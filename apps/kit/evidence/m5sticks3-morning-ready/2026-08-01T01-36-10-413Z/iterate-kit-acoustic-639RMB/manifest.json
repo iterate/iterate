@@ -1,0 +1,3497 @@
+{
+  "acoustic": {
+    "acceptance": {
+      "assessment": {
+        "acceptance": "failed",
+        "normalizedMicrophoneTranscript": "our production turn to change the display to green production turn one is",
+        "normalizedProviderTranscript": "i ll use the tool to change the display to green",
+        "passed": false,
+        "reasons": [
+          "The independent microphone transcript did not match Grok's completed output transcript."
+        ],
+        "responseToBaselineMaximumRmsRatio": 5.608069135203045
+      },
+      "policy": "An independent STT match plus causal relative energy is accepted provisionally at the measured brownout-safe codec gain. The unchanged fixed 120-RMS gate remains a stricter follow-up and is not used to relax transport, frame, reset, or network gates."
+    },
+    "baseline": {
+      "activeWindowCount": null,
+      "clippedSampleCount": 0,
+      "maximumRms": 12.446426863428181,
+      "p50Rms": 8.447139555297206,
+      "p95Rms": 10.80277742064512,
+      "p99Rms": 12.446426863428181,
+      "sampleCount": 45056,
+      "windowCount": 47,
+      "windowDurationMs": 20
+    },
+    "capture": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-ready/2026-08-01T01-36-10-413Z/iterate-kit-acoustic-639RMB/microphone.pcm16le",
+      "capturedByteLength": 3903488,
+      "capturedSampleCount": 1951744,
+      "sampleRateHz": 48000,
+      "captureProvenance": {
+        "input": {
+          "avFoundationSpecifier": ":0",
+          "displayName": "MacBook Pro Microphone",
+          "stableId": "BuiltInMicrophoneDevice",
+          "verification": "host-resolved-coreaudio-uid"
+        },
+        "processing": {
+          "activeMicrophoneMode": "standard",
+          "preferredMicrophoneMode": "standard",
+          "verification": "host-resolved-avfoundation-microphone-mode"
+        },
+        "recorder": {
+          "arguments": [
+            "-q",
+            "-t",
+            "coreaudio",
+            "MacBook Pro Microphone",
+            "-t",
+            "raw",
+            "-L",
+            "-c",
+            "1",
+            "-r",
+            "48000",
+            "-b",
+            "16",
+            "-e",
+            "signed-integer",
+            "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-ready/2026-08-01T01-36-10-413Z/iterate-kit-acoustic-639RMB/microphone.pcm16le"
+          ],
+          "executable": "/opt/homebrew/bin/sox",
+          "version": "/opt/homebrew/bin/sox:      SoX v"
+        }
+      }
+    },
+    "fixedThresholdAssessment": {
+      "activeThresholdRms": 120,
+      "activeWindowCount": 0,
+      "passed": false,
+      "reasons": ["The causal response contained 0 active 20 ms windows; expected at least 4."]
+    },
+    "markers": {
+      "ambientEnd": {
+        "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-ready/2026-08-01T01-36-10-413Z/iterate-kit-acoustic-639RMB/microphone.pcm16le",
+        "capturedByteLength": 131072,
+        "capturedSampleCount": 65536,
+        "sampleRateHz": 48000
+      },
+      "ambientStart": {
+        "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-ready/2026-08-01T01-36-10-413Z/iterate-kit-acoustic-639RMB/microphone.pcm16le",
+        "capturedByteLength": 40960,
+        "capturedSampleCount": 20480,
+        "sampleRateHz": 48000
+      },
+      "responseAnalysisGuardMs": 400,
+      "responseEndMarker": {
+        "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-ready/2026-08-01T01-36-10-413Z/iterate-kit-acoustic-639RMB/microphone.pcm16le",
+        "capturedByteLength": 2531328,
+        "capturedSampleCount": 1265664,
+        "sampleRateHz": 48000
+      },
+      "responseMarker": {
+        "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-ready/2026-08-01T01-36-10-413Z/iterate-kit-acoustic-639RMB/microphone.pcm16le",
+        "capturedByteLength": 1998848,
+        "capturedSampleCount": 999424,
+        "sampleRateHz": 48000
+      },
+      "responseStartSample": 1018624
+    },
+    "relativeResponse": {
+      "analysis": {
+        "activeWindowCount": 31,
+        "clippedSampleCount": 0,
+        "maximumRms": 69.80042233635362,
+        "p50Rms": 12.96606146831026,
+        "p95Rms": 48.98683921898479,
+        "p99Rms": 63.75410934467937,
+        "sampleCount": 247040,
+        "windowCount": 258,
+        "windowDurationMs": 20
+      },
+      "ambientMultiplier": 2.5,
+      "thresholdRms": 31.116067158570452
+    },
+    "response": {
+      "activeWindowCount": 0,
+      "clippedSampleCount": 0,
+      "maximumRms": 69.80042233635362,
+      "p50Rms": 12.96606146831026,
+      "p95Rms": 48.98683921898479,
+      "p99Rms": 63.75410934467937,
+      "sampleCount": 247040,
+      "windowCount": 258,
+      "windowDurationMs": 20
+    },
+    "retainedArtifact": {
+      "byteLength": 3903488,
+      "maximumBufferedAudioBytes": 65536,
+      "sha256": "41781cf3468dbae946d43f31a86c638d4e42b02740f205cb893df957afa653cc"
+    },
+    "transcription": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-ready/2026-08-01T01-36-10-413Z/iterate-kit-acoustic-639RMB/acoustic-transcription.json",
+      "error": null,
+      "microphone": {
+        "durationSeconds": 5.147,
+        "rawEvents": [
+          "{\"type\":\"transcript.created\",\"id\":\"bfc768af-c304-4346-a964-cb9062e80880\"}",
+          "{\"type\":\"transcript.partial\",\"text\":\"Now the last\",\"words\":[{\"text\":\"Now\",\"start\":0.527,\"end\":0.892},{\"text\":\"the\",\"start\":1.014,\"end\":1.074},{\"text\":\"last\",\"start\":1.257,\"end\":1.48}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+          "{\"type\":\"transcript.partial\",\"text\":\"thing is how to change the display.\",\"words\":[{\"text\":\"thing\",\"start\":1.622,\"end\":1.743},{\"text\":\"is\",\"start\":1.743,\"end\":1.784},{\"text\":\"how\",\"start\":1.784,\"end\":1.885},{\"text\":\"to\",\"start\":1.966,\"end\":2.027},{\"text\":\"change\",\"start\":2.108,\"end\":2.453},{\"text\":\"the\",\"start\":2.493,\"end\":2.554},{\"text\":\"display.\",\"start\":2.595,\"end\":2.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+          "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5,\"language\":\"en\"}",
+          "{\"type\":\"transcript.partial\",\"text\":\"Our production turn to change the display to green. Production turn one is\",\"words\":[{\"text\":\"Our\",\"start\":1.041,\"end\":1.121},{\"text\":\"production\",\"start\":1.141,\"end\":1.602},{\"text\":\"turn\",\"start\":1.622,\"end\":1.922},{\"text\":\"to\",\"start\":1.963,\"end\":2.023},{\"text\":\"change\",\"start\":2.103,\"end\":2.443},{\"text\":\"the\",\"start\":2.483,\"end\":2.543},{\"text\":\"display\",\"start\":2.583,\"end\":3.024},{\"text\":\"to\",\"start\":3.104,\"end\":3.184},{\"text\":\"green.\",\"start\":3.244,\"end\":3.505},{\"text\":\"Production\",\"start\":3.505,\"end\":4.145},{\"text\":\"turn\",\"start\":4.225,\"end\":4.506},{\"text\":\"one\",\"start\":4.706,\"end\":4.886},{\"text\":\"is\",\"start\":5.006,\"end\":5.087}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":5.147,\"language\":\"en\"}",
+          "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":5.147}"
+        ],
+        "text": "Our production turn to change the display to green. Production turn one is",
+        "words": [
+          {
+            "text": "Our",
+            "start": 1.041,
+            "end": 1.121
+          },
+          {
+            "text": "production",
+            "start": 1.141,
+            "end": 1.602
+          },
+          {
+            "text": "turn",
+            "start": 1.622,
+            "end": 1.922
+          },
+          {
+            "text": "to",
+            "start": 1.963,
+            "end": 2.023
+          },
+          {
+            "text": "change",
+            "start": 2.103,
+            "end": 2.443
+          },
+          {
+            "text": "the",
+            "start": 2.483,
+            "end": 2.543
+          },
+          {
+            "text": "display",
+            "start": 2.583,
+            "end": 3.024
+          },
+          {
+            "text": "to",
+            "start": 3.104,
+            "end": 3.184
+          },
+          {
+            "text": "green.",
+            "start": 3.244,
+            "end": 3.505
+          },
+          {
+            "text": "Production",
+            "start": 3.505,
+            "end": 4.145
+          },
+          {
+            "text": "turn",
+            "start": 4.225,
+            "end": 4.506
+          },
+          {
+            "text": "one",
+            "start": 4.706,
+            "end": 4.886
+          },
+          {
+            "text": "is",
+            "start": 5.006,
+            "end": 5.087
+          }
+        ]
+      },
+      "provider": "I'll use the tool to change the display to green."
+    }
+  },
+  "createdAt": "2026-08-01T01:37:00.870Z",
+  "device": {
+    "host": "192.168.1.210",
+    "id": "m5sticks3",
+    "mountPath": ["kit", "m5sticks3"]
+  },
+  "digital": {
+    "assessment": {
+      "deltas": {
+        "audio_sent": 658,
+        "uplink_sent": 658,
+        "downlink_accepted": 148,
+        "playback_submitted": 148,
+        "playback_completed": 148,
+        "device_metric_samples": 18,
+        "physical_starts": 0,
+        "physical_stops": 0,
+        "remote_starts": 1,
+        "remote_stops": 1,
+        "worker_downlink_frames": 148,
+        "worker_function_call_failures": 0,
+        "worker_function_calls": 1,
+        "worker_provider_pcm_peak_sample": 16738,
+        "worker_provider_pcm_rms_sample": 3110.977620776104,
+        "worker_provider_pcm_samples": 47204,
+        "worker_provider_responses_completed": 1,
+        "worker_uplink_frames": 658,
+        "audio_dropped": 0,
+        "audio_failures": 0,
+        "uplink_dropped": 0,
+        "uplink_failures": 0,
+        "uplink_restart_incidents": 0,
+        "downlink_dropped": 0,
+        "downlink_failures": 0,
+        "playback_flushed": 0,
+        "playback_failures": 0,
+        "protocol_failures": 0,
+        "worker_uplink_dropped_bytes": 0,
+        "worker_downlink_dropped_bytes": 0,
+        "control websocket disconnects": 0,
+        "control websocket errors": 0,
+        "wifi disconnects": 0,
+        "pcm websocket disconnects": 0,
+        "pcm websocket errors": 0
+      },
+      "passed": false,
+      "reasons": [
+        "remote starts delta was 1; expected 3.",
+        "remote stops delta was 1; expected 3.",
+        "Grok changeColour call delta was 1; expected 3.",
+        "Grok did not complete the tool-bearing spoken response."
+      ]
+    },
+    "device": {
+      "baseline": {
+        "control_transport": "ready",
+        "uptime_ms": 33528,
+        "heap": 8416008,
+        "min_heap": 8408048,
+        "internal": 23619,
+        "min_internal": 15655,
+        "psram": 8384912,
+        "main_stack_headroom": 2796,
+        "cpu_permille": 156,
+        "audio_sent": 0,
+        "audio_dropped": 0,
+        "audio_failures": 0,
+        "uplink_sent": 0,
+        "uplink_dropped": 0,
+        "uplink_current": 0,
+        "uplink_high_water": 0,
+        "uplink_send_deferrals": 0,
+        "uplink_consecutive_send_deferrals": 0,
+        "uplink_maximum_consecutive_send_deferrals": 0,
+        "uplink_restart_incidents": 0,
+        "uplink_producer_backpressure_restarts": 0,
+        "uplink_transport_disconnect_restarts": 0,
+        "uplink_no_progress_timeout_restarts": 0,
+        "uplink_frame_send_timeout_restarts": 0,
+        "uplink_capture_stale_restarts": 0,
+        "uplink_last_transport_accept_age_ms": 0,
+        "uplink_maximum_transport_accept_age_ms": 0,
+        "uplink_last_restart_oldest_capture_age_ms": 0,
+        "uplink_last_restart_frames_discarded": 0,
+        "uplink_failures": 0,
+        "downlink_accepted": 0,
+        "downlink_dropped": 0,
+        "downlink_current": 0,
+        "downlink_high_water": 0,
+        "downlink_failures": 0,
+        "playback_submitted": 0,
+        "playback_completed": 0,
+        "playback_flushed": 0,
+        "playback_current": 0,
+        "playback_high_water": 0,
+        "playback_failures": 0,
+        "protocol_failures": 0,
+        "uplink_last_restart_reason": "none",
+        "buffer_uplink_application_evidence": "observed",
+        "buffer_uplink_application_current_bytes": 0,
+        "buffer_uplink_application_high_water_bytes": 0,
+        "buffer_uplink_application_capacity_bytes": 20480,
+        "buffer_websocket_transmitter_evidence": "observed",
+        "buffer_websocket_transmitter_current_bytes": 0,
+        "buffer_websocket_transmitter_high_water_bytes": 0,
+        "buffer_websocket_transmitter_capacity_bytes": 910,
+        "buffer_lwip_send_evidence": "capacityOnly",
+        "buffer_lwip_send_current_bytes": 0,
+        "buffer_lwip_send_high_water_bytes": 0,
+        "buffer_lwip_send_capacity_bytes": 5760,
+        "buffer_tls_egress_evidence": "unavailable",
+        "buffer_tls_egress_current_bytes": 0,
+        "buffer_tls_egress_high_water_bytes": 0,
+        "buffer_tls_egress_capacity_bytes": 0,
+        "buffer_wifi_egress_evidence": "unavailable",
+        "buffer_wifi_egress_current_bytes": 0,
+        "buffer_wifi_egress_high_water_bytes": 0,
+        "buffer_wifi_egress_capacity_bytes": 0
+      },
+      "continuingHeld": {
+        "control_transport": "ready",
+        "uptime_ms": 46568,
+        "heap": 8407176,
+        "min_heap": 8391260,
+        "internal": 14787,
+        "min_internal": 663,
+        "psram": 8384912,
+        "main_stack_headroom": 2572,
+        "cpu_permille": 322,
+        "audio_sent": 624,
+        "audio_dropped": 0,
+        "audio_failures": 0,
+        "uplink_sent": 624,
+        "uplink_dropped": 0,
+        "uplink_current": 0,
+        "uplink_high_water": 12,
+        "uplink_send_deferrals": 145,
+        "uplink_consecutive_send_deferrals": 0,
+        "uplink_maximum_consecutive_send_deferrals": 10,
+        "uplink_restart_incidents": 0,
+        "uplink_producer_backpressure_restarts": 0,
+        "uplink_transport_disconnect_restarts": 0,
+        "uplink_no_progress_timeout_restarts": 0,
+        "uplink_frame_send_timeout_restarts": 0,
+        "uplink_capture_stale_restarts": 0,
+        "uplink_last_transport_accept_age_ms": 0,
+        "uplink_maximum_transport_accept_age_ms": 222,
+        "uplink_last_restart_oldest_capture_age_ms": 0,
+        "uplink_last_restart_frames_discarded": 0,
+        "uplink_failures": 0,
+        "downlink_accepted": 0,
+        "downlink_dropped": 0,
+        "downlink_current": 0,
+        "downlink_high_water": 0,
+        "downlink_failures": 0,
+        "playback_submitted": 0,
+        "playback_completed": 0,
+        "playback_flushed": 0,
+        "playback_current": 0,
+        "playback_high_water": 0,
+        "playback_failures": 0,
+        "protocol_failures": 0,
+        "uplink_last_restart_reason": "none",
+        "buffer_uplink_application_evidence": "observed",
+        "buffer_uplink_application_current_bytes": 0,
+        "buffer_uplink_application_high_water_bytes": 7680,
+        "buffer_uplink_application_capacity_bytes": 20480,
+        "buffer_websocket_transmitter_evidence": "observed",
+        "buffer_websocket_transmitter_current_bytes": 0,
+        "buffer_websocket_transmitter_high_water_bytes": 648,
+        "buffer_websocket_transmitter_capacity_bytes": 910,
+        "buffer_lwip_send_evidence": "capacityOnly",
+        "buffer_lwip_send_current_bytes": 0,
+        "buffer_lwip_send_high_water_bytes": 0,
+        "buffer_lwip_send_capacity_bytes": 5760,
+        "buffer_tls_egress_evidence": "unavailable",
+        "buffer_tls_egress_current_bytes": 0,
+        "buffer_tls_egress_high_water_bytes": 0,
+        "buffer_tls_egress_capacity_bytes": 0,
+        "buffer_wifi_egress_evidence": "unavailable",
+        "buffer_wifi_egress_current_bytes": 0,
+        "buffer_wifi_egress_high_water_bytes": 0,
+        "buffer_wifi_egress_capacity_bytes": 0
+      },
+      "firstHeld": {
+        "control_transport": "ready",
+        "uptime_ms": 34528,
+        "heap": 8405612,
+        "min_heap": 8397976,
+        "internal": 13223,
+        "min_internal": 5583,
+        "psram": 8384912,
+        "main_stack_headroom": 2636,
+        "cpu_permille": 296,
+        "audio_sent": 23,
+        "audio_dropped": 0,
+        "audio_failures": 0,
+        "uplink_sent": 17,
+        "uplink_dropped": 0,
+        "uplink_current": 6,
+        "uplink_high_water": 7,
+        "uplink_send_deferrals": 54,
+        "uplink_consecutive_send_deferrals": 5,
+        "uplink_maximum_consecutive_send_deferrals": 10,
+        "uplink_restart_incidents": 0,
+        "uplink_producer_backpressure_restarts": 0,
+        "uplink_transport_disconnect_restarts": 0,
+        "uplink_no_progress_timeout_restarts": 0,
+        "uplink_frame_send_timeout_restarts": 0,
+        "uplink_capture_stale_restarts": 0,
+        "uplink_last_transport_accept_age_ms": 101,
+        "uplink_maximum_transport_accept_age_ms": 131,
+        "uplink_last_restart_oldest_capture_age_ms": 0,
+        "uplink_last_restart_frames_discarded": 0,
+        "uplink_failures": 0,
+        "downlink_accepted": 0,
+        "downlink_dropped": 0,
+        "downlink_current": 0,
+        "downlink_high_water": 0,
+        "downlink_failures": 0,
+        "playback_submitted": 0,
+        "playback_completed": 0,
+        "playback_flushed": 0,
+        "playback_current": 0,
+        "playback_high_water": 0,
+        "playback_failures": 0,
+        "protocol_failures": 0,
+        "uplink_last_restart_reason": "none",
+        "buffer_uplink_application_evidence": "observed",
+        "buffer_uplink_application_current_bytes": 3840,
+        "buffer_uplink_application_high_water_bytes": 4480,
+        "buffer_uplink_application_capacity_bytes": 20480,
+        "buffer_websocket_transmitter_evidence": "observed",
+        "buffer_websocket_transmitter_current_bytes": 648,
+        "buffer_websocket_transmitter_high_water_bytes": 648,
+        "buffer_websocket_transmitter_capacity_bytes": 910,
+        "buffer_lwip_send_evidence": "capacityOnly",
+        "buffer_lwip_send_current_bytes": 0,
+        "buffer_lwip_send_high_water_bytes": 0,
+        "buffer_lwip_send_capacity_bytes": 5760,
+        "buffer_tls_egress_evidence": "unavailable",
+        "buffer_tls_egress_current_bytes": 0,
+        "buffer_tls_egress_high_water_bytes": 0,
+        "buffer_tls_egress_capacity_bytes": 0,
+        "buffer_wifi_egress_evidence": "unavailable",
+        "buffer_wifi_egress_current_bytes": 0,
+        "buffer_wifi_egress_high_water_bytes": 0,
+        "buffer_wifi_egress_capacity_bytes": 0
+      },
+      "terminal": {
+        "control_transport": "ready",
+        "uptime_ms": 51597,
+        "heap": 8413152,
+        "min_heap": 8391260,
+        "internal": 20763,
+        "min_internal": 663,
+        "psram": 8384912,
+        "main_stack_headroom": 2572,
+        "cpu_permille": 186,
+        "audio_sent": 658,
+        "audio_dropped": 0,
+        "audio_failures": 0,
+        "uplink_sent": 658,
+        "uplink_dropped": 0,
+        "uplink_current": 0,
+        "uplink_high_water": 12,
+        "uplink_send_deferrals": 148,
+        "uplink_consecutive_send_deferrals": 0,
+        "uplink_maximum_consecutive_send_deferrals": 10,
+        "uplink_restart_incidents": 0,
+        "uplink_producer_backpressure_restarts": 0,
+        "uplink_transport_disconnect_restarts": 0,
+        "uplink_no_progress_timeout_restarts": 0,
+        "uplink_frame_send_timeout_restarts": 0,
+        "uplink_capture_stale_restarts": 0,
+        "uplink_last_transport_accept_age_ms": 0,
+        "uplink_maximum_transport_accept_age_ms": 222,
+        "uplink_last_restart_oldest_capture_age_ms": 0,
+        "uplink_last_restart_frames_discarded": 0,
+        "uplink_failures": 0,
+        "downlink_accepted": 148,
+        "downlink_dropped": 0,
+        "downlink_current": 0,
+        "downlink_high_water": 11,
+        "downlink_failures": 0,
+        "playback_submitted": 148,
+        "playback_completed": 148,
+        "playback_flushed": 0,
+        "playback_current": 0,
+        "playback_high_water": 4,
+        "playback_failures": 0,
+        "protocol_failures": 0,
+        "uplink_last_restart_reason": "none",
+        "buffer_uplink_application_evidence": "observed",
+        "buffer_uplink_application_current_bytes": 0,
+        "buffer_uplink_application_high_water_bytes": 7680,
+        "buffer_uplink_application_capacity_bytes": 20480,
+        "buffer_websocket_transmitter_evidence": "observed",
+        "buffer_websocket_transmitter_current_bytes": 0,
+        "buffer_websocket_transmitter_high_water_bytes": 648,
+        "buffer_websocket_transmitter_capacity_bytes": 910,
+        "buffer_lwip_send_evidence": "capacityOnly",
+        "buffer_lwip_send_current_bytes": 0,
+        "buffer_lwip_send_high_water_bytes": 0,
+        "buffer_lwip_send_capacity_bytes": 5760,
+        "buffer_tls_egress_evidence": "unavailable",
+        "buffer_tls_egress_current_bytes": 0,
+        "buffer_tls_egress_high_water_bytes": 0,
+        "buffer_tls_egress_capacity_bytes": 0,
+        "buffer_wifi_egress_evidence": "unavailable",
+        "buffer_wifi_egress_current_bytes": 0,
+        "buffer_wifi_egress_high_water_bytes": 0,
+        "buffer_wifi_egress_capacity_bytes": 0
+      }
+    },
+    "diagnostics": {
+      "baseline": {
+        "schemaVersion": 3,
+        "producedAtMs": 24443,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 0,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 0,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 11,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 5,
+            "messagesConsumed": 3,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 11,
+            "messagesConsumed": 11,
+            "producerBackpressure": 0,
+            "highWaterSlots": 1,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -49,
+          "pcmWebsocketConnections": 0,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      },
+      "terminal": {
+        "schemaVersion": 3,
+        "producedAtMs": 52073,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 0,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 0,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 187,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 141,
+            "messagesConsumed": 139,
+            "producerBackpressure": 0,
+            "highWaterSlots": 4,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 187,
+            "messagesConsumed": 187,
+            "producerBackpressure": 0,
+            "highWaterSlots": 2,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -49,
+          "pcmWebsocketConnections": 1,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0
+        }
+      }
+    },
+    "playback": {
+      "baseline": {
+        "schemaVersion": 5,
+        "sequence": 3,
+        "producedAtMs": 25576,
+        "downlinkAccepted": 0,
+        "playback": {
+          "submitted": 0,
+          "completed": 0,
+          "generationFramesFlushed": 0,
+          "freshnessFramesDropped": 0,
+          "partialPrebufferFramesDropped": 0,
+          "underrunFramesFlushed": 0,
+          "underrunIncidents": 0,
+          "underrunSilenceFramesSubmitted": 0,
+          "underrunSilenceFramesCompleted": 0,
+          "underrunSilenceFramesRetired": 0,
+          "underrunLateFramesDropped": 0,
+          "dmaDeadlineMissIncidents": 0,
+          "freshnessIncidents": 0,
+          "partialPrebufferIncidents": 0,
+          "endOfStreamMarkersConsumed": 0,
+          "endOfStreamResponses": 0,
+          "endOfStreamSilenceDescriptors": 0,
+          "endOfStreamPaddingDescriptorsCompleted": 0,
+          "driverQueueOverflowIncidents": 0,
+          "driverFailures": 0,
+          "driverStopFailures": 0,
+          "fatalFramesFlushed": 0,
+          "writeBackpressureIncidents": 0,
+          "writeBackpressureDestructiveResets": 0,
+          "writeBackpressureFramesDropped": 0,
+          "invalidFrames": 0,
+          "stateErrors": 0,
+          "ownerClockRegressions": 0,
+          "receiveToDmaStartSamples": 0,
+          "maximumReceiveToDmaStartMs": 0,
+          "downlinkInterarrivalSamples": 0,
+          "maximumDownlinkInterarrivalMs": 0,
+          "maximumEofToSuccessfulRefillUs": 0,
+          "maximumWriteCallDurationUs": 0,
+          "minimumReuseLeadAtSuccessfulRefillUs": 0
+        },
+        "runtime": {
+          "audioOwnerStackHeadroomBytes": 6652,
+          "mainStackHeadroomBytes": 2796,
+          "controlNetworkStackHeadroomBytes": 4584,
+          "pcmNetworkStackHeadroomBytes": 0,
+          "freeInternalHeapBytes": 55303,
+          "minimumFreeInternalHeapBytes": 42531,
+          "freeDmaHeapBytes": 55303,
+          "minimumFreeDmaHeapBytes": 42531,
+          "largestFreeInternalHeapBlockBytes": 31744,
+          "largestFreeDmaBlockBytes": 31744,
+          "generationFenceAcknowledgementTimeouts": 0,
+          "lifecycleAcknowledgementTimeouts": 0,
+          "controlNetworkStackExhaustions": 0,
+          "pcmNetworkStackExhaustions": 0,
+          "pcmReceiveCalls": 0,
+          "pcmReceiveChunks": 0,
+          "controlNetworkMaximumWorkCycles": 295605272,
+          "pcmNetworkMaximumWorkCycles": 0,
+          "cpuPermille": 82
+        }
+      },
+      "terminal": {
+        "schemaVersion": 5,
+        "sequence": 46,
+        "producedAtMs": 51597,
+        "downlinkAccepted": 148,
+        "playback": {
+          "submitted": 148,
+          "completed": 148,
+          "generationFramesFlushed": 0,
+          "freshnessFramesDropped": 0,
+          "partialPrebufferFramesDropped": 0,
+          "underrunFramesFlushed": 0,
+          "underrunIncidents": 0,
+          "underrunSilenceFramesSubmitted": 0,
+          "underrunSilenceFramesCompleted": 0,
+          "underrunSilenceFramesRetired": 0,
+          "underrunLateFramesDropped": 0,
+          "dmaDeadlineMissIncidents": 0,
+          "freshnessIncidents": 0,
+          "partialPrebufferIncidents": 0,
+          "endOfStreamMarkersConsumed": 1,
+          "endOfStreamResponses": 1,
+          "endOfStreamSilenceDescriptors": 3,
+          "endOfStreamPaddingDescriptorsCompleted": 0,
+          "driverQueueOverflowIncidents": 0,
+          "driverFailures": 0,
+          "driverStopFailures": 0,
+          "fatalFramesFlushed": 0,
+          "writeBackpressureIncidents": 0,
+          "writeBackpressureDestructiveResets": 0,
+          "writeBackpressureFramesDropped": 0,
+          "invalidFrames": 0,
+          "stateErrors": 0,
+          "ownerClockRegressions": 0,
+          "receiveToDmaStartSamples": 148,
+          "maximumReceiveToDmaStartMs": 274,
+          "downlinkInterarrivalSamples": 147,
+          "maximumDownlinkInterarrivalMs": 120,
+          "maximumEofToSuccessfulRefillUs": 770,
+          "maximumWriteCallDurationUs": 92,
+          "minimumReuseLeadAtSuccessfulRefillUs": 59230
+        },
+        "runtime": {
+          "audioOwnerStackHeadroomBytes": 6636,
+          "mainStackHeadroomBytes": 2572,
+          "controlNetworkStackHeadroomBytes": 4584,
+          "pcmNetworkStackHeadroomBytes": 4624,
+          "freeInternalHeapBytes": 20763,
+          "minimumFreeInternalHeapBytes": 663,
+          "freeDmaHeapBytes": 20763,
+          "minimumFreeDmaHeapBytes": 663,
+          "largestFreeInternalHeapBlockBytes": 19456,
+          "largestFreeDmaBlockBytes": 19456,
+          "generationFenceAcknowledgementTimeouts": 0,
+          "lifecycleAcknowledgementTimeouts": 0,
+          "controlNetworkStackExhaustions": 0,
+          "pcmNetworkStackExhaustions": 0,
+          "pcmReceiveCalls": 6174,
+          "pcmReceiveChunks": 148,
+          "controlNetworkMaximumWorkCycles": 295605272,
+          "pcmNetworkMaximumWorkCycles": 653004010,
+          "cpuPermille": 186
+        }
+      }
+    },
+    "turns": [
+      {
+        "digital": {
+          "deltas": {
+            "audio_sent": 658,
+            "uplink_sent": 658,
+            "downlink_accepted": 148,
+            "playback_submitted": 148,
+            "playback_completed": 148,
+            "device_metric_samples": 18,
+            "physical_starts": 0,
+            "physical_stops": 0,
+            "remote_starts": 1,
+            "remote_stops": 1,
+            "worker_downlink_frames": 148,
+            "worker_function_call_failures": 0,
+            "worker_function_calls": 1,
+            "worker_provider_pcm_peak_sample": 16738,
+            "worker_provider_pcm_rms_sample": 3110.977620776104,
+            "worker_provider_pcm_samples": 47204,
+            "worker_provider_responses_completed": 1,
+            "worker_uplink_frames": 658,
+            "audio_dropped": 0,
+            "audio_failures": 0,
+            "uplink_dropped": 0,
+            "uplink_failures": 0,
+            "uplink_restart_incidents": 0,
+            "downlink_dropped": 0,
+            "downlink_failures": 0,
+            "playback_flushed": 0,
+            "playback_failures": 0,
+            "protocol_failures": 0,
+            "worker_uplink_dropped_bytes": 0,
+            "worker_downlink_dropped_bytes": 0,
+            "control websocket disconnects": 0,
+            "control websocket errors": 0,
+            "wifi disconnects": 0,
+            "pcm websocket disconnects": 0,
+            "pcm websocket errors": 0
+          },
+          "passed": true,
+          "reasons": []
+        },
+        "expectedColour": "green",
+        "playback": {
+          "baseline": {
+            "schemaVersion": 5,
+            "sequence": 3,
+            "producedAtMs": 25576,
+            "downlinkAccepted": 0,
+            "playback": {
+              "submitted": 0,
+              "completed": 0,
+              "generationFramesFlushed": 0,
+              "freshnessFramesDropped": 0,
+              "partialPrebufferFramesDropped": 0,
+              "underrunFramesFlushed": 0,
+              "underrunIncidents": 0,
+              "underrunSilenceFramesSubmitted": 0,
+              "underrunSilenceFramesCompleted": 0,
+              "underrunSilenceFramesRetired": 0,
+              "underrunLateFramesDropped": 0,
+              "dmaDeadlineMissIncidents": 0,
+              "freshnessIncidents": 0,
+              "partialPrebufferIncidents": 0,
+              "endOfStreamMarkersConsumed": 0,
+              "endOfStreamResponses": 0,
+              "endOfStreamSilenceDescriptors": 0,
+              "endOfStreamPaddingDescriptorsCompleted": 0,
+              "driverQueueOverflowIncidents": 0,
+              "driverFailures": 0,
+              "driverStopFailures": 0,
+              "fatalFramesFlushed": 0,
+              "writeBackpressureIncidents": 0,
+              "writeBackpressureDestructiveResets": 0,
+              "writeBackpressureFramesDropped": 0,
+              "invalidFrames": 0,
+              "stateErrors": 0,
+              "ownerClockRegressions": 0,
+              "receiveToDmaStartSamples": 0,
+              "maximumReceiveToDmaStartMs": 0,
+              "downlinkInterarrivalSamples": 0,
+              "maximumDownlinkInterarrivalMs": 0,
+              "maximumEofToSuccessfulRefillUs": 0,
+              "maximumWriteCallDurationUs": 0,
+              "minimumReuseLeadAtSuccessfulRefillUs": 0
+            },
+            "runtime": {
+              "audioOwnerStackHeadroomBytes": 6652,
+              "mainStackHeadroomBytes": 2796,
+              "controlNetworkStackHeadroomBytes": 4584,
+              "pcmNetworkStackHeadroomBytes": 0,
+              "freeInternalHeapBytes": 55303,
+              "minimumFreeInternalHeapBytes": 42531,
+              "freeDmaHeapBytes": 55303,
+              "minimumFreeDmaHeapBytes": 42531,
+              "largestFreeInternalHeapBlockBytes": 31744,
+              "largestFreeDmaBlockBytes": 31744,
+              "generationFenceAcknowledgementTimeouts": 0,
+              "lifecycleAcknowledgementTimeouts": 0,
+              "controlNetworkStackExhaustions": 0,
+              "pcmNetworkStackExhaustions": 0,
+              "pcmReceiveCalls": 0,
+              "pcmReceiveChunks": 0,
+              "controlNetworkMaximumWorkCycles": 295605272,
+              "pcmNetworkMaximumWorkCycles": 0,
+              "cpuPermille": 82
+            }
+          },
+          "terminal": {
+            "schemaVersion": 5,
+            "sequence": 46,
+            "producedAtMs": 51597,
+            "downlinkAccepted": 148,
+            "playback": {
+              "submitted": 148,
+              "completed": 148,
+              "generationFramesFlushed": 0,
+              "freshnessFramesDropped": 0,
+              "partialPrebufferFramesDropped": 0,
+              "underrunFramesFlushed": 0,
+              "underrunIncidents": 0,
+              "underrunSilenceFramesSubmitted": 0,
+              "underrunSilenceFramesCompleted": 0,
+              "underrunSilenceFramesRetired": 0,
+              "underrunLateFramesDropped": 0,
+              "dmaDeadlineMissIncidents": 0,
+              "freshnessIncidents": 0,
+              "partialPrebufferIncidents": 0,
+              "endOfStreamMarkersConsumed": 1,
+              "endOfStreamResponses": 1,
+              "endOfStreamSilenceDescriptors": 3,
+              "endOfStreamPaddingDescriptorsCompleted": 0,
+              "driverQueueOverflowIncidents": 0,
+              "driverFailures": 0,
+              "driverStopFailures": 0,
+              "fatalFramesFlushed": 0,
+              "writeBackpressureIncidents": 0,
+              "writeBackpressureDestructiveResets": 0,
+              "writeBackpressureFramesDropped": 0,
+              "invalidFrames": 0,
+              "stateErrors": 0,
+              "ownerClockRegressions": 0,
+              "receiveToDmaStartSamples": 148,
+              "maximumReceiveToDmaStartMs": 274,
+              "downlinkInterarrivalSamples": 147,
+              "maximumDownlinkInterarrivalMs": 120,
+              "maximumEofToSuccessfulRefillUs": 770,
+              "maximumWriteCallDurationUs": 92,
+              "minimumReuseLeadAtSuccessfulRefillUs": 59230
+            },
+            "runtime": {
+              "audioOwnerStackHeadroomBytes": 6636,
+              "mainStackHeadroomBytes": 2572,
+              "controlNetworkStackHeadroomBytes": 4584,
+              "pcmNetworkStackHeadroomBytes": 4624,
+              "freeInternalHeapBytes": 20763,
+              "minimumFreeInternalHeapBytes": 663,
+              "freeDmaHeapBytes": 20763,
+              "minimumFreeDmaHeapBytes": 663,
+              "largestFreeInternalHeapBlockBytes": 19456,
+              "largestFreeDmaBlockBytes": 19456,
+              "generationFenceAcknowledgementTimeouts": 0,
+              "lifecycleAcknowledgementTimeouts": 0,
+              "controlNetworkStackExhaustions": 0,
+              "pcmNetworkStackExhaustions": 0,
+              "pcmReceiveCalls": 6174,
+              "pcmReceiveChunks": 148,
+              "controlNetworkMaximumWorkCycles": 295605272,
+              "pcmNetworkMaximumWorkCycles": 653004010,
+              "cpuPermille": 186
+            }
+          }
+        },
+        "provider": {
+          "eventCount": 49,
+          "outputTranscript": "I'll use the tool to change the display to green.",
+          "toolCall": {
+            "arguments": {
+              "colour": "green"
+            },
+            "callId": "call-01af119f-5d8d-41c2-bb56-4997a3419392-0",
+            "output": {
+              "colour": "green",
+              "ok": true
+            }
+          }
+        },
+        "turn": 1,
+        "worker": {
+          "baseline": {
+            "awaitingCommitAcknowledgement": false,
+            "awaitingUplinkEndMarker": false,
+            "closed": false,
+            "downlinkDroppedBytes": 0,
+            "downlinkFrames": 0,
+            "downlinkPartialBytes": 0,
+            "downlinkQueuedBytes": 0,
+            "downlinkQueueHighWaterBytes": 0,
+            "interrupted": false,
+            "lastProviderError": null,
+            "lastProviderEventType": "session.updated",
+            "lastSocketClose": null,
+            "providerAvailable": true,
+            "providerConnections": 1,
+            "providerControlEvents": 4,
+            "providerBufferedBytes": 0,
+            "providerDisconnects": 0,
+            "providerFunctionCallFailures": 0,
+            "providerFunctionCalls": 0,
+            "providerFunctionCallsPending": 0,
+            "providerPcmPeakSample": 0,
+            "providerPcmRmsSample": 0,
+            "providerPcmSamples": 0,
+            "providerResponseActive": false,
+            "providerResponsesCompleted": 0,
+            "uplinkDroppedBytes": 0,
+            "uplinkEndMarkers": 0,
+            "uplinkEndMarkerTimeouts": 0,
+            "uplinkFrames": 0,
+            "uplinkFramesAfterEndMarkerDropped": 0,
+            "uplinkUnavailableFrames": 0,
+            "deviceEvents": {
+              "acceptedEvents": 1,
+              "lastEvent": {
+                "sequence": 2,
+                "source": "system",
+                "type": "pushToTalk.stopped"
+              },
+              "physicalConversationEnds": 0,
+              "physicalConversationStarts": 0,
+              "physicalStarts": 0,
+              "physicalStops": 0,
+              "remoteConversationEnds": 0,
+              "remoteConversationStarts": 0,
+              "remoteStarts": 0,
+              "remoteStops": 0
+            },
+            "deviceId": "m5sticks3",
+            "deviceMetrics": {
+              "invalidSamples": 0,
+              "lastInvalidReason": null,
+              "latestSample": {
+                "metrics": {
+                  "uptimeMs": 33528,
+                  "freeHeapBytes": 8416008,
+                  "minimumFreeHeapBytes": 8408048,
+                  "freeInternalHeapBytes": 23619,
+                  "minimumFreeInternalHeapBytes": 15655,
+                  "freePsramBytes": 8384912,
+                  "taskStackHighWaterBytes": 2796,
+                  "cpuPermille": 156,
+                  "audio": {
+                    "capture": {
+                      "sent": 0,
+                      "dropped": 0,
+                      "failures": 0
+                    },
+                    "uplink": {
+                      "sent": 0,
+                      "dropped": 0,
+                      "depth": 0,
+                      "highWater": 0,
+                      "sendDeferrals": 0,
+                      "consecutiveSendDeferrals": 0,
+                      "maximumConsecutiveSendDeferrals": 0,
+                      "failures": 0,
+                      "restartIncidents": 0,
+                      "producerBackpressureRestarts": 0,
+                      "transportDisconnectRestarts": 0,
+                      "noProgressTimeoutRestarts": 0,
+                      "frameSendTimeoutRestarts": 0,
+                      "captureStaleRestarts": 0,
+                      "lastTransportAcceptAgeMs": 0,
+                      "maximumTransportAcceptAgeMs": 0,
+                      "lastRestartOldestCaptureAgeMs": 0,
+                      "lastRestartReason": "none",
+                      "lastRestartFramesDiscarded": 0
+                    },
+                    "downlink": {
+                      "received": 0,
+                      "dropped": 0,
+                      "depth": 0,
+                      "highWater": 0,
+                      "failures": 0
+                    },
+                    "playback": {
+                      "submitted": 0,
+                      "completed": 0,
+                      "flushed": 0,
+                      "depth": 0,
+                      "highWater": 0,
+                      "failures": 0
+                    },
+                    "protocolFailures": 0,
+                    "buffers": {
+                      "uplinkApplication": {
+                        "evidence": "observed",
+                        "current": 0,
+                        "highWater": 0,
+                        "capacity": 20480
+                      },
+                      "websocketTransmitter": {
+                        "evidence": "observed",
+                        "current": 0,
+                        "highWater": 0,
+                        "capacity": 910
+                      },
+                      "lwipSend": {
+                        "evidence": "capacityOnly",
+                        "current": 0,
+                        "highWater": 0,
+                        "capacity": 5760
+                      },
+                      "tlsEgress": {
+                        "evidence": "unavailable",
+                        "current": 0,
+                        "highWater": 0,
+                        "capacity": 0
+                      },
+                      "wifiEgress": {
+                        "evidence": "unavailable",
+                        "current": 0,
+                        "highWater": 0,
+                        "capacity": 0
+                      }
+                    }
+                  }
+                },
+                "receivedAtMs": 1785548181297
+              },
+              "samplesReceived": 1
+            },
+            "deviceEventSubscriptionAttempts": 1,
+            "deviceEventSubscriptionFailures": 0,
+            "endedAtMs": null,
+            "previousSession": {
+              "awaitingCommitAcknowledgement": false,
+              "awaitingUplinkEndMarker": false,
+              "closed": true,
+              "downlinkDroppedBytes": 0,
+              "downlinkFrames": 400,
+              "downlinkPartialBytes": 0,
+              "downlinkQueuedBytes": 0,
+              "downlinkQueueHighWaterBytes": 70728,
+              "interrupted": false,
+              "lastProviderError": null,
+              "lastProviderEventType": "ping",
+              "lastSocketClose": {
+                "code": 1006,
+                "reason": "WebSocket disconnected without sending Close frame.",
+                "source": "device"
+              },
+              "providerAvailable": false,
+              "providerConnections": 1,
+              "providerControlEvents": 137,
+              "providerBufferedBytes": 0,
+              "providerDisconnects": 0,
+              "providerFunctionCallFailures": 0,
+              "providerFunctionCalls": 3,
+              "providerFunctionCallsPending": 0,
+              "providerPcmPeakSample": 22302,
+              "providerPcmRmsSample": 3277.4384618495246,
+              "providerPcmSamples": 127526,
+              "providerResponseActive": false,
+              "providerResponsesCompleted": 3,
+              "uplinkDroppedBytes": 0,
+              "uplinkEndMarkers": 3,
+              "uplinkEndMarkerTimeouts": 0,
+              "uplinkFrames": 1780,
+              "uplinkFramesAfterEndMarkerDropped": 0,
+              "uplinkUnavailableFrames": 0,
+              "deviceEvents": {
+                "acceptedEvents": 8,
+                "lastEvent": {
+                  "sequence": 9,
+                  "source": "remote",
+                  "type": "conversation.ended"
+                },
+                "physicalConversationEnds": 0,
+                "physicalConversationStarts": 0,
+                "physicalStarts": 0,
+                "physicalStops": 0,
+                "remoteConversationEnds": 1,
+                "remoteConversationStarts": 0,
+                "remoteStarts": 3,
+                "remoteStops": 3
+              },
+              "deviceMetrics": {
+                "invalidSamples": 0,
+                "lastInvalidReason": null,
+                "latestSample": {
+                  "metrics": {
+                    "uptimeMs": 83328,
+                    "freeHeapBytes": 8413344,
+                    "minimumFreeHeapBytes": 8397268,
+                    "freeInternalHeapBytes": 20775,
+                    "minimumFreeInternalHeapBytes": 4875,
+                    "freePsramBytes": 8384912,
+                    "taskStackHighWaterBytes": 2444,
+                    "cpuPermille": 163,
+                    "audio": {
+                      "capture": {
+                        "sent": 1780,
+                        "dropped": 0,
+                        "failures": 0
+                      },
+                      "uplink": {
+                        "sent": 1780,
+                        "dropped": 0,
+                        "depth": 0,
+                        "highWater": 1,
+                        "sendDeferrals": 4,
+                        "consecutiveSendDeferrals": 0,
+                        "maximumConsecutiveSendDeferrals": 2,
+                        "failures": 0,
+                        "restartIncidents": 0,
+                        "producerBackpressureRestarts": 0,
+                        "transportDisconnectRestarts": 0,
+                        "noProgressTimeoutRestarts": 0,
+                        "frameSendTimeoutRestarts": 0,
+                        "captureStaleRestarts": 0,
+                        "lastTransportAcceptAgeMs": 0,
+                        "maximumTransportAcceptAgeMs": 17,
+                        "lastRestartOldestCaptureAgeMs": 0,
+                        "lastRestartReason": "none",
+                        "lastRestartFramesDiscarded": 0
+                      },
+                      "downlink": {
+                        "received": 400,
+                        "dropped": 0,
+                        "depth": 0,
+                        "highWater": 6,
+                        "failures": 0
+                      },
+                      "playback": {
+                        "submitted": 400,
+                        "completed": 400,
+                        "flushed": 0,
+                        "depth": 0,
+                        "highWater": 4,
+                        "failures": 0
+                      },
+                      "protocolFailures": 0,
+                      "buffers": {
+                        "uplinkApplication": {
+                          "evidence": "observed",
+                          "current": 0,
+                          "highWater": 640,
+                          "capacity": 20480
+                        },
+                        "websocketTransmitter": {
+                          "evidence": "observed",
+                          "current": 0,
+                          "highWater": 648,
+                          "capacity": 910
+                        },
+                        "lwipSend": {
+                          "evidence": "capacityOnly",
+                          "current": 0,
+                          "highWater": 0,
+                          "capacity": 5760
+                        },
+                        "tlsEgress": {
+                          "evidence": "unavailable",
+                          "current": 0,
+                          "highWater": 0,
+                          "capacity": 0
+                        },
+                        "wifiEgress": {
+                          "evidence": "unavailable",
+                          "current": 0,
+                          "highWater": 0,
+                          "capacity": 0
+                        }
+                      }
+                    }
+                  },
+                  "receivedAtMs": 1785547913891
+                },
+                "samplesReceived": 51
+              },
+              "deviceId": "m5sticks3",
+              "deviceEventSubscriptionAttempts": 1,
+              "deviceEventSubscriptionFailures": 0,
+              "endedAtMs": 1785547914879,
+              "providerEvents": {
+                "appendFailures": 0,
+                "appendedEvents": 137,
+                "droppedEvents": 0,
+                "lastAppendError": null,
+                "lastAppendedSequence": 137,
+                "observedEvents": 137,
+                "pendingEvents": 0,
+                "pendingRawBytes": 0,
+                "pendingRawHighWaterBytes": 4057
+              },
+              "providerConnectAttempts": 1,
+              "providerConnectFailures": 0,
+              "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:0e13b1aa-a1b4-4e3a-ab45-5a22dd04b81c"
+            },
+            "providerEvents": {
+              "appendFailures": 0,
+              "appendedEvents": 4,
+              "droppedEvents": 0,
+              "lastAppendError": null,
+              "lastAppendedSequence": 4,
+              "observedEvents": 4,
+              "pendingEvents": 0,
+              "pendingRawBytes": 0,
+              "pendingRawHighWaterBytes": 1037
+            },
+            "providerConnectAttempts": 1,
+            "providerConnectFailures": 0,
+            "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40"
+          },
+          "terminal": {
+            "awaitingCommitAcknowledgement": false,
+            "awaitingUplinkEndMarker": false,
+            "closed": false,
+            "downlinkDroppedBytes": 0,
+            "downlinkFrames": 148,
+            "downlinkPartialBytes": 0,
+            "downlinkQueuedBytes": 0,
+            "downlinkQueueHighWaterBytes": 71818,
+            "interrupted": false,
+            "lastProviderError": null,
+            "lastProviderEventType": "conversation.item.added",
+            "lastSocketClose": null,
+            "providerAvailable": true,
+            "providerConnections": 1,
+            "providerControlEvents": 49,
+            "providerBufferedBytes": 0,
+            "providerDisconnects": 0,
+            "providerFunctionCallFailures": 0,
+            "providerFunctionCalls": 1,
+            "providerFunctionCallsPending": 0,
+            "providerPcmPeakSample": 16738,
+            "providerPcmRmsSample": 3110.977620776104,
+            "providerPcmSamples": 47204,
+            "providerResponseActive": false,
+            "providerResponsesCompleted": 1,
+            "uplinkDroppedBytes": 0,
+            "uplinkEndMarkers": 1,
+            "uplinkEndMarkerTimeouts": 0,
+            "uplinkFrames": 658,
+            "uplinkFramesAfterEndMarkerDropped": 0,
+            "uplinkUnavailableFrames": 0,
+            "deviceEvents": {
+              "acceptedEvents": 3,
+              "lastEvent": {
+                "sequence": 4,
+                "source": "remote",
+                "type": "pushToTalk.stopped"
+              },
+              "physicalConversationEnds": 0,
+              "physicalConversationStarts": 0,
+              "physicalStarts": 0,
+              "physicalStops": 0,
+              "remoteConversationEnds": 0,
+              "remoteConversationStarts": 0,
+              "remoteStarts": 1,
+              "remoteStops": 1
+            },
+            "deviceId": "m5sticks3",
+            "deviceMetrics": {
+              "invalidSamples": 0,
+              "lastInvalidReason": null,
+              "latestSample": {
+                "metrics": {
+                  "uptimeMs": 51597,
+                  "freeHeapBytes": 8413152,
+                  "minimumFreeHeapBytes": 8391260,
+                  "freeInternalHeapBytes": 20763,
+                  "minimumFreeInternalHeapBytes": 663,
+                  "freePsramBytes": 8384912,
+                  "taskStackHighWaterBytes": 2572,
+                  "cpuPermille": 186,
+                  "audio": {
+                    "capture": {
+                      "sent": 658,
+                      "dropped": 0,
+                      "failures": 0
+                    },
+                    "uplink": {
+                      "sent": 658,
+                      "dropped": 0,
+                      "depth": 0,
+                      "highWater": 12,
+                      "sendDeferrals": 148,
+                      "consecutiveSendDeferrals": 0,
+                      "maximumConsecutiveSendDeferrals": 10,
+                      "failures": 0,
+                      "restartIncidents": 0,
+                      "producerBackpressureRestarts": 0,
+                      "transportDisconnectRestarts": 0,
+                      "noProgressTimeoutRestarts": 0,
+                      "frameSendTimeoutRestarts": 0,
+                      "captureStaleRestarts": 0,
+                      "lastTransportAcceptAgeMs": 0,
+                      "maximumTransportAcceptAgeMs": 222,
+                      "lastRestartOldestCaptureAgeMs": 0,
+                      "lastRestartReason": "none",
+                      "lastRestartFramesDiscarded": 0
+                    },
+                    "downlink": {
+                      "received": 148,
+                      "dropped": 0,
+                      "depth": 0,
+                      "highWater": 11,
+                      "failures": 0
+                    },
+                    "playback": {
+                      "submitted": 148,
+                      "completed": 148,
+                      "flushed": 0,
+                      "depth": 0,
+                      "highWater": 4,
+                      "failures": 0
+                    },
+                    "protocolFailures": 0,
+                    "buffers": {
+                      "uplinkApplication": {
+                        "evidence": "observed",
+                        "current": 0,
+                        "highWater": 7680,
+                        "capacity": 20480
+                      },
+                      "websocketTransmitter": {
+                        "evidence": "observed",
+                        "current": 0,
+                        "highWater": 648,
+                        "capacity": 910
+                      },
+                      "lwipSend": {
+                        "evidence": "capacityOnly",
+                        "current": 0,
+                        "highWater": 0,
+                        "capacity": 5760
+                      },
+                      "tlsEgress": {
+                        "evidence": "unavailable",
+                        "current": 0,
+                        "highWater": 0,
+                        "capacity": 0
+                      },
+                      "wifiEgress": {
+                        "evidence": "unavailable",
+                        "current": 0,
+                        "highWater": 0,
+                        "capacity": 0
+                      }
+                    }
+                  }
+                },
+                "receivedAtMs": 1785548199361
+              },
+              "samplesReceived": 19
+            },
+            "deviceEventSubscriptionAttempts": 1,
+            "deviceEventSubscriptionFailures": 0,
+            "endedAtMs": null,
+            "previousSession": {
+              "awaitingCommitAcknowledgement": false,
+              "awaitingUplinkEndMarker": false,
+              "closed": true,
+              "downlinkDroppedBytes": 0,
+              "downlinkFrames": 400,
+              "downlinkPartialBytes": 0,
+              "downlinkQueuedBytes": 0,
+              "downlinkQueueHighWaterBytes": 70728,
+              "interrupted": false,
+              "lastProviderError": null,
+              "lastProviderEventType": "ping",
+              "lastSocketClose": {
+                "code": 1006,
+                "reason": "WebSocket disconnected without sending Close frame.",
+                "source": "device"
+              },
+              "providerAvailable": false,
+              "providerConnections": 1,
+              "providerControlEvents": 137,
+              "providerBufferedBytes": 0,
+              "providerDisconnects": 0,
+              "providerFunctionCallFailures": 0,
+              "providerFunctionCalls": 3,
+              "providerFunctionCallsPending": 0,
+              "providerPcmPeakSample": 22302,
+              "providerPcmRmsSample": 3277.4384618495246,
+              "providerPcmSamples": 127526,
+              "providerResponseActive": false,
+              "providerResponsesCompleted": 3,
+              "uplinkDroppedBytes": 0,
+              "uplinkEndMarkers": 3,
+              "uplinkEndMarkerTimeouts": 0,
+              "uplinkFrames": 1780,
+              "uplinkFramesAfterEndMarkerDropped": 0,
+              "uplinkUnavailableFrames": 0,
+              "deviceEvents": {
+                "acceptedEvents": 8,
+                "lastEvent": {
+                  "sequence": 9,
+                  "source": "remote",
+                  "type": "conversation.ended"
+                },
+                "physicalConversationEnds": 0,
+                "physicalConversationStarts": 0,
+                "physicalStarts": 0,
+                "physicalStops": 0,
+                "remoteConversationEnds": 1,
+                "remoteConversationStarts": 0,
+                "remoteStarts": 3,
+                "remoteStops": 3
+              },
+              "deviceMetrics": {
+                "invalidSamples": 0,
+                "lastInvalidReason": null,
+                "latestSample": {
+                  "metrics": {
+                    "uptimeMs": 83328,
+                    "freeHeapBytes": 8413344,
+                    "minimumFreeHeapBytes": 8397268,
+                    "freeInternalHeapBytes": 20775,
+                    "minimumFreeInternalHeapBytes": 4875,
+                    "freePsramBytes": 8384912,
+                    "taskStackHighWaterBytes": 2444,
+                    "cpuPermille": 163,
+                    "audio": {
+                      "capture": {
+                        "sent": 1780,
+                        "dropped": 0,
+                        "failures": 0
+                      },
+                      "uplink": {
+                        "sent": 1780,
+                        "dropped": 0,
+                        "depth": 0,
+                        "highWater": 1,
+                        "sendDeferrals": 4,
+                        "consecutiveSendDeferrals": 0,
+                        "maximumConsecutiveSendDeferrals": 2,
+                        "failures": 0,
+                        "restartIncidents": 0,
+                        "producerBackpressureRestarts": 0,
+                        "transportDisconnectRestarts": 0,
+                        "noProgressTimeoutRestarts": 0,
+                        "frameSendTimeoutRestarts": 0,
+                        "captureStaleRestarts": 0,
+                        "lastTransportAcceptAgeMs": 0,
+                        "maximumTransportAcceptAgeMs": 17,
+                        "lastRestartOldestCaptureAgeMs": 0,
+                        "lastRestartReason": "none",
+                        "lastRestartFramesDiscarded": 0
+                      },
+                      "downlink": {
+                        "received": 400,
+                        "dropped": 0,
+                        "depth": 0,
+                        "highWater": 6,
+                        "failures": 0
+                      },
+                      "playback": {
+                        "submitted": 400,
+                        "completed": 400,
+                        "flushed": 0,
+                        "depth": 0,
+                        "highWater": 4,
+                        "failures": 0
+                      },
+                      "protocolFailures": 0,
+                      "buffers": {
+                        "uplinkApplication": {
+                          "evidence": "observed",
+                          "current": 0,
+                          "highWater": 640,
+                          "capacity": 20480
+                        },
+                        "websocketTransmitter": {
+                          "evidence": "observed",
+                          "current": 0,
+                          "highWater": 648,
+                          "capacity": 910
+                        },
+                        "lwipSend": {
+                          "evidence": "capacityOnly",
+                          "current": 0,
+                          "highWater": 0,
+                          "capacity": 5760
+                        },
+                        "tlsEgress": {
+                          "evidence": "unavailable",
+                          "current": 0,
+                          "highWater": 0,
+                          "capacity": 0
+                        },
+                        "wifiEgress": {
+                          "evidence": "unavailable",
+                          "current": 0,
+                          "highWater": 0,
+                          "capacity": 0
+                        }
+                      }
+                    }
+                  },
+                  "receivedAtMs": 1785547913891
+                },
+                "samplesReceived": 51
+              },
+              "deviceId": "m5sticks3",
+              "deviceEventSubscriptionAttempts": 1,
+              "deviceEventSubscriptionFailures": 0,
+              "endedAtMs": 1785547914879,
+              "providerEvents": {
+                "appendFailures": 0,
+                "appendedEvents": 137,
+                "droppedEvents": 0,
+                "lastAppendError": null,
+                "lastAppendedSequence": 137,
+                "observedEvents": 137,
+                "pendingEvents": 0,
+                "pendingRawBytes": 0,
+                "pendingRawHighWaterBytes": 4057
+              },
+              "providerConnectAttempts": 1,
+              "providerConnectFailures": 0,
+              "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:0e13b1aa-a1b4-4e3a-ab45-5a22dd04b81c"
+            },
+            "providerEvents": {
+              "appendFailures": 0,
+              "appendedEvents": 49,
+              "droppedEvents": 0,
+              "lastAppendError": null,
+              "lastAppendedSequence": 49,
+              "observedEvents": 49,
+              "pendingEvents": 0,
+              "pendingRawBytes": 0,
+              "pendingRawHighWaterBytes": 4057
+            },
+            "providerConnectAttempts": 1,
+            "providerConnectFailures": 0,
+            "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40"
+          }
+        }
+      }
+    ],
+    "worker": {
+      "baseline": {
+        "awaitingCommitAcknowledgement": false,
+        "awaitingUplinkEndMarker": false,
+        "closed": false,
+        "downlinkDroppedBytes": 0,
+        "downlinkFrames": 0,
+        "downlinkPartialBytes": 0,
+        "downlinkQueuedBytes": 0,
+        "downlinkQueueHighWaterBytes": 0,
+        "interrupted": false,
+        "lastProviderError": null,
+        "lastProviderEventType": "session.updated",
+        "lastSocketClose": null,
+        "providerAvailable": true,
+        "providerConnections": 1,
+        "providerControlEvents": 4,
+        "providerBufferedBytes": 0,
+        "providerDisconnects": 0,
+        "providerFunctionCallFailures": 0,
+        "providerFunctionCalls": 0,
+        "providerFunctionCallsPending": 0,
+        "providerPcmPeakSample": 0,
+        "providerPcmRmsSample": 0,
+        "providerPcmSamples": 0,
+        "providerResponseActive": false,
+        "providerResponsesCompleted": 0,
+        "uplinkDroppedBytes": 0,
+        "uplinkEndMarkers": 0,
+        "uplinkEndMarkerTimeouts": 0,
+        "uplinkFrames": 0,
+        "uplinkFramesAfterEndMarkerDropped": 0,
+        "uplinkUnavailableFrames": 0,
+        "deviceEvents": {
+          "acceptedEvents": 1,
+          "lastEvent": {
+            "sequence": 2,
+            "source": "system",
+            "type": "pushToTalk.stopped"
+          },
+          "physicalConversationEnds": 0,
+          "physicalConversationStarts": 0,
+          "physicalStarts": 0,
+          "physicalStops": 0,
+          "remoteConversationEnds": 0,
+          "remoteConversationStarts": 0,
+          "remoteStarts": 0,
+          "remoteStops": 0
+        },
+        "deviceId": "m5sticks3",
+        "deviceMetrics": {
+          "invalidSamples": 0,
+          "lastInvalidReason": null,
+          "latestSample": {
+            "metrics": {
+              "uptimeMs": 33528,
+              "freeHeapBytes": 8416008,
+              "minimumFreeHeapBytes": 8408048,
+              "freeInternalHeapBytes": 23619,
+              "minimumFreeInternalHeapBytes": 15655,
+              "freePsramBytes": 8384912,
+              "taskStackHighWaterBytes": 2796,
+              "cpuPermille": 156,
+              "audio": {
+                "capture": {
+                  "sent": 0,
+                  "dropped": 0,
+                  "failures": 0
+                },
+                "uplink": {
+                  "sent": 0,
+                  "dropped": 0,
+                  "depth": 0,
+                  "highWater": 0,
+                  "sendDeferrals": 0,
+                  "consecutiveSendDeferrals": 0,
+                  "maximumConsecutiveSendDeferrals": 0,
+                  "failures": 0,
+                  "restartIncidents": 0,
+                  "producerBackpressureRestarts": 0,
+                  "transportDisconnectRestarts": 0,
+                  "noProgressTimeoutRestarts": 0,
+                  "frameSendTimeoutRestarts": 0,
+                  "captureStaleRestarts": 0,
+                  "lastTransportAcceptAgeMs": 0,
+                  "maximumTransportAcceptAgeMs": 0,
+                  "lastRestartOldestCaptureAgeMs": 0,
+                  "lastRestartReason": "none",
+                  "lastRestartFramesDiscarded": 0
+                },
+                "downlink": {
+                  "received": 0,
+                  "dropped": 0,
+                  "depth": 0,
+                  "highWater": 0,
+                  "failures": 0
+                },
+                "playback": {
+                  "submitted": 0,
+                  "completed": 0,
+                  "flushed": 0,
+                  "depth": 0,
+                  "highWater": 0,
+                  "failures": 0
+                },
+                "protocolFailures": 0,
+                "buffers": {
+                  "uplinkApplication": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 20480
+                  },
+                  "websocketTransmitter": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 910
+                  },
+                  "lwipSend": {
+                    "evidence": "capacityOnly",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 5760
+                  },
+                  "tlsEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  },
+                  "wifiEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  }
+                }
+              }
+            },
+            "receivedAtMs": 1785548181297
+          },
+          "samplesReceived": 1
+        },
+        "deviceEventSubscriptionAttempts": 1,
+        "deviceEventSubscriptionFailures": 0,
+        "endedAtMs": null,
+        "previousSession": {
+          "awaitingCommitAcknowledgement": false,
+          "awaitingUplinkEndMarker": false,
+          "closed": true,
+          "downlinkDroppedBytes": 0,
+          "downlinkFrames": 400,
+          "downlinkPartialBytes": 0,
+          "downlinkQueuedBytes": 0,
+          "downlinkQueueHighWaterBytes": 70728,
+          "interrupted": false,
+          "lastProviderError": null,
+          "lastProviderEventType": "ping",
+          "lastSocketClose": {
+            "code": 1006,
+            "reason": "WebSocket disconnected without sending Close frame.",
+            "source": "device"
+          },
+          "providerAvailable": false,
+          "providerConnections": 1,
+          "providerControlEvents": 137,
+          "providerBufferedBytes": 0,
+          "providerDisconnects": 0,
+          "providerFunctionCallFailures": 0,
+          "providerFunctionCalls": 3,
+          "providerFunctionCallsPending": 0,
+          "providerPcmPeakSample": 22302,
+          "providerPcmRmsSample": 3277.4384618495246,
+          "providerPcmSamples": 127526,
+          "providerResponseActive": false,
+          "providerResponsesCompleted": 3,
+          "uplinkDroppedBytes": 0,
+          "uplinkEndMarkers": 3,
+          "uplinkEndMarkerTimeouts": 0,
+          "uplinkFrames": 1780,
+          "uplinkFramesAfterEndMarkerDropped": 0,
+          "uplinkUnavailableFrames": 0,
+          "deviceEvents": {
+            "acceptedEvents": 8,
+            "lastEvent": {
+              "sequence": 9,
+              "source": "remote",
+              "type": "conversation.ended"
+            },
+            "physicalConversationEnds": 0,
+            "physicalConversationStarts": 0,
+            "physicalStarts": 0,
+            "physicalStops": 0,
+            "remoteConversationEnds": 1,
+            "remoteConversationStarts": 0,
+            "remoteStarts": 3,
+            "remoteStops": 3
+          },
+          "deviceMetrics": {
+            "invalidSamples": 0,
+            "lastInvalidReason": null,
+            "latestSample": {
+              "metrics": {
+                "uptimeMs": 83328,
+                "freeHeapBytes": 8413344,
+                "minimumFreeHeapBytes": 8397268,
+                "freeInternalHeapBytes": 20775,
+                "minimumFreeInternalHeapBytes": 4875,
+                "freePsramBytes": 8384912,
+                "taskStackHighWaterBytes": 2444,
+                "cpuPermille": 163,
+                "audio": {
+                  "capture": {
+                    "sent": 1780,
+                    "dropped": 0,
+                    "failures": 0
+                  },
+                  "uplink": {
+                    "sent": 1780,
+                    "dropped": 0,
+                    "depth": 0,
+                    "highWater": 1,
+                    "sendDeferrals": 4,
+                    "consecutiveSendDeferrals": 0,
+                    "maximumConsecutiveSendDeferrals": 2,
+                    "failures": 0,
+                    "restartIncidents": 0,
+                    "producerBackpressureRestarts": 0,
+                    "transportDisconnectRestarts": 0,
+                    "noProgressTimeoutRestarts": 0,
+                    "frameSendTimeoutRestarts": 0,
+                    "captureStaleRestarts": 0,
+                    "lastTransportAcceptAgeMs": 0,
+                    "maximumTransportAcceptAgeMs": 17,
+                    "lastRestartOldestCaptureAgeMs": 0,
+                    "lastRestartReason": "none",
+                    "lastRestartFramesDiscarded": 0
+                  },
+                  "downlink": {
+                    "received": 400,
+                    "dropped": 0,
+                    "depth": 0,
+                    "highWater": 6,
+                    "failures": 0
+                  },
+                  "playback": {
+                    "submitted": 400,
+                    "completed": 400,
+                    "flushed": 0,
+                    "depth": 0,
+                    "highWater": 4,
+                    "failures": 0
+                  },
+                  "protocolFailures": 0,
+                  "buffers": {
+                    "uplinkApplication": {
+                      "evidence": "observed",
+                      "current": 0,
+                      "highWater": 640,
+                      "capacity": 20480
+                    },
+                    "websocketTransmitter": {
+                      "evidence": "observed",
+                      "current": 0,
+                      "highWater": 648,
+                      "capacity": 910
+                    },
+                    "lwipSend": {
+                      "evidence": "capacityOnly",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 5760
+                    },
+                    "tlsEgress": {
+                      "evidence": "unavailable",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 0
+                    },
+                    "wifiEgress": {
+                      "evidence": "unavailable",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 0
+                    }
+                  }
+                }
+              },
+              "receivedAtMs": 1785547913891
+            },
+            "samplesReceived": 51
+          },
+          "deviceId": "m5sticks3",
+          "deviceEventSubscriptionAttempts": 1,
+          "deviceEventSubscriptionFailures": 0,
+          "endedAtMs": 1785547914879,
+          "providerEvents": {
+            "appendFailures": 0,
+            "appendedEvents": 137,
+            "droppedEvents": 0,
+            "lastAppendError": null,
+            "lastAppendedSequence": 137,
+            "observedEvents": 137,
+            "pendingEvents": 0,
+            "pendingRawBytes": 0,
+            "pendingRawHighWaterBytes": 4057
+          },
+          "providerConnectAttempts": 1,
+          "providerConnectFailures": 0,
+          "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:0e13b1aa-a1b4-4e3a-ab45-5a22dd04b81c"
+        },
+        "providerEvents": {
+          "appendFailures": 0,
+          "appendedEvents": 4,
+          "droppedEvents": 0,
+          "lastAppendError": null,
+          "lastAppendedSequence": 4,
+          "observedEvents": 4,
+          "pendingEvents": 0,
+          "pendingRawBytes": 0,
+          "pendingRawHighWaterBytes": 1037
+        },
+        "providerConnectAttempts": 1,
+        "providerConnectFailures": 0,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40"
+      },
+      "closed": null,
+      "continuingHeld": {
+        "awaitingCommitAcknowledgement": false,
+        "awaitingUplinkEndMarker": false,
+        "closed": false,
+        "downlinkDroppedBytes": 0,
+        "downlinkFrames": 0,
+        "downlinkPartialBytes": 0,
+        "downlinkQueuedBytes": 0,
+        "downlinkQueueHighWaterBytes": 0,
+        "interrupted": true,
+        "lastProviderError": null,
+        "lastProviderEventType": "conversation.item.input_audio_transcription.completed",
+        "lastSocketClose": null,
+        "providerAvailable": true,
+        "providerConnections": 1,
+        "providerControlEvents": 29,
+        "providerBufferedBytes": 0,
+        "providerDisconnects": 0,
+        "providerFunctionCallFailures": 0,
+        "providerFunctionCalls": 0,
+        "providerFunctionCallsPending": 0,
+        "providerPcmPeakSample": 0,
+        "providerPcmRmsSample": 0,
+        "providerPcmSamples": 0,
+        "providerResponseActive": false,
+        "providerResponsesCompleted": 0,
+        "uplinkDroppedBytes": 0,
+        "uplinkEndMarkers": 0,
+        "uplinkEndMarkerTimeouts": 0,
+        "uplinkFrames": 650,
+        "uplinkFramesAfterEndMarkerDropped": 0,
+        "uplinkUnavailableFrames": 0,
+        "deviceEvents": {
+          "acceptedEvents": 2,
+          "lastEvent": {
+            "sequence": 3,
+            "source": "remote",
+            "type": "pushToTalk.started"
+          },
+          "physicalConversationEnds": 0,
+          "physicalConversationStarts": 0,
+          "physicalStarts": 0,
+          "physicalStops": 0,
+          "remoteConversationEnds": 0,
+          "remoteConversationStarts": 0,
+          "remoteStarts": 1,
+          "remoteStops": 0
+        },
+        "deviceId": "m5sticks3",
+        "deviceMetrics": {
+          "invalidSamples": 0,
+          "lastInvalidReason": null,
+          "latestSample": {
+            "metrics": {
+              "uptimeMs": 46568,
+              "freeHeapBytes": 8407176,
+              "minimumFreeHeapBytes": 8391260,
+              "freeInternalHeapBytes": 14787,
+              "minimumFreeInternalHeapBytes": 663,
+              "freePsramBytes": 8384912,
+              "taskStackHighWaterBytes": 2572,
+              "cpuPermille": 322,
+              "audio": {
+                "capture": {
+                  "sent": 624,
+                  "dropped": 0,
+                  "failures": 0
+                },
+                "uplink": {
+                  "sent": 624,
+                  "dropped": 0,
+                  "depth": 0,
+                  "highWater": 12,
+                  "sendDeferrals": 145,
+                  "consecutiveSendDeferrals": 0,
+                  "maximumConsecutiveSendDeferrals": 10,
+                  "failures": 0,
+                  "restartIncidents": 0,
+                  "producerBackpressureRestarts": 0,
+                  "transportDisconnectRestarts": 0,
+                  "noProgressTimeoutRestarts": 0,
+                  "frameSendTimeoutRestarts": 0,
+                  "captureStaleRestarts": 0,
+                  "lastTransportAcceptAgeMs": 0,
+                  "maximumTransportAcceptAgeMs": 222,
+                  "lastRestartOldestCaptureAgeMs": 0,
+                  "lastRestartReason": "none",
+                  "lastRestartFramesDiscarded": 0
+                },
+                "downlink": {
+                  "received": 0,
+                  "dropped": 0,
+                  "depth": 0,
+                  "highWater": 0,
+                  "failures": 0
+                },
+                "playback": {
+                  "submitted": 0,
+                  "completed": 0,
+                  "flushed": 0,
+                  "depth": 0,
+                  "highWater": 0,
+                  "failures": 0
+                },
+                "protocolFailures": 0,
+                "buffers": {
+                  "uplinkApplication": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 7680,
+                    "capacity": 20480
+                  },
+                  "websocketTransmitter": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 648,
+                    "capacity": 910
+                  },
+                  "lwipSend": {
+                    "evidence": "capacityOnly",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 5760
+                  },
+                  "tlsEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  },
+                  "wifiEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  }
+                }
+              }
+            },
+            "receivedAtMs": 1785548194344
+          },
+          "samplesReceived": 14
+        },
+        "deviceEventSubscriptionAttempts": 1,
+        "deviceEventSubscriptionFailures": 0,
+        "endedAtMs": null,
+        "previousSession": {
+          "awaitingCommitAcknowledgement": false,
+          "awaitingUplinkEndMarker": false,
+          "closed": true,
+          "downlinkDroppedBytes": 0,
+          "downlinkFrames": 400,
+          "downlinkPartialBytes": 0,
+          "downlinkQueuedBytes": 0,
+          "downlinkQueueHighWaterBytes": 70728,
+          "interrupted": false,
+          "lastProviderError": null,
+          "lastProviderEventType": "ping",
+          "lastSocketClose": {
+            "code": 1006,
+            "reason": "WebSocket disconnected without sending Close frame.",
+            "source": "device"
+          },
+          "providerAvailable": false,
+          "providerConnections": 1,
+          "providerControlEvents": 137,
+          "providerBufferedBytes": 0,
+          "providerDisconnects": 0,
+          "providerFunctionCallFailures": 0,
+          "providerFunctionCalls": 3,
+          "providerFunctionCallsPending": 0,
+          "providerPcmPeakSample": 22302,
+          "providerPcmRmsSample": 3277.4384618495246,
+          "providerPcmSamples": 127526,
+          "providerResponseActive": false,
+          "providerResponsesCompleted": 3,
+          "uplinkDroppedBytes": 0,
+          "uplinkEndMarkers": 3,
+          "uplinkEndMarkerTimeouts": 0,
+          "uplinkFrames": 1780,
+          "uplinkFramesAfterEndMarkerDropped": 0,
+          "uplinkUnavailableFrames": 0,
+          "deviceEvents": {
+            "acceptedEvents": 8,
+            "lastEvent": {
+              "sequence": 9,
+              "source": "remote",
+              "type": "conversation.ended"
+            },
+            "physicalConversationEnds": 0,
+            "physicalConversationStarts": 0,
+            "physicalStarts": 0,
+            "physicalStops": 0,
+            "remoteConversationEnds": 1,
+            "remoteConversationStarts": 0,
+            "remoteStarts": 3,
+            "remoteStops": 3
+          },
+          "deviceMetrics": {
+            "invalidSamples": 0,
+            "lastInvalidReason": null,
+            "latestSample": {
+              "metrics": {
+                "uptimeMs": 83328,
+                "freeHeapBytes": 8413344,
+                "minimumFreeHeapBytes": 8397268,
+                "freeInternalHeapBytes": 20775,
+                "minimumFreeInternalHeapBytes": 4875,
+                "freePsramBytes": 8384912,
+                "taskStackHighWaterBytes": 2444,
+                "cpuPermille": 163,
+                "audio": {
+                  "capture": {
+                    "sent": 1780,
+                    "dropped": 0,
+                    "failures": 0
+                  },
+                  "uplink": {
+                    "sent": 1780,
+                    "dropped": 0,
+                    "depth": 0,
+                    "highWater": 1,
+                    "sendDeferrals": 4,
+                    "consecutiveSendDeferrals": 0,
+                    "maximumConsecutiveSendDeferrals": 2,
+                    "failures": 0,
+                    "restartIncidents": 0,
+                    "producerBackpressureRestarts": 0,
+                    "transportDisconnectRestarts": 0,
+                    "noProgressTimeoutRestarts": 0,
+                    "frameSendTimeoutRestarts": 0,
+                    "captureStaleRestarts": 0,
+                    "lastTransportAcceptAgeMs": 0,
+                    "maximumTransportAcceptAgeMs": 17,
+                    "lastRestartOldestCaptureAgeMs": 0,
+                    "lastRestartReason": "none",
+                    "lastRestartFramesDiscarded": 0
+                  },
+                  "downlink": {
+                    "received": 400,
+                    "dropped": 0,
+                    "depth": 0,
+                    "highWater": 6,
+                    "failures": 0
+                  },
+                  "playback": {
+                    "submitted": 400,
+                    "completed": 400,
+                    "flushed": 0,
+                    "depth": 0,
+                    "highWater": 4,
+                    "failures": 0
+                  },
+                  "protocolFailures": 0,
+                  "buffers": {
+                    "uplinkApplication": {
+                      "evidence": "observed",
+                      "current": 0,
+                      "highWater": 640,
+                      "capacity": 20480
+                    },
+                    "websocketTransmitter": {
+                      "evidence": "observed",
+                      "current": 0,
+                      "highWater": 648,
+                      "capacity": 910
+                    },
+                    "lwipSend": {
+                      "evidence": "capacityOnly",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 5760
+                    },
+                    "tlsEgress": {
+                      "evidence": "unavailable",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 0
+                    },
+                    "wifiEgress": {
+                      "evidence": "unavailable",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 0
+                    }
+                  }
+                }
+              },
+              "receivedAtMs": 1785547913891
+            },
+            "samplesReceived": 51
+          },
+          "deviceId": "m5sticks3",
+          "deviceEventSubscriptionAttempts": 1,
+          "deviceEventSubscriptionFailures": 0,
+          "endedAtMs": 1785547914879,
+          "providerEvents": {
+            "appendFailures": 0,
+            "appendedEvents": 137,
+            "droppedEvents": 0,
+            "lastAppendError": null,
+            "lastAppendedSequence": 137,
+            "observedEvents": 137,
+            "pendingEvents": 0,
+            "pendingRawBytes": 0,
+            "pendingRawHighWaterBytes": 4057
+          },
+          "providerConnectAttempts": 1,
+          "providerConnectFailures": 0,
+          "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:0e13b1aa-a1b4-4e3a-ab45-5a22dd04b81c"
+        },
+        "providerEvents": {
+          "appendFailures": 0,
+          "appendedEvents": 29,
+          "droppedEvents": 0,
+          "lastAppendError": null,
+          "lastAppendedSequence": 29,
+          "observedEvents": 29,
+          "pendingEvents": 0,
+          "pendingRawBytes": 0,
+          "pendingRawHighWaterBytes": 1037
+        },
+        "providerConnectAttempts": 1,
+        "providerConnectFailures": 0,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40"
+      },
+      "firstHeld": {
+        "awaitingCommitAcknowledgement": false,
+        "awaitingUplinkEndMarker": false,
+        "closed": false,
+        "downlinkDroppedBytes": 0,
+        "downlinkFrames": 0,
+        "downlinkPartialBytes": 0,
+        "downlinkQueuedBytes": 0,
+        "downlinkQueueHighWaterBytes": 0,
+        "interrupted": true,
+        "lastProviderError": null,
+        "lastProviderEventType": "input_audio_buffer.speech_started",
+        "lastSocketClose": null,
+        "providerAvailable": true,
+        "providerConnections": 1,
+        "providerControlEvents": 5,
+        "providerBufferedBytes": 0,
+        "providerDisconnects": 0,
+        "providerFunctionCallFailures": 0,
+        "providerFunctionCalls": 0,
+        "providerFunctionCallsPending": 0,
+        "providerPcmPeakSample": 0,
+        "providerPcmRmsSample": 0,
+        "providerPcmSamples": 0,
+        "providerResponseActive": false,
+        "providerResponsesCompleted": 0,
+        "uplinkDroppedBytes": 0,
+        "uplinkEndMarkers": 0,
+        "uplinkEndMarkerTimeouts": 0,
+        "uplinkFrames": 19,
+        "uplinkFramesAfterEndMarkerDropped": 0,
+        "uplinkUnavailableFrames": 0,
+        "deviceEvents": {
+          "acceptedEvents": 2,
+          "lastEvent": {
+            "sequence": 3,
+            "source": "remote",
+            "type": "pushToTalk.started"
+          },
+          "physicalConversationEnds": 0,
+          "physicalConversationStarts": 0,
+          "physicalStarts": 0,
+          "physicalStops": 0,
+          "remoteConversationEnds": 0,
+          "remoteConversationStarts": 0,
+          "remoteStarts": 1,
+          "remoteStops": 0
+        },
+        "deviceId": "m5sticks3",
+        "deviceMetrics": {
+          "invalidSamples": 0,
+          "lastInvalidReason": null,
+          "latestSample": {
+            "metrics": {
+              "uptimeMs": 34528,
+              "freeHeapBytes": 8405612,
+              "minimumFreeHeapBytes": 8397976,
+              "freeInternalHeapBytes": 13223,
+              "minimumFreeInternalHeapBytes": 5583,
+              "freePsramBytes": 8384912,
+              "taskStackHighWaterBytes": 2636,
+              "cpuPermille": 296,
+              "audio": {
+                "capture": {
+                  "sent": 23,
+                  "dropped": 0,
+                  "failures": 0
+                },
+                "uplink": {
+                  "sent": 17,
+                  "dropped": 0,
+                  "depth": 6,
+                  "highWater": 7,
+                  "sendDeferrals": 54,
+                  "consecutiveSendDeferrals": 5,
+                  "maximumConsecutiveSendDeferrals": 10,
+                  "failures": 0,
+                  "restartIncidents": 0,
+                  "producerBackpressureRestarts": 0,
+                  "transportDisconnectRestarts": 0,
+                  "noProgressTimeoutRestarts": 0,
+                  "frameSendTimeoutRestarts": 0,
+                  "captureStaleRestarts": 0,
+                  "lastTransportAcceptAgeMs": 101,
+                  "maximumTransportAcceptAgeMs": 131,
+                  "lastRestartOldestCaptureAgeMs": 0,
+                  "lastRestartReason": "none",
+                  "lastRestartFramesDiscarded": 0
+                },
+                "downlink": {
+                  "received": 0,
+                  "dropped": 0,
+                  "depth": 0,
+                  "highWater": 0,
+                  "failures": 0
+                },
+                "playback": {
+                  "submitted": 0,
+                  "completed": 0,
+                  "flushed": 0,
+                  "depth": 0,
+                  "highWater": 0,
+                  "failures": 0
+                },
+                "protocolFailures": 0,
+                "buffers": {
+                  "uplinkApplication": {
+                    "evidence": "observed",
+                    "current": 3840,
+                    "highWater": 4480,
+                    "capacity": 20480
+                  },
+                  "websocketTransmitter": {
+                    "evidence": "observed",
+                    "current": 648,
+                    "highWater": 648,
+                    "capacity": 910
+                  },
+                  "lwipSend": {
+                    "evidence": "capacityOnly",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 5760
+                  },
+                  "tlsEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  },
+                  "wifiEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  }
+                }
+              }
+            },
+            "receivedAtMs": 1785548182398
+          },
+          "samplesReceived": 2
+        },
+        "deviceEventSubscriptionAttempts": 1,
+        "deviceEventSubscriptionFailures": 0,
+        "endedAtMs": null,
+        "previousSession": {
+          "awaitingCommitAcknowledgement": false,
+          "awaitingUplinkEndMarker": false,
+          "closed": true,
+          "downlinkDroppedBytes": 0,
+          "downlinkFrames": 400,
+          "downlinkPartialBytes": 0,
+          "downlinkQueuedBytes": 0,
+          "downlinkQueueHighWaterBytes": 70728,
+          "interrupted": false,
+          "lastProviderError": null,
+          "lastProviderEventType": "ping",
+          "lastSocketClose": {
+            "code": 1006,
+            "reason": "WebSocket disconnected without sending Close frame.",
+            "source": "device"
+          },
+          "providerAvailable": false,
+          "providerConnections": 1,
+          "providerControlEvents": 137,
+          "providerBufferedBytes": 0,
+          "providerDisconnects": 0,
+          "providerFunctionCallFailures": 0,
+          "providerFunctionCalls": 3,
+          "providerFunctionCallsPending": 0,
+          "providerPcmPeakSample": 22302,
+          "providerPcmRmsSample": 3277.4384618495246,
+          "providerPcmSamples": 127526,
+          "providerResponseActive": false,
+          "providerResponsesCompleted": 3,
+          "uplinkDroppedBytes": 0,
+          "uplinkEndMarkers": 3,
+          "uplinkEndMarkerTimeouts": 0,
+          "uplinkFrames": 1780,
+          "uplinkFramesAfterEndMarkerDropped": 0,
+          "uplinkUnavailableFrames": 0,
+          "deviceEvents": {
+            "acceptedEvents": 8,
+            "lastEvent": {
+              "sequence": 9,
+              "source": "remote",
+              "type": "conversation.ended"
+            },
+            "physicalConversationEnds": 0,
+            "physicalConversationStarts": 0,
+            "physicalStarts": 0,
+            "physicalStops": 0,
+            "remoteConversationEnds": 1,
+            "remoteConversationStarts": 0,
+            "remoteStarts": 3,
+            "remoteStops": 3
+          },
+          "deviceMetrics": {
+            "invalidSamples": 0,
+            "lastInvalidReason": null,
+            "latestSample": {
+              "metrics": {
+                "uptimeMs": 83328,
+                "freeHeapBytes": 8413344,
+                "minimumFreeHeapBytes": 8397268,
+                "freeInternalHeapBytes": 20775,
+                "minimumFreeInternalHeapBytes": 4875,
+                "freePsramBytes": 8384912,
+                "taskStackHighWaterBytes": 2444,
+                "cpuPermille": 163,
+                "audio": {
+                  "capture": {
+                    "sent": 1780,
+                    "dropped": 0,
+                    "failures": 0
+                  },
+                  "uplink": {
+                    "sent": 1780,
+                    "dropped": 0,
+                    "depth": 0,
+                    "highWater": 1,
+                    "sendDeferrals": 4,
+                    "consecutiveSendDeferrals": 0,
+                    "maximumConsecutiveSendDeferrals": 2,
+                    "failures": 0,
+                    "restartIncidents": 0,
+                    "producerBackpressureRestarts": 0,
+                    "transportDisconnectRestarts": 0,
+                    "noProgressTimeoutRestarts": 0,
+                    "frameSendTimeoutRestarts": 0,
+                    "captureStaleRestarts": 0,
+                    "lastTransportAcceptAgeMs": 0,
+                    "maximumTransportAcceptAgeMs": 17,
+                    "lastRestartOldestCaptureAgeMs": 0,
+                    "lastRestartReason": "none",
+                    "lastRestartFramesDiscarded": 0
+                  },
+                  "downlink": {
+                    "received": 400,
+                    "dropped": 0,
+                    "depth": 0,
+                    "highWater": 6,
+                    "failures": 0
+                  },
+                  "playback": {
+                    "submitted": 400,
+                    "completed": 400,
+                    "flushed": 0,
+                    "depth": 0,
+                    "highWater": 4,
+                    "failures": 0
+                  },
+                  "protocolFailures": 0,
+                  "buffers": {
+                    "uplinkApplication": {
+                      "evidence": "observed",
+                      "current": 0,
+                      "highWater": 640,
+                      "capacity": 20480
+                    },
+                    "websocketTransmitter": {
+                      "evidence": "observed",
+                      "current": 0,
+                      "highWater": 648,
+                      "capacity": 910
+                    },
+                    "lwipSend": {
+                      "evidence": "capacityOnly",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 5760
+                    },
+                    "tlsEgress": {
+                      "evidence": "unavailable",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 0
+                    },
+                    "wifiEgress": {
+                      "evidence": "unavailable",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 0
+                    }
+                  }
+                }
+              },
+              "receivedAtMs": 1785547913891
+            },
+            "samplesReceived": 51
+          },
+          "deviceId": "m5sticks3",
+          "deviceEventSubscriptionAttempts": 1,
+          "deviceEventSubscriptionFailures": 0,
+          "endedAtMs": 1785547914879,
+          "providerEvents": {
+            "appendFailures": 0,
+            "appendedEvents": 137,
+            "droppedEvents": 0,
+            "lastAppendError": null,
+            "lastAppendedSequence": 137,
+            "observedEvents": 137,
+            "pendingEvents": 0,
+            "pendingRawBytes": 0,
+            "pendingRawHighWaterBytes": 4057
+          },
+          "providerConnectAttempts": 1,
+          "providerConnectFailures": 0,
+          "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:0e13b1aa-a1b4-4e3a-ab45-5a22dd04b81c"
+        },
+        "providerEvents": {
+          "appendFailures": 0,
+          "appendedEvents": 5,
+          "droppedEvents": 0,
+          "lastAppendError": null,
+          "lastAppendedSequence": 5,
+          "observedEvents": 5,
+          "pendingEvents": 0,
+          "pendingRawBytes": 0,
+          "pendingRawHighWaterBytes": 1037
+        },
+        "providerConnectAttempts": 1,
+        "providerConnectFailures": 0,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40"
+      },
+      "terminal": {
+        "awaitingCommitAcknowledgement": false,
+        "awaitingUplinkEndMarker": false,
+        "closed": false,
+        "downlinkDroppedBytes": 0,
+        "downlinkFrames": 148,
+        "downlinkPartialBytes": 0,
+        "downlinkQueuedBytes": 0,
+        "downlinkQueueHighWaterBytes": 71818,
+        "interrupted": false,
+        "lastProviderError": null,
+        "lastProviderEventType": "conversation.item.added",
+        "lastSocketClose": null,
+        "providerAvailable": true,
+        "providerConnections": 1,
+        "providerControlEvents": 49,
+        "providerBufferedBytes": 0,
+        "providerDisconnects": 0,
+        "providerFunctionCallFailures": 0,
+        "providerFunctionCalls": 1,
+        "providerFunctionCallsPending": 0,
+        "providerPcmPeakSample": 16738,
+        "providerPcmRmsSample": 3110.977620776104,
+        "providerPcmSamples": 47204,
+        "providerResponseActive": false,
+        "providerResponsesCompleted": 1,
+        "uplinkDroppedBytes": 0,
+        "uplinkEndMarkers": 1,
+        "uplinkEndMarkerTimeouts": 0,
+        "uplinkFrames": 658,
+        "uplinkFramesAfterEndMarkerDropped": 0,
+        "uplinkUnavailableFrames": 0,
+        "deviceEvents": {
+          "acceptedEvents": 3,
+          "lastEvent": {
+            "sequence": 4,
+            "source": "remote",
+            "type": "pushToTalk.stopped"
+          },
+          "physicalConversationEnds": 0,
+          "physicalConversationStarts": 0,
+          "physicalStarts": 0,
+          "physicalStops": 0,
+          "remoteConversationEnds": 0,
+          "remoteConversationStarts": 0,
+          "remoteStarts": 1,
+          "remoteStops": 1
+        },
+        "deviceId": "m5sticks3",
+        "deviceMetrics": {
+          "invalidSamples": 0,
+          "lastInvalidReason": null,
+          "latestSample": {
+            "metrics": {
+              "uptimeMs": 51597,
+              "freeHeapBytes": 8413152,
+              "minimumFreeHeapBytes": 8391260,
+              "freeInternalHeapBytes": 20763,
+              "minimumFreeInternalHeapBytes": 663,
+              "freePsramBytes": 8384912,
+              "taskStackHighWaterBytes": 2572,
+              "cpuPermille": 186,
+              "audio": {
+                "capture": {
+                  "sent": 658,
+                  "dropped": 0,
+                  "failures": 0
+                },
+                "uplink": {
+                  "sent": 658,
+                  "dropped": 0,
+                  "depth": 0,
+                  "highWater": 12,
+                  "sendDeferrals": 148,
+                  "consecutiveSendDeferrals": 0,
+                  "maximumConsecutiveSendDeferrals": 10,
+                  "failures": 0,
+                  "restartIncidents": 0,
+                  "producerBackpressureRestarts": 0,
+                  "transportDisconnectRestarts": 0,
+                  "noProgressTimeoutRestarts": 0,
+                  "frameSendTimeoutRestarts": 0,
+                  "captureStaleRestarts": 0,
+                  "lastTransportAcceptAgeMs": 0,
+                  "maximumTransportAcceptAgeMs": 222,
+                  "lastRestartOldestCaptureAgeMs": 0,
+                  "lastRestartReason": "none",
+                  "lastRestartFramesDiscarded": 0
+                },
+                "downlink": {
+                  "received": 148,
+                  "dropped": 0,
+                  "depth": 0,
+                  "highWater": 11,
+                  "failures": 0
+                },
+                "playback": {
+                  "submitted": 148,
+                  "completed": 148,
+                  "flushed": 0,
+                  "depth": 0,
+                  "highWater": 4,
+                  "failures": 0
+                },
+                "protocolFailures": 0,
+                "buffers": {
+                  "uplinkApplication": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 7680,
+                    "capacity": 20480
+                  },
+                  "websocketTransmitter": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 648,
+                    "capacity": 910
+                  },
+                  "lwipSend": {
+                    "evidence": "capacityOnly",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 5760
+                  },
+                  "tlsEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  },
+                  "wifiEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  }
+                }
+              }
+            },
+            "receivedAtMs": 1785548199361
+          },
+          "samplesReceived": 19
+        },
+        "deviceEventSubscriptionAttempts": 1,
+        "deviceEventSubscriptionFailures": 0,
+        "endedAtMs": null,
+        "previousSession": {
+          "awaitingCommitAcknowledgement": false,
+          "awaitingUplinkEndMarker": false,
+          "closed": true,
+          "downlinkDroppedBytes": 0,
+          "downlinkFrames": 400,
+          "downlinkPartialBytes": 0,
+          "downlinkQueuedBytes": 0,
+          "downlinkQueueHighWaterBytes": 70728,
+          "interrupted": false,
+          "lastProviderError": null,
+          "lastProviderEventType": "ping",
+          "lastSocketClose": {
+            "code": 1006,
+            "reason": "WebSocket disconnected without sending Close frame.",
+            "source": "device"
+          },
+          "providerAvailable": false,
+          "providerConnections": 1,
+          "providerControlEvents": 137,
+          "providerBufferedBytes": 0,
+          "providerDisconnects": 0,
+          "providerFunctionCallFailures": 0,
+          "providerFunctionCalls": 3,
+          "providerFunctionCallsPending": 0,
+          "providerPcmPeakSample": 22302,
+          "providerPcmRmsSample": 3277.4384618495246,
+          "providerPcmSamples": 127526,
+          "providerResponseActive": false,
+          "providerResponsesCompleted": 3,
+          "uplinkDroppedBytes": 0,
+          "uplinkEndMarkers": 3,
+          "uplinkEndMarkerTimeouts": 0,
+          "uplinkFrames": 1780,
+          "uplinkFramesAfterEndMarkerDropped": 0,
+          "uplinkUnavailableFrames": 0,
+          "deviceEvents": {
+            "acceptedEvents": 8,
+            "lastEvent": {
+              "sequence": 9,
+              "source": "remote",
+              "type": "conversation.ended"
+            },
+            "physicalConversationEnds": 0,
+            "physicalConversationStarts": 0,
+            "physicalStarts": 0,
+            "physicalStops": 0,
+            "remoteConversationEnds": 1,
+            "remoteConversationStarts": 0,
+            "remoteStarts": 3,
+            "remoteStops": 3
+          },
+          "deviceMetrics": {
+            "invalidSamples": 0,
+            "lastInvalidReason": null,
+            "latestSample": {
+              "metrics": {
+                "uptimeMs": 83328,
+                "freeHeapBytes": 8413344,
+                "minimumFreeHeapBytes": 8397268,
+                "freeInternalHeapBytes": 20775,
+                "minimumFreeInternalHeapBytes": 4875,
+                "freePsramBytes": 8384912,
+                "taskStackHighWaterBytes": 2444,
+                "cpuPermille": 163,
+                "audio": {
+                  "capture": {
+                    "sent": 1780,
+                    "dropped": 0,
+                    "failures": 0
+                  },
+                  "uplink": {
+                    "sent": 1780,
+                    "dropped": 0,
+                    "depth": 0,
+                    "highWater": 1,
+                    "sendDeferrals": 4,
+                    "consecutiveSendDeferrals": 0,
+                    "maximumConsecutiveSendDeferrals": 2,
+                    "failures": 0,
+                    "restartIncidents": 0,
+                    "producerBackpressureRestarts": 0,
+                    "transportDisconnectRestarts": 0,
+                    "noProgressTimeoutRestarts": 0,
+                    "frameSendTimeoutRestarts": 0,
+                    "captureStaleRestarts": 0,
+                    "lastTransportAcceptAgeMs": 0,
+                    "maximumTransportAcceptAgeMs": 17,
+                    "lastRestartOldestCaptureAgeMs": 0,
+                    "lastRestartReason": "none",
+                    "lastRestartFramesDiscarded": 0
+                  },
+                  "downlink": {
+                    "received": 400,
+                    "dropped": 0,
+                    "depth": 0,
+                    "highWater": 6,
+                    "failures": 0
+                  },
+                  "playback": {
+                    "submitted": 400,
+                    "completed": 400,
+                    "flushed": 0,
+                    "depth": 0,
+                    "highWater": 4,
+                    "failures": 0
+                  },
+                  "protocolFailures": 0,
+                  "buffers": {
+                    "uplinkApplication": {
+                      "evidence": "observed",
+                      "current": 0,
+                      "highWater": 640,
+                      "capacity": 20480
+                    },
+                    "websocketTransmitter": {
+                      "evidence": "observed",
+                      "current": 0,
+                      "highWater": 648,
+                      "capacity": 910
+                    },
+                    "lwipSend": {
+                      "evidence": "capacityOnly",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 5760
+                    },
+                    "tlsEgress": {
+                      "evidence": "unavailable",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 0
+                    },
+                    "wifiEgress": {
+                      "evidence": "unavailable",
+                      "current": 0,
+                      "highWater": 0,
+                      "capacity": 0
+                    }
+                  }
+                }
+              },
+              "receivedAtMs": 1785547913891
+            },
+            "samplesReceived": 51
+          },
+          "deviceId": "m5sticks3",
+          "deviceEventSubscriptionAttempts": 1,
+          "deviceEventSubscriptionFailures": 0,
+          "endedAtMs": 1785547914879,
+          "providerEvents": {
+            "appendFailures": 0,
+            "appendedEvents": 137,
+            "droppedEvents": 0,
+            "lastAppendError": null,
+            "lastAppendedSequence": 137,
+            "observedEvents": 137,
+            "pendingEvents": 0,
+            "pendingRawBytes": 0,
+            "pendingRawHighWaterBytes": 4057
+          },
+          "providerConnectAttempts": 1,
+          "providerConnectFailures": 0,
+          "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:0e13b1aa-a1b4-4e3a-ab45-5a22dd04b81c"
+        },
+        "providerEvents": {
+          "appendFailures": 0,
+          "appendedEvents": 49,
+          "droppedEvents": 0,
+          "lastAppendError": null,
+          "lastAppendedSequence": 49,
+          "observedEvents": 49,
+          "pendingEvents": 0,
+          "pendingRawBytes": 0,
+          "pendingRawHighWaterBytes": 4057
+        },
+        "providerConnectAttempts": 1,
+        "providerConnectFailures": 0,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40"
+      }
+    }
+  },
+  "model": "grok-voice-think-fast-2.0",
+  "network": {
+    "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-ready/2026-08-01T01-36-10-413Z/iterate-kit-acoustic-639RMB/network.json",
+    "classification": "network-invalid",
+    "reasons": [
+      {
+        "code": "host-rtt-exceeded",
+        "message": "worker RTT 148.825 ms exceeded 100 ms at 36088.829208 ms."
+      },
+      {
+        "code": "host-rtt-exceeded",
+        "message": "worker RTT 115.26 ms exceeded 100 ms at 37089.951791 ms."
+      },
+      {
+        "code": "host-rtt-exceeded",
+        "message": "worker RTT 272.372 ms exceeded 100 ms at 62090.254625 ms."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 65466.296875 ms."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 0 to 1."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 66243.322541 ms."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 0 to 1."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 1 to 2."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 0 to 1."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 1 to 2."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 0 to 1."
+      },
+      {
+        "code": "pcm-socket-reconnect",
+        "message": "pcm socket reconnect count increased from 1 to 2."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 0 to 1."
+      },
+      {
+        "code": "terminal-pcm-socket-reconnect",
+        "message": "Terminal PCM socket recorded 1 reconnect incident(s)."
+      },
+      {
+        "code": "terminal-pcm-socket-disconnect",
+        "message": "Terminal PCM socket recorded 1 disconnect incident(s)."
+      }
+    ]
+  },
+  "passed": false,
+  "project": {
+    "baseUrl": "https://os.iterate.com",
+    "id": "prj_bd8785e119fe4f1d8631bb95e1dea748",
+    "slug": "kit-stick-voice-e2e-20260731",
+    "workerHost": "kit--kit-stick-voice-e2e-20260731.iterate.app"
+  },
+  "provenance": {
+    "device": {
+      "buildDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/m5sticks3/build",
+      "currentPort": "/dev/cu.usbmodem11201",
+      "host": "192.168.1.210",
+      "id": "m5sticks3",
+      "name": "M5Stack M5StickS3",
+      "stableUsbSerial": "70:04:1D:D5:45:88"
+    },
+    "project": {
+      "baseUrl": "https://os.iterate.com",
+      "id": "prj_bd8785e119fe4f1d8631bb95e1dea748",
+      "slug": "kit-stick-voice-e2e-20260731",
+      "workerHost": "kit--kit-stick-voice-e2e-20260731.iterate.app"
+    },
+    "routes": {
+      "capabilityMountPath": ["kit", "m5sticks3"],
+      "pcmUrl": "https://kit--kit-stick-voice-e2e-20260731.iterate.app/pcm",
+      "providerEventStreamPath": "/devices/m5sticks3"
+    },
+    "schemaVersion": 1
+  },
+  "providerEventsArtifact": {
+    "continuity": {
+      "discontinuities": [],
+      "expectedFirstSequence": 1,
+      "firstObservedSequence": 1,
+      "lastObservedSequence": 62,
+      "verdict": "contiguous-from-one"
+    },
+    "eventCount": 62,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-ready/2026-08-01T01-36-10-413Z/provider-events.jsonl",
+    "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40"
+  },
+  "providerEvents": {
+    "events": [
+      {
+        "providerType": "session.created",
+        "raw": "{\"type\":\"session.created\",\"event_id\":\"550122b0-381b-4987-9018-b04f754cad2f\",\"session\":{\"id\":\"8d1a5b46829f4a269b9480e1f68f9d1e\",\"object\":\"realtime.session\",\"instructions\":\"\",\"voice\":\"xai_ara\",\"modalities\":[\"audio\"],\"turn_detection\":{\"type\":null},\"tools\":[],\"model\":\"grok-voice-think-fast-2.0\"}}",
+        "receivedAtMs": 1785548180871,
+        "sequence": 1,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:20.890Z",
+        "offset": 1224
+      },
+      {
+        "providerType": "conversation.created",
+        "raw": "{\"type\":\"conversation.created\",\"event_id\":\"794699e2-e897-4818-9ec0-3bfe7453462c\",\"conversation\":{\"id\":\"f225d2ef-4d5a-4c13-80fa-d47c01f0ccc0\",\"object\":\"realtime.conversation\"},\"previous_item_id\":null}",
+        "receivedAtMs": 1785548180871,
+        "sequence": 2,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:20.934Z",
+        "offset": 1225
+      },
+      {
+        "providerType": "ping",
+        "raw": "{\"type\":\"ping\",\"event_id\":\"90c0442c-12c8-44b5-b588-0a5047a8bdbc\",\"timestamp\":1785548180813,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548180871,
+        "sequence": 3,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:20.934Z",
+        "offset": 1226
+      },
+      {
+        "providerType": "session.updated",
+        "raw": "{\"session\":{\"instructions\":\"Be concise, conversational, and useful.\",\"enable_noise_suppression\":true,\"turn_detection\":{},\"model\":\"grok-voice-think-fast-2.0\",\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"changeColour\",\"description\":\"Change the physical M5StickS3 display background to red or green.\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"colour\":{\"enum\":[\"red\",\"green\"],\"type\":\"string\"}},\"required\":[\"colour\"],\"type\":\"object\"}}}],\"keep_context\":false,\"enable_phonetic_spelling\":false,\"input_audio_transcription\":{\"model\":\"grok-transcribe\"},\"modalities\":[\"audio\"],\"input_audio_format\":\"not specified\",\"output_audio_format\":\"not specified\",\"tool_choice\":\"auto\",\"temperature\":-1.0,\"max_response_output_tokens\":\"inf\",\"audio\":{\"input\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":16000},\"transport\":\"binary\",\"transcription\":{\"model\":\"grok-transcribe\"}},\"output\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":16000},\"transport\":\"binary\"}}},\"type\":\"session.updated\",\"event_id\":\"7d502758-be48-467c-8bf6-badbe8046675\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548180969,
+        "sequence": 4,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:20.981Z",
+        "offset": 1227
+      },
+      {
+        "providerType": "input_audio_buffer.speech_started",
+        "raw": "{\"type\":\"input_audio_buffer.speech_started\",\"event_id\":\"d264b2f1-f665-4c90-af5f-7b2e2c97e5e6\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"audio_start_ms\":1128,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548182104,
+        "sequence": 5,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:22.110Z",
+        "offset": 1228
+      },
+      {
+        "providerType": "conversation.item.added",
+        "raw": "{\"type\":\"conversation.item.added\",\"event_id\":\"4ea2ae6a-5abe-499b-9004-006ae391c8af\",\"item\":{\"id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"object\":\"realtime.item\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"user\",\"content\":[{\"type\":\"input_audio\",\"transcript\":\"\"}]},\"previous_item_id\":null}",
+        "receivedAtMs": 1785548184181,
+        "sequence": 6,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:24.191Z",
+        "offset": 1229
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"9ef8ee55-19ea-4762-b986-aaa39c68db9e\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one.\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548184181,
+        "sequence": 7,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:24.221Z",
+        "offset": 1230
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"6071c056-42da-4d36-becf-8fd407ab508e\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one.\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548184181,
+        "sequence": 8,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:24.221Z",
+        "offset": 1231
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"e90b4981-e048-4848-b254-6c71cb5bfc40\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing.\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548185114,
+        "sequence": 9,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:25.117Z",
+        "offset": 1232
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"3d5848d0-672c-45ba-98fa-46bc617821de\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing.\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548185114,
+        "sequence": 10,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:25.151Z",
+        "offset": 1233
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"717857e1-553c-493e-bf87-431524f37517\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation.\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548186103,
+        "sequence": 11,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:26.105Z",
+        "offset": 1234
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"8f7856e6-e9a0-4d61-99fe-987b2541f00e\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation.\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548186103,
+        "sequence": 12,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:26.137Z",
+        "offset": 1235
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"291c0e4b-0574-446b-9424-c59ec6b96c9c\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548187126,
+        "sequence": 13,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:27.127Z",
+        "offset": 1236
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"7ea0b5bd-7787-4b15-8163-54295981c54e\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548187126,
+        "sequence": 14,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:27.162Z",
+        "offset": 1237
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"3e338c85-28cd-4295-851d-589224c9315b\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548188078,
+        "sequence": 15,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:28.077Z",
+        "offset": 1238
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"eaeb0d96-a9d9-49b1-a4df-99f9433ee480\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548188078,
+        "sequence": 16,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:28.110Z",
+        "offset": 1239
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"774516b8-c6b2-4286-8381-e8a411c16951\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548189113,
+        "sequence": 17,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:29.114Z",
+        "offset": 1240
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"061ed302-ce37-451a-9da8-6d8b4a9f601c\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548189113,
+        "sequence": 18,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:29.148Z",
+        "offset": 1241
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"cffca7bf-2c27-4490-93e7-0d827cf221cb\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548190104,
+        "sequence": 19,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:30.104Z",
+        "offset": 1242
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"ff2f360c-3c1f-4564-8ad5-4ade3a81ca58\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548190104,
+        "sequence": 20,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:30.136Z",
+        "offset": 1243
+      },
+      {
+        "providerType": "ping",
+        "raw": "{\"type\":\"ping\",\"event_id\":\"e1a84566-b85d-4d2e-ae57-05bacd8ae522\",\"timestamp\":1785548190814,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548190872,
+        "sequence": 21,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:30.871Z",
+        "offset": 1244
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"fd1e227b-4d27-4108-975c-bfeec4a6b682\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then reply by saying\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548191133,
+        "sequence": 22,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:31.127Z",
+        "offset": 1245
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"231988cc-ba15-4f14-ad70-f8a03297b49d\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then reply by saying\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548191133,
+        "sequence": 23,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:31.159Z",
+        "offset": 1246
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"43661632-a401-4869-8601-10d8e702ab02\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then reply by saying exactly\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548192040,
+        "sequence": 24,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:32.037Z",
+        "offset": 1247
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"2b1a466d-2d1d-4a52-9745-59909aa0c4d6\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then reply by saying exactly\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548192040,
+        "sequence": 25,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:32.069Z",
+        "offset": 1248
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"ea16892a-e5ac-432f-97dd-882ee1b78fdd\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then reply by saying exactly: Production turn one\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548193057,
+        "sequence": 26,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:33.055Z",
+        "offset": 1249
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"383317f4-23e6-4886-b2f2-b92a3e514793\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then reply by saying exactly: Production turn one\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548193057,
+        "sequence": 27,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:33.088Z",
+        "offset": 1250
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.updated",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"2e4b1a95-48e3-4a51-b2c6-2e531b95a3ed\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then reply by saying exactly: Production turn one is green.\",\"content_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548194107,
+        "sequence": 28,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:34.107Z",
+        "offset": 1251
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"1e7d6396-5202-4409-a74d-27557a7a1481\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then reply by saying exactly: Production turn one is green.\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548194107,
+        "sequence": 29,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:34.138Z",
+        "offset": 1252
+      },
+      {
+        "providerType": "input_audio_buffer.speech_stopped",
+        "raw": "{\"type\":\"input_audio_buffer.speech_stopped\",\"event_id\":\"3fb62de1-47d2-433c-b994-c460103119bc\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"audio_end_ms\":14189,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548195166,
+        "sequence": 30,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:35.170Z",
+        "offset": 1253
+      },
+      {
+        "providerType": "input_audio_buffer.committed",
+        "raw": "{\"type\":\"input_audio_buffer.committed\",\"event_id\":\"c6c68f5a-9b99-4f53-92da-f33dc3c86234\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548195166,
+        "sequence": 31,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:35.201Z",
+        "offset": 1254
+      },
+      {
+        "providerType": "conversation.item.input_audio_transcription.completed",
+        "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"18d5fd60-9dc0-4194-afa8-8cf20647889b\",\"item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\",\"transcript\":\"This is turn one of one continuing conversation. Use the change color tool to make the physical display green. Then reply by saying exactly: Production turn one is green.\",\"content_index\":0,\"status\":\"completed\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548195263,
+        "sequence": 32,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:35.295Z",
+        "offset": 1255
+      },
+      {
+        "providerType": "response.created",
+        "raw": "{\"type\":\"response.created\",\"event_id\":\"965f72a0-808c-496d-8103-cbb594661e35\",\"response\":{\"id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"object\":\"realtime.response\",\"output\":[],\"status\":\"in_progress\",\"status_details\":\"unimplemented\",\"usage\":{}},\"previous_item_id\":null}",
+        "receivedAtMs": 1785548195268,
+        "sequence": 33,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:35.327Z",
+        "offset": 1256
+      },
+      {
+        "providerType": "response.output_item.added",
+        "raw": "{\"type\":\"response.output_item.added\",\"event_id\":\"ead750c7-e5e3-4090-8a5e-281fffd39bd3\",\"item\":{\"id\":\"3710f8a7-97b9-4e3b-b98a-2607323e7fa9\",\"object\":\"realtime.item\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\"},\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"output_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548195547,
+        "sequence": 34,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:35.532Z",
+        "offset": 1257
+      },
+      {
+        "providerType": "conversation.item.added",
+        "raw": "{\"type\":\"conversation.item.added\",\"event_id\":\"f7467d35-08df-4a8b-a1c5-c709bbd08f42\",\"item\":{\"id\":\"3710f8a7-97b9-4e3b-b98a-2607323e7fa9\",\"object\":\"realtime.item\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]},\"previous_item_id\":\"e130369a-1a5d-45fd-9ff5-9419282c647d\"}",
+        "receivedAtMs": 1785548195547,
+        "sequence": 35,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:35.566Z",
+        "offset": 1258
+      },
+      {
+        "providerType": "response.content_part.added",
+        "raw": "{\"type\":\"response.content_part.added\",\"event_id\":\"e204e0bd-a6f7-49ce-9be2-978b9971e4d1\",\"item_id\":\"3710f8a7-97b9-4e3b-b98a-2607323e7fa9\",\"previous_item_id\":\"0\",\"part\":{\"type\":\"audio\",\"transcript\":\"\"},\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"content_index\":0,\"output_index\":0}",
+        "receivedAtMs": 1785548195547,
+        "sequence": 36,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:35.566Z",
+        "offset": 1259
+      },
+      {
+        "providerType": "response.output_audio_transcript.delta",
+        "raw": "{\"type\":\"response.output_audio_transcript.delta\",\"event_id\":\"7c9083e2-5ab9-40ba-8eab-fb6ddad0dc1c\",\"item_id\":\"3710f8a7-97b9-4e3b-b98a-2607323e7fa9\",\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"delta\":\"I'll use the tool to change the\",\"content_index\":0,\"output_index\":0,\"rid\":\"7c9083e2-5ab9-40ba-8eab-fb6ddad0dc1c\",\"start_time\":0.0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548195778,
+        "sequence": 37,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:35.762Z",
+        "offset": 1260
+      },
+      {
+        "providerType": "response.output_audio_transcript.delta",
+        "raw": "{\"type\":\"response.output_audio_transcript.delta\",\"event_id\":\"347fa75e-074e-4b9d-85ae-e048c79b0eaa\",\"item_id\":\"3710f8a7-97b9-4e3b-b98a-2607323e7fa9\",\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"delta\":\" display to green.\",\"content_index\":0,\"output_index\":0,\"rid\":\"347fa75e-074e-4b9d-85ae-e048c79b0eaa\",\"start_time\":0.76,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548195834,
+        "sequence": 38,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:35.852Z",
+        "offset": 1261
+      },
+      {
+        "providerType": "response.output_audio_transcript.done",
+        "raw": "{\"type\":\"response.output_audio_transcript.done\",\"event_id\":\"774d5988-9719-4b7f-8b1b-993693bdb09a\",\"item_id\":\"3710f8a7-97b9-4e3b-b98a-2607323e7fa9\",\"transcript\":\"I'll use the tool to change the display to green.\",\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"content_index\":0,\"output_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548196772,
+        "sequence": 39,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:36.772Z",
+        "offset": 1262
+      },
+      {
+        "providerType": "response.content_part.done",
+        "raw": "{\"type\":\"response.content_part.done\",\"event_id\":\"3e15906f-2e47-41cc-8db8-86d25b37c771\",\"item_id\":\"3710f8a7-97b9-4e3b-b98a-2607323e7fa9\",\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"content_index\":0,\"output_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548196772,
+        "sequence": 40,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:36.804Z",
+        "offset": 1263
+      },
+      {
+        "providerType": "response.output_audio.done",
+        "raw": "{\"type\":\"response.output_audio.done\",\"event_id\":\"c02f8cac-2442-49bb-a1ec-141ee7f3c3b0\",\"item_id\":\"3710f8a7-97b9-4e3b-b98a-2607323e7fa9\",\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"content_index\":0,\"output_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548196772,
+        "sequence": 41,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:36.804Z",
+        "offset": 1264
+      },
+      {
+        "providerType": "response.output_item.done",
+        "raw": "{\"type\":\"response.output_item.done\",\"event_id\":\"ade54409-729d-4d22-8298-c3ba96427e19\",\"item\":{\"id\":\"3710f8a7-97b9-4e3b-b98a-2607323e7fa9\",\"object\":\"realtime.item\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\"},\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"output_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548196772,
+        "sequence": 42,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:36.804Z",
+        "offset": 1265
+      },
+      {
+        "providerType": "response.output_item.added",
+        "raw": "{\"type\":\"response.output_item.added\",\"event_id\":\"a1bf1609-67cd-450c-8a23-924e3225479a\",\"item\":{\"id\":\"be1eca44-f6ba-4418-b685-972c82503f93\",\"object\":\"realtime.item\",\"type\":\"function_call\",\"status\":\"in_progress\",\"role\":\"user\",\"call_id\":\"call-01af119f-5d8d-41c2-bb56-4997a3419392-0\",\"name\":\"changeColour\",\"arguments\":\"\"},\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"output_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548196772,
+        "sequence": 43,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:36.804Z",
+        "offset": 1266
+      },
+      {
+        "providerType": "conversation.item.added",
+        "raw": "{\"type\":\"conversation.item.added\",\"event_id\":\"adb898e8-b75d-4416-b770-cb828121b491\",\"item\":{\"id\":\"be1eca44-f6ba-4418-b685-972c82503f93\",\"object\":\"realtime.item\",\"type\":\"function_call\",\"status\":\"in_progress\",\"role\":\"tool\",\"call_id\":\"call-01af119f-5d8d-41c2-bb56-4997a3419392-0\",\"name\":\"changeColour\",\"arguments\":\"\"},\"previous_item_id\":null}",
+        "receivedAtMs": 1785548196772,
+        "sequence": 44,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:36.804Z",
+        "offset": 1267
+      },
+      {
+        "providerType": "response.function_call_arguments.delta",
+        "raw": "{\"type\":\"response.function_call_arguments.delta\",\"event_id\":\"ed6adf3f-2392-4b52-b9d7-132c7e733248\",\"item_id\":\"be1eca44-f6ba-4418-b685-972c82503f93\",\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"delta\":\"{\\\"colour\\\":\\\"green\\\"}\",\"call_id\":\"call-01af119f-5d8d-41c2-bb56-4997a3419392-0\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548196772,
+        "sequence": 45,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:36.804Z",
+        "offset": 1268
+      },
+      {
+        "providerType": "response.function_call_arguments.done",
+        "raw": "{\"type\":\"response.function_call_arguments.done\",\"event_id\":\"0aefd96d-fbe1-4fd1-9fee-c7244f73b0e1\",\"item_id\":\"be1eca44-f6ba-4418-b685-972c82503f93\",\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"output_index\":0,\"call_id\":\"call-01af119f-5d8d-41c2-bb56-4997a3419392-0\",\"name\":\"changeColour\",\"arguments\":\"{\\\"colour\\\":\\\"green\\\"}\",\"previous_item_id\":null}",
+        "receivedAtMs": 1785548196772,
+        "sequence": 46,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:36.804Z",
+        "offset": 1269
+      },
+      {
+        "providerType": "response.output_item.done",
+        "raw": "{\"type\":\"response.output_item.done\",\"event_id\":\"1399b8c6-be5f-47e8-b6d6-a656b39d6b10\",\"item\":{\"id\":\"be1eca44-f6ba-4418-b685-972c82503f93\",\"object\":\"realtime.item\",\"type\":\"function_call\",\"status\":\"completed\",\"role\":\"user\",\"call_id\":\"call-01af119f-5d8d-41c2-bb56-4997a3419392-0\",\"name\":\"changeColour\",\"arguments\":\"{\\\"colour\\\":\\\"green\\\"}\"},\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"output_index\":0,\"previous_item_id\":null}",
+        "receivedAtMs": 1785548196772,
+        "sequence": 47,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:36.804Z",
+        "offset": 1270
+      },
+      {
+        "providerType": "response.done",
+        "raw": "{\"type\":\"response.done\",\"event_id\":\"7fe02ed6-5f2f-4ad7-b38f-987b0a288637\",\"response\":{\"id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"object\":\"realtime.response\",\"output\":[{\"id\":\"3710f8a7-97b9-4e3b-b98a-2607323e7fa9\",\"object\":\"realtime.item\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"audio\",\"transcript\":\"I'll use the tool to change the display to green.\"}]},{\"id\":\"be1eca44-f6ba-4418-b685-972c82503f93\",\"object\":\"realtime.item\",\"type\":\"function_call\",\"status\":\"completed\",\"role\":\"user\",\"call_id\":\"call-01af119f-5d8d-41c2-bb56-4997a3419392-0\",\"name\":\"changeColour\",\"arguments\":\"{\\\"colour\\\":\\\"green\\\"}\"}],\"status\":\"completed\",\"status_details\":\"unimplemented\",\"usage\":{}},\"response_id\":\"4a15abb5-fa86-4d46-9315-4d11eee76495\",\"usage\":{\"input_tokens\":696,\"input_token_details\":{\"text_tokens\":36,\"audio_tokens\":660,\"grok_tokens\":0},\"output_tokens\":159,\"output_token_details\":{\"text_tokens\":11,\"audio_tokens\":148,\"grok_tokens\":0},\"total_tokens\":855,\"output_audio_seconds\":2.9501666666666666,\"billable_audio_seconds\":15},\"previous_item_id\":null}",
+        "receivedAtMs": 1785548196772,
+        "sequence": 48,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:36.829Z",
+        "offset": 1271
+      },
+      {
+        "providerType": "conversation.item.added",
+        "raw": "{\"type\":\"conversation.item.added\",\"event_id\":\"86ba74a7-69ad-40d4-bea6-8665d7efd670\",\"item\":{\"id\":\"bb821124-506c-4e4a-b45b-227ce61603b5\",\"object\":\"realtime.item\",\"type\":\"function_call_output\",\"status\":\"completed\",\"role\":\"tool\",\"call_id\":\"call-01af119f-5d8d-41c2-bb56-4997a3419392-0\",\"output\":\"{\\\"colour\\\":\\\"green\\\",\\\"ok\\\":true}\"},\"previous_item_id\":null}",
+        "receivedAtMs": 1785548197049,
+        "sequence": 49,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dfc9d818-1972-46c0-9fdb-cc217e7a4d40",
+        "createdAt": "2026-08-01T01:36:37.040Z",
+        "offset": 1272
+      }
+    ],
+    "eventType": "events.iterate.com/kit/provider-event",
+    "streamPath": "/devices/m5sticks3",
+    "toolCall": {
+      "arguments": {
+        "colour": "green"
+      },
+      "callId": "call-01af119f-5d8d-41c2-bb56-4997a3419392-0",
+      "output": {
+        "colour": "green",
+        "ok": true
+      }
+    }
+  },
+  "pttAuthority": {
+    "conversationEnded": true,
+    "conversationStarted": true,
+    "directRedAcknowledged": true,
+    "remoteCallsMadeByRunner": 10,
+    "requiredSource": "remote"
+  },
+  "schemaVersion": 3
+}

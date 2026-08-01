@@ -57,7 +57,9 @@ static enum iterate_kit_pcm_uplink_send_outcome fake_send(
   return fake->outcomes[fake->calls++];
 }
 
-static void fixture_init(struct fixture *fixture) {
+static void fixture_init_with_capture_age(
+    struct fixture *fixture,
+    uint64_t maximum_capture_age_ms) {
   const struct iterate_kit_pcm_uplink_sender_options options = {
     .lane = &fixture->lane,
     .send = fake_send,
@@ -65,8 +67,7 @@ static void fixture_init(struct fixture *fixture) {
     .restart_after_no_progress_ms = NO_PROGRESS_TIMEOUT_MS,
     .maximum_frame_send_duration_ms =
         MAXIMUM_FRAME_SEND_DURATION_MS,
-    .maximum_capture_age_ms =
-        MAXIMUM_FRAME_SEND_DURATION_MS * 2U,
+    .maximum_capture_age_ms = maximum_capture_age_ms,
   };
   memset(fixture, 0, sizeof(*fixture));
   CHECK(iterate_kit_spsc_ring_init(
@@ -87,6 +88,11 @@ static void fixture_init(struct fixture *fixture) {
       &fixture->downlink) == ITERATE_KIT_OK);
   CHECK(iterate_kit_pcm_uplink_sender_init(
       &fixture->sender, &options) == ITERATE_KIT_OK);
+}
+
+static void fixture_init(struct fixture *fixture) {
+  fixture_init_with_capture_age(
+      fixture, MAXIMUM_FRAME_SEND_DURATION_MS * 2U);
 }
 
 static enum iterate_kit_pcm_uplink_sender_poll_result poll_at(
@@ -469,6 +475,52 @@ static void a_normal_wifi_stall_does_not_restart_the_socket(void) {
 }
 
 /*
+ * The physical production run retained in the landing evidence observed one
+ * roughly 300 ms TCP no-ACK interval. A 250 ms capture-age preference turned
+ * that recoverable radio event into a destroyed Grok conversation even though
+ * the application ring is deliberately bounded to 640 ms. Once the ordered
+ * PTT end marker prevents delayed PCM crossing a turn boundary, capture age is
+ * a latency policy rather than the turn-integrity mechanism: one ordinary RTO
+ * should recover, but data older than the complete ring budget must still
+ * purge the epoch instead of becoming catch-up speech.
+ */
+static void one_rto_survives_but_ring_age_still_restarts(void) {
+  struct fixture recovered;
+  struct fixture stale;
+  struct iterate_kit_pcm_uplink_sender_metrics metrics;
+
+  fixture_init_with_capture_age(&recovered, 640U);
+  recovered.fake.outcomes[0] =
+      ITERATE_KIT_PCM_UPLINK_SEND_TEMPORARILY_UNAVAILABLE;
+  recovered.fake.outcomes[1] =
+      ITERATE_KIT_PCM_UPLINK_SEND_COMPLETE;
+  recovered.fake.outcome_count = 2U;
+  submit_frame_at(&recovered, 90U, 0U);
+  CHECK(poll_at(&recovered, 0U) ==
+      ITERATE_KIT_PCM_UPLINK_SENDER_DEFERRED);
+  CHECK(poll_at(&recovered, 400U) ==
+      ITERATE_KIT_PCM_UPLINK_SENDER_SENT);
+  iterate_kit_pcm_uplink_sender_metrics(
+      &recovered.sender, &metrics);
+  CHECK(metrics.frames_sent == 1U);
+  CHECK(metrics.restart_incidents == 0U);
+
+  fixture_init_with_capture_age(&stale, 640U);
+  stale.fake.outcomes[0] =
+      ITERATE_KIT_PCM_UPLINK_SEND_COMPLETE;
+  stale.fake.outcome_count = 1U;
+  submit_frame_at(&stale, 91U, 0U);
+  CHECK(poll_at(&stale, 700U) ==
+      ITERATE_KIT_PCM_UPLINK_SENDER_RESTART);
+  CHECK(stale.fake.calls == 0U);
+  iterate_kit_pcm_uplink_sender_metrics(
+      &stale.sender, &metrics);
+  CHECK(metrics.frames_sent == 0U);
+  CHECK(metrics.capture_stale_restarts == 1U);
+  CHECK(metrics.frames_discarded == 1U);
+}
+
+/*
  * A pathological peer can accept a byte occasionally, continually resetting a
  * pure no-progress timer while one PCM frame becomes conversationally useless.
  * Trusting any progress forever therefore reintroduces an unbounded latency
@@ -590,6 +642,7 @@ int main(void) {
   disconnected_drain_includes_a_retained_frame();
   disconnected_drain_consumes_a_prior_overflow_request();
   a_normal_wifi_stall_does_not_restart_the_socket();
+  one_rto_survives_but_ring_age_still_restarts();
   trickle_progress_cannot_keep_one_frame_alive_forever();
   capture_age_is_measured_at_local_transport_acceptance();
   a_newer_cross_task_capture_timestamp_is_age_zero();

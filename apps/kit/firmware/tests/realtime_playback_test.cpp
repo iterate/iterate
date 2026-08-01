@@ -1,4 +1,5 @@
 #include "iterate/kit/platforms/realtime_playback.hpp"
+#include "iterate/kit/platforms/m5sticks3_realtime_audio_policy.hpp"
 
 #include "iterate/kit/pcm_lane.h"
 
@@ -427,6 +428,18 @@ using Playback =
         maximumFrameAgeMs,
         partialPrebufferTimeoutMs,
         minimumRefillLeadUs>;
+
+using M5StickS3ProductionPlayback =
+    iterate::kit::platforms::RealtimePlayback<
+        sampleCount,
+        sampleRate,
+        4U,
+        iterate::kit::platforms::M5StickS3RealtimeAudioPolicy::
+            maximumFrameAgeMs,
+        iterate::kit::platforms::M5StickS3RealtimeAudioPolicy::
+            partialPrebufferTimeoutMs,
+        iterate::kit::platforms::M5StickS3RealtimeAudioPolicy::
+            minimumRefillLeadUs>;
 
 /*
  * The policy owns counters and scalar ownership metadata, never PCM storage.
@@ -1081,6 +1094,57 @@ void staleDownlinkIsPurgedInsteadOfPlayedLate() {
 
   TEST_ASSERT(
       playback.pump(fixture.lane, output, 301U).status ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(output.startCount == 0U);
+  TEST_ASSERT(output.submittedHistory.empty());
+  TEST_ASSERT(playback.metrics().freshnessIncidents == 1U);
+  TEST_ASSERT(playback.metrics().freshnessFramesDropped == 6U);
+}
+
+/*
+ * A production Grok run delivered every frame in order with at most 40 ms
+ * between socket messages, yet Core-1 did not submit the first DMA epoch until
+ * its oldest frame was 257 ms old. The former 200 ms target cutoff turned that
+ * finite startup scheduling excursion into a 15-frame audible clip. The
+ * production policy must admit this measured envelope without weakening the
+ * generic test above: genuinely old speech still has a separate hard bound.
+ */
+void productionStartupJitterDoesNotClipAnOrderedResponse() {
+  LaneFixture fixture;
+  FakeDirectOutput output;
+  M5StickS3ProductionPlayback playback;
+  TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
+  for (std::int16_t value = 1; value <= 4; ++value) {
+    fixture.publish(value, 100U);
+  }
+
+  const auto result = playback.pump(fixture.lane, output, 357U);
+  TEST_ASSERT(result.status == ITERATE_KIT_OK);
+  TEST_ASSERT(result.playbackStarted);
+  TEST_ASSERT(
+      output.submittedHistory ==
+      std::vector<std::int16_t>({1, 2, 3, 4}));
+  TEST_ASSERT(playback.metrics().freshnessIncidents == 0U);
+  TEST_ASSERT(playback.metrics().freshnessFramesDropped == 0U);
+}
+
+/*
+ * Raising a measured startup envelope must not turn the 640 ms loss reserve
+ * into permission to replay it. At one millisecond beyond the target policy,
+ * all queued speech belongs to a failed realtime epoch and must be discarded
+ * with exact diagnostics before any descriptor or amplifier starts.
+ */
+void productionSpeechPastTheBoundIsStillPurged() {
+  LaneFixture fixture;
+  FakeDirectOutput output;
+  M5StickS3ProductionPlayback playback;
+  TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
+  for (std::int16_t value = 1; value <= 6; ++value) {
+    fixture.publish(value, 100U);
+  }
+
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 501U).status ==
       ITERATE_KIT_OK);
   TEST_ASSERT(output.startCount == 0U);
   TEST_ASSERT(output.submittedHistory.empty());
@@ -1965,6 +2029,8 @@ int main() {
   generationBarrierFlushesHardwareDriverAndLaneOwnership();
   initialGenerationBarrierDoesNotPollStoppedDma();
   staleDownlinkIsPurgedInsteadOfPlayedLate();
+  productionStartupJitterDoesNotClipAnOrderedResponse();
+  productionSpeechPastTheBoundIsStillPurged();
   partialPrebufferTimesOutAsOneClassifiedDiscard();
   finiteResponsesFromOneThroughFiveFramesEndCleanly();
   delayedOwnerBatchDistinguishesContentFromEosPadding();

@@ -4,6 +4,7 @@
 #include "iterate/kit/platforms/esp_idf_configuration.h"
 #include "iterate/kit/platforms/esp_idf_itx_transport.h"
 #include "iterate/kit/platforms/esp_idf_pcm_transport.h"
+#include "iterate/kit/platforms/esp_idf_websocket_policy.h"
 #include "iterate/kit/platforms/m5sticks3_direct_audio.hpp"
 #include "iterate/kit/platforms/m5unified.hpp"
 #include "iterate/kit/spsc_ring.h"
@@ -216,6 +217,15 @@ static_assert(
     (pcmUplinkSlotCount & (pcmUplinkSlotCount - 1U)) == 0U,
     "PCM uplink slot count must be a power of two");
 static_assert(
+    pcmUplinkCapacityMilliseconds ==
+        ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS,
+    /*
+     * Freshness policy may spend the finite ring reserve but must never imply
+     * an unaccounted second backlog. Changing either value requires one
+     * measured, reviewed change to both the RAM and latency budgets.
+     */
+    "PCM capture age must equal the application ring's hard bound");
+static_assert(
     (pcmDownlinkSlotCount & (pcmDownlinkSlotCount - 1U)) == 0U,
     "PCM downlink slot count must be a power of two");
 
@@ -335,19 +345,55 @@ void downlinkReady(void *context) {
 }
 
 iterate_kit_status sendAudioEvent(
-    void *,
+    void *context,
     iterate_kit_audio_event event) {
+  auto &state = *static_cast<Runtime *>(context);
+  iterate_kit_status status = ITERATE_KIT_OK;
   /*
-   * The eventual proxy will mirror non-PCM lifecycle events to a stream. Until
-   * that path exists, log the exact event that WOULD be posted so end-to-end
-   * device tests can prove semantics without pretending durable delivery.
-   * This callback runs on the owner task and must remain bounded.
+   * PTT release is mirrored through Cap'n Web, while PCM uses an independent
+   * socket. Even healthy networks may deliver the control edge before the
+   * final microphone frame. The audio controller invokes CAPTURE_ENDED only
+   * after hardware capture has stopped; publishing an empty PCM item here puts
+   * a causal fence behind every frame this same application producer accepted.
+   * Userspace commits Grok's manual input buffer only after it has observed
+   * both boundaries, regardless of their cross-socket arrival order.
+   *
+   * This cannot be an out-of-band atomic flag: the PCM network consumer could
+   * observe that flag before older ring slots and clip the turn. Nor can it be
+   * a WebSocket PING: PONG is hop liveness, not an application media boundary.
+   * A full ring makes the boundary ambiguous, so the lane requests a
+   * destructive generation reset and this callback reports the failure rather
+   * than allowing userspace to commit incomplete speech.
+   */
+  if (event == ITERATE_KIT_AUDIO_CAPTURE_ENDED) {
+    if (state.pcmTransport.state !=
+        ITERATE_KIT_ESP_IDF_PCM_READY) {
+      status = ITERATE_KIT_BACKPRESSURE;
+    } else {
+      status =
+          iterate_kit_pcm_lane_submit_uplink_end_marker_at(
+              &state.pcmLane,
+              static_cast<std::uint64_t>(
+                  esp_timer_get_time() / 1000));
+      if (status == ITERATE_KIT_OK ||
+          status == ITERATE_KIT_BACKPRESSURE) {
+        iterate_kit_esp_idf_pcm_transport_notify_uplink(
+            &state.pcmTransport);
+      }
+    }
+  }
+
+  /*
+   * The device-event subsystem separately mirrors the physical lifecycle to
+   * userspace. This transition-only line remains a serial fallback and makes
+   * the PCM-fence outcome visible without logging from the network/audio ISR.
    */
   ESP_LOGI(
       tag,
-      "would_post_to_stream event=audio.%d source=system result=0",
-      static_cast<int>(event));
-  return ITERATE_KIT_OK;
+      "would_post_to_stream event=audio.%d source=system result=%d",
+      static_cast<int>(event),
+      static_cast<int>(status));
+  return status;
 }
 
 iterate_kit_status sendPcm(

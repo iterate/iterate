@@ -33,6 +33,7 @@ Userspace/project route:
   --project-id <prj_...>
   --project-slug <slug>
   --output-directory <path>
+  --turns <1..20>          Repeated PTT turns on one deployed /pcm session
   --install-userspace
   --flash-firmware
 

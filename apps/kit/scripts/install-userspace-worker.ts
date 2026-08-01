@@ -6,6 +6,7 @@ import type { KitVoiceInstallMode } from "../src/userspace/install-plan.ts";
 
 const runtimeSourceNames = [
   "app-ref.ts",
+  "device-id.ts",
   "device-events.ts",
   "device-metrics.ts",
   "device-tools.ts",
@@ -153,7 +154,7 @@ export function parseInstallerCliOptions(
   };
 }
 
-async function readRuntimeSources(): Promise<Record<string, string>> {
+export async function readRuntimeSources(): Promise<Record<string, string>> {
   return Object.fromEntries(
     await Promise.all(
       runtimeSourceNames.map(async (name) => [

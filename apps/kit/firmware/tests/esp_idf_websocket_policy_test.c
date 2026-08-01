@@ -58,6 +58,17 @@ static void latency_and_recovery_deadlines_remain_coherent(void) {
       2000);
   assert(
       ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS > 150);
+  /*
+   * One measured TCP retransmission interval exceeded the old 250 ms capture
+   * budget while byte progress was still within the separately bounded 500 ms
+   * liveness deadline. Capture freshness must therefore not pre-empt the
+   * no-progress classifier; the target's 640 ms fixed ring remains the outer
+   * memory/latency bound and the sender regression exercises both 400 and
+   * 700 ms observations explicitly.
+   */
+  assert(
+      ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS >
+      ITERATE_KIT_ESP_IDF_PCM_SEND_NO_PROGRESS_TIMEOUT_MS);
   assert(
       ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS <
       ITERATE_KIT_ESP_IDF_PCM_FRAME_MAX_SEND_DURATION_MS);

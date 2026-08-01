@@ -274,6 +274,9 @@ iterate_kit_pcm_uplink_sender_poll(
       sender->pending_frame_bytes);
 
   if (outcome == ITERATE_KIT_PCM_UPLINK_SEND_COMPLETE) {
+    const bool end_marker =
+        sender->pending_frame == NULL &&
+        sender->pending_frame_bytes == 0U;
     const uint32_t capture_age_ms = saturating_age_ms(
         normalized_now_ms,
         sender->pending_capture_completed_at_ms);
@@ -281,6 +284,7 @@ iterate_kit_pcm_uplink_sender_poll(
       event->capture_completed_at_ms =
           sender->pending_capture_completed_at_ms;
       event->transport_accepted_at_ms = normalized_now_ms;
+      event->end_marker = end_marker;
       event->transport_accepted = true;
     }
     if (release_pending(sender) != ITERATE_KIT_OK) {
@@ -289,13 +293,18 @@ iterate_kit_pcm_uplink_sender_poll(
     }
     atomic_store_relaxed(
         &sender->consecutive_send_deferrals, 0U);
-    atomic_saturating_increment(&sender->frames_sent);
-    atomic_store_relaxed(
-        &sender->last_transport_accept_age_ms,
-        capture_age_ms);
-    atomic_update_max(
-        &sender->maximum_transport_accept_age_ms,
-        capture_age_ms);
+    if (end_marker) {
+      atomic_saturating_increment(
+          &sender->end_markers_sent);
+    } else {
+      atomic_saturating_increment(&sender->frames_sent);
+      atomic_store_relaxed(
+          &sender->last_transport_accept_age_ms,
+          capture_age_ms);
+      atomic_update_max(
+          &sender->maximum_transport_accept_age_ms,
+          capture_age_ms);
+    }
     return ITERATE_KIT_PCM_UPLINK_SENDER_SENT;
   }
 
@@ -364,20 +373,29 @@ enum iterate_kit_status iterate_kit_pcm_uplink_sender_discard_pending(
   (void)reset_requested;
 
   for (;;) {
+    bool end_marker;
     status = acquire_if_needed(sender, 0U);
     if (status == ITERATE_KIT_UNAVAILABLE) {
       break;
     }
-    if (status != ITERATE_KIT_OK ||
-        release_pending(sender) != ITERATE_KIT_OK) {
-      return status == ITERATE_KIT_OK
-          ? ITERATE_KIT_STATE_ERROR
-          : status;
+    if (status != ITERATE_KIT_OK) {
+      return status;
     }
-    if (discarded != UINT32_MAX) {
-      ++discarded;
+    end_marker =
+        sender->pending_frame == NULL &&
+        sender->pending_frame_bytes == 0U;
+    if (release_pending(sender) != ITERATE_KIT_OK) {
+      return ITERATE_KIT_STATE_ERROR;
     }
-    atomic_saturating_increment(&sender->frames_discarded);
+    if (end_marker) {
+      atomic_saturating_increment(
+          &sender->end_markers_discarded);
+    } else {
+      if (discarded != UINT32_MAX) {
+        ++discarded;
+      }
+      atomic_saturating_increment(&sender->frames_discarded);
+    }
   }
   atomic_store_relaxed(
       &sender->consecutive_send_deferrals, 0U);
@@ -397,8 +415,12 @@ void iterate_kit_pcm_uplink_sender_metrics(
   }
   metrics->frames_sent =
       atomic_load_relaxed(&sender->frames_sent);
+  metrics->end_markers_sent =
+      atomic_load_relaxed(&sender->end_markers_sent);
   metrics->frames_discarded =
       atomic_load_relaxed(&sender->frames_discarded);
+  metrics->end_markers_discarded =
+      atomic_load_relaxed(&sender->end_markers_discarded);
   metrics->send_deferrals =
       atomic_load_relaxed(&sender->send_deferrals);
   metrics->send_failures =

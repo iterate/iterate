@@ -198,18 +198,27 @@ test("drains coalesced Cap'n Web frames from one transport read", async () => {
   const transport = new SimulatorTransport();
   try {
     await transport.sendBatch(['["push",["pipeline",0,["__test","servoSpeed"],[]]]', '["pull",1]']);
+
+    // This assertion is about decoder progress, not wall-clock RPC latency. In
+    // the full suite the simulator process competes with native compilers and
+    // CoreAudio fixtures; macOS can therefore leave the child unscheduled for
+    // longer than the old 500 ms timer even though the two coalesced frames are
+    // drained immediately once it runs. Keep a finite watchdog so a lost frame
+    // still fails loudly, but give host scheduling contention a separate,
+    // deliberately generous budget rather than misclassifying it as a Cap'n
+    // Web protocol failure.
     await expect(
       Promise.race([
         transport.receive(),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error("coalesced pull frame was not drained")), 500),
+          setTimeout(() => reject(new Error("coalesced pull frame was not drained")), 5_000),
         ),
       ]),
     ).resolves.toBe('["resolve",1,0]');
   } finally {
     await transport.close();
   }
-});
+}, 10_000);
 
 test("the firmware decoder accepts the exact configuration image emitted by TypeScript", () => {
   const configuration: DeviceConfiguration = {

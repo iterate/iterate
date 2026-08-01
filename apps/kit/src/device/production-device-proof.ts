@@ -29,6 +29,7 @@ export interface ProductionDeviceProofCliOptions {
   port: string;
   projectId?: string;
   projectSlug: string;
+  turns: number;
   workerHost: string;
 }
 
@@ -65,6 +66,7 @@ interface ParsedValues {
   port?: string;
   projectId?: string;
   projectSlug?: string;
+  turns?: string;
   workerHost?: string;
 }
 
@@ -125,6 +127,9 @@ export function parseProductionDeviceProofCliOptions(
         break;
       case "--project-slug":
         values.projectSlug = value;
+        break;
+      case "--turns":
+        values.turns = value;
         break;
       case "--worker-host":
         values.workerHost = value;
@@ -191,6 +196,10 @@ export function parseProductionDeviceProofCliOptions(
   if (mode !== "grok" && mode !== "tone") {
     throw new Error("--mode must be either grok or tone.");
   }
+  const turns = Number(values.turns ?? environment.ITERATE_KIT_VOICE_TURNS?.trim() ?? "1");
+  if (!Number.isSafeInteger(turns) || turns < 1 || turns > 20) {
+    throw new Error("--turns must be an integer from 1 through 20.");
+  }
 
   return {
     buildDirectory: resolve(
@@ -211,6 +220,7 @@ export function parseProductionDeviceProofCliOptions(
     projectId,
     projectSlug:
       values.projectSlug ?? environment.ITERATE_KIT_PROJECT_SLUG?.trim() ?? defaultProjectSlug,
+    turns,
     workerHost,
   };
 }
@@ -233,6 +243,22 @@ export function buildProductionDeviceProofPlan(
   }
   const projectId = options.projectId ?? configuration.iterate.projectId;
   const pcmOrigin = new URL(`https://${options.workerHost}`).origin;
+  const grokProofArgs = [
+    "--device-id",
+    options.deviceId,
+    "--device-host",
+    options.deviceHost,
+    "--worker-host",
+    options.workerHost,
+    "--project-id",
+    projectId,
+    "--project-slug",
+    options.projectSlug,
+    "--output-directory",
+    options.outputDirectory,
+    "--remote-ptt",
+  ];
+  if (options.turns > 1) grokProofArgs.push("--turns", String(options.turns));
   return {
     flashArgs: [
       "--device",
@@ -250,21 +276,7 @@ export function buildProductionDeviceProofPlan(
       "--build-directory",
       options.buildDirectory,
     ],
-    grokProofArgs: [
-      "--device-id",
-      options.deviceId,
-      "--device-host",
-      options.deviceHost,
-      "--worker-host",
-      options.workerHost,
-      "--project-id",
-      projectId,
-      "--project-slug",
-      options.projectSlug,
-      "--output-directory",
-      options.outputDirectory,
-      "--remote-ptt",
-    ],
+    grokProofArgs,
     projectId,
     provenance: {
       device: {

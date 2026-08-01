@@ -5,6 +5,7 @@
 #include "iterate/kit/platforms/bounded_event_counter.hpp"
 #include "iterate/kit/platforms/direct_i2s_stereo_output.hpp"
 #include "iterate/kit/platforms/esp_idf_direct_i2s_backend.hpp"
+#include "iterate/kit/platforms/m5sticks3_realtime_audio_policy.hpp"
 #include "iterate/kit/platforms/realtime_owner_control.hpp"
 #include "iterate/kit/platforms/realtime_playback.hpp"
 #include "iterate/kit/platforms/release_owned_handle.hpp"
@@ -105,9 +106,9 @@ using M5StickS3RealtimePlayback =
         M5StickS3DirectI2sOps::monoSampleCount,
         16'000U,
         M5StickS3DirectI2sOps::descriptorCount,
-        200U,
-        200U,
-        2'000U>;
+        M5StickS3RealtimeAudioPolicy::maximumFrameAgeMs,
+        M5StickS3RealtimeAudioPolicy::partialPrebufferTimeoutMs,
+        M5StickS3RealtimeAudioPolicy::minimumRefillLeadUs>;
 
 /**
  * Sole task owner of the Stick's speaker policy and direct-I2S descriptor set.

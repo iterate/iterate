@@ -25,6 +25,7 @@ export interface ProductionGrokCliOptions {
   pttAuthority: PttAuthority;
   sayExecutable: string;
   soxExecutable?: string;
+  turns: number;
   workerHost: string;
   xaiApiKey: string;
 }
@@ -48,6 +49,7 @@ export function parseProductionGrokCliOptions(
   let projectId = environment.ITERATE_KIT_PROJECT_ID?.trim() || defaultProjectId;
   let projectSlug = defaultProjectSlug;
   let pttAuthority: PttAuthority = "physical";
+  let turns = 1;
   let workerHost = defaultWorkerHost;
   for (let index = 0; index < args.length; index += 1) {
     const flag = args[index];
@@ -64,7 +66,12 @@ export function parseProductionGrokCliOptions(
     else if (flag === "--device-host") deviceHost = value();
     else if (flag === "--device-id") deviceId = value();
     else if (flag === "--output-directory") outputDirectory = value();
-    else throw new Error(`Unknown option: ${flag}`);
+    else if (flag === "--turns") {
+      turns = Number(value());
+      if (!Number.isSafeInteger(turns) || turns < 1 || turns > 20) {
+        throw new Error("--turns must be an integer from 1 through 20.");
+      }
+    } else throw new Error(`Unknown option: ${flag}`);
   }
 
   /* Validate before deriving either the capability or evidence route. */
@@ -91,6 +98,7 @@ export function parseProductionGrokCliOptions(
     pttAuthority,
     sayExecutable: environment.ITERATE_KIT_SAY?.trim() || "/usr/bin/say",
     soxExecutable: environment.ITERATE_KIT_SOX?.trim() || undefined,
+    turns,
     workerHost,
     xaiApiKey,
   };

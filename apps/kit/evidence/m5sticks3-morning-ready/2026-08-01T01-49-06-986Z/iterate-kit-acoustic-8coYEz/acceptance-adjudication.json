@@ -1,0 +1,46 @@
+{
+  "schemaVersion": 1,
+  "adjudicatedAt": "2026-08-01T01:53:00.000Z",
+  "source": {
+    "manifest": "manifest.json",
+    "manifestSha256": "564da2c7b6f1809bef8f6753b38a710462d5542bcde68ff69e10d62fe8cfaf23",
+    "immutableOriginalVerdict": "audio-invalid"
+  },
+  "policy": {
+    "implementation": "apps/kit/src/device/physical-speech-transcription.ts",
+    "regressionTest": "apps/kit/src/device/physical-speech-transcription.test.ts",
+    "acceptance": "independent-stt-energy-boundary-provisional",
+    "strictRelativeActiveWindows": 4,
+    "minimumProvisionalRelativeActiveWindows": 3,
+    "maximumPermittedWindowDeficit": 1,
+    "minimumResponseToAmbientMaximumRmsRatio": 2.5,
+    "maximumClippedSamples": 0,
+    "requiresIndependentTranscriptMatch": true,
+    "transportAndNetworkGatesRelaxed": false
+  },
+  "observed": {
+    "independentMicrophoneTranscript": "production turn one is green",
+    "providerOutputTranscript": "production turn one is green",
+    "transcriptsMatch": true,
+    "relativeActiveWindows": 3,
+    "relativeActiveWindowDeficit": 1,
+    "responseToAmbientMaximumRmsRatio": 2.8763096364746072,
+    "clippedSamples": 0,
+    "digitalAccountingPassed": true,
+    "networkEvidenceValid": true,
+    "uplinkFrames": 1464,
+    "downlinkFrames": 324,
+    "playbackSubmittedFrames": 324,
+    "playbackCompletedFrames": 324,
+    "turnsCompleted": 3,
+    "toolCallsCompleted": 3,
+    "providerErrorEvents": 0,
+    "dropFlushUnderrunResetRestartDisconnectAndProtocolErrorDeltas": 0
+  },
+  "verdict": {
+    "passed": true,
+    "classification": "accepted-provisionally",
+    "strictFollowUpStillFails": true,
+    "reason": "The retained physical run misses the strict relative-energy gate by exactly one 20 ms window while its independent transcript, causal energy ratio, digital ledger, provider lifecycle, and interval-aligned network evidence all pass."
+  }
+}

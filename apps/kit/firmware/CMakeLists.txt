@@ -397,6 +397,7 @@ add_executable(iterate-kit-realtime-playback-test
 )
 target_include_directories(iterate-kit-realtime-playback-test PRIVATE
   platforms/common/include
+  platforms/iterate_m5unified/include
 )
 target_compile_features(
   iterate-kit-realtime-playback-test PRIVATE cxx_std_17)

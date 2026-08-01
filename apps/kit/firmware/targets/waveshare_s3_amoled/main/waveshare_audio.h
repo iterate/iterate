@@ -28,6 +28,12 @@ bool waveshare_audio_read(int16_t *destination, size_t samples);
 /** Blocking playout of exactly `samples` mono PCM16 samples. */
 bool waveshare_audio_write(const int16_t *pcm, size_t samples);
 
+/** Log the ES8311's ADC-path registers (bring-up diagnostics). */
+void waveshare_audio_dump_registers(void);
+
+/** Log whether anything drives the I2S DIN pad (bring-up diagnostics). */
+void waveshare_audio_probe_din(void);
+
 #ifdef __cplusplus
 }
 #endif

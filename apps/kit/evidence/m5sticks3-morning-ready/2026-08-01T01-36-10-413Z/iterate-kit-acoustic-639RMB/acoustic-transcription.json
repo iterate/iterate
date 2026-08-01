@@ -1,0 +1,115 @@
+{
+  "assessment": {
+    "acceptance": "failed",
+    "normalizedMicrophoneTranscript": "our production turn to change the display to green production turn one is",
+    "normalizedProviderTranscript": "i ll use the tool to change the display to green",
+    "passed": false,
+    "reasons": [
+      "The independent microphone transcript did not match Grok's completed output transcript."
+    ],
+    "responseToBaselineMaximumRmsRatio": 5.608069135203045
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": ["The causal response contained 0 active 20 ms windows; expected at least 4."]
+  },
+  "microphoneStt": {
+    "durationSeconds": 5.147,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"bfc768af-c304-4346-a964-cb9062e80880\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Now the last\",\"words\":[{\"text\":\"Now\",\"start\":0.527,\"end\":0.892},{\"text\":\"the\",\"start\":1.014,\"end\":1.074},{\"text\":\"last\",\"start\":1.257,\"end\":1.48}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"thing is how to change the display.\",\"words\":[{\"text\":\"thing\",\"start\":1.622,\"end\":1.743},{\"text\":\"is\",\"start\":1.743,\"end\":1.784},{\"text\":\"how\",\"start\":1.784,\"end\":1.885},{\"text\":\"to\",\"start\":1.966,\"end\":2.027},{\"text\":\"change\",\"start\":2.108,\"end\":2.453},{\"text\":\"the\",\"start\":2.493,\"end\":2.554},{\"text\":\"display.\",\"start\":2.595,\"end\":2.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Our production turn to change the display to green. Production turn one is\",\"words\":[{\"text\":\"Our\",\"start\":1.041,\"end\":1.121},{\"text\":\"production\",\"start\":1.141,\"end\":1.602},{\"text\":\"turn\",\"start\":1.622,\"end\":1.922},{\"text\":\"to\",\"start\":1.963,\"end\":2.023},{\"text\":\"change\",\"start\":2.103,\"end\":2.443},{\"text\":\"the\",\"start\":2.483,\"end\":2.543},{\"text\":\"display\",\"start\":2.583,\"end\":3.024},{\"text\":\"to\",\"start\":3.104,\"end\":3.184},{\"text\":\"green.\",\"start\":3.244,\"end\":3.505},{\"text\":\"Production\",\"start\":3.505,\"end\":4.145},{\"text\":\"turn\",\"start\":4.225,\"end\":4.506},{\"text\":\"one\",\"start\":4.706,\"end\":4.886},{\"text\":\"is\",\"start\":5.006,\"end\":5.087}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":5.147,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":5.147}"
+    ],
+    "text": "Our production turn to change the display to green. Production turn one is",
+    "words": [
+      {
+        "text": "Our",
+        "start": 1.041,
+        "end": 1.121
+      },
+      {
+        "text": "production",
+        "start": 1.141,
+        "end": 1.602
+      },
+      {
+        "text": "turn",
+        "start": 1.622,
+        "end": 1.922
+      },
+      {
+        "text": "to",
+        "start": 1.963,
+        "end": 2.023
+      },
+      {
+        "text": "change",
+        "start": 2.103,
+        "end": 2.443
+      },
+      {
+        "text": "the",
+        "start": 2.483,
+        "end": 2.543
+      },
+      {
+        "text": "display",
+        "start": 2.583,
+        "end": 3.024
+      },
+      {
+        "text": "to",
+        "start": 3.104,
+        "end": 3.184
+      },
+      {
+        "text": "green.",
+        "start": 3.244,
+        "end": 3.505
+      },
+      {
+        "text": "Production",
+        "start": 3.505,
+        "end": 4.145
+      },
+      {
+        "text": "turn",
+        "start": 4.225,
+        "end": 4.506
+      },
+      {
+        "text": "one",
+        "start": 4.706,
+        "end": 4.886
+      },
+      {
+        "text": "is",
+        "start": 5.006,
+        "end": 5.087
+      }
+    ]
+  },
+  "providerOutputTranscript": "I'll use the tool to change the display to green.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 31,
+      "clippedSampleCount": 0,
+      "maximumRms": 69.80042233635362,
+      "p50Rms": 12.96606146831026,
+      "p95Rms": 48.98683921898479,
+      "p99Rms": 63.75410934467937,
+      "sampleCount": 247040,
+      "windowCount": 258,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 31.116067158570452
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

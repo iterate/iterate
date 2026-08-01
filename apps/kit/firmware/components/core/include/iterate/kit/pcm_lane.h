@@ -22,6 +22,7 @@ struct iterate_kit_pcm_lane_metrics {
   struct iterate_kit_spsc_ring_metrics uplink;
   struct iterate_kit_spsc_ring_metrics downlink;
   uint32_t uplink_frames_accepted;
+  uint32_t uplink_end_markers_accepted;
   uint32_t uplink_invalid_frames;
   uint32_t uplink_epoch_reset_requests;
   uint32_t downlink_frames_accepted;
@@ -38,8 +39,17 @@ struct iterate_kit_pcm_lane_metrics {
 };
 
 /**
- * Caller-owned storage envelope for one microphone frame. The capture
- * timestamp is local metadata and is never written to the PCM WebSocket.
+ * Caller-owned storage envelope for one ordered microphone-lane item.
+ *
+ * The capture timestamp is local metadata and is never written to the PCM
+ * WebSocket. END_OF_TURN ignores frame bytes and is exposed by acquire as
+ * frame=NULL, frame_bytes=0. Its kind is encoded in the timestamp's reserved
+ * high bit, which a monotonic millisecond clock cannot reach for roughly 292
+ * million years. This preserves the measured eight-byte metadata cost for all
+ * 32 static slots; adding a C enum would spend another aligned eight bytes per
+ * slot for a rare boundary. The marker still occupies this same FIFO: an
+ * atomic side flag could overtake the final captured frame and make userspace
+ * commit a clipped manual-PTT turn.
  */
 struct iterate_kit_pcm_uplink_slot {
   uint64_t capture_completed_at_ms;
@@ -82,6 +92,7 @@ struct iterate_kit_pcm_lane {
   struct iterate_kit_spsc_ring *uplink;
   struct iterate_kit_spsc_ring *downlink;
   uint32_t uplink_frames_accepted;
+  uint32_t uplink_end_markers_accepted;
   uint32_t uplink_invalid_frames;
   uint32_t uplink_epoch_reset_requests;
   uint32_t uplink_epoch_reset_requested;
@@ -121,11 +132,31 @@ enum iterate_kit_status iterate_kit_pcm_lane_submit_uplink_at(
     size_t frame_bytes,
     uint64_t capture_completed_at_ms);
 
+/**
+ * Publishes the ordered end of one manual-PTT capture epoch.
+ *
+ * This is a zero-length binary WebSocket message on the wire. It is queued
+ * behind every microphone frame accepted before hardware capture stopped, so
+ * an independently delivered Cap'n Web button-release event cannot cause the
+ * userspace proxy to commit before the audio tail arrives.
+ */
+enum iterate_kit_status
+iterate_kit_pcm_lane_submit_uplink_end_marker_at(
+    struct iterate_kit_pcm_lane *lane,
+    uint64_t capture_completed_at_ms);
+
 enum iterate_kit_status iterate_kit_pcm_lane_uplink_acquire(
     struct iterate_kit_pcm_lane *lane,
     const void **frame,
     size_t *frame_bytes,
     uint64_t *capture_completed_at_ms);
+
+/**
+ * Acquires either one PCM frame or the ordered manual-turn marker.
+ *
+ * ITERATE_KIT_OK with frame=NULL and frame_bytes=0 is END_OF_TURN. The caller
+ * must still release the item. No other successful shape is valid.
+ */
 
 enum iterate_kit_status iterate_kit_pcm_lane_uplink_release(
     struct iterate_kit_pcm_lane *lane);

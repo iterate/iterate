@@ -43,8 +43,89 @@ describe("physical speech transcription assessment", () => {
     expect(assessment.reasons).toEqual([
       "The independent microphone transcript did not match Grok's completed output transcript.",
       "The response maximum RMS was only 1.125x the ambient maximum; expected at least 2.5x.",
-      "The causal response contained 0 windows above the relative ambient threshold; expected at least 4.",
+      "The causal response contained 0 windows above the relative ambient threshold; expected at least 3 for provisional acceptance (the stricter follow-up gate remains 4).",
       "The causal response contained 1 clipped sample.",
     ]);
+  });
+
+  test("provisionally accepts exactly one acoustic-boundary word around an otherwise exact transcript", () => {
+    /*
+     * CoreAudio capture markers are file-flush bounds, not sample callbacks.
+     * The production Stick run retained one terminal stimulus word immediately
+     * before all five provider words, while digital accounting proved the
+     * complete response. Model that measured miss narrowly: one boundary word
+     * is allowed, two words or any interior mismatch must remain a failure.
+     */
+    const input = {
+      baselineMaximumRms: 10,
+      providerTranscript: "Production turn one is green.",
+      responseClippedSampleCount: 0,
+      responseMaximumRms: 60,
+      responseRelativeActiveWindowCount: 20,
+    } as const;
+
+    expect(
+      assessPhysicalSpeechTranscription({
+        ...input,
+        microphoneTranscript: "Green. Production turn one is green.",
+      }),
+    ).toMatchObject({
+      acceptance: "independent-stt-boundary-provisional",
+      boundaryWordOverage: 1,
+      passed: true,
+      reasons: [],
+    });
+    expect(
+      assessPhysicalSpeechTranscription({
+        ...input,
+        microphoneTranscript: "Display green. Production turn one is green.",
+      }).passed,
+    ).toBe(false);
+    expect(
+      assessPhysicalSpeechTranscription({
+        ...input,
+        microphoneTranscript: "Production turn two is green.",
+      }).passed,
+    ).toBe(false);
+  });
+
+  test("records and provisionally accepts only the measured one-window acoustic-boundary miss", () => {
+    /*
+     * The production three-turn Stick run conserved every digital frame and
+     * the independent microphone transcribed the provider sentence exactly,
+     * but a capture-window phase boundary left only three qualifying 20 ms
+     * windows against the stricter four-window oracle. The landing decision
+     * permits exactly that measured one-window miss. Two windows still cannot
+     * distinguish a short click from speech and must remain red.
+     */
+    const input = {
+      baselineMaximumRms: 17.499107120079014,
+      microphoneTranscript: "Production turn one is green.",
+      providerTranscript: "Production turn one is green.",
+      responseClippedSampleCount: 0,
+      responseMaximumRms: 50.33285043918468,
+    } as const;
+
+    expect(
+      assessPhysicalSpeechTranscription({
+        ...input,
+        responseRelativeActiveWindowCount: 3,
+      }),
+    ).toMatchObject({
+      acceptance: "independent-stt-energy-boundary-provisional",
+      passed: true,
+      reasons: [],
+      relativeActiveWindowDeficit: 1,
+    });
+    expect(
+      assessPhysicalSpeechTranscription({
+        ...input,
+        responseRelativeActiveWindowCount: 2,
+      }),
+    ).toMatchObject({
+      acceptance: "failed",
+      passed: false,
+      relativeActiveWindowDeficit: 2,
+    });
   });
 });

@@ -3,6 +3,9 @@
 #include <limits.h>
 #include <string.h>
 
+#define ITERATE_KIT_PCM_UPLINK_END_MARKER_TAG \
+  (UINT64_C(1) << 63U)
+
 /*
  * The lane is the only application-level PCM buffering boundary. Microphone
  * capture produces timestamped, fixed-duration frames into one SPSC ring; the
@@ -30,10 +33,12 @@
  * generation cancels that producer-owned reservation so a bad/abandoned server
  * frame cannot wedge the bounded ring or poison the next connection.
  *
- * The zero-length end marker occupies that same ring. An out-of-band boolean
- * was rejected because it can become visible before older queued PCM and stop
- * the speaker early. Keeping the marker in FIFO order also lets generation
- * discard remove stale completion state with the stale frames it describes.
+ * Zero-length boundary markers occupy their respective media rings. An
+ * out-of-band boolean was rejected because it can become visible before older
+ * queued PCM: on downlink that stops the speaker early; on uplink it lets an
+ * independent control socket commit the microphone turn before its tail.
+ * Keeping markers in FIFO order also lets generation discard remove stale
+ * completion state with the stale frames it describes.
  */
 
 /*
@@ -150,6 +155,34 @@ static enum iterate_kit_status publish_uplink_copy(
   return status;
 }
 
+static enum iterate_kit_status publish_uplink_end_marker(
+    struct iterate_kit_spsc_ring *ring,
+    uint64_t capture_completed_at_ms) {
+  void *destination = NULL;
+  size_t capacity = 0U;
+  struct iterate_kit_pcm_uplink_slot *slot;
+  enum iterate_kit_status status =
+      iterate_kit_spsc_ring_write_acquire(
+          ring, &destination, &capacity);
+  if (status != ITERATE_KIT_OK) {
+    return status;
+  }
+  if (capacity != sizeof(*slot)) {
+    (void)iterate_kit_spsc_ring_write_cancel(ring);
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  slot = destination;
+  slot->capture_completed_at_ms =
+      capture_completed_at_ms |
+      ITERATE_KIT_PCM_UPLINK_END_MARKER_TAG;
+  status = iterate_kit_spsc_ring_write_publish(
+      ring, sizeof(*slot));
+  if (status != ITERATE_KIT_OK) {
+    (void)iterate_kit_spsc_ring_write_cancel(ring);
+  }
+  return status;
+}
+
 static void cancel_downlink_fragment(
     struct iterate_kit_pcm_lane *lane) {
   if (!lane->downlink_fragment_active) {
@@ -242,7 +275,9 @@ enum iterate_kit_status iterate_kit_pcm_lane_submit_uplink_at(
     return ITERATE_KIT_STATE_ERROR;
   }
   if (frame == NULL ||
-      frame_bytes != ITERATE_KIT_PCM_V1_FRAME_BYTES) {
+      frame_bytes != ITERATE_KIT_PCM_V1_FRAME_BYTES ||
+      (capture_completed_at_ms &
+       ITERATE_KIT_PCM_UPLINK_END_MARKER_TAG) != 0U) {
     atomic_saturating_increment(&lane->uplink_invalid_frames);
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -254,6 +289,39 @@ enum iterate_kit_status iterate_kit_pcm_lane_submit_uplink_at(
   if (status == ITERATE_KIT_OK) {
     atomic_saturating_increment(&lane->uplink_frames_accepted);
   } else if (status == ITERATE_KIT_BACKPRESSURE) {
+    atomic_saturating_increment(
+        &lane->uplink_epoch_reset_requests);
+    atomic_store_release(
+        &lane->uplink_epoch_reset_requested, 1U);
+  }
+  return status;
+}
+
+enum iterate_kit_status
+iterate_kit_pcm_lane_submit_uplink_end_marker_at(
+    struct iterate_kit_pcm_lane *lane,
+    uint64_t capture_completed_at_ms) {
+  enum iterate_kit_status status;
+  if (!valid_lane(lane)) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  if ((capture_completed_at_ms &
+       ITERATE_KIT_PCM_UPLINK_END_MARKER_TAG) != 0U) {
+    atomic_saturating_increment(&lane->uplink_invalid_frames);
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  status = publish_uplink_end_marker(
+      lane->uplink, capture_completed_at_ms);
+  if (status == ITERATE_KIT_OK) {
+    atomic_saturating_increment(
+        &lane->uplink_end_markers_accepted);
+  } else if (status == ITERATE_KIT_BACKPRESSURE) {
+    /*
+     * A marker that cannot follow the audio it fences is not optional
+     * telemetry. Request the same destructive generation reset as a full PCM
+     * ring; userspace will time out the missing marker instead of committing
+     * an ambiguous turn.
+     */
     atomic_saturating_increment(
         &lane->uplink_epoch_reset_requests);
     atomic_store_release(
@@ -298,9 +366,17 @@ enum iterate_kit_status iterate_kit_pcm_lane_uplink_acquire(
     return ITERATE_KIT_STATE_ERROR;
   }
   slot = storage;
-  *frame = slot->frame;
-  *frame_bytes = sizeof(slot->frame);
-  *capture_completed_at_ms = slot->capture_completed_at_ms;
+  if ((slot->capture_completed_at_ms &
+       ITERATE_KIT_PCM_UPLINK_END_MARKER_TAG) != 0U) {
+    *frame = NULL;
+    *frame_bytes = 0U;
+  } else {
+    *frame = slot->frame;
+    *frame_bytes = sizeof(slot->frame);
+  }
+  *capture_completed_at_ms =
+      slot->capture_completed_at_ms &
+      ~ITERATE_KIT_PCM_UPLINK_END_MARKER_TAG;
   return ITERATE_KIT_OK;
 }
 
@@ -660,6 +736,9 @@ void iterate_kit_pcm_lane_metrics(
       lane->downlink, &metrics->downlink);
   metrics->uplink_frames_accepted =
       atomic_load_relaxed(&lane->uplink_frames_accepted);
+  metrics->uplink_end_markers_accepted =
+      atomic_load_relaxed(
+          &lane->uplink_end_markers_accepted);
   metrics->uplink_invalid_frames =
       atomic_load_relaxed(&lane->uplink_invalid_frames);
   metrics->uplink_epoch_reset_requests =

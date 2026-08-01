@@ -32233,6 +32233,174 @@
         "id": "component-config-wi-fi-provisioning-manager",
         "title": "Wi-Fi Provisioning Manager",
         "type": "menu"
+      },
+      {
+        "children": [
+          {
+            "children": [],
+            "depends_on": null,
+            "help": null,
+            "id": "ESP_IDF_VERSION",
+            "name": "ESP_IDF_VERSION",
+            "range": null,
+            "title": null,
+            "type": "string"
+          },
+          {
+            "children": [],
+            "depends_on": "ESP_IDF_VERSION >= 5.3",
+            "help": "Enable this option for backward compatibility with the old I2C driver",
+            "id": "CODEC_I2C_BACKWARD_COMPATIBLE",
+            "name": "CODEC_I2C_BACKWARD_COMPATIBLE",
+            "range": null,
+            "title": "Enable backward compatibility for the I2C driver (force use of the old i2c_driver above v5.3)",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec ES8311.",
+            "id": "CODEC_ES8311_SUPPORT",
+            "name": "CODEC_ES8311_SUPPORT",
+            "range": null,
+            "title": "Support ES8311 Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec ES7210.",
+            "id": "CODEC_ES7210_SUPPORT",
+            "name": "CODEC_ES7210_SUPPORT",
+            "range": null,
+            "title": "Support ES7210 Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec ES7243.",
+            "id": "CODEC_ES7243_SUPPORT",
+            "name": "CODEC_ES7243_SUPPORT",
+            "range": null,
+            "title": "Support ES7243 Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec ES7243E.",
+            "id": "CODEC_ES7243E_SUPPORT",
+            "name": "CODEC_ES7243E_SUPPORT",
+            "range": null,
+            "title": "Support ES7243E Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec ES8156.",
+            "id": "CODEC_ES8156_SUPPORT",
+            "name": "CODEC_ES8156_SUPPORT",
+            "range": null,
+            "title": "Support ES8156 Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec AW88298.",
+            "id": "CODEC_AW88298_SUPPORT",
+            "name": "CODEC_AW88298_SUPPORT",
+            "range": null,
+            "title": "Support AW88298 Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec ES8389.",
+            "id": "CODEC_ES8389_SUPPORT",
+            "name": "CODEC_ES8389_SUPPORT",
+            "range": null,
+            "title": "Support ES8389 Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec ES8374.",
+            "id": "CODEC_ES8374_SUPPORT",
+            "name": "CODEC_ES8374_SUPPORT",
+            "range": null,
+            "title": "Support ES8374 Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec ES8388.",
+            "id": "CODEC_ES8388_SUPPORT",
+            "name": "CODEC_ES8388_SUPPORT",
+            "range": null,
+            "title": "Support ES8388 Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec TAS5805M.",
+            "id": "CODEC_TAS5805M_SUPPORT",
+            "name": "CODEC_TAS5805M_SUPPORT",
+            "range": null,
+            "title": "Support TAS5805M Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec ZL38063.\nZL38063 firmware only support xtensa, don't enable for RISC-V IC.",
+            "id": "CODEC_ZL38063_SUPPORT",
+            "name": "CODEC_ZL38063_SUPPORT",
+            "range": null,
+            "title": "Support ZL38063 Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support codec CJC8910.",
+            "id": "CODEC_CJC8910_SUPPORT",
+            "name": "CODEC_CJC8910_SUPPORT",
+            "range": null,
+            "title": "Support CJC8910 Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": null,
+            "help": "Enable this option to support dummy codec, which is used without a codec chip",
+            "id": "CODEC_DUMMY_SUPPORT",
+            "name": "CODEC_DUMMY_SUPPORT",
+            "range": null,
+            "title": "Support Dummy Codec Chip",
+            "type": "bool"
+          },
+          {
+            "children": [],
+            "depends_on": "SOC_ADC_SUPPORTED",
+            "help": "Enable this option to support ADC continuous mode as an audio codec data interface.\nThis allows using the on-chip ADC for audio input instead of an external codec.",
+            "id": "CODEC_DATA_ADC_SUPPORT",
+            "name": "CODEC_DATA_ADC_SUPPORT",
+            "range": null,
+            "title": "Support ADC continuous data interface",
+            "type": "bool"
+          }
+        ],
+        "depends_on": null,
+        "id": "component-config-audio-codec-device-configuration",
+        "title": "Audio Codec Device Configuration",
+        "type": "menu"
       }
     ],
     "depends_on": null,

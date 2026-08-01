@@ -87,4 +87,5 @@ $<TARGET_FILE:__idf_wifi_provisioning>
 $<TARGET_FILE:__idf_capnweb>
 $<TARGET_FILE:__idf_core>
 $<TARGET_FILE:__idf_iterate_esp_idf>
+$<TARGET_FILE:__idf_espressif__esp_codec_dev>
 $<TARGET_FILE:__idf_main>

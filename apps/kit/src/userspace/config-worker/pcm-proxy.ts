@@ -24,6 +24,14 @@ const DOWNLINK_RESPONSE_RESERVOIR_FRAMES = 400;
 const DOWNLINK_SOURCE_STARTUP_FRAMES = 32;
 const DEVICE_INITIAL_LEAD_FRAMES = 8;
 const PCM_FRAME_DURATION_MS = 20;
+/*
+ * This is not an audio queue timeout. It bounds how long two independently
+ * delivered facts may disagree after PTT release: the Cap'n Web stop event and
+ * the empty marker ordered behind the last PCM frame. Healthy delivery is a few
+ * milliseconds; 1.5 seconds tolerates control/media scheduling skew while
+ * ensuring a lost marker cannot leave a Grok input buffer open indefinitely.
+ */
+const UPLINK_END_MARKER_TIMEOUT_MS = 1_500;
 const MAXIMUM_FUNCTION_CALLS_PER_RESPONSE = 8;
 const MAXIMUM_FUNCTION_ARGUMENT_BYTES = 2_048;
 const pcmEndOfResponse = new Uint8Array(0);
@@ -51,7 +59,10 @@ export interface PcmProxyDiagnostic {
     | "provider-function-call-failed"
     | "provider-unavailable"
     | "socket-error"
-    | "uplink-backpressure";
+    | "uplink-backpressure"
+    | "uplink-end-marker-timeout"
+    | "uplink-frame-after-end-marker"
+    | "uplink-turn-overlap";
   detail?: unknown;
   droppedBytes?: number;
   sessionId: string;
@@ -60,6 +71,7 @@ export interface PcmProxyDiagnostic {
 
 export interface PcmSessionMetrics {
   awaitingCommitAcknowledgement: boolean;
+  awaitingUplinkEndMarker: boolean;
   closed: boolean;
   downlinkDroppedBytes: number;
   downlinkFrames: number;
@@ -88,7 +100,10 @@ export interface PcmSessionMetrics {
   providerResponseActive: boolean;
   providerResponsesCompleted: number;
   uplinkDroppedBytes: number;
+  uplinkEndMarkers: number;
+  uplinkEndMarkerTimeouts: number;
   uplinkFrames: number;
+  uplinkFramesAfterEndMarkerDropped: number;
   uplinkUnavailableFrames: number;
 }
 
@@ -129,6 +144,7 @@ export class PcmSessionBridge {
     ITERATE_KIT_PCM_FRAME_BYTES * DOWNLINK_RESPONSE_RESERVOIR_FRAMES,
   );
   #closed = false;
+  #awaitingUplinkEndMarker = false;
   #downlinkDroppedBytes = 0;
   #downlinkFrames = 0;
   #downlinkQueuedBytes = 0;
@@ -164,7 +180,12 @@ export class PcmSessionBridge {
   #responseActive = false;
   #nextDownlinkAt = 0;
   #uplinkDroppedBytes = 0;
+  #uplinkEndMarkerSeen = false;
+  #uplinkEndMarkers = 0;
+  #uplinkEndMarkerTimeouts = 0;
+  #uplinkEndMarkerTimer: ReturnType<typeof setTimeout> | undefined;
   #uplinkFrames = 0;
+  #uplinkFramesAfterEndMarkerDropped = 0;
   #uplinkUnavailableFrames = 0;
 
   constructor(options: PcmSessionBridgeOptions) {
@@ -212,6 +233,7 @@ export class PcmSessionBridge {
   metrics(): PcmSessionMetrics {
     return {
       awaitingCommitAcknowledgement: this.#responseAfterCommitPending,
+      awaitingUplinkEndMarker: this.#awaitingUplinkEndMarker,
       closed: this.#closed,
       downlinkDroppedBytes: this.#downlinkDroppedBytes,
       downlinkFrames: this.#downlinkFrames,
@@ -239,7 +261,10 @@ export class PcmSessionBridge {
       providerResponseActive: this.#responseActive,
       providerResponsesCompleted: this.#providerResponsesCompleted,
       uplinkDroppedBytes: this.#uplinkDroppedBytes,
+      uplinkEndMarkers: this.#uplinkEndMarkers,
+      uplinkEndMarkerTimeouts: this.#uplinkEndMarkerTimeouts,
       uplinkFrames: this.#uplinkFrames,
+      uplinkFramesAfterEndMarkerDropped: this.#uplinkFramesAfterEndMarkerDropped,
       uplinkUnavailableFrames: this.#uplinkUnavailableFrames,
     };
   }
@@ -301,6 +326,22 @@ export class PcmSessionBridge {
       this.#onProviderUnavailable();
       return false;
     }
+    if (this.#awaitingUplinkEndMarker) {
+      /*
+       * A new capture cannot safely reuse this socket until the prior turn's
+       * ordered marker arrives. Treating the next marker as the new turn's end
+       * would drop fresh speech; ignoring it would let the old tail leak into
+       * the new Grok buffer. Replacing one ambiguous realtime generation is
+       * safer and bounded, and the explicit diagnostic distinguishes this from
+       * provider/network unavailability.
+       */
+      this.#fail(
+        "uplink-turn-overlap",
+        "A new PTT turn began before the prior PCM end marker arrived.",
+      );
+      return false;
+    }
+    this.#uplinkEndMarkerSeen = false;
     /*
      * A new press supersedes any released turn that Grok has not acknowledged
      * yet. Remembering one boolean is enough: keeping the stale request would
@@ -338,15 +379,25 @@ export class PcmSessionBridge {
      * This is a control-plane fence only—PCM still travels immediately and no
      * audio or turn queue is introduced.
      */
-    this.#responseAfterCommitPending = true;
-    if (this.#sendProviderControl("input_audio_buffer.commit")) return true;
-    this.#responseAfterCommitPending = false;
-    return false;
+    if (this.#uplinkEndMarkerSeen) return this.#commitInputTurn();
+    this.#awaitingUplinkEndMarker = true;
+    this.#uplinkEndMarkerTimer = setTimeout(() => {
+      this.#uplinkEndMarkerTimer = undefined;
+      if (this.#closed || !this.#awaitingUplinkEndMarker) return;
+      this.#awaitingUplinkEndMarker = false;
+      this.#uplinkEndMarkerTimeouts += 1;
+      this.#fail(
+        "uplink-end-marker-timeout",
+        "The ordered PCM end marker did not arrive after PTT release.",
+      );
+    }, UPLINK_END_MARKER_TIMEOUT_MS);
+    return true;
   }
 
   close(code = 1000, reason = "PCM session ended."): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#clearUplinkEndMarkerWait();
     this.#responseAfterCommitPending = false;
     this.#abandonProviderResponse();
     this.#discardDownlinkQueue();
@@ -363,6 +414,10 @@ export class PcmSessionBridge {
   #handleDeviceMessage(data: unknown): void {
     if (this.#closed) return;
     const bytes = binaryBytes(data);
+    if (bytes?.byteLength === 0) {
+      this.#handleUplinkEndMarker();
+      return;
+    }
     if (!bytes || bytes.byteLength !== ITERATE_KIT_PCM_FRAME_BYTES) {
       const droppedBytes = bytes?.byteLength ?? 0;
       this.#uplinkDroppedBytes += droppedBytes;
@@ -370,6 +425,24 @@ export class PcmSessionBridge {
         "invalid-device-frame",
         `Device PCM messages must contain exactly ${ITERATE_KIT_PCM_FRAME_BYTES} bytes.`,
         droppedBytes,
+      );
+      return;
+    }
+    if (this.#uplinkEndMarkerSeen) {
+      /*
+       * FIFO ordering makes this a concrete contradiction: no audio from the
+       * just-ended turn can legally follow its marker, and the next turn is
+       * not open until inputStarted() clears the fence. Drop rather than close
+       * so one late callback remains diagnosable without destroying an
+       * otherwise healthy provider conversation.
+       */
+      this.#uplinkDroppedBytes += bytes.byteLength;
+      this.#uplinkFramesAfterEndMarkerDropped += 1;
+      this.#diagnostic(
+        "uplink-frame-after-end-marker",
+        "warn",
+        "A microphone frame arrived after its turn's ordered end marker.",
+        bytes.byteLength,
       );
       return;
     }
@@ -396,6 +469,41 @@ export class PcmSessionBridge {
     }
     provider.send(bytes);
     this.#uplinkFrames += 1;
+  }
+
+  #handleUplinkEndMarker(): void {
+    if (this.#uplinkEndMarkerSeen) {
+      this.#fail(
+        "invalid-device-frame",
+        "The device sent two PCM end markers without beginning another turn.",
+      );
+      return;
+    }
+    this.#uplinkEndMarkerSeen = true;
+    this.#uplinkEndMarkers += 1;
+    if (!this.#awaitingUplinkEndMarker) return;
+    this.#clearUplinkEndMarkerWait();
+    this.#commitInputTurn();
+  }
+
+  #commitInputTurn(): boolean {
+    const provider = this.#provider;
+    if (this.#closed || !provider || !socketIsOpen(provider)) {
+      this.#onProviderUnavailable();
+      return false;
+    }
+    this.#clearUplinkEndMarkerWait();
+    this.#responseAfterCommitPending = true;
+    if (this.#sendProviderControl("input_audio_buffer.commit")) return true;
+    this.#responseAfterCommitPending = false;
+    return false;
+  }
+
+  #clearUplinkEndMarkerWait(): void {
+    this.#awaitingUplinkEndMarker = false;
+    if (this.#uplinkEndMarkerTimer === undefined) return;
+    clearTimeout(this.#uplinkEndMarkerTimer);
+    this.#uplinkEndMarkerTimer = undefined;
   }
 
   #handleProviderMessage(provider: WebSocket, data: unknown): void {
@@ -893,6 +1001,7 @@ export class PcmSessionBridge {
     this.#provider = undefined;
     this.#providerDisconnects += 1;
     this.#lastSocketClose = { code, reason, source: "provider" };
+    this.#clearUplinkEndMarkerWait();
     this.#responseAfterCommitPending = false;
     this.#abandonProviderResponse();
     this.#discardDownlinkQueue();

@@ -88,7 +88,7 @@ describe("userspace PCM session bridge", () => {
      * while the dedicated device lane remains binary-only.
      */
     const events: ProviderNonPcmEvent[] = [];
-    const { bridge, device, provider } = createBridge({
+    const { device, provider } = createBridge({
       onProviderEvent: (event) => events.push(event),
     });
     const downlink = textMessages(device.client);
@@ -203,12 +203,24 @@ describe("userspace PCM session bridge", () => {
     expect(downlink[0]).toHaveLength(0);
   });
 
-  test("manual PTT release waits for the provider commit acknowledgement before requesting speech", async () => {
-    const { bridge, provider } = createBridge();
+  test("manual PTT release waits for the ordered PCM end marker before committing", async () => {
+    /*
+     * Button release and microphone bytes use independent WebSockets. A
+     * control release can therefore arrive before the final PCM frame even
+     * when both paths are healthy. Committing on that edge clips speech and
+     * lets the late tail leak into the next turn. The device's empty binary
+     * marker is ordered behind all accepted PCM on the media socket, so the
+     * bridge must wait for it before asking Grok to commit.
+     */
+    const { bridge, device, provider } = createBridge();
     const controls = textMessages(provider.client);
 
     bridge.inputStarted();
     expect(bridge.inputStopped()).toBe(true);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(controls).toEqual([]);
+
+    device.client.send(new Uint8Array(0));
 
     await vi.waitFor(() => expect(controls).toEqual(['{"type":"input_audio_buffer.commit"}']));
 
@@ -218,6 +230,71 @@ describe("userspace PCM session bridge", () => {
         '{"type":"input_audio_buffer.commit"}',
         '{"type":"response.create"}',
       ]),
+    );
+    expect(bridge.metrics()).toMatchObject({
+      awaitingUplinkEndMarker: false,
+      uplinkEndMarkers: 1,
+      uplinkFramesAfterEndMarkerDropped: 0,
+    });
+  });
+
+  test("an end marker that wins the socket race still fences late turn audio", async () => {
+    /*
+     * The media marker may arrive before Cap'n Web reports the release. It is
+     * still the same boundary, not an invalid empty PCM packet. Any non-empty
+     * device message after it and before the next start contradicts FIFO turn
+     * ownership, so it is discarded visibly rather than entering Grok's next
+     * manual input buffer.
+     */
+    const { bridge, device, provider } = createBridge();
+    const controls = textMessages(provider.client);
+    const uplink = binaryMessages(provider.client);
+
+    bridge.inputStarted();
+    device.client.send(new Uint8Array(0));
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(9));
+    await vi.waitFor(() =>
+      expect(bridge.metrics()).toMatchObject({
+        uplinkEndMarkers: 1,
+        uplinkFramesAfterEndMarkerDropped: 1,
+      }),
+    );
+    expect(uplink).toEqual([]);
+
+    expect(bridge.inputStopped()).toBe(true);
+    await vi.waitFor(() => expect(controls).toEqual(['{"type":"input_audio_buffer.commit"}']));
+  });
+
+  test("a missing end marker terminates the ambiguous turn after a bounded wait", async () => {
+    /*
+     * Silently waiting would leave Grok's manual input buffer and a Durable
+     * Object timer alive forever; committing anyway would guess that missing
+     * microphone bytes do not exist. The only honest recovery is a classified,
+     * bounded generation failure whose counter survives in the closed report.
+     */
+    vi.useFakeTimers();
+    const { bridge, diagnostics } = createBridge();
+
+    expect(bridge.inputStarted()).toBe(true);
+    expect(bridge.inputStopped()).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(bridge.metrics()).toMatchObject({
+      awaitingUplinkEndMarker: true,
+      closed: false,
+      uplinkEndMarkerTimeouts: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(bridge.metrics()).toMatchObject({
+      awaitingUplinkEndMarker: false,
+      closed: true,
+      uplinkEndMarkerTimeouts: 1,
+    });
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "uplink-end-marker-timeout",
+        severity: "error",
+      }),
     );
   });
 
@@ -393,10 +470,12 @@ describe("userspace PCM session bridge", () => {
      * acknowledgement must not resurrect the stale turn and speak over the
      * newly captured microphone audio.
      */
-    const { bridge, provider } = createBridge();
+    const { bridge, device, provider } = createBridge();
     const controls = textMessages(provider.client);
 
     bridge.inputStarted();
+    device.client.send(new Uint8Array(0));
+    await vi.waitFor(() => expect(bridge.metrics()).toMatchObject({ uplinkEndMarkers: 1 }));
     expect(bridge.inputStopped()).toBe(true);
     expect(bridge.inputStarted()).toBe(true);
     provider.client.send(JSON.stringify({ type: "input_audio_buffer.committed" }));

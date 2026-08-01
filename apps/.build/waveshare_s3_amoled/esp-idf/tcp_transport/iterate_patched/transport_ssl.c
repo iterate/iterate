@@ -282,24 +282,31 @@ static int ssl_read(esp_transport_handle_t t, char *buffer, int len, int timeout
 
     int ret = esp_tls_conn_read(ssl->tls, (unsigned char *)buffer, len);
     if (ret < 0) {
-        ESP_LOGE(TAG, "esp_tls_conn_read error, errno=%s", strerror(errno));
         /*
-         * ITERATE PATCH: TLS may need to write protocol traffic while the
-         * application is reading. WANT_WRITE means retry after socket progress,
-         * not that the peer disconnected; restarting here would purge fresh
-         * audio during a valid TLS state transition.
+         * ITERATE PATCH: a zero-timeout read is a scheduling probe, so
+         * WANT_READ/WANT_WRITE/TIMEOUT describe ordinary lack of immediate
+         * application progress. ESP-IDF v5.4 logs and captures those values as
+         * TLS errors before translating WANT_READ to a transport timeout. That
+         * produces a false error trail during an otherwise bit-exact realtime
+         * audio run and may copy a stale TLS error into later diagnostics.
+         *
+         * Classify retryable states before the terminal-failure branch. Real
+         * negative TLS results still retain ESP-IDF's synchronous log and error
+         * handle; this is not a blanket suppression or a compatibility shim.
          */
         if (ret == ESP_TLS_ERR_SSL_WANT_READ ||
                 ret == ESP_TLS_ERR_SSL_WANT_WRITE ||
                 ret == ESP_TLS_ERR_SSL_TIMEOUT) {
             ret = ERR_TCP_TRANSPORT_CONNECTION_TIMEOUT;
-        }
-
-        esp_tls_error_handle_t esp_tls_error_handle;
-        if (esp_tls_get_error_handle(ssl->tls, &esp_tls_error_handle) == ESP_OK) {
-            esp_transport_set_errors(t, esp_tls_error_handle);
         } else {
-            ESP_LOGE(TAG, "Error in obtaining the error handle");
+            ESP_LOGE(TAG, "esp_tls_conn_read error, errno=%s", strerror(errno));
+
+            esp_tls_error_handle_t esp_tls_error_handle;
+            if (esp_tls_get_error_handle(ssl->tls, &esp_tls_error_handle) == ESP_OK) {
+                esp_transport_set_errors(t, esp_tls_error_handle);
+            } else {
+                ESP_LOGE(TAG, "Error in obtaining the error handle");
+            }
         }
     } else if (ret == 0) {
         if (poll > 0) {

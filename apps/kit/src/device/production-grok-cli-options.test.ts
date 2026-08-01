@@ -12,6 +12,13 @@ describe("production Grok proof CLI options", () => {
 
     expect(options.deviceId).toBe("m5sticks3");
     expect(options.outputDirectory).toMatch(/\/evidence\/m5sticks3-production-grok$/u);
+    expect(options.turns).toBe(1);
+  });
+
+  test("selects a bounded number of PTT turns for one deployed conversation", () => {
+    const options = parseProductionGrokCliOptions(["--turns", "3"], environment);
+
+    expect(options.turns).toBe(3);
   });
 
   test("selects a reusable device identity explicitly", () => {

@@ -67,7 +67,9 @@ struct iterate_kit_pcm_uplink_sender_options {
 
 struct iterate_kit_pcm_uplink_sender_metrics {
   uint32_t frames_sent;
+  uint32_t end_markers_sent;
   uint32_t frames_discarded;
+  uint32_t end_markers_discarded;
   uint32_t send_deferrals;
   uint32_t send_failures;
   uint32_t consecutive_send_deferrals;
@@ -99,6 +101,7 @@ struct iterate_kit_pcm_uplink_sender_metrics {
 struct iterate_kit_pcm_uplink_sender_event {
   uint64_t capture_completed_at_ms;
   uint64_t transport_accepted_at_ms;
+  bool end_marker;
   bool transport_accepted;
 };
 
@@ -121,7 +124,9 @@ struct iterate_kit_pcm_uplink_sender {
   const void *pending_frame;
   size_t pending_frame_bytes;
   uint32_t frames_sent;
+  uint32_t end_markers_sent;
   uint32_t frames_discarded;
+  uint32_t end_markers_discarded;
   uint32_t send_deferrals;
   uint32_t send_failures;
   uint32_t consecutive_send_deferrals;

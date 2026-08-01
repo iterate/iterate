@@ -111,6 +111,64 @@ static void exact_uplink_frame_emerges_once(void) {
 }
 
 /*
+ * PTT release crosses the low-rate Cap'n Web socket while captured PCM crosses
+ * the independent realtime socket. Waiting for the control event alone cannot
+ * prove that the final microphone frame reached userspace: the two TCP streams
+ * may be scheduled in either order. The release edge therefore publishes an
+ * empty binary item behind all accepted microphone frames in this same SPSC
+ * ring. Userspace commits only after observing both the control edge and this
+ * ordered marker. This test is deliberately symmetric with the downlink end
+ * marker below; an out-of-band flag was rejected because it could overtake the
+ * queued audio it is meant to fence.
+ */
+static void uplink_end_marker_follows_the_final_capture_frame(void) {
+  struct lane_fixture fixture;
+  struct iterate_kit_pcm_lane_metrics metrics;
+  uint8_t frame[ITERATE_KIT_PCM_V1_FRAME_BYTES];
+  const void *borrowed = NULL;
+  size_t borrowed_size = 99U;
+  uint64_t capture_completed_at_ms = 0U;
+  fixture_init(&fixture);
+  fill_frame(frame, 71U);
+
+  CHECK(iterate_kit_pcm_lane_submit_uplink_at(
+      &fixture.lane,
+      frame,
+      sizeof(frame),
+      123U) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_lane_submit_uplink_end_marker_at(
+      &fixture.lane, 124U) == ITERATE_KIT_OK);
+
+  CHECK(iterate_kit_pcm_lane_uplink_acquire(
+      &fixture.lane,
+      &borrowed,
+      &borrowed_size,
+      &capture_completed_at_ms) == ITERATE_KIT_OK);
+  CHECK(borrowed_size == sizeof(frame));
+  CHECK(capture_completed_at_ms == 123U);
+  CHECK(memcmp(borrowed, frame, sizeof(frame)) == 0);
+  CHECK(iterate_kit_pcm_lane_uplink_release(
+      &fixture.lane) == ITERATE_KIT_OK);
+
+  CHECK(iterate_kit_pcm_lane_uplink_acquire(
+      &fixture.lane,
+      &borrowed,
+      &borrowed_size,
+      &capture_completed_at_ms) == ITERATE_KIT_OK);
+  CHECK(borrowed == NULL);
+  CHECK(borrowed_size == 0U);
+  CHECK(capture_completed_at_ms == 124U);
+  CHECK(iterate_kit_pcm_lane_uplink_release(
+      &fixture.lane) == ITERATE_KIT_OK);
+
+  iterate_kit_pcm_lane_metrics(&fixture.lane, &metrics);
+  CHECK(metrics.uplink_frames_accepted == 1U);
+  CHECK(metrics.uplink_end_markers_accepted == 1U);
+  CHECK(metrics.uplink.messages_published == 2U);
+  CHECK(metrics.uplink.messages_consumed == 2U);
+}
+
+/*
  * Speaker playback must receive exactly the binary frame sent by the server,
  * independent of the WebSocket callback buffer's lifetime. Passing that
  * callback pointer through is cheaper but becomes use-after-reuse as soon as
@@ -641,6 +699,7 @@ static void interruption_discards_every_queued_downlink_frame(void) {
 
 int main(void) {
   exact_uplink_frame_emerges_once();
+  uplink_end_marker_follows_the_final_capture_frame();
   exact_binary_downlink_frame_emerges_once();
   zero_length_end_marker_follows_the_final_frame();
   every_two_chunk_split_reassembles_exactly_once();

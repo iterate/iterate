@@ -81,6 +81,7 @@ describe("userspace PCM providers", () => {
             },
           },
           instructions: "Be concise, conversational, and useful.",
+          keep_context: true,
           tools: [
             {
               description: "Change the physical M5StickS3 display background to red or green.",

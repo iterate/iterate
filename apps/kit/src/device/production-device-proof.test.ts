@@ -73,6 +73,7 @@ describe("unattended production device proof", () => {
       port: "/dev/cu.usbmodem11101",
       projectId: "prj_stackchan_voice",
       projectSlug: "stackchan-voice-lab",
+      turns: 1,
       workerHost: "stackchan--voice-lab.iterate.app",
     });
   });
@@ -166,5 +167,15 @@ describe("unattended production device proof", () => {
     });
     expect(JSON.stringify(plan)).not.toContain("itxk_must_not_enter_the_plan");
     expect(JSON.stringify(plan)).not.toContain("wifi_password_must_not_enter_the_plan");
+  });
+
+  test("forwards a bounded multi-turn conversation through the device-backed production proof", () => {
+    const options = parseProductionDeviceProofCliOptions(["--turns", "3"], {}, packageDirectory);
+
+    const plan = buildProductionDeviceProofPlan(options, configuration);
+
+    expect(options.turns).toBe(3);
+    expect(plan.grokProofArgs).toContain("--turns");
+    expect(plan.grokProofArgs.at(plan.grokProofArgs.indexOf("--turns") + 1)).toBe("3");
   });
 });

@@ -32,6 +32,7 @@ import {
 import type { ProductionDeviceProofProvenance } from "../src/device/production-device-proof.ts";
 import { assessPhysicalSpeechTranscription } from "../src/device/physical-speech-transcription.ts";
 import { parseKitControlDiagnostics } from "../src/device/kit-control-diagnostics.ts";
+import { parseKitPlaybackMetrics } from "../src/device/kit-playback-metrics.ts";
 import { MacOsPcm16Capture } from "../src/device/macos-pcm16-capture.ts";
 import {
   buildPhysicalNetworkRunArtifact,
@@ -53,7 +54,10 @@ import {
   transcribePcm16WithXaiStreamingStt,
   type XaiStreamingSttResult,
 } from "../src/device/xai-streaming-stt.ts";
-import type { KitControlDiagnostics } from "../src/device/kit-device-contract.ts";
+import type {
+  KitControlDiagnostics,
+  KitPlaybackMetrics,
+} from "../src/device/kit-device-contract.ts";
 import { kitVoiceWorkerRef } from "../src/userspace/config-worker/app-ref.ts";
 import type { DeviceEventSessionMetrics } from "../src/userspace/config-worker/device-events.ts";
 import type { DeviceMetricsSessionMetrics } from "../src/userspace/config-worker/device-metrics.ts";
@@ -72,6 +76,7 @@ const physicalReleaseTimeoutMs = 30_000;
 const responseTimeoutMs = 90_000;
 const ambientDurationMs = 1_000;
 const responseAnalysisGuardMs = 400;
+const macOsSpeechDrainGuardMs = 1_200;
 const provisionalRelativeAmbientMultiplier = 2.5;
 const executeFile = promisify(execFile);
 
@@ -159,6 +164,36 @@ export async function proveProductionM5StickS3Grok(
     limit: 1,
   });
   const baselineDiagnostics = await readDiagnostics();
+  const playbackSamples: KitPlaybackMetrics[] = [];
+  let playbackCallbackError: Error | undefined;
+  await invoke<void>(
+    [...devicePath, "subscribeToPlaybackMetrics"],
+    [
+      (value: unknown) => {
+        try {
+          playbackSamples.push(parseKitPlaybackMetrics(value));
+          if (playbackSamples.length > 16) playbackSamples.shift();
+        } catch (error) {
+          playbackCallbackError = new Error("The device sent malformed playback metrics.", {
+            cause: error,
+          });
+        }
+      },
+    ],
+  );
+  /*
+   * General metrics intentionally compress all destructive speaker outcomes
+   * into `playback.flushed`. That is the correct release gate but a poor fault
+   * locator. Capture the independent detailed view before media starts so a
+   * failed physical run can say whether the loss was a stale frame, an
+   * underrun substitution, a generation reset, or an EOS ownership defect.
+   * The callback is latest-state only; this bounded host array never adds a
+   * queue or history allocation to the device.
+   */
+  const baselinePlayback = await waitForStablePlayback(
+    playbackSamples,
+    () => playbackCallbackError,
+  );
 
   let capture: MacOsPcm16Capture | undefined;
   let completedCapture: Awaited<ReturnType<MacOsPcm16Capture["stop"]>> | undefined;
@@ -168,6 +203,7 @@ export async function proveProductionM5StickS3Grok(
   let ambientStart: Awaited<ReturnType<MacOsPcm16Capture["inspectProgress"]>> | undefined;
   let ambientEnd: Awaited<ReturnType<MacOsPcm16Capture["inspectProgress"]>> | undefined;
   let responseMarker: Awaited<ReturnType<MacOsPcm16Capture["inspectProgress"]>> | undefined;
+  let responseEndMarker: Awaited<ReturnType<MacOsPcm16Capture["inspectProgress"]>> | undefined;
   let firstHeldWorker: ProductionPcmMetrics | undefined;
   let continuingHeldWorker: ProductionPcmMetrics | undefined;
   let baselineWorker: ProductionPcmMetrics | undefined;
@@ -178,8 +214,11 @@ export async function proveProductionM5StickS3Grok(
   let terminalWorker: ProductionPcmMetrics | undefined;
   let terminalDevice: DeviceRuntimeMetrics | undefined;
   let terminalDiagnostics: KitControlDiagnostics = baselineDiagnostics;
+  let terminalPlayback: KitPlaybackMetrics | undefined;
   let providerEventEvidence: ProductionGrokProviderEvent[] | undefined;
   let providerToolCallEvidence: CompletedProviderToolCall | undefined;
+  let acousticProviderOutputTranscript: string | undefined;
+  const turnEvidence: Array<Record<string, unknown>> = [];
   let failureWorkerSnapshot: ProductionPcmMetrics | null | undefined;
   let failureDiagnosticsSnapshot: KitControlDiagnostics | undefined;
   let failureProviderEventEvidence: ProductionGrokProviderEvent[] | undefined;
@@ -279,206 +318,326 @@ export async function proveProductionM5StickS3Grok(
     networkMonitor.start();
     networkMeasurement = measureRemoteDnsAndTlsConnect(options.workerHost);
 
-    if (options.pttAuthority === "remote") {
-      remotePttStarted = (await invoke<boolean>([...devicePath, "pushToTalk", "start"])) === true;
-      if (!remotePttStarted) {
-        throw new Error("The device rejected the remote push-to-talk start transition.");
+    for (let turn = 1; turn <= options.turns; turn += 1) {
+      /*
+       * Each turn gets its own baseline while the PCM session id remains
+       * fixed. Aggregate accounting can hide an early loss behind a later
+       * surplus; a per-turn boundary makes the first divergence terminal and
+       * proves that repeated Button-A cycles do not accumulate stale audio.
+       */
+      const turnBaselineWorker = terminalWorker ?? connectedWorker;
+      const turnBaselineDevice = requireLatestWorkerDeviceMetrics(turnBaselineWorker);
+      const turnBaselineDiagnostics = turn === 1 ? baselineDiagnostics : await readDiagnostics();
+      const turnBaselinePlayback = terminalPlayback ?? baselinePlayback;
+      const providerSequenceBaseline = providerEventEvidence?.at(-1)?.sequence ?? 0;
+      const expectedColour = turn % 2 === 1 ? "green" : "red";
+      remotePttStarted = false;
+      remotePttStopped = false;
+
+      if (options.pttAuthority === "remote") {
+        remotePttStarted = (await invoke<boolean>([...devicePath, "pushToTalk", "start"])) === true;
+        if (!remotePttStarted) {
+          throw new Error(`The device rejected remote push-to-talk start for turn ${turn}.`);
+        }
+        console.log(`remote_ptt=started turn=${turn}`);
+      } else {
+        console.log(
+          `physical_ptt=ARMED turn=${turn} ` +
+            'action="Hold Button A now; keep holding until the Mac says release."',
+        );
       }
-      console.log("remote_ptt=started");
-    } else {
-      console.log(
-        'physical_ptt=ARMED action="Hold Button A now; keep holding until the Mac says release."',
+
+      const pressed = await waitForWorkerMetrics(
+        worker,
+        (metrics) =>
+          (options.pttAuthority === "remote"
+            ? metrics.deviceEvents.remoteStarts > turnBaselineWorker.deviceEvents.remoteStarts &&
+              metrics.deviceEvents.physicalStarts === turnBaselineWorker.deviceEvents.physicalStarts
+            : metrics.deviceEvents.physicalStarts >
+                turnBaselineWorker.deviceEvents.physicalStarts &&
+              metrics.deviceEvents.remoteStarts === turnBaselineWorker.deviceEvents.remoteStarts) &&
+          metrics.interrupted,
+        `${options.pttAuthority} push-to-talk start for deployed turn ${turn}`,
+        options.pttAuthority === "remote" ? 10_000 : physicalPressTimeoutMs,
+        connectedWorker.sessionId,
       );
-    }
+      console.log(
+        `${options.pttAuthority}_ptt=observed turn=${turn} ` +
+          `sequence=${pressed.deviceEvents.lastEvent?.sequence}`,
+      );
 
-    const pressed = await waitForWorkerMetrics(
-      worker,
-      (metrics) =>
-        (options.pttAuthority === "remote"
-          ? metrics.deviceEvents.remoteStarts > connectedWorker.deviceEvents.remoteStarts &&
-            metrics.deviceEvents.physicalStarts === connectedWorker.deviceEvents.physicalStarts
-          : metrics.deviceEvents.physicalStarts > connectedWorker.deviceEvents.physicalStarts &&
-            metrics.deviceEvents.remoteStarts === connectedWorker.deviceEvents.remoteStarts) &&
-        metrics.interrupted,
-      `${options.pttAuthority} push-to-talk start at the deployed worker`,
-      options.pttAuthority === "remote" ? 10_000 : physicalPressTimeoutMs,
-      connectedWorker.sessionId,
-    );
-    console.log(
-      `${options.pttAuthority}_ptt=observed sequence=${pressed.deviceEvents.lastEvent?.sequence}`,
-    );
+      const turnFirstHeldWorker = await waitForWorkerMetrics(
+        worker,
+        (metrics) => {
+          const device = latestWorkerDeviceMetrics(metrics);
+          return (
+            metrics.uplinkFrames > turnBaselineWorker.uplinkFrames &&
+            device !== undefined &&
+            deviceUplinkStreaming(turnBaselineDevice, device)
+          );
+        },
+        `the first microphone frame for deployed turn ${turn}`,
+        10_000,
+        connectedWorker.sessionId,
+      );
+      const turnFirstHeldDevice = requireLatestWorkerDeviceMetrics(turnFirstHeldWorker);
+      firstHeldWorker ??= turnFirstHeldWorker;
+      firstHeldDevice ??= turnFirstHeldDevice;
 
-    firstHeldWorker = await waitForWorkerMetrics(
-      worker,
-      (metrics) => {
-        const device = latestWorkerDeviceMetrics(metrics);
-        return (
-          metrics.uplinkFrames > connectedWorker.uplinkFrames &&
-          device !== undefined &&
-          deviceUplinkStreaming(connectedDevice, device)
-        );
-      },
-      "the first microphone frame and device sample through deployed /pcm",
-      10_000,
-      connectedWorker.sessionId,
-    );
-    const firstWorker = firstHeldWorker;
-    const firstDevice = requireLatestWorkerDeviceMetrics(firstHeldWorker);
-    firstHeldDevice = firstDevice;
+      const configuredPhrase = environment.ITERATE_KIT_VOICE_PHRASE?.trim();
+      const phrase =
+        configuredPhrase && options.turns === 1
+          ? configuredPhrase
+          : `Turn ${turn}. Use the change colour tool: ${expectedColour}. ` +
+            `Say exactly: production turn ${turn} is ${expectedColour}.` +
+            (options.pttAuthority === "physical" ? " Release Button A now." : "");
+      console.log(`voice_prompt=started source=macos-say turn=${turn}`);
+      /*
+       * Render first, then use the blocking CoreAudio file player. Direct
+       * `say <text>` has been observed to exit while several seconds of its
+       * synthesizer queue remain audible; that tail both extends PTT and
+       * contaminates the Mac-microphone boundary used to prove Stick output.
+       * `afplay` owns a finite file and returns only after that file is played,
+       * making this unattended physical stimulus deterministic and shorter.
+       * Retain the source AIFF beside the raw microphone artifact so a failed
+       * oracle can distinguish its stimulus from the device response.
+       */
+      const promptArtifactPath = join(runRoot, `voice-prompt-turn-${turn}.aiff`);
+      await executeFile(options.sayExecutable, ["-o", promptArtifactPath, phrase]);
+      await executeFile("/usr/bin/afplay", [promptArtifactPath]);
+      /*
+       * Leave one bounded hardware/file-buffer guard after the blocking player
+       * before marking the capture and releasing PTT. This costs no provider
+       * response latency because manual PTT has not committed yet.
+       */
+      await delay(macOsSpeechDrainGuardMs);
+      const turnResponseMarker = await capture.inspectProgress();
+      responseMarker ??= turnResponseMarker;
+      console.log(`voice_prompt=complete ptt_authority=${options.pttAuthority} turn=${turn}`);
 
-    const phrase =
-      environment.ITERATE_KIT_VOICE_PHRASE?.trim() ||
-      (options.pttAuthority === "remote"
-        ? "Use the change colour tool to make the physical display green. Then reply by saying exactly, the deployed Iterate Stick voice path is working."
-        : "Use the change colour tool to make the physical display green. Then reply by saying, Iterate Stick voice is working. Release Button A now.");
-    console.log("voice_prompt=started source=macos-say");
-    await executeFile(options.sayExecutable, [phrase]);
-    responseMarker = await capture.inspectProgress();
-    console.log(`voice_prompt=complete ptt_authority=${options.pttAuthority}`);
-
-    continuingHeldWorker = await waitForWorkerMetrics(
-      worker,
-      (metrics) => {
-        const device = latestWorkerDeviceMetrics(metrics);
-        return (
-          metrics.uplinkFrames > firstWorker.uplinkFrames &&
-          device !== undefined &&
-          deviceUplinkStreaming(firstDevice, device)
-        );
-      },
-      "continued microphone delivery and metrics throughout the held prompt",
-      10_000,
-      connectedWorker.sessionId,
-    );
-    continuingHeldDevice = requireLatestWorkerDeviceMetrics(continuingHeldWorker);
-    if (options.pttAuthority === "remote") {
-      remotePttStopped = (await invoke<boolean>([...devicePath, "pushToTalk", "stop"])) === true;
-      if (!remotePttStopped) {
-        throw new Error("The device rejected the remote push-to-talk stop transition.");
+      const turnContinuingHeldWorker = await waitForWorkerMetrics(
+        worker,
+        (metrics) => {
+          const device = latestWorkerDeviceMetrics(metrics);
+          return (
+            metrics.uplinkFrames > turnFirstHeldWorker.uplinkFrames &&
+            device !== undefined &&
+            deviceUplinkStreaming(turnFirstHeldDevice, device)
+          );
+        },
+        `continued microphone delivery throughout deployed turn ${turn}`,
+        10_000,
+        connectedWorker.sessionId,
+      );
+      const turnContinuingHeldDevice = requireLatestWorkerDeviceMetrics(turnContinuingHeldWorker);
+      continuingHeldWorker = turnContinuingHeldWorker;
+      continuingHeldDevice = turnContinuingHeldDevice;
+      if (options.pttAuthority === "remote") {
+        remotePttStopped = (await invoke<boolean>([...devicePath, "pushToTalk", "stop"])) === true;
+        if (!remotePttStopped) {
+          throw new Error(`The device rejected remote push-to-talk stop for turn ${turn}.`);
+        }
+        console.log(`remote_ptt=stopped turn=${turn}`);
       }
-      console.log("remote_ptt=stopped");
-    }
-    await waitForWorkerMetrics(
-      worker,
-      (metrics) =>
-        (options.pttAuthority === "remote"
-          ? metrics.deviceEvents.remoteStops > connectedWorker.deviceEvents.remoteStops &&
-            metrics.deviceEvents.physicalStops === connectedWorker.deviceEvents.physicalStops
-          : metrics.deviceEvents.physicalStops > connectedWorker.deviceEvents.physicalStops &&
-            metrics.deviceEvents.remoteStops === connectedWorker.deviceEvents.remoteStops) &&
-        !metrics.interrupted,
-      `${options.pttAuthority} push-to-talk stop at the deployed worker`,
-      options.pttAuthority === "remote" ? 10_000 : physicalReleaseTimeoutMs,
-      connectedWorker.sessionId,
-    );
-    console.log(`${options.pttAuthority}_ptt=released`);
+      await waitForWorkerMetrics(
+        worker,
+        (metrics) =>
+          (options.pttAuthority === "remote"
+            ? metrics.deviceEvents.remoteStops > turnBaselineWorker.deviceEvents.remoteStops &&
+              metrics.deviceEvents.physicalStops === turnBaselineWorker.deviceEvents.physicalStops
+            : metrics.deviceEvents.physicalStops > turnBaselineWorker.deviceEvents.physicalStops &&
+              metrics.deviceEvents.remoteStops === turnBaselineWorker.deviceEvents.remoteStops) &&
+          !metrics.interrupted,
+        `${options.pttAuthority} push-to-talk stop for deployed turn ${turn}`,
+        options.pttAuthority === "remote" ? 10_000 : physicalReleaseTimeoutMs,
+        connectedWorker.sessionId,
+      );
+      console.log(`${options.pttAuthority}_ptt=released turn=${turn}`);
 
-    terminalWorker = await waitForWorkerMetrics(
-      worker,
-      (metrics) => {
-        const device = latestWorkerDeviceMetrics(metrics);
-        return (
-          device !== undefined &&
-          devicePlaybackCompleted(connectedDevice, device) &&
-          queuesAreEmpty(device) &&
-          deviceDownlinkBalanced(connectedDevice, device) &&
-          metrics.downlinkFrames > connectedWorker.downlinkFrames &&
-          metrics.providerFunctionCalls > connectedWorker.providerFunctionCalls &&
-          metrics.providerFunctionCallFailures === connectedWorker.providerFunctionCallFailures &&
-          metrics.providerFunctionCallsPending === 0 &&
-          metrics.providerResponsesCompleted > connectedWorker.providerResponsesCompleted &&
-          !metrics.providerResponseActive &&
-          metrics.deviceMetrics.samplesReceived > connectedWorker.deviceMetrics.samplesReceived &&
-          metrics.deviceMetrics.invalidSamples === connectedWorker.deviceMetrics.invalidSamples &&
-          metrics.providerEvents.observedEvents > 0 &&
-          metrics.providerEvents.appendedEvents === metrics.providerEvents.observedEvents &&
+      let turnTerminalWorker = await waitForWorkerMetrics(
+        worker,
+        (metrics) => {
+          const device = latestWorkerDeviceMetrics(metrics);
+          return (
+            device !== undefined &&
+            devicePlaybackCompleted(turnBaselineDevice, device) &&
+            queuesAreEmpty(device) &&
+            metrics.downlinkFrames > turnBaselineWorker.downlinkFrames &&
+            metrics.providerFunctionCalls > turnBaselineWorker.providerFunctionCalls &&
+            metrics.providerFunctionCallFailures ===
+              turnBaselineWorker.providerFunctionCallFailures &&
+            metrics.providerFunctionCallsPending === 0 &&
+            metrics.providerResponsesCompleted > turnBaselineWorker.providerResponsesCompleted &&
+            !metrics.providerResponseActive &&
+            metrics.deviceMetrics.samplesReceived >
+              turnBaselineWorker.deviceMetrics.samplesReceived &&
+            metrics.deviceMetrics.invalidSamples ===
+              turnBaselineWorker.deviceMetrics.invalidSamples &&
+            metrics.providerEvents.observedEvents >
+              turnBaselineWorker.providerEvents.observedEvents &&
+            metrics.providerEvents.appendedEvents === metrics.providerEvents.observedEvents &&
+            metrics.providerEvents.appendFailures === 0 &&
+            metrics.providerEvents.droppedEvents === 0 &&
+            metrics.providerEvents.pendingEvents === 0 &&
+            metrics.downlinkPartialBytes === 0 &&
+            metrics.downlinkQueuedBytes === 0 &&
+            metrics.providerBufferedBytes === 0 &&
+            !metrics.closed
+          );
+        },
+        `the Grok response and device playback boundary for turn ${turn}`,
+        responseTimeoutMs,
+        connectedWorker.sessionId,
+      );
+      let turnTerminalDevice = requireLatestWorkerDeviceMetrics(turnTerminalWorker);
+      const turnTerminalPlayback = await waitForPlaybackObservation(
+        playbackSamples,
+        turnBaselinePlayback,
+        turnTerminalDevice,
+        () => playbackCallbackError,
+      );
+      const providerEvidenceDeadline = performance.now() + 5_000;
+      let providerEvidenceFailure: Error | undefined;
+      let turnProviderEvents: ProductionGrokProviderEvent[] | undefined;
+      let turnProviderTranscript: string | undefined;
+      let turnProviderToolCall: CompletedProviderToolCall | undefined;
+      while (performance.now() < providerEvidenceDeadline) {
+        const candidate = parseProductionGrokProviderEvents(
+          await providerEventStream.getEvents({
+            afterOffset: providerEventStart.streamMaxOffset,
+            eventTypes: [KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE],
+            limit: 500,
+          }),
+          turnTerminalWorker.sessionId,
+          options.deviceId,
+        );
+        const currentTurnEvents = candidate.filter(
+          (event) => event.sequence > providerSequenceBaseline,
+        );
+        try {
+          turnProviderTranscript = completedProviderOutputTranscript(currentTurnEvents);
+          turnProviderToolCall = completedProviderToolCall(currentTurnEvents, "changeColour");
+          if (!currentTurnEvents.some((event) => event.providerType === "response.done")) {
+            throw new Error(`The provider stream did not retain response.done for turn ${turn}.`);
+          }
+          if (currentTurnEvents.some((event) => event.providerType === "error")) {
+            throw new Error(`The provider stream retained an error event during turn ${turn}.`);
+          }
+          providerEventEvidence = candidate;
+          turnProviderEvents = currentTurnEvents;
+          break;
+        } catch (error) {
+          providerEvidenceFailure = error instanceof Error ? error : new Error(String(error));
+          await delay(100);
+        }
+      }
+      if (
+        !providerEventEvidence ||
+        !turnProviderEvents ||
+        !turnProviderTranscript ||
+        !turnProviderToolCall
+      ) {
+        throw (
+          providerEvidenceFailure ??
+          new Error(`Timed out waiting for Grok provider evidence for turn ${turn}.`)
+        );
+      }
+      const exactProviderEventCount = providerEventEvidence.length;
+      turnTerminalWorker = await waitForWorkerMetrics(
+        worker,
+        (metrics) =>
+          metrics.providerEvents.appendedEvents === exactProviderEventCount &&
+          metrics.providerEvents.observedEvents === exactProviderEventCount &&
           metrics.providerEvents.appendFailures === 0 &&
           metrics.providerEvents.droppedEvents === 0 &&
           metrics.providerEvents.pendingEvents === 0 &&
-          metrics.downlinkPartialBytes === 0 &&
-          metrics.downlinkQueuedBytes === 0 &&
-          metrics.providerBufferedBytes === 0 &&
-          !metrics.closed
+          metrics.providerFunctionCallsPending === 0 &&
+          !metrics.providerResponseActive &&
+          !metrics.closed,
+        `the exact provider event journal for turn ${turn}`,
+        5_000,
+        connectedWorker.sessionId,
+      );
+      turnTerminalDevice = requireLatestWorkerDeviceMetrics(turnTerminalWorker);
+      if (providerEventEvidence.length !== turnTerminalWorker.providerEvents.appendedEvents) {
+        throw new Error(
+          `The provider stream retained ${providerEventEvidence.length} of ` +
+            `${turnTerminalWorker.providerEvents.appendedEvents} appended raw events.`,
         );
-      },
-      "the Grok response, stream-journal, and device playback boundary",
-      responseTimeoutMs,
-      connectedWorker.sessionId,
-    );
-    terminalDevice = requireLatestWorkerDeviceMetrics(terminalWorker);
-    const providerEvidenceDeadline = performance.now() + 5_000;
-    let providerEvidenceFailure: Error | undefined;
-    while (performance.now() < providerEvidenceDeadline) {
-      const candidate = parseProductionGrokProviderEvents(
-        await providerEventStream.getEvents({
-          afterOffset: providerEventStart.streamMaxOffset,
-          eventTypes: [KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE],
-          limit: 500,
-        }),
-        terminalWorker.sessionId,
-        options.deviceId,
-      );
-      try {
-        completedProviderOutputTranscript(candidate);
-        providerToolCallEvidence = completedProviderToolCall(candidate, "changeColour");
-        if (!candidate.some((event) => event.providerType === "response.done")) {
-          throw new Error("The provider stream did not retain response.done.");
-        }
-        if (candidate.some((event) => event.providerType === "error")) {
-          throw new Error("The provider stream retained an error event during the Grok turn.");
-        }
-        providerEventEvidence = candidate;
-        break;
-      } catch (error) {
-        providerEvidenceFailure = error instanceof Error ? error : new Error(String(error));
-        await delay(100);
       }
-    }
-    if (!providerEventEvidence || !providerToolCallEvidence) {
-      throw providerEvidenceFailure ?? new Error("Timed out waiting for Grok provider evidence.");
-    }
-    terminalWorker = await waitForWorkerMetrics(
-      worker,
-      (metrics) =>
-        metrics.providerEvents.appendedEvents === providerEventEvidence?.length &&
-        metrics.providerEvents.observedEvents === providerEventEvidence.length &&
-        metrics.providerEvents.appendFailures === 0 &&
-        metrics.providerEvents.droppedEvents === 0 &&
-        metrics.providerEvents.pendingEvents === 0 &&
-        metrics.providerFunctionCallsPending === 0 &&
-        !metrics.providerResponseActive &&
-        !metrics.closed,
-      "the exact provider event journal and completed tool result",
-      5_000,
-      terminalWorker.sessionId,
-    );
-    terminalDevice = requireLatestWorkerDeviceMetrics(terminalWorker);
-    if (providerEventEvidence.length !== terminalWorker.providerEvents.appendedEvents) {
-      throw new Error(
-        `The provider stream retained ${providerEventEvidence.length} of ` +
-          `${terminalWorker.providerEvents.appendedEvents} appended raw events.`,
+      for (const requiredType of [
+        "input_audio_buffer.committed",
+        "response.function_call_arguments.done",
+        "response.output_audio_transcript.done",
+        "response.done",
+      ]) {
+        if (!turnProviderEvents.some((event) => event.providerType === requiredType)) {
+          throw new Error(`Turn ${turn} did not retain ${requiredType}.`);
+        }
+      }
+      if (
+        !isRecord(turnProviderToolCall.arguments) ||
+        turnProviderToolCall.arguments.colour !== expectedColour ||
+        !isRecord(turnProviderToolCall.output) ||
+        turnProviderToolCall.output.colour !== expectedColour ||
+        turnProviderToolCall.output.ok !== true
+      ) {
+        throw new Error(
+          `The raw Grok event stream did not prove a successful ${expectedColour} tool result ` +
+            `for turn ${turn}.`,
+        );
+      }
+      const turnTerminalDiagnostics = await readDiagnostics();
+      const turnDigitalAssessment = assessDigitalRun({
+        baselineDevice: turnBaselineDevice,
+        baselineDiagnostics: turnBaselineDiagnostics,
+        baselineWorker: turnBaselineWorker,
+        continuingHeldDevice: turnContinuingHeldDevice,
+        continuingHeldWorker: turnContinuingHeldWorker,
+        firstHeldDevice: turnFirstHeldDevice,
+        firstHeldWorker: turnFirstHeldWorker,
+        pttAuthority: options.pttAuthority,
+        terminalDevice: turnTerminalDevice,
+        terminalDiagnostics: turnTerminalDiagnostics,
+        terminalWorker: turnTerminalWorker,
+      });
+      if (!turnDigitalAssessment.passed) {
+        throw new Error(`Turn ${turn}: ${turnDigitalAssessment.reasons.join("; ")}`);
+      }
+      if (turn === 1) {
+        providerToolCallEvidence = turnProviderToolCall;
+        acousticProviderOutputTranscript = turnProviderTranscript;
+        await delay(500);
+        responseEndMarker = await capture.inspectProgress();
+      }
+      turnEvidence.push({
+        digital: turnDigitalAssessment,
+        expectedColour,
+        playback: {
+          baseline: turnBaselinePlayback,
+          terminal: turnTerminalPlayback,
+        },
+        provider: {
+          eventCount: turnProviderEvents.length,
+          outputTranscript: turnProviderTranscript,
+          toolCall: turnProviderToolCall,
+        },
+        turn,
+        worker: {
+          baseline: turnBaselineWorker,
+          terminal: turnTerminalWorker,
+        },
+      });
+      terminalWorker = turnTerminalWorker;
+      terminalDevice = turnTerminalDevice;
+      terminalPlayback = turnTerminalPlayback;
+      terminalDiagnostics = turnTerminalDiagnostics;
+      console.log(
+        `production_voice_turn=passed turn=${turn} session_id=${turnTerminalWorker.sessionId} ` +
+          `colour=${expectedColour}`,
       );
     }
-    for (const requiredType of [
-      "input_audio_buffer.committed",
-      "response.function_call_arguments.done",
-      "response.output_audio_transcript.done",
-      "response.done",
-    ]) {
-      if (!providerEventEvidence.some((event) => event.providerType === requiredType)) {
-        throw new Error(`The provider stream did not retain ${requiredType}.`);
-      }
-    }
-    if (
-      !isRecord(providerToolCallEvidence.arguments) ||
-      providerToolCallEvidence.arguments.colour !== "green" ||
-      !isRecord(providerToolCallEvidence.output) ||
-      providerToolCallEvidence.output.colour !== "green" ||
-      providerToolCallEvidence.output.ok !== true
-    ) {
-      throw new Error("The raw Grok event stream did not prove a successful green tool result.");
-    }
-    terminalDiagnostics = await readDiagnostics();
+
     await delay(500);
     networkCapture = await networkMonitor.capture();
     networkMonitor = undefined;
@@ -659,6 +818,7 @@ export async function proveProductionM5StickS3Grok(
     !ambientStart ||
     !ambientEnd ||
     !responseMarker ||
+    !responseEndMarker ||
     !baselineWorker ||
     !baselineDevice ||
     !terminalWorker ||
@@ -671,6 +831,7 @@ export async function proveProductionM5StickS3Grok(
         ambientEnd,
         ambientStart,
         completed: completedCapture,
+        responseEndMarker,
         responseMarker,
       },
       deviceDiagnostics: failureDiagnosticsSnapshot,
@@ -699,6 +860,10 @@ export async function proveProductionM5StickS3Grok(
       provenance: deviceProvenance ?? null,
       providerEventsArtifact,
       providerEvents: failureProviderEventEvidence,
+      playback: {
+        baseline: baselinePlayback,
+        latestBeforeCleanup: playbackSamples.at(-1) ?? null,
+      },
       schemaVersion: 2,
       snapshotErrors: failureSnapshotErrors,
       worker: {
@@ -725,7 +890,7 @@ export async function proveProductionM5StickS3Grok(
   const responseEnergy = await analyzePcm16WindowEnergy({
     activeThresholdRms: causalSpeechActiveThreshold(baselineEnergy),
     artifactPath: completedCapture.artifactPath,
-    endSample: completedCapture.capturedSampleCount,
+    endSample: responseEndMarker.capturedSampleCount,
     sampleRateHz: completedCapture.sampleRateHz,
     startSample: responseStartSample,
   });
@@ -744,7 +909,7 @@ export async function proveProductionM5StickS3Grok(
   const relativeResponseEnergy = await analyzePcm16WindowEnergy({
     activeThresholdRms: relativeActiveThresholdRms,
     artifactPath: completedCapture.artifactPath,
-    endSample: completedCapture.capturedSampleCount,
+    endSample: responseEndMarker.capturedSampleCount,
     sampleRateHz: completedCapture.sampleRateHz,
     startSample: responseStartSample,
   });
@@ -755,10 +920,13 @@ export async function proveProductionM5StickS3Grok(
   let providerOutputTranscript: string | undefined;
   let physicalSpeechAssessment: ReturnType<typeof assessPhysicalSpeechTranscription> | undefined;
   try {
-    providerOutputTranscript = completedProviderOutputTranscript(providerEventEvidence);
+    providerOutputTranscript = acousticProviderOutputTranscript;
+    if (!providerOutputTranscript) {
+      throw new Error("The first production turn retained no acoustic transcript expectation.");
+    }
     const pcm = await readFile(completedCapture.artifactPath);
     const responseStartByte = responseStartSample * Int16Array.BYTES_PER_ELEMENT;
-    const responseEndByte = completedCapture.capturedSampleCount * Int16Array.BYTES_PER_ELEMENT;
+    const responseEndByte = responseEndMarker.capturedSampleCount * Int16Array.BYTES_PER_ELEMENT;
     if (responseEndByte > pcm.byteLength || responseStartByte >= responseEndByte) {
       throw new Error("The causal speech interval was outside the retained microphone artifact.");
     }
@@ -802,6 +970,7 @@ export async function proveProductionM5StickS3Grok(
     baselineWorker,
     continuingHeldDevice,
     continuingHeldWorker,
+    expectedTurns: options.turns,
     firstHeldDevice,
     firstHeldWorker,
     pttAuthority: options.pttAuthority,
@@ -875,6 +1044,7 @@ export async function proveProductionM5StickS3Grok(
         ambientEnd,
         ambientStart,
         responseAnalysisGuardMs,
+        responseEndMarker,
         responseMarker,
         responseStartSample,
       },
@@ -910,6 +1080,11 @@ export async function proveProductionM5StickS3Grok(
         baseline: baselineDiagnostics,
         terminal: terminalDiagnostics,
       },
+      playback: {
+        baseline: baselinePlayback,
+        terminal: terminalPlayback ?? playbackSamples.at(-1) ?? null,
+      },
+      turns: turnEvidence,
       worker: {
         baseline: baselineWorker,
         closed: closedWorker ?? null,
@@ -943,10 +1118,10 @@ export async function proveProductionM5StickS3Grok(
       conversationEnded: remoteConversationEnded,
       conversationStarted: remoteConversationStarted,
       directRedAcknowledged,
-      remoteCallsMadeByRunner: options.pttAuthority === "remote" ? 5 : 0,
+      remoteCallsMadeByRunner: options.pttAuthority === "remote" ? 4 + options.turns * 2 : 0,
       requiredSource: options.pttAuthority,
     },
-    schemaVersion: 2,
+    schemaVersion: 3,
   });
   return {
     classification: networkArtifact.classification,
@@ -970,6 +1145,7 @@ function assessDigitalRun(input: {
   baselineWorker: ProductionPcmMetrics;
   continuingHeldDevice?: DeviceRuntimeMetrics;
   continuingHeldWorker?: ProductionPcmMetrics;
+  expectedTurns?: number;
   firstHeldDevice?: DeviceRuntimeMetrics;
   firstHeldWorker?: ProductionPcmMetrics;
   pttAuthority: PttAuthority;
@@ -979,6 +1155,7 @@ function assessDigitalRun(input: {
 }): DigitalAssessment {
   const reasons: string[] = [];
   const deltas: Record<string, number> = {};
+  const expectedTurns = input.expectedTurns ?? 1;
   const deviceDelta = (name: string) => {
     const value = numeric(input.terminalDevice, name) - numeric(input.baselineDevice, name);
     deltas[name] = value;
@@ -1036,8 +1213,8 @@ function assessDigitalRun(input: {
   } else if (!deviceUplinkStreaming(input.firstHeldDevice, input.continuingHeldDevice)) {
     reasons.push("Device microphone frames did not continue advancing while Button A was held.");
   }
-  const expectedPhysicalDelta = input.pttAuthority === "physical" ? 1 : 0;
-  const expectedRemoteDelta = input.pttAuthority === "remote" ? 1 : 0;
+  const expectedPhysicalDelta = input.pttAuthority === "physical" ? expectedTurns : 0;
+  const expectedRemoteDelta = input.pttAuthority === "remote" ? expectedTurns : 0;
   for (const [label, actual, expected] of [
     ["physical starts", deltas.physical_starts, expectedPhysicalDelta],
     ["physical stops", deltas.physical_stops, expectedPhysicalDelta],
@@ -1057,10 +1234,12 @@ function assessDigitalRun(input: {
   ) {
     reasons.push("Userspace did not retain a valid latest-only device metrics sample.");
   }
-  if (deltas.worker_function_calls <= 0) {
-    reasons.push("Grok did not invoke the deployed worker changeColour tool.");
+  if (deltas.worker_function_calls !== expectedTurns) {
+    reasons.push(
+      `Grok changeColour call delta was ${deltas.worker_function_calls}; expected ${expectedTurns}.`,
+    );
   }
-  if (deltas.worker_provider_responses_completed < 1) {
+  if (deltas.worker_provider_responses_completed < expectedTurns) {
     reasons.push("Grok did not complete the tool-bearing spoken response.");
   }
   if (
@@ -1180,18 +1359,78 @@ function queuesAreEmpty(metrics: DeviceRuntimeMetrics) {
   );
 }
 
-function deviceDownlinkBalanced(baseline: DeviceRuntimeMetrics, current: DeviceRuntimeMetrics) {
-  const accepted = numeric(current, "downlink_accepted") - numeric(baseline, "downlink_accepted");
-  return (
-    accepted > 0 &&
-    numeric(current, "playback_submitted") - numeric(baseline, "playback_submitted") === accepted &&
-    numeric(current, "playback_completed") - numeric(baseline, "playback_completed") === accepted
-  );
-}
-
 function numeric(metrics: DeviceRuntimeMetrics, name: string) {
   const value = metrics[name];
   return typeof value === "number" ? value : Number.NaN;
+}
+
+async function waitForStablePlayback(
+  samples: KitPlaybackMetrics[],
+  callbackError: () => Error | undefined,
+): Promise<KitPlaybackMetrics> {
+  return await waitForPlaybackValue(
+    "two stable detailed playback samples before media admission",
+    samples,
+    callbackError,
+    (current, previous) =>
+      previous !== undefined && samePlaybackBoundary(previous, current) ? current : undefined,
+  );
+}
+
+async function waitForPlaybackObservation(
+  samples: KitPlaybackMetrics[],
+  baseline: KitPlaybackMetrics,
+  terminalDevice: DeviceRuntimeMetrics,
+  callbackError: () => Error | undefined,
+): Promise<KitPlaybackMetrics> {
+  const accepted = numeric(terminalDevice, "downlink_accepted");
+  const submitted = numeric(terminalDevice, "playback_submitted");
+  const completed = numeric(terminalDevice, "playback_completed");
+  return await waitForPlaybackValue(
+    "detailed playback counters covering the terminal device sample",
+    samples,
+    callbackError,
+    (current) =>
+      current.sequence > baseline.sequence &&
+      current.downlinkAccepted >= accepted &&
+      current.playback.submitted >= submitted &&
+      current.playback.completed >= completed
+        ? current
+        : undefined,
+  );
+}
+
+async function waitForPlaybackValue<Value>(
+  description: string,
+  samples: KitPlaybackMetrics[],
+  callbackError: () => Error | undefined,
+  select: (
+    current: KitPlaybackMetrics,
+    previous: KitPlaybackMetrics | undefined,
+  ) => Value | undefined,
+): Promise<Value> {
+  const deadline = performance.now() + 10_000;
+  while (performance.now() < deadline) {
+    const error = callbackError();
+    if (error) throw error;
+    const current = samples.at(-1);
+    if (current !== undefined) {
+      const selected = select(current, samples.at(-2));
+      if (selected !== undefined) return selected;
+    }
+    await delay(50);
+  }
+  throw new Error(`Timed out waiting for ${description}.`);
+}
+
+function samePlaybackBoundary(left: KitPlaybackMetrics, right: KitPlaybackMetrics): boolean {
+  return (
+    left.downlinkAccepted === right.downlinkAccepted &&
+    left.playback.submitted === right.playback.submitted &&
+    left.playback.completed === right.playback.completed &&
+    left.playback.endOfStreamMarkersConsumed === right.playback.endOfStreamMarkersConsumed &&
+    left.playback.endOfStreamResponses === right.playback.endOfStreamResponses
+  );
 }
 
 function latestWorkerDeviceMetrics(

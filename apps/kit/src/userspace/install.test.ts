@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 import {
   formatInstallerResult,
   parseInstallerCliOptions,
+  readRuntimeSources,
   writeInstallerResultAndExit,
 } from "../../scripts/install-userspace-worker.ts";
 import { kitVoiceRootWorkerSource } from "./install-plan.ts";
@@ -50,6 +51,26 @@ function projectFixture() {
 }
 
 describe("kit voice userspace install", () => {
+  test("ships the transitive relative imports needed by the deployed worker", async () => {
+    const sources = await readRuntimeSources();
+
+    /*
+     * The production installer uploads an explicit allow-list, not the source
+     * directory. A local test/build can therefore be green while a newly
+     * committed worker fails its first cold start with `No such module`. Walk
+     * each selected module's same-directory imports so adding one dependency
+     * cannot silently create that production-only failure again.
+     */
+    for (const [importer, source] of Object.entries(sources)) {
+      for (const match of source.matchAll(/from\s+["']\.\/([^"']+)["']/gu)) {
+        const imported = `apps/kit-voice/${match[1]}`;
+        expect(sources, `${importer} imports omitted runtime module ${imported}`).toHaveProperty(
+          imported,
+        );
+      }
+    }
+  });
+
   test("dry-run reports the complete preservation plan without mutating the project", async () => {
     const { operations, project, secret } = projectFixture();
     const result = await installKitVoiceUserspace({

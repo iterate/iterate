@@ -181,6 +181,12 @@ export async function connectGrokRealtimeVoice(
           },
           instructions: options.instructions ?? "Be concise, conversational, and useful.",
           /*
+           * Button B owns the lifetime of one conversation. Grok must retain
+           * preceding PTT turns for that lifetime; otherwise repeated Button A
+           * presses share a socket but behave like unrelated voice requests.
+           */
+          keep_context: true,
+          /*
            * This userspace app serves a physical PTT device. Keeping manual
            * turn detection unconditional makes it impossible for a future
            * caller to silently re-enable server VAD without also redesigning

@@ -220,6 +220,15 @@ static void capture_task(void *argument) {
       continue;
     }
     ++runtime.mic_frames_captured;
+    if (runtime.mic_frames_captured % 250U == 1U) {
+      /* Bring-up: is the codec giving us audio, or is corruption ours? */
+      ESP_LOGI(
+          tag,
+          "raw mic samples: %d %d %d %d %d %d %d %d",
+          frame.samples[0], frame.samples[1], frame.samples[2],
+          frame.samples[3], frame.samples[4], frame.samples[5],
+          frame.samples[6], frame.samples[7]);
+    }
     if (xQueueSend(runtime.mic_queue, &frame, 0) != pdTRUE) {
       /* Freshest wins: discard the OLDEST frame, keep this one. Stale
        * speech after a network hiccup is worse than a gap. */

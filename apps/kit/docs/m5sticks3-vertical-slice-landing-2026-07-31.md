@@ -10,12 +10,71 @@ interruption runs remain the stronger endurance evidence. Physical-button
 provenance and the deferred deployed-worker kill/remount lifecycle are not
 silently relabelled as complete.
 
+## Morning-ready deployed conversation checkpoint (2026-08-01)
+
+The physical M5StickS3 is flashed, provisioned, mounted, and left idle on the
+production test project ready for a human conversation. Press the top Button B
+once to connect; hold the front Button A while speaking and release it to hear
+Grok; press the top button again to hang up. This is intentionally PTT: the
+Stick runs neither VAD nor AEC. The two sockets remain separate—ordinary Cap'n
+Web at `os.iterate.com/api` and binary PCM at the userspace app's `/pcm` route.
+
+The current installed userspace source is object
+`a4cc2e559da8de1554c5c02f46efb35aa9a31e86`. Its session update selects
+`grok-voice-think-fast-2.0`, disables turn detection, and now retains
+`keep_context: true`, so repeated PTT turns share a real conversation. The
+worker also posts the exact raw non-PCM provider frames to
+`/devices/m5sticks3`; the retained run contains 113 ordered frames, including
+transcriptions, response lifecycle, three tool calls and outputs, and pings,
+with no provider `error` event.
+
+The unattended three-turn acceptance interval is retained at
+`apps/kit/evidence/m5sticks3-morning-ready/2026-08-01T01-49-06-986Z/iterate-kit-acoustic-8coYEz/`.
+Its immutable source manifest SHA-256 is
+`564da2c7b6f1809bef8f6753b38a710462d5542bcde68ff69e10d62fe8cfaf23`.
+On one deployed `/pcm` session it sent 1,464 microphone frames and received 324
+speaker frames. Worker downlink, device acceptance, DMA submission, and DMA
+completion are all exactly 324. All three responses completed and all three
+`changeColour` calls succeeded in order green/red/green through `env.ITX`.
+Every drop, flush, underrun, failure, restart, reset, protocol error, WebSocket
+disconnect, and Wi-Fi disconnect delta is zero. The source reservoir drained;
+device playback queues drained; `keep_context` was observed in the raw event
+stream rather than inferred from source.
+
+The exact network interval is valid. Forty-four device samples stayed linked
+at -53 to -48 dBm with zero Wi-Fi or PCM lifecycle faults. All 43/43 device,
+43/43 router, and 43/43 worker probes replied; maximum RTTs were 22.236 ms,
+7.406 ms, and 60.11 ms respectively. DNS took 1.637 ms and TLS connect took
+47.276 ms. Thus the physical audio judgment is not being made during a bad or
+indeterminate network interval.
+
+The nearby Mac independently transcribed Grok's first physical reply exactly
+as `Production turn one is green.` The response was coherent, unclipped, and
+2.8763 times the ambient maximum. The immutable manifest predates the final
+landing policy and therefore records a failure because it counted three 20 ms
+windows above the relative threshold rather than four. The current policy
+accepts exactly this one-window phase-boundary miss provisionally only when the
+independent transcript matches, the response remains at least 2.5x ambient,
+and clipping is zero. Two windows still fail. The exact one-window deficit and
+the unchanged stricter four-window/fixed-120-RMS misses remain in the artifact;
+transport, frame conservation, reset, and network gates were not relaxed.
+
+The flashed application image is 1,152,464 bytes with SHA-256
+`b576c4338e1dd7d75df4b1be2f7ffb88d72537f473e831c959427b15160fb6ee`.
+At the end of the clean interval internal/DMA heap had 20,571 bytes free and a
+19,456-byte largest block; task stack headrooms were 6,652 bytes (audio), 2,556
+bytes (main), 4,584 bytes (control network), and 4,528 bytes (PCM network).
+CPU was 195 permille. The allocator's boot-to-run historical minimum was only
+279 bytes even though no allocation failed and steady state recovered. That
+startup transient is a visible memory-headroom follow-up, not silently called
+healthy or used to invalidate the otherwise exact conversation.
+
 ## Achieved deployed-userspace slice
 
 The production project is `kit-stick-voice-e2e-20260731`
 (`prj_bd8785e119fe4f1d8631bb95e1dea748`), hosted at
 `kit--kit-stick-voice-e2e-20260731.iterate.app`. The retained installed worker
-configuration is object `b7f976004910f87a2e9454045a1ad33e8da7ea59`. The
+configuration is object `a4cc2e559da8de1554c5c02f46efb35aa9a31e86`. The
 device authenticated with its project credential, mounted its ordinary Cap'n
 Web target through `os.iterate.com/api`, and opened the separate binary `/pcm`
 lane. The unattended proof invoked the same bounded conversation and PTT event
@@ -528,4 +587,7 @@ audio order.
   `a0c54771d7b92991387eef7644234c57e0529440`
 - Complete deployed-slice recovery checkpoint:
   `origin/backup/c-capabilities-stick-production-20260731`; verified content
-  commit `9f89dd87e57f06622162404eec3e2b519da92f95`
+  commit `3820bd408536d6cbdbffd56b1594b1b0099ce99b`. This is a backup
+  checkpoint, not a completion claim; it includes the fresh raw-provider-event
+  proof artifacts and the first build-proven shared CoreS3/StackChan audio
+  owner.

@@ -1,7 +1,7 @@
 {
   "version": "1.2",
   "project_name": "iterate-kit-waveshare-s3-amoled",
-  "project_version": "v2026-07-28-21-00-57-26-g2ea24c72e-dirty",
+  "project_version": "v2026-07-28-21-00-57-37-g020059d9d-dirty",
   "project_path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled",
   "idf_path": "/Users/jonastemplestein/esp/esp-idf",
   "build_dir": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled",
@@ -21,7 +21,7 @@
   "monitor_toolprefix": "xtensa-esp32s3-elf-",
   "c_compiler": "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc",
   "config_environment": {
-    "COMPONENT_KCONFIGS": "/Users/jonastemplestein/esp/esp-idf/components/app_trace/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/bt/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/console/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/driver/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/efuse/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp-tls/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_adc/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_coex/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_common/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_ana_cmpr/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_cam/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_dac/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_gpio/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_gptimer/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_i2c/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_i2s/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_isp/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_jpeg/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_ledc/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_mcpwm/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_parlio/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_pcnt/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_rmt/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_sdm/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_spi/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_touch_sens/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_tsens/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_uart/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_usb_serial_jtag/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_eth/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_event/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_gdbstub/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_hid/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_http_client/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_http_server/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_https_ota/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_https_server/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_hw_support/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_lcd/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_mm/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_netif/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_partition/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_phy/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_pm/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_psram/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_ringbuf/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_security/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_system/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_timer/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_wifi/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/espcoredump/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/fatfs/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/freertos/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/hal/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/heap/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/ieee802154/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/log/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/lwip/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/mbedtls/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/mqtt/esp-mqtt/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/newlib/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/nvs_flash/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/nvs_sec_provider/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/openthread/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/protocomm/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/pthread/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/soc/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/spi_flash/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/spiffs/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/tcp_transport/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/ulp/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/unity/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/usb/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/vfs/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/wear_levelling/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/wifi_provisioning/Kconfig",
+    "COMPONENT_KCONFIGS": "/Users/jonastemplestein/esp/esp-idf/components/app_trace/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/bt/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/console/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/driver/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/efuse/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp-tls/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_adc/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_coex/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_common/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_ana_cmpr/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_cam/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_dac/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_gpio/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_gptimer/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_i2c/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_i2s/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_isp/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_jpeg/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_ledc/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_mcpwm/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_parlio/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_pcnt/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_rmt/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_sdm/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_spi/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_touch_sens/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_tsens/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_uart/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_driver_usb_serial_jtag/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_eth/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_event/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_gdbstub/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_hid/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_http_client/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_http_server/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_https_ota/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_https_server/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_hw_support/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_lcd/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_mm/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_netif/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_partition/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_phy/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_pm/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_psram/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_ringbuf/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_security/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_system/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_timer/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/esp_wifi/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/espcoredump/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/fatfs/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/freertos/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/hal/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/heap/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/ieee802154/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/log/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/lwip/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/mbedtls/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/mqtt/esp-mqtt/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/newlib/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/nvs_flash/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/nvs_sec_provider/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/openthread/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/protocomm/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/pthread/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/soc/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/spi_flash/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/spiffs/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/tcp_transport/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/ulp/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/unity/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/usb/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/vfs/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/wear_levelling/Kconfig;/Users/jonastemplestein/esp/esp-idf/components/wifi_provisioning/Kconfig;/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/Kconfig",
     "COMPONENT_KCONFIGS_PROJBUILD": "/Users/jonastemplestein/esp/esp-idf/components/bootloader/Kconfig.projbuild;/Users/jonastemplestein/esp/esp-idf/components/esp_app_format/Kconfig.projbuild;/Users/jonastemplestein/esp/esp-idf/components/esp_rom/Kconfig.projbuild;/Users/jonastemplestein/esp/esp-idf/components/esptool_py/Kconfig.projbuild;/Users/jonastemplestein/esp/esp-idf/components/partition_table/Kconfig.projbuild"
   },
   "common_component_reqs": [
@@ -107,6 +107,7 @@
     "esp_vfs_console",
     "esp_wifi",
     "espcoredump",
+    "espressif__esp_codec_dev",
     "esptool_py",
     "fatfs",
     "freertos",
@@ -217,6 +218,7 @@
     "/Users/jonastemplestein/esp/esp-idf/components/esp_vfs_console",
     "/Users/jonastemplestein/esp/esp-idf/components/esp_wifi",
     "/Users/jonastemplestein/esp/esp-idf/components/espcoredump",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev",
     "/Users/jonastemplestein/esp/esp-idf/components/esptool_py",
     "/Users/jonastemplestein/esp/esp-idf/components/fatfs",
     "/Users/jonastemplestein/esp/esp-idf/components/freertos",
@@ -1798,6 +1800,48 @@
       ],
       "include_dirs": ["include", "include/port/xtensa"]
     },
+    "espressif__esp_codec_dev": {
+      "alias": "idf::espressif__esp_codec_dev",
+      "target": "___idf_espressif__esp_codec_dev",
+      "prefix": "idf",
+      "dir": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev",
+      "type": "LIBRARY",
+      "lib": "__idf_espressif__esp_codec_dev",
+      "reqs": [],
+      "priv_reqs": [
+        "freertos",
+        "esp_driver_gpio",
+        "esp_driver_i2c",
+        "esp_driver_i2s",
+        "esp_driver_spi",
+        "esp_adc"
+      ],
+      "managed_reqs": [],
+      "managed_priv_reqs": [],
+      "file": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_codec_dev/libespressif__esp_codec_dev.a",
+      "sources": [
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/esp_codec_dev.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/esp_codec_dev_vol.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/esp_codec_dev_if.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/audio_codec_sw_vol.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/platform/audio_codec_gpio.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/platform/audio_codec_ctrl_i2c.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/platform/audio_codec_data_i2s.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/platform/audio_codec_ctrl_spi.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/platform/esp_codec_dev_os.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/device/es8311/es8311.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/device/es8156/es8156.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/device/es7243e/es7243e.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/device/es7210/es7210.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/device/es7243/es7243.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/device/es8388/es8388.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/device/tas5805m/tas5805m.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/device/es8374/es8374.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/device/aw88298/aw88298.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev/device/es8389/es8389.c"
+      ],
+      "include_dirs": ["include", "interface", "device/include"]
+    },
     "esptool_py": {
       "alias": "idf::esptool_py",
       "target": "___idf_esptool_py",
@@ -2220,13 +2264,23 @@
       "dir": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/main",
       "type": "LIBRARY",
       "lib": "__idf_main",
-      "reqs": ["capnweb", "core", "iterate_esp_idf", "esp_timer", "esp_wifi"],
-      "priv_reqs": [],
+      "reqs": [
+        "capnweb",
+        "core",
+        "iterate_esp_idf",
+        "esp_timer",
+        "esp_wifi",
+        "esp_driver_i2s",
+        "esp_driver_i2c",
+        "esp_driver_gpio"
+      ],
+      "priv_reqs": ["espressif__esp_codec_dev"],
       "managed_reqs": [],
-      "managed_priv_reqs": [],
+      "managed_priv_reqs": ["espressif__esp_codec_dev"],
       "file": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/main/libmain.a",
       "sources": [
-        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/main/main.c"
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/main/main.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/main/waveshare_audio.c"
       ],
       "include_dirs": []
     },
@@ -4350,10 +4404,19 @@
       "prefix": "idf",
       "dir": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/main",
       "lib": "__idf_main",
-      "reqs": ["capnweb", "core", "iterate_esp_idf", "esp_timer", "esp_wifi"],
-      "priv_reqs": [],
+      "reqs": [
+        "capnweb",
+        "core",
+        "iterate_esp_idf",
+        "esp_timer",
+        "esp_wifi",
+        "esp_driver_i2s",
+        "esp_driver_i2c",
+        "esp_driver_gpio"
+      ],
+      "priv_reqs": ["espressif__esp_codec_dev"],
       "managed_reqs": [],
-      "managed_priv_reqs": [],
+      "managed_priv_reqs": ["espressif__esp_codec_dev"],
       "include_dirs": []
     },
     "capnweb": {
@@ -4406,6 +4469,25 @@
       "managed_reqs": [],
       "managed_priv_reqs": [],
       "include_dirs": ["include"]
+    },
+    "espressif__esp_codec_dev": {
+      "alias": "idf::espressif__esp_codec_dev",
+      "target": "___idf_espressif__esp_codec_dev",
+      "prefix": "idf",
+      "dir": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled/managed_components/espressif__esp_codec_dev",
+      "lib": "__idf_espressif__esp_codec_dev",
+      "reqs": [],
+      "priv_reqs": [
+        "freertos",
+        "esp_driver_gpio",
+        "esp_driver_i2c",
+        "esp_driver_i2s",
+        "esp_driver_spi",
+        "esp_adc"
+      ],
+      "managed_reqs": [],
+      "managed_priv_reqs": [],
+      "include_dirs": ["include", "interface", "device/include"]
     }
   },
   "debug_prefix_map_gdbinit": "",

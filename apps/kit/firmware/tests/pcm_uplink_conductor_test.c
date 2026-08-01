@@ -289,6 +289,49 @@ static void continuous_fresh_audio_needs_no_peer_pong(void) {
 }
 
 /*
+ * Button release travels over Cap'n Web while microphone bytes travel over a
+ * separate WebSocket. Network scheduling may deliver that control event first,
+ * so the PCM socket needs its own ordered turn fence. The fence is an empty
+ * binary message queued behind the final capture frame—not a PING/PONG and not
+ * an out-of-band flag which could overtake audio. Decode the actual masked wire
+ * bytes to prove the exact frame-then-marker contract used by userspace.
+ */
+static void end_of_turn_marker_follows_final_pcm_on_the_wire(void) {
+  struct fixture fixture;
+  struct iterate_kit_pcm_uplink_conductor_metrics metrics;
+  struct parsed_frame frame;
+  size_t offset = 0U;
+  fixture_init(&fixture);
+  begin_generation(&fixture, 1U);
+  submit_frame(&fixture, 0x2aU, 100U);
+  CHECK(iterate_kit_pcm_lane_submit_uplink_end_marker_at(
+            &fixture.lane, 120U) == ITERATE_KIT_OK);
+
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 120U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 120U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_IDLE);
+
+  CHECK(parse_frame(&fixture.raw, &offset, &frame));
+  CHECK(frame.opcode == ITERATE_KIT_WEBSOCKET_BINARY);
+  CHECK(frame.payload_size == ITERATE_KIT_PCM_V1_FRAME_BYTES);
+  CHECK(frame.payload[0] == 0x2aU);
+  CHECK(parse_frame(&fixture.raw, &offset, &frame));
+  CHECK(frame.opcode == ITERATE_KIT_WEBSOCKET_BINARY);
+  CHECK(frame.payload_size == 0U);
+  CHECK(!parse_frame(&fixture.raw, &offset, &frame));
+
+  iterate_kit_pcm_uplink_conductor_metrics(
+      &fixture.conductor, &metrics);
+  CHECK(metrics.sender.frames_sent == 1U);
+  CHECK(metrics.sender.end_markers_sent == 1U);
+  CHECK(metrics.sender.frames_discarded == 0U);
+  CHECK(metrics.sender.end_markers_discarded == 0U);
+}
+
+/*
  * The microphone and network tasks run on different cores. The network task
  * can sample 100 ms and then acquire a frame the producer completed at 101 ms.
  * That ordinary scheduling race is zero known age, not a broken clock. The
@@ -752,6 +795,7 @@ static void legal_tunnel_faults_never_latch_local_failure(void) {
 
 int main(void) {
   continuous_fresh_audio_needs_no_peer_pong();
+  end_of_turn_marker_follows_final_pcm_on_the_wire();
   newer_capture_timestamp_does_not_poison_conductor();
   true_owner_clock_regression_is_not_normalized();
   mandatory_pong_waits_for_partial_pcm_then_preempts_later_audio();
