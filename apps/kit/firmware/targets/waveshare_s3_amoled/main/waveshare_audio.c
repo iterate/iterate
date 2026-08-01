@@ -69,14 +69,11 @@ enum {
 
 static i2c_master_bus_handle_t i2c_bus;
 /*
- * Separate IN and OUT esp_codec_dev handles over their own ES8311 instances,
- * mirroring Waveshare's own BSP (bsp_audio_codec_speaker_init /
- * bsp_audio_codec_microphone_init). A single IN_OUT handle brings the codec
- * up with a working speaker but a microphone that returns gain-independent
- * broadband noise on this board.
+ * One ES8311 instance, one IN_OUT handle: the chip is one device and the I2S
+ * channel pair has one owner. Two handles over one data interface meant the
+ * second open() reconfigured the channels the first had set up.
  */
-static esp_codec_dev_handle_t speaker_dev;
-static esp_codec_dev_handle_t microphone_dev;
+static esp_codec_dev_handle_t codec_dev;
 /* Retained for the post-open register dump (bring-up diagnostics only). */
 static const audio_codec_ctrl_if_t *registers_ctrl_if;
 
@@ -216,53 +213,40 @@ bool waveshare_audio_init(void) {
       .invert_sclk = false,
       .hw_gain = {.pa_voltage = 5.0f, .codec_dac_voltage = 3.3f},
       /*
-       * Default (false) writes reg 0x44 = 0x58, which fills the ADC lane's
-       * RIGHT slot with DAC output as an AEC reference. A mono capture then
-       * reads mic and speaker-loopback samples alternately — broadband
-       * garbage whose level ignores the mic PGA, which is exactly the
-       * failure this board showed. True writes 0x44 = 0x08: ADC only.
+       * Reg 0x44 = 0x58 (the default) puts DAC output in the ADC lane's right
+       * slot as an AEC reference. That was blamed for this board's "broadband
+       * garbage" capture and worked around here — but the real cause was two
+       * codec instances fighting over one I2S channel pair (see below), and
+       * every working port of this board leaves this at the default.
        */
-      .no_dac_ref = true,
+      .no_dac_ref = false,
     };
-#if WAVESHARE_AUDIO_MIC_ONLY_DIAGNOSTIC
     /*
-     * Bring-up probe: one ADC-only codec instance, no speaker. Isolates the
-     * microphone from any interaction between two es8311 instances sharing
-     * one chip (each open() re-runs the chip's init sequence).
+     * ONE codec instance, ONE device handle, opened once.
+     *
+     * This used to build two es8311 instances over the same control
+     * interface and two esp_codec_dev handles (IN and OUT) over the same
+     * I2S data interface. Every esp_codec_dev_open() calls the data
+     * interface's set_fmt, which DISABLES BOTH I2S CHANNELS, rewrites the
+     * slot configuration and re-enables them — so opening the speaker tore
+     * down and reconfigured the channel pair the microphone had just set up,
+     * and clobbered the shared format state that this driver assumes has a
+     * single owner. A capture whose slot mask got rewritten underneath it is
+     * exactly the "gain-independent broadband noise" this board showed.
      */
-    codec_config.codec_mode = ESP_CODEC_DEV_WORK_MODE_ADC;
-    const audio_codec_if_t *microphone_codec = es8311_codec_new(&codec_config);
-    if (microphone_codec == NULL) {
-      ESP_LOGE(tag, "ES8311 probe failed");
+    const audio_codec_if_t *codec = es8311_codec_new(&codec_config);
+    if (codec == NULL) {
+      ESP_LOGE(tag, "ES8311 construction failed");
       return false;
     }
-    const audio_codec_if_t *speaker_codec = NULL;
-#else
-    const audio_codec_if_t *speaker_codec = es8311_codec_new(&codec_config);
-    const audio_codec_if_t *microphone_codec = es8311_codec_new(&codec_config);
-    if (speaker_codec == NULL || microphone_codec == NULL) {
-      ESP_LOGE(tag, "ES8311 probe failed");
-      return false;
-    }
-#endif
-    esp_codec_dev_cfg_t microphone_config = {
-      .dev_type = ESP_CODEC_DEV_TYPE_IN,
-      .codec_if = microphone_codec,
-      .data_if = data_interface,
-    };
-    microphone_dev = esp_codec_dev_new(&microphone_config);
-    if (microphone_dev == NULL) {
-      ESP_LOGE(tag, "esp_codec_dev creation failed");
-      return false;
-    }
-    if (speaker_codec != NULL) {
-      esp_codec_dev_cfg_t speaker_config = {
-        .dev_type = ESP_CODEC_DEV_TYPE_OUT,
-        .codec_if = speaker_codec,
+    {
+      esp_codec_dev_cfg_t device_config = {
+        .dev_type = ESP_CODEC_DEV_TYPE_IN_OUT,
+        .codec_if = codec,
         .data_if = data_interface,
       };
-      speaker_dev = esp_codec_dev_new(&speaker_config);
-      if (speaker_dev == NULL) {
+      codec_dev = esp_codec_dev_new(&device_config);
+      if (codec_dev == NULL) {
         ESP_LOGE(tag, "esp_codec_dev creation failed");
         return false;
       }
@@ -277,9 +261,7 @@ bool waveshare_audio_init(void) {
       .sample_rate = WAVESHARE_AUDIO_SAMPLE_RATE_HZ,
       .mclk_multiple = 0, /* 0 -> x256, matching the I2S clock */
     };
-    if (esp_codec_dev_open(microphone_dev, &sample_info) != ESP_CODEC_DEV_OK ||
-        (speaker_dev != NULL &&
-         esp_codec_dev_open(speaker_dev, &sample_info) != ESP_CODEC_DEV_OK)) {
+    if (esp_codec_dev_open(codec_dev, &sample_info) != ESP_CODEC_DEV_OK) {
       ESP_LOGE(tag, "codec open failed");
       return false;
     }
@@ -289,13 +271,17 @@ bool waveshare_audio_init(void) {
      * quiet for Grok's server VAD to open a turn; +12 dB puts normal speech
      * near -30 dBFS with peaks still ~12 dB below clipping.
      */
-    (void)esp_codec_dev_set_in_gain(microphone_dev, 36.0f);
-        /* Maximum: this speaker is small and the device is used at arm's length. */
-    (void)esp_codec_dev_set_out_vol(speaker_dev, 100);
+    (void)esp_codec_dev_set_in_gain(codec_dev, 30.0f);
+    /* Maximum: this speaker is small and the device is used at arm's length. */
+    (void)esp_codec_dev_set_out_vol(codec_dev, 100);
   }
   ESP_LOGI(tag, "ES8311 duplex audio ready at 16 kHz");
-  waveshare_audio_dump_registers();
-  waveshare_audio_probe_din();
+  /*
+   * Bring-up probes deliberately NOT run here: probe_din reconfigures the
+   * pull mode on a live DIN pad, busy-spins, and leaves the pad FLOATING —
+   * discarding whatever the I2S driver installed. Call them by hand when
+   * diagnosing, never on the shipping path.
+   */
   return true;
 }
 
@@ -370,15 +356,15 @@ void waveshare_audio_dump_registers(void) {
 }
 
 bool waveshare_audio_read(int16_t *destination, size_t samples) {
-  return microphone_dev != NULL &&
+  return codec_dev != NULL &&
       esp_codec_dev_read(
-          microphone_dev, destination, samples * sizeof(int16_t)) ==
+          codec_dev, destination, samples * sizeof(int16_t)) ==
       ESP_CODEC_DEV_OK;
 }
 
 bool waveshare_audio_write(const int16_t *pcm, size_t samples) {
-  return speaker_dev != NULL &&
+  return codec_dev != NULL &&
       esp_codec_dev_write(
-          speaker_dev, (void *)(uintptr_t)pcm, samples * sizeof(int16_t)) ==
+          codec_dev, (void *)(uintptr_t)pcm, samples * sizeof(int16_t)) ==
       ESP_CODEC_DEV_OK;
 }

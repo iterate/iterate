@@ -65,6 +65,7 @@
 #define STACKCHAN_METRICS_SUBSCRIPTION_CAPACITY 2U
 #define STACKCHAN_SCREEN_URL_CAPACITY 513U
 #define STACKCHAN_MAXIMUM_PHOTO_BYTES (512U * 1024U)
+#define STACKCHAN_PLAYBACK_INTERRUPTION_ACK_TIMEOUT_MS 50U
 
 /*
  * One callback consumes push+pull and may return resolve+release. Eight slots
@@ -524,6 +525,16 @@ static bool initialise_device(struct stackchan_runtime *state) {
   device_options.camera =
       iterate_kit_stackchan_camera_driver(&state->hardware);
   device_options.maximum_photo_bytes = STACKCHAN_MAXIMUM_PHOTO_BYTES;
+  device_options.playback_interruption =
+      (struct iterate_kit_conversation_playback_interruption_driver){
+        .context = NULL,
+        .request =
+            iterate_kit_core_s3_audio_owner_request_playback_interruption,
+        .poll =
+            iterate_kit_core_s3_audio_owner_poll_playback_interruption,
+        .acknowledgement_timeout_ms =
+            STACKCHAN_PLAYBACK_INTERRUPTION_ACK_TIMEOUT_MS,
+      };
   device_options.metrics.session = &state->connection.session;
   device_options.metrics.driver.context = state;
   device_options.metrics.driver.sample = sample_runtime_metrics;

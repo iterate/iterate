@@ -23,6 +23,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/pcm_capture_turn.c
   components/core/src/pcm_generation_fence.c
   components/core/src/pcm_lane.c
+  components/core/src/pcm_playback_interruption.c
   components/core/src/pcm_uplink_conductor.c
   components/core/src/pcm_uplink_sender.c
   components/core/src/pcm_websocket.c
@@ -806,6 +807,24 @@ add_test(
   NAME iterate-kit-pcm-generation-fence-test
   COMMAND iterate-kit-pcm-generation-fence-test
 )
+
+add_executable(iterate-kit-pcm-playback-interruption-test
+  tests/pcm_playback_interruption_test.c
+)
+target_compile_features(
+  iterate-kit-pcm-playback-interruption-test PRIVATE c_std_99)
+target_compile_options(
+  iterate-kit-pcm-playback-interruption-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-pcm-playback-interruption-test PRIVATE iterate-kit-core)
+add_test(
+  NAME iterate-kit-pcm-playback-interruption-test
+  COMMAND iterate-kit-pcm-playback-interruption-test)
 
 add_executable(iterate-kit-pcm-uplink-sender-test
   tests/pcm_uplink_sender_test.c

@@ -28,7 +28,9 @@ static const char description[] =
     "\"renderOnScreen\":\"Download and render a PNG from {url}.\","
     "\"changeColour\":\"Fill the screen with red or green.\","
     "\"conversation\":{\"start\":\"Open the PCM conversation intent.\","
-    "\"hangUp\":\"End the current conversation intent.\"},"
+    "\"hangUp\":\"End the current conversation intent.\","
+    "\"interruptPlayback\":\"Purge assistant speech and acknowledge only "
+    "after the physical speaker owner has reset.\"},"
     "\"pushToTalk\":{\"start\":\"Start one manual microphone turn.\","
     "\"stop\":\"Commit the current microphone turn.\"},"
     "\"servos\":\"Head servos; call servos.move(...).\","
@@ -215,6 +217,9 @@ enum capnweb_status iterate_kit_stackchan_init(
           &device->events, &event_options) != ITERATE_KIT_OK ||
       iterate_kit_conversation_init(
           &device->conversation, &device->events) != ITERATE_KIT_OK ||
+      iterate_kit_conversation_bind_playback_interruption(
+          &device->conversation,
+          &options->playback_interruption) != ITERATE_KIT_OK ||
       iterate_kit_push_to_talk_init(
           &device->push_to_talk, &device->events) != ITERATE_KIT_OK) {
     return CAPNWEB_E_INVALID_ARGUMENT;

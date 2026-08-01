@@ -12,6 +12,7 @@ idf_component_register(
     "src/pcm_capture_turn.c"
     "src/pcm_generation_fence.c"
     "src/pcm_lane.c"
+    "src/pcm_playback_interruption.c"
     "src/pcm_uplink_conductor.c"
     "src/pcm_uplink_sender.c"
     "src/pcm_websocket.c"

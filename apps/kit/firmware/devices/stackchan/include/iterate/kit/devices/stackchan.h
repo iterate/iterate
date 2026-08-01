@@ -55,6 +55,8 @@ struct iterate_kit_stackchan_options {
   struct iterate_kit_led_driver leds;
   struct iterate_kit_camera_driver camera;
   size_t maximum_photo_bytes;
+  struct iterate_kit_conversation_playback_interruption_driver
+      playback_interruption;
   struct iterate_kit_metrics_options metrics;
 };
 

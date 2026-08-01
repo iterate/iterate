@@ -7,6 +7,7 @@
 #include "iterate/kit/pcm_clock_playback.h"
 #include "iterate/kit/pcm_generation_fence.h"
 #include "iterate/kit/pcm_lane.h"
+#include "iterate/kit/pcm_playback_interruption.h"
 #include "iterate/kit/platforms/core_s3_capture_reserve.h"
 #include "iterate/kit/platforms/core_s3_bsp_audio.h"
 
@@ -71,6 +72,8 @@ struct iterate_kit_core_s3_audio_owner_metrics {
   struct iterate_kit_pcm_lane_metrics lane;
   struct iterate_kit_pcm_capture_turn_metrics capture_turn;
   struct iterate_kit_pcm_generation_fence_metrics generation_fence;
+  struct iterate_kit_pcm_playback_interruption_metrics
+      playback_interruption;
 
   uint32_t io_cycles;
   uint32_t codec_write_errors;
@@ -142,6 +145,20 @@ esp_err_t iterate_kit_core_s3_audio_owner_start(
  * before rendering. Thus pre-interruption speech cannot play after recovery.
  */
 void iterate_kit_core_s3_audio_owner_request_playback_reset(void);
+
+/**
+ * Capability-side half of the physical playback interruption barrier.
+ *
+ * These signatures intentionally match the generic conversation driver. The
+ * request only admits a constant-space token; poll returns OK only after the
+ * priority CoreS3 I/O task has purged retained and queued speaker samples.
+ */
+enum iterate_kit_status
+iterate_kit_core_s3_audio_owner_request_playback_interruption(
+    void *context, uint32_t *token);
+enum iterate_kit_status
+iterate_kit_core_s3_audio_owner_poll_playback_interruption(
+    void *context, uint32_t token);
 
 /**
  * Nonblocking speaker-generation barrier for the ESP-IDF PCM transport.

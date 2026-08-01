@@ -98,6 +98,7 @@ struct core_s3_audio_owner {
   struct iterate_kit_pcm_clock_playback playback;
   struct iterate_kit_pcm_capture_turn capture_turn;
   struct iterate_kit_pcm_generation_fence generation_fence;
+  struct iterate_kit_pcm_playback_interruption playback_interruption;
   struct iterate_kit_aec_capture_bridge capture_bridge;
 
   int16_t retained_downlink[ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME]
@@ -721,16 +722,27 @@ static void apply_playback_reset_if_requested(void) {
   const enum iterate_kit_status fence_status =
       iterate_kit_pcm_generation_fence_service(
           &owner.generation_fence);
+  enum iterate_kit_status interruption_status = ITERATE_KIT_UNAVAILABLE;
+  if (fence_status == ITERATE_KIT_UNAVAILABLE) {
+    interruption_status =
+        iterate_kit_pcm_playback_interruption_service(
+            &owner.playback_interruption);
+  }
   if (fence_status == ITERATE_KIT_UNAVAILABLE &&
+      interruption_status == ITERATE_KIT_UNAVAILABLE &&
       direct_reset_requested) {
     (void)reset_playback_state(NULL);
   }
   /*
-   * If both an interruption and a socket edge arrive before this 8 ms owner
-   * pass, the generation fence's physical purge satisfies both. Resetting a
-   * second time would add silence/CPU without making any older sample more
-   * unreachable. A fence failure is retained by the handshake and metrics;
-   * this realtime owner never logs or retries it in a tight loop.
+   * At most one handshake reset runs in an 8 ms codec pass. If a socket edge
+   * and provider interruption overlap, the generation fence wins this pass
+   * and the interruption is settled on the next one. Running both resets
+   * before one DMA write would add CPU and silence without increasing safety;
+   * queueing either elsewhere would create unbounded lifecycle backlog.
+   *
+   * A fire-and-forget reset coalesces with whichever acknowledged reset ran.
+   * Any failure remains retained by that handshake and its metrics; this
+   * realtime owner never logs or retries it in a tight loop.
    */
 }
 
@@ -968,6 +980,19 @@ esp_err_t iterate_kit_core_s3_audio_owner_start(
           &generation_fence_options) != ITERATE_KIT_OK) {
     return ESP_ERR_INVALID_STATE;
   }
+  const struct iterate_kit_pcm_playback_interruption_options
+      playback_interruption_options = {
+        .reset = reset_playback_state,
+        .reset_context = NULL,
+        /* The continuously clocked I/O owner reaches the next edge in 8 ms. */
+        .notify_consumer = NULL,
+        .notify_consumer_context = NULL,
+      };
+  if (iterate_kit_pcm_playback_interruption_init(
+          &owner.playback_interruption,
+          &playback_interruption_options) != ITERATE_KIT_OK) {
+    return ESP_ERR_INVALID_STATE;
+  }
 
   owner.aec = create_aec();
   if (owner.aec == NULL) {
@@ -1066,6 +1091,28 @@ void iterate_kit_core_s3_audio_owner_request_playback_reset(void) {
 }
 
 enum iterate_kit_status
+iterate_kit_core_s3_audio_owner_request_playback_interruption(
+    void *context, uint32_t *token) {
+  (void)context;
+  if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  return iterate_kit_pcm_playback_interruption_request(
+      &owner.playback_interruption, token);
+}
+
+enum iterate_kit_status
+iterate_kit_core_s3_audio_owner_poll_playback_interruption(
+    void *context, uint32_t token) {
+  (void)context;
+  if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  return iterate_kit_pcm_playback_interruption_poll(
+      &owner.playback_interruption, token);
+}
+
+enum iterate_kit_status
 iterate_kit_core_s3_audio_owner_downlink_generation_barrier(
     void *context,
     uint32_t generation,
@@ -1137,6 +1184,9 @@ void iterate_kit_core_s3_audio_owner_metrics_snapshot(
       &owner.capture_turn, &snapshot->capture_turn);
   iterate_kit_pcm_generation_fence_metrics(
       &owner.generation_fence, &snapshot->generation_fence);
+  iterate_kit_pcm_playback_interruption_metrics(
+      &owner.playback_interruption,
+      &snapshot->playback_interruption);
 
 #define COPY_ATOMIC_METRIC(name) \
   snapshot->name = atomic_load(&owner.metrics.name)

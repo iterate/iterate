@@ -54,6 +54,11 @@ struct fixture {
   size_t screen_colour_count;
   enum iterate_kit_screen_colour last_screen_colour;
   size_t metrics_sample_count;
+  uint32_t playback_interruption_requests;
+  uint32_t playback_interruption_polls;
+  uint32_t playback_interruption_token;
+  enum iterate_kit_status playback_interruption_result;
+  bool playback_interruption_complete;
   struct iterate_kit_stackchan device;
 };
 
@@ -184,6 +189,29 @@ static enum iterate_kit_status sample_metrics(
   return ITERATE_KIT_OK;
 }
 
+static enum iterate_kit_status request_playback_interruption(
+    void *context, uint32_t *token) {
+  struct fixture *fixture = context;
+  if (token == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  ++fixture->playback_interruption_requests;
+  fixture->playback_interruption_token =
+      fixture->playback_interruption_requests;
+  *token = fixture->playback_interruption_token;
+  return ITERATE_KIT_OK;
+}
+
+static enum iterate_kit_status poll_playback_interruption(
+    void *context, uint32_t token) {
+  struct fixture *fixture = context;
+  ++fixture->playback_interruption_polls;
+  assert(token == fixture->playback_interruption_token);
+  return fixture->playback_interruption_complete
+      ? fixture->playback_interruption_result
+      : ITERATE_KIT_UNAVAILABLE;
+}
+
 static enum iterate_kit_status handle_control_event(
     void *context,
     const struct iterate_kit_device_event *event) {
@@ -209,6 +237,7 @@ static void fixture_init(struct fixture *fixture) {
   struct iterate_kit_stackchan_control_driver control_driver;
   struct capnweb_session_options session_options;
   memset(fixture, 0, sizeof(*fixture));
+  fixture->playback_interruption_result = ITERATE_KIT_OK;
   device_options = (struct iterate_kit_stackchan_options){
     .screen = {fixture, render_png, change_colour},
     .screen_url_scratch = fixture->screen_url,
@@ -217,6 +246,12 @@ static void fixture_init(struct fixture *fixture) {
     .leds = {fixture, set_led, fill_leds},
     .camera = {fixture, take_photo},
     .maximum_photo_bytes = 1U,
+    .playback_interruption = {
+      .context = fixture,
+      .request = request_playback_interruption,
+      .poll = poll_playback_interruption,
+      .acknowledgement_timeout_ms = 50U,
+    },
     .metrics = {
       &fixture->session,
       {fixture, sample_metrics},
@@ -263,6 +298,90 @@ static void fixture_init(struct fixture *fixture) {
   assert(
       capnweb_session_init(
           &fixture->session, &session_options) == CAPNWEB_OK);
+}
+
+static void receive(struct fixture *fixture, const char *message);
+static void fixture_close(struct fixture *fixture);
+static bool captured_contains(
+    const struct fixture *fixture, const char *substring);
+
+/*
+ * Grok's speech-start event races fresh response audio. Userspace therefore
+ * holds that new downlink behind this exact Cap'n Web result. Returning true
+ * when the control task merely requested a reset would release stale speaker
+ * state; the capability must stay deferred until the audio-owner token is
+ * complete, while normal device polling continues without blocking.
+ */
+static void playback_interruption_acknowledges_the_audio_owner(void) {
+  struct fixture fixture;
+  size_t before_completion;
+  fixture_init(&fixture);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"conversation\","
+      "\"interruptPlayback\"],[]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(fixture.playback_interruption_requests == 1U);
+  before_completion = fixture.captured_count;
+
+  assert(
+      iterate_kit_stackchan_poll(&fixture.device, 100U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.playback_interruption_polls == 1U);
+  assert(fixture.captured_count == before_completion);
+
+  fixture.playback_interruption_complete = true;
+  assert(
+      iterate_kit_stackchan_poll(&fixture.device, 101U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.playback_interruption_polls == 2U);
+  assert(fixture.captured_count == before_completion + 1U);
+  assert(captured_contains(&fixture, "[\"resolve\",1,true]"));
+  fixture_close(&fixture);
+}
+
+/*
+ * Hardware silence must never be an unbounded promise. If the audio owner
+ * misses its explicit deadline, userspace needs a classified rejection so it
+ * can fail the PCM generation. The underlying purge remains owned and polled
+ * after that rejection: abandoning it would wedge the one-slot barrier or let
+ * a later request leapfrog samples whose fate is still unknown.
+ */
+static void playback_interruption_timeout_is_visible_and_drainable(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"conversation\","
+      "\"interruptPlayback\"],[]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      iterate_kit_stackchan_poll(&fixture.device, 200U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(
+      iterate_kit_stackchan_poll(&fixture.device, 249U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(!captured_contains(&fixture, "timed out"));
+  assert(
+      iterate_kit_stackchan_poll(&fixture.device, 250U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(captured_contains(&fixture, "timed out"));
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"conversation\","
+      "\"interruptPlayback\"],[]]]");
+  receive(&fixture, "[\"pull\",2]");
+  assert(fixture.playback_interruption_requests == 1U);
+  assert(captured_contains(&fixture, "interruption already pending"));
+
+  fixture.playback_interruption_complete = true;
+  assert(
+      iterate_kit_stackchan_poll(&fixture.device, 251U).status ==
+      ITERATE_KIT_POLL_OK);
+  fixture_close(&fixture);
 }
 
 static void receive(struct fixture *fixture, const char *message) {
@@ -542,6 +661,8 @@ static void manifest_advertises_the_shared_manual_pcm_contract(void) {
 }
 
 int main(void) {
+  playback_interruption_acknowledges_the_audio_owner();
+  playback_interruption_timeout_is_visible_and_drainable();
   remote_and_physical_controls_share_one_owner_queue();
   change_colour_keeps_the_shared_red_green_contract();
   event_and_metrics_subscriptions_share_bounded_profile_state();
