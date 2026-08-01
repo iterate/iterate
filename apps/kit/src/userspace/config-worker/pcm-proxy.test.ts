@@ -184,7 +184,7 @@ describe("userspace PCM session bridge", () => {
   });
 
   test("interruption drops stale partial playback before cancelling the provider", async () => {
-    const { bridge, device, provider } = createBridge();
+    const { bridge, device, diagnostics, provider } = createBridge();
     const controls = textMessages(provider.client);
     const downlink = binaryMessages(device.client);
     provider.client.send(new Uint8Array(300).fill(7));
@@ -220,6 +220,7 @@ describe("userspace PCM session bridge", () => {
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(controls).toEqual([]);
 
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(19));
     device.client.send(new Uint8Array(0));
 
     await vi.waitFor(() => expect(controls).toEqual(['{"type":"input_audio_buffer.commit"}']));
@@ -236,6 +237,35 @@ describe("userspace PCM session bridge", () => {
       uplinkEndMarkers: 1,
       uplinkFramesAfterEndMarkerDropped: 0,
     });
+  });
+
+  test("does not ask Grok to commit an empty manual PTT turn", async () => {
+    /*
+     * Remote test controls can produce a real press/release pair inside one
+     * audio-owner interval, so the firmware deliberately preserves it as an
+     * ordered marker-only turn. Grok must not receive an empty-buffer commit:
+     * providers are allowed to reject that command, and doing so would turn a
+     * harmless no-speech gesture into a disconnected morning conversation.
+     */
+    const { bridge, device, diagnostics, provider } = createBridge();
+    const controls = textMessages(provider.client);
+
+    expect(bridge.inputStarted()).toBe(true);
+    expect(bridge.inputStopped()).toBe(true);
+    device.client.send(new Uint8Array(0));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(controls).toEqual([]);
+    expect(bridge.metrics()).toMatchObject({
+      awaitingUplinkEndMarker: false,
+      emptyUplinkTurns: 1,
+    });
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "empty-uplink-turn",
+        severity: "info",
+      }),
+    );
   });
 
   test("an end marker that wins the socket race still fences late turn audio", async () => {
@@ -262,7 +292,9 @@ describe("userspace PCM session bridge", () => {
     expect(uplink).toEqual([]);
 
     expect(bridge.inputStopped()).toBe(true);
-    await vi.waitFor(() => expect(controls).toEqual(['{"type":"input_audio_buffer.commit"}']));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(controls).toEqual([]);
+    expect(bridge.metrics()).toMatchObject({ emptyUplinkTurns: 1 });
   });
 
   test("a missing end marker terminates the ambiguous turn after a bounded wait", async () => {
@@ -474,6 +506,7 @@ describe("userspace PCM session bridge", () => {
     const controls = textMessages(provider.client);
 
     bridge.inputStarted();
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(27));
     device.client.send(new Uint8Array(0));
     await vi.waitFor(() => expect(bridge.metrics()).toMatchObject({ uplinkEndMarkers: 1 }));
     expect(bridge.inputStopped()).toBe(true);

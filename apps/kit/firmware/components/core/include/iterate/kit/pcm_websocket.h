@@ -19,9 +19,11 @@ enum {
    * 20 ms frame per binary WebSocket message. Keeping this fixed avoids
    * device-side resampling and makes every queue slot and latency budget exact.
    *
-   * Server-to-device only, a final zero-length binary message is the ordered
-   * end-of-response marker. It is deliberately not a PCM frame and therefore
-   * remains invalid input to iterate_kit_pcm_websocket_validate_frame().
+   * A final zero-length binary message is an ordered boundary in each
+   * direction: device-to-server ends one manual capture turn, while
+   * server-to-device ends one response. It is deliberately not a PCM frame
+   * and therefore remains invalid input to
+   * iterate_kit_pcm_websocket_validate_frame().
    */
   ITERATE_KIT_PCM_V1_SAMPLE_RATE_HZ = 16000,
   ITERATE_KIT_PCM_V1_CHANNEL_COUNT = 1,

@@ -97,6 +97,7 @@ struct core_s3_audio_owner {
   struct iterate_kit_core_s3_capture_chunk capture_chunk;
   struct iterate_kit_pcm_clock_playback playback;
   struct iterate_kit_pcm_capture_turn capture_turn;
+  struct iterate_kit_pcm_generation_fence generation_fence;
   struct iterate_kit_aec_capture_bridge capture_bridge;
 
   int16_t retained_downlink[ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME]
@@ -689,14 +690,9 @@ static void aec_task_main(void *context) {
   }
 }
 
-static void apply_playback_reset_if_requested(void) {
-  if (__atomic_exchange_n(
-          &owner.playback_reset_requested,
-          0U,
-          __ATOMIC_ACQUIRE) == 0U) {
-    return;
-  }
+static enum iterate_kit_status reset_playback_state(void *context) {
   uint32_t discarded_frames = 0U;
+  (void)context;
   const enum iterate_kit_status playback_status =
       iterate_kit_pcm_clock_playback_reset(&owner.playback);
   const enum iterate_kit_status lane_status =
@@ -711,6 +707,31 @@ static void apply_playback_reset_if_requested(void) {
   atomic_saturating_add(
       &owner.metrics.downlink_frames_discarded_by_reset,
       discarded_frames);
+  return playback_status != ITERATE_KIT_OK
+          ? playback_status
+          : lane_status;
+}
+
+static void apply_playback_reset_if_requested(void) {
+  const bool direct_reset_requested =
+      __atomic_exchange_n(
+          &owner.playback_reset_requested,
+          0U,
+          __ATOMIC_ACQUIRE) != 0U;
+  const enum iterate_kit_status fence_status =
+      iterate_kit_pcm_generation_fence_service(
+          &owner.generation_fence);
+  if (fence_status == ITERATE_KIT_UNAVAILABLE &&
+      direct_reset_requested) {
+    (void)reset_playback_state(NULL);
+  }
+  /*
+   * If both an interruption and a socket edge arrive before this 8 ms owner
+   * pass, the generation fence's physical purge satisfies both. Resetting a
+   * second time would add silence/CPU without making any older sample more
+   * unreachable. A fence failure is retained by the handshake and metrics;
+   * this realtime owner never logs or retries it in a tight loop.
+   */
 }
 
 static void note_codec_timing(
@@ -923,6 +944,24 @@ esp_err_t iterate_kit_core_s3_audio_owner_start(
           &capture_turn_options) != ITERATE_KIT_OK) {
     return ESP_ERR_INVALID_STATE;
   }
+  const struct iterate_kit_pcm_generation_fence_options
+      generation_fence_options = {
+        .reset = reset_playback_state,
+        .reset_context = NULL,
+        /*
+         * CoreS3 playback is clocked continuously by blocking 8 ms codec I/O,
+         * so a task notification cannot shorten this boundary. Leaving the
+         * wake NULL avoids manufacturing a signal the owner never waits on;
+         * the next physical edge services the one-slot command.
+         */
+        .notify_consumer = NULL,
+        .notify_consumer_context = NULL,
+      };
+  if (iterate_kit_pcm_generation_fence_init(
+          &owner.generation_fence,
+          &generation_fence_options) != ITERATE_KIT_OK) {
+    return ESP_ERR_INVALID_STATE;
+  }
 
   owner.aec = create_aec();
   if (owner.aec == NULL) {
@@ -1021,9 +1060,29 @@ void iterate_kit_core_s3_audio_owner_request_playback_reset(void) {
 }
 
 enum iterate_kit_status
+iterate_kit_core_s3_audio_owner_downlink_generation_barrier(
+    void *context,
+    uint32_t generation,
+    bool connected) {
+  (void)context;
+  if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  return iterate_kit_pcm_generation_fence_poll(
+      &owner.generation_fence, generation, connected);
+}
+
+enum iterate_kit_status
 iterate_kit_core_s3_audio_owner_request_uplink_active(bool active) {
   if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U ||
+      __atomic_load_n(&owner.capture_failed, __ATOMIC_ACQUIRE) != 0U ||
       owner.aec_task == NULL) {
+    /*
+     * Accepting an edge after the DSP owner has terminated would make the
+     * capability report success for work that can never be applied. Keep the
+     * failed state explicit; the control owner may now end/restart the whole
+     * session rather than silently leaving a requested open microphone.
+     */
     return ITERATE_KIT_STATE_ERROR;
   }
   const enum iterate_kit_status status =
@@ -1070,6 +1129,8 @@ void iterate_kit_core_s3_audio_owner_metrics_snapshot(
   }
   iterate_kit_pcm_capture_turn_metrics(
       &owner.capture_turn, &snapshot->capture_turn);
+  iterate_kit_pcm_generation_fence_metrics(
+      &owner.generation_fence, &snapshot->generation_fence);
 
 #define COPY_ATOMIC_METRIC(name) \
   snapshot->name = atomic_load(&owner.metrics.name)

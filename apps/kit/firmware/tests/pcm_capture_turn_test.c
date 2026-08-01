@@ -242,6 +242,78 @@ static void rapid_edges_are_ordered_and_saturation_is_recoverable(void) {
 }
 
 /*
+ * A full command queue is rare, but a rejected release is the dangerous
+ * direction: treating it as an eventually-consistent desired-state write
+ * would leave clean microphone frames flowing after the user released PTT.
+ * Begin from active, fill the four-entry edge budget so it ends active, prove
+ * the fifth stop is explicitly rejected, then drain and retry that same stop.
+ * The requested-state snapshot must change only when the retry is accepted,
+ * and the consumer must ultimately close with one marker for every stop.
+ */
+static void backpressured_stop_is_retried_and_closes_the_gate(void) {
+  struct fixture fixture;
+  struct iterate_kit_pcm_capture_turn_metrics metrics;
+  const void *borrowed = NULL;
+  size_t borrowed_bytes = 1U;
+  uint64_t captured_at_ms = 0U;
+  fixture_init(&fixture);
+
+  CHECK(iterate_kit_pcm_capture_turn_request(
+            &fixture.turn, true) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_poll(
+            &fixture.turn, 1U) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_is_active(&fixture.turn));
+
+  CHECK(iterate_kit_pcm_capture_turn_request(
+            &fixture.turn, false) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_request(
+            &fixture.turn, true) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_request(
+            &fixture.turn, false) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_request(
+            &fixture.turn, true) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_request(
+            &fixture.turn, false) == ITERATE_KIT_BACKPRESSURE);
+
+  iterate_kit_pcm_capture_turn_metrics(&fixture.turn, &metrics);
+  CHECK(metrics.requested_active);
+  CHECK(metrics.active);
+  CHECK(metrics.command_backpressure == 1U);
+
+  CHECK(iterate_kit_pcm_capture_turn_poll(
+            &fixture.turn, 2U) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_is_active(&fixture.turn));
+  CHECK(iterate_kit_pcm_capture_turn_request(
+            &fixture.turn, false) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_capture_turn_poll(
+            &fixture.turn, 3U) == ITERATE_KIT_OK);
+  CHECK(!iterate_kit_pcm_capture_turn_is_active(&fixture.turn));
+
+  for (uint32_t marker = 0U; marker < 3U; ++marker) {
+    CHECK(iterate_kit_pcm_lane_uplink_acquire(
+              &fixture.lane,
+              &borrowed,
+              &borrowed_bytes,
+              &captured_at_ms) == ITERATE_KIT_OK);
+    CHECK(borrowed == NULL);
+    CHECK(borrowed_bytes == 0U);
+    CHECK(iterate_kit_pcm_lane_uplink_release(
+              &fixture.lane) == ITERATE_KIT_OK);
+  }
+  CHECK(iterate_kit_pcm_lane_uplink_acquire(
+            &fixture.lane,
+            &borrowed,
+            &borrowed_bytes,
+            &captured_at_ms) == ITERATE_KIT_UNAVAILABLE);
+
+  iterate_kit_pcm_capture_turn_metrics(&fixture.turn, &metrics);
+  CHECK(!metrics.requested_active);
+  CHECK(!metrics.active);
+  CHECK(metrics.end_markers_accepted == 3U);
+  CHECK(metrics.commands.current_slots == 0U);
+}
+
+/*
  * If a network stall fills the microphone lane at release, silently losing
  * the end marker would leave userspace waiting on an ambiguous half-turn.
  * The lane's destructive epoch-reset request is the recovery contract. The
@@ -288,6 +360,7 @@ int main(void) {
   inactive_aec_never_builds_a_pcm_backlog();
   start_frame_stop_preserves_wire_order();
   rapid_edges_are_ordered_and_saturation_is_recoverable();
+  backpressured_stop_is_retried_and_closes_the_gate();
   full_lane_cannot_silently_lose_the_end_marker();
   puts("pcm capture turn tests passed");
   return 0;

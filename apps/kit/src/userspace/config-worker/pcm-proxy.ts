@@ -53,6 +53,7 @@ export interface PcmProxyDiagnostic {
   code:
     | "device-closed"
     | "downlink-overflow"
+    | "empty-uplink-turn"
     | "invalid-device-frame"
     | "provider-closed"
     | "provider-event"
@@ -78,6 +79,7 @@ export interface PcmSessionMetrics {
   downlinkPartialBytes: number;
   downlinkQueuedBytes: number;
   downlinkQueueHighWaterBytes: number;
+  emptyUplinkTurns: number;
   interrupted: boolean;
   lastProviderError: { code: string | null; message: string | null } | null;
   lastProviderEventType: string | null;
@@ -154,6 +156,7 @@ export class PcmSessionBridge {
   #downlinkStarted = false;
   #downlinkTimer: ReturnType<typeof setTimeout> | undefined;
   #downlinkWriteOffset = 0;
+  #emptyUplinkTurns = 0;
   #interrupted = false;
   #lastProviderError: PcmSessionMetrics["lastProviderError"] = null;
   #lastProviderEventType: string | null = null;
@@ -185,6 +188,7 @@ export class PcmSessionBridge {
   #uplinkEndMarkerTimeouts = 0;
   #uplinkEndMarkerTimer: ReturnType<typeof setTimeout> | undefined;
   #uplinkFrames = 0;
+  #uplinkFramesInTurn = 0;
   #uplinkFramesAfterEndMarkerDropped = 0;
   #uplinkUnavailableFrames = 0;
 
@@ -240,6 +244,7 @@ export class PcmSessionBridge {
       downlinkPartialBytes: this.#downlinkQueuedBytes % ITERATE_KIT_PCM_FRAME_BYTES,
       downlinkQueuedBytes: this.#downlinkQueuedBytes,
       downlinkQueueHighWaterBytes: this.#downlinkQueueHighWaterBytes,
+      emptyUplinkTurns: this.#emptyUplinkTurns,
       interrupted: this.#interrupted,
       lastProviderError: this.#lastProviderError,
       lastProviderEventType: this.#lastProviderEventType,
@@ -295,6 +300,13 @@ export class PcmSessionBridge {
     provider.binaryType = "arraybuffer";
     this.#provider = provider;
     this.#providerConnections += 1;
+    /*
+     * A replacement provider has an empty input buffer even if its predecessor
+     * received frames from the current physical press. Retaining the old count
+     * would commit an empty buffer on the new generation. The media socket is
+     * stable, but provider-buffer ownership is generation-scoped.
+     */
+    this.#uplinkFramesInTurn = 0;
     this.#abandonProviderResponse();
     provider.addEventListener("message", (event) => {
       /*
@@ -342,6 +354,7 @@ export class PcmSessionBridge {
       return false;
     }
     this.#uplinkEndMarkerSeen = false;
+    this.#uplinkFramesInTurn = 0;
     /*
      * A new press supersedes any released turn that Grok has not acknowledged
      * yet. Remembering one boolean is enough: keeping the stale request would
@@ -379,7 +392,7 @@ export class PcmSessionBridge {
      * This is a control-plane fence only—PCM still travels immediately and no
      * audio or turn queue is introduced.
      */
-    if (this.#uplinkEndMarkerSeen) return this.#commitInputTurn();
+    if (this.#uplinkEndMarkerSeen) return this.#finishInputTurn();
     this.#awaitingUplinkEndMarker = true;
     this.#uplinkEndMarkerTimer = setTimeout(() => {
       this.#uplinkEndMarkerTimer = undefined;
@@ -469,6 +482,7 @@ export class PcmSessionBridge {
     }
     provider.send(bytes);
     this.#uplinkFrames += 1;
+    this.#uplinkFramesInTurn += 1;
   }
 
   #handleUplinkEndMarker(): void {
@@ -482,8 +496,30 @@ export class PcmSessionBridge {
     this.#uplinkEndMarkerSeen = true;
     this.#uplinkEndMarkers += 1;
     if (!this.#awaitingUplinkEndMarker) return;
+    this.#finishInputTurn();
+  }
+
+  #finishInputTurn(): boolean {
+    const frames = this.#uplinkFramesInTurn;
+    this.#uplinkFramesInTurn = 0;
     this.#clearUplinkEndMarkerWait();
-    this.#commitInputTurn();
+    if (frames !== 0) return this.#commitInputTurn();
+
+    /*
+     * The firmware preserves quick start/stop pairs as marker-only turns so a
+     * successful remote action is never scheduler-dependent. That is a valid
+     * device event but not valid provider input: an empty Grok commit may be
+     * rejected and disconnect an otherwise healthy conversation. Classify and
+     * absorb it here without synthesising a response or hiding the gesture.
+     */
+    this.#emptyUplinkTurns += 1;
+    this.#responseAfterCommitPending = false;
+    this.#diagnostic(
+      "empty-uplink-turn",
+      "info",
+      "The completed manual PTT turn contained no microphone frames and was not committed.",
+    );
+    return true;
   }
 
   #commitInputTurn(): boolean {

@@ -20,6 +20,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/itx_mount.c
   components/core/src/pcm_clock_playback.c
   components/core/src/pcm_capture_turn.c
+  components/core/src/pcm_generation_fence.c
   components/core/src/pcm_lane.c
   components/core/src/pcm_uplink_conductor.c
   components/core/src/pcm_uplink_sender.c
@@ -778,6 +779,26 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-pcm-capture-turn-test
   COMMAND iterate-kit-pcm-capture-turn-test
+)
+
+add_executable(iterate-kit-pcm-generation-fence-test
+  tests/pcm_generation_fence_test.c
+)
+target_compile_features(
+  iterate-kit-pcm-generation-fence-test PRIVATE c_std_99)
+target_compile_options(
+  iterate-kit-pcm-generation-fence-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-pcm-generation-fence-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-pcm-generation-fence-test
+  COMMAND iterate-kit-pcm-generation-fence-test
 )
 
 add_executable(iterate-kit-pcm-uplink-sender-test

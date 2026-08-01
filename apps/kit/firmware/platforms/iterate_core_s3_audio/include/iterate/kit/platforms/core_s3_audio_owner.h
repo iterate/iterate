@@ -4,6 +4,7 @@
 #include "iterate/kit/aec_capture_bridge.h"
 #include "iterate/kit/pcm_capture_turn.h"
 #include "iterate/kit/pcm_clock_playback.h"
+#include "iterate/kit/pcm_generation_fence.h"
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/platforms/core_s3_capture_reserve.h"
 #include "iterate/kit/platforms/core_s3_bsp_audio.h"
@@ -61,6 +62,7 @@ struct iterate_kit_core_s3_audio_owner_metrics {
   struct iterate_kit_core_s3_capture_reserve_metrics capture_reserve;
   struct iterate_kit_pcm_lane_metrics lane;
   struct iterate_kit_pcm_capture_turn_metrics capture_turn;
+  struct iterate_kit_pcm_generation_fence_metrics generation_fence;
 
   uint32_t io_cycles;
   uint32_t codec_write_errors;
@@ -126,6 +128,20 @@ esp_err_t iterate_kit_core_s3_audio_owner_start(
 void iterate_kit_core_s3_audio_owner_request_playback_reset(void);
 
 /**
+ * Nonblocking speaker-generation barrier for the ESP-IDF PCM transport.
+ *
+ * The first call for a `{generation, connected}` target queues a physical
+ * owner reset and returns UNAVAILABLE. A later call returns OK only after the
+ * priority audio owner has destroyed retained playback and the downlink lane.
+ * This signature intentionally matches the transport callback contract.
+ */
+enum iterate_kit_status
+iterate_kit_core_s3_audio_owner_downlink_generation_barrier(
+    void *context,
+    uint32_t generation,
+    bool connected);
+
+/**
  * Enqueues one manual-PTT publication edge for the continuous AEC task.
  *
  * The hardware microphone and reference remain clocked in both states. The
@@ -133,6 +149,14 @@ void iterate_kit_core_s3_audio_owner_request_playback_reset(void);
  * alone starts/stops PCM publication and emits the ordered turn marker. This
  * keeps control code off the realtime lane and avoids resetting AEC on every
  * human button edge.
+ *
+ * Exactly one cooperative control owner may call this function; the embedded
+ * command queue is SPSC, not a multi-producer convenience queue. Remote and
+ * physical edges must first converge on that owner. BACKPRESSURE means the
+ * requested edge was not accepted: in particular, a rejected stop must be
+ * retried by that owner and conversation teardown must keep requesting stop
+ * until it is accepted. Treating a rejected stop as success can leave the
+ * microphone publishing indefinitely.
  */
 enum iterate_kit_status
 iterate_kit_core_s3_audio_owner_request_uplink_active(bool active);
