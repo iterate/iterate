@@ -149,6 +149,13 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // lapses, and the device processor sends the push — on the web build's
     // undeliverable token that terminally reads "Send failed" (see header).
     const elsewhereAgent = await itx.agents.get("/agents/elsewhere-thread").create();
+    // The thread's agent-maintained status, appended ahead of the run so the
+    // notification expansion's thread-context line has something real to
+    // fold ("what was this run even doing?").
+    await itx.streams.get("/agents/elsewhere-thread").append({
+      type: "events.iterate.com/agent/summary-updated",
+      payload: { title: "Sending the launch webhook", activity: "waiting on egress approval" },
+    });
     void elsewhereAgent.capabilityHost.runScript(parkOneRequest("elsewhere")).catch(() => {});
     await spinnerWaiter.settings.run({ disabled: true }, () =>
       page.getByText("Send failed").waitFor({ timeout: 30_000 }),
@@ -156,16 +163,52 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // Both lanes journaled side by side — the comparison this spec exists for.
     await page.getByText("Skipped — already on screen").waitFor({ timeout: 5_000 });
 
-    // ── The row's deep link: tapping the sent push's row lands in the thread
-    // that caused it, exactly where tapping the real push would go. (The
-    // still-open batch renders its dialog there, whose late claim is a no-op
-    // — the push already went out.)
+    // ── Decide the parked batch (as another approver's device would), so
+    // the notification's expansion shows a full historical record: verdict,
+    // reason, and the thread's status at the time.
+    const requestedEvents = await itx.streams.get("/").getEvents({
+      eventTypes: ["events.iterate.com/project/human-approval-requested"],
+    });
+    const elsewhereBatch = requestedEvents.find(
+      (event) =>
+        (event.payload as { streamContext?: { streamPath?: string } }).streamContext?.streamPath ===
+        "/agents/elsewhere-thread",
+    );
+    await itx.streams.get("/").append({
+      type: "events.iterate.com/project/human-approval-decided",
+      payload: {
+        approvalRequestEventOffset: elsewhereBatch!.offset,
+        verdicts: ["reject"],
+        decidedBy: "human",
+        reason: "not while the spec is watching",
+      },
+    });
+
+    // ── Approval rows now EXPAND instead of navigating: tapping the sent
+    // push's row unfolds the same rich detail the Approvals history renders
+    // — the held request, the verdict with the human's reason, and the
+    // #2372 thread-context status line.
     await page
       .getByTestId(/^notification-row-/)
       .filter({ hasText: "Send failed" })
       .click();
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await page
+        .getByText("Rejected because: not while the spec is watching")
+        .waitFor({ timeout: 30_000 });
+      await page.getByText("Sending the launch webhook").waitFor({ timeout: 15_000 });
+      await page.getByText("egress-echo?elsewhere=1").waitFor({ timeout: 15_000 });
+    });
+
+    // The chat deep-link lives INSIDE the expansion now — its "Open thread"
+    // lands in the thread that caused the push, where tapping the real push
+    // would have gone.
+    await page.getByRole("link", { name: "Open thread" }).click();
+    // The heading, specifically: expo-router keeps the Notifications screen
+    // mounted-but-hidden behind the chat, and its thread-context line also
+    // says "elsewhere-thread" — a bare text locator finds that hidden copy.
     await spinnerWaiter.settings.run({ disabled: true }, () =>
-      page.getByText("elsewhere-thread").first().waitFor({ timeout: 30_000 }),
+      page.getByRole("heading", { name: "elsewhere-thread" }).waitFor({ timeout: 30_000 }),
     );
     expect(decodeURIComponent(page.url())).toContain("/agents/elsewhere-thread");
   } finally {
