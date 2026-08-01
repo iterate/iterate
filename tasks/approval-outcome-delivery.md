@@ -7,16 +7,31 @@ size: medium
 
 ## Status summary
 
-Implemented, all gates green (typecheck/lint/knip/full unit suite, egress
-e2e, both mobile specs). Both bugs fixed: the project processor now relays
-every accepted approval decision (human and expiry) as developer context to
-the originating agent thread, and mobile code previews render natively. One
-deviation from the spec, found by the mobile approvals spec: slash-command
-runs get the context WITHOUT the model wake (`dont-trigger-request`) — see
-the implementation log. Remaining: PR review.
+**Redirected after review, then re-implemented; all gates green**
+(typecheck/lint/knip/full unit suite, both mobile specs). The
+approval-decision relay was built, then REMOVED on Misha's verdict — the
+incident was a discarded 200, not a stranded decision (see "What changed
+after review"). What ships now: progressive-enhancement code previews on
+mobile (native text immediately, CodeMirror only on a positive ready
+signal), two lines of prompt guidance against silent turns, and a new
+placeholder task (tasks/agent-silent-turn-nudge.md) for the general
+"turn ended with nothing visible" design. Remaining: PR review.
 
 Two production bugs Misha hit on
 device (prod project `misha`, thread `mobile/2026-08-01t03-30-40-828z`).
+
+## What changed after review
+
+Deeper diagnosis showed the script DID await the held fetch: it received the
+released 200, discarded it, and returned undefined — silent settle by
+contract, not a lost decision. Misha's verdict: held fetches must stay
+completely opaque to scripts (normal fetches that happen to be slow), so
+delivering approval decisions into the thread was the wrong fix and the
+relay was removed (ordinary reverts, commits `392ab14`/`40bd71c`/`bda2d38`).
+The no-response problem is really "agent turn ended with no sendMessage" —
+a cross-channel design captured in tasks/agent-silent-turn-nudge.md. The
+CodeBlock fix was also reworked from a plain-text swap into progressive
+enhancement, and two terse prompt teaches were added (see checklist).
 
 ## Bug 1: after approving, nothing happened and the agent got confused
 
@@ -105,21 +120,25 @@ v1 — reliability over color; note it as a possible follow-up.
 
 ## Checklist
 
-- [x] Decision-outcome context appended to the originating agent thread
-      (human and expiry decisions; scope holds unaffected) — _new
-      `human-approval-decided` case in the project processor's per-event lane
-      (project-processor-implementation.ts): getEvent the requested batch,
-      mirror the door's `evaluateDecision` acceptance, `appendTo` the agent
-      stream; contract adds decided to consumes, `agents/context-added` to
-      emits, AgentProcessorContract to processorDeps_
-- [x] Unit test + egress e2e extension — _5 cases in
-      project-processor.test.ts ("approval outcome delivery" describe);
-      burst test in egress-approvals.e2e.test.ts now asserts the decision
-      context lands on the agent thread_
-- [x] `CodeBlock` renders natively (webview only used for editing surfaces)
-      — _selectable monospace `<Text>` in a bounded ScrollView
-      (activity-card.tsx); code-editor.tsx untouched, still used by
-      repo.tsx only_
+- ~~[x] Decision-outcome context appended to the originating agent thread~~
+      — _built, then removed after review: the incident was a discarded 200,
+      not a stranded decision; held fetches stay opaque to scripts. Reverted
+      in `392ab14`/`40bd71c`/`bda2d38`_
+- ~~[x] Unit test + egress e2e extension~~ — _reverted with the relay_
+- [x] `CodeBlock` renders progressively (native text first, CodeMirror on
+      ready) — _activity-card.tsx: monospace `<Text>` renders immediately;
+      CodeEditor mounts invisibly behind it and swaps in only when its new
+      `onReady` function prop fires from inside the webview (marshaled like
+      `onChange`); modeled as a useMutation whose `mutate` IS the callback,
+      swap derived from `.isSuccess`. Dev-only "editor webview never ready"
+      badge after a 10s watchdog (a useQuery timer, `enabled: __DEV__`)_
+- [x] Prompt guidance against silent turns — _agent-defaults.ts: summary
+      instruction gains "never set waitingFor in a script that still awaits
+      work"; prompt gains "do something visible with an awaited result".
+      Budget ceiling 4100 → 4200, dated note in
+      agent-prompt-budgets.test.ts_
+- [x] Placeholder task for the general silent-turn nudge —
+      _tasks/agent-silent-turn-nudge.md, `status: needs-grilling`_
 - [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
       — _all green from the worktree root; mobile/approvals and
       mobile/notifications specs pass against local dev_
@@ -131,6 +150,28 @@ v1 — reliability over color; note it as a possible follow-up.
 - Expiry pre-approve/retry flows (separate design task)
 
 ## Implementation log
+
+### After the redirect (2026-08-01)
+
+- Relay removed via three ordinary `git revert` commits (no history
+  rewrite); reverts applied cleanly, projects-domain tests green after.
+- Progressive CodeBlock: the ready signal is a new REQUIRED `onReady: () =>
+  Promise<void>` prop on CodeEditor, fired at the end of its
+  `componentDidMount` right after the `EditorView` is constructed — the same
+  expo/dom function-prop marshaling `onChange` already uses (DOM-component
+  function props must be async). repo.tsx passes an explicit noop (it has no
+  fallback to swap from). In CodeBlock the callback is `useMutation`'s
+  `mutate`; the swap derives from `.isSuccess` — no useState/useEffect. The
+  container keeps the old height heuristic as a FIXED height so the
+  text → editor swap can't jump; the hidden editor layer is absolute-fill,
+  `opacity: 0`, `pointerEvents: "none"` until ready. The dev watchdog is a
+  `useQuery` whose queryFn resolves after 10s (`enabled: __DEV__ &&
+  !ready`), rendering a tiny red "editor webview never ready" badge.
+- Prompt lines kept terse on purpose; the default-prompt ceiling had only
+  ~156 chars of headroom, so it was raised 4100 → 4200 with the dated
+  justification the budget file's own comments prescribe.
+
+### Original implementation (superseded — relay since removed)
 
 - Mechanism chosen: the per-event lane on the project processor itself, with
   `args.appendTo(streamContext.streamPath, ...)` — the same sibling-stream
