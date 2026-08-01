@@ -19,6 +19,14 @@ enum {
    */
   ITERATE_KIT_VOICELAB_FRAME_BYTES = 640,
   ITERATE_KIT_VOICELAB_ARGS_CAPACITY = 1536,
+  /* Base64 scratch for one inbound speaker frame (854 chars + padding slack). */
+  ITERATE_KIT_VOICELAB_B64_CAPACITY = 1200,
+  /*
+   * Recycle the live connection before the platform's ~1000-push
+   * per-connection delivery budget goes silent (measured; see
+   * apps/os/docs/stream-event-connections-and-subscriptions.md).
+   */
+  ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES = 600,
 };
 
 enum iterate_kit_voicelab_state {
@@ -26,10 +34,28 @@ enum iterate_kit_voicelab_state {
   ITERATE_KIT_VOICELAB_AUTHENTICATING,
   ITERATE_KIT_VOICELAB_GETTING_PROJECT,
   ITERATE_KIT_VOICELAB_GETTING_STREAM,
+  ITERATE_KIT_VOICELAB_OPENING_CONNECTION,
   ITERATE_KIT_VOICELAB_READY,
   ITERATE_KIT_VOICELAB_FAILED,
   ITERATE_KIT_VOICELAB_CLOSED,
 };
+
+/** Downlink control moments the device reacts to. */
+enum iterate_kit_voicelab_control {
+  /** Barge-in: the user is speaking — flush local playback immediately. */
+  ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED = 0,
+  ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE,
+};
+
+/** One decoded speaker PCM frame (16 kHz mono S16LE) from the stream. */
+typedef void (*iterate_kit_voicelab_speaker_fn)(
+    void *context,
+    const uint8_t *pcm,
+    size_t pcm_length,
+    int64_t sequence);
+
+typedef void (*iterate_kit_voicelab_control_fn)(
+    void *context, enum iterate_kit_voicelab_control control);
 
 enum iterate_kit_voicelab_failure {
   ITERATE_KIT_VOICELAB_FAILURE_NONE = 0,
@@ -43,6 +69,10 @@ enum iterate_kit_voicelab_failure {
   ITERATE_KIT_VOICELAB_FAILURE_STREAM_CALL,
   ITERATE_KIT_VOICELAB_FAILURE_STREAM_REJECTED,
   ITERATE_KIT_VOICELAB_FAILURE_STREAM_RESULT,
+  ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL,
+  ITERATE_KIT_VOICELAB_FAILURE_OPEN_REJECTED,
+  ITERATE_KIT_VOICELAB_FAILURE_OPEN_RESULT,
+  ITERATE_KIT_VOICELAB_FAILURE_EXPORT,
   ITERATE_KIT_VOICELAB_FAILURE_RELEASE,
   ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED,
 };
@@ -58,6 +88,14 @@ struct iterate_kit_voicelab_options {
   /** Monotonic clock in milliseconds; drives ping RTT measurement. */
   uint64_t (*now_ms)(void *clock_context);
   void *clock_context;
+  /**
+   * Downlink: when set, the mount also opens a live connection on the
+   * stream (spk-frame + grok-event, capped to what one inbox slot holds)
+   * and delivers decoded speaker PCM here. NULL = uplink-only probe.
+   */
+  iterate_kit_voicelab_speaker_fn on_speaker;
+  iterate_kit_voicelab_control_fn on_control;
+  void *downlink_context;
 };
 
 /**
@@ -79,9 +117,16 @@ struct iterate_kit_voicelab {
   struct capnweb_remote_capability session_capability;
   struct capnweb_remote_capability project_capability;
   struct capnweb_remote_capability stream_capability;
+  struct capnweb_remote_capability connection_capability;
+  /* Make-before-break: the outgoing connection lives until its successor opens. */
+  struct capnweb_remote_capability previous_connection_capability;
+  struct capnweb_local_capability callback_capability;
   bool has_session_capability;
   bool has_project_capability;
   bool has_stream_capability;
+  bool has_connection_capability;
+  bool has_previous_connection_capability;
+  bool has_callback_capability;
   uint32_t frames_sent;
   uint32_t frame_send_failures;
   bool ping_pending;
@@ -89,7 +134,17 @@ struct iterate_kit_voicelab {
   uint32_t ping_count;
   uint32_t ping_failures;
   uint32_t last_rtt_ms;
+  /* Downlink accounting (single-owner: dispatch runs on the session task). */
+  uint32_t connection_generation;
+  uint32_t batches_on_connection;
+  uint32_t spk_frames_received;
+  uint32_t spk_decode_failures;
+  uint32_t spk_seq_gaps;
+  int64_t last_spk_sequence;
+  int64_t last_event_offset;
   char args_buffer[ITERATE_KIT_VOICELAB_ARGS_CAPACITY];
+  char b64_buffer[ITERATE_KIT_VOICELAB_B64_CAPACITY];
+  uint8_t pcm_buffer[ITERATE_KIT_VOICELAB_FRAME_BYTES];
 };
 
 enum capnweb_status iterate_kit_voicelab_start(
@@ -124,6 +179,19 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
  * budget; completion updates last_rtt_ms. One probe in flight at a time.
  */
 enum capnweb_status iterate_kit_voicelab_ping(
+    struct iterate_kit_voicelab *voicelab);
+
+/**
+ * True when the live connection has taken enough delivery batches that the
+ * platform's per-connection push budget is near. The owner should call
+ * iterate_kit_voicelab_recycle_connection() from its poll loop (never from
+ * inside a callback it wants to keep re-entrancy-free).
+ */
+bool iterate_kit_voicelab_needs_recycle(
+    const struct iterate_kit_voicelab *voicelab);
+
+/** Open the successor connection; the old one is released on success. */
+enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab);
 
 enum capnweb_status iterate_kit_voicelab_close(

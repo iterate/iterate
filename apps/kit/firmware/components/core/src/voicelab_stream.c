@@ -104,7 +104,364 @@ static size_t base64_encode(
   return out;
 }
 
-/* --- mount-to-stream state machine --------------------------------------- */
+/* --- base64 decode (accepts padded and unpadded input) -------------------- */
+
+static int base64_value(char character) {
+  if (character >= 'A' && character <= 'Z') {
+    return character - 'A';
+  }
+  if (character >= 'a' && character <= 'z') {
+    return character - 'a' + 26;
+  }
+  if (character >= '0' && character <= '9') {
+    return character - '0' + 52;
+  }
+  if (character == '+') {
+    return 62;
+  }
+  if (character == '/') {
+    return 63;
+  }
+  return -1;
+}
+
+static bool base64_decode(
+    const char *text,
+    size_t text_length,
+    uint8_t *destination,
+    size_t destination_capacity,
+    size_t *decoded_length) {
+  uint32_t accumulator = 0U;
+  int bits = 0;
+  size_t out = 0U;
+  size_t index;
+  while (text_length > 0U && text[text_length - 1U] == '=') {
+    --text_length;
+  }
+  for (index = 0U; index < text_length; ++index) {
+    const int value = base64_value(text[index]);
+    if (value < 0) {
+      return false;
+    }
+    accumulator = (accumulator << 6) | (uint32_t)value;
+    bits += 6;
+    if (bits >= 8) {
+      bits -= 8;
+      if (out >= destination_capacity) {
+        return false;
+      }
+      destination[out++] = (uint8_t)((accumulator >> bits) & 0xffU);
+    }
+  }
+  *decoded_length = out;
+  return true;
+}
+
+/* --- inbound delivery batches (the exported callback capability) ---------- */
+
+static void handle_spk_frame(
+    struct iterate_kit_voicelab *voicelab,
+    const struct capnweb_value *payload) {
+  struct capnweb_value pcm_value;
+  struct capnweb_value sequence_value;
+  int64_t sequence = -1;
+  size_t b64_length;
+  size_t pcm_length;
+  if (capnweb_value_object_get(payload, "seq", &sequence_value)) {
+    (void)capnweb_value_get_int64(&sequence_value, &sequence);
+  }
+  if (!capnweb_value_object_get(payload, "pcm", &pcm_value) ||
+      capnweb_value_copy_string(
+          &pcm_value,
+          voicelab->b64_buffer,
+          sizeof(voicelab->b64_buffer),
+          &b64_length) != CAPNWEB_OK ||
+      !base64_decode(
+          voicelab->b64_buffer,
+          b64_length,
+          voicelab->pcm_buffer,
+          sizeof(voicelab->pcm_buffer),
+          &pcm_length)) {
+    ++voicelab->spk_decode_failures;
+    return;
+  }
+  if (voicelab->last_spk_sequence >= 0 &&
+      sequence > voicelab->last_spk_sequence + 1) {
+    ++voicelab->spk_seq_gaps;
+  }
+  if (sequence > voicelab->last_spk_sequence) {
+    voicelab->last_spk_sequence = sequence;
+  }
+  ++voicelab->spk_frames_received;
+  if (voicelab->options.on_speaker != NULL) {
+    voicelab->options.on_speaker(
+        voicelab->options.downlink_context,
+        voicelab->pcm_buffer,
+        pcm_length,
+        sequence);
+  }
+}
+
+static void handle_grok_event(
+    struct iterate_kit_voicelab *voicelab,
+    const struct capnweb_value *payload) {
+  struct capnweb_value event_value;
+  struct capnweb_value type_value;
+  if (voicelab->options.on_control == NULL ||
+      !capnweb_value_object_get(payload, "event", &event_value) ||
+      !capnweb_value_object_get(&event_value, "type", &type_value)) {
+    return;
+  }
+  if (capnweb_value_string_equals(
+          &type_value, "input_audio_buffer.speech_started")) {
+    voicelab->options.on_control(
+        voicelab->options.downlink_context,
+        ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED);
+  } else if (capnweb_value_string_equals(&type_value, "response.done")) {
+    voicelab->options.on_control(
+        voicelab->options.downlink_context,
+        ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE);
+  }
+}
+
+static enum capnweb_status batch_dispatch(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct iterate_kit_voicelab *voicelab = context;
+  struct capnweb_value batch;
+  struct capnweb_value events_wrapper;
+  struct capnweb_value events;
+  size_t event_count;
+  size_t index;
+  ++voicelab->batches_on_connection;
+  if (!call->has_arguments ||
+      !capnweb_value_array_at(&call->arguments, 0U, &batch)) {
+    return capnweb_reply_set_null(reply);
+  }
+  /* Application arrays ride the wire escaped as [[item, ...]]. */
+  if (!capnweb_value_object_get(&batch, "events", &events_wrapper) ||
+      !capnweb_value_get_expression_array(&events_wrapper, &events)) {
+    return capnweb_reply_set_null(reply);
+  }
+  event_count = capnweb_value_array_size(&events);
+  for (index = 0U; index < event_count; ++index) {
+    struct capnweb_value event;
+    struct capnweb_value offset_value;
+    struct capnweb_value type_value;
+    struct capnweb_value payload;
+    int64_t offset = -1;
+    if (!capnweb_value_array_at(&events, index, &event)) {
+      continue;
+    }
+    if (capnweb_value_object_get(&event, "offset", &offset_value)) {
+      (void)capnweb_value_get_int64(&offset_value, &offset);
+    }
+    /* Overlapping generations during a recycle re-deliver; offset dedupe. */
+    if (offset >= 0 && offset <= voicelab->last_event_offset) {
+      continue;
+    }
+    if (offset > voicelab->last_event_offset) {
+      voicelab->last_event_offset = offset;
+    }
+    if (!capnweb_value_object_get(&event, "type", &type_value) ||
+        !capnweb_value_object_get(&event, "payload", &payload)) {
+      continue;
+    }
+    if (capnweb_value_string_equals(&type_value, "voicelab/spk-frame")) {
+      handle_spk_frame(voicelab, &payload);
+    } else if (capnweb_value_string_equals(&type_value, "voicelab/grok-event")) {
+      handle_grok_event(voicelab, &payload);
+    }
+  }
+  return capnweb_reply_set_null(reply);
+}
+
+/* --- live connection open / recycle --------------------------------------- */
+
+static void connection_opened(
+    void *context, const struct capnweb_result *result) {
+  struct iterate_kit_voicelab *voicelab = context;
+  enum capnweb_status status;
+  if (voicelab->state == ITERATE_KIT_VOICELAB_CLOSED) {
+    return;
+  }
+  if (result->kind == CAPNWEB_RESULT_SESSION_ENDED) {
+    (void)fail(
+        voicelab,
+        ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED,
+        result->status);
+    return;
+  }
+  if (result->kind == CAPNWEB_RESULT_REJECTION) {
+    (void)fail(
+        voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_REJECTED, CAPNWEB_OK);
+    return;
+  }
+  if (voicelab->has_connection_capability) {
+    /* Make-before-break: the incumbent becomes the outgoing generation. */
+    voicelab->previous_connection_capability =
+        voicelab->connection_capability;
+    voicelab->has_previous_connection_capability = true;
+    voicelab->has_connection_capability = false;
+  }
+  if (!take_result_capability(result, &voicelab->connection_capability)) {
+    (void)fail(
+        voicelab,
+        ITERATE_KIT_VOICELAB_FAILURE_OPEN_RESULT,
+        CAPNWEB_E_INVALID_MESSAGE);
+    return;
+  }
+  voicelab->has_connection_capability = true;
+  voicelab->batches_on_connection = 0U;
+  status = release_remote(
+      voicelab,
+      &voicelab->previous_connection_capability,
+      &voicelab->has_previous_connection_capability);
+  if (status != CAPNWEB_OK) {
+    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_RELEASE, status);
+    return;
+  }
+  voicelab->state = ITERATE_KIT_VOICELAB_READY;
+  voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_NONE;
+  voicelab->capnweb_status = CAPNWEB_OK;
+}
+
+bool iterate_kit_voicelab_needs_recycle(
+    const struct iterate_kit_voicelab *voicelab) {
+  return voicelab != NULL &&
+      voicelab->state == ITERATE_KIT_VOICELAB_READY &&
+      voicelab->has_connection_capability &&
+      voicelab->batches_on_connection >=
+          ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES;
+}
+
+/*
+ * openConnection with the constrained-consumer contract this device needs:
+ * one exported callback capability, at most 2 events / 2600 event-bytes per
+ * batch (one inbox slot's worth), and no per-batch core state. Serves both
+ * the first open and every proactive recycle; the incumbent connection is
+ * released only after its successor resolves (make-before-break, offset
+ * dedupe handles the overlap).
+ */
+enum capnweb_status iterate_kit_voicelab_recycle_connection(
+    struct iterate_kit_voicelab *voicelab) {
+  static const char *const open_path[] = {"openConnection"};
+  struct capnweb_expression event_type_items[2];
+  struct capnweb_expression event_types;
+  struct capnweb_expression connection_key;
+  struct capnweb_expression max_events;
+  struct capnweb_expression max_bytes;
+  struct capnweb_expression no_state;
+  struct capnweb_expression callback;
+  struct capnweb_object_field fields[6];
+  struct capnweb_expression argument;
+  char key_text[64];
+  int key_length;
+  enum capnweb_status status;
+
+  if (voicelab == NULL) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  if (voicelab->state != ITERATE_KIT_VOICELAB_READY &&
+      voicelab->state != ITERATE_KIT_VOICELAB_OPENING_CONNECTION) {
+    return CAPNWEB_E_STATE;
+  }
+  if (!voicelab->has_callback_capability) {
+    const struct capnweb_capability dispatch = {
+      batch_dispatch,
+      voicelab,
+      NULL,
+    };
+    status = capnweb_session_export_capability(
+        voicelab->options.session, dispatch, &voicelab->callback_capability);
+    if (status != CAPNWEB_OK) {
+      return fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_EXPORT, status);
+    }
+    voicelab->has_callback_capability = true;
+  }
+
+  ++voicelab->connection_generation;
+  key_length = snprintf(
+      key_text,
+      sizeof(key_text),
+      "%s-cb-g%" PRIu32,
+      voicelab->options.call_id,
+      voicelab->connection_generation);
+  if (key_length < 0 || (size_t)key_length >= sizeof(key_text)) {
+    return CAPNWEB_E_LIMIT;
+  }
+
+  event_type_items[0] = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {"voicelab/spk-frame", sizeof("voicelab/spk-frame") - 1U}},
+  };
+  event_type_items[1] = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {"voicelab/grok-event", sizeof("voicelab/grok-event") - 1U}},
+  };
+  event_types = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_ARRAY,
+    {.array = {event_type_items, 2U}},
+  };
+  connection_key = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {key_text, (size_t)key_length}},
+  };
+  max_events = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_INT64,
+    {.integer = 2},
+  };
+  max_bytes = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_INT64,
+    {.integer = 2600},
+  };
+  no_state = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_BOOLEAN,
+    {.boolean = false},
+  };
+  callback = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_CAPABILITY,
+    {.capability = voicelab->callback_capability},
+  };
+  fields[0] = (struct capnweb_object_field){
+    {"connectionKey", sizeof("connectionKey") - 1U},
+    &connection_key,
+  };
+  fields[1] = (struct capnweb_object_field){
+    {"eventTypes", sizeof("eventTypes") - 1U},
+    &event_types,
+  };
+  fields[2] = (struct capnweb_object_field){
+    {"maxDeliveryEvents", sizeof("maxDeliveryEvents") - 1U},
+    &max_events,
+  };
+  fields[3] = (struct capnweb_object_field){
+    {"maxDeliveryBytes", sizeof("maxDeliveryBytes") - 1U},
+    &max_bytes,
+  };
+  fields[4] = (struct capnweb_object_field){
+    {"state", sizeof("state") - 1U},
+    &no_state,
+  };
+  fields[5] = (struct capnweb_object_field){
+    {"processEventBatch", sizeof("processEventBatch") - 1U},
+    &callback,
+  };
+  argument = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_OBJECT,
+    {.object = {fields, 6U}},
+  };
+  return capnweb_session_call_expressions(
+      voicelab->options.session,
+      voicelab->stream_capability,
+      open_path,
+      sizeof(open_path) / sizeof(open_path[0]),
+      &argument,
+      1U,
+      connection_opened,
+      voicelab);
+}
 
 static void stream_completed(
     void *context, const struct capnweb_result *result) {
@@ -141,9 +498,17 @@ static void stream_completed(
     (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_RELEASE, status);
     return;
   }
-  voicelab->state = ITERATE_KIT_VOICELAB_READY;
-  voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_NONE;
-  voicelab->capnweb_status = CAPNWEB_OK;
+  if (voicelab->options.on_speaker == NULL) {
+    voicelab->state = ITERATE_KIT_VOICELAB_READY;
+    voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_NONE;
+    voicelab->capnweb_status = CAPNWEB_OK;
+    return;
+  }
+  voicelab->state = ITERATE_KIT_VOICELAB_OPENING_CONNECTION;
+  status = iterate_kit_voicelab_recycle_connection(voicelab);
+  if (status != CAPNWEB_OK) {
+    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, status);
+  }
 }
 
 static void project_completed(
@@ -278,6 +643,8 @@ enum capnweb_status iterate_kit_voicelab_start(
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
   voicelab->options = *options;
+  voicelab->last_spk_sequence = -1;
+  voicelab->last_event_offset = -1;
   voicelab->state = ITERATE_KIT_VOICELAB_AUTHENTICATING;
   project_id = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
@@ -464,6 +831,29 @@ enum capnweb_status iterate_kit_voicelab_close(
   }
   status = release_remote(
       voicelab,
+      &voicelab->connection_capability,
+      &voicelab->has_connection_capability);
+  if (status != CAPNWEB_OK && first_error == CAPNWEB_OK) {
+    first_error = status;
+  }
+  status = release_remote(
+      voicelab,
+      &voicelab->previous_connection_capability,
+      &voicelab->has_previous_connection_capability);
+  if (status != CAPNWEB_OK && first_error == CAPNWEB_OK) {
+    first_error = status;
+  }
+  if (voicelab->has_callback_capability) {
+    status = capnweb_session_release_local_capability(
+        voicelab->options.session, voicelab->callback_capability);
+    if (status == CAPNWEB_OK) {
+      voicelab->has_callback_capability = false;
+    } else if (first_error == CAPNWEB_OK) {
+      first_error = status;
+    }
+  }
+  status = release_remote(
+      voicelab,
       &voicelab->stream_capability,
       &voicelab->has_stream_capability);
   if (status != CAPNWEB_OK && first_error == CAPNWEB_OK) {
@@ -494,6 +884,7 @@ const char *iterate_kit_voicelab_state_name(
     case ITERATE_KIT_VOICELAB_AUTHENTICATING: return "authenticating";
     case ITERATE_KIT_VOICELAB_GETTING_PROJECT: return "getting-project";
     case ITERATE_KIT_VOICELAB_GETTING_STREAM: return "getting-stream";
+    case ITERATE_KIT_VOICELAB_OPENING_CONNECTION: return "opening-connection";
     case ITERATE_KIT_VOICELAB_READY: return "ready";
     case ITERATE_KIT_VOICELAB_FAILED: return "failed";
     case ITERATE_KIT_VOICELAB_CLOSED: return "closed";
@@ -519,6 +910,10 @@ const char *iterate_kit_voicelab_failure_name(
     case ITERATE_KIT_VOICELAB_FAILURE_STREAM_REJECTED:
       return "stream-rejected";
     case ITERATE_KIT_VOICELAB_FAILURE_STREAM_RESULT: return "stream-result";
+    case ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL: return "open-call";
+    case ITERATE_KIT_VOICELAB_FAILURE_OPEN_REJECTED: return "open-rejected";
+    case ITERATE_KIT_VOICELAB_FAILURE_OPEN_RESULT: return "open-result";
+    case ITERATE_KIT_VOICELAB_FAILURE_EXPORT: return "export";
     case ITERATE_KIT_VOICELAB_FAILURE_RELEASE: return "release";
     case ITERATE_KIT_VOICELAB_FAILURE_SESSION_ENDED:
       return "session-ended";

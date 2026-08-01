@@ -147,6 +147,9 @@ static void start_and_mount(struct fixture *fixture) {
     "wsdev",
     fixture_now_ms,
     fixture,
+    NULL,
+    NULL,
+    NULL,
   };
   assert(
       iterate_kit_voicelab_start(&fixture->voicelab, &options) ==
@@ -184,6 +187,136 @@ static void start_and_mount(struct fixture *fixture) {
   assert(fixture->voicelab.has_stream_capability);
   assert(!fixture->voicelab.has_project_capability);
   assert(!fixture->voicelab.has_session_capability);
+}
+
+static uint8_t spoken[64];
+static size_t spoken_length;
+static int64_t spoken_sequence = -1;
+static int speech_started_count;
+static int response_done_count;
+
+static void record_speaker(
+    void *context, const uint8_t *pcm, size_t pcm_length, int64_t sequence) {
+  (void)context;
+  if (pcm_length <= sizeof(spoken)) {
+    memcpy(spoken, pcm, pcm_length);
+    spoken_length = pcm_length;
+  }
+  spoken_sequence = sequence;
+}
+
+static void record_control(
+    void *context, enum iterate_kit_voicelab_control control) {
+  (void)context;
+  if (control == ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED) {
+    ++speech_started_count;
+  } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
+    ++response_done_count;
+  }
+}
+
+/*
+ * Full downlink shape: the module exports a callback capability, opens the
+ * live connection with the constrained-consumer caps, decodes inbound
+ * spk-frames, forwards barge-in control, dedupes across an overlapping
+ * recycle, and recycles make-before-break.
+ */
+static void downlink_flow(void) {
+  static struct fixture fixture;
+  fixture_init(&fixture);
+  {
+    const struct iterate_kit_voicelab_options options = {
+      &fixture.session,
+      "prj_test",
+      "itxk_secret-never-log",
+      "/voicelab/dev-test",
+      "wsdev",
+      fixture_now_ms,
+      &fixture,
+      record_speaker,
+      record_control,
+      NULL,
+    };
+    assert(
+        iterate_kit_voicelab_start(&fixture.voicelab, &options) ==
+        CAPNWEB_OK);
+  }
+  receive(&fixture, "[\"resolve\",1,[\"export\",-10]]");
+  receive(&fixture, "[\"resolve\",2,[\"export\",-11]]");
+  receive(&fixture, "[\"resolve\",3,[\"export\",-12]]");
+  assert(
+      fixture.voicelab.state == ITERATE_KIT_VOICELAB_OPENING_CONNECTION);
+
+  /* The open call rides the wire with the caps and the exported callback. */
+  {
+    const char *open_message = NULL;
+    size_t index;
+    for (index = 0U; index < fixture.captured_count; ++index) {
+      if (strstr(fixture.captured[index], "openConnection") != NULL) {
+        open_message = fixture.captured[index];
+      }
+    }
+    assert(open_message != NULL);
+    assert(strstr(open_message, "\"connectionKey\":\"wsdev-cb-g1\"") != NULL);
+    assert(
+        strstr(
+            open_message,
+            "\"eventTypes\":[[\"voicelab/spk-frame\",\"voicelab/grok-event\"]]") !=
+        NULL);
+    assert(strstr(open_message, "\"maxDeliveryEvents\":2") != NULL);
+    assert(strstr(open_message, "\"maxDeliveryBytes\":2600") != NULL);
+    assert(strstr(open_message, "\"state\":false") != NULL);
+    assert(strstr(open_message, "\"processEventBatch\":[\"export\",-1]") != NULL);
+  }
+  receive(&fixture, "[\"resolve\",4,[\"export\",-13]]");
+  assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
+  assert(fixture.voicelab.has_connection_capability);
+
+  /* The platform invokes the exported callback: push, result never pulled. */
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"voicelab/spk-frame\",\"offset\":40,"
+      "\"payload\":{\"seq\":0,\"pcm\":\"QUJDRA\"}},"
+      "{\"type\":\"voicelab/grok-event\",\"offset\":41,"
+      "\"payload\":{\"event\":{\"type\":\"input_audio_buffer.speech_started\"}}}"
+      "]],\"scannedThroughOffset\":41,\"state\":null}]]]");
+  assert(fixture.voicelab.spk_frames_received == 1U);
+  assert(spoken_length == 4U);
+  assert(memcmp(spoken, "ABCD", 4U) == 0);
+  assert(spoken_sequence == 0);
+  assert(speech_started_count == 1);
+  assert(fixture.voicelab.last_event_offset == 41);
+
+  /* Redelivery of the same offsets (recycle overlap) is deduped. */
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"voicelab/spk-frame\",\"offset\":40,"
+      "\"payload\":{\"seq\":0,\"pcm\":\"QUJDRA\"}},"
+      "{\"type\":\"voicelab/grok-event\",\"offset\":42,"
+      "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
+      "]],\"scannedThroughOffset\":42,\"state\":null}]]]");
+  assert(fixture.voicelab.spk_frames_received == 1U);
+  assert(response_done_count == 1);
+
+  /* Proactive recycle: successor opens under g2, incumbent released after. */
+  fixture.voicelab.batches_on_connection =
+      ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES;
+  assert(iterate_kit_voicelab_needs_recycle(&fixture.voicelab));
+  assert(
+      iterate_kit_voicelab_recycle_connection(&fixture.voicelab) ==
+      CAPNWEB_OK);
+  {
+    const char *second_open = fixture.captured[fixture.captured_count - 2U];
+    assert(strstr(second_open, "\"connectionKey\":\"wsdev-cb-g2\"") != NULL);
+  }
+  receive(&fixture, "[\"resolve\",5,[\"export\",-14]]");
+  assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
+  assert(fixture.voicelab.batches_on_connection < 2U);
+  assert(!fixture.voicelab.has_previous_connection_capability);
+
+  assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
 }
 
 int main(void) {
@@ -262,6 +395,8 @@ int main(void) {
 
   assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
   assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_CLOSED);
+
+  downlink_flow();
 
   printf("voicelab stream test passed\n");
   return 0;
