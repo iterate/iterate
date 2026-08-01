@@ -24,6 +24,14 @@ export interface BridgeOptions extends VoicelabConnectOptions {
   once?: boolean;
   /** Audio transport on the Grok leg. */
   grokTransport?: "binary" | "json";
+  /** Text turn injected as soon as the call is accepted (Grok speaks it). */
+  greet?: string;
+  /**
+   * Pace speaker appends at ~2x realtime instead of relaying Grok's burst
+   * instantly — a constrained consumer (ESP32) takes each delivery into a
+   * bounded inbox and cannot absorb hundreds of messages in one TCP clump.
+   */
+  paceDevice?: boolean;
 }
 
 const FORWARDED_GROK_EVENTS = new Set([
@@ -67,6 +75,24 @@ export async function bridge(options: BridgeOptions) {
     });
   };
 
+  // --pace-device: drip queued speaker events in 5-event appends every 50ms
+  // (2x realtime), so a downstream bounded inbox sees a steady trickle
+  // instead of Grok's burst.
+  const paceQueue: Parameters<typeof stream.append>[0][] = [];
+  let paceTimer: NodeJS.Timeout | null = null;
+  const pacePump = () => {
+    if (paceTimer !== null) return;
+    paceTimer = setInterval(() => {
+      const slice = paceQueue.splice(0, 5);
+      if (slice.length === 0) {
+        if (paceTimer !== null) clearInterval(paceTimer);
+        paceTimer = null;
+        return;
+      }
+      fireAppend(...slice);
+    }, 50);
+  };
+
   const endCall = (reason: string) => {
     if (callId === null) return;
     const endedCallId = callId;
@@ -103,6 +129,18 @@ export async function bridge(options: BridgeOptions) {
         payload: { callId, bridge: "node", model: client.options.model },
       });
       console.error(`bridge: call ${callId} accepted (model=${client.options.model})`);
+      if (options.greet) {
+        client.send({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: options.greet }],
+          },
+        });
+        client.send({ type: "response.create" });
+        console.error(`bridge: greet turn sent`);
+      }
     });
     client.on("audio", (pcm: Buffer) => {
       const tGrok = Date.now();
@@ -125,10 +163,19 @@ export async function bridge(options: BridgeOptions) {
           },
         });
       }
-      if (events.length > 0) fireAppend(...events);
+      if (events.length === 0) return;
+      if (!options.paceDevice) {
+        fireAppend(...events);
+        return;
+      }
+      paceQueue.push(...events);
+      pacePump();
     });
     client.on("event", (event: { type: string }) => {
       if (!FORWARDED_GROK_EVENTS.has(event.type)) return;
+      if (event.type === "input_audio_buffer.speech_started") {
+        paceQueue.length = 0; // barge-in: never drip stale response audio
+      }
       fireAppend({
         type: "voicelab/grok-event",
         ephemeral: true,
