@@ -7,10 +7,13 @@ size: small-medium
 
 ## Status summary
 
-Implemented: shared batch-detail components extracted from the approvals
-screen, Notifications approval rows expand inline into the full history
-(requests, verdicts, reason, thread-context line, script, Open thread),
-spec extended and passing 3x consecutively. Remaining: final gates + CI.
+Implemented, twice over: first the expandable approval detail on
+notification rows (shared components, spec, video), then — per Misha's
+review verdict — the standalone Approvals screen was RETIRED: decide
+actions and the approver-key banner moved to the Notifications surface,
+approvals-destination pushes route there with the matching row
+pre-expanded, and both mobile specs run through the new surface (3x
+consecutive passes each). Remaining: final gates + CI.
 
 ## Ask (Misha, 2026-08-01)
 
@@ -110,3 +113,50 @@ being only a deep link.
 - The local dev server needed two `pnpm dev restart --detach` cycles during
   spec iteration (known miniflare degradation; one mid-series failure was
   exactly that, not the spec).
+
+## Removal scope (Misha: "we should just get rid of the approvals view")
+
+- [x] Decide actions for open batches inside the notification expansion
+      _shared `ApprovalBatchActions` in components/approval-batch.tsx — the
+      retired screen's respond mutation verbatim (approve-all signs via
+      signWithApproverKey, reject-all prompts a reason, never signs);
+      rendered when `resolved === null` and unexpired; onDecided
+      invalidates the batch query so the record replaces the buttons_
+- [x] Approver key UI on the Notifications screen
+      _components/approver-key-banner.tsx (enroll / re-enroll / signing-as,
+      moved verbatim), mounted above the list; shares the
+      approver-key-status query cache with the actions_
+- [x] Routing: approvals-destination pushes → Notifications view
+      _lib/notification-routing.ts routes to
+      /project/[projectId]/notifications with approvalRequestEventOffset;
+      the screen pre-expands the matching row (ActivityCard's
+      toggled-or-default pattern). CHOICE: no scroll-to-row — newest-first
+      list puts a fresh push's row at/near the top; noted as acceptable.
+      The expansion's "Open in Approvals" link removed (it would
+      self-navigate) — scope batches show their source line, nothing more_
+- [x] Removal: approvals.tsx + drawer entry deleted; `focusOpenBatch` (+ its
+      test) pruned as screen-only; knip clean
+- [x] approvals.spec.ts final act reworked through the Notifications view
+      _spec now enrolls the browser's device identity (rows need a device
+      stream; both batches are claimed in-thread so the fake token is never
+      dialed), expands both rows, keeps the #2372 full-text thread-context
+      assertions and the tap-through verbatim_
+- [x] notifications.spec.ts decides from the expansion
+      _replaces the admin-side reject: "Awaiting decision" + Reject via the
+      window.prompt stand-in (retried press, button-departure success
+      signal), then asserts the historical record_
+
+Removal-round log:
+
+- decide() signature compatibility confirmed: it takes the requested
+  event's payload, which deriveBatchDetail already returns verbatim (both
+  deriveOpenBatches and the by-offset fetch carry `requested.payload`
+  untransformed) — no reconciliation needed beyond an `expired` guard on
+  showing the actions (deriveOpenBatches used to filter expired batches;
+  the expansion checks payload.expiresAt instead).
+- What resisted: the LOCAL dev server (miniflare host) dies with a V8
+  heap OOM after ~2-3 consecutive spec runs — every mid-series spec
+  failure in this round was that (health 000, OOM in dev-server.log), not
+  spec logic. Cure: `pnpm dev restart --detach` before each run; the 3x
+  series for both specs was recorded with fresh servers. Worth a separate
+  look at the dev server's memory ceiling.
