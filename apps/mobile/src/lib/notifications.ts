@@ -42,6 +42,13 @@ export type DeviceNotificationRow = {
   status: DeviceNotificationStatus;
   /** Where a tap navigates — the same destination union a push tap uses. */
   destination: PushNotificationData["destination"] | null;
+  /**
+   * The approval batch this notification is about (the offset of its
+   * project/human-approval-requested event on the root stream), or null for
+   * non-approval notifications. What the Notifications screen keys its
+   * inline batch-detail expansion on.
+   */
+  approvalRequestEventOffset: number | null;
 };
 
 /**
@@ -65,6 +72,7 @@ export function deriveDeviceNotifications(events: readonly StreamEvent[]): Devic
       // zod contract would drag the OS processor machinery into the app
       // bundle for shapes the server already enforced.
       const payload = event.payload as {
+        approvalRequestEventOffset?: number;
         title?: string;
         body?: string;
         destination?: PushNotificationData["destination"];
@@ -76,6 +84,15 @@ export function deriveDeviceNotifications(events: readonly StreamEvent[]): Devic
         requestedAt: event.createdAt,
         status: { kind: "pending", label: "Waiting to send" },
         destination: payload.destination || null,
+        // The top-level field is the batch identity since #2371; intents
+        // committed before it only carried the offset inside the approvals
+        // destination, so fall back there — those rows expand too.
+        approvalRequestEventOffset:
+          typeof payload.approvalRequestEventOffset === "number"
+            ? payload.approvalRequestEventOffset
+            : typeof payload.destination?.approvalRequestEventOffset === "number"
+              ? payload.destination.approvalRequestEventOffset
+              : null,
       });
       continue;
     }

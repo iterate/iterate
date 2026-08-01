@@ -263,6 +263,39 @@ export function deriveRecentResolvedBatches(
     .slice(0, limit);
 }
 
+/**
+ * One batch's full detail, addressed by its requested-event offset — what
+ * the Notifications screen's inline expansion renders. `resolved` is null
+ * while the batch awaits its decision; `complete` is the caller's caching
+ * contract (mirrors threadContextForScriptRun's `settled`): true once the
+ * decision AND every approved index's settle are in view, after which the
+ * history is immutable and may be cached forever. Null when the requested
+ * event itself is not in the given events (wrong offset, or a stream page
+ * that missed it).
+ */
+export function deriveBatchDetail(
+  events: readonly StreamEvent[],
+  offset: number,
+): { payload: RequestedPayload; resolved: ResolvedBatch | null; complete: boolean } | null {
+  const resolved = deriveRecentResolvedBatches(events, Number.MAX_SAFE_INTEGER).find(
+    (batch) => batch.offset === offset,
+  );
+  if (resolved) {
+    return {
+      payload: resolved.payload,
+      resolved,
+      complete: resolved.verdicts.every(
+        (verdict, index) => verdict === "reject" || resolved.outcomes[index] !== null,
+      ),
+    };
+  }
+  const requested = events.find(
+    (event) => event.offset === offset && event.type === EVENT.requested,
+  );
+  if (requested === undefined) return null;
+  return { payload: requested.payload as RequestedPayload, resolved: null, complete: false };
+}
+
 /** Put the batch opened from a notification first without disturbing the queue's other items. */
 export function focusOpenBatch(batches: OpenBatch[], targetOffset: number | null): OpenBatch[] {
   if (targetOffset === null) return batches;

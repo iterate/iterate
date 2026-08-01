@@ -109,6 +109,45 @@ test("rows come newest first, and facts pointing at unknown obligations are igno
   expect(rows.map((row) => row.title)).toEqual(["Direct", "Second", "First"]);
 });
 
+test("rows carry the approval batch identity: top-level field, legacy destination fallback, null otherwise", () => {
+  const rows = deriveDeviceNotifications([
+    // The post-#2371 shape: batch identity rides top-level on the intent.
+    intentRequested(2, {}),
+    // A pre-#2371 intent: only the approvals destination carried the offset.
+    {
+      type: "events.iterate.com/notification/requested",
+      offset: 5,
+      createdAt: "2026-07-18T08:01:00.000Z",
+      path: "/devices/phone",
+      payload: {
+        audience: { kind: "project" },
+        title: "Approval needed",
+        body: "POST api.stripe.com is waiting for approval.",
+        destination: { kind: "approvals", approvalRequestEventOffset: 9 },
+        expiresAt: 1_784_000_000_000,
+      },
+    } as StreamEvent,
+    // A non-approval notification has no batch to expand.
+    {
+      type: "events.iterate.com/device/notification-requested",
+      offset: 7,
+      createdAt: "2026-07-18T08:02:00.000Z",
+      path: "/devices/phone",
+      payload: {
+        title: "Direct",
+        body: "Buy milk",
+        destination: { kind: "project" },
+        expiresAt: 1,
+      },
+    } as StreamEvent,
+  ]);
+  expect(rows).toMatchObject([
+    { requestOffset: 7, approvalRequestEventOffset: null },
+    { requestOffset: 5, approvalRequestEventOffset: 9 },
+    { requestOffset: 2, approvalRequestEventOffset: 17 },
+  ]);
+});
+
 // -----------------------------------------------------------------------------
 // Event literal builders.
 // -----------------------------------------------------------------------------

@@ -3,6 +3,7 @@ import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
   approvalBodyForDisplay,
   decide,
+  deriveBatchDetail,
   deriveOpenBatches,
   deriveRecentResolvedBatches,
   EVENT,
@@ -137,6 +138,37 @@ test("recents order by newest decision, not request order", () => {
   expect(deriveRecentResolvedBatches(events, 1)).toMatchObject([
     { offset: 1, resolutionEventOffset: 4 },
   ]);
+});
+
+test("batch detail by offset: undecided → provisional, decided → resolved, complete once settles land", () => {
+  const undecided = deriveBatchDetail([requested(1, "post-echo")], 1);
+  expect(undecided).toMatchObject({
+    payload: { ruleKey: "post-echo" },
+    resolved: null,
+    complete: false,
+  });
+
+  // All-reject is complete the moment it is decided — nothing settles.
+  expect(
+    deriveBatchDetail([requested(1, "post-echo"), decided(2, 1, ["reject"])], 1),
+  ).toMatchObject({
+    resolved: { decisionSummary: "Rejected" },
+    complete: true,
+  });
+
+  // Approved indexes keep the detail provisional until every settle is in view.
+  const burst = [requestedBurst(1, "gmail-sends", 2), decided(2, 1, ["approve", "approve"])];
+  expect(deriveBatchDetail([...burst, settled(3, 1, 0, 200)], 1)).toMatchObject({
+    resolved: { decisionSummary: "Approved" },
+    complete: false,
+  });
+  expect(
+    deriveBatchDetail([...burst, settled(3, 1, 0, 200), settled(4, 1, 1, 200)], 1),
+  ).toMatchObject({ complete: true });
+});
+
+test("batch detail for an offset whose requested event is not in view is null", () => {
+  expect(deriveBatchDetail([requested(1, "post-echo")], 99)).toBeNull();
 });
 
 test("an expired undecided batch is no longer open even with no decision event", () => {
