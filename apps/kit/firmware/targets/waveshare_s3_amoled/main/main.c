@@ -125,13 +125,45 @@ enum {
    * that the bridge paces at ~1.05x, and whole frames are dropped rather
    * than split.
    */
-  SPEAKER_BUFFER_BYTES = 32000,
+  /*
+   * 900ms, in INTERNAL RAM. Two constraints meet here: it must exceed the
+   * bridge's 600ms opening burst plus jitter (at 750ms it did not, and 36
+   * frames were dropped on arrival), and it must not rob the TLS handshake
+   * (at 40000 the connection could not be established at all). 900ms clears
+   * the burst with room and leaves the network stack its working set. (PSRAM is unreachable while the cache is off, and
+   * a flash write would otherwise stall the audio ring as well as the tasks).
+   * Deep buffers were the wrong lever: they cannot fix a recovery path that
+   * under-fills the DMA, and they raise the ceiling that playout lag ratchets
+   * toward. Concealment plus drop-debt bounds the lag instead.
+   *
+   * (Was four seconds, in PSRAM.) One second could not hold the bridge's 600ms
+   * opening burst plus network jitter, so the buffer both OVERFLOWED (22
+   * frames dropped) and later ran dry (minimum margin 0ms) in the same
+   * answer — the classic too-small-for-the-burst signature.
+   *
+   * Unbounded growth is not a risk any more: the bridge paces at realtime
+   * after its burst, so occupancy is bounded by burst + jitter rather than
+   * by the length of the answer. (A 32s buffer WAS wrong, but only because
+   * pacing was then 2x realtime and accumulated for the whole answer.)
+   */
+  SPEAKER_BUFFER_BYTES = 28800,
   /*
    * Playback will not start, or resume after starving, until this much audio
    * is queued. Without it the first frame starts the speaker with zero margin
    * and the DMA's 90 ms is the only tolerance the whole path has.
    */
-  SPEAKER_PREFILL_BYTES = 160 * 32,
+  /*
+   * 300ms before playback starts. The bridge bursts 600ms at the opening of
+   * every response, so this is reached as fast as the wire allows and costs
+   * almost nothing in latency — while doubling the cushion that a network
+   * hiccup has to exhaust before anything is audible.
+   */
+  /*
+   * Net of the DMA ring: the first 2880 bytes of any prefill go into the
+   * hardware, not into jitter cushion, so the old "300ms" was really 210.
+   * 300ms of true cushion plus one ring.
+   */
+  SPEAKER_PREFILL_BYTES = 300 * 32 + 2880,
   /*
    * Recovering from a starve does NOT re-buy the full opening prefill. It
    * used to, so a single late frame cost 160 ms of inserted silence —
@@ -139,12 +171,13 @@ enum {
    * minute of speech. Mid-answer the bridge is already streaming, so a much
    * smaller cushion is enough to carry on.
    */
-  SPEAKER_REPRIME_BYTES = 40 * 32,
   /*
-   * And a starve is only real if the buffer stays empty. One empty read is
-   * ordinary jitter between a 20 ms write and a ~20 ms arrival cadence.
+   * Beyond this much silence the answer is simply over: settle back to
+   * priming rather than concealing an empty stream indefinitely.
    */
-  SPEAKER_STARVE_READS = 3,
+  SPEAKER_CONCEAL_LIMIT_MS = 400,
+  /* Backlog beyond which a frame is skipped to catch up. */
+  SPEAKER_HIGH_WATER_MS = 650,
   /*
    * How long the speaker must stay dry before the amplifier is powered down.
    * Long enough that a network hiccup mid-answer never power-cycles it.
@@ -207,7 +240,7 @@ static struct {
   struct iterate_kit_voicelab voicelab;
   uint32_t voicelab_generation;
   uint32_t frame_sequence;
-  char stats_buffer[896];
+  char stats_buffer[1024];
   uint32_t stats_sequence;
   enum iterate_kit_esp_idf_itx_transport_state last_transport_state;
   enum iterate_kit_voicelab_state last_voicelab_state;
@@ -221,13 +254,38 @@ static struct {
   uint32_t mic_frames_gated;
   uint32_t speaker_frames_played;
   uint32_t speaker_overflow_drops;
+  /*
+   * A starve is only a DEFECT if the stream had more to say. The buffer
+   * legitimately empties at the end of every answer, and counting that as an
+   * underrun made the metric read one per answer no matter how healthy the
+   * pipe was — which is exactly the sort of false positive that hides a real
+   * one. A starve is promoted to an underrun only when audio resumes soon
+   * after it, meaning the answer was still in progress.
+   */
   uint32_t speaker_underruns;
+  uint32_t speaker_conceal_frames;
+  uint32_t speaker_catchup_frames;
+  uint32_t speaker_debt_paid;
+  uint32_t speaker_write_failures;
+  uint32_t speaker_margin_max_ms;
+  volatile uint64_t starve_at_ms;
+  /*
+   * Proving "no underruns" needs more than a count of holes: it needs the
+   * MARGIN distribution. Every write records how much audio was still queued
+   * behind it, so the minimum over a call says how close the pipe ever came
+   * to running dry. A run with a healthy floor is evidence; a zero count on
+   * its own only says none happened to fire this time.
+   */
+  uint32_t speaker_margin_min_ms;
+  uint32_t speaker_margin_p10_ms;
+  uint32_t speaker_writes;
   uint32_t speaker_bad_frames;
   uint32_t barge_in_flushes;
   bool talking;
   /* Release pressed, but the capture queue is not yet on the wire. */
   bool flushing_turn;
   volatile bool speaker_reprime;
+  volatile bool speaker_answer_done;
   uint32_t flush_frames_left;
   uint64_t flush_deadline_ms;
 } runtime;
@@ -312,6 +370,18 @@ static void on_speaker_pcm(
    * prefill (160 ms) as settle time, which costs nothing.
    */
   waveshare_audio_amplifier(true);
+  runtime.speaker_answer_done = false;
+  /*
+   * Audio arriving within a second of a starve means the answer was still
+   * going: the pipe genuinely ran dry mid-speech, and that is audible.
+   */
+  if (runtime.starve_at_ms != 0U) {
+    const uint64_t now = now_ms(NULL);
+    if (now - runtime.starve_at_ms < 1000U) {
+      ++runtime.speaker_underruns;
+    }
+    runtime.starve_at_ms = 0U;
+  }
   (void)xStreamBufferSend(runtime.speaker_buffer, pcm, pcm_length, 0);
 }
 
@@ -330,6 +400,14 @@ static void on_control(
     ++runtime.barge_in_flushes;
     waveshare_display_set_state(WAVESHARE_UI_LISTENING);
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
+    /*
+     * The answer is finished, so a dry buffer from here is not a deficit —
+     * it is simply the end. Telling playback that keeps concealment meaning
+     * "audio failed to arrive in time", which is the only reading worth
+     * having: without it every answer contributed a settle window's worth of
+     * concealed frames and the metric could never reach zero.
+     */
+    runtime.speaker_answer_done = true;
     waveshare_recorder_log("answer complete");
     /* The answer is complete: back to waiting for the next turn. */
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
@@ -374,66 +452,75 @@ static void recorder_task(void *argument) {
 
 static void playback_task(void *argument) {
   static int16_t chunk[FRAME_SAMPLES];
+  static const int16_t silence[FRAME_SAMPLES];
   /*
-   * Starts buffering, and returns to buffering whenever the queue runs dry.
-   * Resuming at zero margin is why a single network excursion used to turn
-   * into continuous stutter: the deficit was never recovered.
+   * The writer NEVER stops. That is the whole design.
+   *
+   * It used to stop on an empty read and wait to re-buy a cushion — and the
+   * cushion it waited for (40 ms) was SMALLER THAN THE DMA RING IT HAD JUST
+   * LET RUN DRY (90 ms). So every recovery under-filled the hardware and
+   * immediately starved again: one network hiccup produced a train of holes,
+   * which is why the rate never went to zero however large the buffers grew.
+   *
+   * Now an empty read writes 20 ms of silence instead, which keeps the DMA
+   * ring topped up and the writer's lead intact — the DAC can no longer run
+   * dry because of anything this task does. Each silence records one unit of
+   * DROP DEBT, and when audio returns that many frames are discarded before
+   * playing: concealment therefore costs no accumulated latency, which is
+   * the invariant the M5StickS3's engine is built around.
    */
   bool priming = true;
-  bool started_once = false;
-  uint32_t empty_reads = 0U;
+  uint32_t drop_debt = 0U;
   uint64_t last_write_ms = 0U;
   (void)argument;
   for (;;) {
     size_t received;
+
     if (runtime.speaker_reprime) {
       runtime.speaker_reprime = false;
+      runtime.speaker_answer_done = false;
       priming = true;
-      started_once = false; /* a real boundary: buy the full cushion */
+      drop_debt = 0U; /* a new answer owes nothing for the last one */
     }
     if (priming) {
-      const size_t target = started_once ? (size_t)SPEAKER_REPRIME_BYTES
-                                         : (size_t)SPEAKER_PREFILL_BYTES;
-      if (xStreamBufferBytesAvailable(runtime.speaker_buffer) < target) {
+      if (xStreamBufferBytesAvailable(runtime.speaker_buffer) <
+          (size_t)SPEAKER_PREFILL_BYTES) {
+        /* Idle, not starving: nothing is playing, so write nothing. */
+        if (last_write_ms != 0U &&
+            now_ms(NULL) - last_write_ms > SPEAKER_IDLE_POWERDOWN_MS) {
+          waveshare_audio_amplifier(false);
+        }
         DELAY_MS(5);
         continue;
       }
       priming = false;
-      started_once = true;
-      empty_reads = 0U;
     }
+
     received = xStreamBufferReceive(
         runtime.speaker_buffer, chunk, sizeof(chunk), pdMS_TO_TICKS(20));
+
     if (received == 0U) {
       /*
-       * One empty read is ordinary jitter, not a starve: the DMA still holds
-       * ~90 ms and the next frame is usually already in flight. Only a run of
-       * them means the pipe is genuinely dry, and only then is it worth
-       * re-buying a cushion — treating every hiccup as a starve is what
-       * turned jitter into audible stutter.
-       *
-       * The amplifier is NOT dropped here either; a momentary gap would
-       * power-cycle it and clip the audio on both sides. It goes down only
-       * after sustained silence, below.
+       * Dry mid-answer. Conceal rather than stall — and only while the
+       * stream is genuinely still speaking, so the end of an answer settles
+       * back to idle instead of concealing forever.
        */
-      if (++empty_reads < (uint32_t)SPEAKER_STARVE_READS) {
+      if (runtime.speaker_answer_done ||
+          (last_write_ms != 0U &&
+           now_ms(NULL) - last_write_ms > SPEAKER_CONCEAL_LIMIT_MS)) {
+        runtime.speaker_answer_done = false;
+        priming = true;
         continue;
       }
-      empty_reads = 0U;
-      priming = true;
-      ++runtime.speaker_underruns;
-      if (last_write_ms != 0U &&
-          now_ms(NULL) - last_write_ms > SPEAKER_IDLE_POWERDOWN_MS) {
-        waveshare_audio_amplifier(false);
+      if (waveshare_audio_write(silence, FRAME_SAMPLES)) {
+        ++runtime.speaker_conceal_frames;
+        ++drop_debt;
+        runtime.starve_at_ms = now_ms(NULL);
       }
       continue;
     }
+
     if (runtime.speaker_discard_bytes > 0U) {
-      /*
-       * Discard only what was asked for. Dropping the whole chunk threw away
-       * up to 20 ms of the NEXT answer on the last chunk of a flush — the
-       * first syllable after a barge-in.
-       */
       const uint32_t discard = runtime.speaker_discard_bytes;
       const size_t skipped = discard < received ? (size_t)discard : received;
       runtime.speaker_discard_bytes = (uint32_t)(discard - skipped);
@@ -441,16 +528,57 @@ static void playback_task(void *argument) {
       memmove(chunk, (const uint8_t *)chunk + skipped, received - skipped);
       received -= skipped;
     }
+
+    /*
+     * Flooded: skip this frame to catch up.
+     *
+     * The bridge paces off its own wall clock and the device consumes off
+     * the I2S clock; the two are independent, so a small rate difference
+     * accumulates without bound. Left alone the buffer fills and frames are
+     * discarded ON ARRIVAL — which punches a hole in the middle of speech.
+     * Dropping one 20ms frame here instead, only when there is most of a
+     * second of backlog, is the same total loss placed where it is least
+     * audible, and it bounds playout latency as a side effect.
+     *
+     * This is the symmetric counterpart to concealment: conceal when
+     * starved, skip when flooded, and count both honestly.
+     */
+    if ((uint32_t)(xStreamBufferBytesAvailable(runtime.speaker_buffer) / 32U) >
+        (uint32_t)SPEAKER_HIGH_WATER_MS) {
+      ++runtime.speaker_catchup_frames;
+      continue;
+    }
+
+    /*
+     * Pay the debt: one frame concealed, one late frame dropped. Without
+     * this, every concealment would permanently add its own duration to
+     * playout lag and the buffer would ratchet toward full.
+     */
+    if (drop_debt > 0U) {
+      --drop_debt;
+      ++runtime.speaker_debt_paid;
+      continue;
+    }
+
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
       waveshare_recorder_write_speaker(chunk, received);
+    } else {
+      ++runtime.speaker_write_failures;
     }
-    /*
-     * Stamp the echo gate from PLAYBACK, not arrival: paced delivery can
-     * finish arriving seconds before the speaker finishes, and a gate timed
-     * from arrival reopens the microphone while the board is still talking.
-     */
-    empty_reads = 0U;
+
+    {
+      const uint32_t margin_ms =
+          (uint32_t)(xStreamBufferBytesAvailable(runtime.speaker_buffer) / 32U);
+      ++runtime.speaker_writes;
+      if (runtime.speaker_writes == 1U ||
+          margin_ms < runtime.speaker_margin_min_ms) {
+        runtime.speaker_margin_min_ms = margin_ms;
+      }
+      if (margin_ms > runtime.speaker_margin_max_ms) {
+        runtime.speaker_margin_max_ms = margin_ms;
+      }
+    }
     last_write_ms = now_ms(NULL);
     runtime.speaker_last_write_ms = last_write_ms;
   }
@@ -561,6 +689,9 @@ static void append_stats(uint64_t now) {
       ",\"micGated\":%" PRIu32
       ",\"spkFrames\":%" PRIu32 ",\"spkPlayed\":%" PRIu32
       ",\"spkOverflow\":%" PRIu32 ",\"spkUnderruns\":%" PRIu32
+      ",\"spkConceal\":%" PRIu32 ",\"spkCatchup\":%" PRIu32
+      ",\"spkDebtPaid\":%" PRIu32
+      ",\"spkWriteFailures\":%" PRIu32 ",\"spkMarginMaxMs\":%" PRIu32
       ",\"spkBadFrames\":%" PRIu32 ",\"spkSeqGaps\":%" PRIu32
       ",\"spkDecodeFailures\":%" PRIu32 ",\"bargeIns\":%" PRIu32
       ",\"batches\":%" PRIu32 ",\"connGeneration\":%" PRIu32
@@ -573,7 +704,9 @@ static void append_stats(uint64_t now) {
       ",\"protoFailures\":%" PRIu32 ",\"recvFailures\":%" PRIu32
       ",\"sendFailures\":%" PRIu32 ",\"inboxDeferrals\":%" PRIu32
       ",\"lastAppStatus\":%" PRId32
-      ",\"dmaLargest\":%" PRIu32 "}}]",
+      ",\"dmaLargest\":%" PRIu32
+      ",\"spkMarginMinMs\":%" PRIu32 ",\"spkMarginP10Ms\":%" PRIu32
+      ",\"spkWrites\":%" PRIu32 "}}]",
       runtime.stats_sequence++,
       now,
       runtime.voicelab.frames_sent,
@@ -585,6 +718,11 @@ static void append_stats(uint64_t now) {
       runtime.speaker_frames_played,
       runtime.speaker_overflow_drops,
       runtime.speaker_underruns,
+      runtime.speaker_conceal_frames,
+      runtime.speaker_catchup_frames,
+      runtime.speaker_debt_paid,
+      runtime.speaker_write_failures,
+      runtime.speaker_margin_max_ms,
       runtime.speaker_bad_frames,
       runtime.voicelab.spk_seq_gaps,
       runtime.voicelab.spk_decode_failures,
@@ -607,7 +745,10 @@ static void append_stats(uint64_t now) {
       metrics.control_send_failures,
       metrics.control_inbox_deferrals,
       metrics.last_application_capnweb_status,
-      (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
+      (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
+      runtime.speaker_margin_min_ms,
+      runtime.speaker_margin_p10_ms,
+      runtime.speaker_writes);
   if (length > 0 && (size_t)length < sizeof(runtime.stats_buffer)) {
     (void)iterate_kit_voicelab_append_raw(
         &runtime.voicelab, runtime.stats_buffer, (size_t)length);
@@ -678,7 +819,7 @@ void app_main(void) {
   runtime.mic_queue =
       xQueueCreate(MIC_QUEUE_DEPTH, sizeof(struct mic_frame));
   runtime.speaker_buffer = xStreamBufferCreateWithCaps(
-      SPEAKER_BUFFER_BYTES, FRAME_BYTES, MALLOC_CAP_SPIRAM);
+      SPEAKER_BUFFER_BYTES, 1U, MALLOC_CAP_INTERNAL);
   if (runtime.mic_queue == NULL || runtime.speaker_buffer == NULL) {
     ESP_LOGE(tag, "audio buffer allocation failed");
     return;
@@ -696,9 +837,9 @@ void app_main(void) {
     return;
   }
   (void)xTaskCreatePinnedToCore(
-      capture_task, "vl-capture", 4096, NULL, 8, NULL, 1);
+      capture_task, "vl-capture", 4096, NULL, 18, NULL, 1);
   (void)xTaskCreatePinnedToCore(
-      playback_task, "vl-playback", 4096, NULL, 9, NULL, 1);
+      playback_task, "vl-playback", 4096, NULL, 19, NULL, 1);
   /*
    * Below everything. The audio tasks block inside the I2S driver almost all
    * the time, so 8/9 is as effective as 18/19 was and no longer out-ranks
@@ -943,6 +1084,8 @@ void app_main(void) {
        */
       if (runtime.voicelab.call_active && !waveshare_recorder_recording()) {
         waveshare_recorder_begin_call(CALL_ID);
+        runtime.speaker_margin_min_ms = 0U;
+        runtime.speaker_writes = 0U;
       } else if (!runtime.voicelab.call_active &&
                  waveshare_recorder_recording()) {
         waveshare_recorder_end_call("call no longer active");

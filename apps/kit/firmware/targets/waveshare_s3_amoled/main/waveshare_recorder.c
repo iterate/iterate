@@ -152,7 +152,29 @@ static void wipe_directory(void) {
   (void)closedir(directory);
 }
 
+/* Deferred to the recorder task; see the header. */
+static volatile bool begin_requested;
+static volatile bool end_requested;
+static char pending_call_id[32];
+static char pending_end_reason[64];
+
 void waveshare_recorder_begin_call(const char *call_id) {
+  if (!recorder.mounted) return;
+  snprintf(
+      pending_call_id, sizeof(pending_call_id), "%s",
+      call_id == NULL ? "?" : call_id);
+  begin_requested = true;
+}
+
+void waveshare_recorder_end_call(const char *reason) {
+  if (!recorder.mounted) return;
+  snprintf(
+      pending_end_reason, sizeof(pending_end_reason), "%s",
+      reason == NULL ? "?" : reason);
+  end_requested = true;
+}
+
+static void begin_call_now(const char *call_id) {
   if (!recorder.mounted) return;
   close_files();
   wipe_directory();
@@ -172,15 +194,20 @@ void waveshare_recorder_begin_call(const char *call_id) {
     return;
   }
   ESP_LOGI(tag, "recording begins for call %s", call_id == NULL ? "?" : call_id);
-  waveshare_recorder_log(
-      "call %s begins; 16kHz mono s16le, mic.pcm = uplink, speaker.pcm = "
-      "downlink",
+  (void)fprintf(
+      recorder.log,
+      "[       0] call %s begins; 16kHz mono s16le, mic.pcm = uplink, "
+      "speaker.pcm = downlink\n",
       call_id == NULL ? "?" : call_id);
+  (void)fflush(recorder.log);
 }
 
-void waveshare_recorder_end_call(const char *reason) {
+static void end_call_now(const char *reason) {
   if (recorder.log != NULL) {
-    waveshare_recorder_log("call ends: %s", reason == NULL ? "?" : reason);
+    /* Written directly: the queue drain has already happened this pass. */
+    (void)fprintf(recorder.log, "[%8llu] call ends: %s\n",
+                  (unsigned long long)(now_ms() - recorder.call_started_ms),
+                  reason == NULL ? "?" : reason);
   }
   close_files();
 }
@@ -208,6 +235,10 @@ void waveshare_recorder_drain(void) {
   static uint8_t scratch[4096];
   size_t taken;
   if (recorder.mic_queue == NULL) return;
+  if (begin_requested) {
+    begin_requested = false;
+    begin_call_now(pending_call_id);
+  }
   while ((taken = xStreamBufferReceive(
               recorder.mic_queue, scratch, sizeof(scratch), 0)) > 0U) {
     if (recorder.mic != NULL) {
@@ -228,6 +259,10 @@ void waveshare_recorder_drain(void) {
       recorder.log_bytes = (size_t)ftell(recorder.log);
     }
   }
+  if (end_requested) {
+    end_requested = false;
+    end_call_now(pending_end_reason);
+  }
 }
 
 /* A recording is read by name; a separator would let a caller walk the card. */
@@ -246,7 +281,6 @@ size_t waveshare_recorder_size(const char *name) {
     ESP_LOGW(tag, "size(%s): not mounted or bad name", name == NULL ? "?" : name);
     return 0U;
   }
-  sync_open_files();
   if (stat(path, &status) != 0) {
     ESP_LOGW(tag, "size(%s): stat failed on %s", name, path);
     return 0U;
@@ -275,17 +309,33 @@ size_t waveshare_recorder_read(
   return read_bytes;
 }
 
+/*
+ * Formats into the queue and returns — no filesystem call, ever, on the
+ * caller's task. This matters more than it looks: the callers are transcript
+ * and turn events on the APP task, which is the sole producer of speaker
+ * PCM. An fsync there stalls for as long as the card's wear levelling takes
+ * (FatFs bounds it at 10 s) and every one of those milliseconds is audio not
+ * being decoded. vl-recorder owns the writing.
+ */
 void waveshare_recorder_log(const char *format, ...) {
+  char line[192];
   va_list arguments;
-  if (recorder.log == NULL || format == NULL) return;
-  (void)fprintf(
-      recorder.log, "[%8llu] ",
+  int prefix;
+  int written;
+  if (recorder.log_queue == NULL || format == NULL) return;
+  prefix = snprintf(
+      line, sizeof(line), "[%8llu] ",
       (unsigned long long)(now_ms() - recorder.call_started_ms));
+  if (prefix < 0 || (size_t)prefix >= sizeof(line)) return;
   va_start(arguments, format);
-  (void)vfprintf(recorder.log, format, arguments);
+  written =
+      vsnprintf(line + prefix, sizeof(line) - (size_t)prefix, format, arguments);
   va_end(arguments);
-  (void)fputc('\n', recorder.log);
-  recorder.log_bytes = (size_t)ftell(recorder.log);
-  (void)fflush(recorder.log);
-  (void)fsync(fileno(recorder.log));
+  if (written < 0) return;
+  {
+    size_t length = (size_t)prefix + (size_t)written;
+    if (length >= sizeof(line) - 1U) length = sizeof(line) - 2U;
+    line[length++] = '\n';
+    (void)xStreamBufferSend(recorder.log_queue, line, length, 0);
+  }
 }

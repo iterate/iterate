@@ -720,6 +720,75 @@ void oneLateFrameUsesBoundedSilenceAndResumesWithoutReset() {
 }
 
 /*
+ * Userspace deliberately discards elapsed audio after an event-loop or socket
+ * egress stall so the conversation returns to realtime. The device cannot see
+ * that upstream discard: if it keeps manufacturing one recovery silence and
+ * one ordered drop debt per empty playout slot forever, newly-current frames
+ * arrive only fast enough to pay old debt and the rest of the response remains
+ * silent. This is worse than one bounded gap and was identified by composing
+ * the userspace pacer with the firmware policy rather than testing either in
+ * isolation.
+ *
+ * Permit two DMA cycles of cheap in-place recovery. The ninth missing slot
+ * must reset and rebuffer the same generation, clearing scalar debt without
+ * closing /pcm. Four later fresh frames then restart normally rather than
+ * being consumed forever as stale heads.
+ */
+void prolongedRecoveryDebtResetsAndRebuffersFreshAudio() {
+  LaneFixture fixture;
+  FakeDirectOutput output;
+  Playback playback;
+  TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
+  for (std::int16_t value = 1; value <= 4; ++value) {
+    fixture.publish(value, 0U);
+  }
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 0U).
+          playbackStarted);
+
+  output.complete(3U);
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 60U).status ==
+      ITERATE_KIT_OK);
+  for (std::uint64_t missingSlot = 2U;
+       missingSlot <= 8U;
+       ++missingSlot) {
+    output.complete(1U);
+    TEST_ASSERT(
+        playback.pump(
+            fixture.lane,
+            output,
+            40U + missingSlot * frameDurationMs).status ==
+        ITERATE_KIT_OK);
+  }
+  TEST_ASSERT(output.running);
+  TEST_ASSERT(
+      playback.metrics().underrunSilenceFramesSubmitted ==
+      8U);
+
+  output.complete(1U);
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 220U).status ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(!output.running);
+  TEST_ASSERT(output.stopCount == 1U);
+  TEST_ASSERT(output.resetCount == 2U);
+  TEST_ASSERT(
+      playback.metrics().underrunSilenceFramesSubmitted ==
+      8U);
+
+  for (std::int16_t value = 101; value <= 104; ++value) {
+    fixture.publish(value, 240U);
+  }
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 240U).
+          playbackStarted);
+  TEST_ASSERT(
+      output.currentDma ==
+      std::vector<std::int16_t>({101, 102, 103, 104}));
+}
+
+/*
  * Silence debt describes missing ordered PCM only until the ordered EOS marker
  * proves the response has no more content. Treating EOS as another late frame
  * would discard the boundary, keep manufacturing silence forever, and then
@@ -2020,6 +2089,7 @@ int main() {
   timelyFrameAfterEofUsesHardwareReserveWithoutSilence();
   underrunStopsOnceAndRebuffersFourFreshFrames();
   oneLateFrameUsesBoundedSilenceAndResumesWithoutReset();
+  prolongedRecoveryDebtResetsAndRebuffersFreshAudio();
   endOfStreamClosesUnpayableRecoveryDebt();
   endOfStreamRetiresTrailingRecoverySilenceExactly();
   aCompleteDmaCycleCannotBeRefilledAfterItsDeadline();

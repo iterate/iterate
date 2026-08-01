@@ -42,10 +42,14 @@ bool waveshare_recorder_recording(void);
 void waveshare_recorder_counters(
     size_t *mic_bytes, size_t *speaker_bytes, size_t *log_bytes);
 
-/** Wipe the directory and open a fresh set of files for this call. */
+/**
+ * Request a fresh recording. The directory wipe and the file opens happen on
+ * the recorder's own task — on the caller's task they were seconds of FatFs
+ * work landing exactly when a call goes live, i.e. as the greeting arrives.
+ */
 void waveshare_recorder_begin_call(const char *call_id);
 
-/** Close the current recording, if any. */
+/** Request the current recording be closed. */
 void waveshare_recorder_end_call(const char *reason);
 
 /** Uplink PCM, exactly as sent. */
