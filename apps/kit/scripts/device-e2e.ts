@@ -993,6 +993,16 @@ export async function runDeviceE2e(
               }
               return true;
             },
+            setConversationActive() {
+              /*
+               * This local deterministic server is created before the device
+               * connects and has no disposable upstream provider. Production
+               * uses this callback to create/retire Grok while preserving the
+               * warm device lane; here the event is still retained by
+               * recordPhysicalEvent, but no server resource needs toggling.
+               */
+              return true;
+            },
           },
           (diagnostic) => {
             runtimeProbe.fail(

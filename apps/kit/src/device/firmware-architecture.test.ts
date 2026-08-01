@@ -213,6 +213,52 @@ describe("firmware architecture boundaries", () => {
     );
   });
 
+  test("the M5StickS3 control slots neither inherit another target's width nor consume TLS SRAM", () => {
+    /*
+     * The Waveshare VoiceLab path needs an 8 KiB outbound Cap'n Web message for
+     * eight-frame microphone appends. The Stick sends microphone audio over
+     * its separate binary /pcm socket, so neither direction can produce that
+     * shape. Reusing the transport-wide maximum for both eight-slot rings added
+     * 64 KiB of permanent internal SRAM, first breaking the link and then
+     * starving the second TLS socket at runtime. Pin this target's actual 4 KiB
+     * control envelope and keep these non-realtime mailboxes in PSRAM without
+     * weakening any PCM ring or the Waveshare batch. The PCM ring deliberately
+     * remains inside Runtime/internal SRAM: only control traffic may pay PSRAM
+     * latency so audio still makes progress while flash/cache access stalls.
+     */
+    const source = readFileSync(
+      resolve(firmwareDirectory, "targets/m5sticks3/main/main.cpp"),
+      "utf8",
+    );
+    const sdkconfigDefaults = readFileSync(
+      resolve(firmwareDirectory, "targets/m5sticks3/sdkconfig.defaults"),
+      "utf8",
+    );
+    const constant = (name: string) => {
+      const match = new RegExp(`constexpr std::size_t ${name} =\\s*(\\d+)U;`, "u").exec(source);
+      if (!match) throw new Error(`Could not read M5StickS3 profile constant ${name}.`);
+      return Number(match[1]);
+    };
+
+    const inboxBytes = constant("controlInboxSlotCapacity");
+    const outboxBytes = constant("controlOutboxSlotCapacity");
+    expect(inboxBytes).toBe(4096);
+    expect(outboxBytes).toBe(4096);
+    expect(source).toMatch(
+      /EXT_RAM_BSS_ATTR static std::uint8_t\s+controlInboxStorage\[controlInboxSlotCount\]\s*\[controlInboxSlotCapacity\]/u,
+    );
+    expect(source).toMatch(
+      /EXT_RAM_BSS_ATTR static std::uint8_t\s+controlOutboxStorage\[controlOutboxSlotCount\]\s*\[controlOutboxSlotCapacity\]/u,
+    );
+    expect(sdkconfigDefaults).toContain("CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y");
+
+    const runtime = sourceSection(source, "struct Runtime {", "\n};\n\nRuntime runtime;");
+    expect(runtime).not.toContain("controlInboxStorage");
+    expect(runtime).not.toContain("controlOutboxStorage");
+    expect(runtime).toContain("pcmUplinkStorage");
+    expect(runtime).toContain("pcmDownlinkStorage");
+  });
+
   test("the ESP PCM transport is a separate socket and never owns Wi-Fi", () => {
     const pcmTransportHeader = readFileSync(
       resolve(
@@ -755,6 +801,89 @@ describe("firmware architecture boundaries", () => {
 
     expect(beginFunction).toContain("iterate_kit_cpu_usage_meter_init");
     expect(beginFunction).toContain("iterate_kit_cpu_usage_meter_sample");
+  });
+
+  test("the M5StickS3 display calibration preserves the colours seen by a person", () => {
+    const platformSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_m5unified/m5unified.cpp"),
+      "utf8",
+    );
+
+    /*
+     * TFT_RED/TFT_GREEN are 16-bit RGB565 constants. Storing either in this
+     * adapter's uint32_t retained colour and passing it to M5GFX's 32-bit
+     * overload reinterprets the bits as RGB888: the first physical deployment
+     * consequently rendered requested red as green and a guessed constant swap
+     * then rendered it blue. Keep this boundary explicitly RGB888; framebuffer
+     * capture can verify the bytes while the nearby person verifies the panel.
+     */
+    expect(platformSource).toContain("m5StickS3PhysicalRed = 0xFF0000U");
+    expect(platformSource).toContain("m5StickS3PhysicalGreen = 0x00FF00U");
+  });
+
+  test("the M5StickS3 screen explains the physical call controls and follows real lifecycle state", () => {
+    const platformSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_m5unified/m5unified.cpp"),
+      "utf8",
+    );
+    const targetSource = readFileSync(
+      resolve(firmwareDirectory, "targets/m5sticks3/main/main.cpp"),
+      "utf8",
+    );
+
+    /*
+     * A successful remote proof is not a usable product if the person holding
+     * the Stick cannot discover its two-button call model. The display must be
+     * driven from reconciled device/socket/audio state, not merely from button
+     * edges: an optimistic "connected" label during TLS failure would be more
+     * misleading than no UI. Requiring the colour capability to repaint the
+     * current view also prevents a Grok tool call from erasing the controls.
+     */
+    expect(platformSource).toContain("TOP: start call");
+    expect(platformSource).toContain("Hold FRONT to talk");
+    expect(platformSource).toContain("Release FRONT to send");
+    expect(platformSource).toContain("AI SPEAKING");
+    expect(platformSource).toContain("renderCallUi(true)");
+    /*
+     * A rendered screen is not evidence that later lifecycle transitions can
+     * repaint it. The first implementation changed callUiState_ and then
+     * invoked the ordinary renderer while its "already drawn" latch remained
+     * set, permanently leaving the person on the BOOTING screen even though
+     * the control and PCM sockets were alive. A transition must explicitly
+     * dirty the retained view before asking the allocation-free renderer to
+     * reconcile it.
+     */
+    expect(platformSource).toMatch(
+      /callUiState_ = state;[\s\S]*?callUiDrawn_ = false;[\s\S]*?renderCallUi\(false\);/,
+    );
+    expect(targetSource).toContain("selectCallUiState(runtime)");
+    expect(targetSource).toContain("runtime.pcmTransport.state");
+    expect(targetSource).toContain("iterate_kit_m5sticks3_is_capturing(&state.device)");
+    expect(targetSource).toContain("RealtimePlaybackState::playing");
+  });
+
+  test("the Stick establishes its PCM lane before a person starts a call", () => {
+    const targetSource = readFileSync(
+      resolve(firmwareDirectory, "targets/m5sticks3/main/main.cpp"),
+      "utf8",
+    );
+    const transportLifecycle = sourceSection(
+      targetSource,
+      "const iterate_kit_status transportPoll =",
+      "const auto playbackPoll =",
+    );
+
+    /*
+     * A physical trace measured only 33 ms in userspace and 1.48 s through
+     * Grok, but 5.52 s from Button B to a newly opened device socket. TLS and
+     * WebSocket setup therefore belong to device readiness, not interactive
+     * call setup. Reintroducing conversation-owned start/stop would preserve
+     * functional tests while restoring exactly the delay a person reported.
+     */
+    expect(transportLifecycle).toContain("iterate_kit_esp_idf_pcm_transport_start(");
+    expect(transportLifecycle).not.toContain("iterate_kit_esp_idf_pcm_transport_request_stop(");
+    expect(transportLifecycle).not.toContain("conversationActive &&");
+    expect(targetSource).not.toContain("pcmTransportStartAttemptedForConversation");
   });
 
   test("the M5 audio owner performs no serial or display I/O in its steady-state loop", () => {

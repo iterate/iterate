@@ -402,9 +402,26 @@ bool waveshare_display_init(void) {
   snprintf(ui.status, sizeof(ui.status), "starting");
 
   release_board_resets();
-  if (bsp_display_start() == NULL) {
-    ESP_LOGE(tag, "bsp display start failed");
-    return false;
+  /*
+   * Not bsp_display_start(): its defaults put the LVGL draw buffers in PSRAM
+   * and leave the LVGL task unpinned. PSRAM buffers make every flush do a
+   * synchronous bounce-buffer memcpy into internal DMA memory on the LVGL
+   * task, and an unpinned LVGL task migrates onto the audio core mid-flush.
+   * Both show up as audio latency, not as a display fault.
+   */
+  {
+    bsp_display_cfg_t cfg = {
+      .lvgl_port_cfg = ESP_LVGL_PORT_INIT_CONFIG(),
+      .buffer_size = BSP_LCD_H_RES * LVGL_BUFFER_HEIGHT,
+      .double_buffer = true,
+      .flags = {.buff_dma = true, .buff_spiram = false},
+    };
+    cfg.lvgl_port_cfg.task_affinity = 0; /* core 0: core 1 is the audio core */
+    cfg.lvgl_port_cfg.task_priority = 3;
+    if (bsp_display_start_with_config(&cfg) == NULL) {
+      ESP_LOGE(tag, "bsp display start failed");
+      return false;
+    }
   }
   (void)bsp_display_brightness_set(90);
 

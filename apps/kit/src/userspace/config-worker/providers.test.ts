@@ -41,6 +41,7 @@ class FakeProviderSocket extends EventTarget {
 describe("userspace PCM providers", () => {
   test("mints a short-lived Grok credential through project egress and configures native PCM16", async () => {
     const requests: Request[] = [];
+    const startupStages: string[] = [];
     let socket: FakeProviderSocket | undefined;
     const provider = await connectGrokRealtimeVoice({
       createWebSocket(url, protocols) {
@@ -52,6 +53,7 @@ describe("userspace PCM providers", () => {
         requests.push(request);
         return Response.json({ expires_at: 123_456, value: "short-lived" });
       },
+      onStage: (stage) => startupStages.push(stage.code),
       sampleRateHz: 16_000,
     });
 
@@ -65,6 +67,14 @@ describe("userspace PCM providers", () => {
       'Bearer getSecret("/secrets/kit/xai-api-key")',
     );
     expect(socket?.url).toBe("wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-2.0");
+    expect(startupStages).toEqual([
+      "credential-request-started",
+      "credential-response-received",
+      "credential-decoded",
+      "websocket-created",
+      "websocket-opened",
+      "session-update-sent",
+    ]);
     expect(socket?.sent).toContainEqual(
       JSON.stringify({
         type: "session.update",

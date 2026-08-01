@@ -35,8 +35,20 @@ export interface GrokRealtimeVoiceOptions {
   fetchCredential(request: Request): Promise<Response>;
   instructions?: string;
   model?: string;
+  onStage?: (stage: GrokRealtimeVoiceStage) => void;
   sampleRateHz: number;
   voice?: string;
+}
+
+export interface GrokRealtimeVoiceStage {
+  atMs: number;
+  code:
+    | "credential-request-started"
+    | "credential-response-received"
+    | "credential-decoded"
+    | "websocket-created"
+    | "websocket-opened"
+    | "session-update-sent";
 }
 
 /**
@@ -126,6 +138,7 @@ export async function connectGrokRealtimeVoice(
   if (!supportedPcmSampleRates.has(options.sampleRateHz)) {
     throw new Error(`Grok does not support ${options.sampleRateHz} Hz PCM audio.`);
   }
+  options.onStage?.({ atMs: Date.now(), code: "credential-request-started" });
   const credentialResponse = await options.fetchCredential(
     new Request("https://api.x.ai/v1/realtime/client_secrets", {
       /*
@@ -145,6 +158,7 @@ export async function connectGrokRealtimeVoice(
       method: "POST",
     }),
   );
+  options.onStage?.({ atMs: Date.now(), code: "credential-response-received" });
   if (!credentialResponse.ok) {
     throw new Error(
       `Grok client credential request failed with status ${credentialResponse.status}.`,
@@ -154,6 +168,7 @@ export async function connectGrokRealtimeVoice(
   if (!isGrokClientCredential(credential)) {
     throw new Error("Grok returned a malformed client credential.");
   }
+  options.onStage?.({ atMs: Date.now(), code: "credential-decoded" });
 
   const endpoint = new URL("wss://api.x.ai/v1/realtime");
   endpoint.searchParams.set("model", options.model ?? "grok-voice-think-fast-2.0");
@@ -161,9 +176,11 @@ export async function connectGrokRealtimeVoice(
     options.createWebSocket ??
     ((url: string, protocols: readonly string[]) => new WebSocket(url, [...protocols]));
   const socket = createWebSocket(endpoint.href, [`xai-client-secret.${credential.value}`]);
+  options.onStage?.({ atMs: Date.now(), code: "websocket-created" });
   socket.binaryType = "arraybuffer";
   try {
     await waitForOpen(socket, options.connectTimeoutMs ?? 10_000);
+    options.onStage?.({ atMs: Date.now(), code: "websocket-opened" });
     socket.send(
       JSON.stringify({
         type: "session.update",
@@ -212,6 +229,7 @@ export async function connectGrokRealtimeVoice(
         },
       }),
     );
+    options.onStage?.({ atMs: Date.now(), code: "session-update-sent" });
     return socket;
   } catch (error) {
     socket.close(1000, "Grok connection setup failed.");

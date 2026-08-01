@@ -379,6 +379,9 @@ WAVESHARE_AUDIO_DIGITAL_MIC:UNINITIALIZED=1
 //No help, variable specified on the command line.
 WAVESHARE_AUDIO_MIC_ONLY_DIAGNOSTIC:UNINITIALIZED=1
 
+//No help, variable specified on the command line.
+WAVESHARE_UI_ENABLED:UNINITIALIZED=0
+
 //Value Computed by CMake
 esp-idf_BINARY_DIR:STATIC=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf
 
@@ -564,7 +567,7 @@ CMAKE_MODULE_LINKER_FLAGS_RELWITHDEBINFO-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_NM
 CMAKE_NM-ADVANCED:INTERNAL=1
 //number of local generators
-CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=122
+CMAKE_NUMBER_OF_MAKEFILES:INTERNAL=132
 //ADVANCED property for variable: CMAKE_OBJCOPY
 CMAKE_OBJCOPY-ADVANCED:INTERNAL=1
 //ADVANCED property for variable: CMAKE_OBJDUMP

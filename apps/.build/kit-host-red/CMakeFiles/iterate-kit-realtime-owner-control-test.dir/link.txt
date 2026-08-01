@@ -1,0 +1,1 @@
+/usr/bin/c++ -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-realtime-owner-control-test.dir/tests/realtime_owner_control_test.cpp.o" -o iterate-kit-realtime-owner-control-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a

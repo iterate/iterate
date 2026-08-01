@@ -1,7 +1,9 @@
 import { describe, expect, test } from "vitest";
 import {
+  productionPcmConversationIsIdle,
   productionPcmGenerationProgress,
   ProductionPcmGenerationChangedError,
+  waitForProductionPcmConversationIdle,
   waitForProductionPcmMetrics,
 } from "./production-pcm-generation.ts";
 
@@ -12,6 +14,92 @@ interface TestMetrics {
 }
 
 describe("production PCM generation wait", () => {
+  test("treats a warm device lane with no provider as idle", async () => {
+    /*
+     * Button B owns the provider conversation, not the device `/pcm` lane.
+     * Waiting for `closed` here reintroduced the old cold-connect lifecycle
+     * into every latency proof: the test could only proceed after a coincident
+     * deploy or network reconnect. The idle contract therefore requires the
+     * same socket to remain open while provider and media work are quiescent.
+     */
+    const metrics = {
+      awaitingCommitAcknowledgement: false,
+      awaitingUplinkEndMarker: false,
+      closed: false,
+      conversationActive: false,
+      downlinkQueuedBytes: 0,
+      interrupted: false,
+      providerAvailable: false,
+      providerBufferedBytes: 0,
+      providerFunctionCallsPending: 0,
+      providerResponseActive: false,
+      sessionId: "warm-device-lane",
+    };
+    let reads = 0;
+
+    expect(productionPcmConversationIsIdle(metrics)).toBe(true);
+    await expect(
+      waitForProductionPcmConversationIdle({
+        description: "the provider conversation to retire",
+        minimumStableMs: 0,
+        pollIntervalMs: 0,
+        timeoutMs: 1_000,
+        worker: {
+          async pcmMetrics() {
+            reads += 1;
+            return metrics;
+          },
+        },
+      }),
+    ).resolves.toBe(metrics);
+    expect(reads).toBe(1);
+  });
+
+  test("rejects a replacement while settling the expected warm lane", async () => {
+    /*
+     * A worker install can replace the socket between the first idle poll and
+     * Button B start. Accepting the replacement makes its TLS/reconnect delay
+     * look like call setup. Once the harness names a generation, any identity
+     * change must fail immediately and retain both session ids for diagnosis.
+     */
+    const idle = {
+      awaitingCommitAcknowledgement: false,
+      awaitingUplinkEndMarker: false,
+      closed: false,
+      conversationActive: false,
+      downlinkQueuedBytes: 0,
+      interrupted: false,
+      providerAvailable: false,
+      providerBufferedBytes: 0,
+      providerFunctionCallsPending: 0,
+      providerResponseActive: false,
+    };
+    const observations = [
+      { ...idle, sessionId: "expected" },
+      { ...idle, sessionId: "replacement" },
+    ];
+    let index = 0;
+
+    const failure = await waitForProductionPcmConversationIdle({
+      description: "the warm device lane to remain stable",
+      expectedSessionId: "expected",
+      minimumStableMs: 1_000,
+      pollIntervalMs: 0,
+      timeoutMs: 1_000,
+      worker: {
+        async pcmMetrics() {
+          return observations[Math.min(index++, observations.length - 1)];
+        },
+      },
+    }).catch((error: unknown) => error);
+
+    expect(failure).toBeInstanceOf(ProductionPcmGenerationChangedError);
+    expect(failure).toMatchObject({
+      expectedSessionId: "expected",
+      observedSessionId: "replacement",
+    });
+  });
+
   test("fails at the first replacement instead of timing out against another session", async () => {
     /*
      * A healthy Stick can reconnect quickly enough that the worker's public

@@ -1,0 +1,55 @@
+{
+  "assessment": {
+    "acceptance": "failed",
+    "boundaryWordOverage": -1,
+    "normalizedMicrophoneTranscript": "",
+    "normalizedProviderTranscript": "production turn one is green",
+    "passed": false,
+    "reasons": [
+      "The independent microphone transcript did not match Grok's completed output transcript.",
+      "The response maximum RMS was only 1.7026599334903723x the ambient maximum; expected at least 2.5x.",
+      "The causal response contained 0 windows above the relative ambient threshold; expected at least 3 for provisional acceptance (the stricter follow-up gate remains 4)."
+    ],
+    "relativeActiveWindowDeficit": 4,
+    "responseToBaselineMaximumRmsRatio": 1.7026599334903723
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 685.1451098961325,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": [
+      "The causal response contained 0 active 20 ms windows; expected at least 4."
+    ]
+  },
+  "microphoneStt": {
+    "durationSeconds": 4.635,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"b3a1e497-52c4-4df6-9c66-0cc1979a4532\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.635}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":4.635}"
+    ],
+    "text": "",
+    "words": []
+  },
+  "providerOutputTranscript": "Production turn one is green.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 0,
+      "clippedSampleCount": 0,
+      "maximumRms": 466.62765089880105,
+      "p50Rms": 24.657803869498732,
+      "p95Rms": 134.40113311774323,
+      "p99Rms": 204.05275563768635,
+      "sampleCount": 222464,
+      "windowCount": 232,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 685.1451098961325
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

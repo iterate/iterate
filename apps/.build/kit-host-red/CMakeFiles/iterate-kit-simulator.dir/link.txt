@@ -1,0 +1,2 @@
+/usr/bin/ar qc libiterate-kit-simulator.a "CMakeFiles/iterate-kit-simulator.dir/simulator/src/hardware.cpp.o" "CMakeFiles/iterate-kit-simulator.dir/simulator/src/runner.cpp.o"
+/usr/bin/ranlib libiterate-kit-simulator.a

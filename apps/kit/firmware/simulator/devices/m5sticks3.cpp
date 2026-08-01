@@ -140,6 +140,17 @@ iterate_kit_status flushPlayback(void *context) {
   return ITERATE_KIT_OK;
 }
 
+iterate_kit_status preparePlayback(void *context) {
+  /*
+   * Host simulation has no shared I2S peripheral to reacquire. Retaining the
+   * explicit success edge is still important: conversation-start exercises
+   * the same portable lifecycle contract as hardware, while ownership detail
+   * remains the platform adapter's responsibility.
+   */
+  (void)context;
+  return ITERATE_KIT_OK;
+}
+
 iterate_kit_status sendEvent(
     void *context, iterate_kit_audio_event event) {
   auto &simulation = *static_cast<Simulation *>(context);
@@ -439,6 +450,7 @@ capnweb_status initialize(
         stopCapture,
         stopPlayback,
         flushPlayback,
+        preparePlayback,
       },
       {
         &simulation,

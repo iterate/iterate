@@ -74,9 +74,10 @@ describe("userspace PCM session bridge", () => {
       onProviderEvent: options.onProviderEvent,
       onProviderFunctionCall: options.onProviderFunctionCall,
       onProviderUnavailable: options.onProviderUnavailable,
-      provider: provider.server,
       sessionId: "prj_test",
     });
+    bridge.setConversationActive(true);
+    expect(bridge.attachProvider(provider.server)).toBe(true);
     return { bridge, device, diagnostics, provider };
   }
 
@@ -157,7 +158,7 @@ describe("userspace PCM session bridge", () => {
   });
 
   test("relays each microphone frame immediately and preserves rechunked provider audio", async () => {
-    const { device, provider } = createBridge();
+    const { bridge, device, provider } = createBridge();
     const uplink = binaryMessages(provider.client);
     const downlink = binaryMessages(device.client);
     const microphoneFrame = Uint8Array.from(
@@ -168,6 +169,9 @@ describe("userspace PCM session bridge", () => {
     device.client.send(microphoneFrame);
     await vi.waitFor(() => expect(uplink).toHaveLength(1));
     expect(uplink[0]).toEqual(microphoneFrame);
+    /* A response is playable only after the ordered media turn has ended. */
+    device.client.send(new Uint8Array(0));
+    await vi.waitFor(() => expect(bridge.metrics().uplinkEndMarkers).toBe(1));
 
     provider.client.send(microphoneFrame.slice(0, 117));
     provider.client.send(microphoneFrame.slice(117));
@@ -215,6 +219,51 @@ describe("userspace PCM session bridge", () => {
     );
   });
 
+  test("does not mistake a cancelled provider response for completed speech", async () => {
+    /*
+     * Production Grok emitted a cancelled response.done immediately before
+     * response.created for the actual answer. Counting that terminal event as
+     * completed woke the physical harness, which hung up while the real reply
+     * was still reaching the Stick. A cancellation with no PCM is neither an
+     * audible answer nor a device response boundary: it must remain visible in
+     * metrics without emitting an empty PCM marker or satisfying the completion
+     * predicate. The following genuinely completed response must still play
+     * normally, proving that classification does not poison the next response.
+     */
+    const { bridge, device, provider } = createBridge();
+    const downlink = binaryMessages(device.client);
+    provider.client.send(
+      JSON.stringify({ response: { id: "cancelled", status: "cancelled" }, type: "response.done" }),
+    );
+
+    await vi.waitFor(() =>
+      expect(bridge.metrics()).toMatchObject({
+        providerResponsesCancelled: 1,
+        providerResponsesCompleted: 0,
+      }),
+    );
+    expect(downlink).toEqual([]);
+
+    provider.client.send(
+      JSON.stringify({
+        response: { id: "spoken", status: "in_progress" },
+        type: "response.created",
+      }),
+    );
+    provider.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(23));
+    provider.client.send(
+      JSON.stringify({ response: { id: "spoken", status: "completed" }, type: "response.done" }),
+    );
+
+    await vi.waitFor(() => expect(downlink).toHaveLength(2));
+    expect(downlink[0]).toEqual(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(23));
+    expect(downlink[1]).toHaveLength(0);
+    expect(bridge.metrics()).toMatchObject({
+      providerResponsesCancelled: 1,
+      providerResponsesCompleted: 1,
+    });
+  });
+
   test("pads only the final provider fragment and emits the zero-length response boundary", async () => {
     const { device, provider } = createBridge();
     const downlink = binaryMessages(device.client);
@@ -228,13 +277,19 @@ describe("userspace PCM session bridge", () => {
   });
 
   test("interruption drops stale partial playback before cancelling the provider", async () => {
-    const { bridge, device, diagnostics, provider } = createBridge();
+    const { bridge, device, provider } = createBridge();
     const controls = textMessages(provider.client);
     const downlink = binaryMessages(device.client);
     provider.client.send(new Uint8Array(300).fill(7));
     await vi.waitFor(() => expect(bridge.metrics()).toMatchObject({ downlinkPartialBytes: 300 }));
 
-    expect(bridge.inputStarted()).toBe(true);
+    /*
+     * The PCM lane, not the independently scheduled Cap'n Web callback, owns
+     * the instant at which speech actually begins. Exercising a real media
+     * frame here prevents this test from blessing the production race where a
+     * late button callback used to leave audible provider bytes undisturbed.
+     */
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(11));
     await vi.waitFor(() => expect(controls).toContain('{"type":"response.cancel"}'));
     expect(bridge.metrics()).toMatchObject({
       downlinkPartialBytes: 0,
@@ -259,12 +314,13 @@ describe("userspace PCM session bridge", () => {
     const { bridge, device, provider } = createBridge();
     const controls = textMessages(provider.client);
 
-    bridge.inputStarted();
+    expect(bridge.inputStarted()).toBe(true);
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(19));
+    await vi.waitFor(() => expect(bridge.metrics().uplinkFrames).toBe(1));
     expect(bridge.inputStopped()).toBe(true);
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(controls).toEqual([]);
 
-    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(19));
     device.client.send(new Uint8Array(0));
 
     await vi.waitFor(() => expect(controls).toEqual(['{"type":"input_audio_buffer.commit"}']));
@@ -282,8 +338,65 @@ describe("userspace PCM session bridge", () => {
       providerControlMessagesSent: 2,
       providerResponseCreateMessagesSent: 1,
       providerSendFailures: 0,
+      uplinkControlStarts: 1,
+      uplinkControlStops: 1,
       uplinkEndMarkers: 1,
-      uplinkFramesAfterEndMarkerDropped: 0,
+      uplinkTurns: 1,
+    });
+  });
+
+  test("does not drop the first PCM frame when the next PTT control edge arrives later", async () => {
+    /*
+     * This is the production two-turn failure from 2026-08-01 reduced to its
+     * actual ordering. The PCM and Cap'n Web sockets are independent: after
+     * turn one's ordered marker, turn two's first 20 ms media frame may reach
+     * the worker before the `pushToTalk.started` callback. FIFO proves that the
+     * frame cannot belong to turn one, so treating it as a late tail loses live
+     * speech and makes transport conservation fail despite a healthy network.
+     *
+     * The late control edge must also be idempotent. Resetting the count when
+     * it catches up would make a one-frame press look empty and ask neither the
+     * provider nor diagnostics to account for the speech already forwarded.
+     */
+    const { bridge, device, provider } = createBridge();
+    const controls = textMessages(provider.client);
+    const uplink = binaryMessages(provider.client);
+    const first = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(31);
+    const second = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(47);
+
+    expect(bridge.inputStarted()).toBe(true);
+    device.client.send(first);
+    device.client.send(new Uint8Array(0));
+    await vi.waitFor(() => expect(controls).toEqual(['{"type":"input_audio_buffer.commit"}']));
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.committed" }));
+    await vi.waitFor(() => expect(controls).toContain('{"type":"response.create"}'));
+    provider.client.send(JSON.stringify({ type: "response.done" }));
+
+    /*
+     * This is the harder legal ordering, not merely the initially observed
+     * START2 race: END1 and FRAME2 can both beat STOP1 on the media socket.
+     * Monotonic control/marker accounting must attribute the delayed STOP1 to
+     * marker one rather than arming a timeout against live turn two.
+     */
+    device.client.send(second);
+    await vi.waitFor(() => expect(uplink).toEqual([first, second]));
+    expect(bridge.inputStopped()).toBe(true);
+    expect(bridge.inputStarted()).toBe(true);
+    expect(bridge.inputStopped()).toBe(true);
+    device.client.send(new Uint8Array(0));
+
+    await vi.waitFor(() =>
+      expect(
+        controls.filter((message) => message === '{"type":"input_audio_buffer.commit"}'),
+      ).toHaveLength(2),
+    );
+    expect(bridge.metrics()).toMatchObject({
+      uplinkDroppedBytes: 0,
+      uplinkControlStarts: 2,
+      uplinkControlStops: 2,
+      uplinkEndMarkers: 2,
+      uplinkFrames: 2,
+      uplinkTurns: 2,
     });
   });
 
@@ -307,14 +420,14 @@ describe("userspace PCM session bridge", () => {
 
     expect(bridge.inputStarted()).toBe(true);
     device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(37));
-    device.client.send(new Uint8Array(0));
-    await vi.waitFor(() => expect(bridge.metrics().uplinkEndMarkers).toBe(1));
+    await vi.waitFor(() => expect(bridge.metrics().uplinkFrames).toBe(1));
     vi.spyOn(provider.server, "send").mockImplementationOnce(() => {
       throw new Error("provider transport rejected commit");
     });
+    device.client.send(new Uint8Array(0));
 
-    expect(bridge.inputStopped()).toBe(false);
     await vi.waitFor(() => expect(providerUnavailable).toHaveBeenCalledOnce());
+    expect(bridge.inputStopped()).toBe(true);
 
     expect(deviceClose).not.toHaveBeenCalled();
     expect(bridge.metrics()).toMatchObject({
@@ -359,33 +472,30 @@ describe("userspace PCM session bridge", () => {
     );
   });
 
-  test("an end marker that wins the socket race still fences late turn audio", async () => {
+  test("the ordered PCM lane can complete a turn without either Cap'n Web edge", async () => {
     /*
-     * The media marker may arrive before Cap'n Web reports the release. It is
-     * still the same boundary, not an invalid empty PCM packet. Any non-empty
-     * device message after it and before the next start contradicts FIFO turn
-     * ownership, so it is discarded visibly rather than entering Grok's next
-     * manual input buffer.
+     * Button events are useful provenance, but requiring either of them for
+     * media correctness recreates cross-WebSocket ordering assumptions. A
+     * non-empty frame opens a turn and the zero-length marker closes it; this
+     * test is the smallest statement of that production contract.
      */
     const { bridge, device, provider } = createBridge();
     const controls = textMessages(provider.client);
     const uplink = binaryMessages(provider.client);
+    const frame = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(9);
 
-    bridge.inputStarted();
+    device.client.send(frame);
     device.client.send(new Uint8Array(0));
-    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(9));
-    await vi.waitFor(() =>
-      expect(bridge.metrics()).toMatchObject({
-        uplinkEndMarkers: 1,
-        uplinkFramesAfterEndMarkerDropped: 1,
-      }),
-    );
-    expect(uplink).toEqual([]);
-
-    expect(bridge.inputStopped()).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 0));
-    expect(controls).toEqual([]);
-    expect(bridge.metrics()).toMatchObject({ emptyUplinkTurns: 1 });
+    await vi.waitFor(() => expect(controls).toEqual(['{"type":"input_audio_buffer.commit"}']));
+    expect(uplink).toEqual([frame]);
+    expect(bridge.metrics()).toMatchObject({
+      emptyUplinkTurns: 0,
+      uplinkControlStarts: 0,
+      uplinkControlStops: 0,
+      uplinkEndMarkers: 1,
+      uplinkFrames: 1,
+      uplinkTurns: 1,
+    });
   });
 
   test("a missing end marker terminates the ambiguous turn after a bounded wait", async () => {
@@ -396,9 +506,11 @@ describe("userspace PCM session bridge", () => {
      * bounded generation failure whose counter survives in the closed report.
      */
     vi.useFakeTimers();
-    const { bridge, diagnostics } = createBridge();
+    const { bridge, device, diagnostics } = createBridge();
 
     expect(bridge.inputStarted()).toBe(true);
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(23));
+    await vi.advanceTimersByTimeAsync(0);
     expect(bridge.inputStopped()).toBe(true);
     await vi.advanceTimersByTimeAsync(1_499);
     expect(bridge.metrics()).toMatchObject({
@@ -601,6 +713,8 @@ describe("userspace PCM session bridge", () => {
     device.client.send(new Uint8Array(0));
     await vi.waitFor(() => expect(bridge.metrics()).toMatchObject({ uplinkEndMarkers: 1 }));
     expect(bridge.inputStopped()).toBe(true);
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(41));
+    await vi.waitFor(() => expect(bridge.metrics().uplinkTurns).toBe(2));
     expect(bridge.inputStarted()).toBe(true);
     provider.client.send(JSON.stringify({ type: "input_audio_buffer.committed" }));
 
@@ -618,16 +732,18 @@ describe("userspace PCM session bridge", () => {
      * enter interrupted/capture state. A later press while provider audio is
      * active remains the actual interruption case covered above.
      */
-    const { bridge, provider } = createBridge();
+    const { bridge, device, provider } = createBridge();
     const controls = textMessages(provider.client);
 
     expect(bridge.inputStarted()).toBe(true);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(13));
+    await vi.waitFor(() => expect(bridge.metrics().uplinkFrames).toBe(1));
 
     expect(controls).toEqual([]);
     expect(bridge.metrics()).toMatchObject({
       closed: false,
       interrupted: true,
+      uplinkTurns: 1,
     });
   });
 
@@ -763,6 +879,157 @@ describe("userspace PCM session bridge", () => {
       providerAvailable: true,
       providerConnections: 2,
       uplinkFrames: 1,
+    });
+  });
+
+  test("accepts the realtime device lane before the voice provider is available", async () => {
+    /*
+     * A call used to hold the Stick's WebSocket upgrade behind xAI credential
+     * minting and a second TLS/WebSocket handshake. Production measured that
+     * serial dependency as 4.70 seconds from call intent to `/pcm` readiness.
+     * The device lane is independently useful and already has explicit fresh
+     * audio loss semantics, so it must be constructible before its disposable
+     * upstream generation. This is the contract that lets the worker answer
+     * the device upgrade immediately and finish provider setup concurrently.
+     */
+    const device = socketPair();
+    sockets.push(device.client, device.server);
+    const bridge = new PcmSessionBridge({
+      device: device.server,
+      maximumSocketBufferedBytes: ITERATE_KIT_PCM_FRAME_BYTES * 8,
+      sessionId: "prj_test",
+    });
+
+    expect(bridge.metrics()).toMatchObject({
+      closed: false,
+      providerAvailable: false,
+      providerConnections: 0,
+    });
+
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(17));
+    await vi.waitFor(() =>
+      expect(bridge.metrics()).toMatchObject({
+        uplinkDroppedBytes: ITERATE_KIT_PCM_FRAME_BYTES,
+        uplinkUnavailableFrames: 1,
+      }),
+    );
+
+    const provider = socketPair();
+    sockets.push(provider.client, provider.server);
+    const freshUplink = binaryMessages(provider.client);
+    bridge.setConversationActive(true);
+    expect(bridge.attachProvider(provider.server)).toBe(true);
+    const freshFrame = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(29);
+    device.client.send(freshFrame);
+    await vi.waitFor(() => expect(freshUplink).toEqual([freshFrame]));
+  });
+
+  test("asks Grok for one exact greeting only after the configured session is ready", async () => {
+    /*
+     * A WebSocket OPEN is not a configured Grok session. Asking for speech
+     * before session.updated races the native PCM format, voice, manual turn
+     * detection, and tool configuration. Conversely, waiting for the user's
+     * first PTT release makes a connected call sound dead. The provider's
+     * acknowledgement is therefore the one safe, deterministic greeting edge.
+     * A repeated acknowledgement or replacement generation must not greet
+     * again inside the same physical call.
+     */
+    const device = socketPair();
+    const provider = socketPair();
+    sockets.push(device.client, device.server, provider.client, provider.server);
+    const controls = textMessages(provider.client);
+    const bridge = new PcmSessionBridge({
+      device: device.server,
+      initialGreeting: "How can I help you?",
+      maximumSocketBufferedBytes: ITERATE_KIT_PCM_FRAME_BYTES * 8,
+      sessionId: "prj_test",
+    });
+    bridge.setConversationActive(true);
+    expect(bridge.attachProvider(provider.server)).toBe(true);
+
+    provider.client.send(JSON.stringify({ type: "session.created" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(controls).toEqual([]);
+
+    provider.client.send(JSON.stringify({ type: "session.updated" }));
+    await vi.waitFor(() => expect(controls).toHaveLength(2));
+    expect(controls.map((control) => JSON.parse(control) as unknown)).toEqual([
+      {
+        item: {
+          content: [
+            {
+              text: 'Begin the call by saying exactly: "How can I help you?" Do not add any other words.',
+              type: "input_text",
+            },
+          ],
+          role: "user",
+          type: "message",
+        },
+        type: "conversation.item.create",
+      },
+      { type: "response.create" },
+    ]);
+    expect(bridge.metrics()).toMatchObject({
+      initialGreetingRequests: 1,
+      providerSessionReadyAtMs: expect.any(Number),
+    });
+
+    provider.client.send(JSON.stringify({ type: "session.updated" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(controls).toHaveLength(2);
+    expect(bridge.metrics().initialGreetingRequests).toBe(1);
+  });
+
+  test("keeps the device lane warm while call lifetime creates and retires providers", async () => {
+    /*
+     * The physical latency incident came from giving Button B ownership of
+     * DNS/TLS/WebSocket setup on the Stick. The correct lifetime split is a
+     * boot-warm device lane plus one disposable provider per explicit call.
+     * Hang-up must retire Grok and discard its state without closing `/pcm`;
+     * the next call can then attach immediately without any device handshake.
+     */
+    const device = socketPair();
+    const firstProvider = socketPair();
+    sockets.push(device.client, device.server, firstProvider.client, firstProvider.server);
+    const deviceClosed = vi.fn();
+    const providerClosed = vi.fn();
+    device.client.addEventListener("close", deviceClosed);
+    firstProvider.client.addEventListener("close", providerClosed);
+    const bridge = new PcmSessionBridge({
+      device: device.server,
+      initialGreeting: "How can I help you?",
+      maximumSocketBufferedBytes: ITERATE_KIT_PCM_FRAME_BYTES * 8,
+      sessionId: "prj_test",
+    });
+
+    expect(bridge.metrics()).toMatchObject({
+      conversationActive: false,
+      conversationStarts: 0,
+      providerAvailable: false,
+    });
+    expect(bridge.attachProvider(firstProvider.server)).toBe(false);
+    await vi.waitFor(() => expect(providerClosed).toHaveBeenCalledOnce());
+
+    const activeProvider = socketPair();
+    sockets.push(activeProvider.client, activeProvider.server);
+    const activeProviderClosed = vi.fn();
+    activeProvider.client.addEventListener("close", activeProviderClosed);
+    expect(bridge.setConversationActive(true)).toBe(true);
+    expect(bridge.attachProvider(activeProvider.server)).toBe(true);
+    expect(bridge.metrics()).toMatchObject({
+      conversationActive: true,
+      conversationStarts: 1,
+      providerAvailable: true,
+    });
+
+    expect(bridge.setConversationActive(false)).toBe(true);
+    await vi.waitFor(() => expect(activeProviderClosed).toHaveBeenCalledOnce());
+    expect(deviceClosed).not.toHaveBeenCalled();
+    expect(bridge.metrics()).toMatchObject({
+      closed: false,
+      conversationActive: false,
+      conversationEnds: 1,
+      providerAvailable: false,
     });
   });
 

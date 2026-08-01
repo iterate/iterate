@@ -10,7 +10,155 @@ interruption runs remain the stronger endurance evidence. Physical-button
 provenance and the deferred deployed-worker kill/remount lifecycle are not
 silently relabelled as complete.
 
+## Call-start latency diagnosis and fix (2026-08-01 09:21 UTC)
+
+The reported five-to-eight-second `Call connecting` interval was real, but it
+was not one indivisible Grok delay. Two independent lifecycle mistakes were
+stacked together:
+
+1. Button B used to dispose the physical device's `/pcm` WebSocket along with
+   the Grok conversation. The next call therefore paid ESP DNS, TLS, WebSocket,
+   userspace routing, and provider setup serially. A physical trace measured
+   5.520 seconds before first downlink PCM, including roughly 2.55 seconds in
+   the device's new TLS connection. The device lane is now boot-warm and
+   survives call hang-up; Button B creates and retires only the provider socket.
+2. Hang-up correctly flushed old speech by suspending the Stick's half-duplex
+   speaker, but conversation start did not reacquire it. Grok's opening greeting
+   reached the device and was then discarded until the first PTT release happened
+   to resume output. The diagnostic run retained at
+   `apps/kit/evidence/m5sticks3-call-startup-warm-socket-fixed3/2026-08-01T09-10-31-942Z/`
+   accepted all 56 greeting frames while submitting and completing zero and
+   explicitly flushing all 56. This made a correctly connected call sound dead.
+
+The portable audio contract now has an explicit `prepare_playback` lifecycle
+operation. The M5StickS3 conversation-start event does not become active until
+the platform audio owner has reacquired speaker hardware. This is deliberately
+not hidden in the first PCM frame, a sleep, or `flush_playback`: start failure is
+causal and observable, and a PTT interruption does not briefly resume the
+speaker just before claiming the shared I2S hardware for the microphone. Native
+tests first reproduced the missing operation and now pin the hang-up → prepare
+ordering and the physical/remote conversation event path.
+
+After rebuilding and freshly flashing the 1,155,952-byte image (SHA-256
+`646e3e396f97f0318e33d8ef205263d7bb2f4aa3b14ad32dd2bb01b70cca32f3`),
+the network-valid production run at
+`apps/kit/evidence/m5sticks3-call-startup-speaker-ready-valid/2026-08-01T09-21-34-825Z/`
+kept the same `/pcm` session before start and after hang-up. Its measured
+conversation-start-to-first-device-PCM latency was **1,603 ms**, decomposed as:
+
+- short-lived xAI credential mint: 264 ms;
+- xAI WebSocket open: 433 ms;
+- session-update acknowledgement: 210 ms;
+- Grok generation to its first PCM: 564 ms;
+- userspace source-readiness/admission to first device send: 132 ms.
+
+That is the remaining provider-shaped path, not the old device reconnection
+path. The greeting contributed 60 accepted, submitted, and completed frames
+before PTT, with zero flush, underrun, drop, reset, or playback failure. The
+complete run ended at 176 accepted/submitted/completed downlink frames and 495
+uplink frames, with all queues drained. Its maximum observed device
+receive-to-DMA-start delay was 168 ms; because server and ESP clocks are not
+synchronized, this is retained separately rather than presented as a fabricated
+sample-exact acoustic-start timestamp.
+
+The evidence classification is `valid`: 16/16 Stick, router, and worker probes
+replied; maximum RTTs were 17.527, 6.156, and 34.5 ms; all 17 device samples
+remained linked at -65 through -63 dBm; DNS took 1.044 ms and TLS connect took
+40.286 ms. The manifest and network SHA-256 values are respectively
+`66918659f6b9ca4d52c7ec345edb8d3fc02b021daefad0068d05fe0d23983b22`
+and `f767110daf0d9b4dbd39b647914b921860c727ec692cb60c3630ed3a89de3139`.
+An immediately preceding digitally clean run remains classified
+`network-invalid` because one worker probe reached 158.994 ms; it was not used
+as the clean acceptance run.
+
+The next honest latency work is the remaining 1.603-second upstream budget,
+not another device reconnect: credential prefetch/caching can remove part of
+the 264 ms only with an explicit expiry policy, and replacing Grok's generated
+opening sentence with cached audio could remove generation time but would
+change the product contract. Neither shortcut has been silently introduced.
+
 ## Morning-ready deployed conversation checkpoint (2026-08-01)
+
+### Current-source three-turn acceptance at 06:37 UTC
+
+The latest production userspace object is
+`7a2d07d020a6238965d6b9c854be9512253df366`. A fresh unattended run through
+that exact object passed three consecutive real-Grok turns on one physical
+M5StickS3 `/pcm` connection and is retained at
+`apps/kit/evidence/m5sticks3-morning-conversation-clean-network/2026-08-01T06-37-04-147Z/iterate-kit-acoustic-7gbR33/`.
+Its manifest SHA-256 is
+`14d89614a1c56875dd391b3d44e957df61047e4c817bfdc25da156cdf4fdb128`;
+the aligned network artifact is
+`fdd2be8bff8aa5132728a7a948146efb68390b0bf3a1641eeecc9bea9217ba5b`.
+
+The Stick captured and the worker received exactly 1,511 microphone frames.
+The worker emitted 288 speaker frames and the device accepted, submitted, and
+completed exactly 288. All uplink/downlink drops, audio failures, playback
+flushes, protocol failures, socket disconnects, Wi-Fi disconnects, and restart
+incidents remained zero; every queue drained between turns. The nearby Mac
+independently transcribed the first physical reply exactly as `Production turn
+one is green.` The response was coherent and unclipped, with an 18.119x
+response-to-ambient maximum-RMS ratio. Its provisional acoustic policy remains
+the previously documented independent-transcript/relative-energy exception;
+no digital, reset, or network gate was relaxed.
+
+The correlated interval is `valid`: all 44/44 Stick, 44/44 router, and 44/44
+worker probes replied, with maximum RTTs 41.928, 8.764, and 71.617 ms. Forty-five
+device samples remained linked at -60 to -57 dBm. DNS completed in 2.174 ms,
+TLS connect in 44.512 ms, and the control and PCM sockets recorded no lifecycle
+fault. A preceding otherwise exact three-turn run is retained separately as
+`network-invalid` because one worker probe measured 111.813 ms; it was not used
+to waive the network gate.
+
+This run also physically exercised the production provider lifecycle bug found
+in the preceding attempt. Grok emitted one explicit cancelled `response.done`
+before three genuine completed replies. Userspace now reports one cancellation
+and three completions; the cancellation neither satisfies the harness's audible
+response fence nor sends a fake PCM end marker. The 105 exact raw provider
+events were all appended to `/devices/m5sticks3` with no loss, append failure,
+provider error, or unclassified response status. Their standalone JSONL SHA-256
+is `ed3665072f46d2f9dd7887c3cd5f1062d849b71167567f46d245e7e798213f80`.
+
+The run directly acknowledged the red precondition and retained Grok's bounded
+`changeColour({colour: "green"})` call plus `{colour: "green", ok: true}` tool
+result through `env.ITX`. The person beside the physical Stick subsequently
+reported that its visible red and green backgrounds were reversed. That
+physical observation is the acceptance oracle: the M5StickS3 adapter now maps
+the shared semantic enum through board-local `m5StickS3PhysicalRed` and
+`m5StickS3PhysicalGreen` aliases, leaving the shared capability and correctly
+wired StackChan/simulator paths unchanged.
+
+The corrected 1,153,120-byte image (SHA-256
+`c1e940690326c9442f8b24970ea8e706cc670102ef3004d9714d46a63393ff87`)
+was then freshly flashed to the same MAC and rebooted. A new production run
+first invoked semantic red directly and then made Grok invoke semantic green
+through `env.ITX`; both calls were acknowledged, the spoken reply played, and
+the exact 478 uplink and 112 accepted/submitted/completed downlink frames were
+conserved. Every drop, underrun, flush, restart, protocol failure, socket
+failure, and Wi-Fi disconnect delta remained zero. The 40 raw provider events
+were contiguous from sequence one, and the green tool result was retained with
+SHA-256
+`891930ebdd67b860f734b2d32304d10653e2f6600a8593bfc0b50a7bc3f8535f`.
+
+That calibrated-source run is retained at
+`apps/kit/evidence/m5sticks3-colour-calibration/2026-08-01T06-55-51-322Z/`;
+its manifest SHA-256 is
+`c996277bad6c37d885c650221625ac6fdd6e1edff3d127fba930e3fd6f4bad67`.
+Its network classification is `valid`: all 16 device, 16 router, and 16 worker
+probes replied with maximum RTTs 78.083, 7.128, and 58.352 ms, while the 17
+device samples stayed linked at -60 to -58 dBm. The independent Mac recording
+transcribed `Production turn one is green.` exactly and clipped no samples.
+This fresh proof validates the corrected firmware's complete command and audio
+path; because the harness has no camera aimed at the panel, it does not invent
+an optical observation beyond the person's report that established the
+calibration.
+
+That historical proof's cleanup invoked conversation hang-up and observed the
+then-current `/pcm` generation close. The corrected architecture keeps the
+device lane warm and retires only the provider generation. The Stick remains
+provisioned and idle: press top Button B once to start a conversation, hold
+front Button A while speaking, release it for the reply, and press Button B
+again to hang up.
 
 The complete checkpoint, including source, physical evidence, and concurrent
 hardware-port work, is preserved on `origin/c-capabilities` at

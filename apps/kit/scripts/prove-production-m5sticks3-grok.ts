@@ -12,6 +12,7 @@ import {
 } from "../src/device/causal-speech-energy-analysis.ts";
 import {
   devicePlaybackCompleted,
+  devicePlaybackResponseCompleted,
   deviceUplinkStreaming,
   parseKitMetricsCallback,
   type DeviceRuntimeMetrics,
@@ -47,9 +48,15 @@ import {
 } from "../src/device/physical-network-reachability.ts";
 import { inspectRetainedPcm16Artifact } from "../src/device/retained-pcm16-artifact.ts";
 import {
+  productionPcmConversationIsIdle,
   productionPcmGenerationProgress,
+  waitForProductionPcmConversationIdle,
   waitForProductionPcmMetrics,
 } from "../src/device/production-pcm-generation.ts";
+import {
+  productionGrokTurnRequiresDeviceTool,
+  requiredDeviceToolCallsForVoiceProof,
+} from "../src/device/production-grok-turn-policy.ts";
 import {
   transcribePcm16WithXaiStreamingStt,
   type XaiStreamingSttResult,
@@ -86,6 +93,13 @@ interface ProductionPcmMetrics extends PcmSessionMetrics {
   previousSession?: ProductionPcmMetrics | null;
   providerEvents: ProviderEventStreamMetrics;
   sessionId: string;
+  startup?: {
+    deviceUpgradeLatencyMs: number | null;
+    firstDevicePcmLatencyMs: number | null;
+    firstProviderPcmLatencyMs: number | null;
+    providerAttachedLatencyMs: number | null;
+    providerSessionReadyLatencyMs: number | null;
+  };
 }
 
 interface KitVoiceProofWorker {
@@ -163,7 +177,7 @@ export async function proveProductionM5StickS3Grok(
     eventTypes: [KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE],
     limit: 1,
   });
-  const baselineDiagnostics = await readDiagnostics();
+  let baselineDiagnostics = await readDiagnostics();
   const playbackSamples: KitPlaybackMetrics[] = [];
   let playbackCallbackError: Error | undefined;
   await invoke<void>(
@@ -190,7 +204,7 @@ export async function proveProductionM5StickS3Grok(
    * The callback is latest-state only; this bounded host array never adds a
    * queue or history allocation to the device.
    */
-  const baselinePlayback = await waitForStablePlayback(
+  let baselinePlayback = await waitForStablePlayback(
     playbackSamples,
     () => playbackCallbackError,
   );
@@ -207,8 +221,10 @@ export async function proveProductionM5StickS3Grok(
   let firstHeldWorker: ProductionPcmMetrics | undefined;
   let continuingHeldWorker: ProductionPcmMetrics | undefined;
   let baselineWorker: ProductionPcmMetrics | undefined;
+  let preflightWorker: ProductionPcmMetrics | undefined;
+  let preflightDevice: DeviceRuntimeMetrics | undefined;
   let baselineDevice: DeviceRuntimeMetrics | undefined;
-  let closedWorker: ProductionPcmMetrics | undefined;
+  let idleAfterHangUpWorker: ProductionPcmMetrics | undefined;
   let firstHeldDevice: DeviceRuntimeMetrics | undefined;
   let continuingHeldDevice: DeviceRuntimeMetrics | undefined;
   let terminalWorker: ProductionPcmMetrics | undefined;
@@ -243,16 +259,46 @@ export async function proveProductionM5StickS3Grok(
 
     if (options.pttAuthority === "remote") {
       /*
-       * Establish a known idle generation first. `conversation.hangUp` is an
-       * idempotent event admission, so a prior failed proof cannot cause this
-       * run to reuse an already-open provider or inherit its counters.
+       * Establish one stable, warm device lane first. `conversation.hangUp`
+       * retires only the disposable Grok provider; waiting for `/pcm` to close
+       * was the obsolete cold-connect lifecycle and allowed a coincident
+       * worker install to add roughly four seconds of TLS/WebSocket work to
+       * the following call. The diagnostics baselines are deliberately
+       * refreshed after this transition so preflight cleanup cannot be
+       * misclassified as media loss during the measured conversation.
        */
       const preflightEnded =
         (await invoke<boolean>([...devicePath, "conversation", "hangUp"])) === true;
       if (!preflightEnded) {
         throw new Error("The device rejected the preflight conversation hang-up transition.");
       }
-      await waitForWorkerIdle(worker, 15_000);
+      preflightWorker = await waitForProductionPcmConversationIdle({
+        description: "one stable warm device PCM lane before call start",
+        minimumStableMs: 1_000,
+        timeoutMs: 15_000,
+        worker,
+      });
+      preflightWorker = await waitForWorkerMetrics(
+        worker,
+        (metrics) => {
+          const device = latestWorkerDeviceMetrics(metrics);
+          return (
+            productionPcmConversationIsIdle(metrics) &&
+            device !== undefined &&
+            queuesAreEmpty(device)
+          );
+        },
+        "a current drained device sample on the stable warm PCM lane",
+        10_000,
+        preflightWorker.sessionId,
+      );
+      preflightDevice = requireLatestWorkerDeviceMetrics(preflightWorker);
+      baselineDiagnostics = await readDiagnostics();
+      baselinePlayback = await waitForStablePlayback(
+        playbackSamples,
+        () => playbackCallbackError,
+      );
+      console.log(`pcm_lane=warm_idle session_id=${preflightWorker.sessionId}`);
       remoteConversationStarted =
         (await invoke<boolean>([...devicePath, "conversation", "start"])) === true;
       if (!remoteConversationStarted) {
@@ -269,23 +315,42 @@ export async function proveProductionM5StickS3Grok(
       worker,
       (metrics) => {
         const device = latestWorkerDeviceMetrics(metrics);
+        const greetingFrames =
+          preflightWorker === undefined
+            ? undefined
+            : metrics.downlinkFrames - preflightWorker.downlinkFrames;
         return (
           !metrics.closed &&
           !metrics.interrupted &&
+          metrics.providerAvailable &&
+          metrics.providerSessionReadyAtMs !== null &&
+          metrics.initialGreetingRequests === 1 &&
+          metrics.providerResponsesCompleted >= 1 &&
+          !metrics.providerResponseActive &&
+          metrics.downlinkQueuedBytes === 0 &&
           metrics.deviceMetrics.samplesReceived > 0 &&
           device !== undefined &&
+          (preflightDevice === undefined ||
+            (greetingFrames !== undefined &&
+              devicePlaybackResponseCompleted(preflightDevice, device, greetingFrames))) &&
           queuesAreEmpty(device)
         );
       },
       "a connected Grok PCM bridge with userspace device metrics",
       options.pttAuthority === "remote" ? 30_000 : physicalPressTimeoutMs,
+      preflightWorker?.sessionId,
     );
     baselineWorker = connectedWorker;
     const connectedDevice = requireLatestWorkerDeviceMetrics(connectedWorker);
     baselineDevice = connectedDevice;
+    baselinePlayback = await waitForStablePlayback(
+      playbackSamples,
+      () => playbackCallbackError,
+    );
     console.log(
       `pcm_conversation=connected session_id=${connectedWorker.sessionId} ` +
-        `device_metric_samples=${connectedWorker.deviceMetrics.samplesReceived}`,
+        `device_metric_samples=${connectedWorker.deviceMetrics.samplesReceived} ` +
+        `startup=${JSON.stringify(connectedWorker.startup ?? null)}`,
     );
 
     /*
@@ -330,7 +395,8 @@ export async function proveProductionM5StickS3Grok(
       const turnBaselineDiagnostics = turn === 1 ? baselineDiagnostics : await readDiagnostics();
       const turnBaselinePlayback = terminalPlayback ?? baselinePlayback;
       const providerSequenceBaseline = providerEventEvidence?.at(-1)?.sequence ?? 0;
-      const expectedColour = turn % 2 === 1 ? "green" : "red";
+      const requiresDeviceTool = productionGrokTurnRequiresDeviceTool(turn);
+      const expectedColour = requiresDeviceTool ? "green" : undefined;
       remotePttStarted = false;
       remotePttStopped = false;
 
@@ -388,9 +454,13 @@ export async function proveProductionM5StickS3Grok(
       const phrase =
         configuredPhrase && options.turns === 1
           ? configuredPhrase
-          : `Turn ${turn}. Use the change colour tool: ${expectedColour}. ` +
-            `Say exactly: production turn ${turn} is ${expectedColour}.` +
-            (options.pttAuthority === "physical" ? " Release Button A now." : "");
+          : requiresDeviceTool
+            ? `Turn ${turn}. Use the change colour tool: ${expectedColour}. ` +
+              `Say exactly: production turn ${turn} is ${expectedColour}.` +
+              (options.pttAuthority === "physical" ? " Release Button A now." : "")
+            : `Turn ${turn}. Reply in one short sentence. ` +
+              `Say exactly: production conversation turn ${turn} is clear.` +
+              (options.pttAuthority === "physical" ? " Release Button A now." : "");
       console.log(`voice_prompt=started source=macos-say turn=${turn}`);
       /*
        * Render first, then use the blocking CoreAudio file player. Direct
@@ -463,7 +533,8 @@ export async function proveProductionM5StickS3Grok(
             devicePlaybackCompleted(turnBaselineDevice, device) &&
             queuesAreEmpty(device) &&
             metrics.downlinkFrames > turnBaselineWorker.downlinkFrames &&
-            metrics.providerFunctionCalls > turnBaselineWorker.providerFunctionCalls &&
+            (!requiresDeviceTool ||
+              metrics.providerFunctionCalls > turnBaselineWorker.providerFunctionCalls) &&
             metrics.providerFunctionCallFailures ===
               turnBaselineWorker.providerFunctionCallFailures &&
             metrics.providerFunctionCallsPending === 0 &&
@@ -516,7 +587,9 @@ export async function proveProductionM5StickS3Grok(
         );
         try {
           turnProviderTranscript = completedProviderOutputTranscript(currentTurnEvents);
-          turnProviderToolCall = completedProviderToolCall(currentTurnEvents, "changeColour");
+          turnProviderToolCall = requiresDeviceTool
+            ? completedProviderToolCall(currentTurnEvents, "changeColour")
+            : undefined;
           if (!currentTurnEvents.some((event) => event.providerType === "response.done")) {
             throw new Error(`The provider stream did not retain response.done for turn ${turn}.`);
           }
@@ -535,7 +608,7 @@ export async function proveProductionM5StickS3Grok(
         !providerEventEvidence ||
         !turnProviderEvents ||
         !turnProviderTranscript ||
-        !turnProviderToolCall
+        (requiresDeviceTool && !turnProviderToolCall)
       ) {
         throw (
           providerEvidenceFailure ??
@@ -565,22 +638,27 @@ export async function proveProductionM5StickS3Grok(
             `${turnTerminalWorker.providerEvents.appendedEvents} appended raw events.`,
         );
       }
-      for (const requiredType of [
+      const requiredProviderTypes = [
         "input_audio_buffer.committed",
-        "response.function_call_arguments.done",
         "response.output_audio_transcript.done",
         "response.done",
-      ]) {
+      ];
+      if (requiresDeviceTool) {
+        requiredProviderTypes.push("response.function_call_arguments.done");
+      }
+      for (const requiredType of requiredProviderTypes) {
         if (!turnProviderEvents.some((event) => event.providerType === requiredType)) {
           throw new Error(`Turn ${turn} did not retain ${requiredType}.`);
         }
       }
       if (
-        !isRecord(turnProviderToolCall.arguments) ||
-        turnProviderToolCall.arguments.colour !== expectedColour ||
-        !isRecord(turnProviderToolCall.output) ||
-        turnProviderToolCall.output.colour !== expectedColour ||
-        turnProviderToolCall.output.ok !== true
+        requiresDeviceTool &&
+        (!turnProviderToolCall ||
+          !isRecord(turnProviderToolCall.arguments) ||
+          turnProviderToolCall.arguments.colour !== expectedColour ||
+          !isRecord(turnProviderToolCall.output) ||
+          turnProviderToolCall.output.colour !== expectedColour ||
+          turnProviderToolCall.output.ok !== true)
       ) {
         throw new Error(
           `The raw Grok event stream did not prove a successful ${expectedColour} tool result ` +
@@ -594,6 +672,7 @@ export async function proveProductionM5StickS3Grok(
         baselineWorker: turnBaselineWorker,
         continuingHeldDevice: turnContinuingHeldDevice,
         continuingHeldWorker: turnContinuingHeldWorker,
+        expectedFunctionCalls: requiresDeviceTool ? 1 : 0,
         firstHeldDevice: turnFirstHeldDevice,
         firstHeldWorker: turnFirstHeldWorker,
         pttAuthority: options.pttAuthority,
@@ -612,7 +691,7 @@ export async function proveProductionM5StickS3Grok(
       }
       turnEvidence.push({
         digital: turnDigitalAssessment,
-        expectedColour,
+        expectedColour: expectedColour ?? null,
         playback: {
           baseline: turnBaselinePlayback,
           terminal: turnTerminalPlayback,
@@ -634,7 +713,7 @@ export async function proveProductionM5StickS3Grok(
       terminalDiagnostics = turnTerminalDiagnostics;
       console.log(
         `production_voice_turn=passed turn=${turn} session_id=${turnTerminalWorker.sessionId} ` +
-          `colour=${expectedColour}`,
+          `colour=${expectedColour ?? "unchanged"}`,
       );
     }
 
@@ -713,15 +792,17 @@ export async function proveProductionM5StickS3Grok(
         if (!remoteConversationEnded) {
           runFailure ??= new Error("Cleanup could not end the remote conversation.");
         } else if (baselineWorker !== undefined) {
-          closedWorker = await waitForWorkerMetrics(
+          idleAfterHangUpWorker = await waitForProductionPcmConversationIdle({
+            description: "the Grok provider to retire while the device PCM lane remains warm",
+            expectedSessionId: baselineWorker.sessionId,
+            minimumStableMs: 1_000,
+            timeoutMs: 15_000,
             worker,
-            (metrics) => metrics.closed && metrics.sessionId === baselineWorker!.sessionId,
-            "the top-button-equivalent hang-up to close the deployed PCM generation",
-            15_000,
-            baselineWorker.sessionId,
-            true,
+          });
+          console.log(
+            `remote_conversation=ended pcm_lane=warm_idle ` +
+              `session_id=${idleAfterHangUpWorker.sessionId}`,
           );
-          console.log("remote_conversation=ended pcm_generation=closed");
         }
       } catch (error) {
         runFailure ??= new Error("Cleanup could not invoke the remote conversation hang-up.", {
@@ -970,6 +1051,7 @@ export async function proveProductionM5StickS3Grok(
     baselineWorker,
     continuingHeldDevice,
     continuingHeldWorker,
+    expectedFunctionCalls: requiredDeviceToolCallsForVoiceProof(options.turns),
     expectedTurns: options.turns,
     firstHeldDevice,
     firstHeldWorker,
@@ -1087,7 +1169,7 @@ export async function proveProductionM5StickS3Grok(
       turns: turnEvidence,
       worker: {
         baseline: baselineWorker,
-        closed: closedWorker ?? null,
+        idleAfterHangUp: idleAfterHangUpWorker ?? null,
         continuingHeld: continuingHeldWorker ?? null,
         firstHeld: firstHeldWorker ?? null,
         terminal: terminalWorker,
@@ -1145,6 +1227,7 @@ function assessDigitalRun(input: {
   baselineWorker: ProductionPcmMetrics;
   continuingHeldDevice?: DeviceRuntimeMetrics;
   continuingHeldWorker?: ProductionPcmMetrics;
+  expectedFunctionCalls?: number;
   expectedTurns?: number;
   firstHeldDevice?: DeviceRuntimeMetrics;
   firstHeldWorker?: ProductionPcmMetrics;
@@ -1156,6 +1239,7 @@ function assessDigitalRun(input: {
   const reasons: string[] = [];
   const deltas: Record<string, number> = {};
   const expectedTurns = input.expectedTurns ?? 1;
+  const expectedFunctionCalls = input.expectedFunctionCalls ?? expectedTurns;
   const deviceDelta = (name: string) => {
     const value = numeric(input.terminalDevice, name) - numeric(input.baselineDevice, name);
     deltas[name] = value;
@@ -1234,13 +1318,14 @@ function assessDigitalRun(input: {
   ) {
     reasons.push("Userspace did not retain a valid latest-only device metrics sample.");
   }
-  if (deltas.worker_function_calls !== expectedTurns) {
+  if (deltas.worker_function_calls !== expectedFunctionCalls) {
     reasons.push(
-      `Grok changeColour call delta was ${deltas.worker_function_calls}; expected ${expectedTurns}.`,
+      `Grok changeColour call delta was ${deltas.worker_function_calls}; ` +
+        `expected ${expectedFunctionCalls}.`,
     );
   }
   if (deltas.worker_provider_responses_completed < expectedTurns) {
-    reasons.push("Grok did not complete the tool-bearing spoken response.");
+    reasons.push("Grok did not complete every spoken response.");
   }
   if (
     input.terminalWorker.providerResponseActive ||
@@ -1457,26 +1542,14 @@ async function waitForWorkerMetrics(
   description: string,
   timeoutMs: number,
   expectedSessionId?: string,
-  allowClosedExpectedSession = false,
 ) {
   return await waitForProductionPcmMetrics({
-    allowClosedExpectedSession,
     description,
     expectedSessionId,
     predicate,
     timeoutMs,
     worker,
   });
-}
-
-async function waitForWorkerIdle(worker: KitVoiceProofWorker, timeoutMs: number): Promise<void> {
-  const deadline = performance.now() + timeoutMs;
-  while (performance.now() < deadline) {
-    const metrics = await worker.pcmMetrics();
-    if (metrics === null || metrics.closed) return;
-    await delay(100);
-  }
-  throw new Error("Timed out waiting for the prior deployed PCM generation to close.");
 }
 
 async function writeExclusiveJson(path: string, value: unknown) {

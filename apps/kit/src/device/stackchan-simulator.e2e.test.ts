@@ -36,6 +36,7 @@ interface M5StickS3Simulator extends M5StickS3 {
     playbackStopCount(): Promise<number>;
     playbackFlushCount(): Promise<number>;
     interruptionCount(): Promise<number>;
+    screenshotReleaseCount(): Promise<number>;
     closeProfile(): Promise<number>;
   };
   servos: {
@@ -286,6 +287,7 @@ test("the M5StickS3 profile describes screen, metrics, and push-to-talk events",
   const { m5sticks3 } = fixture;
   const description = await m5sticks3.__describe();
   expect(description.children).toEqual({
+    captureScreen: expect.any(String),
     changeColour: expect.any(String),
     conversation: {
       hangUp: expect.any(String),
@@ -308,6 +310,15 @@ test("the M5StickS3 profile describes screen, metrics, and push-to-talk events",
     }),
   ).resolves.toBe(true);
   await expect(m5sticks3.__test.renderUrlHash()).resolves.not.toBe(0);
+  const screenshot = await m5sticks3.captureScreen();
+  /*
+   * This crosses the real C Cap'n Web serializer rather than a TypeScript
+   * screenshot fake. The PNG signature proves the capability returns image
+   * bytes, and the release count proves the temporary encoded framebuffer does
+   * not remain resident after the reply has been serialized.
+   */
+  expect([...screenshot.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
+  await expect(m5sticks3.__test.screenshotReleaseCount()).resolves.toBe(1);
   await expectRpcRejection(
     m5sticks3.servos.move({
       yawDegrees: 0,
@@ -399,6 +410,7 @@ test("physical button state crosses the public Cap'n Web event subscription", as
       {
         active: false,
         coalescedNotifications: 0,
+        conversationActive: false,
         result: 0,
         schemaVersion: 1,
         sequence: 0,
@@ -417,6 +429,7 @@ test("physical button state crosses the public Cap'n Web event subscription", as
       {
         active: false,
         coalescedNotifications: 0,
+        conversationActive: true,
         result: 0,
         schemaVersion: 1,
         sequence: 1,
@@ -427,6 +440,7 @@ test("physical button state crosses the public Cap'n Web event subscription", as
       {
         active: true,
         coalescedNotifications: 0,
+        conversationActive: true,
         result: 0,
         schemaVersion: 1,
         sequence: 2,
@@ -437,6 +451,7 @@ test("physical button state crosses the public Cap'n Web event subscription", as
       {
         active: false,
         coalescedNotifications: 0,
+        conversationActive: true,
         result: 0,
         schemaVersion: 1,
         sequence: 3,

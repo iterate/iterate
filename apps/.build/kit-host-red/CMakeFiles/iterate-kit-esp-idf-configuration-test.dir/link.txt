@@ -1,0 +1,1 @@
+/usr/bin/cc -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-esp-idf-configuration-test.dir/tests/esp_idf_configuration_test.c.o" "CMakeFiles/iterate-kit-esp-idf-configuration-test.dir/platforms/iterate_esp_idf/configuration.c.o" -o iterate-kit-esp-idf-configuration-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a

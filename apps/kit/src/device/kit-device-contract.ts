@@ -37,6 +37,10 @@ export interface KitAudioMetrics {
     sendDeferrals: number;
     consecutiveSendDeferrals: number;
     maximumConsecutiveSendDeferrals: number;
+    /** Stale epochs purged before any cancelled WebSocket byte reached TLS. */
+    inPlaceFreshnessRecoveries: number;
+    /** Freshness or disconnect recoveries that had to replace the socket. */
+    socketRestarts: number;
     restartIncidents: number;
     producerBackpressureRestarts: number;
     transportDisconnectRestarts: number;
@@ -264,6 +268,7 @@ export interface KitDeviceDescription {
 export interface KitDeviceEvent {
   active: boolean;
   coalescedNotifications: number;
+  conversationActive: boolean;
   result: number;
   schemaVersion: 1;
   sequence: number;

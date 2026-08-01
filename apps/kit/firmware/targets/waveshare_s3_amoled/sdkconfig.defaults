@@ -59,3 +59,16 @@ CONFIG_I2S_ISR_IRAM_SAFE=y
 # 1ms ticks: pdMS_TO_TICKS(5) rounds to 0 at 100Hz, so the app loop's delay
 # silently became a 10ms tick and halved the inbox drain rate.
 CONFIG_FREERTOS_HZ=1000
+
+# Every console write is duplicated to the USB-Serial-JTAG secondary console,
+# which spins for up to 50ms when a host is attached but not draining.
+CONFIG_ESP_CONSOLE_SECONDARY_NONE=y
+
+# Pin lwIP to core 0 so core 1 is genuinely the audio core; unpinned it
+# round-robins against the playback task at the same priority.
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+
+# Execute in place from PSRAM: without it, a flash write SUSPENDS ALL TASKS
+# and busy-waits the other core for up to 600ms per sector erase, which no
+# amount of DMA or task tuning survives.
+CONFIG_SPIRAM_XIP_FROM_PSRAM=y

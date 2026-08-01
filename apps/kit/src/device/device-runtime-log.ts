@@ -175,6 +175,8 @@ const kitAudioMetricFields = [
   [["uplink", "consecutiveSendDeferrals"], "uplink_consecutive_send_deferrals"],
   [["uplink", "maximumConsecutiveSendDeferrals"], "uplink_maximum_consecutive_send_deferrals"],
   [["uplink", "restartIncidents"], "uplink_restart_incidents"],
+  [["uplink", "inPlaceFreshnessRecoveries"], "uplink_in_place_freshness_recoveries"],
+  [["uplink", "socketRestarts"], "uplink_socket_restarts"],
   [["uplink", "producerBackpressureRestarts"], "uplink_producer_backpressure_restarts"],
   [["uplink", "transportDisconnectRestarts"], "uplink_transport_disconnect_restarts"],
   [["uplink", "noProgressTimeoutRestarts"], "uplink_no_progress_timeout_restarts"],

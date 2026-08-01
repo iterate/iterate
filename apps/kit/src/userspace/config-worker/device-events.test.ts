@@ -16,9 +16,15 @@ describe("device push-to-talk event subscription", () => {
     };
     const inputStarted = vi.fn(() => true);
     const inputStopped = vi.fn(() => true);
+    const setConversationActive = vi.fn(() => true);
 
-    await subscribePcmBridgeToDeviceEvents(device, { inputStarted, inputStopped });
+    await subscribePcmBridgeToDeviceEvents(device, {
+      inputStarted,
+      inputStopped,
+      setConversationActive,
+    });
     callback?.({
+      conversationActive: false,
       result: 0,
       schemaVersion: 1,
       sequence: 10,
@@ -27,6 +33,7 @@ describe("device push-to-talk event subscription", () => {
       type: "pushToTalk.stopped",
     });
     callback?.({
+      conversationActive: false,
       result: 0,
       schemaVersion: 1,
       sequence: 11,
@@ -34,6 +41,7 @@ describe("device push-to-talk event subscription", () => {
       type: "pushToTalk.started",
     });
     callback?.({
+      conversationActive: false,
       result: 0,
       schemaVersion: 1,
       sequence: 12,
@@ -43,6 +51,7 @@ describe("device push-to-talk event subscription", () => {
 
     expect(inputStarted).toHaveBeenCalledOnce();
     expect(inputStopped).toHaveBeenCalledOnce();
+    expect(setConversationActive).toHaveBeenCalledExactlyOnceWith(false);
   });
 
   test("keeps remote events on the same path and makes unknown events observable", async () => {
@@ -56,12 +65,14 @@ describe("device push-to-talk event subscription", () => {
     const bridge = {
       inputStarted: vi.fn(() => true),
       inputStopped: vi.fn(() => true),
+      setConversationActive: vi.fn(() => true),
     };
 
     await subscribePcmBridgeToDeviceEvents(device, bridge, (diagnostic) =>
       diagnostics.push(diagnostic),
     );
     callback?.({
+      conversationActive: true,
       result: 0,
       schemaVersion: 1,
       sequence: 4,
@@ -70,6 +81,7 @@ describe("device push-to-talk event subscription", () => {
       type: "pushToTalk.started",
     });
     callback?.({
+      conversationActive: true,
       result: 0,
       schemaVersion: 1,
       sequence: 5,
@@ -97,6 +109,7 @@ describe("device push-to-talk event subscription", () => {
     const bridge = {
       inputStarted: vi.fn(() => true),
       inputStopped: vi.fn(() => true),
+      setConversationActive: vi.fn(() => true),
     };
     await subscribePcmBridgeToDeviceEvents(
       {
@@ -110,6 +123,7 @@ describe("device push-to-talk event subscription", () => {
     );
 
     callback?.({
+      conversationActive: false,
       result: 0,
       schemaVersion: 1,
       sequence: 70,
@@ -118,6 +132,7 @@ describe("device push-to-talk event subscription", () => {
       type: "pushToTalk.stopped",
     });
     callback?.({
+      conversationActive: true,
       result: 0,
       schemaVersion: 1,
       sequence: 71,
@@ -125,6 +140,7 @@ describe("device push-to-talk event subscription", () => {
       type: "conversation.started",
     });
     callback?.({
+      conversationActive: true,
       result: 0,
       schemaVersion: 1,
       sequence: 72,
@@ -140,6 +156,7 @@ describe("device push-to-talk event subscription", () => {
     ]);
     expect(bridge.inputStarted).toHaveBeenCalledOnce();
     expect(bridge.inputStopped).not.toHaveBeenCalled();
+    expect(bridge.setConversationActive.mock.calls).toEqual([[false], [true]]);
   });
 
   test("rejects a sequence gap so a lost button edge cannot commit the wrong turn", async () => {
@@ -153,12 +170,14 @@ describe("device push-to-talk event subscription", () => {
     const bridge = {
       inputStarted: vi.fn(() => true),
       inputStopped: vi.fn(() => true),
+      setConversationActive: vi.fn(() => true),
     };
     await subscribePcmBridgeToDeviceEvents(device, bridge, (diagnostic) =>
       diagnostics.push(diagnostic),
     );
 
     callback?.({
+      conversationActive: false,
       result: 0,
       schemaVersion: 1,
       sequence: 20,
@@ -167,6 +186,7 @@ describe("device push-to-talk event subscription", () => {
       type: "pushToTalk.stopped",
     });
     callback?.({
+      conversationActive: false,
       result: 0,
       schemaVersion: 1,
       sequence: 22,
@@ -194,6 +214,7 @@ describe("device push-to-talk event subscription", () => {
     const bridge = {
       inputStarted: vi.fn(() => true),
       inputStopped: vi.fn(() => true),
+      setConversationActive: vi.fn(() => true),
     };
 
     await subscribePcmBridgeToDeviceEvents(
@@ -203,6 +224,7 @@ describe("device push-to-talk event subscription", () => {
       (event) => tracker.observe(event),
     );
     callback?.({
+      conversationActive: false,
       result: 0,
       schemaVersion: 1,
       sequence: 30,
@@ -211,6 +233,7 @@ describe("device push-to-talk event subscription", () => {
       type: "pushToTalk.stopped",
     });
     callback?.({
+      conversationActive: false,
       result: 0,
       schemaVersion: 1,
       sequence: 31,
@@ -218,6 +241,7 @@ describe("device push-to-talk event subscription", () => {
       type: "pushToTalk.started",
     });
     callback?.({
+      conversationActive: false,
       result: 0,
       schemaVersion: 1,
       sequence: 32,
@@ -241,5 +265,44 @@ describe("device push-to-talk event subscription", () => {
       remoteConversationStarts: 0,
       remoteConversationEnds: 0,
     });
+  });
+
+  test("restores an already-active call from the first event snapshot", async () => {
+    /*
+     * The PCM socket now outlives individual calls. A userspace eviction or
+     * callback replacement can therefore happen while Button B still says a
+     * call is active. Replaying only the PTT level would leave the warm audio
+     * lane connected but never recreate Grok, reproducing a silent call after
+     * recovery. The snapshot carries both independent state bits and must
+     * restore call lifetime before any later microphone edge is accepted.
+     */
+    let callback: ((event: DeviceEvent) => void) | undefined;
+    const bridge = {
+      inputStarted: vi.fn(() => true),
+      inputStopped: vi.fn(() => true),
+      setConversationActive: vi.fn(() => true),
+    };
+    await subscribePcmBridgeToDeviceEvents(
+      {
+        async subscribeToEvents(next) {
+          callback = next;
+        },
+      },
+      bridge,
+    );
+
+    callback?.({
+      conversationActive: true,
+      result: 0,
+      schemaVersion: 1,
+      sequence: 90,
+      snapshot: true,
+      source: "system",
+      type: "pushToTalk.stopped",
+    });
+
+    expect(bridge.setConversationActive).toHaveBeenCalledExactlyOnceWith(true);
+    expect(bridge.inputStarted).not.toHaveBeenCalled();
+    expect(bridge.inputStopped).not.toHaveBeenCalled();
   });
 });

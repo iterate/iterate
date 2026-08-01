@@ -72,6 +72,7 @@ const validKitAudioMetrics = {
     failures: 0,
     frameSendTimeoutRestarts: 0,
     highWater: 2,
+    inPlaceFreshnessRecoveries: 1,
     lastRestartOldestCaptureAgeMs: 261,
     lastRestartFramesDiscarded: 4,
     lastRestartReason: "capture_stale",
@@ -83,6 +84,7 @@ const validKitAudioMetrics = {
     restartIncidents: 1,
     sendDeferrals: 3,
     sent: 99,
+    socketRestarts: 0,
     transportDisconnectRestarts: 0,
   },
 };
@@ -156,6 +158,7 @@ describe("device runtime log", () => {
         uplink_failures: 0,
         uplink_frame_send_timeout_restarts: 0,
         uplink_high_water: 2,
+        uplink_in_place_freshness_recoveries: 1,
         uplink_last_restart_oldest_capture_age_ms: 261,
         uplink_last_restart_frames_discarded: 4,
         uplink_last_restart_reason: "capture_stale",
@@ -167,6 +170,7 @@ describe("device runtime log", () => {
         uplink_restart_incidents: 1,
         uplink_send_deferrals: 3,
         uplink_sent: 99,
+        uplink_socket_restarts: 0,
         uplink_transport_disconnect_restarts: 0,
       },
     });
@@ -252,6 +256,7 @@ describe("device runtime log", () => {
             failures: 0,
             frameSendTimeoutRestarts: 0,
             highWater: 1,
+            inPlaceFreshnessRecoveries: 0,
             lastRestartOldestCaptureAgeMs: 0,
             lastRestartFramesDiscarded: 0,
             lastRestartReason: "none",
@@ -263,6 +268,7 @@ describe("device runtime log", () => {
             restartIncidents: 0,
             sendDeferrals: 0,
             sent: 1,
+            socketRestarts: 0,
             transportDisconnectRestarts: 0,
           },
         },
@@ -773,7 +779,8 @@ describe("device runtime log", () => {
       parseDeviceRuntimeLogLine(
         "W (1420) iterate-kit: pcm_uplink_recovery incidents=3 " +
           "reason=producer_backpressure discarded=32 queue_depth=0 " +
-          "queue_high_water=32 reset_requests=1 oldest_capture_age_ms=640",
+          "queue_high_water=32 reset_requests=1 oldest_capture_age_ms=640 " +
+          "in_place_recoveries=3 socket_restarts=0",
       ),
     ).toEqual({
       family: "pcm-recovery",
@@ -781,11 +788,13 @@ describe("device runtime log", () => {
       values: {
         discarded: 32,
         incidents: 3,
+        in_place_recoveries: 3,
         oldest_capture_age_ms: 640,
         queue_depth: 0,
         queue_high_water: 32,
         reason: "producer_backpressure",
         reset_requests: 1,
+        socket_restarts: 0,
       },
     });
   });

@@ -88,4 +88,12 @@ $<TARGET_FILE:__idf_capnweb>
 $<TARGET_FILE:__idf_core>
 $<TARGET_FILE:__idf_iterate_esp_idf>
 $<TARGET_FILE:__idf_espressif__esp_codec_dev>
+$<TARGET_FILE:__idf_espressif__esp_io_expander>
+$<TARGET_FILE:__idf_espressif__esp_io_expander_tca9554>
+$<TARGET_FILE:__idf_lvgl__lvgl>
+$<TARGET_FILE:__idf_espressif__esp_lcd_panel_io_additions>
+$<TARGET_FILE:__idf_espressif__esp_lcd_touch>
+$<TARGET_FILE:__idf_espressif__esp_lcd_touch_ft5x06>
+$<TARGET_FILE:__idf_waveshare__esp_lcd_sh8601>
+$<TARGET_FILE:__idf_waveshare__esp32_s3_touch_amoled_1_8>
 $<TARGET_FILE:__idf_main>

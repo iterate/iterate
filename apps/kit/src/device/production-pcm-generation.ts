@@ -5,6 +5,18 @@ export interface ProductionPcmGenerationMetrics {
   sessionId: string;
 }
 
+export interface ProductionPcmConversationMetrics extends ProductionPcmGenerationMetrics {
+  awaitingCommitAcknowledgement: boolean;
+  awaitingUplinkEndMarker: boolean;
+  conversationActive: boolean;
+  downlinkQueuedBytes: number;
+  interrupted: boolean;
+  providerAvailable: boolean;
+  providerBufferedBytes: number;
+  providerFunctionCallsPending: number;
+  providerResponseActive: boolean;
+}
+
 export interface ProductionPcmFrameMetrics extends ProductionPcmGenerationMetrics {
   downlinkFrames: number;
   previousSession?: ProductionPcmFrameMetrics | null;
@@ -57,6 +69,83 @@ export class ProductionPcmWaitTimeoutError<
     this.name = "ProductionPcmWaitTimeoutError";
     this.lastObservedMetrics = lastObservedMetrics;
   }
+}
+
+/**
+ * Describes the quiescent state between Button-B conversations.
+ *
+ * The device WebSocket is deliberately absent from this predicate. It is
+ * infrastructure that remains open for the device's lifetime; only the Grok
+ * provider and one conversation's bounded media state are disposable. A
+ * closed device lane is therefore never "idle"—it is a transport incident or
+ * deployment boundary that must be kept out of call-start measurements.
+ */
+export function productionPcmConversationIsIdle(
+  metrics: ProductionPcmConversationMetrics,
+): boolean {
+  return (
+    !metrics.closed &&
+    !metrics.conversationActive &&
+    !metrics.providerAvailable &&
+    !metrics.providerResponseActive &&
+    !metrics.interrupted &&
+    !metrics.awaitingCommitAcknowledgement &&
+    !metrics.awaitingUplinkEndMarker &&
+    metrics.downlinkQueuedBytes === 0 &&
+    metrics.providerBufferedBytes === 0 &&
+    metrics.providerFunctionCallsPending === 0
+  );
+}
+
+/**
+ * Waits for one continuously idle, open device PCM generation.
+ *
+ * A single idle observation is insufficient immediately after installing a
+ * userspace worker: the old Durable Object can look quiescent just before its
+ * socket is replaced. Requiring one session id to remain idle for a bounded
+ * settling interval prevents deployment TLS/reconnect work from being charged
+ * to the following Button-B call. When the caller already owns a session id,
+ * replacement is a causal failure rather than a condition to follow.
+ */
+export async function waitForProductionPcmConversationIdle<
+  Metrics extends ProductionPcmConversationMetrics,
+>(options: ProductionPcmConversationIdleWaitOptions<Metrics>): Promise<Metrics> {
+  const deadline = performance.now() + options.timeoutMs;
+  const minimumStableMs = options.minimumStableMs ?? 1_000;
+  const pollIntervalMs = options.pollIntervalMs ?? 100;
+  let candidateSessionId: string | undefined;
+  let candidateSinceMs = 0;
+  let lastObservedMetrics: Metrics | null = null;
+
+  while (performance.now() < deadline) {
+    const metrics = await options.worker.pcmMetrics();
+    lastObservedMetrics = metrics;
+    if (
+      options.expectedSessionId !== undefined &&
+      (metrics === null || metrics.closed || metrics.sessionId !== options.expectedSessionId)
+    ) {
+      throw new ProductionPcmGenerationChangedError(
+        options.description,
+        options.expectedSessionId,
+        metrics,
+      );
+    }
+
+    if (metrics !== null && productionPcmConversationIsIdle(metrics)) {
+      const observedAtMs = performance.now();
+      if (candidateSessionId !== metrics.sessionId) {
+        candidateSessionId = metrics.sessionId;
+        candidateSinceMs = observedAtMs;
+      }
+      if (observedAtMs - candidateSinceMs >= minimumStableMs) return metrics;
+    } else {
+      candidateSessionId = undefined;
+      candidateSinceMs = 0;
+    }
+    await delay(pollIntervalMs);
+  }
+
+  throw new ProductionPcmWaitTimeoutError(options.description, lastObservedMetrics);
 }
 
 /**
@@ -142,6 +231,17 @@ interface ProductionPcmWaitOptions<Metrics extends ProductionPcmGenerationMetric
   expectedSessionId?: string;
   pollIntervalMs?: number;
   predicate(metrics: Metrics): boolean;
+  timeoutMs: number;
+  worker: ProductionPcmMetricsReader<Metrics>;
+}
+
+interface ProductionPcmConversationIdleWaitOptions<
+  Metrics extends ProductionPcmConversationMetrics,
+> {
+  description: string;
+  expectedSessionId?: string;
+  minimumStableMs?: number;
+  pollIntervalMs?: number;
   timeoutMs: number;
   worker: ProductionPcmMetricsReader<Metrics>;
 }

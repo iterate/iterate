@@ -1,0 +1,1563 @@
+{
+  "capture": {
+    "ambientEnd": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-handoff-fixed/2026-08-01T05-05-20-271Z/iterate-kit-acoustic-IxThcZ/microphone.pcm16le",
+      "capturedByteLength": 131072,
+      "capturedSampleCount": 65536,
+      "sampleRateHz": 48000
+    },
+    "ambientStart": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-handoff-fixed/2026-08-01T05-05-20-271Z/iterate-kit-acoustic-IxThcZ/microphone.pcm16le",
+      "capturedByteLength": 40960,
+      "capturedSampleCount": 20480,
+      "sampleRateHz": 48000
+    },
+    "completed": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-handoff-fixed/2026-08-01T05-05-20-271Z/iterate-kit-acoustic-IxThcZ/microphone.pcm16le",
+      "capturedByteLength": 3952640,
+      "capturedSampleCount": 1976320,
+      "sampleRateHz": 48000,
+      "captureProvenance": {
+        "input": {
+          "avFoundationSpecifier": ":0",
+          "displayName": "MacBook Pro Microphone",
+          "stableId": "BuiltInMicrophoneDevice",
+          "verification": "host-resolved-coreaudio-uid"
+        },
+        "processing": {
+          "activeMicrophoneMode": "standard",
+          "preferredMicrophoneMode": "standard",
+          "verification": "host-resolved-avfoundation-microphone-mode"
+        },
+        "recorder": {
+          "arguments": [
+            "-q",
+            "-t",
+            "coreaudio",
+            "MacBook Pro Microphone",
+            "-t",
+            "raw",
+            "-L",
+            "-c",
+            "1",
+            "-r",
+            "48000",
+            "-b",
+            "16",
+            "-e",
+            "signed-integer",
+            "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-handoff-fixed/2026-08-01T05-05-20-271Z/iterate-kit-acoustic-IxThcZ/microphone.pcm16le"
+          ],
+          "executable": "/opt/homebrew/bin/sox",
+          "version": "/opt/homebrew/bin/sox:      SoX v"
+        }
+      }
+    }
+  },
+  "deviceDiagnostics": {
+    "schemaVersion": 3,
+    "producedAtMs": 68745,
+    "control": {
+      "websocketStartAttempts": 1,
+      "websocketConnections": 1,
+      "websocketDisconnects": 0,
+      "websocketErrors": 0,
+      "wifiDisconnects": 0,
+      "protocolFailures": 0,
+      "receiveFailures": 0,
+      "sendFailures": 0,
+      "lastWifiDisconnectReason": 0,
+      "lastErrorGeneration": 0,
+      "lastErrorType": 0,
+      "lastTlsError": 0,
+      "lastTlsStackError": 0,
+      "lastTransportErrno": 0,
+      "lastHandshakeStatusCode": 0,
+      "lastCloseStatusCode": 0,
+      "protocolFailureGeneration": 0,
+      "lastApplicationCapnwebGeneration": 0,
+      "lastApplicationCapnwebStatus": 0,
+      "lastControlReceiveStatus": 0,
+      "messagesSent": 86,
+      "messagesDiscarded": 0,
+      "inboxDiscarded": 0,
+      "outboxDiscarded": 0,
+      "inbox": {
+        "capacitySlots": 8,
+        "messagesPublished": 55,
+        "messagesConsumed": 53,
+        "producerBackpressure": 0,
+        "highWaterSlots": 6,
+        "currentSlots": 2
+      },
+      "outbox": {
+        "capacitySlots": 8,
+        "messagesPublished": 86,
+        "messagesConsumed": 86,
+        "producerBackpressure": 0,
+        "highWaterSlots": 1,
+        "currentSlots": 0
+      }
+    },
+    "network": {
+      "wifiConnected": true,
+      "wifiRssiDbm": -48,
+      "pcmWebsocketConnections": 1,
+      "pcmWebsocketDisconnects": 1,
+      "pcmWebsocketErrors": 0
+    }
+  },
+  "deviceRoute": {
+    "deviceId": "m5sticks3",
+    "eventStreamPath": "/devices/m5sticks3",
+    "mountPath": [
+      "kit",
+      "m5sticks3"
+    ]
+  },
+  "error": {
+    "message": "Lost deployed PCM generation prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429 while waiting for the first microphone frame for deployed turn 1; pcmMetrics() reported closed generation prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429.",
+    "name": "ProductionPcmGenerationChangedError",
+    "stack": "ProductionPcmGenerationChangedError: Lost deployed PCM generation prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429 while waiting for the first microphone frame for deployed turn 1; pcmMetrics() reported closed generation prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429.\n    at waitForProductionPcmMetrics (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/src/device/production-pcm-generation.ts:125:15)\n    at async waitForWorkerMetrics (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-m5sticks3-grok.ts:1462:10)\n    at async proveProductionM5StickS3Grok (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-m5sticks3-grok.ts:369:35)\n    at async proveProductionGrokFromDevice (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-grok-from-device.ts:177:18)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-grok-from-device.ts:193:22)",
+    "expectedSessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429",
+    "observedMetrics": {
+      "awaitingCommitAcknowledgement": false,
+      "awaitingUplinkEndMarker": false,
+      "closed": true,
+      "downlinkDroppedBytes": 0,
+      "downlinkFrames": 0,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 0,
+      "emptyUplinkTurns": 0,
+      "interrupted": true,
+      "lastProviderError": null,
+      "lastProviderEventType": "input_audio_buffer.speech_started",
+      "lastSocketClose": {
+        "code": 1006,
+        "reason": "WebSocket disconnected without sending Close frame.",
+        "source": "device"
+      },
+      "providerAvailable": false,
+      "providerCommitMessagesSent": 0,
+      "providerConnections": 1,
+      "providerControlEvents": 5,
+      "providerControlMessagesSent": 1,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 0,
+      "providerFunctionCallFailures": 0,
+      "providerFunctionCalls": 0,
+      "providerFunctionCallsPending": 0,
+      "providerKeepalivePings": 1,
+      "providerKeepalivePongs": 1,
+      "providerPcmPeakSample": 0,
+      "providerPcmRmsSample": 0,
+      "providerPcmSamples": 0,
+      "providerResponseActive": false,
+      "providerResponseCreateMessagesSent": 0,
+      "providerResponsesCompleted": 0,
+      "providerSendFailures": 0,
+      "uplinkDroppedBytes": 0,
+      "uplinkEndMarkers": 0,
+      "uplinkEndMarkerTimeouts": 0,
+      "uplinkFrames": 9,
+      "uplinkFramesAfterEndMarkerDropped": 0,
+      "uplinkUnavailableFrames": 0,
+      "deviceEvents": {
+        "acceptedEvents": 2,
+        "lastEvent": {
+          "sequence": 3,
+          "source": "remote",
+          "type": "pushToTalk.started"
+        },
+        "physicalConversationEnds": 0,
+        "physicalConversationStarts": 0,
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteConversationEnds": 0,
+        "remoteConversationStarts": 0,
+        "remoteStarts": 1,
+        "remoteStops": 0
+      },
+      "deviceMetrics": {
+        "invalidSamples": 0,
+        "lastInvalidReason": null,
+        "latestSample": {
+          "metrics": {
+            "uptimeMs": 62208,
+            "freeHeapBytes": 8415252,
+            "minimumFreeHeapBytes": 8404912,
+            "freeInternalHeapBytes": 23491,
+            "minimumFreeInternalHeapBytes": 12519,
+            "freePsramBytes": 8384912,
+            "taskStackHighWaterBytes": 2636,
+            "cpuPermille": 167,
+            "audio": {
+              "capture": {
+                "sent": 0,
+                "dropped": 0,
+                "failures": 0
+              },
+              "uplink": {
+                "sent": 0,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 0,
+                "sendDeferrals": 0,
+                "consecutiveSendDeferrals": 0,
+                "maximumConsecutiveSendDeferrals": 0,
+                "failures": 0,
+                "restartIncidents": 0,
+                "producerBackpressureRestarts": 0,
+                "transportDisconnectRestarts": 0,
+                "noProgressTimeoutRestarts": 0,
+                "frameSendTimeoutRestarts": 0,
+                "captureStaleRestarts": 0,
+                "lastTransportAcceptAgeMs": 0,
+                "maximumTransportAcceptAgeMs": 0,
+                "lastRestartOldestCaptureAgeMs": 0,
+                "lastRestartReason": "none",
+                "lastRestartFramesDiscarded": 0
+              },
+              "downlink": {
+                "received": 0,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 0,
+                "failures": 0
+              },
+              "playback": {
+                "submitted": 0,
+                "completed": 0,
+                "flushed": 0,
+                "depth": 0,
+                "highWater": 0,
+                "failures": 0
+              },
+              "protocolFailures": 0,
+              "buffers": {
+                "uplinkApplication": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 20480
+                },
+                "websocketTransmitter": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 910
+                },
+                "lwipSend": {
+                  "evidence": "capacityOnly",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 5760
+                },
+                "tlsEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                },
+                "wifiEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                }
+              }
+            }
+          },
+          "receivedAtMs": 1785560755279
+        },
+        "samplesReceived": 2
+      },
+      "deviceId": "m5sticks3",
+      "deviceEventSubscriptionAttempts": 1,
+      "deviceEventSubscriptionFailures": 0,
+      "endedAtMs": 1785560758166,
+      "providerEvents": {
+        "appendFailures": 0,
+        "appendedEvents": 5,
+        "droppedEvents": 0,
+        "lastAppendError": null,
+        "lastAppendedSequence": 5,
+        "observedEvents": 5,
+        "pendingEvents": 0,
+        "pendingRawBytes": 0,
+        "pendingRawHighWaterBytes": 1036
+      },
+      "providerConnectAttempts": 1,
+      "providerConnectFailures": 0,
+      "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429"
+    },
+    "observedSessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429"
+  },
+  "lifecycle": {
+    "directRedAcknowledged": true,
+    "remoteConversationEnded": true,
+    "remoteConversationStarted": true,
+    "remotePttStarted": true,
+    "remotePttStopped": true
+  },
+  "network": {
+    "audioInterval": {
+      "completedAtMonotonicMs": 77021.343,
+      "startedAtMonotonicMs": 65291.587791
+    },
+    "diagnostics": [
+      {
+        "completedAtMonotonicMs": 67970.826083,
+        "diagnostics": {
+          "schemaVersion": 3,
+          "producedAtMs": 64071,
+          "control": {
+            "websocketStartAttempts": 1,
+            "websocketConnections": 1,
+            "websocketDisconnects": 0,
+            "websocketErrors": 0,
+            "wifiDisconnects": 0,
+            "protocolFailures": 0,
+            "receiveFailures": 0,
+            "sendFailures": 0,
+            "lastWifiDisconnectReason": 0,
+            "lastErrorGeneration": 0,
+            "lastErrorType": 0,
+            "lastTlsError": 0,
+            "lastTlsStackError": 0,
+            "lastTransportErrno": 0,
+            "lastHandshakeStatusCode": 0,
+            "lastCloseStatusCode": 0,
+            "protocolFailureGeneration": 0,
+            "lastApplicationCapnwebGeneration": 0,
+            "lastApplicationCapnwebStatus": 0,
+            "lastControlReceiveStatus": 0,
+            "messagesSent": 74,
+            "messagesDiscarded": 0,
+            "inboxDiscarded": 0,
+            "outboxDiscarded": 0,
+            "inbox": {
+              "capacitySlots": 8,
+              "messagesPublished": 45,
+              "messagesConsumed": 43,
+              "producerBackpressure": 0,
+              "highWaterSlots": 6,
+              "currentSlots": 2
+            },
+            "outbox": {
+              "capacitySlots": 8,
+              "messagesPublished": 74,
+              "messagesConsumed": 74,
+              "producerBackpressure": 0,
+              "highWaterSlots": 1,
+              "currentSlots": 0
+            }
+          },
+          "network": {
+            "wifiConnected": true,
+            "wifiRssiDbm": -49,
+            "pcmWebsocketConnections": 1,
+            "pcmWebsocketDisconnects": 0,
+            "pcmWebsocketErrors": 0
+          }
+        },
+        "outcome": "success",
+        "startedAtMonotonicMs": 65294.581833
+      },
+      {
+        "completedAtMonotonicMs": 71652.603375,
+        "diagnostics": {
+          "schemaVersion": 3,
+          "producedAtMs": 68733,
+          "control": {
+            "websocketStartAttempts": 1,
+            "websocketConnections": 1,
+            "websocketDisconnects": 0,
+            "websocketErrors": 0,
+            "wifiDisconnects": 0,
+            "protocolFailures": 0,
+            "receiveFailures": 0,
+            "sendFailures": 0,
+            "lastWifiDisconnectReason": 0,
+            "lastErrorGeneration": 0,
+            "lastErrorType": 0,
+            "lastTlsError": 0,
+            "lastTlsStackError": 0,
+            "lastTransportErrno": 0,
+            "lastHandshakeStatusCode": 0,
+            "lastCloseStatusCode": 0,
+            "protocolFailureGeneration": 0,
+            "lastApplicationCapnwebGeneration": 0,
+            "lastApplicationCapnwebStatus": 0,
+            "lastControlReceiveStatus": 0,
+            "messagesSent": 84,
+            "messagesDiscarded": 0,
+            "inboxDiscarded": 0,
+            "outboxDiscarded": 0,
+            "inbox": {
+              "capacitySlots": 8,
+              "messagesPublished": 55,
+              "messagesConsumed": 50,
+              "producerBackpressure": 0,
+              "highWaterSlots": 6,
+              "currentSlots": 5
+            },
+            "outbox": {
+              "capacitySlots": 8,
+              "messagesPublished": 84,
+              "messagesConsumed": 84,
+              "producerBackpressure": 0,
+              "highWaterSlots": 1,
+              "currentSlots": 0
+            }
+          },
+          "network": {
+            "wifiConnected": true,
+            "wifiRssiDbm": -48,
+            "pcmWebsocketConnections": 1,
+            "pcmWebsocketDisconnects": 1,
+            "pcmWebsocketErrors": 0
+          }
+        },
+        "outcome": "success",
+        "startedAtMonotonicMs": 68295.220458
+      },
+      {
+        "completedAtMonotonicMs": 74416.258291,
+        "diagnostics": {
+          "schemaVersion": 3,
+          "producedAtMs": 71132,
+          "control": {
+            "websocketStartAttempts": 1,
+            "websocketConnections": 1,
+            "websocketDisconnects": 0,
+            "websocketErrors": 0,
+            "wifiDisconnects": 0,
+            "protocolFailures": 0,
+            "receiveFailures": 0,
+            "sendFailures": 0,
+            "lastWifiDisconnectReason": 0,
+            "lastErrorGeneration": 0,
+            "lastErrorType": 0,
+            "lastTlsError": 0,
+            "lastTlsStackError": 0,
+            "lastTransportErrno": 0,
+            "lastHandshakeStatusCode": 0,
+            "lastCloseStatusCode": 0,
+            "protocolFailureGeneration": 0,
+            "lastApplicationCapnwebGeneration": 0,
+            "lastApplicationCapnwebStatus": 0,
+            "lastControlReceiveStatus": 0,
+            "messagesSent": 92,
+            "messagesDiscarded": 0,
+            "inboxDiscarded": 0,
+            "outboxDiscarded": 0,
+            "inbox": {
+              "capacitySlots": 8,
+              "messagesPublished": 60,
+              "messagesConsumed": 58,
+              "producerBackpressure": 0,
+              "highWaterSlots": 6,
+              "currentSlots": 2
+            },
+            "outbox": {
+              "capacitySlots": 8,
+              "messagesPublished": 92,
+              "messagesConsumed": 92,
+              "producerBackpressure": 0,
+              "highWaterSlots": 1,
+              "currentSlots": 0
+            }
+          },
+          "network": {
+            "wifiConnected": true,
+            "wifiRssiDbm": -51,
+            "pcmWebsocketConnections": 1,
+            "pcmWebsocketDisconnects": 1,
+            "pcmWebsocketErrors": 0
+          }
+        },
+        "outcome": "success",
+        "startedAtMonotonicMs": 72298.279208
+      },
+      {
+        "completedAtMonotonicMs": 77021.250083,
+        "diagnostics": {
+          "schemaVersion": 3,
+          "producedAtMs": 73672,
+          "control": {
+            "websocketStartAttempts": 1,
+            "websocketConnections": 1,
+            "websocketDisconnects": 0,
+            "websocketErrors": 0,
+            "wifiDisconnects": 0,
+            "protocolFailures": 0,
+            "receiveFailures": 0,
+            "sendFailures": 0,
+            "lastWifiDisconnectReason": 0,
+            "lastErrorGeneration": 0,
+            "lastErrorType": 0,
+            "lastTlsError": 0,
+            "lastTlsStackError": 0,
+            "lastTransportErrno": 0,
+            "lastHandshakeStatusCode": 0,
+            "lastCloseStatusCode": 0,
+            "protocolFailureGeneration": 0,
+            "lastApplicationCapnwebGeneration": 0,
+            "lastApplicationCapnwebStatus": 0,
+            "lastControlReceiveStatus": 0,
+            "messagesSent": 101,
+            "messagesDiscarded": 0,
+            "inboxDiscarded": 0,
+            "outboxDiscarded": 0,
+            "inbox": {
+              "capacitySlots": 8,
+              "messagesPublished": 69,
+              "messagesConsumed": 67,
+              "producerBackpressure": 0,
+              "highWaterSlots": 6,
+              "currentSlots": 2
+            },
+            "outbox": {
+              "capacitySlots": 8,
+              "messagesPublished": 101,
+              "messagesConsumed": 101,
+              "producerBackpressure": 0,
+              "highWaterSlots": 1,
+              "currentSlots": 0
+            }
+          },
+          "network": {
+            "wifiConnected": true,
+            "wifiRssiDbm": -49,
+            "pcmWebsocketConnections": 1,
+            "pcmWebsocketDisconnects": 1,
+            "pcmWebsocketErrors": 0
+          }
+        },
+        "outcome": "success",
+        "startedAtMonotonicMs": 74805.9375
+      }
+    ],
+    "dnsAndConnect": {
+      "coverage": {
+        "completedAtMonotonicMs": 77021.343,
+        "startedAtMonotonicMs": 65291.587791
+      },
+      "kind": "measured",
+      "connect": {
+        "durationMs": 1742.565499999997,
+        "error": null,
+        "maximumHealthyDurationMs": 1000,
+        "outcome": "success"
+      },
+      "dns": {
+        "durationMs": 931.1177499999976,
+        "error": null,
+        "maximumHealthyDurationMs": 500,
+        "outcome": "success"
+      }
+    },
+    "reachability": [
+      {
+        "outcome": "reply",
+        "rttMs": 6.637,
+        "completedAtMonotonicMs": 65302.600958,
+        "host": "192.168.1.210",
+        "startedAtMonotonicMs": 65291.675416,
+        "target": "device"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.576,
+        "completedAtMonotonicMs": 65300.231166,
+        "host": "192.168.1.254",
+        "startedAtMonotonicMs": 65291.675416,
+        "target": "router"
+      },
+      {
+        "detail": "no ICMP reply within 500 ms",
+        "outcome": "timeout",
+        "completedAtMonotonicMs": 66796.871875,
+        "host": "kit--kit-stick-voice-e2e-20260731.iterate.app",
+        "startedAtMonotonicMs": 65291.675416,
+        "target": "worker"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.205,
+        "completedAtMonotonicMs": 67303.643375,
+        "host": "192.168.1.210",
+        "startedAtMonotonicMs": 67293.728333,
+        "target": "device"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.114,
+        "completedAtMonotonicMs": 67303.356625,
+        "host": "192.168.1.254",
+        "startedAtMonotonicMs": 67293.728333,
+        "target": "router"
+      },
+      {
+        "detail": "ping completed without an RTT reply",
+        "outcome": "error",
+        "completedAtMonotonicMs": 68312.127083,
+        "host": "kit--kit-stick-voice-e2e-20260731.iterate.app",
+        "startedAtMonotonicMs": 67293.728333,
+        "target": "worker"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.661,
+        "completedAtMonotonicMs": 69302.669,
+        "host": "192.168.1.210",
+        "startedAtMonotonicMs": 69293.50325,
+        "target": "device"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.611,
+        "completedAtMonotonicMs": 69302.033916,
+        "host": "192.168.1.254",
+        "startedAtMonotonicMs": 69293.50325,
+        "target": "router"
+      },
+      {
+        "detail": "ping completed without an RTT reply",
+        "outcome": "error",
+        "completedAtMonotonicMs": 70022.988,
+        "host": "kit--kit-stick-voice-e2e-20260731.iterate.app",
+        "startedAtMonotonicMs": 69293.50325,
+        "target": "worker"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.825,
+        "completedAtMonotonicMs": 70303.386041,
+        "host": "192.168.1.210",
+        "startedAtMonotonicMs": 70293.20625,
+        "target": "device"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.13,
+        "completedAtMonotonicMs": 70302.232625,
+        "host": "192.168.1.254",
+        "startedAtMonotonicMs": 70293.20625,
+        "target": "router"
+      },
+      {
+        "detail": "ping completed without an RTT reply",
+        "outcome": "error",
+        "completedAtMonotonicMs": 71340.668958,
+        "host": "kit--kit-stick-voice-e2e-20260731.iterate.app",
+        "startedAtMonotonicMs": 70293.20625,
+        "target": "worker"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.793,
+        "completedAtMonotonicMs": 72305.027541,
+        "host": "192.168.1.210",
+        "startedAtMonotonicMs": 72292.840916,
+        "target": "device"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.981,
+        "completedAtMonotonicMs": 72304.028958,
+        "host": "192.168.1.254",
+        "startedAtMonotonicMs": 72292.840916,
+        "target": "router"
+      },
+      {
+        "detail": "ping completed without an RTT reply",
+        "outcome": "error",
+        "completedAtMonotonicMs": 73329.284416,
+        "host": "kit--kit-stick-voice-e2e-20260731.iterate.app",
+        "startedAtMonotonicMs": 72292.840916,
+        "target": "worker"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.823,
+        "completedAtMonotonicMs": 74305.389125,
+        "host": "192.168.1.210",
+        "startedAtMonotonicMs": 74294.052416,
+        "target": "device"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.605,
+        "completedAtMonotonicMs": 74304.860458,
+        "host": "192.168.1.254",
+        "startedAtMonotonicMs": 74294.052416,
+        "target": "router"
+      },
+      {
+        "detail": "ping completed without an RTT reply",
+        "outcome": "error",
+        "completedAtMonotonicMs": 75436.188416,
+        "host": "kit--kit-stick-voice-e2e-20260731.iterate.app",
+        "startedAtMonotonicMs": 74294.052416,
+        "target": "worker"
+      }
+    ],
+    "reachabilitySampleIntervalMs": 1000
+  },
+  "networkArtifact": {
+    "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-handoff-fixed/2026-08-01T05-05-20-271Z/network.json",
+    "classification": "network-invalid",
+    "reasons": [
+      {
+        "code": "host-reachability-timeout",
+        "message": "worker reachability probe timed out at 65291.675416 ms."
+      },
+      {
+        "code": "host-reachability-unreachable",
+        "message": "worker reachability probe failed at 67293.728333 ms."
+      },
+      {
+        "code": "host-reachability-unreachable",
+        "message": "worker reachability probe failed at 69293.50325 ms."
+      },
+      {
+        "code": "host-reachability-unreachable",
+        "message": "worker reachability probe failed at 70293.20625 ms."
+      },
+      {
+        "code": "host-reachability-unreachable",
+        "message": "worker reachability probe failed at 72292.840916 ms."
+      },
+      {
+        "code": "host-reachability-unreachable",
+        "message": "worker reachability probe failed at 74294.052416 ms."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 71652.603375 ms."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 0 to 1."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 74416.258291 ms."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 0 to 1."
+      },
+      {
+        "code": "pcm-socket-disconnected",
+        "message": "pcm socket was disconnected at 77021.250083 ms."
+      },
+      {
+        "code": "pcm-socket-disconnect",
+        "message": "pcm socket disconnect count increased from 0 to 1."
+      },
+      {
+        "code": "dns-duration-exceeded",
+        "message": "DNS duration 931.1177499999976 ms exceeded 500 ms."
+      },
+      {
+        "code": "connect-duration-exceeded",
+        "message": "CONNECT duration 1742.565499999997 ms exceeded 1000 ms."
+      },
+      {
+        "code": "terminal-pcm-socket-closed",
+        "message": "Terminal PCM socket state was closed."
+      },
+      {
+        "code": "terminal-pcm-socket-disconnect",
+        "message": "Terminal PCM socket recorded 1 disconnect incident(s)."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2002.0529170000082 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.774916999988 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.634665999998 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2001.211500000005 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2727.2905839999876 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2002.0529170000082 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.774916999988 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.634665999998 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2001.211500000005 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2727.2905839999876 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2002.0529170000082 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.774916999988 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.634665999998 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2001.211500000005 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2727.2905839999876 ms gap, exceeding 1500 ms."
+      }
+    ]
+  },
+  "provenance": {
+    "device": {
+      "buildDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/m5sticks3/build",
+      "currentPort": "/dev/cu.usbmodem11201",
+      "host": "192.168.1.210",
+      "id": "m5sticks3",
+      "name": "M5Stack M5StickS3",
+      "stableUsbSerial": "70:04:1D:D5:45:88"
+    },
+    "project": {
+      "baseUrl": "https://os.iterate.com",
+      "id": "prj_bd8785e119fe4f1d8631bb95e1dea748",
+      "slug": "kit-stick-voice-e2e-20260731",
+      "workerHost": "kit--kit-stick-voice-e2e-20260731.iterate.app"
+    },
+    "routes": {
+      "capabilityMountPath": [
+        "kit",
+        "m5sticks3"
+      ],
+      "pcmUrl": "https://kit--kit-stick-voice-e2e-20260731.iterate.app/pcm",
+      "providerEventStreamPath": "/devices/m5sticks3"
+    },
+    "schemaVersion": 1
+  },
+  "providerEventsArtifact": {
+    "continuity": {
+      "discontinuities": [],
+      "expectedFirstSequence": 1,
+      "firstObservedSequence": 1,
+      "lastObservedSequence": 5,
+      "verdict": "contiguous-from-one"
+    },
+    "eventCount": 5,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-morning-handoff-fixed/2026-08-01T05-05-20-271Z/provider-events.jsonl",
+    "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429"
+  },
+  "providerEvents": [
+    {
+      "providerType": "session.created",
+      "raw": "{\"type\":\"session.created\",\"event_id\":\"d4dddf05-4a55-46dd-be61-988ab7cca44b\",\"session\":{\"id\":\"005d629e1fec4f20a0915a3669ca6684\",\"object\":\"realtime.session\",\"instructions\":\"\",\"voice\":\"xai_ara\",\"modalities\":[\"audio\"],\"turn_detection\":{\"type\":null},\"tools\":[],\"model\":\"grok-voice-think-fast-2.0\"}}",
+      "receivedAtMs": 1785560753457,
+      "sequence": 1,
+      "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429",
+      "createdAt": "2026-08-01T05:05:53.471Z",
+      "offset": 2302
+    },
+    {
+      "providerType": "conversation.created",
+      "raw": "{\"type\":\"conversation.created\",\"event_id\":\"7f979896-ecab-4479-a41d-3c0a57144a94\",\"conversation\":{\"id\":\"5351ea0d-51e2-42cd-9eee-5906c5beed9b\",\"object\":\"realtime.conversation\"},\"previous_item_id\":null}",
+      "receivedAtMs": 1785560753457,
+      "sequence": 2,
+      "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429",
+      "createdAt": "2026-08-01T05:05:53.505Z",
+      "offset": 2303
+    },
+    {
+      "providerType": "ping",
+      "raw": "{\"type\":\"ping\",\"event_id\":\"ca2c6cd3-5398-4f6d-b7e4-a5a0e68f100a\",\"timestamp\":1785560753388,\"previous_item_id\":null}",
+      "receivedAtMs": 1785560753457,
+      "sequence": 3,
+      "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429",
+      "createdAt": "2026-08-01T05:05:53.505Z",
+      "offset": 2304
+    },
+    {
+      "providerType": "session.updated",
+      "raw": "{\"session\":{\"instructions\":\"Be concise, conversational, and useful.\",\"enable_noise_suppression\":true,\"turn_detection\":{},\"model\":\"grok-voice-think-fast-2.0\",\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"changeColour\",\"description\":\"Change the physical M5StickS3 display background to red or green.\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"colour\":{\"enum\":[\"red\",\"green\"],\"type\":\"string\"}},\"required\":[\"colour\"],\"type\":\"object\"}}}],\"keep_context\":true,\"enable_phonetic_spelling\":false,\"input_audio_transcription\":{\"model\":\"grok-transcribe\"},\"modalities\":[\"audio\"],\"input_audio_format\":\"not specified\",\"output_audio_format\":\"not specified\",\"tool_choice\":\"auto\",\"temperature\":-1.0,\"max_response_output_tokens\":\"inf\",\"audio\":{\"input\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":16000},\"transport\":\"binary\",\"transcription\":{\"model\":\"grok-transcribe\"}},\"output\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":16000},\"transport\":\"binary\"}}},\"type\":\"session.updated\",\"event_id\":\"4b5cc15e-3505-42fc-8281-274593c07b2e\",\"previous_item_id\":null}",
+      "receivedAtMs": 1785560753521,
+      "sequence": 4,
+      "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429",
+      "createdAt": "2026-08-01T05:05:53.532Z",
+      "offset": 2305
+    },
+    {
+      "providerType": "input_audio_buffer.speech_started",
+      "raw": "{\"type\":\"input_audio_buffer.speech_started\",\"event_id\":\"5cca3e9a-247f-459c-8fd6-f634721db33d\",\"item_id\":\"883f00a6-0f46-48b9-9cc5-35e28734e520\",\"audio_start_ms\":3505,\"previous_item_id\":null}",
+      "receivedAtMs": 1785560757034,
+      "sequence": 5,
+      "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429",
+      "createdAt": "2026-08-01T05:05:57.041Z",
+      "offset": 2306
+    }
+  ],
+  "playback": {
+    "baseline": {
+      "schemaVersion": 5,
+      "sequence": 3,
+      "producedAtMs": 36846,
+      "downlinkAccepted": 0,
+      "playback": {
+        "submitted": 0,
+        "completed": 0,
+        "generationFramesFlushed": 0,
+        "freshnessFramesDropped": 0,
+        "partialPrebufferFramesDropped": 0,
+        "underrunFramesFlushed": 0,
+        "underrunIncidents": 0,
+        "underrunSilenceFramesSubmitted": 0,
+        "underrunSilenceFramesCompleted": 0,
+        "underrunSilenceFramesRetired": 0,
+        "underrunLateFramesDropped": 0,
+        "dmaDeadlineMissIncidents": 0,
+        "freshnessIncidents": 0,
+        "partialPrebufferIncidents": 0,
+        "endOfStreamMarkersConsumed": 0,
+        "endOfStreamResponses": 0,
+        "endOfStreamSilenceDescriptors": 0,
+        "endOfStreamPaddingDescriptorsCompleted": 0,
+        "driverQueueOverflowIncidents": 0,
+        "driverFailures": 0,
+        "driverStopFailures": 0,
+        "fatalFramesFlushed": 0,
+        "writeBackpressureIncidents": 0,
+        "writeBackpressureDestructiveResets": 0,
+        "writeBackpressureFramesDropped": 0,
+        "invalidFrames": 0,
+        "stateErrors": 0,
+        "ownerClockRegressions": 0,
+        "receiveToDmaStartSamples": 0,
+        "maximumReceiveToDmaStartMs": 0,
+        "downlinkInterarrivalSamples": 0,
+        "maximumDownlinkInterarrivalMs": 0,
+        "maximumEofToSuccessfulRefillUs": 0,
+        "maximumWriteCallDurationUs": 0,
+        "minimumReuseLeadAtSuccessfulRefillUs": 0
+      },
+      "runtime": {
+        "audioOwnerStackHeadroomBytes": 6652,
+        "mainStackHeadroomBytes": 2796,
+        "controlNetworkStackHeadroomBytes": 4584,
+        "pcmNetworkStackHeadroomBytes": 0,
+        "freeInternalHeapBytes": 53611,
+        "minimumFreeInternalHeapBytes": 40695,
+        "freeDmaHeapBytes": 53611,
+        "minimumFreeDmaHeapBytes": 40695,
+        "largestFreeInternalHeapBlockBytes": 29696,
+        "largestFreeDmaBlockBytes": 29696,
+        "generationFenceAcknowledgementTimeouts": 0,
+        "lifecycleAcknowledgementTimeouts": 0,
+        "controlNetworkStackExhaustions": 0,
+        "pcmNetworkStackExhaustions": 0,
+        "pcmReceiveCalls": 0,
+        "pcmReceiveChunks": 0,
+        "controlNetworkMaximumWorkCycles": 987657572,
+        "pcmNetworkMaximumWorkCycles": 0,
+        "cpuPermille": 76
+      }
+    },
+    "latestBeforeCleanup": {
+      "schemaVersion": 5,
+      "sequence": 32,
+      "producedAtMs": 78898,
+      "downlinkAccepted": 0,
+      "playback": {
+        "submitted": 0,
+        "completed": 0,
+        "generationFramesFlushed": 0,
+        "freshnessFramesDropped": 0,
+        "partialPrebufferFramesDropped": 0,
+        "underrunFramesFlushed": 0,
+        "underrunIncidents": 0,
+        "underrunSilenceFramesSubmitted": 0,
+        "underrunSilenceFramesCompleted": 0,
+        "underrunSilenceFramesRetired": 0,
+        "underrunLateFramesDropped": 0,
+        "dmaDeadlineMissIncidents": 0,
+        "freshnessIncidents": 0,
+        "partialPrebufferIncidents": 0,
+        "endOfStreamMarkersConsumed": 0,
+        "endOfStreamResponses": 0,
+        "endOfStreamSilenceDescriptors": 0,
+        "endOfStreamPaddingDescriptorsCompleted": 0,
+        "driverQueueOverflowIncidents": 0,
+        "driverFailures": 0,
+        "driverStopFailures": 0,
+        "fatalFramesFlushed": 0,
+        "writeBackpressureIncidents": 0,
+        "writeBackpressureDestructiveResets": 0,
+        "writeBackpressureFramesDropped": 0,
+        "invalidFrames": 0,
+        "stateErrors": 0,
+        "ownerClockRegressions": 0,
+        "receiveToDmaStartSamples": 0,
+        "maximumReceiveToDmaStartMs": 0,
+        "downlinkInterarrivalSamples": 0,
+        "maximumDownlinkInterarrivalMs": 0,
+        "maximumEofToSuccessfulRefillUs": 0,
+        "maximumWriteCallDurationUs": 0,
+        "minimumReuseLeadAtSuccessfulRefillUs": 0
+      },
+      "runtime": {
+        "audioOwnerStackHeadroomBytes": 6652,
+        "mainStackHeadroomBytes": 2476,
+        "controlNetworkStackHeadroomBytes": 4584,
+        "pcmNetworkStackHeadroomBytes": 0,
+        "freeInternalHeapBytes": 54243,
+        "minimumFreeInternalHeapBytes": 431,
+        "freeDmaHeapBytes": 54243,
+        "minimumFreeDmaHeapBytes": 431,
+        "largestFreeInternalHeapBlockBytes": 28672,
+        "largestFreeDmaBlockBytes": 28672,
+        "generationFenceAcknowledgementTimeouts": 0,
+        "lifecycleAcknowledgementTimeouts": 0,
+        "controlNetworkStackExhaustions": 0,
+        "pcmNetworkStackExhaustions": 0,
+        "pcmReceiveCalls": 1489,
+        "pcmReceiveChunks": 0,
+        "controlNetworkMaximumWorkCycles": 987657572,
+        "pcmNetworkMaximumWorkCycles": 1618026964,
+        "cpuPermille": 98
+      }
+    }
+  },
+  "schemaVersion": 2,
+  "snapshotErrors": [],
+  "worker": {
+    "baseline": {
+      "awaitingCommitAcknowledgement": false,
+      "awaitingUplinkEndMarker": false,
+      "closed": false,
+      "downlinkDroppedBytes": 0,
+      "downlinkFrames": 0,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 0,
+      "emptyUplinkTurns": 0,
+      "interrupted": false,
+      "lastProviderError": null,
+      "lastProviderEventType": "session.updated",
+      "lastSocketClose": null,
+      "providerAvailable": true,
+      "providerCommitMessagesSent": 0,
+      "providerConnections": 1,
+      "providerControlEvents": 4,
+      "providerControlMessagesSent": 1,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 0,
+      "providerFunctionCallFailures": 0,
+      "providerFunctionCalls": 0,
+      "providerFunctionCallsPending": 0,
+      "providerKeepalivePings": 1,
+      "providerKeepalivePongs": 1,
+      "providerPcmPeakSample": 0,
+      "providerPcmRmsSample": 0,
+      "providerPcmSamples": 0,
+      "providerResponseActive": false,
+      "providerResponseCreateMessagesSent": 0,
+      "providerResponsesCompleted": 0,
+      "providerSendFailures": 0,
+      "uplinkDroppedBytes": 0,
+      "uplinkEndMarkers": 0,
+      "uplinkEndMarkerTimeouts": 0,
+      "uplinkFrames": 0,
+      "uplinkFramesAfterEndMarkerDropped": 0,
+      "uplinkUnavailableFrames": 0,
+      "deviceEvents": {
+        "acceptedEvents": 1,
+        "lastEvent": {
+          "sequence": 2,
+          "source": "system",
+          "type": "pushToTalk.stopped"
+        },
+        "physicalConversationEnds": 0,
+        "physicalConversationStarts": 0,
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteConversationEnds": 0,
+        "remoteConversationStarts": 0,
+        "remoteStarts": 0,
+        "remoteStops": 0
+      },
+      "deviceId": "m5sticks3",
+      "deviceMetrics": {
+        "invalidSamples": 0,
+        "lastInvalidReason": null,
+        "latestSample": {
+          "metrics": {
+            "uptimeMs": 61188,
+            "freeHeapBytes": 8415252,
+            "minimumFreeHeapBytes": 8404912,
+            "freeInternalHeapBytes": 23491,
+            "minimumFreeInternalHeapBytes": 12519,
+            "freePsramBytes": 8384912,
+            "taskStackHighWaterBytes": 2796,
+            "cpuPermille": 138,
+            "audio": {
+              "capture": {
+                "sent": 0,
+                "dropped": 0,
+                "failures": 0
+              },
+              "uplink": {
+                "sent": 0,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 0,
+                "sendDeferrals": 0,
+                "consecutiveSendDeferrals": 0,
+                "maximumConsecutiveSendDeferrals": 0,
+                "failures": 0,
+                "restartIncidents": 0,
+                "producerBackpressureRestarts": 0,
+                "transportDisconnectRestarts": 0,
+                "noProgressTimeoutRestarts": 0,
+                "frameSendTimeoutRestarts": 0,
+                "captureStaleRestarts": 0,
+                "lastTransportAcceptAgeMs": 0,
+                "maximumTransportAcceptAgeMs": 0,
+                "lastRestartOldestCaptureAgeMs": 0,
+                "lastRestartReason": "none",
+                "lastRestartFramesDiscarded": 0
+              },
+              "downlink": {
+                "received": 0,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 0,
+                "failures": 0
+              },
+              "playback": {
+                "submitted": 0,
+                "completed": 0,
+                "flushed": 0,
+                "depth": 0,
+                "highWater": 0,
+                "failures": 0
+              },
+              "protocolFailures": 0,
+              "buffers": {
+                "uplinkApplication": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 20480
+                },
+                "websocketTransmitter": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 910
+                },
+                "lwipSend": {
+                  "evidence": "capacityOnly",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 5760
+                },
+                "tlsEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                },
+                "wifiEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                }
+              }
+            }
+          },
+          "receivedAtMs": 1785560754108
+        },
+        "samplesReceived": 1
+      },
+      "deviceEventSubscriptionAttempts": 1,
+      "deviceEventSubscriptionFailures": 0,
+      "endedAtMs": null,
+      "previousSession": {
+        "awaitingCommitAcknowledgement": false,
+        "awaitingUplinkEndMarker": false,
+        "closed": true,
+        "downlinkDroppedBytes": 0,
+        "downlinkFrames": 0,
+        "downlinkPartialBytes": 0,
+        "downlinkQueuedBytes": 0,
+        "downlinkQueueHighWaterBytes": 0,
+        "interrupted": false,
+        "lastProviderError": null,
+        "lastProviderEventType": "ping",
+        "lastSocketClose": {
+          "code": 1006,
+          "reason": "WebSocket disconnected without sending Close frame.",
+          "source": "device"
+        },
+        "providerAvailable": false,
+        "providerConnections": 1,
+        "providerControlEvents": 16,
+        "providerBufferedBytes": 0,
+        "providerDisconnects": 0,
+        "providerFunctionCallFailures": 0,
+        "providerFunctionCalls": 0,
+        "providerFunctionCallsPending": 0,
+        "providerPcmPeakSample": 0,
+        "providerPcmRmsSample": 0,
+        "providerPcmSamples": 0,
+        "providerResponseActive": false,
+        "providerResponsesCompleted": 0,
+        "uplinkDroppedBytes": 0,
+        "uplinkEndMarkers": 0,
+        "uplinkEndMarkerTimeouts": 0,
+        "uplinkFrames": 0,
+        "uplinkFramesAfterEndMarkerDropped": 0,
+        "uplinkUnavailableFrames": 0,
+        "deviceEvents": {
+          "acceptedEvents": 2,
+          "lastEvent": {
+            "sequence": 10,
+            "source": "remote",
+            "type": "conversation.ended"
+          },
+          "physicalConversationEnds": 0,
+          "physicalConversationStarts": 0,
+          "physicalStarts": 0,
+          "physicalStops": 0,
+          "remoteConversationEnds": 1,
+          "remoteConversationStarts": 0,
+          "remoteStarts": 0,
+          "remoteStops": 0
+        },
+        "deviceMetrics": {
+          "invalidSamples": 0,
+          "lastInvalidReason": null,
+          "latestSample": {
+            "metrics": {
+              "uptimeMs": 503018,
+              "freeHeapBytes": 8411324,
+              "minimumFreeHeapBytes": 8392272,
+              "freeInternalHeapBytes": 19039,
+              "minimumFreeInternalHeapBytes": 1675,
+              "freePsramBytes": 8384912,
+              "taskStackHighWaterBytes": 2444,
+              "cpuPermille": 157,
+              "audio": {
+                "capture": {
+                  "sent": 89,
+                  "dropped": 754,
+                  "failures": 2
+                },
+                "uplink": {
+                  "sent": 25,
+                  "dropped": 66,
+                  "depth": 0,
+                  "highWater": 32,
+                  "sendDeferrals": 238,
+                  "consecutiveSendDeferrals": 0,
+                  "maximumConsecutiveSendDeferrals": 57,
+                  "failures": 0,
+                  "restartIncidents": 2,
+                  "producerBackpressureRestarts": 2,
+                  "transportDisconnectRestarts": 0,
+                  "noProgressTimeoutRestarts": 0,
+                  "frameSendTimeoutRestarts": 0,
+                  "captureStaleRestarts": 0,
+                  "lastTransportAcceptAgeMs": 311,
+                  "maximumTransportAcceptAgeMs": 416,
+                  "lastRestartOldestCaptureAgeMs": 641,
+                  "lastRestartReason": "producer_backpressure",
+                  "lastRestartFramesDiscarded": 32
+                },
+                "downlink": {
+                  "received": 0,
+                  "dropped": 0,
+                  "depth": 0,
+                  "highWater": 0,
+                  "failures": 0
+                },
+                "playback": {
+                  "submitted": 0,
+                  "completed": 0,
+                  "flushed": 0,
+                  "depth": 0,
+                  "highWater": 0,
+                  "failures": 0
+                },
+                "protocolFailures": 0,
+                "buffers": {
+                  "uplinkApplication": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 20480,
+                    "capacity": 20480
+                  },
+                  "websocketTransmitter": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 648,
+                    "capacity": 910
+                  },
+                  "lwipSend": {
+                    "evidence": "capacityOnly",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 5760
+                  },
+                  "tlsEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  },
+                  "wifiEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  }
+                }
+              }
+            },
+            "receivedAtMs": 1785560663348
+          },
+          "samplesReceived": 112
+        },
+        "deviceId": "m5sticks3",
+        "deviceEventSubscriptionAttempts": 1,
+        "deviceEventSubscriptionFailures": 0,
+        "endedAtMs": 1785560664182,
+        "providerEvents": {
+          "appendFailures": 0,
+          "appendedEvents": 16,
+          "droppedEvents": 0,
+          "lastAppendError": null,
+          "lastAppendedSequence": 16,
+          "observedEvents": 16,
+          "pendingEvents": 0,
+          "pendingRawBytes": 0,
+          "pendingRawHighWaterBytes": 1036
+        },
+        "providerConnectAttempts": 1,
+        "providerConnectFailures": 0,
+        "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:cf4977ad-8933-4862-9e07-e6e7ff3f0bcd"
+      },
+      "providerEvents": {
+        "appendFailures": 0,
+        "appendedEvents": 4,
+        "droppedEvents": 0,
+        "lastAppendError": null,
+        "lastAppendedSequence": 4,
+        "observedEvents": 4,
+        "pendingEvents": 0,
+        "pendingRawBytes": 0,
+        "pendingRawHighWaterBytes": 1036
+      },
+      "providerConnectAttempts": 1,
+      "providerConnectFailures": 0,
+      "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429"
+    },
+    "latestBeforeCleanup": {
+      "awaitingCommitAcknowledgement": false,
+      "awaitingUplinkEndMarker": false,
+      "closed": true,
+      "downlinkDroppedBytes": 0,
+      "downlinkFrames": 0,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 0,
+      "emptyUplinkTurns": 0,
+      "interrupted": true,
+      "lastProviderError": null,
+      "lastProviderEventType": "input_audio_buffer.speech_started",
+      "lastSocketClose": {
+        "code": 1006,
+        "reason": "WebSocket disconnected without sending Close frame.",
+        "source": "device"
+      },
+      "providerAvailable": false,
+      "providerCommitMessagesSent": 0,
+      "providerConnections": 1,
+      "providerControlEvents": 5,
+      "providerControlMessagesSent": 1,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 0,
+      "providerFunctionCallFailures": 0,
+      "providerFunctionCalls": 0,
+      "providerFunctionCallsPending": 0,
+      "providerKeepalivePings": 1,
+      "providerKeepalivePongs": 1,
+      "providerPcmPeakSample": 0,
+      "providerPcmRmsSample": 0,
+      "providerPcmSamples": 0,
+      "providerResponseActive": false,
+      "providerResponseCreateMessagesSent": 0,
+      "providerResponsesCompleted": 0,
+      "providerSendFailures": 0,
+      "uplinkDroppedBytes": 0,
+      "uplinkEndMarkers": 0,
+      "uplinkEndMarkerTimeouts": 0,
+      "uplinkFrames": 9,
+      "uplinkFramesAfterEndMarkerDropped": 0,
+      "uplinkUnavailableFrames": 0,
+      "deviceEvents": {
+        "acceptedEvents": 2,
+        "lastEvent": {
+          "sequence": 3,
+          "source": "remote",
+          "type": "pushToTalk.started"
+        },
+        "physicalConversationEnds": 0,
+        "physicalConversationStarts": 0,
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteConversationEnds": 0,
+        "remoteConversationStarts": 0,
+        "remoteStarts": 1,
+        "remoteStops": 0
+      },
+      "deviceMetrics": {
+        "invalidSamples": 0,
+        "lastInvalidReason": null,
+        "latestSample": {
+          "metrics": {
+            "uptimeMs": 62208,
+            "freeHeapBytes": 8415252,
+            "minimumFreeHeapBytes": 8404912,
+            "freeInternalHeapBytes": 23491,
+            "minimumFreeInternalHeapBytes": 12519,
+            "freePsramBytes": 8384912,
+            "taskStackHighWaterBytes": 2636,
+            "cpuPermille": 167,
+            "audio": {
+              "capture": {
+                "sent": 0,
+                "dropped": 0,
+                "failures": 0
+              },
+              "uplink": {
+                "sent": 0,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 0,
+                "sendDeferrals": 0,
+                "consecutiveSendDeferrals": 0,
+                "maximumConsecutiveSendDeferrals": 0,
+                "failures": 0,
+                "restartIncidents": 0,
+                "producerBackpressureRestarts": 0,
+                "transportDisconnectRestarts": 0,
+                "noProgressTimeoutRestarts": 0,
+                "frameSendTimeoutRestarts": 0,
+                "captureStaleRestarts": 0,
+                "lastTransportAcceptAgeMs": 0,
+                "maximumTransportAcceptAgeMs": 0,
+                "lastRestartOldestCaptureAgeMs": 0,
+                "lastRestartReason": "none",
+                "lastRestartFramesDiscarded": 0
+              },
+              "downlink": {
+                "received": 0,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 0,
+                "failures": 0
+              },
+              "playback": {
+                "submitted": 0,
+                "completed": 0,
+                "flushed": 0,
+                "depth": 0,
+                "highWater": 0,
+                "failures": 0
+              },
+              "protocolFailures": 0,
+              "buffers": {
+                "uplinkApplication": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 20480
+                },
+                "websocketTransmitter": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 910
+                },
+                "lwipSend": {
+                  "evidence": "capacityOnly",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 5760
+                },
+                "tlsEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                },
+                "wifiEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                }
+              }
+            }
+          },
+          "receivedAtMs": 1785560755279
+        },
+        "samplesReceived": 2
+      },
+      "deviceId": "m5sticks3",
+      "deviceEventSubscriptionAttempts": 1,
+      "deviceEventSubscriptionFailures": 0,
+      "endedAtMs": 1785560758166,
+      "providerEvents": {
+        "appendFailures": 0,
+        "appendedEvents": 5,
+        "droppedEvents": 0,
+        "lastAppendError": null,
+        "lastAppendedSequence": 5,
+        "observedEvents": 5,
+        "pendingEvents": 0,
+        "pendingRawBytes": 0,
+        "pendingRawHighWaterBytes": 1036
+      },
+      "providerConnectAttempts": 1,
+      "providerConnectFailures": 0,
+      "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:034210ac-6565-4ce9-a8df-f7c6b94c5429"
+    }
+  }
+}

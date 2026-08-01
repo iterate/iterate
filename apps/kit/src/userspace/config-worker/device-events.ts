@@ -1,4 +1,5 @@
 export interface DeviceEvent {
+  conversationActive?: boolean;
   result: number;
   schemaVersion: number;
   sequence: number;
@@ -36,6 +37,7 @@ export type DeviceEventSubscriptionDiagnostic =
       expectedSequence: number;
     }
   | { code: "device-event-handler-failed"; event: DeviceEvent }
+  | { code: "device-event-missing-conversation-state"; event: DeviceEvent }
   | { code: "device-event-missing-snapshot"; event: DeviceEvent }
   | { code: "unknown-device-event"; event: DeviceEvent };
 
@@ -105,13 +107,15 @@ export class DeviceEventSessionMetricsTracker {
 interface PushToTalkBridge {
   inputStarted(): boolean;
   inputStopped(): boolean;
+  setConversationActive(active: boolean): boolean;
 }
 
 /**
  * Subscribes the server-side PCM generation to the device's one ordered event
- * source. The initial snapshot establishes held/released state but a released
- * snapshot never commits a turn: doing so would ask Grok to answer an empty
- * input every time either WebSocket reconnects.
+ * source. The initial snapshot establishes both independent state machines:
+ * call lifetime and held/released PTT. A released snapshot never commits a
+ * turn: doing so would ask Grok to answer an empty input every time either
+ * WebSocket reconnects.
  *
  * A sequence gap is rejected rather than guessed through. Losing either edge
  * can invert the meaning of every later microphone frame, so continuing would
@@ -144,6 +148,10 @@ export async function subscribePcmBridgeToDeviceEvents(
         onDiagnostic({ code: "device-event-missing-snapshot", event });
         return;
       }
+      if (typeof event.conversationActive !== "boolean") {
+        onDiagnostic({ code: "device-event-missing-conversation-state", event });
+        return;
+      }
       synchronized = true;
       lastSequence = event.sequence;
     } else {
@@ -164,14 +172,30 @@ export async function subscribePcmBridgeToDeviceEvents(
       onDiagnostic({ code: "device-event-handler-failed", event });
       return;
     }
-    if (event.type === "conversation.started" || event.type === "conversation.ended") {
+    if (event.snapshot === true) {
       /*
-       * The top button owns the lifetime of the independent PCM socket. Its
-       * event still advances this shared sequence and supplies provenance for
-       * a physical proof, but it must never impersonate a front-button speech
-       * edge. The device has already opened or closed `/pcm` by the time this
-       * callback arrives, so userspace only records the transition here.
+       * `/pcm` is already warm when userspace subscribes. Restoring call state
+       * here lets a replacement Durable Object recreate only the disposable
+       * provider and avoids another device TLS handshake. This transition is
+       * intentionally separate from the PTT snapshot below: a call may be
+       * active while the microphone is released.
        */
+      bridge.setConversationActive(event.conversationActive!);
+    }
+    if (event.type === "conversation.started" || event.type === "conversation.ended") {
+      const conversationActive = event.type === "conversation.started";
+      if (event.conversationActive !== conversationActive) {
+        onDiagnostic({ code: "device-event-missing-conversation-state", event });
+        return;
+      }
+      /*
+       * The top button owns one disposable provider conversation over the
+       * already-open PCM lane. It must never impersonate a front-button speech
+       * edge: switching call lifetime cannot capture or commit microphone
+       * audio. Idempotence also absorbs a snapshot followed by a repeated
+       * state observation without greeting twice.
+       */
+      bridge.setConversationActive(conversationActive);
       onAcceptedEvent(event);
       return;
     }

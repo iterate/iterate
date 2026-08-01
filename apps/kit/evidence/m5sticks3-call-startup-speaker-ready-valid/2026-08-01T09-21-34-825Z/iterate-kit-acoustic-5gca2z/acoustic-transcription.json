@@ -1,0 +1,74 @@
+{
+  "assessment": {
+    "acceptance": "independent-stt-provisional",
+    "boundaryWordOverage": 0,
+    "normalizedMicrophoneTranscript": "production turn one is green",
+    "normalizedProviderTranscript": "production turn one is green",
+    "passed": true,
+    "reasons": [],
+    "relativeActiveWindowDeficit": 0,
+    "responseToBaselineMaximumRmsRatio": 11.393911142718602
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 5,
+    "passed": true,
+    "reasons": []
+  },
+  "microphoneStt": {
+    "durationSeconds": 4.208,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"3f801a59-a278-4aa5-9624-7ceea0194acb\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Production\",\"words\":[{\"text\":\"Production\",\"start\":0.73,\"end\":1.257}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"turn one is green.\",\"words\":[{\"text\":\"turn\",\"start\":1.52,\"end\":1.642},{\"text\":\"one\",\"start\":1.804,\"end\":2.027},{\"text\":\"is\",\"start\":2.169,\"end\":2.25},{\"text\":\"green.\",\"start\":2.351,\"end\":2.716}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Production turn one is green.\",\"words\":[{\"text\":\"Production\",\"start\":0.721,\"end\":1.242},{\"text\":\"turn\",\"start\":1.363,\"end\":1.643},{\"text\":\"one\",\"start\":1.823,\"end\":2.024},{\"text\":\"is\",\"start\":2.164,\"end\":2.244},{\"text\":\"green.\",\"start\":2.344,\"end\":2.705}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":4.208,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":4.208}"
+    ],
+    "text": "Production turn one is green.",
+    "words": [
+      {
+        "text": "Production",
+        "start": 0.721,
+        "end": 1.242
+      },
+      {
+        "text": "turn",
+        "start": 1.363,
+        "end": 1.643
+      },
+      {
+        "text": "one",
+        "start": 1.823,
+        "end": 2.024
+      },
+      {
+        "text": "is",
+        "start": 2.164,
+        "end": 2.244
+      },
+      {
+        "text": "green.",
+        "start": 2.344,
+        "end": 2.705
+      }
+    ]
+  },
+  "providerOutputTranscript": "Production turn one is green.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 36,
+      "clippedSampleCount": 0,
+      "maximumRms": 153.3674509144623,
+      "p50Rms": 10.041476485059356,
+      "p95Rms": 66.36412340263374,
+      "p99Rms": 126.26883935344725,
+      "sampleCount": 201984,
+      "windowCount": 211,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 33.65118636467368
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

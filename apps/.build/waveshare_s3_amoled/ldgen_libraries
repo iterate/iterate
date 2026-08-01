@@ -88,4 +88,12 @@
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/core/libcore.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/iterate_esp_idf/libiterate_esp_idf.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_codec_dev/libespressif__esp_codec_dev.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_io_expander/libespressif__esp_io_expander.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_io_expander_tca9554/libespressif__esp_io_expander_tca9554.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/lvgl__lvgl/liblvgl__lvgl.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_panel_io_additions/libespressif__esp_lcd_panel_io_additions.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/libespressif__esp_lcd_touch.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch_ft5x06/libespressif__esp_lcd_touch_ft5x06.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/waveshare__esp_lcd_sh8601/libwaveshare__esp_lcd_sh8601.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/waveshare__esp32_s3_touch_amoled_1_8/libwaveshare__esp32_s3_touch_amoled_1_8.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/main/libmain.a

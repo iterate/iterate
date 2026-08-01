@@ -14,6 +14,8 @@ export type M5StickS3Metrics = KitMetrics & {
 export type M5StickS3Description = KitDeviceDescription;
 
 export interface M5StickS3 extends KitDevice {
+  /** Capture the pixels currently shown on the physical panel as a PNG. */
+  captureScreen(): Promise<Uint8Array>;
   conversation: {
     hangUp(): Promise<boolean>;
     start(): Promise<boolean>;

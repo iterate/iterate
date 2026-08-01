@@ -1,0 +1,76 @@
+[1/2] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/esptool_py && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/partition_table/partition-table.bin /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/iterate-kit-waveshare-s3-amoled.bin
+iterate-kit-waveshare-s3-amoled.bin binary size 0x138100 bytes. Smallest app partition is 0x400000 bytes. 0x2c7f00 bytes (70%) free.
+[1/2] cd /Users/jonastemplestein/esp/esp-idf/components/esptool_py && /opt/homebrew/bin/cmake -D IDF_PATH=/Users/jonastemplestein/esp/esp-idf -D "SERIAL_TOOL=/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python;;/Users/jonastemplestein/esp/esp-idf/components/esptool_py/esptool/esptool.py;--chip;esp32s3" -D "SERIAL_TOOL_ARGS=--before=default_reset;--after=hard_reset;write_flash;@app-flash_args" -D WORKING_DIRECTORY=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled -P /Users/jonastemplestein/esp/esp-idf/components/esptool_py/run_serial_tool.cmake
+esptool.py --chip esp32s3 -p /dev/cu.usbmodem11301 -b 921600 --before=default_reset --after=hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB 0x10000 iterate-kit-waveshare-s3-amoled.bin
+esptool.py v4.12.0
+Serial port /dev/cu.usbmodem11301
+Connecting...
+Chip is ESP32-S3 (QFN56) (revision v0.2)
+Features: WiFi, BLE, Embedded PSRAM 8MB (AP_3v3)
+Crystal is 40MHz
+USB mode: USB-Serial/JTAG
+MAC: 1c:db:d4:7a:16:c8
+Uploading stub...
+Running stub...
+Stub running...
+Changing baud rate to 921600
+Changed.
+Configuring flash size...
+Flash will be erased from 0x00010000 to 0x00148fff...
+Compressed 1278208 bytes to 830722...
+Writing at 0x00010000... (1 %)
+Writing at 0x0001ce74... (3 %)
+Writing at 0x00028b7c... (5 %)
+Writing at 0x00030915... (7 %)
+Writing at 0x00039825... (9 %)
+Writing at 0x00042141... (11 %)
+Writing at 0x00046e99... (13 %)
+Writing at 0x0004bfc6... (15 %)
+Writing at 0x0005190a... (17 %)
+Writing at 0x0005ae88... (19 %)
+Writing at 0x00063c68... (21 %)
+Writing at 0x000694dd... (23 %)
+Writing at 0x0006e883... (25 %)
+Writing at 0x00073dfd... (27 %)
+Writing at 0x0007992d... (29 %)
+Writing at 0x0007ed2b... (31 %)
+Writing at 0x000840d4... (33 %)
+Writing at 0x0008a06c... (35 %)
+Writing at 0x0008f386... (37 %)
+Writing at 0x00094710... (39 %)
+Writing at 0x0009a9bd... (41 %)
+Writing at 0x000a07ea... (43 %)
+Writing at 0x000a6549... (45 %)
+Writing at 0x000abfb8... (47 %)
+Writing at 0x000b1b4e... (49 %)
+Writing at 0x000b6d57... (50 %)
+Writing at 0x000bbfe3... (52 %)
+Writing at 0x000c1219... (54 %)
+Writing at 0x000c686a... (56 %)
+Writing at 0x000cb93c... (58 %)
+Writing at 0x000d0e93... (60 %)
+Writing at 0x000d65aa... (62 %)
+Writing at 0x000db790... (64 %)
+Writing at 0x000e08ec... (66 %)
+Writing at 0x000e5bf7... (68 %)
+Writing at 0x000eb5a1... (70 %)
+Writing at 0x000f0ac1... (72 %)
+Writing at 0x000f5e73... (74 %)
+Writing at 0x000fb480... (76 %)
+Writing at 0x00101855... (78 %)
+Writing at 0x0010691d... (80 %)
+Writing at 0x0010b97e... (82 %)
+Writing at 0x00110d9f... (84 %)
+Writing at 0x001164f4... (86 %)
+Writing at 0x0011f045... (88 %)
+Writing at 0x00126dfe... (90 %)
+Writing at 0x0012c8e6... (92 %)
+Writing at 0x00132ccf... (94 %)
+Writing at 0x00138656... (96 %)
+Writing at 0x0013e4e2... (98 %)
+Writing at 0x001440d5... (100 %)
+Wrote 1278208 bytes (830722 compressed) at 0x00010000 in 7.0 seconds (effective 1454.9 kbit/s)...
+Hash of data verified.
+
+Leaving...
+Hard resetting via RTS pin...

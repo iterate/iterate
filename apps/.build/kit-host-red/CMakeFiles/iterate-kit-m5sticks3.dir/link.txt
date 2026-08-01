@@ -1,0 +1,2 @@
+/usr/bin/ar qc libiterate-kit-m5sticks3.a "CMakeFiles/iterate-kit-m5sticks3.dir/devices/m5sticks3/m5sticks3.c.o"
+/usr/bin/ranlib libiterate-kit-m5sticks3.a

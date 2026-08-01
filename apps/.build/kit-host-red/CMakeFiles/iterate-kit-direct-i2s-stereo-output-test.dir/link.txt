@@ -1,0 +1,1 @@
+/usr/bin/c++ -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-direct-i2s-stereo-output-test.dir/tests/direct_i2s_stereo_output_test.cpp.o" -o iterate-kit-direct-i2s-stereo-output-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a

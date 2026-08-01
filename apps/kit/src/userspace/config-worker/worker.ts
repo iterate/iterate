@@ -21,7 +21,11 @@ import {
   kitDeviceEventStreamPath,
   type ProviderEventStreamMetrics,
 } from "./provider-event-stream.ts";
-import { connectDeterministicTone, connectGrokRealtimeVoice } from "./providers.ts";
+import {
+  connectDeterministicTone,
+  connectGrokRealtimeVoice,
+  type GrokRealtimeVoiceStage,
+} from "./providers.ts";
 import {
   authenticateProjectBearer,
   handleKitVoiceRequest,
@@ -32,6 +36,19 @@ import {
 const PCM_MODE_KEY = "kit-pcm-mode";
 const PCM_SOCKET_BACKLOG_LIMIT_BYTES = 16 * 640;
 const PREVIOUS_PCM_SESSION_KEY = "kit:previous-pcm-session";
+
+interface PcmSessionStartupTimeline {
+  authenticationAndModeReadyAtMs: number | null;
+  credentialDecodedAtMs: number | null;
+  credentialRequestStartedAtMs: number | null;
+  credentialResponseReceivedAtMs: number | null;
+  deviceLaneAcceptedAtMs: number | null;
+  providerConnectStartedAtMs: number | null;
+  providerSessionUpdateSentAtMs: number | null;
+  providerWebSocketCreatedAtMs: number | null;
+  providerWebSocketOpenedAtMs: number | null;
+  requestReceivedAtMs: number;
+}
 
 interface ActivePcmSession {
   bridge: PcmSessionBridge;
@@ -48,6 +65,7 @@ interface ActivePcmSession {
   providerConnectPromise?: Promise<void>;
   server: WebSocket;
   sessionId: string;
+  startup: PcmSessionStartupTimeline;
 }
 
 interface ClosedPcmSessionReport extends PcmSessionMetrics {
@@ -61,6 +79,7 @@ interface ClosedPcmSessionReport extends PcmSessionMetrics {
   providerConnectAttempts: number;
   providerConnectFailures: number;
   sessionId: string;
+  startup: ReturnType<typeof pcmSessionStartupMetrics>;
 }
 
 /**
@@ -124,8 +143,9 @@ export class KitVoiceWorker extends IterateDurableObject {
   pcmMetrics() {
     const active = this.#activePcm;
     if (active === undefined) return this.#readPreviousPcm() ?? null;
+    const bridgeMetrics = active.bridge.metrics();
     return {
-      ...active.bridge.metrics(),
+      ...bridgeMetrics,
       deviceEvents: active.deviceEvents.metrics(),
       deviceId: active.deviceId,
       deviceMetrics: active.deviceMetrics.metrics(),
@@ -137,10 +157,23 @@ export class KitVoiceWorker extends IterateDurableObject {
       providerConnectAttempts: active.providerConnectAttempts,
       providerConnectFailures: active.providerConnectFailures,
       sessionId: active.sessionId,
+      startup: pcmSessionStartupMetrics(active.startup, bridgeMetrics),
     };
   }
 
   async #handlePcm(request: Request): Promise<Response> {
+    const startup: PcmSessionStartupTimeline = {
+      authenticationAndModeReadyAtMs: null,
+      credentialDecodedAtMs: null,
+      credentialRequestStartedAtMs: null,
+      credentialResponseReceivedAtMs: null,
+      deviceLaneAcceptedAtMs: null,
+      providerConnectStartedAtMs: null,
+      providerSessionUpdateSentAtMs: null,
+      providerWebSocketCreatedAtMs: null,
+      providerWebSocketOpenedAtMs: null,
+      requestReceivedAtMs: Date.now(),
+    };
     if (request.method !== "GET" || request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("A WebSocket upgrade is required.", {
         headers: { upgrade: "websocket" },
@@ -154,10 +187,23 @@ export class KitVoiceWorker extends IterateDurableObject {
       });
     }
 
-    const authenticated = await authenticateProjectBearer(
-      request,
-      async () => await this.#loadProjectCredential(),
-    );
+    /*
+     * Authentication and the mode are properties of the same scoped project.
+     * A call previously opened two sequential Cap'n Web sessions just to read
+     * them. One lazy promise lets authentication retain its existing API while
+     * both reads share one project session and execute concurrently.
+     */
+    let ingressConfigurationPromise:
+      | Promise<{
+          credential: Awaited<ReturnType<typeof loadProjectBearerCredential>>;
+          mode: KitVoiceMode;
+        }>
+      | undefined;
+    const loadIngressConfiguration = () =>
+      (ingressConfigurationPromise ??= this.#loadPcmIngressConfiguration());
+    const authenticated = await authenticateProjectBearer(request, async () => {
+      return (await loadIngressConfiguration()).credential;
+    });
     if (authenticated === null) {
       return new Response("Unauthorized.", {
         headers: { "www-authenticate": "Bearer" },
@@ -168,25 +214,8 @@ export class KitVoiceWorker extends IterateDurableObject {
     if (deviceId === null) {
       return new Response("A valid Iterate Kit device identity is required.", { status: 400 });
     }
-
-    const mode = await this.#readMode();
-    let provider: WebSocket;
-    try {
-      provider =
-        mode === "tone"
-          ? await connectDeterministicTone({
-              durationMs: 2_000,
-              frequencyHz: 1_000,
-              sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
-            })
-          : await this.#connectGrok();
-    } catch (error) {
-      this.#log("provider-connect-failed", "error", {
-        message: errorMessage(error),
-        mode,
-      });
-      return new Response("The voice provider could not be reached.", { status: 502 });
-    }
+    const { mode } = await loadIngressConfiguration();
+    startup.authenticationAndModeReadyAtMs = Date.now();
 
     /*
      * A replacement must invalidate the old provider and callback before the
@@ -199,6 +228,7 @@ export class KitVoiceWorker extends IterateDurableObject {
     const client = pair[0];
     const server = pair[1];
     server.accept();
+    startup.deviceLaneAcceptedAtMs = Date.now();
     const sessionId = `${authenticated.projectId}:${deviceId}:${crypto.randomUUID()}`;
     /*
      * Provider evidence uses its own short ITX sessions and a bounded journal.
@@ -230,9 +260,11 @@ export class KitVoiceWorker extends IterateDurableObject {
       onProviderFunctionCall: (call) =>
         this.#executeProviderFunctionCall(call, sessionId, deviceId),
       onProviderUnavailable: () => {
-        if (active !== undefined) this.#ensureProvider(active, "provider-unavailable");
+        if (active?.bridge.metrics().conversationActive) {
+          this.#ensureProvider(active, "provider-unavailable");
+        }
       },
-      provider,
+      ...(mode === "grok" ? { initialGreeting: "How can I help you?" } : {}),
       sessionId,
     });
     const deviceEvents = new DeviceEventSessionMetricsTracker();
@@ -256,10 +288,11 @@ export class KitVoiceWorker extends IterateDurableObject {
       deviceEventSubscriptionFailures: 0,
       mode,
       providerEvents,
-      providerConnectAttempts: 1,
+      providerConnectAttempts: 0,
       providerConnectFailures: 0,
       server,
       sessionId,
+      startup,
     };
     this.#activePcm = active;
     server.addEventListener(
@@ -300,10 +333,11 @@ export class KitVoiceWorker extends IterateDurableObject {
     });
   }
 
-  async #connectGrok(): Promise<WebSocket> {
+  async #connectGrok(onStage?: (stage: GrokRealtimeVoiceStage) => void): Promise<WebSocket> {
     using project = await this.env.ITX.get();
     return await connectGrokRealtimeVoice({
       fetchCredential: async (request) => await project.egress.fetch(request),
+      onStage,
       sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
     });
   }
@@ -343,10 +377,19 @@ export class KitVoiceWorker extends IterateDurableObject {
   }
 
   #ensureProvider(active: ActivePcmSession, reason: string): void {
-    if (this.#activePcm !== active || active.bridge.metrics().closed) return;
+    const bridgeMetrics = active.bridge.metrics();
+    if (
+      this.#activePcm !== active ||
+      bridgeMetrics.closed ||
+      !bridgeMetrics.conversationActive ||
+      bridgeMetrics.providerAvailable
+    ) {
+      return;
+    }
     if (active.providerConnectPromise !== undefined) return;
 
     active.providerConnectAttempts += 1;
+    active.startup.providerConnectStartedAtMs ??= Date.now();
     const connecting = (async () => {
       try {
         const provider =
@@ -356,7 +399,9 @@ export class KitVoiceWorker extends IterateDurableObject {
                 frequencyHz: 1_000,
                 sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
               })
-            : await this.#connectGrok();
+            : await this.#connectGrok((stage) => {
+                if (this.#activePcm === active) observeGrokStartupStage(active.startup, stage);
+              });
         if (this.#activePcm !== active || !active.bridge.attachProvider(provider)) {
           if (
             provider.readyState === WebSocket.OPEN ||
@@ -435,17 +480,18 @@ export class KitVoiceWorker extends IterateDurableObject {
     }
   }
 
-  async #loadProjectCredential() {
+  async #loadPcmIngressConfiguration() {
     using project = await this.env.ITX.get();
-    return await loadProjectBearerCredential(project);
+    const [credential, storedMode] = await Promise.all([
+      loadProjectBearerCredential(project),
+      project.kv.get(PCM_MODE_KEY),
+    ]);
+    return { credential, mode: parseKitVoiceMode(storedMode) };
   }
 
   async #readMode(): Promise<KitVoiceMode> {
     using project = await this.env.ITX.get();
-    const mode = await project.kv.get(PCM_MODE_KEY);
-    if (mode === null) return "tone";
-    if (mode === "tone" || mode === "grok") return mode;
-    throw new Error(`${PCM_MODE_KEY} must be either "tone" or "grok".`);
+    return parseKitVoiceMode(await project.kv.get(PCM_MODE_KEY));
   }
 
   async #subscribeToDeviceEvents(
@@ -485,7 +531,22 @@ export class KitVoiceWorker extends IterateDurableObject {
       },
       active.bridge,
       (diagnostic) => this.#onDeviceEventDiagnostic(diagnostic, active.bridge, sessionId),
-      (event) => active.deviceEvents.observe(event),
+      (event) => {
+        active.deviceEvents.observe(event);
+        if (
+          event.type === "conversation.started" ||
+          (event.snapshot === true && event.conversationActive === true)
+        ) {
+          /*
+           * Button B now pays only for the disposable upstream generation.
+           * The Stick's authenticated PCM socket completed its expensive TLS
+           * setup while idle, so provider setup can run here without delaying
+           * or replacing that device lane. A duplicate edge is harmless:
+           * #ensureProvider fences both an attached and an in-flight provider.
+           */
+          this.#ensureProvider(active, event.snapshot === true ? "snapshot" : "conversation-start");
+        }
+      },
     );
   }
 
@@ -565,8 +626,9 @@ export class KitVoiceWorker extends IterateDurableObject {
      * error/close fields survive eviction. Raw non-PCM provider frames live in
      * the normal device stream instead; PCM is never retained.
      */
+    const bridgeMetrics = active.bridge.metrics();
     const report: ClosedPcmSessionReport = {
-      ...active.bridge.metrics(),
+      ...bridgeMetrics,
       deviceEvents: active.deviceEvents.metrics(),
       deviceMetrics: active.deviceMetrics.metrics(),
       deviceId: active.deviceId,
@@ -577,6 +639,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       providerConnectAttempts: active.providerConnectAttempts,
       providerConnectFailures: active.providerConnectFailures,
       sessionId: active.sessionId,
+      startup: pcmSessionStartupMetrics(active.startup, bridgeMetrics),
     };
     this.#previousPcm = report;
     this.ctx.storage.kv.put(PREVIOUS_PCM_SESSION_KEY, report);
@@ -605,4 +668,72 @@ function requestedProtocols(request: Request): string[] {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function parseKitVoiceMode(mode: unknown): KitVoiceMode {
+  if (mode === null) return "tone";
+  if (mode === "tone" || mode === "grok") return mode;
+  throw new Error(`${PCM_MODE_KEY} must be either "tone" or "grok".`);
+}
+
+function observeGrokStartupStage(
+  timeline: PcmSessionStartupTimeline,
+  stage: GrokRealtimeVoiceStage,
+): void {
+  /*
+   * These fields retain only the first upstream generation. Reconnect timing
+   * is separately counted, while overwriting cold-start timestamps would make
+   * a later fast retry erase the reason the user originally waited.
+   */
+  if (stage.code === "credential-request-started") {
+    timeline.credentialRequestStartedAtMs ??= stage.atMs;
+  } else if (stage.code === "credential-response-received") {
+    timeline.credentialResponseReceivedAtMs ??= stage.atMs;
+  } else if (stage.code === "credential-decoded") {
+    timeline.credentialDecodedAtMs ??= stage.atMs;
+  } else if (stage.code === "websocket-created") {
+    timeline.providerWebSocketCreatedAtMs ??= stage.atMs;
+  } else if (stage.code === "websocket-opened") {
+    timeline.providerWebSocketOpenedAtMs ??= stage.atMs;
+  } else {
+    timeline.providerSessionUpdateSentAtMs ??= stage.atMs;
+  }
+}
+
+function pcmSessionStartupMetrics(
+  timeline: PcmSessionStartupTimeline,
+  bridge: Pick<
+    PcmSessionMetrics,
+    | "firstDevicePcmSentAtMs"
+    | "firstProviderPcmAtMs"
+    | "conversationStartedAtMs"
+    | "providerAttachedAtMs"
+    | "providerSessionReadyAtMs"
+  >,
+) {
+  const elapsedFromRequest = (atMs: number | null) =>
+    atMs === null ? null : Math.max(0, atMs - timeline.requestReceivedAtMs);
+  const elapsedFromConversation = (atMs: number | null) =>
+    atMs === null || bridge.conversationStartedAtMs === null
+      ? null
+      : Math.max(0, atMs - bridge.conversationStartedAtMs);
+  return {
+    ...timeline,
+    deviceUpgradeLatencyMs: elapsedFromRequest(timeline.deviceLaneAcceptedAtMs),
+    firstDevicePcmLatencyMs: elapsedFromRequest(bridge.firstDevicePcmSentAtMs),
+    firstDevicePcmSentAtMs: bridge.firstDevicePcmSentAtMs,
+    firstDevicePcmFromConversationMs: elapsedFromConversation(bridge.firstDevicePcmSentAtMs),
+    firstProviderPcmAtMs: bridge.firstProviderPcmAtMs,
+    firstProviderPcmLatencyMs: elapsedFromRequest(bridge.firstProviderPcmAtMs),
+    firstProviderPcmFromConversationMs: elapsedFromConversation(bridge.firstProviderPcmAtMs),
+    conversationStartedAtMs: bridge.conversationStartedAtMs,
+    providerAttachedAtMs: bridge.providerAttachedAtMs,
+    providerAttachedLatencyMs: elapsedFromRequest(bridge.providerAttachedAtMs),
+    providerAttachedFromConversationMs: elapsedFromConversation(bridge.providerAttachedAtMs),
+    providerSessionReadyAtMs: bridge.providerSessionReadyAtMs,
+    providerSessionReadyLatencyMs: elapsedFromRequest(bridge.providerSessionReadyAtMs),
+    providerSessionReadyFromConversationMs: elapsedFromConversation(
+      bridge.providerSessionReadyAtMs,
+    ),
+  };
 }

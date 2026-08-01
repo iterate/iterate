@@ -25,11 +25,11 @@ const DOWNLINK_SOURCE_STARTUP_FRAMES = 32;
 const DEVICE_INITIAL_LEAD_FRAMES = 8;
 const PCM_FRAME_DURATION_MS = 20;
 /*
- * This is not an audio queue timeout. It bounds how long two independently
- * delivered facts may disagree after PTT release: the Cap'n Web stop event and
- * the empty marker ordered behind the last PCM frame. Healthy delivery is a few
- * milliseconds; 1.5 seconds tolerates control/media scheduling skew while
- * ensuring a lost marker cannot leave a Grok input buffer open indefinitely.
+ * This is not an audio queue timeout. The PCM marker owns the turn boundary;
+ * the independently delivered Cap'n Web stop event merely starts a watchdog
+ * when it gets there first. Healthy delivery is a few milliseconds; 1.5
+ * seconds tolerates control/media scheduling skew while ensuring a lost marker
+ * cannot leave a Grok input buffer open indefinitely.
  */
 const UPLINK_END_MARKER_TIMEOUT_MS = 1_500;
 const MAXIMUM_FUNCTION_CALLS_PER_RESPONSE = 8;
@@ -58,13 +58,12 @@ export interface PcmProxyDiagnostic {
     | "provider-closed"
     | "provider-event"
     | "provider-function-call-failed"
+    | "provider-response-failed"
     | "provider-send-failed"
     | "provider-unavailable"
     | "socket-error"
     | "uplink-backpressure"
-    | "uplink-end-marker-timeout"
-    | "uplink-frame-after-end-marker"
-    | "uplink-turn-overlap";
+    | "uplink-end-marker-timeout";
   detail?: unknown;
   droppedBytes?: number;
   sessionId: string;
@@ -75,12 +74,19 @@ export interface PcmSessionMetrics {
   awaitingCommitAcknowledgement: boolean;
   awaitingUplinkEndMarker: boolean;
   closed: boolean;
+  conversationActive: boolean;
+  conversationEnds: number;
+  conversationStartedAtMs: number | null;
+  conversationStarts: number;
   downlinkDroppedBytes: number;
   downlinkFrames: number;
   downlinkPartialBytes: number;
   downlinkQueuedBytes: number;
   downlinkQueueHighWaterBytes: number;
   emptyUplinkTurns: number;
+  firstDevicePcmSentAtMs: number | null;
+  firstProviderPcmAtMs: number | null;
+  initialGreetingRequests: number;
   interrupted: boolean;
   lastProviderError: { code: string | null; message: string | null } | null;
   lastProviderEventType: string | null;
@@ -90,6 +96,7 @@ export interface PcmSessionMetrics {
     source: "device" | "provider";
   } | null;
   providerAvailable: boolean;
+  providerAttachedAtMs: number | null;
   providerCommitMessagesSent: number;
   providerConnections: number;
   providerControlEvents: number;
@@ -104,26 +111,32 @@ export interface PcmSessionMetrics {
   providerPcmPeakSample: number;
   providerPcmRmsSample: number;
   providerPcmSamples: number;
+  providerRetirements: number;
   providerResponseActive: boolean;
   providerResponseCreateMessagesSent: number;
+  providerResponsesCancelled: number;
   providerResponsesCompleted: number;
+  providerResponsesFailed: number;
+  providerSessionReadyAtMs: number | null;
   providerSendFailures: number;
   uplinkDroppedBytes: number;
+  uplinkControlStarts: number;
+  uplinkControlStops: number;
   uplinkEndMarkers: number;
   uplinkEndMarkerTimeouts: number;
   uplinkFrames: number;
-  uplinkFramesAfterEndMarkerDropped: number;
+  uplinkTurns: number;
   uplinkUnavailableFrames: number;
 }
 
 export interface PcmSessionBridgeOptions {
   device: WebSocket;
+  initialGreeting?: string;
   maximumSocketBufferedBytes: number;
   onDiagnostic?: (diagnostic: PcmProxyDiagnostic) => void;
   onProviderEvent?: (event: ProviderNonPcmEvent) => void;
   onProviderFunctionCall?: (call: ProviderFunctionCall) => Promise<unknown>;
   onProviderUnavailable?: () => void;
-  provider: WebSocket;
   sessionId: string;
 }
 
@@ -143,6 +156,7 @@ export interface PcmSessionBridgeOptions {
  */
 export class PcmSessionBridge {
   readonly #device: WebSocket;
+  readonly #initialGreeting: string | undefined;
   readonly #maximumSocketBufferedBytes: number;
   readonly #onDiagnostic: (diagnostic: PcmProxyDiagnostic) => void;
   readonly #onProviderEvent: (event: ProviderNonPcmEvent) => void;
@@ -153,6 +167,10 @@ export class PcmSessionBridge {
     ITERATE_KIT_PCM_FRAME_BYTES * DOWNLINK_RESPONSE_RESERVOIR_FRAMES,
   );
   #closed = false;
+  #conversationActive = false;
+  #conversationEnds = 0;
+  #conversationStartedAtMs: number | null = null;
+  #conversationStarts = 0;
   #awaitingUplinkEndMarker = false;
   #downlinkDroppedBytes = 0;
   #downlinkFrames = 0;
@@ -164,11 +182,16 @@ export class PcmSessionBridge {
   #downlinkTimer: ReturnType<typeof setTimeout> | undefined;
   #downlinkWriteOffset = 0;
   #emptyUplinkTurns = 0;
+  #firstDevicePcmSentAtMs: number | null = null;
+  #firstProviderPcmAtMs: number | null = null;
+  #initialGreetingRequests = 0;
+  #initialGreetingRequestedForConversation = false;
   #interrupted = false;
   #lastProviderError: PcmSessionMetrics["lastProviderError"] = null;
   #lastProviderEventType: string | null = null;
   #lastSocketClose: PcmSessionMetrics["lastSocketClose"] = null;
   #provider: WebSocket | undefined;
+  #providerAttachedAtMs: number | null = null;
   #providerCommitMessagesSent = 0;
   #providerConnections = 0;
   #providerControlEvents = 0;
@@ -182,6 +205,7 @@ export class PcmSessionBridge {
   #providerPcmPeakSample = 0;
   #providerPcmSamples = 0;
   #providerPcmTrailingByte: number | undefined;
+  #providerRetirements = 0;
   #providerResponseEpoch = 0;
   #providerResponseFunctionCallIds = new Set<string>();
   #providerResponseFunctionCallsPending = 0;
@@ -190,19 +214,24 @@ export class PcmSessionBridge {
   #providerResponseDone = false;
   #providerResponsePlaybackFinished = false;
   #providerResponseCreateMessagesSent = 0;
+  #providerResponsesCancelled = 0;
   #providerResponsesCompleted = 0;
+  #providerResponsesFailed = 0;
+  #providerSessionReadyAtMs: number | null = null;
   #providerSendFailures = 0;
   #responseAfterCommitPending = false;
   #responseActive = false;
   #nextDownlinkAt = 0;
+  #uplinkControlStarts = 0;
+  #uplinkControlStops = 0;
   #uplinkDroppedBytes = 0;
-  #uplinkEndMarkerSeen = false;
   #uplinkEndMarkers = 0;
   #uplinkEndMarkerTimeouts = 0;
   #uplinkEndMarkerTimer: ReturnType<typeof setTimeout> | undefined;
   #uplinkFrames = 0;
   #uplinkFramesInTurn = 0;
-  #uplinkFramesAfterEndMarkerDropped = 0;
+  #uplinkTurnActive = false;
+  #uplinkTurns = 0;
   #uplinkUnavailableFrames = 0;
 
   constructor(options: PcmSessionBridgeOptions) {
@@ -213,7 +242,18 @@ export class PcmSessionBridge {
     ) {
       throw new Error("The PCM socket backlog limit must be from one frame through 256 KiB.");
     }
+    const initialGreetingBytes =
+      options.initialGreeting === undefined
+        ? 0
+        : new TextEncoder().encode(options.initialGreeting).byteLength;
+    if (
+      options.initialGreeting !== undefined &&
+      (initialGreetingBytes === 0 || initialGreetingBytes > 160)
+    ) {
+      throw new Error("The initial greeting must contain from one through 160 UTF-8 bytes.");
+    }
     this.#device = options.device;
+    this.#initialGreeting = options.initialGreeting;
     this.#maximumSocketBufferedBytes = options.maximumSocketBufferedBytes;
     this.#onDiagnostic = options.onDiagnostic ?? (() => undefined);
     this.#onProviderEvent = options.onProviderEvent ?? (() => undefined);
@@ -225,7 +265,6 @@ export class PcmSessionBridge {
     this.#onProviderUnavailable = options.onProviderUnavailable ?? (() => undefined);
     this.#sessionId = options.sessionId;
     this.#device.binaryType = "arraybuffer";
-
     this.#device.addEventListener("message", (event) => {
       this.#handleDeviceMessage(event.data);
     });
@@ -244,7 +283,6 @@ export class PcmSessionBridge {
     this.#device.addEventListener("error", () => {
       this.#fail("socket-error", "PCM WebSocket emitted an error.");
     });
-    this.attachProvider(options.provider);
   }
 
   metrics(): PcmSessionMetrics {
@@ -252,17 +290,25 @@ export class PcmSessionBridge {
       awaitingCommitAcknowledgement: this.#responseAfterCommitPending,
       awaitingUplinkEndMarker: this.#awaitingUplinkEndMarker,
       closed: this.#closed,
+      conversationActive: this.#conversationActive,
+      conversationEnds: this.#conversationEnds,
+      conversationStartedAtMs: this.#conversationStartedAtMs,
+      conversationStarts: this.#conversationStarts,
       downlinkDroppedBytes: this.#downlinkDroppedBytes,
       downlinkFrames: this.#downlinkFrames,
       downlinkPartialBytes: this.#downlinkQueuedBytes % ITERATE_KIT_PCM_FRAME_BYTES,
       downlinkQueuedBytes: this.#downlinkQueuedBytes,
       downlinkQueueHighWaterBytes: this.#downlinkQueueHighWaterBytes,
       emptyUplinkTurns: this.#emptyUplinkTurns,
+      firstDevicePcmSentAtMs: this.#firstDevicePcmSentAtMs,
+      firstProviderPcmAtMs: this.#firstProviderPcmAtMs,
+      initialGreetingRequests: this.#initialGreetingRequests,
       interrupted: this.#interrupted,
       lastProviderError: this.#lastProviderError,
       lastProviderEventType: this.#lastProviderEventType,
       lastSocketClose: this.#lastSocketClose,
       providerAvailable: this.#provider !== undefined && socketIsOpen(this.#provider),
+      providerAttachedAtMs: this.#providerAttachedAtMs,
       providerCommitMessagesSent: this.#providerCommitMessagesSent,
       providerConnections: this.#providerConnections,
       providerControlEvents: this.#providerControlEvents,
@@ -280,15 +326,21 @@ export class PcmSessionBridge {
           ? 0
           : Math.sqrt(this.#providerPcmNormalizedSquareSum / this.#providerPcmSamples) * 32_768,
       providerPcmSamples: this.#providerPcmSamples,
+      providerRetirements: this.#providerRetirements,
       providerResponseActive: this.#responseActive,
       providerResponseCreateMessagesSent: this.#providerResponseCreateMessagesSent,
+      providerResponsesCancelled: this.#providerResponsesCancelled,
       providerResponsesCompleted: this.#providerResponsesCompleted,
+      providerResponsesFailed: this.#providerResponsesFailed,
+      providerSessionReadyAtMs: this.#providerSessionReadyAtMs,
       providerSendFailures: this.#providerSendFailures,
+      uplinkControlStarts: this.#uplinkControlStarts,
+      uplinkControlStops: this.#uplinkControlStops,
       uplinkDroppedBytes: this.#uplinkDroppedBytes,
       uplinkEndMarkers: this.#uplinkEndMarkers,
       uplinkEndMarkerTimeouts: this.#uplinkEndMarkerTimeouts,
       uplinkFrames: this.#uplinkFrames,
-      uplinkFramesAfterEndMarkerDropped: this.#uplinkFramesAfterEndMarkerDropped,
+      uplinkTurns: this.#uplinkTurns,
       uplinkUnavailableFrames: this.#uplinkUnavailableFrames,
     };
   }
@@ -303,9 +355,12 @@ export class PcmSessionBridge {
    * socket be rejected by identity rather than mistaken for current speech.
    */
   attachProvider(provider: WebSocket): boolean {
-    if (this.#closed) {
+    if (this.#closed || !this.#conversationActive) {
       if (socketIsOpenOrConnecting(provider)) {
-        provider.close(1000, "The device PCM lane has ended.");
+        provider.close(
+          1000,
+          this.#closed ? "The device PCM lane has ended." : "No conversation is active.",
+        );
       }
       return false;
     }
@@ -318,6 +373,7 @@ export class PcmSessionBridge {
 
     provider.binaryType = "arraybuffer";
     this.#provider = provider;
+    this.#providerAttachedAtMs ??= Date.now();
     this.#providerConnections += 1;
     /*
      * A replacement provider has an empty input buffer even if its predecessor
@@ -351,67 +407,84 @@ export class PcmSessionBridge {
     return true;
   }
 
+  /**
+   * Reconciles Button B's call state without touching the device WebSocket.
+   *
+   * The device lane is boot-warm infrastructure; one Grok socket is the
+   * disposable conversation. Conflating those lifetimes cost the physical
+   * Stick 5.52 seconds of DNS/TLS/WebSocket work after every button press.
+   * This method is idempotent because a replacement Cap'n Web callback first
+   * supplies a state snapshot and can then observe the same edge again.
+   */
+  setConversationActive(active: boolean): boolean {
+    if (this.#closed || active === this.#conversationActive) return false;
+    this.#conversationActive = active;
+    if (active) {
+      this.#conversationStarts += 1;
+      this.#conversationStartedAtMs = Date.now();
+      this.#firstDevicePcmSentAtMs = null;
+      this.#firstProviderPcmAtMs = null;
+      this.#providerAttachedAtMs = null;
+      this.#providerSessionReadyAtMs = null;
+      this.#initialGreetingRequestedForConversation = false;
+      this.#interrupted = false;
+      this.#uplinkFramesInTurn = 0;
+      this.#uplinkTurnActive = false;
+      return true;
+    }
+
+    this.#conversationEnds += 1;
+    this.#clearUplinkEndMarkerWait();
+    this.#responseAfterCommitPending = false;
+    this.#interrupted = false;
+    this.#uplinkFramesInTurn = 0;
+    this.#uplinkTurnActive = false;
+    this.#discardDownlinkQueue();
+    this.#abandonProviderResponse();
+    const provider = this.#provider;
+    this.#provider = undefined;
+    if (provider !== undefined) {
+      this.#providerRetirements += 1;
+      if (socketIsOpenOrConnecting(provider)) {
+        provider.close(1000, "The device conversation ended.");
+      }
+    }
+    return true;
+  }
+
   inputStarted(): boolean {
     if (this.#closed) return false;
-    if (!this.#provider || !socketIsOpen(this.#provider)) {
-      this.#onProviderUnavailable();
-      return false;
-    }
-    if (this.#awaitingUplinkEndMarker) {
-      /*
-       * A new capture cannot safely reuse this socket until the prior turn's
-       * ordered marker arrives. Treating the next marker as the new turn's end
-       * would drop fresh speech; ignoring it would let the old tail leak into
-       * the new Grok buffer. Replacing one ambiguous realtime generation is
-       * safer and bounded, and the explicit diagnostic distinguishes this from
-       * provider/network unavailability.
-       */
-      this.#fail(
-        "uplink-turn-overlap",
-        "A new PTT turn began before the prior PCM end marker arrived.",
-      );
-      return false;
-    }
-    this.#uplinkEndMarkerSeen = false;
-    this.#uplinkFramesInTurn = 0;
     /*
-     * A new press supersedes any released turn that Grok has not acknowledged
-     * yet. Remembering one boolean is enough: keeping the stale request would
-     * let a delayed control-plane acknowledgement start speech over the new
-     * microphone turn, while queuing the turns would violate realtime
-     * semantics and grow without a useful bound.
+     * Cap'n Web and PCM use independent sockets, so this edge cannot open or
+     * reset a media epoch. Production proved that even on a healthy network the
+     * first PCM frame can arrive first. Retain the edge only for provenance and
+     * the start/stop accounting used by the missing-marker watchdog; the first
+     * non-empty PCM message performs interruption on the authoritative lane.
      */
-    this.#responseAfterCommitPending = false;
-    this.#interrupted = true;
-    this.#discardDownlinkQueue();
-    const responseWasActive = this.#responseActive;
-    this.#abandonProviderResponse();
-    /*
-     * `response.cancel` is not an idempotent "ensure silence" command. Grok
-     * Voice 2.0 can reject it when no response exists, which needlessly kills
-     * the first PTT generation before any microphone audio is useful. Only an
-     * observed provider response may be cancelled; entering capture state for
-     * the first turn is otherwise entirely local.
-     */
-    return !responseWasActive || this.#sendProviderControl("response.cancel");
+    this.#uplinkControlStarts += 1;
+    return true;
   }
 
   inputStopped(): boolean {
     if (this.#closed) return false;
-    if (!this.#provider || !socketIsOpen(this.#provider)) {
-      this.#onProviderUnavailable();
-      return false;
-    }
-    this.#interrupted = false;
+    this.#uplinkControlStops += 1;
     /*
-     * Grok confirms that the manual-turn audio buffer became a conversation
-     * item asynchronously. `response.create` belongs after that confirmation;
-     * sending both controls back-to-back races provider state and was observed
-     * to close an otherwise healthy production generation after PTT release.
-     * This is a control-plane fence only—PCM still travels immediately and no
-     * audio or turn queue is introduced.
+     * A stop that arrives before its in-band media marker starts only a bounded
+     * watchdog. A stop that arrives after the marker is already reconciled and
+     * must not close whatever newer media turn may have begun meanwhile. The
+     * monotonic counts, rather than a shared "pressed" boolean, make all legal
+     * cross-socket reorderings idempotent.
      */
-    if (this.#uplinkEndMarkerSeen) return this.#finishInputTurn();
+    this.#reconcileUplinkEndMarkerWatchdog();
+    return true;
+  }
+
+  #reconcileUplinkEndMarkerWatchdog(): void {
+    if (this.#uplinkControlStops <= this.#uplinkEndMarkers) {
+      this.#clearUplinkEndMarkerWait();
+      return;
+    }
+    if (this.#uplinkEndMarkerTimer !== undefined) return;
     this.#awaitingUplinkEndMarker = true;
     this.#uplinkEndMarkerTimer = setTimeout(() => {
       this.#uplinkEndMarkerTimer = undefined;
@@ -423,7 +496,6 @@ export class PcmSessionBridge {
         "The ordered PCM end marker did not arrive after PTT release.",
       );
     }, UPLINK_END_MARKER_TIMEOUT_MS);
-    return true;
   }
 
   close(code = 1000, reason = "PCM session ended."): void {
@@ -460,23 +532,14 @@ export class PcmSessionBridge {
       );
       return;
     }
-    if (this.#uplinkEndMarkerSeen) {
+    if (!this.#uplinkTurnActive) {
       /*
-       * FIFO ordering makes this a concrete contradiction: no audio from the
-       * just-ended turn can legally follow its marker, and the next turn is
-       * not open until inputStarted() clears the fence. Drop rather than close
-       * so one late callback remains diagnosable without destroying an
-       * otherwise healthy provider conversation.
+       * The first non-empty message after connection or END is the only start
+       * fact that is ordered with the microphone samples. Let it own the turn.
+       * This deliberately makes Cap'n Web button latency irrelevant to media
+       * conservation while still preserving those events as analytics.
        */
-      this.#uplinkDroppedBytes += bytes.byteLength;
-      this.#uplinkFramesAfterEndMarkerDropped += 1;
-      this.#diagnostic(
-        "uplink-frame-after-end-marker",
-        "warn",
-        "A microphone frame arrived after its turn's ordered end marker.",
-        bytes.byteLength,
-      );
-      return;
+      this.#beginUplinkTurn();
     }
     const provider = this.#provider;
     if (!provider || !socketIsOpen(provider)) {
@@ -520,40 +583,53 @@ export class PcmSessionBridge {
   }
 
   #handleUplinkEndMarker(): void {
-    if (this.#uplinkEndMarkerSeen) {
-      this.#fail(
-        "invalid-device-frame",
-        "The device sent two PCM end markers without beginning another turn.",
+    this.#uplinkEndMarkers += 1;
+    this.#reconcileUplinkEndMarkerWatchdog();
+    if (!this.#uplinkTurnActive) {
+      /*
+       * The firmware preserves a quick press/release as an END even when no 20
+       * ms frame was captured. Count and absorb it: committing an empty Grok
+       * buffer can terminate an otherwise healthy conversation.
+       */
+      this.#emptyUplinkTurns += 1;
+      this.#diagnostic(
+        "empty-uplink-turn",
+        "info",
+        "The completed manual PTT turn contained no microphone frames and was not committed.",
       );
       return;
     }
-    this.#uplinkEndMarkerSeen = true;
-    this.#uplinkEndMarkers += 1;
-    if (!this.#awaitingUplinkEndMarker) return;
+    this.#uplinkTurnActive = false;
+    this.#interrupted = false;
     this.#finishInputTurn();
+  }
+
+  #beginUplinkTurn(): void {
+    this.#uplinkTurnActive = true;
+    this.#uplinkTurns += 1;
+    this.#uplinkFramesInTurn = 0;
+    /*
+     * A fresh media turn supersedes any released turn whose provider response
+     * has not started. No turn queue is retained: delayed speech is less useful
+     * than current speech, and every discarded response byte remains counted.
+     */
+    this.#responseAfterCommitPending = false;
+    this.#interrupted = true;
+    this.#discardDownlinkQueue();
+    const responseWasActive = this.#responseActive;
+    this.#abandonProviderResponse();
+    /*
+     * `response.cancel` targets a concrete response and Grok rejects it on an
+     * idle generation. Only observed response activity is cancellable.
+     */
+    if (responseWasActive) this.#sendProviderControl("response.cancel");
   }
 
   #finishInputTurn(): boolean {
     const frames = this.#uplinkFramesInTurn;
     this.#uplinkFramesInTurn = 0;
     this.#clearUplinkEndMarkerWait();
-    if (frames !== 0) return this.#commitInputTurn();
-
-    /*
-     * The firmware preserves quick start/stop pairs as marker-only turns so a
-     * successful remote action is never scheduler-dependent. That is a valid
-     * device event but not valid provider input: an empty Grok commit may be
-     * rejected and disconnect an otherwise healthy conversation. Classify and
-     * absorb it here without synthesising a response or hiding the gesture.
-     */
-    this.#emptyUplinkTurns += 1;
-    this.#responseAfterCommitPending = false;
-    this.#diagnostic(
-      "empty-uplink-turn",
-      "info",
-      "The completed manual PTT turn contained no microphone frames and was not committed.",
-    );
-    return true;
+    return frames !== 0 && this.#commitInputTurn();
   }
 
   #commitInputTurn(): boolean {
@@ -595,7 +671,10 @@ export class PcmSessionBridge {
      */
     if (!this.#responseActive) this.#beginProviderResponse();
     this.#responseActive = true;
-    if (bytes.byteLength > 0) this.#providerResponseHadPcm = true;
+    if (bytes.byteLength > 0) {
+      this.#providerResponseHadPcm = true;
+      this.#firstProviderPcmAtMs ??= Date.now();
+    }
     this.#observeProviderPcm(bytes);
     if (this.#interrupted) {
       this.#downlinkDroppedBytes += bytes.byteLength;
@@ -629,6 +708,11 @@ export class PcmSessionBridge {
     this.#providerControlEvents += 1;
     this.#lastProviderEventType = event.type;
     if (event.type === "error") this.#lastProviderError = summarizeProviderError(event);
+    if (event.type === "session.updated") {
+      this.#providerSessionReadyAtMs ??= Date.now();
+      this.#requestInitialGreeting();
+      return;
+    }
     if (event.type === "ping") {
       this.#providerKeepalivePings += 1;
       const timestamp = "timestamp" in event ? event.timestamp : undefined;
@@ -664,8 +748,54 @@ export class PcmSessionBridge {
       return;
     }
     if (event.type !== "response.done") return;
-    this.#providerResponsesCompleted += 1;
+    const responseStatus = providerResponseStatus(event);
     this.#responseActive = false;
+
+    if (responseStatus !== null && responseStatus !== "completed") {
+      if (responseStatus === "cancelled") {
+        this.#providerResponsesCancelled += 1;
+      } else {
+        this.#providerResponsesFailed += 1;
+        this.#diagnostic("provider-response-failed", "error", { status: responseStatus });
+      }
+      /*
+       * A cancelled response.done is a provider lifecycle boundary, not proof
+       * of audible speech. xAI can emit one immediately before response.created
+       * for the actual manual-PTT answer. With no PCM there is consequently no
+       * device boundary to send; abandoning the generation prevents a physical
+       * harness from hanging up on a phantom answer. If any PCM did enter this
+       * response, discard its stale tail and terminate the device response
+       * explicitly so partial speech cannot splice into whatever follows.
+       */
+      const responseHadPcm =
+        this.#providerResponseHadPcm || this.#downlinkQueuedBytes > 0 || this.#downlinkStarted;
+      this.#discardDownlinkQueue();
+      if (this.#interrupted) {
+        if (this.#sendDevice(pcmEndOfResponse)) {
+          this.#interrupted = false;
+          this.#providerResponseDone = true;
+          this.#providerResponsePlaybackFinished = true;
+          this.#continueAfterProviderFunctionCalls();
+        }
+        return;
+      }
+      if (responseHadPcm) {
+        this.#providerResponseDone = true;
+        this.#downlinkResponseDone = true;
+        this.#scheduleDownlink();
+        return;
+      }
+      this.#abandonProviderResponse();
+      return;
+    }
+
+    /*
+     * Deterministic in-repo providers predate xAI's nested response.status and
+     * intentionally emit only {type: response.done}; absence therefore keeps
+     * the established completed contract. An explicit non-completed status is
+     * classified above and can never advance this counter.
+     */
+    this.#providerResponsesCompleted += 1;
     if (this.#interrupted) {
       this.#discardDownlinkQueue();
       if (this.#sendDevice(pcmEndOfResponse)) {
@@ -1056,8 +1186,47 @@ export class PcmSessionBridge {
       return false;
     }
     this.#device.send(bytes);
-    if (bytes.byteLength > 0) this.#downlinkFrames += 1;
+    if (bytes.byteLength > 0) {
+      this.#downlinkFrames += 1;
+      this.#firstDevicePcmSentAtMs ??= Date.now();
+    }
     return true;
+  }
+
+  #requestInitialGreeting(): void {
+    if (
+      !this.#conversationActive ||
+      this.#initialGreeting === undefined ||
+      this.#initialGreetingRequestedForConversation
+    ) {
+      return;
+    }
+    /*
+     * The provider acknowledgement above is the first instant at which its
+     * native PCM format, voice, tools, and manual turn policy are known to be
+     * installed. Sending this synthetic user item earlier can race those
+     * settings; waiting for physical speech instead makes a healthy call feel
+     * dead. The counter is a call-lifetime fence, so a replacement provider
+     * cannot surprise the user by greeting them again mid-conversation. The
+     * lifetime fence resets only on the next explicit Button B start; the
+     * public counter remains cumulative for diagnostics.
+     */
+    const itemSent = this.#sendProviderMessage({
+      item: {
+        content: [
+          {
+            text: `Begin the call by saying exactly: "${this.#initialGreeting}" Do not add any other words.`,
+            type: "input_text",
+          },
+        ],
+        role: "user",
+        type: "message",
+      },
+      type: "conversation.item.create",
+    });
+    if (!itemSent || !this.#sendProviderControl("response.create")) return;
+    this.#initialGreetingRequestedForConversation = true;
+    this.#initialGreetingRequests += 1;
   }
 
   #sendProviderControl(type: string): boolean {
@@ -1182,6 +1351,19 @@ function providerMessageType(value: unknown): string | null {
    * and risk making diagnostics memory proportional to provider payloads.
    */
   return isProviderEvent(value) ? value.type : null;
+}
+
+function providerResponseStatus(event: { type: string }): string | null {
+  /*
+   * Only response.done calls this guard. Keeping the provider-owned nested
+   * object unknown until this boundary avoids teaching the realtime bridge a
+   * broad, brittle copy of xAI's response schema while still classifying the
+   * one field that changes whether an answer was actually completed.
+   */
+  if (!("response" in event) || typeof event.response !== "object" || event.response === null) {
+    return null;
+  }
+  return selectedBoundedString(event.response, "status");
 }
 
 function parseProviderFunctionCall(event: { type: string }): ProviderFunctionCall | null {
