@@ -50,6 +50,15 @@ const FORWARDED_GROK_EVENTS = new Set([
 ]);
 
 export class VoiceBridge extends IterateDurableObject {
+  /*
+   * One live call per instance. A DO instance is keyed by the stream path, so
+   * a second startCall on the same stream lands HERE — and without this, its
+   * Grok socket and its stream subscription simply joined the first one's.
+   * Every one of them then saw the same voicelab/turn commit and answered it,
+   * which is heard as the assistant replying two or three times to one turn.
+   */
+  #endActiveCall: ((reason: string) => void) | null = null;
+
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const mode = url.searchParams.get("mode") ?? "proxy";
@@ -59,6 +68,10 @@ export class VoiceBridge extends IterateDurableObject {
     }
     const model = url.searchParams.get("model") ?? "grok-voice-think-fast-2.0";
 
+    if (this.#endActiveCall !== null) {
+      this.#endActiveCall("superseded by a new call on this stream");
+      this.#endActiveCall = null;
+    }
     const upstreamResponse = await fetch(`https://api.x.ai/v1/realtime?model=${model}`, {
       headers: { Upgrade: "websocket", Authorization: `Bearer getSecret("${XAI_SECRET}")` },
     });
@@ -392,9 +405,11 @@ export class VoiceBridge extends IterateDurableObject {
       try {
         server?.close();
       } catch {}
+      if (this.#endActiveCall === teardown) this.#endActiveCall = null;
       markReady({ ok: false, reason });
       resolveFinished();
     };
+    this.#endActiveCall = teardown;
     upstream.addEventListener("close", (event) => teardown(`grok closed ${event.code}`));
     server?.addEventListener("close", () => teardown("anchor socket closed"));
     server?.addEventListener("message", () => {
