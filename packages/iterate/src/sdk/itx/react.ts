@@ -81,6 +81,7 @@ import {
   projectStubFor,
   releaseItxConnection,
   reportTransportSuspicion,
+  retainIterateSessionPredecessor,
   serverSnapshot,
   subscribeSession,
   watchItxConnection,
@@ -277,7 +278,15 @@ export function useIterateSessionQuery<T>({
  * an `await` must be gated on it: without the shared signal, a cancelled run's
  * late continuation could overwrite its successor's state.
  */
-type ItxEffectSignal = { readonly disposed: boolean };
+type ItxEffectSignal = {
+  readonly disposed: boolean;
+  /** A live callback on the proactive predecessor remains available during this setup. */
+  readonly replacingActive: boolean;
+};
+
+type ItxEffectSetupResult =
+  | { established: true; cleanup: void | (() => void) }
+  | { established: false };
 
 type RootConnection<Root> =
   | { key: unknown; connect: () => Promise<Root> }
@@ -295,17 +304,19 @@ type RootConnection<Root> =
  *
  *   useReconnectableEffect(async (itx, signal) => {
  *     const sub = await itx.streams.get("/logs").openConnection({ processEventBatch });
- *     if (signal.disposed) { sub.unsubscribe(); return; }
- *     return () => sub.unsubscribe();
+ *     if (signal.disposed) { sub.unsubscribe(); return { established: false }; }
+ *     return { established: true, cleanup: () => sub.unsubscribe() };
  *   }, []);
  *
  * Generation changes are observed inside the semantic-lifetime effect. Its
  * active setup remains live while the successor connects and is cleaned up
- * immediately after the successor setup resolves. A late cleanup from a
- * superseded candidate still executes. `enabled: false` renders it fully inert.
+ * only after the successor setup reports that it established a live resource.
+ * A failed candidate retains both the active callback and its predecessor-
+ * transport lease; a late cleanup from a superseded candidate still executes.
+ * `enabled: false` renders it fully inert.
  */
 function useReconnectableEffect<Root>(
-  setup: (root: Root, signal: ItxEffectSignal) => Promise<void | (() => void)>,
+  setup: (root: Root, signal: ItxEffectSignal) => Promise<ItxEffectSetupResult>,
   deps: unknown[],
   connection: RootConnection<Root>,
   opts?: {
@@ -318,8 +329,17 @@ function useReconnectableEffect<Root>(
     if (!enabled) return;
     let stopped = false;
     let observedGeneration = -1;
-    let candidate: { signal: { disposed: boolean } } | undefined;
+    type Run = {
+      signal: { disposed: boolean; readonly replacingActive: boolean };
+      releasePredecessor: () => void;
+    };
+    let candidate: Run | undefined;
     let active: { signal: { disposed: boolean }; cleanup: void | (() => void) } | undefined;
+
+    const disposeCandidate = (run: Run) => {
+      run.signal.disposed = true;
+      run.releasePredecessor();
+    };
 
     const startGeneration = () => {
       const generation = currentSnapshot().generation;
@@ -328,8 +348,11 @@ function useReconnectableEffect<Root>(
 
       // A newer socket superseded an in-flight setup. The active predecessor,
       // however, stays live until this candidate has fully opened.
-      if (candidate !== undefined) candidate.signal.disposed = true;
-      const run = { signal: { disposed: false } };
+      if (candidate !== undefined) disposeCandidate(candidate);
+      const run: Run = {
+        signal: { disposed: false, replacingActive: active !== undefined },
+        releasePredecessor: retainIterateSessionPredecessor(),
+      };
       candidate = run;
 
       if (connection.connect === undefined) {
@@ -344,21 +367,27 @@ function useReconnectableEffect<Root>(
         (root) => {
           if (stopped || run.signal.disposed) return;
           setup(root, run.signal).then(
-            (cleanup) => {
+            (result) => {
               if (stopped || run.signal.disposed || candidate !== run) {
-                cleanup?.();
+                if (result.established) result.cleanup?.();
+                disposeCandidate(run);
                 return;
               }
+              // A completed-but-unestablished setup (timeout, transport error,
+              // permanent rejection) must not promote and tear down the live
+              // predecessor. It keeps the overlap lease until it is retried,
+              // superseded, unmounted, or the keeper's hard overlap bound fires.
+              if (!result.established) return;
               candidate = undefined;
               const predecessor = active;
-              active = { signal: run.signal, cleanup };
+              active = { signal: run.signal, cleanup: result.cleanup };
               if (predecessor !== undefined) {
                 predecessor.signal.disposed = true;
                 predecessor.cleanup?.();
               }
+              run.releasePredecessor();
             },
             (error: unknown) => {
-              if (candidate === run) candidate = undefined;
               if (!stopped && !run.signal.disposed) {
                 console.error("reconnectable itx effect setup failed", error);
               }
@@ -366,7 +395,6 @@ function useReconnectableEffect<Root>(
           );
         },
         (error: unknown) => {
-          if (candidate === run) candidate = undefined;
           if (stopped || run.signal.disposed) return;
           if (opts?.onConnectionError) opts.onConnectionError(error);
           else console.error("reconnectable itx effect connect failed", error);
@@ -379,7 +407,7 @@ function useReconnectableEffect<Root>(
     return () => {
       stopped = true;
       unsubscribe();
-      if (candidate !== undefined) candidate.signal.disposed = true;
+      if (candidate !== undefined) disposeCandidate(candidate);
       if (active !== undefined) {
         active.signal.disposed = true;
         active.cleanup?.();
@@ -421,85 +449,92 @@ function useRecoveringConnection<Root>(
 
   useReconnectableEffect(
     async (root, signal) => {
-      setState({ status: "connecting" });
+      if (!signal.replacingActive) setState({ status: "connecting" });
 
-      let openedConnection: ItxRecoverableConnectionHandle;
-      try {
-        const pending = open(root);
-        let timeout: ReturnType<typeof setTimeout> | undefined;
-        const result = await Promise.race([
-          pending,
-          new Promise<typeof CONNECTION_TIMED_OUT>((resolve) => {
-            timeout = setTimeout(() => resolve(CONNECTION_TIMED_OUT), CONNECTION_TIMEOUT_MS);
-          }),
-        ]).finally(() => clearTimeout(timeout));
-        if (result === CONNECTION_TIMED_OUT) {
-          // A transport can disappear after the server accepted the open but
-          // before the browser receives its handle. No handle means no ping
-          // watchdog, and a half-open WebSocket emits no close event: without
-          // this bound the UI stays "connecting" forever. REPORT the suspicion
-          // (never close the shared socket ourselves — the verifier two-strikes
-          // and, if genuinely half-open, reconnects, whose generation re-runs this
-          // effect); a straggler handle is closed AND disposed.
-          void pending.then(
-            (late) => releaseItxConnection(late),
-            () => {},
-          );
-          if (signal.disposed) return;
-          reportTransportSuspicion();
-          // This attempt is bounded and a retry is already scheduled, so the
-          // consumer remains in a recoverable connecting state rather than
-          // replacing already-loaded data with terminal error UI.
-          setState({ status: "connecting" });
-          // Retry regardless of the verifier's verdict: a wedged-but-alive
-          // server (cold DO) recovers on the next attempt, not on a reconnect.
-          const retry = setTimeout(() => setEpoch((current) => current + 1), CONNECTION_RETRY_MS);
-          return () => clearTimeout(retry);
+      while (!signal.disposed) {
+        let openedConnection: ItxRecoverableConnectionHandle;
+        try {
+          const pending = open(root);
+          let timeout: ReturnType<typeof setTimeout> | undefined;
+          const result = await Promise.race([
+            pending,
+            new Promise<typeof CONNECTION_TIMED_OUT>((resolve) => {
+              timeout = setTimeout(() => resolve(CONNECTION_TIMED_OUT), CONNECTION_TIMEOUT_MS);
+            }),
+          ]).finally(() => clearTimeout(timeout));
+          if (result === CONNECTION_TIMED_OUT) {
+            // A transport can disappear after the server accepted the open but
+            // before the browser receives its handle. No handle means no ping
+            // watchdog, and a half-open WebSocket emits no close event: without
+            // this bound the UI stays "connecting" forever. REPORT the suspicion
+            // (never close the shared socket ourselves — the verifier two-strikes
+            // and, if genuinely half-open, reconnects, whose generation re-runs this
+            // effect); a straggler handle is closed AND disposed.
+            void pending.then(
+              (late) => releaseItxConnection(late),
+              () => {},
+            );
+            if (signal.disposed) return { established: false };
+            reportTransportSuspicion();
+            // This attempt is bounded and a retry is already scheduled, so the
+            // consumer remains in a recoverable connecting state rather than
+            // replacing already-loaded data with terminal error UI.
+            if (!signal.replacingActive) setState({ status: "connecting" });
+            // Retry inside this candidate lifetime. Bumping the effect epoch here
+            // would tear down the live predecessor before this attempt succeeds.
+            await new Promise((resolve) => setTimeout(resolve, CONNECTION_RETRY_MS));
+            continue;
+          }
+          openedConnection = result;
+        } catch (error) {
+          // The ONE cancellation signal: a run superseded mid-await (unmount,
+          // deps, reconnect) must not touch state its successor now owns.
+          if (signal.disposed) return { established: false };
+          if (!isItxTransportError(error)) {
+            const message = error instanceof Error ? error.message : String(error);
+            setState({
+              status: signal.replacingActive ? "live" : "error",
+              error: message,
+            });
+            return { established: false };
+          }
+          // Recoverable transport failures never become terminal UI errors. Keep
+          // already-loaded consumers rendered while this hook retries.
+          if (!signal.replacingActive) setState({ status: "connecting" });
+          await new Promise((resolve) => setTimeout(resolve, CONNECTION_RETRY_MS));
+          continue;
         }
-        openedConnection = result;
-      } catch (error) {
-        // The ONE cancellation signal: a run superseded mid-await (unmount,
-        // deps, reconnect) must not touch state its successor now owns.
-        if (signal.disposed) return;
-        if (!isItxTransportError(error)) {
-          setState({
-            status: "error",
-            error: error instanceof Error ? error.message : String(error),
-          });
-          return;
+        const dispose = () => releaseItxConnection(openedConnection);
+        if (signal.disposed) {
+          dispose();
+          return { established: false };
         }
-        // Recoverable transport failures never become terminal UI errors. Keep
-        // already-loaded consumers rendered while this hook retries.
-        setState({ status: "connecting" });
-        const retry = setTimeout(() => setEpoch((current) => current + 1), CONNECTION_RETRY_MS);
-        return () => clearTimeout(retry);
-      }
-      const dispose = () => releaseItxConnection(openedConnection);
-      if (signal.disposed) {
-        dispose();
-        return;
-      }
-      setState({ status: "live" });
+        setState({ status: "live" });
 
-      const stopWatchdog = watchItxConnection(
-        () => openedConnection.ping(),
-        () => {
-          if (signal.disposed) return;
-          setState({ status: "connecting" });
-          // Open again unconditionally. When only the server-side callback
-          // connection died, the shared transport is still fine and this is
-          // the whole recovery; on a transport timeout the
-          // verifier may be reconnecting, and the generation dep will also re-run
-          // this effect — the epoch bump covers both, and a doubled
-          // second open is idempotent by connection key.
-          setEpoch((current) => current + 1);
-        },
-      );
+        const stopWatchdog = watchItxConnection(
+          () => openedConnection.ping(),
+          () => {
+            if (signal.disposed) return;
+            setState({ status: "connecting" });
+            // Open again unconditionally. When only the server-side callback
+            // connection died, the shared transport is still fine and this is
+            // the whole recovery; on a transport timeout the
+            // verifier may be reconnecting, and the generation dep will also re-run
+            // this effect — the epoch bump covers both, and a doubled
+            // second open is idempotent by connection key.
+            setEpoch((current) => current + 1);
+          },
+        );
 
-      return () => {
-        stopWatchdog();
-        dispose();
-      };
+        return {
+          established: true,
+          cleanup: () => {
+            stopWatchdog();
+            dispose();
+          },
+        };
+      }
+      return { established: false };
     },
     [epoch, ...deps],
     connection,

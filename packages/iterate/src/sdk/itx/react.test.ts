@@ -722,7 +722,10 @@ describe("useStreamConnection liveness", () => {
     });
     function Harness() {
       const connection = useStreamConnection(open as never, []);
-      return createElement("output", { "data-status": connection.status });
+      return createElement("output", {
+        "data-status": connection.status,
+        "data-error": connection.error,
+      });
     }
 
     const container = document.body.appendChild(document.createElement("div"));
@@ -742,6 +745,7 @@ describe("useStreamConnection liveness", () => {
     return {
       open,
       status: () => container.querySelector("output")?.getAttribute("data-status"),
+      error: () => container.querySelector("output")?.getAttribute("data-error"),
       advance: (ms: number) => act(async () => vi.advanceTimersByTimeAsync(ms)),
       act: (fn: () => void) =>
         act(async () => {
@@ -813,6 +817,79 @@ describe("useStreamConnection liveness", () => {
     await harness.advance(0);
 
     expect(lifecycle.slice(0, 3)).toEqual(["open-1", "open-2", "close-1"]);
+    await harness.unmount();
+  });
+
+  test("budget rotation keeps the predecessor when the successor callback is rejected", async () => {
+    const lifecycle: string[] = [];
+    let attempts = 0;
+    const harness = await mountConnection(
+      () => {
+        attempts += 1;
+        const attempt = attempts;
+        lifecycle.push(`open-${attempt}`);
+        return {
+          ping: () => true,
+          close: () => lifecycle.push(`close-${attempt}`),
+        };
+      },
+      async (handle) => {
+        if (attempts === 2) throw new Error("successor rejected the callback");
+        return handle;
+      },
+    );
+    const predecessorSocket = FakeWebSocket.instances.at(-1)!;
+
+    await harness.act(() => {
+      for (let message = 0; message < 8_000; message += 1) predecessorSocket.fire("message");
+    });
+    await harness.act(() => FakeWebSocket.instances[1]!.fire("open"));
+    await harness.advance(0);
+
+    expect(lifecycle).toEqual(["open-1", "open-2"]);
+    expect(predecessorSocket.closeCalls).toBe(0);
+    expect(harness.status()).toBe("live");
+    expect(harness.error()).toBe("successor rejected the callback");
+
+    await harness.advance(30_000);
+    expect(predecessorSocket.closeCalls).toBe(1);
+    await harness.unmount();
+  });
+
+  test("budget rotation retries a timed-out successor before retiring the predecessor", async () => {
+    const lifecycle: string[] = [];
+    let attempts = 0;
+    const harness = await mountConnection(
+      () => {
+        attempts += 1;
+        const attempt = attempts;
+        lifecycle.push(`open-${attempt}`);
+        return {
+          ping: () => true,
+          close: () => lifecycle.push(`close-${attempt}`),
+        };
+      },
+      async (handle) => {
+        if (attempts === 2) return new Promise<never>(() => {});
+        return handle;
+      },
+    );
+    const predecessorSocket = FakeWebSocket.instances.at(-1)!;
+
+    await harness.act(() => {
+      for (let message = 0; message < 8_000; message += 1) predecessorSocket.fire("message");
+    });
+    await harness.act(() => FakeWebSocket.instances[1]!.fire("open"));
+    await harness.advance(15_000);
+
+    expect(lifecycle).toEqual(["open-1", "open-2"]);
+    expect(predecessorSocket.closeCalls).toBe(0);
+    expect(harness.status()).toBe("live");
+
+    await harness.advance(10_000);
+    expect(lifecycle).toEqual(["open-1", "open-2", "open-3", "close-1"]);
+    expect(predecessorSocket.closeCalls).toBe(1);
+    expect(harness.status()).toBe("live");
     await harness.unmount();
   });
 

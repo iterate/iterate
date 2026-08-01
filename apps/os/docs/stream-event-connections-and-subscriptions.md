@@ -111,11 +111,13 @@ stream callback on the same ITX socket does not reset that counter.
 OS deployments set an explicit 1,000,000-subrequest ceiling, and the
 `iterate/client` session keeper proactively authenticates a successor `/api`
 socket after 8,000 inbound messages. It publishes the successor before retiring
-the predecessor, with a bounded five-second transport overlap so
-reconnect-aware effects can move their callbacks. Long-lived Node and TUI
-consumers must use that keeper (`configureIterateSession` plus
-`connectIterateSession`); `iterate/node` is deliberately a one-shot dial for
-bounded scripts and tests.
+the predecessor. Reconnect-aware effects lease that predecessor until every
+successor callback is live; failed opens retry without breaking the working
+callback, and a 30-second hard bound prevents a failed consumer from leaking
+the old transport. Consumers without a lease retain a five-second grace.
+Long-lived Node and TUI consumers must use that keeper
+(`configureIterateSession` plus `connectIterateSession`); `iterate/node` is
+deliberately a one-shot dial for bounded scripts and tests.
 
 A callback consumer still owns delivery continuity across every reconnect:
 

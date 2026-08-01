@@ -184,8 +184,10 @@ const RECONNECT_BACKOFF_MAX_MS = 10_000;
  * deployment's larger explicit limit was omitted.
  */
 const TRANSPORT_MESSAGE_ROTATION_THRESHOLD = 8_000;
-/** Keep the predecessor alive long enough for reconnect-aware effects to open on the successor. */
-const TRANSPORT_ROTATION_OVERLAP_MS = 5_000;
+/** Give reconnect-aware effects time to claim the proactive predecessor before retiring it. */
+const TRANSPORT_ROTATION_OVERLAP_GRACE_MS = 5_000;
+/** Bound a claimed predecessor even when a successor callback can never establish. */
+const TRANSPORT_ROTATION_MAX_OVERLAP_MS = 30_000;
 /**
  * How often a live transport (the socket verifier) and a mounted subscription
  * (the watchdog) prove they are not silently dead. ONE shared cadence: the two
@@ -222,13 +224,7 @@ type Generation = {
   /** Still-live transport kept while this proactive successor authenticates. */
   predecessor: Generation | undefined;
   /** Authenticated predecessor retained briefly while subscriptions move to this generation. */
-  overlap:
-    | {
-        generation: Generation;
-        session: SessionStub;
-        timeout: ReturnType<typeof setTimeout>;
-      }
-    | undefined;
+  overlap: TransportOverlap | undefined;
   /**
    * HALTED after a terminal auth rejection: the generation keeps owning the
    * slot (so a render can never trigger another connection attempt — every re-render of an
@@ -238,6 +234,13 @@ type Generation = {
    * explicit {@link reconnectIterateSession} (or a page load) revives.
    */
   failed: boolean;
+};
+
+type TransportOverlap = {
+  generation: Generation;
+  session: SessionStub;
+  leases: number;
+  timeout: ReturnType<typeof setTimeout>;
 };
 
 /**
@@ -280,6 +283,27 @@ export const subscribeSession = (onChange: () => void) => {
   listeners.add(onChange);
   return () => void listeners.delete(onChange);
 };
+
+/**
+ * Keep the predecessor transport alive while a reconnect-aware consumer opens
+ * its callback on a proactively rotated successor. The lease is a no-op for
+ * ordinary reconnects and initial connections. Release is idempotent; the
+ * transport also has a hard upper bound so a failed consumer cannot leak it.
+ */
+export function retainIterateSessionPredecessor(): () => void {
+  const generation = current;
+  const overlap = generation?.overlap;
+  if (generation === undefined || overlap === undefined) return () => {};
+  overlap.leases += 1;
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    if (generation.overlap !== overlap) return;
+    overlap.leases -= 1;
+    if (overlap.leases === 0) finishTransportOverlap(generation);
+  };
+}
 
 /**
  * One real project stub per (session, slug), cached in module state so a
@@ -390,6 +414,9 @@ function startConnectionAttempt(predecessor?: Generation): Generation {
     const retiringSession = snapshot?.session;
     const retiringGeneration = generation.predecessor;
     generation.predecessor = undefined;
+    if (retiringSession !== undefined && retiringGeneration !== undefined) {
+      generation.overlap = startTransportOverlap(generation, retiringGeneration, retiringSession);
+    }
     setSnapshot({ generation: id, session: root, connecting: promise });
     resolve(root);
     firstConnect?.resolve(root);
@@ -401,19 +428,10 @@ function startConnectionAttempt(predecessor?: Generation): Generation {
       disposeSession(retiringSession);
       return;
     }
-    // Proactive budget rotation: publish the ready successor first, then leave
-    // the old transport alive briefly. Reconnect-aware effects use the new
-    // generation to open replacement callbacks during this overlap; identical
-    // connection keys replace the old Stream DO callback without a delivery gap.
-    const timeout = setTimeout(
-      () => finishTransportOverlap(generation),
-      TRANSPORT_ROTATION_OVERLAP_MS,
-    );
-    generation.overlap = {
-      generation: retiringGeneration,
-      session: retiringSession,
-      timeout,
-    };
+    // Proactive budget rotation installed its overlap BEFORE publishing the
+    // snapshot, so reconnect-aware listeners could synchronously lease the old
+    // transport. With no consumer lease it retains the original short grace;
+    // claimed predecessors retire as soon as every successor is established.
   };
 
   const beginWebSocketConnection = () => {
@@ -618,6 +636,33 @@ function disposeSession(session: SessionStub): void {
   const cache = projectStubCaches.get(session);
   if (cache) for (const stub of cache.values()) (stub as Partial<Disposable>)[Symbol.dispose]?.();
   (session as Partial<Disposable>)[Symbol.dispose]?.();
+}
+
+/** Install the short unclaimed grace and the hard bound for a claimed predecessor. */
+function startTransportOverlap(
+  successor: Generation,
+  predecessor: Generation,
+  predecessorSession: SessionStub,
+): TransportOverlap {
+  const overlap: TransportOverlap = {
+    generation: predecessor,
+    session: predecessorSession,
+    leases: 0,
+    timeout: setTimeout(finishGrace, TRANSPORT_ROTATION_OVERLAP_GRACE_MS),
+  };
+  return overlap;
+
+  function finishGrace(): void {
+    if (successor.overlap !== overlap) return;
+    if (overlap.leases === 0) {
+      finishTransportOverlap(successor);
+      return;
+    }
+    overlap.timeout = setTimeout(
+      () => finishTransportOverlap(successor),
+      TRANSPORT_ROTATION_MAX_OVERLAP_MS - TRANSPORT_ROTATION_OVERLAP_GRACE_MS,
+    );
+  }
 }
 
 /** Finish the bounded make-before-break window of a proactive transport rotation. */
