@@ -123,6 +123,7 @@ export class VoiceBridge extends IterateDurableObject {
       url.searchParams.get("instructions") ??
       "You are a concise voice assistant. Answer in one short sentence unless asked for detail.";
     const greeting = url.searchParams.get("greet");
+    const manualTurns = url.searchParams.get("turns") === "manual";
 
     // One project stub for the whole call; valid because this invocation's
     // context stays open for as long as the call is doing work — the anchor
@@ -194,6 +195,7 @@ export class VoiceBridge extends IterateDurableObject {
       markReady = resolve;
     });
     let lastActivityAt = Date.now();
+    let responseActive = false;
 
     upstream.addEventListener("message", (event) => {
       const tGrok = Date.now();
@@ -211,7 +213,16 @@ export class VoiceBridge extends IterateDurableObject {
               voice,
               instructions,
               reasoning: { effort },
-              turn_detection: { type: "server_vad", threshold: 0.5, silence_duration_ms: 500 },
+              /*
+               * Manual turns mean no VAD anywhere: the device decides when a
+               * turn starts and ends (push to talk), and this bridge turns
+               * those edges into commit/response.create. Server VAD on an
+               * open microphone next to a speaker hears the answer and
+               * answers itself.
+               */
+              turn_detection: manualTurns
+                ? { type: null }
+                : { type: "server_vad", threshold: 0.5, silence_duration_ms: 500 },
               audio: {
                 input: { format: { type: "audio/pcm", rate: 16000 }, transport: "binary" },
                 output: { format: { type: "audio/pcm", rate: 16000 }, transport: "binary" },
@@ -241,6 +252,8 @@ export class VoiceBridge extends IterateDurableObject {
         appendSpkPcm(new Uint8Array(base64ToBytes(grokEvent.delta)), tGrok);
         return;
       }
+      if (grokEvent.type === "response.created") responseActive = true;
+      if (grokEvent.type === "response.done") responseActive = false;
       if (grokEvent.type === "input_audio_buffer.speech_started") {
         // Barge-in: everything still queued is answer the user talked over.
         paceQueue.length = 0;
@@ -283,6 +296,21 @@ export class VoiceBridge extends IterateDurableObject {
             }
             break;
           }
+          case "voicelab/turn": {
+            lastActivityAt = Date.now();
+            if (payload.action === "start") {
+              // Everything queued is answer the user just talked over.
+              paceQueue.length = 0;
+              if (responseActive) {
+                upstream.send(JSON.stringify({ type: "response.cancel" }));
+                responseActive = false;
+              }
+            } else if (payload.action === "commit") {
+              upstream.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+              upstream.send(JSON.stringify({ type: "response.create" }));
+            }
+            break;
+          }
           case "voicelab/ping":
             fireAppend({
               type: "voicelab/pong",
@@ -309,7 +337,12 @@ export class VoiceBridge extends IterateDurableObject {
         if (generation > 1) reconnects++;
         const next = await stream.openConnection({
           connectionKey: `voicelab-worker-bridge-${callId}-g${generation}`,
-          eventTypes: ["voicelab/mic-frame", "voicelab/ping", "voicelab/call-ended"],
+          eventTypes: [
+            "voicelab/mic-frame",
+            "voicelab/ping",
+            "voicelab/turn",
+            "voicelab/call-ended",
+          ],
           processEventBatch: (batch) => handleEvents(batch.events),
           ...(lastSeenOffset >= 0 ? { replayAfterOffset: lastSeenOffset } : {}),
         });
@@ -418,6 +451,11 @@ export interface StartCallOptions {
   greet?: string;
   /** Drip speaker frames at ~2x realtime — set this from a microcontroller. */
   pace?: boolean;
+  /**
+   * "manual": no VAD; the caller marks turns with voicelab/turn events. This
+   * is what a push-to-talk device wants. Anything else keeps server VAD.
+   */
+  turns?: "manual" | "vad";
 }
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
@@ -442,6 +480,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (options.instructions) params.set("instructions", options.instructions);
     if (options.greet) params.set("greet", options.greet);
     if (options.pace) params.set("pace", "1");
+    if (options.turns === "manual") params.set("turns", "manual");
 
     const startedAt = Date.now();
     const response = await this.fetchDynamicWorker(
