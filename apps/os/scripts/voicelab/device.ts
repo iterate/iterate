@@ -14,7 +14,7 @@ import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 
 /** Options for `pnpm cli voicelab device`. */
 export interface DeviceOptions extends VoicelabConnectOptions {
-  /** screenshot | pull | turn | tone | call | hangup | status. */
+  /** journey | screenshot | pull | turn | tone | call | hangup | status. */
   action?: string;
   /** Capability the device mounts itself under (itx.kit.<name>). */
   name?: string;
@@ -155,6 +155,153 @@ export async function device(options: DeviceOptions) {
       if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
     }
     console.error(`sent ${sequence} frames (${(sequence * 20) / 1000}s of 440Hz)`);
+    return;
+  }
+
+  if (action === "journey") {
+    /*
+     * The whole user journey, driven the way a person drives it and observed
+     * the way a person observes it: press call, wait for it to actually be
+     * live, hold talk, let go, wait for the answer. Every step is timed and
+     * screenshotted, because "it takes forever" and "the screen is stuck"
+     * are only diagnosable if you can see WHICH step stalled and what the
+     * device was showing while it did.
+     */
+    const outDir = options.out ?? "journey";
+    fs.mkdirSync(outDir, { recursive: true });
+    const stream = itx.streams.get(options.path ?? "/voicelab/device");
+    const steps: { step: string; ms: number; note?: string }[] = [];
+    /*
+     * Every device call is time-bounded. A capability call that never
+     * resolves — which happens when the device resets or its session drops
+     * mid-request — would otherwise hang the whole harness silently, and a
+     * test tool that can hang is worse than no test tool: it turns "the
+     * device is broken" into "the run produced nothing".
+     */
+    const withTimeout = async <T>(label: string, run: () => Promise<T>, ms = 20_000) => {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        return await Promise.race([
+          run(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+          }),
+        ]);
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    };
+    const shot = async (name: string) => {
+      try {
+        const meta = await withTimeout("takeScreenshot", () => capability.takeScreenshot());
+        const pixels = new Uint8Array(meta.bytes);
+        let offset = 0;
+        for (let index = 0; index < meta.chunks; index++) {
+          const chunk = new Uint8Array(
+            await withTimeout(`chunk ${index}`, () => capability.readScreenshotChunk(index)),
+          );
+          pixels.set(chunk, offset);
+          offset += chunk.length;
+        }
+        fs.writeFileSync(
+          path_.join(outDir, `${name}.png`),
+          encodeRgb565Png(pixels, meta.width, meta.height),
+        );
+      } catch (error) {
+        steps.push({ ms: 0, note: String(error).slice(0, 80), step: `screenshot:${name}` });
+      }
+    };
+    const timed = async <T>(step: string, run: () => Promise<T>) => {
+      const started = Date.now();
+      try {
+        const value = await withTimeout(step, run);
+        steps.push({ ms: Date.now() - started, step });
+        return value;
+      } catch (error) {
+        steps.push({ ms: Date.now() - started, note: String(error).slice(0, 90), step });
+        return undefined;
+      }
+    };
+
+    console.error("journey: screenshotting idle screen");
+    await shot("1-idle");
+    await timed("hangUp (clear any stale call)", () => capability.conversation.hangUp());
+    await new Promise((resolve) => setTimeout(resolve, 3000));
+
+    console.error("journey: pressing call");
+    await timed("press call", () => capability.conversation.start());
+    // Wait for the call to be LIVE, not merely requested.
+    {
+      const started = Date.now();
+      let live = false;
+      while (Date.now() - started < 60_000) {
+        const status = (await withTimeout("status", () => capability.recording.status()).catch(
+          () => ({}),
+        )) as { recording?: boolean };
+        if (status.recording === true) {
+          live = true;
+          break;
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      steps.push({
+        ms: Date.now() - started,
+        note: live ? "call went live" : "NEVER WENT LIVE",
+        step: "wait for call live",
+      });
+    }
+    await shot("2-call-live");
+
+    console.error("journey: holding talk");
+    await timed("hold talk", () => capability.pushToTalk.start());
+    await new Promise((resolve) => setTimeout(resolve, (options.seconds ?? 3) * 1000));
+    await shot("3-talking");
+    await timed("release talk", () => capability.pushToTalk.stop());
+
+    /*
+     * Watch the STREAM for the answer, not the device's SD-card log. The log
+     * is a diagnostic that can be absent (no card, a card that wedged) and
+     * an absent diagnostic must never read as a failed call — that reported
+     * "NO ANSWER" for a call whose answer was plainly on the screen.
+     */
+    {
+      const started = Date.now();
+      let answered = false;
+      let spokenText = "";
+      const connection = await stream.openConnection({
+        connectionKey: `journey-${Date.now()}`,
+        eventTypes: ["voicelab/grok-event"],
+        processEventBatch: (batch: { events: { payload?: unknown }[] }) => {
+          for (const event of batch.events) {
+            const inner = (event.payload as { event?: { type?: string; delta?: string } })?.event;
+            if (inner?.type === "response.output_audio_transcript.delta") {
+              spokenText += inner.delta ?? "";
+            }
+            if (inner?.type === "response.done") answered = true;
+          }
+        },
+      });
+      while (Date.now() - started < 45_000 && !answered) {
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+      connection.close();
+      steps.push({
+        ms: Date.now() - started,
+        note: answered ? `answered: ${spokenText.slice(0, 70)}` : "NO ANSWER",
+        step: "wait for answer",
+      });
+    }
+    await shot("4-answered");
+
+    let log = "";
+    const size = await capability.recording.size("call.log");
+    for (let offset = 0; offset < size; ) {
+      const chunk = new Uint8Array(await capability.recording.read("call.log", offset));
+      if (chunk.length === 0) break;
+      log += String.fromCharCode(...chunk);
+      offset += chunk.length;
+    }
+    console.log(JSON.stringify({ callLog: log.split("\n"), screenshots: outDir, steps }, null, 2));
     return;
   }
 
