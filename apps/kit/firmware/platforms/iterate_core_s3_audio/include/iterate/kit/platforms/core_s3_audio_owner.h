@@ -2,6 +2,7 @@
 #define ITERATE_KIT_PLATFORMS_CORE_S3_AUDIO_OWNER_H
 
 #include "iterate/kit/aec_capture_bridge.h"
+#include "iterate/kit/pcm_capture_turn.h"
 #include "iterate/kit/pcm_clock_playback.h"
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/platforms/core_s3_capture_reserve.h"
@@ -26,6 +27,14 @@ struct iterate_kit_core_s3_audio_owner_options {
   size_t maximum_lane_items_per_dma_chunk;
   int speaker_volume_percent;
   int microphone_gain_db;
+
+  /*
+   * Optional nonblocking wake for the PCM connection owner. The audio task
+   * invokes it only after publishing an uplink item or requesting a destructive
+   * reset due to lane pressure; a FreeRTOS task notification is appropriate.
+   */
+  iterate_kit_pcm_capture_turn_notify_fn notify_uplink;
+  void *notify_uplink_context;
 };
 
 /**
@@ -51,6 +60,7 @@ struct iterate_kit_core_s3_audio_owner_metrics {
   iterate_kit_core_s3_i2s_stats_t i2s;
   struct iterate_kit_core_s3_capture_reserve_metrics capture_reserve;
   struct iterate_kit_pcm_lane_metrics lane;
+  struct iterate_kit_pcm_capture_turn_metrics capture_turn;
 
   uint32_t io_cycles;
   uint32_t codec_write_errors;
@@ -83,6 +93,7 @@ struct iterate_kit_core_s3_audio_owner_metrics {
   uint32_t maximum_capture_to_uplink_us;
   uint32_t aec_input_partial_samples;
   uint32_t clean_egress_partial_samples;
+  uint32_t capture_turn_poll_failures;
 
   uint32_t io_stack_minimum_free_bytes;
   uint32_t aec_stack_minimum_free_bytes;
@@ -113,6 +124,18 @@ esp_err_t iterate_kit_core_s3_audio_owner_start(
  * before rendering. Thus pre-interruption speech cannot play after recovery.
  */
 void iterate_kit_core_s3_audio_owner_request_playback_reset(void);
+
+/**
+ * Enqueues one manual-PTT publication edge for the continuous AEC task.
+ *
+ * The hardware microphone and reference remain clocked in both states. The
+ * AEC task drains already-reserved raw audio before applying the edge, then it
+ * alone starts/stops PCM publication and emits the ordered turn marker. This
+ * keeps control code off the realtime lane and avoids resetting AEC on every
+ * human button edge.
+ */
+enum iterate_kit_status
+iterate_kit_core_s3_audio_owner_request_uplink_active(bool active);
 
 void iterate_kit_core_s3_audio_owner_metrics_snapshot(
     struct iterate_kit_core_s3_audio_owner_metrics *snapshot);

@@ -77,6 +77,44 @@ CPU was 195 permille. The allocator's boot-to-run historical minimum was only
 startup transient is a visible memory-headroom follow-up, not silently called
 healthy or used to invalidate the otherwise exact conversation.
 
+### Fresh pre-handoff validation without reflashing
+
+At 02:30 UTC on 2026-08-01 the deployed worker health route, physical Stick,
+USB identity, Cap'n Web mount, project credential, real Grok session, raw event
+stream, colour tools, uplink, and playback path were exercised again. The run
+completed three remote-PTT turns on one production `/pcm` connection. It sent
+1,464 microphone frames, conserved all 324 accepted/submitted/completed
+downlink frames, completed three responses, and called the colour capability
+green/red/green. The raw artifact contains 113 ordered provider events with no
+provider error. The nearby Mac independently transcribed the first response as
+`Production turn one is green.`; it contained 20 relative-energy windows,
+measured 7.516x ambient maximum, and clipped no samples.
+
+That otherwise clean run is deliberately classified **network-invalid**, not
+promoted to a new acceptance run: one aligned router probe reached 62.223 ms
+against the 50 ms gate and one worker probe reached 104.568 ms against the
+100 ms gate. Its evidence is under
+`apps/kit/evidence/m5sticks3-morning-final/2026-08-01T02-30-33-544Z/`.
+
+A bounded retry at 02:32 UTC completed two fully accounted turns. Grok also
+emitted a complete third response in the retained raw stream, but the harness
+did not observe the matching terminal device-playback metrics before its
+finite deadline. The interval independently contained router RTTs of 69.990,
+74.467, 79.675, and 93.141 ms and worker RTTs of 103.507 and 123.237 ms, so it
+is also correctly **network-invalid**. It is retained under
+`apps/kit/evidence/m5sticks3-morning-final-valid/2026-08-01T02-32-58-807Z/`
+as a regression lead for callback/metrics freshness under poor connectivity,
+not as positive evidence and not as an unexplained success.
+
+An immediate post-run 20-probe diagnostic window was clean (maximum Stick,
+router, and worker RTT 22.934, 8.336, and 53.732 ms respectively). This shows
+the invalidity was intermittent; it does not retroactively validate either
+measured audio interval. Repeating effectively identical conversations until
+one happened to sample a quiet router would add little confidence and risk the
+known-good device state. The earlier immutable `m5sticks3-morning-ready` run
+remains the authoritative network-valid production acceptance. The Stick was
+left idle on that same known-good firmware and production configuration.
+
 ## Achieved deployed-userspace slice
 
 The production project is `kit-stick-voice-e2e-20260731`

@@ -80,12 +80,11 @@ struct core_s3_atomic_metrics {
   volatile uint32_t maximum_aec_linear_us;
   volatile uint32_t last_aec_nlp_us;
   volatile uint32_t maximum_aec_nlp_us;
-  volatile uint32_t clean_uplink_frames;
-  volatile uint32_t clean_uplink_drops;
   volatile uint32_t last_capture_to_uplink_us;
   volatile uint32_t maximum_capture_to_uplink_us;
   volatile uint32_t aec_input_partial_samples;
   volatile uint32_t clean_egress_partial_samples;
+  volatile uint32_t capture_turn_poll_failures;
 };
 
 struct core_s3_audio_owner {
@@ -97,6 +96,7 @@ struct core_s3_audio_owner {
   struct iterate_kit_core_s3_capture_reserve capture_reserve;
   struct iterate_kit_core_s3_capture_chunk capture_chunk;
   struct iterate_kit_pcm_clock_playback playback;
+  struct iterate_kit_pcm_capture_turn capture_turn;
   struct iterate_kit_aec_capture_bridge capture_bridge;
 
   int16_t retained_downlink[ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME]
@@ -517,15 +517,17 @@ static enum iterate_kit_status copy_clean_uplink(
       sample_rate_hz != ITERATE_KIT_CORE_S3_AUDIO_SAMPLE_RATE_HZ) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
+  const bool publication_was_active =
+      iterate_kit_pcm_capture_turn_is_active(
+          &state->capture_turn);
   const enum iterate_kit_status status =
-      iterate_kit_pcm_lane_submit_uplink_at(
-          state->lane,
+      iterate_kit_pcm_capture_turn_submit(
+          &state->capture_turn,
           samples,
-          sample_count * sizeof(*samples),
-          captured_through_at_us / 1000U);
-  if (status == ITERATE_KIT_OK) {
-    atomic_saturating_increment(
-        &state->metrics.clean_uplink_frames);
+          sample_count,
+          sample_rate_hz,
+          captured_through_at_us);
+  if (status == ITERATE_KIT_OK && publication_was_active) {
     const int64_t now_us = esp_timer_get_time();
     if (now_us >= 0 &&
         (uint64_t)now_us >= captured_through_at_us) {
@@ -542,16 +544,13 @@ static enum iterate_kit_status copy_clean_uplink(
           &state->metrics.maximum_capture_to_uplink_us,
           bounded);
     }
-  } else {
-    /*
-     * Never retry a rejected frame. The bridge also destroys the clean suffix
-     * from the same DSP result, and pcm_lane asks its network consumer to
-     * purge the old epoch. Recovered connectivity therefore resumes at "now"
-     * instead of draining speech captured during the outage.
-     */
-    atomic_saturating_increment(
-        &state->metrics.clean_uplink_drops);
   }
+  /*
+   * Never retry a rejected frame. The bridge destroys the clean suffix from
+   * the same DSP result, while pcm_capture_turn/pcm_lane classify pressure and
+   * request an epoch purge. Recovery therefore resumes at "now" instead of
+   * draining speech captured during the outage.
+   */
   return status;
 }
 
@@ -668,6 +667,24 @@ static void aec_task_main(void *context) {
             &owner.metrics.capture_bridge_errors);
       }
       mirror_capture_bridge_metrics();
+    }
+
+    /*
+     * Apply PTT edges only after draining the bounded raw reserve which was
+     * already waiting when this wake began. A tempting poll-before-drain puts
+     * the release marker ahead of microphone chunks captured just before the
+     * button edge. Draining at most eight 8 ms chunks bounds the tail and keeps
+     * accepted frame/marker order causal without stopping the AEC timeline.
+     * Notifications arriving during this pass remain sticky for the next pass.
+     */
+    const enum iterate_kit_status turn_status =
+        iterate_kit_pcm_capture_turn_poll(
+            &owner.capture_turn, monotonic_ms());
+    if (turn_status != ITERATE_KIT_OK &&
+        turn_status != ITERATE_KIT_UNAVAILABLE &&
+        turn_status != ITERATE_KIT_BACKPRESSURE) {
+      atomic_saturating_increment(
+          &owner.metrics.capture_turn_poll_failures);
     }
   }
 }
@@ -895,6 +912,17 @@ esp_err_t iterate_kit_core_s3_audio_owner_start(
           &owner.playback, &playback_options) != ITERATE_KIT_OK) {
     return ESP_ERR_INVALID_STATE;
   }
+  const struct iterate_kit_pcm_capture_turn_options
+      capture_turn_options = {
+        .lane = owner.lane,
+        .notify_uplink = options->notify_uplink,
+        .notify_uplink_context = options->notify_uplink_context,
+      };
+  if (iterate_kit_pcm_capture_turn_init(
+          &owner.capture_turn,
+          &capture_turn_options) != ITERATE_KIT_OK) {
+    return ESP_ERR_INVALID_STATE;
+  }
 
   owner.aec = create_aec();
   if (owner.aec == NULL) {
@@ -992,6 +1020,26 @@ void iterate_kit_core_s3_audio_owner_request_playback_reset(void) {
       &owner.playback_reset_requested, 1U, __ATOMIC_RELEASE);
 }
 
+enum iterate_kit_status
+iterate_kit_core_s3_audio_owner_request_uplink_active(bool active) {
+  if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U ||
+      owner.aec_task == NULL) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  const enum iterate_kit_status status =
+      iterate_kit_pcm_capture_turn_request(
+          &owner.capture_turn, active);
+  if (status == ITERATE_KIT_OK) {
+    /*
+     * Continuous capture normally wakes this task every 8 ms, but an explicit
+     * edge wake keeps hang-up bounded even if the codec has just failed. It is
+     * a counter notification, so racing an ISR wake cannot lose either reason.
+     */
+    xTaskNotifyGive(owner.aec_task);
+  }
+  return status;
+}
+
 void iterate_kit_core_s3_audio_owner_metrics_snapshot(
     struct iterate_kit_core_s3_audio_owner_metrics *snapshot) {
   if (snapshot == NULL) {
@@ -1020,6 +1068,8 @@ void iterate_kit_core_s3_audio_owner_metrics_snapshot(
   if (owner.lane != NULL) {
     iterate_kit_pcm_lane_metrics(owner.lane, &snapshot->lane);
   }
+  iterate_kit_pcm_capture_turn_metrics(
+      &owner.capture_turn, &snapshot->capture_turn);
 
 #define COPY_ATOMIC_METRIC(name) \
   snapshot->name = atomic_load(&owner.metrics.name)
@@ -1046,13 +1096,20 @@ void iterate_kit_core_s3_audio_owner_metrics_snapshot(
   COPY_ATOMIC_METRIC(maximum_aec_linear_us);
   COPY_ATOMIC_METRIC(last_aec_nlp_us);
   COPY_ATOMIC_METRIC(maximum_aec_nlp_us);
-  COPY_ATOMIC_METRIC(clean_uplink_frames);
-  COPY_ATOMIC_METRIC(clean_uplink_drops);
   COPY_ATOMIC_METRIC(last_capture_to_uplink_us);
   COPY_ATOMIC_METRIC(maximum_capture_to_uplink_us);
   COPY_ATOMIC_METRIC(aec_input_partial_samples);
   COPY_ATOMIC_METRIC(clean_egress_partial_samples);
+  COPY_ATOMIC_METRIC(capture_turn_poll_failures);
 #undef COPY_ATOMIC_METRIC
+  snapshot->clean_uplink_frames =
+      snapshot->capture_turn.frames_accepted;
+  const uint64_t clean_uplink_drops =
+      (uint64_t)snapshot->capture_turn.frame_backpressure +
+      snapshot->capture_turn.frame_failures;
+  snapshot->clean_uplink_drops = clean_uplink_drops > UINT32_MAX
+      ? UINT32_MAX
+      : (uint32_t)clean_uplink_drops;
   for (size_t slot = 0U;
        slot < ITERATE_KIT_CORE_S3_TDM_SLOT_COUNT;
        ++slot) {
