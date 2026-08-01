@@ -338,7 +338,7 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 72U;
   sample->has_control_diagnostics =
       fixture->include_control_diagnostics;
-  sample->control_diagnostics.schema_version = 3U;
+  sample->control_diagnostics.schema_version = 4U;
   sample->control_diagnostics.produced_at_ms = uptime;
   sample->control_diagnostics.websocket_start_attempts =
       fixture->maximum_metrics ? UINT32_MAX : 73U;
@@ -429,6 +429,22 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 93U;
   sample->control_diagnostics.network.pcm_websocket_errors =
       fixture->maximum_metrics ? UINT32_MAX : 94U;
+  sample->control_diagnostics.network.pcm_websocket_raw_write_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 95U;
+  sample->control_diagnostics.network.pcm_transport_failure_incidents =
+      fixture->maximum_metrics ? UINT32_MAX : 96U;
+  sample->control_diagnostics.network.pcm_last_failure_operation =
+      fixture->maximum_metrics ? UINT32_MAX : 3U;
+  sample->control_diagnostics.network.pcm_last_raw_result =
+      fixture->maximum_metrics ? INT32_MIN : -1;
+  sample->control_diagnostics.network.pcm_last_socket_errno =
+      fixture->maximum_metrics ? INT32_MIN : 104;
+  sample->control_diagnostics.network.pcm_last_esp_tls_error =
+      fixture->maximum_metrics ? INT32_MIN : 32776;
+  sample->control_diagnostics.network.pcm_last_tls_stack_error =
+      fixture->maximum_metrics ? INT32_MIN : -29312;
+  sample->control_diagnostics.network.pcm_last_tls_cert_flags =
+      fixture->maximum_metrics ? INT32_MIN : 0;
   return ITERATE_KIT_OK;
 }
 
@@ -926,7 +942,7 @@ static void control_diagnostics_are_available_as_a_one_shot_snapshot(void) {
   assert(
       strstr(
           fixture.captured[0],
-          "\"schemaVersion\":3,\"producedAtMs\":1,"
+          "\"schemaVersion\":4,\"producedAtMs\":1,"
           "\"control\":{\"websocketStartAttempts\":73,"
           "\"websocketConnections\":74,\"websocketDisconnects\":75,"
           "\"websocketErrors\":76,\"wifiDisconnects\":77,"
@@ -951,7 +967,15 @@ static void control_diagnostics_are_available_as_a_one_shot_snapshot(void) {
           "\"network\":{\"wifiConnected\":true,\"wifiRssiDbm\":-67,"
           "\"pcmWebsocketConnections\":92,"
           "\"pcmWebsocketDisconnects\":93,"
-          "\"pcmWebsocketErrors\":94}") != NULL);
+          "\"pcmWebsocketErrors\":94,"
+          "\"pcmWebsocketRawWriteFailures\":95,"
+          "\"pcmTransportFailureIncidents\":96,"
+          "\"pcmLastFailureOperation\":3,"
+          "\"pcmLastRawResult\":-1,"
+          "\"pcmLastSocketErrno\":104,"
+          "\"pcmLastEspTlsError\":32776,"
+          "\"pcmLastTlsStackError\":-29312,"
+          "\"pcmLastTlsCertFlags\":0}") != NULL);
   /*
    * The eight-slot physical run still lost a resolution after 21 seconds.
    * These retained counters are the minimum evidence needed to tell a full
@@ -995,7 +1019,15 @@ static void network_diagnostics_omit_unobserved_wifi_rssi(void) {
           "\"network\":{\"wifiConnected\":true,"
           "\"pcmWebsocketConnections\":92,"
           "\"pcmWebsocketDisconnects\":93,"
-          "\"pcmWebsocketErrors\":94}") != NULL);
+          "\"pcmWebsocketErrors\":94,"
+          "\"pcmWebsocketRawWriteFailures\":95,"
+          "\"pcmTransportFailureIncidents\":96,"
+          "\"pcmLastFailureOperation\":3,"
+          "\"pcmLastRawResult\":-1,"
+          "\"pcmLastSocketErrno\":104,"
+          "\"pcmLastEspTlsError\":32776,"
+          "\"pcmLastTlsStackError\":-29312,"
+          "\"pcmLastTlsCertFlags\":0}") != NULL);
   assert(strstr(fixture.captured[0], "wifiRssiDbm") == NULL);
 
   capnweb_session_close(&fixture.session);
@@ -1077,7 +1109,15 @@ static void maximum_control_diagnostics_fit_the_static_reply_budget(void) {
           "\"wifiRssiDbm\":-2147483648,"
           "\"pcmWebsocketConnections\":4294967295,"
           "\"pcmWebsocketDisconnects\":4294967295,"
-          "\"pcmWebsocketErrors\":4294967295}") != NULL);
+          "\"pcmWebsocketErrors\":4294967295,"
+          "\"pcmWebsocketRawWriteFailures\":4294967295,"
+          "\"pcmTransportFailureIncidents\":4294967295,"
+          "\"pcmLastFailureOperation\":4294967295,"
+          "\"pcmLastRawResult\":-2147483648,"
+          "\"pcmLastSocketErrno\":-2147483648,"
+          "\"pcmLastEspTlsError\":-2147483648,"
+          "\"pcmLastTlsStackError\":-2147483648,"
+          "\"pcmLastTlsCertFlags\":-2147483648}") != NULL);
 
   capnweb_session_close(&fixture.session);
   fixture.module.session_ended(fixture.module.context);

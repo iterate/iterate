@@ -478,6 +478,103 @@ static void no_send_progress_purges_the_whole_microphone_epoch(void) {
 }
 
 /*
+ * Cancelling one wholly-unwritten frame is a useful cheap recovery: the peer's
+ * WebSocket parser is unchanged, so paying DNS/TCP/TLS immediately only makes
+ * a brief radio stall longer. It must not, however, reset the liveness clock
+ * forever. A socket which accepts no complete PCM frame can otherwise cycle
+ * through purge -> fresh frame -> purge indefinitely while looking connected,
+ * exactly the accumulating-loss pattern observed on the physical StackChan.
+ *
+ * The per-frame total-send limit is also the outer bound for this continuous
+ * no-completion epoch. The no-progress deadline still performs the first cheap
+ * purge; once repeated cheap recoveries consume the outer elapsed-time budget,
+ * the generation is replaced. This assertion is intentionally about elapsed
+ * time, not poll/retry count, so task frequency cannot change the verdict.
+ */
+static void repeated_in_place_recovery_eventually_replaces_socket(void) {
+  struct fixture fixture;
+  struct iterate_kit_pcm_uplink_conductor_metrics metrics;
+  fixture_init(&fixture);
+  begin_generation(&fixture, 1U);
+  fixture.raw.writes_to_defer = UINT32_MAX;
+
+  submit_frame(&fixture, 0xa1U, 20U);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 20U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 60U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+
+  submit_frame(&fixture, 0xa2U, 60U);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 60U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 100U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+
+  submit_frame(&fixture, 0xa3U, 100U);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 100U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 140U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_RESTART);
+  CHECK(!fixture.conductor.generation_active);
+
+  iterate_kit_pcm_uplink_conductor_metrics(
+      &fixture.conductor, &metrics);
+  CHECK(metrics.sender.no_progress_timeout_restarts == 3U);
+  CHECK(metrics.in_place_freshness_recoveries == 2U);
+  CHECK(metrics.socket_restarts == 1U);
+}
+
+/*
+ * A complete non-empty PCM frame is direct evidence that the current socket
+ * recovered. Without this reset, two unrelated short Wi-Fi stalls separated
+ * by healthy audio could inherit one degradation epoch and cause a needless
+ * reconnect. An empty end marker is deliberately insufficient evidence: its
+ * tiny header can pass while a normal 640-byte audio frame remains blocked.
+ */
+static void completed_pcm_resets_repeated_recovery_deadline(void) {
+  struct fixture fixture;
+  struct iterate_kit_pcm_uplink_conductor_metrics metrics;
+  fixture_init(&fixture);
+  begin_generation(&fixture, 1U);
+  fixture.raw.writes_to_defer = UINT32_MAX;
+
+  submit_frame(&fixture, 0xb1U, 20U);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 20U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 60U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+
+  fixture.raw.writes_to_defer = 0U;
+  submit_frame(&fixture, 0xb2U, 61U);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 61U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+
+  fixture.raw.writes_to_defer = UINT32_MAX;
+  submit_frame(&fixture, 0xb3U, 100U);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 100U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 140U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+  CHECK(fixture.conductor.generation_active);
+
+  iterate_kit_pcm_uplink_conductor_metrics(
+      &fixture.conductor, &metrics);
+  CHECK(metrics.in_place_freshness_recoveries == 2U);
+  CHECK(metrics.socket_restarts == 0U);
+}
+
+/*
  * A release marker may already be queued when a long WAN stall expires the
  * oldest audio frame. Purging that marker together with stale PCM leaves the
  * still-connected userspace session waiting for a boundary which can never
@@ -931,6 +1028,8 @@ int main(void) {
   true_owner_clock_regression_is_not_normalized();
   mandatory_pong_waits_for_partial_pcm_then_preempts_later_audio();
   no_send_progress_purges_the_whole_microphone_epoch();
+  repeated_in_place_recovery_eventually_replaces_socket();
+  completed_pcm_resets_repeated_recovery_deadline();
   in_place_freshness_purge_preserves_end_marker();
   trickling_socket_cannot_hold_one_frame_forever();
   capture_age_expiry_purges_queued_history_before_send();

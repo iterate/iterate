@@ -98,6 +98,7 @@ struct iterate_kit_pcm_uplink_conductor {
   struct iterate_kit_websocket_tx *tx;
   uint64_t last_sampled_now_ms;
   uint64_t policy_time_floor_ms;
+  uint64_t in_place_recovery_started_at_ms;
   uint32_t maximum_work_steps;
   uint32_t connection_generation;
   uint32_t in_place_freshness_recoveries;
@@ -106,6 +107,7 @@ struct iterate_kit_pcm_uplink_conductor {
   uint32_t maximum_policy_time_adjustment_ms;
   uint32_t owner_clock_regressions;
   bool has_last_sample;
+  bool in_place_recovery_active;
   bool generation_active;
   bool initialized;
 };

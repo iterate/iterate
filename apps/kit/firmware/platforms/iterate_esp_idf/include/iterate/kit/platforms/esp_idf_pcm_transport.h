@@ -115,6 +115,7 @@ struct iterate_kit_esp_idf_pcm_transport_metrics {
   uint32_t websocket_raw_write_calls;
   uint32_t websocket_raw_write_partial;
   uint32_t websocket_raw_write_deferrals;
+  uint32_t websocket_raw_write_failures;
   uint32_t websocket_receive_calls;
   uint32_t websocket_receive_chunks;
   /*
@@ -125,6 +126,14 @@ struct iterate_kit_esp_idf_pcm_transport_metrics {
   uint32_t websocket_pings_received;
   uint32_t websocket_pongs_received;
   uint32_t websocket_control_backpressure;
+  uint32_t websocket_transport_failure_incidents;
+  enum iterate_kit_esp_idf_websocket_failure_operation
+      websocket_last_failure_operation;
+  int32_t websocket_last_raw_result;
+  int32_t websocket_last_socket_errno;
+  int32_t websocket_last_esp_tls_error;
+  int32_t websocket_last_tls_stack_error;
+  int32_t websocket_last_tls_cert_flags;
   uint32_t protocol_failures;
   uint32_t uplink_frames_sent;
   uint32_t uplink_frames_discarded;

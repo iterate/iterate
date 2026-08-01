@@ -1051,6 +1051,8 @@ void iterate_kit_esp_idf_pcm_transport_metrics(
       websocket.raw_write_partial;
   metrics->websocket_raw_write_deferrals =
       websocket.raw_write_deferrals;
+  metrics->websocket_raw_write_failures =
+      websocket.raw_write_failures;
   metrics->websocket_receive_calls = websocket.receive_calls;
   metrics->websocket_receive_chunks =
       websocket.receive_chunks;
@@ -1060,6 +1062,20 @@ void iterate_kit_esp_idf_pcm_transport_metrics(
       websocket.pongs_received;
   metrics->websocket_control_backpressure =
       websocket.control_backpressure;
+  metrics->websocket_transport_failure_incidents =
+      websocket.transport_failure_incidents;
+  metrics->websocket_last_failure_operation =
+      websocket.last_failure_operation;
+  metrics->websocket_last_raw_result =
+      websocket.last_raw_result;
+  metrics->websocket_last_socket_errno =
+      websocket.last_socket_errno;
+  metrics->websocket_last_esp_tls_error =
+      websocket.last_esp_tls_error;
+  metrics->websocket_last_tls_stack_error =
+      websocket.last_tls_stack_error;
+  metrics->websocket_last_tls_cert_flags =
+      websocket.last_tls_cert_flags;
   metrics->protocol_failures =
       atomic_load_u32(&transport->protocol_failures);
   iterate_kit_pcm_uplink_conductor_metrics(

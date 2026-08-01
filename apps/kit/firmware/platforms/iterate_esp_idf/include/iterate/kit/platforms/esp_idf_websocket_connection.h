@@ -63,6 +63,14 @@ enum iterate_kit_esp_idf_websocket_receive_result {
   ITERATE_KIT_ESP_IDF_WEBSOCKET_RECEIVE_PROTOCOL_FAILURE,
 };
 
+/** Owner operation which most recently observed a terminal transport error. */
+enum iterate_kit_esp_idf_websocket_failure_operation {
+  ITERATE_KIT_ESP_IDF_WEBSOCKET_FAILURE_NONE = 0,
+  ITERATE_KIT_ESP_IDF_WEBSOCKET_FAILURE_CONNECT,
+  ITERATE_KIT_ESP_IDF_WEBSOCKET_FAILURE_READ,
+  ITERATE_KIT_ESP_IDF_WEBSOCKET_FAILURE_WRITE,
+};
+
 /**
  * Borrowed view into receive_storage.
  *
@@ -121,6 +129,20 @@ struct iterate_kit_esp_idf_websocket_connection_metrics {
   uint32_t pings_received;
   uint32_t pongs_received;
   uint32_t control_backpressure;
+  /*
+   * ESP-IDF keeps socket, ESP-TLS, and TLS-stack causes in a mutable error
+   * handle which is destroyed with the transport. Retain the exact tuple at
+   * the failure boundary; `last_raw_result == -1` alone cannot distinguish a
+   * peer FIN from a parser failure or an opaque TLS incident.
+   */
+  uint32_t transport_failure_incidents;
+  enum iterate_kit_esp_idf_websocket_failure_operation
+      last_failure_operation;
+  int32_t last_raw_result;
+  int32_t last_socket_errno;
+  int32_t last_esp_tls_error;
+  int32_t last_tls_stack_error;
+  int32_t last_tls_cert_flags;
   struct iterate_kit_websocket_tx_metrics tx;
 };
 
@@ -163,6 +185,13 @@ struct iterate_kit_esp_idf_websocket_connection {
   uint32_t pings_received;
   uint32_t pongs_received;
   uint32_t control_backpressure;
+  uint32_t transport_failure_incidents;
+  uint32_t last_failure_operation;
+  int32_t last_raw_result;
+  int32_t last_socket_errno;
+  int32_t last_esp_tls_error;
+  int32_t last_tls_stack_error;
+  int32_t last_tls_cert_flags;
   int port;
   int last_error;
   bool secure;

@@ -22,6 +22,7 @@
 #include "bsp/touch.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
@@ -67,6 +68,10 @@ static lv_obj_t *bottom_button_label;
 /* Snapshot staging: full-resolution RGB565 in PSRAM, reused per capture. */
 static lv_draw_buf_t snapshot_buf;
 static uint8_t *snapshot_pixels;
+/* Half-scale result, filled by the LVGL task and read by the capability. */
+static uint16_t *snapshot_scaled;
+static volatile bool snapshot_requested;
+static volatile bool snapshot_ready;
 
 /* --- public, thread-safe setters ----------------------------------------- */
 
@@ -357,41 +362,52 @@ static void align_invalidated_area(lv_event_t *event) {
   area->y2 |= 1;
 }
 
+/*
+ * The snapshot is rendered HERE, on the LVGL task, not on whoever asked for
+ * it. A full-frame lv_snapshot plus the downscale is tens of milliseconds of
+ * work, and the task that dispatches capability calls is the same one that
+ * decodes speaker PCM — so rendering on demand stalled the audio downlink
+ * for the duration of every screenshot.
+ */
 static void refresh_timer(lv_timer_t *timer) {
   (void)timer;
   refresh_ui();
+  if (snapshot_requested && snapshot_pixels != NULL) {
+    snapshot_requested = false;
+    if (lv_snapshot_take_to_draw_buf(
+            lv_screen_active(), LV_COLOR_FORMAT_RGB565, &snapshot_buf) ==
+        LV_RESULT_OK) {
+      const uint16_t *source = (const uint16_t *)(const void *)snapshot_buf.data;
+      size_t y;
+      for (y = 0U; y < (size_t)WAVESHARE_SNAPSHOT_HEIGHT; ++y) {
+        size_t x;
+        const uint16_t *row =
+            &source[y * 2U * (snapshot_buf.header.stride / 2U)];
+        for (x = 0U; x < (size_t)WAVESHARE_SNAPSHOT_WIDTH; ++x) {
+          snapshot_scaled[y * (size_t)WAVESHARE_SNAPSHOT_WIDTH + x] =
+              row[x * 2U];
+        }
+      }
+      snapshot_ready = true;
+    }
+  }
 }
 
 bool waveshare_display_snapshot(uint8_t *out, size_t capacity) {
-  uint16_t *destination = (uint16_t *)(void *)out;
-  const uint16_t *source;
-  size_t y;
-
+  const uint64_t deadline = (uint64_t)(esp_timer_get_time() / 1000) + 1000U;
   if (out == NULL || capacity < (size_t)WAVESHARE_SNAPSHOT_BYTES ||
-      snapshot_pixels == NULL) {
+      snapshot_scaled == NULL) {
     return false;
   }
-  if (!bsp_display_lock(1000)) {
-    return false;
+  /* Ask the LVGL task for a fresh frame and wait for it, rather than
+   * rendering one here — see refresh_timer. */
+  snapshot_ready = false;
+  snapshot_requested = true;
+  while (!snapshot_ready) {
+    if ((uint64_t)(esp_timer_get_time() / 1000) > deadline) return false;
+    vTaskDelay(pdMS_TO_TICKS(10));
   }
-  if (lv_snapshot_take_to_draw_buf(
-          lv_screen_active(), LV_COLOR_FORMAT_RGB565, &snapshot_buf) !=
-      LV_RESULT_OK) {
-    bsp_display_unlock();
-    return false;
-  }
-  bsp_display_unlock();
-
-  /* Half scale: legible on a laptop, a quarter of the bytes to ship. */
-  source = (const uint16_t *)(const void *)snapshot_buf.data;
-  for (y = 0U; y < (size_t)WAVESHARE_SNAPSHOT_HEIGHT; ++y) {
-    size_t x;
-    const uint16_t *row =
-        &source[y * 2U * (snapshot_buf.header.stride / 2U)];
-    for (x = 0U; x < (size_t)WAVESHARE_SNAPSHOT_WIDTH; ++x) {
-      destination[y * (size_t)WAVESHARE_SNAPSHOT_WIDTH + x] = row[x * 2U];
-    }
-  }
+  memcpy(out, snapshot_scaled, (size_t)WAVESHARE_SNAPSHOT_BYTES);
   return true;
 }
 
@@ -502,7 +518,9 @@ bool waveshare_display_init(void) {
     const uint32_t stride = (uint32_t)WAVESHARE_DISPLAY_WIDTH * 2U;
     const size_t bytes = (size_t)stride * WAVESHARE_DISPLAY_HEIGHT;
     snapshot_pixels = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
-    if (snapshot_pixels != NULL) {
+    snapshot_scaled = heap_caps_malloc(
+        (size_t)WAVESHARE_SNAPSHOT_BYTES, MALLOC_CAP_SPIRAM);
+    if (snapshot_pixels != NULL && snapshot_scaled != NULL) {
       lv_draw_buf_init(
           &snapshot_buf,
           WAVESHARE_DISPLAY_WIDTH,

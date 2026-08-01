@@ -189,6 +189,22 @@ struct iterate_kit_control_diagnostics_sample {
     uint32_t pcm_websocket_connections;
     uint32_t pcm_websocket_disconnects;
     uint32_t pcm_websocket_errors;
+    /*
+     * The PCM WebSocket wrapper collapses every terminal lower-layer result
+     * into a reconnect, but the physical rig must still distinguish peer FIN,
+     * socket errno, ESP-TLS, TLS-stack, and wrapper-only failures. This is one
+     * retained latest-incident tuple, not a log or queue. Operation values are
+     * 0 none, 1 connect, 2 read, and 3 write; the integer error domains remain
+     * verbatim ESP-IDF values so the host can classify them without guessing.
+     */
+    uint32_t pcm_websocket_raw_write_failures;
+    uint32_t pcm_transport_failure_incidents;
+    uint32_t pcm_last_failure_operation;
+    int32_t pcm_last_raw_result;
+    int32_t pcm_last_socket_errno;
+    int32_t pcm_last_esp_tls_error;
+    int32_t pcm_last_tls_stack_error;
+    int32_t pcm_last_tls_cert_flags;
   } network;
 };
 

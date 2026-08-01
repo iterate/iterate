@@ -1154,7 +1154,7 @@ static enum capnweb_status get_diagnostics(
 
   /*
    * Keep the established control object's formatter untouched apart from its
-   * final root brace, then append the schema-v3 sibling. This makes review of
+   * final root brace, then append the schema-v4 sibling. This makes review of
    * the recovery contract mechanical and avoids duplicating a long format
    * string solely because RSSI is optional.
    *
@@ -1172,12 +1172,28 @@ static enum capnweb_status get_diagnostics(
         ",\"wifiRssiDbm\":%" PRId32
         ",\"pcmWebsocketConnections\":%" PRIu32
         ",\"pcmWebsocketDisconnects\":%" PRIu32
-        ",\"pcmWebsocketErrors\":%" PRIu32 "}}",
+        ",\"pcmWebsocketErrors\":%" PRIu32
+        ",\"pcmWebsocketRawWriteFailures\":%" PRIu32
+        ",\"pcmTransportFailureIncidents\":%" PRIu32
+        ",\"pcmLastFailureOperation\":%" PRIu32
+        ",\"pcmLastRawResult\":%" PRId32
+        ",\"pcmLastSocketErrno\":%" PRId32
+        ",\"pcmLastEspTlsError\":%" PRId32
+        ",\"pcmLastTlsStackError\":%" PRId32
+        ",\"pcmLastTlsCertFlags\":%" PRId32 "}}",
         diagnostics->network.wifi_connected ? "true" : "false",
         diagnostics->network.wifi_rssi_dbm,
         diagnostics->network.pcm_websocket_connections,
         diagnostics->network.pcm_websocket_disconnects,
-        diagnostics->network.pcm_websocket_errors);
+        diagnostics->network.pcm_websocket_errors,
+        diagnostics->network.pcm_websocket_raw_write_failures,
+        diagnostics->network.pcm_transport_failure_incidents,
+        diagnostics->network.pcm_last_failure_operation,
+        diagnostics->network.pcm_last_raw_result,
+        diagnostics->network.pcm_last_socket_errno,
+        diagnostics->network.pcm_last_esp_tls_error,
+        diagnostics->network.pcm_last_tls_stack_error,
+        diagnostics->network.pcm_last_tls_cert_flags);
   } else {
     network_length = snprintf(
         metrics->options.diagnostics_expression_buffer + length,
@@ -1185,18 +1201,34 @@ static enum capnweb_status get_diagnostics(
         ",\"network\":{\"wifiConnected\":%s"
         ",\"pcmWebsocketConnections\":%" PRIu32
         ",\"pcmWebsocketDisconnects\":%" PRIu32
-        ",\"pcmWebsocketErrors\":%" PRIu32 "}}",
+        ",\"pcmWebsocketErrors\":%" PRIu32
+        ",\"pcmWebsocketRawWriteFailures\":%" PRIu32
+        ",\"pcmTransportFailureIncidents\":%" PRIu32
+        ",\"pcmLastFailureOperation\":%" PRIu32
+        ",\"pcmLastRawResult\":%" PRId32
+        ",\"pcmLastSocketErrno\":%" PRId32
+        ",\"pcmLastEspTlsError\":%" PRId32
+        ",\"pcmLastTlsStackError\":%" PRId32
+        ",\"pcmLastTlsCertFlags\":%" PRId32 "}}",
         diagnostics->network.wifi_connected ? "true" : "false",
         diagnostics->network.pcm_websocket_connections,
         diagnostics->network.pcm_websocket_disconnects,
-        diagnostics->network.pcm_websocket_errors);
+        diagnostics->network.pcm_websocket_errors,
+        diagnostics->network.pcm_websocket_raw_write_failures,
+        diagnostics->network.pcm_transport_failure_incidents,
+        diagnostics->network.pcm_last_failure_operation,
+        diagnostics->network.pcm_last_raw_result,
+        diagnostics->network.pcm_last_socket_errno,
+        diagnostics->network.pcm_last_esp_tls_error,
+        diagnostics->network.pcm_last_tls_stack_error,
+        diagnostics->network.pcm_last_tls_cert_flags);
   }
   if (network_length <= 0 ||
       (size_t)network_length >= remaining) {
     /*
      * As with the control prefix, truncation is a firmware/schema defect.
      * Reject the whole snapshot: a syntactically valid prefix without network
-     * evidence would violate schema v3 more dangerously than a visible error.
+     * evidence would violate schema v4 more dangerously than a visible error.
      */
     return capnweb_reply_set_error(
         reply, "Error", "control diagnostics snapshot exceeded its budget");

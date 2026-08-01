@@ -217,6 +217,7 @@ iterate_kit_pcm_uplink_conductor_abandon_generation(
   status = iterate_kit_pcm_uplink_sender_discard_pending(
       &conductor->sender, discarded_frames);
   iterate_kit_websocket_tx_reset(conductor->tx);
+  conductor->in_place_recovery_active = false;
   conductor->generation_active = false;
   return status;
 }
@@ -249,6 +250,7 @@ iterate_kit_pcm_uplink_conductor_begin_generation(
     return status;
   }
   conductor->connection_generation = connection_generation;
+  conductor->in_place_recovery_active = false;
   conductor->generation_active = true;
   return ITERATE_KIT_OK;
 }
@@ -369,6 +371,18 @@ iterate_kit_pcm_uplink_conductor_poll(
         conductor->policy_time_floor_ms =
             event.transport_accepted_at_ms;
       }
+      /*
+       * A complete normal PCM frame is the only cheap proof that a socket
+       * recovered after an unwritten-frame purge. Partial byte progress will
+       * force a generation replacement if it later expires, and an empty turn
+       * marker is too small to prove the 640-byte audio path is writable. This
+       * reset lets isolated radio stalls remain cheap without allowing a
+       * persistently degraded socket to renew its deadline by discarding each
+       * fresh frame before the first byte.
+       */
+      if (!event.end_marker) {
+        conductor->in_place_recovery_active = false;
+      }
       made_progress = true;
       continue;
     }
@@ -420,6 +434,32 @@ iterate_kit_pcm_uplink_conductor_poll(
               ITERATE_KIT_PCM_UPLINK_RESTART_TRANSPORT_DISCONNECTED &&
           cancel_result !=
               ITERATE_KIT_WEBSOCKET_TX_DATA_PARTIALLY_WRITTEN) {
+        /*
+         * Cancelling a wholly-local frame leaves the peer parser intact, so
+         * the first freshness incident should not pay for a TLS reconnect.
+         * That optimization previously formed a liveness loophole: each purge
+         * acquired a new frame and restarted the sender's per-frame clock,
+         * allowing an unwritable socket to shed live microphone audio forever.
+         *
+         * Reuse the existing total frame-send bound as the outer elapsed-time
+         * allowance for a continuous no-completed-frame epoch. This avoids a
+         * second tuning knob and, unlike an incident count, is invariant to
+         * scheduler frequency. A completed non-empty frame clears the epoch
+         * above; reaching the bound replaces the whole generation.
+         */
+        if (!conductor->in_place_recovery_active) {
+          conductor->in_place_recovery_started_at_ms =
+              policy_now_ms;
+          conductor->in_place_recovery_active = true;
+        } else if (
+            policy_now_ms -
+                    conductor->in_place_recovery_started_at_ms >=
+                conductor->sender.options.
+                    maximum_frame_send_duration_ms) {
+          return finish_generation(
+              conductor,
+              ITERATE_KIT_PCM_UPLINK_CONDUCTOR_RESTART);
+        }
         atomic_saturating_increment(
             &conductor->in_place_freshness_recoveries);
         made_progress = true;

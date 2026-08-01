@@ -723,11 +723,39 @@ static void reconcile_pcm_conversation(struct stackchan_runtime *state) {
           (long)state->pcm_transport.last_platform_error);
     }
     if (state->pcm_transport.state != state->last_pcm_state) {
+      struct iterate_kit_esp_idf_pcm_transport_metrics pcm;
+      memset(&pcm, 0, sizeof(pcm));
+      iterate_kit_esp_idf_pcm_transport_metrics(
+          &state->pcm_transport, &pcm);
+      /*
+       * Connection churn has several materially different causes: a peer
+       * CLOSE, a lower-transport read/write failure, local ordered-item loss,
+       * or a deliberate freshness restart. A bare "connecting" line erased
+       * that distinction and encouraged guessing from the later 1006 observed
+       * by userspace. Emit one bounded transition record with the counters
+       * needed to classify the interval; never log per PCM frame or per idle
+       * socket probe because serial output itself can perturb audio deadlines.
+       */
       ESP_LOGI(
           TAG,
-          "pcm state=%s",
+          "pcm state=%s platform=%ld connections=%lu disconnects=%lu "
+          "errors=%lu protocol=%lu rx_calls=%lu rx_chunks=%lu "
+          "pings=%lu pongs=%lu control_bp=%lu ordered_losses=%lu "
+          "uplink_socket_restarts=%lu",
           iterate_kit_esp_idf_pcm_transport_state_name(
-              state->pcm_transport.state));
+              state->pcm_transport.state),
+          (long)pcm.last_platform_error,
+          (unsigned long)pcm.websocket_connections,
+          (unsigned long)pcm.websocket_disconnects,
+          (unsigned long)pcm.websocket_errors,
+          (unsigned long)pcm.protocol_failures,
+          (unsigned long)pcm.websocket_receive_calls,
+          (unsigned long)pcm.websocket_receive_chunks,
+          (unsigned long)pcm.websocket_pings_received,
+          (unsigned long)pcm.websocket_pongs_received,
+          (unsigned long)pcm.websocket_control_backpressure,
+          (unsigned long)pcm.downlink_ordered_item_losses,
+          (unsigned long)pcm.uplink_socket_restarts);
       state->last_pcm_state = state->pcm_transport.state;
     }
   }

@@ -9,6 +9,7 @@
 
 #include "esp_crt_bundle.h"
 #include "esp_random.h"
+#include "esp_tls.h"
 #include "esp_tls_errors.h"
 #include "esp_transport_ssl.h"
 #include "esp_transport_tcp.h"
@@ -172,6 +173,85 @@ static enum iterate_kit_status random_mask(
   return ITERATE_KIT_OK;
 }
 
+/*
+ * ESP-IDF's transport error handle belongs to the live parent and is cleared
+ * by its public getters. Capture every domain exactly once before close()
+ * destroys that evidence. Keeping the raw result alongside the decoded tuple
+ * is important: the WebSocket wrapper itself can return -1 without a lower
+ * socket/TLS error, which is a parser-layer failure rather than peer FIN.
+ */
+static void remember_transport_failure(
+    struct iterate_kit_esp_idf_websocket_connection *connection,
+    enum iterate_kit_esp_idf_websocket_failure_operation operation,
+    int raw_result,
+    int observed_socket_errno) {
+  esp_tls_error_handle_t error_handle = NULL;
+  esp_err_t esp_tls_error = ESP_OK;
+  int tls_stack_error = 0;
+  int tls_cert_flags = 0;
+
+  if (connection->parent != NULL) {
+    error_handle =
+        esp_transport_get_error_handle(connection->parent);
+    if (error_handle != NULL) {
+      esp_tls_error = esp_tls_get_and_clear_last_error(
+          error_handle, &tls_stack_error, &tls_cert_flags);
+    }
+  }
+
+  __atomic_store_n(
+      &connection->last_failure_operation,
+      (uint32_t)operation,
+      __ATOMIC_RELEASE);
+  __atomic_store_n(
+      &connection->last_raw_result,
+      (int32_t)raw_result,
+      __ATOMIC_RELEASE);
+  __atomic_store_n(
+      &connection->last_socket_errno,
+      (int32_t)observed_socket_errno,
+      __ATOMIC_RELEASE);
+  __atomic_store_n(
+      &connection->last_esp_tls_error,
+      (int32_t)esp_tls_error,
+      __ATOMIC_RELEASE);
+  __atomic_store_n(
+      &connection->last_tls_stack_error,
+      (int32_t)tls_stack_error,
+      __ATOMIC_RELEASE);
+  __atomic_store_n(
+      &connection->last_tls_cert_flags,
+      (int32_t)tls_cert_flags,
+      __ATOMIC_RELEASE);
+  iterate_kit_atomic_saturating_increment_relaxed_u32(
+      &connection->transport_failure_incidents);
+
+  connection->last_error = esp_tls_error != ESP_OK
+      ? (int)esp_tls_error
+      : (observed_socket_errno != 0
+              ? observed_socket_errno
+              : raw_result);
+}
+
+/*
+ * `esp_transport_get_errno()` is destructive: it returns and clears the
+ * socket-domain cause. Read it exactly once at the failure site, before the
+ * transport is closed, then pass that value into the tuple recorder. This is
+ * separate from `remember_transport_failure()` because the write path must
+ * inspect the same value to distinguish ordinary nonblocking backpressure
+ * from a terminal incident; letting both helpers read it made the retained
+ * diagnosis depend on call order.
+ */
+static int take_socket_errno(
+    struct iterate_kit_esp_idf_websocket_connection *connection) {
+  int socket_errno;
+  if (connection->parent == NULL) {
+    return 0;
+  }
+  socket_errno = esp_transport_get_errno(connection->parent);
+  return socket_errno > 0 ? socket_errno : 0;
+}
+
 static enum iterate_kit_websocket_tx_raw_write_result
 raw_write(
     void *context,
@@ -220,7 +300,7 @@ raw_write(
         &connection->raw_write_deferrals);
     return ITERATE_KIT_WEBSOCKET_TX_RAW_WOULD_BLOCK;
   }
-  socket_error = esp_transport_get_errno(connection->parent);
+  socket_error = take_socket_errno(connection);
   if (socket_error == EAGAIN ||
       socket_error == EWOULDBLOCK ||
       socket_error == EINPROGRESS ||
@@ -229,8 +309,11 @@ raw_write(
         &connection->raw_write_deferrals);
     return ITERATE_KIT_WEBSOCKET_TX_RAW_WOULD_BLOCK;
   }
-  connection->last_error =
-      socket_error != 0 ? socket_error : result;
+  remember_transport_failure(
+      connection,
+      ITERATE_KIT_ESP_IDF_WEBSOCKET_FAILURE_WRITE,
+      result,
+      socket_error);
   iterate_kit_atomic_saturating_increment_relaxed_u32(
       &connection->raw_write_failures);
   return ITERATE_KIT_WEBSOCKET_TX_RAW_DISCONNECTED;
@@ -407,8 +490,11 @@ iterate_kit_esp_idf_websocket_connection_open(
       connection->port,
       timeout_ms);
   if (result != 0) {
-    connection->last_error =
-        esp_transport_get_errno(connection->parent);
+    remember_transport_failure(
+        connection,
+        ITERATE_KIT_ESP_IDF_WEBSOCKET_FAILURE_CONNECT,
+        result,
+        take_socket_errno(connection));
     destroy_transports(connection);
     return ITERATE_KIT_IO_ERROR;
   }
@@ -475,7 +561,11 @@ iterate_kit_esp_idf_websocket_connection_receive(
      * mid-frame. Reset immediately and require a new generation; replaying the
      * fragment would risk classifying stale bytes as fresh audio.
      */
-    connection->last_error = result;
+    remember_transport_failure(
+        connection,
+        ITERATE_KIT_ESP_IDF_WEBSOCKET_FAILURE_READ,
+        result,
+        take_socket_errno(connection));
     connection->connected = false;
     iterate_kit_websocket_rx_reset(&connection->rx);
     iterate_kit_websocket_tx_reset(&connection->tx);
@@ -680,6 +770,24 @@ void iterate_kit_esp_idf_websocket_connection_metrics(
   metrics->control_backpressure =
       iterate_kit_atomic_load_relaxed_u32(
           &connection->control_backpressure);
+  metrics->transport_failure_incidents =
+      iterate_kit_atomic_load_relaxed_u32(
+          &connection->transport_failure_incidents);
+  metrics->last_failure_operation =
+      (enum iterate_kit_esp_idf_websocket_failure_operation)
+          __atomic_load_n(
+              &connection->last_failure_operation,
+              __ATOMIC_ACQUIRE);
+  metrics->last_raw_result = __atomic_load_n(
+      &connection->last_raw_result, __ATOMIC_ACQUIRE);
+  metrics->last_socket_errno = __atomic_load_n(
+      &connection->last_socket_errno, __ATOMIC_ACQUIRE);
+  metrics->last_esp_tls_error = __atomic_load_n(
+      &connection->last_esp_tls_error, __ATOMIC_ACQUIRE);
+  metrics->last_tls_stack_error = __atomic_load_n(
+      &connection->last_tls_stack_error, __ATOMIC_ACQUIRE);
+  metrics->last_tls_cert_flags = __atomic_load_n(
+      &connection->last_tls_cert_flags, __ATOMIC_ACQUIRE);
   iterate_kit_websocket_tx_metrics(
       &connection->tx, &metrics->tx);
 }

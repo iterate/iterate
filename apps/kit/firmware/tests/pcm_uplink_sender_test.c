@@ -372,6 +372,65 @@ static void producer_backpressure_purges_before_an_old_frame_is_sent(
 }
 
 /*
+ * The microphone producer publishes the epoch-reset flag independently from
+ * the SPSC queue. The network consumer can therefore drain the final queued
+ * frame just before it observes that flag. An empty queue at that point means
+ * recovery has already achieved its goal; it is not evidence of corrupt
+ * ownership. Fatal-latching this legal interleaving takes voice offline until
+ * reboot precisely while the freshness policy is trying to recover from
+ * pressure. Keep the incident observable, request the same socket-generation
+ * boundary, and record zero additional discards.
+ */
+static void producer_backpressure_with_an_already_empty_epoch_recovers(
+    void) {
+  struct fixture fixture;
+  struct iterate_kit_pcm_uplink_sender_event event;
+  struct iterate_kit_pcm_uplink_sender_metrics metrics;
+  uint8_t overflow_frame[ITERATE_KIT_PCM_V1_FRAME_BYTES] = {0};
+  const void *frame;
+  size_t frame_bytes;
+  uint64_t captured_at_ms;
+  size_t index;
+
+  fixture_init(&fixture);
+  for (index = 0U; index < SLOT_COUNT - 1U; ++index) {
+    submit_frame(&fixture, (uint8_t)(141U + index));
+  }
+  CHECK(iterate_kit_pcm_lane_submit_uplink_at(
+      &fixture.lane,
+      overflow_frame,
+      sizeof(overflow_frame),
+      0U) == ITERATE_KIT_BACKPRESSURE);
+
+  for (index = 0U; index < SLOT_COUNT - 1U; ++index) {
+    CHECK(iterate_kit_pcm_lane_uplink_acquire(
+        &fixture.lane,
+        &frame,
+        &frame_bytes,
+        &captured_at_ms) == ITERATE_KIT_OK);
+    CHECK(frame != NULL);
+    CHECK(frame_bytes == ITERATE_KIT_PCM_V1_FRAME_BYTES);
+    CHECK(iterate_kit_pcm_lane_uplink_release(&fixture.lane) ==
+        ITERATE_KIT_OK);
+  }
+
+  CHECK(iterate_kit_pcm_uplink_sender_poll(
+      &fixture.sender, 100U, &event) ==
+      ITERATE_KIT_PCM_UPLINK_SENDER_RESTART);
+  CHECK(event.restart_requested);
+  CHECK(event.restart_reason ==
+      ITERATE_KIT_PCM_UPLINK_RESTART_PRODUCER_BACKPRESSURE);
+
+  iterate_kit_pcm_uplink_sender_metrics(
+      &fixture.sender, &metrics);
+  CHECK(metrics.frames_discarded == 0U);
+  CHECK(metrics.send_failures == 0U);
+  CHECK(metrics.restart_incidents == 1U);
+  CHECK(metrics.producer_backpressure_restarts == 1U);
+  CHECK(metrics.last_restart_frames_discarded == 0U);
+}
+
+/*
  * Teardown can occur while the sender owns the head slot after a would-block.
  * Draining only the ring's apparently queued tail would omit that borrowed slot
  * from accounting or leave it pinned across object reuse. This proves explicit
@@ -639,6 +698,7 @@ int main(void) {
   disconnect_requests_restart_without_retry();
   restart_discards_the_entire_microphone_epoch();
   producer_backpressure_purges_before_an_old_frame_is_sent();
+  producer_backpressure_with_an_already_empty_epoch_recovers();
   disconnected_drain_includes_a_retained_frame();
   disconnected_drain_consumes_a_prior_overflow_request();
   a_normal_wifi_stall_does_not_restart_the_socket();

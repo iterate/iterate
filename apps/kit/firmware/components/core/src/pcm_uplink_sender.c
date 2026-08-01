@@ -240,15 +240,29 @@ restart_for_freshness(
       return ITERATE_KIT_PCM_UPLINK_SENDER_FAILED;
   }
   status = acquire_if_needed(sender, now_ms);
-  if (status != ITERATE_KIT_OK) {
+  if (status != ITERATE_KIT_OK &&
+      status != ITERATE_KIT_UNAVAILABLE) {
     atomic_saturating_increment(&sender->send_failures);
     return ITERATE_KIT_PCM_UPLINK_SENDER_FAILED;
   }
-  normalized_now_ms =
-      frame_policy_now_ms(sender, now_ms);
-  oldest_capture_age_ms = saturating_age_ms(
-      normalized_now_ms,
-      sender->pending_capture_completed_at_ms);
+  /*
+   * Producer pressure and queue ownership are separate atomics. The consumer
+   * may legitimately empty the ring before observing the producer's reset
+   * request. That interleaving has already discarded the stale epoch, so it is
+   * a zero-discard recovery—not a broken lane. Only calculate frame age when
+   * a frame is actually retained; treating the zeroed timestamp as a capture
+   * would manufacture a large and misleading age metric.
+   */
+  if (status == ITERATE_KIT_UNAVAILABLE) {
+    normalized_now_ms = now_ms;
+    oldest_capture_age_ms = 0U;
+  } else {
+    normalized_now_ms =
+        frame_policy_now_ms(sender, now_ms);
+    oldest_capture_age_ms = saturating_age_ms(
+        normalized_now_ms,
+        sender->pending_capture_completed_at_ms);
+  }
   if (discard_stale_audio_preserving_end_marker(
           sender,
           normalized_now_ms,
