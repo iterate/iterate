@@ -12,6 +12,14 @@ silently relabelled as complete.
 
 ## Morning-ready deployed conversation checkpoint (2026-08-01)
 
+The complete checkpoint, including source, physical evidence, and concurrent
+hardware-port work, is preserved on `origin/c-capabilities` at
+`934710ddc74b448a1b0466d9bcfee9a1d1e56b62`. The earlier whole-worktree safety
+checkpoint remains independently available as
+`origin/backup/c-capabilities-stick-production-20260731` at
+`3820bd408536d6cbdbffd56b1594b1b0099ce99b`; neither checkpoint is a merge or a
+claim that the later StackChan and Home Assistant ports are finished.
+
 The physical M5StickS3 is flashed, provisioned, mounted, and left idle on the
 production test project ready for a human conversation. Press the top Button B
 once to connect; hold the front Button A while speaking and release it to hear
