@@ -20,6 +20,7 @@ import { isWorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
 import { WORKER_SERVE_HEADER } from "../workers/worker-serve-info.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
+import { SLASH_COMMAND_EXECUTION_PREFIX } from "../agents/slash-commands.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
 import { buildApprovalMessage, evaluateDecision } from "./egress-approvals.ts";
 import {
@@ -454,6 +455,14 @@ export class ProjectProcessor extends StreamProcessor<
             }),
           });
           if (!verdict.accepted) return;
+          // A slash-command run is user-driven and deterministic — no agent
+          // turn is parked or in flight, so the outcome is recorded without
+          // waking the model (which would add chatter to a thread the human
+          // is steering by hand). Agent-initiated runs get the wake — the
+          // whole point of the relay.
+          const isSlashCommandRun = streamContext.executionId.startsWith(
+            SLASH_COMMAND_EXECUTION_PREFIX,
+          );
           await args.appendTo(streamContext.streamPath, {
             type: "events.iterate.com/agents/context-added",
             idempotencyKey: this.idempotencyKey("approval-outcome", event),
@@ -464,7 +473,9 @@ export class ProjectProcessor extends StreamProcessor<
               // waiting-clear treats this as an external wake, so a parked
               // `waitingFor: external_event` thread resumes.
               actor: { type: "integration", name: "egress-approvals" },
-              llmRequestPolicy: { behaviour: "after-current-request" },
+              llmRequestPolicy: {
+                behaviour: isSlashCommandRun ? "dont-trigger-request" : "after-current-request",
+              },
               refs: [
                 {
                   type: "event",
