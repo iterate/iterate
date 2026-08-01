@@ -63,10 +63,6 @@
 
 static const char tag[] = "iterate-voicelab";
 
-/* PSRAM-resident: 256 KiB would crowd internal RAM out of TLS headroom. */
-EXT_RAM_BSS_ATTR static uint8_t
-    inbox_storage_psram[64][4096];
-
 enum {
   PENDING_CALL_CAPACITY = 8,
   EXPORT_CAPACITY = 4,
@@ -80,10 +76,11 @@ enum {
   OUTPUT_CAPACITY = 128,
   /*
    * Inbox slots take one whole delivery batch each (the connection is opened
-   * with maxDeliveryBytes 2600 + envelope); outbox slots take one ~1.05 KiB
-   * mic-frame push. 4 KiB covers both with margin.
+   * with maxDeliveryBytes 2600 + envelope), so 4 KiB is ample there. Outbox
+   * slots have to hold an eight-frame mic append, which is about 7 KiB.
    */
-  CONTROL_SLOT_CAPACITY = 4096,
+  CONTROL_INBOX_SLOT_CAPACITY = 4096,
+  CONTROL_OUTBOX_SLOT_CAPACITY = 8192,
   /*
    * The inbox rides PSRAM (256 KiB): speaker audio arrives as ~1.3 KiB
    * delivery batches and a paced answer still clumps at TCP granularity;
@@ -91,17 +88,23 @@ enum {
    * message-loss path.
    */
   CONTROL_INBOX_SLOTS = 64,
-  CONTROL_OUTBOX_SLOTS = 16,
+  /* Bigger slots, half as many: the same 64 KiB of internal RAM. */
+  CONTROL_OUTBOX_SLOTS = 8,
   FRAME_MS = 20,
   FRAME_SAMPLES = WAVESHARE_AUDIO_FRAME_SAMPLES,
   FRAME_BYTES = FRAME_SAMPLES * 2,
   MIC_QUEUE_DEPTH = 32,
+  MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND,
   /* 1 MiB of PSRAM speaker staging ≈ 32 s of audio — Grok bursts whole
    * answers; barge-in flushes this, underrun never should. */
   SPEAKER_BUFFER_BYTES = 1024 * 1024,
   STATS_INTERVAL_MS = 5000,
   PING_INTERVAL_MS = 5000,
 };
+
+/* PSRAM-resident: 256 KiB would crowd internal RAM out of TLS headroom. */
+EXT_RAM_BSS_ATTR static uint8_t
+    inbox_storage_psram[CONTROL_INBOX_SLOTS][CONTROL_INBOX_SLOT_CAPACITY];
 
 #define STREAM_PATH "/voicelab/dev-waveshare"
 #define CALL_ID "wsdev"
@@ -121,7 +124,7 @@ static struct {
   char output_buffer[OUTPUT_CAPACITY];
   struct iterate_kit_spsc_ring control_inbox;
   struct iterate_kit_spsc_ring control_outbox;
-  uint8_t outbox_storage[CONTROL_OUTBOX_SLOTS][CONTROL_SLOT_CAPACITY];
+  uint8_t outbox_storage[CONTROL_OUTBOX_SLOTS][CONTROL_OUTBOX_SLOT_CAPACITY];
   size_t inbox_lengths[CONTROL_INBOX_SLOTS];
   size_t outbox_lengths[CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_esp_idf_itx_transport transport;
@@ -321,13 +324,13 @@ static bool initialise_rings(void) {
   return iterate_kit_spsc_ring_init(
              &runtime.control_inbox,
              inbox_storage_psram,
-             CONTROL_SLOT_CAPACITY,
+             CONTROL_INBOX_SLOT_CAPACITY,
              CONTROL_INBOX_SLOTS,
              runtime.inbox_lengths) == ITERATE_KIT_OK &&
       iterate_kit_spsc_ring_init(
              &runtime.control_outbox,
              runtime.outbox_storage,
-             CONTROL_SLOT_CAPACITY,
+             CONTROL_OUTBOX_SLOT_CAPACITY,
              CONTROL_OUTBOX_SLOTS,
              runtime.outbox_lengths) == ITERATE_KIT_OK;
 }
@@ -638,7 +641,7 @@ void app_main(void) {
       iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
       const size_t outbox_free =
           CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
-      static struct mic_frame frame_storage[4];
+      static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
       static uint64_t drain_window_at;
       static uint64_t next_call_attempt_at;
       static bool call_active_shown;
@@ -654,7 +657,7 @@ void app_main(void) {
           (waveshare_buttons_talk_held() || waveshare_display_talk_held());
 
       if (wants_call && !runtime.voicelab.call_active &&
-          !runtime.voicelab.call_pending && outbox_free >= 5U &&
+          !runtime.voicelab.call_pending && outbox_free >= 3U &&
           now >= next_call_attempt_at) {
         next_call_attempt_at = now + 8000U; /* a start takes ~1-3s; don't spam */
         if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==
@@ -662,7 +665,7 @@ void app_main(void) {
           waveshare_display_set_status("starting call");
         }
       }
-      if (!wants_call && runtime.voicelab.call_active && outbox_free >= 5U) {
+      if (!wants_call && runtime.voicelab.call_active && outbox_free >= 3U) {
         (void)iterate_kit_voicelab_end_call(&runtime.voicelab, "button");
         waveshare_recorder_end_call("button");
         waveshare_display_set_status("call ended");
@@ -695,7 +698,7 @@ void app_main(void) {
        * speaker. Releasing commits the turn and asks for the answer.
        */
       if (wants_talk != runtime.talking && runtime.voicelab.call_active &&
-          outbox_free >= 5U) {
+          outbox_free >= 3U) {
         runtime.talking = wants_talk;
         waveshare_recorder_log("turn %s", wants_talk ? "start" : "commit");
         if (wants_talk) {
@@ -717,31 +720,36 @@ void app_main(void) {
 
       /* The microphone is only on the wire while the talk button is down. */
       if (runtime.talking && now >= drain_window_at &&
-          uxQueueMessagesWaiting(runtime.mic_queue) >= 4U) {
+          uxQueueMessagesWaiting(runtime.mic_queue) >= MIC_FRAMES_PER_APPEND &&
+          outbox_free >= 3U) {
+        /*
+         * The window only advances on a batch that was actually sent. It
+         * used to advance regardless, so a moment of outbox backpressure
+         * silently dropped that speech instead of sending it a beat later —
+         * the mic queue holds 640ms and is the right place to absorb this.
+         */
+        size_t index;
+        const uint8_t *frame_pointers[MIC_FRAMES_PER_APPEND];
         drain_window_at =
-            (drain_window_at == 0U || now - drain_window_at > 400U)
-            ? now + 4U * FRAME_MS
-            : drain_window_at + 4U * FRAME_MS;
-        if (outbox_free >= 5U) {
-          size_t index;
-          const uint8_t *frame_pointers[4];
-          for (index = 0U; index < 4U; ++index) {
-            (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
-            frame_pointers[index] =
-                (const uint8_t *)frame_storage[index].samples;
-          }
-          (void)iterate_kit_voicelab_append_frames(
-              &runtime.voicelab,
-              frame_pointers,
-              4U,
-              sizeof(frame_storage[0].samples),
-              runtime.frame_sequence,
-              now);
-          runtime.frame_sequence += 4U;
-          waveshare_recorder_write_mic(frame_storage, sizeof(frame_storage));
+            (drain_window_at == 0U ||
+             now - drain_window_at > MIC_FRAMES_PER_APPEND * FRAME_MS * 4U)
+            ? now + MIC_FRAMES_PER_APPEND * FRAME_MS
+            : drain_window_at + MIC_FRAMES_PER_APPEND * FRAME_MS;
+        for (index = 0U; index < MIC_FRAMES_PER_APPEND; ++index) {
+          (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
+          frame_pointers[index] = (const uint8_t *)frame_storage[index].samples;
         }
+        (void)iterate_kit_voicelab_append_frames(
+            &runtime.voicelab,
+            frame_pointers,
+            MIC_FRAMES_PER_APPEND,
+            sizeof(frame_storage[0].samples),
+            runtime.frame_sequence,
+            now);
+        runtime.frame_sequence += MIC_FRAMES_PER_APPEND;
+        waveshare_recorder_write_mic(frame_storage, sizeof(frame_storage));
       }
-      if (outbox_free >= 7U &&
+      if (outbox_free >= 4U &&
           iterate_kit_voicelab_needs_recycle(&runtime.voicelab)) {
         (void)iterate_kit_voicelab_recycle_connection(&runtime.voicelab);
       }
@@ -749,11 +757,11 @@ void app_main(void) {
         next_ping_at = now + 1000U;
         next_stats_at = now + STATS_INTERVAL_MS;
       }
-      if (now >= next_ping_at && outbox_free >= 5U) {
+      if (now >= next_ping_at && outbox_free >= 3U) {
         (void)iterate_kit_voicelab_ping(&runtime.voicelab);
         next_ping_at = now + PING_INTERVAL_MS;
       }
-      if (now >= next_stats_at && outbox_free >= 5U) {
+      if (now >= next_stats_at && outbox_free >= 3U) {
         append_stats(now);
         next_stats_at = now + STATS_INTERVAL_MS;
       }

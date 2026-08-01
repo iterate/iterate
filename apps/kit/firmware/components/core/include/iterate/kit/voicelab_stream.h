@@ -19,14 +19,17 @@ enum {
    */
   ITERATE_KIT_VOICELAB_FRAME_BYTES = 640,
   /*
-   * The taskless control socket sustains ~25-50 TLS messages/s on-device
-   * (each one-way append costs TWO messages: push + release), so mic frames
-   * aggregate: 4 frames (80 ms) per append = 12.5 pushes/s. The args buffer
-   * holds that four-event array; with the push envelope it must stay inside
-   * one 4 KiB transport message.
+   * The taskless control socket sustains ~25-50 TLS messages/s on-device and
+   * every one-way append costs TWO of them (push + release), so at 4 frames
+   * per append the uplink sat right on the ceiling: a measured 3s turn put
+   * 43520 bytes on the wire where realtime is 96000, because a batch is
+   * skipped whenever the outbox is short. 8 frames (160 ms) per append is
+   * 6.25 appends/s = 12.5 messages/s, half the ceiling. The args buffer
+   * holds that eight-event array; with the push envelope it must stay inside
+   * one 8 KiB transport message.
    */
-  ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND = 4,
-  ITERATE_KIT_VOICELAB_ARGS_CAPACITY = 4000,
+  ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND = 8,
+  ITERATE_KIT_VOICELAB_ARGS_CAPACITY = 7600,
   /* Base64 scratch for one inbound speaker frame (854 chars + padding slack). */
   ITERATE_KIT_VOICELAB_B64_CAPACITY = 1200,
   /*

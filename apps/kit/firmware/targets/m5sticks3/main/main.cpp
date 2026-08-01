@@ -325,7 +325,7 @@ struct Runtime {
    */
   std::uint32_t playbackMetricsSequence = 0U;
   bool pcmTransportStarted = false;
-  bool pcmTransportStartAttemptedForConversation = false;
+  bool pcmTransportStartAttempted = false;
   /*
    * "Waiting for AI" is a conversational fact which neither the transport nor
    * I2S state can infer: the playback owner is deliberately pre-buffer-ready
@@ -346,12 +346,14 @@ selectCallUiState(Runtime &state) {
   const bool conversationActive =
       iterate_kit_m5sticks3_is_conversation_active(&state.device);
   if (!conversationActive) {
-    if (state.pcmTransportStarted &&
-        state.pcmTransport.state ==
-            ITERATE_KIT_ESP_IDF_PCM_STOPPING) {
-      return M5StickS3CallUiState::endingCall;
+    if (state.pcmTransport.state ==
+        ITERATE_KIT_ESP_IDF_PCM_FAILED) {
+      return M5StickS3CallUiState::callFailed;
     }
-    return state.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY
+    return state.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+            state.pcmTransportStarted &&
+            state.pcmTransport.state ==
+                ITERATE_KIT_ESP_IDF_PCM_READY
         ? M5StickS3CallUiState::ready
         : M5StickS3CallUiState::controlConnecting;
   }
@@ -1422,83 +1424,24 @@ extern "C" void app_main(void) {
       runtime.lastTransportState = runtime.transport.state;
     }
 
-    const bool conversationActive =
-        iterate_kit_m5sticks3_is_conversation_active(
-            &runtime.device);
-    if (runtime.pcmTransportStarted &&
-        runtime.pcmTransport.state ==
-            ITERATE_KIT_ESP_IDF_PCM_STOPPING) {
-      /*
-       * Reap an earlier hang-up even if the user has already started a new
-       * conversation. Static FreeRTOS task storage cannot be reused until the
-       * old owner acknowledges exit; once it does, the active conversation is
-       * allowed one fresh start below instead of remaining wedged forever.
-       */
-      const iterate_kit_status stopStatus =
-          iterate_kit_esp_idf_pcm_transport_finish_stop(
-              &runtime.pcmTransport);
-      if (stopStatus == ITERATE_KIT_OK) {
-        runtime.pcmTransportStarted = false;
-        runtime.pcmTransportStartAttemptedForConversation = false;
-        ESP_LOGI(tag, "pcm conversation stopped");
-      } else if (stopStatus != ITERATE_KIT_UNAVAILABLE) {
-        ESP_LOGE(
-            tag,
-            "pcm conversation stop failed: status=%d platform=%ld",
-            static_cast<int>(stopStatus),
-            static_cast<long>(
-                runtime.pcmTransport.last_platform_error));
-      }
-    } else if (!conversationActive && runtime.pcmTransportStarted) {
-      /*
-       * Interactive hang-up may arrive while DNS, TLS, or a socket read owns
-       * the network task. Waiting for that task here would stall GPIO and
-       * capability polling, so stop is a two-phase reconciliation. Admission
-       * and playback have already been revoked by the conversation event;
-       * this loop merely observes when the static network owner has exited.
-       */
-      iterate_kit_status stopStatus =
-          iterate_kit_esp_idf_pcm_transport_request_stop(
-              &runtime.pcmTransport);
-      if (stopStatus == ITERATE_KIT_OK) {
-        stopStatus = iterate_kit_esp_idf_pcm_transport_finish_stop(
-            &runtime.pcmTransport);
-      }
-      if (stopStatus == ITERATE_KIT_OK) {
-        runtime.pcmTransportStarted = false;
-        runtime.pcmTransportStartAttemptedForConversation = false;
-        ESP_LOGI(tag, "pcm conversation stopped");
-      } else if (stopStatus != ITERATE_KIT_UNAVAILABLE) {
-        ESP_LOGE(
-            tag,
-            "pcm conversation stop failed: status=%d platform=%ld",
-            static_cast<int>(stopStatus),
-            static_cast<long>(
-                runtime.pcmTransport.last_platform_error));
-      }
-    } else if (!conversationActive) {
-      /*
-       * A failed connect is retried only after a deliberate new top-button
-       * conversation. This prevents an outage from turning the 10 ms owner
-       * loop into a connection storm while still giving the user an explicit
-       * recovery action.
-       */
-      runtime.pcmTransportStartAttemptedForConversation = false;
-    }
-
-    if (conversationActive &&
-        !runtime.pcmTransportStarted &&
-        !runtime.pcmTransportStartAttemptedForConversation &&
+    if (!runtime.pcmTransportStarted &&
+        !runtime.pcmTransportStartAttempted &&
         runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
       /*
-       * The sockets remain separate. A top-button call starts PCM only after
-       * the authenticated Cap'n Web mount proves the device configuration,
-       * but a later control reconnect does not tear down a healthy voice
-       * socket. Attempt exactly once per conversation; the PCM transport owns
-       * bounded reconnects after start, and hang-up/start is the explicit
-       * retry boundary for an initial connect failure.
+       * DNS/TCP/TLS/WebSocket setup measured 5.52 seconds on the physical
+       * Stick, so it is device-readiness work, not something Button B may put
+       * on a person's interactive path. Start the independent PCM lane once
+       * after the authenticated Cap'n Web mount proves configuration. The PCM
+       * task then owns bounded reconnects and freshness resets for the device
+       * lifetime; hang-up retires only Grok in userspace and never queues or
+       * replays audio here.
+       *
+       * The one-shot flag covers only an impossible local start failure such
+       * as static-task creation failure. Retrying that from the 10 ms owner
+       * loop would be an unbounded storm; network failures after a successful
+       * start are already explicitly governed by the transport retry gate.
        */
-      runtime.pcmTransportStartAttemptedForConversation = true;
+      runtime.pcmTransportStartAttempted = true;
       const iterate_kit_status startStatus =
           iterate_kit_esp_idf_pcm_transport_start(
               &runtime.pcmTransport);
@@ -1513,9 +1456,7 @@ extern "C" void app_main(void) {
                 runtime.pcmTransport.last_platform_error));
       }
     }
-    if (runtime.pcmTransportStarted &&
-        runtime.pcmTransport.state !=
-            ITERATE_KIT_ESP_IDF_PCM_STOPPING) {
+    if (runtime.pcmTransportStarted) {
       const iterate_kit_status pcmTransportPoll =
           iterate_kit_esp_idf_pcm_transport_poll(
               &runtime.pcmTransport);

@@ -186,6 +186,7 @@ static enum capnweb_status subscribe(
             ? ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED
             : ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED),
     .source = (uint8_t)ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM,
+    .conversation_active = stream->conversation_active,
     .snapshot = true,
   };
   /*
@@ -234,8 +235,8 @@ static void delivery_complete(
 }
 
 struct notification_expression_workspace {
-  struct capnweb_expression values[8];
-  struct capnweb_object_field fields[8];
+  struct capnweb_expression values[9];
+  struct capnweb_object_field fields[9];
   struct capnweb_expression object;
 };
 
@@ -334,6 +335,11 @@ static bool build_notification_expression(
       &workspace->fields[7],
       "coalescedNotifications",
       notification->coalesced_notifications);
+  boolean_value(
+      &workspace->values[8],
+      &workspace->fields[8],
+      "conversationActive",
+      notification->conversation_active);
   workspace->object = (struct capnweb_expression){
     .kind = CAPNWEB_EXPRESSION_OBJECT,
     .value.object = {
@@ -521,6 +527,19 @@ enum iterate_kit_status iterate_kit_device_event_stream_observe(
     stream->current_active =
         event->type == ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED;
   }
+  if (result == ITERATE_KIT_OK &&
+      (event->type == ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED ||
+       event->type == ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED)) {
+    /*
+     * Call lifetime is independent of the PTT level above. Keeping both bits
+     * in the same ordered owner lets a replacement userspace callback recover
+     * an in-progress call without opening another query/callback race. A
+     * failed device transition is retained as evidence but cannot mutate the
+     * state advertised by the next subscription snapshot.
+     */
+    stream->conversation_active =
+        event->type == ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED;
+  }
   /*
    * Saturation is visible through a repeated sequence plus the coalesced
    * counter; wrapping would make a decades-old event appear to precede a
@@ -538,6 +557,7 @@ enum iterate_kit_status iterate_kit_device_event_stream_observe(
     .result = (int32_t)result,
     .type = event->type,
     .source = event->source,
+    .conversation_active = stream->conversation_active,
     .snapshot = false,
   };
   return enqueue(stream, notification);

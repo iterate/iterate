@@ -64,7 +64,13 @@ enum {
    * move together. Costs ~4 KiB more permanent RAM per transport than the
    * previous 2 KiB cap.
    */
-  ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY = 4096,
+  /*
+   * The largest legitimate control message. Mic frames aggregate to keep the
+   * outbound MESSAGE rate down — the socket sustains only ~25-50/s and every
+   * one-way append costs two (push + release) — so one append carries 8
+   * base64 PCM frames, about 7 KiB.
+   */
+  ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY = 8192,
 };
 
 /**

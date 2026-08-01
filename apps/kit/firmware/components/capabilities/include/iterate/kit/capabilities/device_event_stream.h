@@ -21,8 +21,10 @@ extern "C" {
  * This is control state, never PCM. Sequence is device-boot-local and lets the
  * userspace proxy detect a coalesced transition instead of silently leaving a
  * provider turn open. `snapshot` is emitted once after subscription so a
- * reconnect while the physical button is held can restore the current state
- * without replaying an invented edge.
+ * reconnect while either button-owned state machine is active can restore the
+ * current state without replaying an invented edge. `conversation_active` is
+ * repeated on ordinary events as a bounded state checksum; it is not a second
+ * event source and does not imply ordering with PCM on the other socket.
  */
 struct iterate_kit_device_event_notification {
   int64_t sequence;
@@ -30,6 +32,7 @@ struct iterate_kit_device_event_notification {
   int32_t result;
   uint8_t type;
   uint8_t source;
+  bool conversation_active;
   bool snapshot;
 };
 
@@ -69,6 +72,7 @@ struct iterate_kit_device_event_stream {
   uint32_t coalesced_notifications;
   size_t queue_head;
   size_t queue_count;
+  bool conversation_active;
   bool current_active;
   bool occupied;
   bool call_in_flight;

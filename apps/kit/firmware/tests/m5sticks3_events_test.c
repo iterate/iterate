@@ -609,11 +609,13 @@ static void flattened_host_invocation_reaches_the_static_method_table(void) {
 
 /*
  * A call and a microphone turn are deliberately different state machines.
- * The top button (or conversation capability) owns the expensive `/pcm`
- * lifetime, while the front button (or pushToTalk capability) alone owns the
- * microphone. Collapsing these states previously turned provider VAD on and
- * made every call capture continuously, which violated the product decision
- * and made echo handling unavoidable.
+ * The top button (or conversation capability) owns the disposable provider
+ * lifetime in userspace, while the front button (or pushToTalk capability)
+ * alone owns the microphone. The target keeps its `/pcm` transport warm, but
+ * this device profile deliberately knows nothing about that transport.
+ * Collapsing call and PTT states previously turned provider VAD on and made
+ * every call capture continuously, violating the product decision and making
+ * echo handling unavoidable.
  *
  * This test also pins the awkward but safety-critical edges: a PTT press
  * outside a call is rejected without opening the mic, and hanging up while the
