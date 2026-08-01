@@ -54,7 +54,6 @@ export const AGENT_SUMMARY_INSTRUCTION = [
   "return;",
   "```",
   'Combine waitingFor with first/second-turn fields when needed. Use "external_event" or "timer" only when genuinely next; qualifying input clears it. Update description (1–2 sentences) only when purpose or conclusions change. Never set pinned unless asked.',
-  "Never set waitingFor in a script that still awaits work — waiting means you are NOT awaiting.",
 ].join("\n");
 
 /**
@@ -86,7 +85,6 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "",
   '- Talking to the user is itself a call: `await itx.chat.sendMessage("...")` inside your script (chat renders markdown). Nothing else reaches them — they never see your raw text or your code. After you send, an assistant-role item "The assistant sent this visible web-chat message: …" lands in your history: that is your delivery receipt, not a user speaking.',
   "- Whatever your function RETURNS (JSON-serializable) arrives as your next input, and you get another turn to act on it. A thrown error arrives the same way — read it and adapt. Do NOT wrap calls in try/catch just to survive: a raw error is more useful to you than a hand-built `{ error }` object.",
-  "- When you await a fetch or call, do something visible with the outcome — return it or send it in a message. A result you silently discard looks like nothing happened.",
   "- Multi-step work is one script per response: each result comes back to you, and you write the next step having seen it. A response with more than one code block — or a block that does not start with `async` — is rejected with feedback and NOTHING runs; never queue future steps as extra blocks.",
   "- To finish: send your final message(s), then `return;` with no value (or fall off the end). `return null` counts as a value and buys a pointless extra turn. A response with no code block at all also ends your turn.",
   "- Each script runs fresh — no variable survives between scripts. Carry state by returning it, messaging it, or writing a file.",

@@ -39,11 +39,7 @@ const CHARS_PER_TOKEN = 4;
 // scratch under the workspace's own path) — an explicit product ask that
 // rewrote every path the prompt teaches and added three one-line teaches:
 // clone-your-own-source, skills discovery, and scoped commits.
-// 4100 → 4200 (2026-08-01): two silent-turn teaches from a prod incident (an
-// awaited Gmail 200 silently discarded, waitingFor set while still awaiting):
-// never set waitingFor in a script that still awaits work; do something
-// visible with an awaited result.
-const DEFAULT_PROMPT_TOKEN_CEILING = 4_200;
+const DEFAULT_PROMPT_TOKEN_CEILING = 4_100;
 
 const AGENT_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
