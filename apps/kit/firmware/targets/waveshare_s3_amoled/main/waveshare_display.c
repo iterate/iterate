@@ -1,56 +1,38 @@
 /*
  * Waveshare ESP32-S3 Touch AMOLED 1.8 — the Iterate UI.
  *
- * SH8601 QSPI panel (368x448, CS 12 / PCLK 11 / D0..D3 4,5,6,7, no reset or
- * backlight pin — an AMOLED's brightness is register 0x51) plus an FT5x06
- * touch controller on the audio I2C bus (INT 21). One LVGL task owns every
- * widget and polls touch; other tasks publish into a small mutex-guarded
- * snapshot, so nothing outside this file touches LVGL.
+ * Bring-up is the board's own BSP (waveshare/esp32_s3_touch_amoled_1_8):
+ * bsp_display_start() brings up the SH8601 QSPI panel, the FT3168 touch
+ * controller behind its TCA9554 expander, and esp_lvgl_port's LVGL task and
+ * lock. Hand-rolling that was how this file started, and it cost a day to
+ * two board facts the BSP already knows — the touch reset hangs off the
+ * expander, and the draw buffers have to come out of the right heap.
  *
- * The panel init sequence is the vendor's, as used by this board's
- * xiaozhi-esp32 port: sleep-out, then the 0x2A/0x2B column/row windows that
- * match 368x448, then display-on.
+ * Everything below the bring-up is ours: other tasks publish into a small
+ * mutex-guarded snapshot, and one LVGL timer paints it. Nothing outside this
+ * file touches LVGL.
  */
 #include "waveshare_display.h"
 
 #include <stdio.h>
 #include <string.h>
 
-#include "driver/gpio.h"
-#include "driver/spi_master.h"
+#include "bsp/esp-bsp.h"
 #include "esp_heap_caps.h"
-#include "esp_lcd_panel_io.h"
-#include "esp_lcd_panel_ops.h"
-#include "esp_lcd_sh8601.h"
-#include "esp_lcd_touch_ft5x06.h"
 #include "esp_log.h"
-#include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lvgl.h"
-#include "waveshare_audio.h"
 
 static const char tag[] = "waveshare-ui";
 
 enum {
-  PIN_LCD_CS = 12,
-  PIN_LCD_PCLK = 11,
-  PIN_LCD_D0 = 4,
-  PIN_LCD_D1 = 5,
-  PIN_LCD_D2 = 6,
-  PIN_LCD_D3 = 7,
-  PIN_TOUCH_INT = 21,
   TRANSCRIPT_LINES = 6,
   TRANSCRIPT_LINE_CHARS = 96,
   STATUS_CHARS = 64,
-  /*
-   * Two 20-line stripes, in PSRAM. Internal RAM is the Wi-Fi driver's
-   * budget: 40-line stripes in internal DMA memory left only ~81 KiB free
-   * and the station associated but never completed DHCP. The S3's GDMA
-   * reaches PSRAM, so the panel does not need internal memory at all.
-   */
-  DRAW_BUFFER_LINES = 20,
+  /* How often the published snapshot is painted, in milliseconds. */
+  REFRESH_PERIOD_MS = 100,
 };
 
 struct transcript_line {
@@ -73,31 +55,15 @@ static struct {
   .background = 0x101820,
 };
 
-/*
- * The vendor's panel bring-up, as used by this board's xiaozhi-esp32 port:
- * sleep-out, the 0x2A/0x2B windows that describe 368x448, full brightness
- * (0x51 — an AMOLED has no backlight pin), display on.
- */
-static const sh8601_lcd_init_cmd_t vendor_init[] = {
-  {0x11, (uint8_t[]){0x00}, 0, 120},
-  {0x44, (uint8_t[]){0x01, 0xD1}, 2, 0},
-  {0x35, (uint8_t[]){0x00}, 1, 0},
-  {0x53, (uint8_t[]){0x20}, 1, 10},
-  {0x2A, (uint8_t[]){0x00, 0x00, 0x01, 0x6F}, 4, 0},
-  {0x2B, (uint8_t[]){0x00, 0x00, 0x01, 0xBF}, 4, 0},
-  {0x51, (uint8_t[]){0xFF}, 1, 10},
-  {0x29, (uint8_t[]){0x00}, 0, 10},
-};
-
 static lv_obj_t *screen_root;
 static lv_obj_t *state_label;
 static lv_obj_t *status_label;
 static lv_obj_t *transcript_label;
 static lv_obj_t *call_button;
 static lv_obj_t *call_button_label;
-static esp_lcd_touch_handle_t touch_handle;
-/* Set once the panel is up; the retriable touch bring-up needs it. */
-static lv_display_t *ui_display;
+/* Snapshot staging: full-resolution RGB565 in PSRAM, reused per capture. */
+static lv_draw_buf_t snapshot_buf;
+static uint8_t *snapshot_pixels;
 
 /* --- public, thread-safe setters ----------------------------------------- */
 
@@ -320,256 +286,112 @@ static void refresh_ui(void) {
   lv_obj_set_style_border_color(call_button, lv_color_hex(0x4ade80), 0);
 }
 
-static void touch_read(lv_indev_t *indev, lv_indev_data_t *data) {
-  uint16_t x = 0;
-  uint16_t y = 0;
-  uint16_t strength = 0;
-  uint8_t count = 0;
-  (void)indev;
-  if (touch_handle == NULL) {
-    data->state = LV_INDEV_STATE_RELEASED;
-    return;
-  }
-  /*
-   * This panel's controller sleeps between touches and NACKs every register
-   * read while it does. Polling it anyway produced a continuous I2C error
-   * storm that starved the network stack on this core — so the INT line
-   * (active low, asserted while a finger is down) is the gate, and I2C is
-   * only touched when there is something to read.
-   */
-  if (gpio_get_level(PIN_TOUCH_INT) != 0) {
-    data->state = LV_INDEV_STATE_RELEASED;
-    return;
-  }
-  esp_lcd_touch_read_data(touch_handle);
-  if (esp_lcd_touch_get_coordinates(touch_handle, &x, &y, &strength, &count, 1) &&
-      count > 0U) {
-    data->point.x = x;
-    data->point.y = y;
-    data->state = LV_INDEV_STATE_PRESSED;
-    return;
-  }
-  data->state = LV_INDEV_STATE_RELEASED;
+static void refresh_timer(lv_timer_t *timer) {
+  (void)timer;
+  refresh_ui();
 }
 
-/*
- * This panel's capacitive controller sleeps hard: while asleep it NACKs
- * every I2C transaction, so a one-shot probe at boot reports "no touch
- * controller" on a board that has one. Two things fix that — pulsing the
- * INT line low wakes it (the line is bidirectional on this part), and the
- * bring-up is retried from the UI task, so a controller that only ever wakes
- * under a finger still gets attached.
- */
-static void pulse_touch_interrupt(void) {
-  const gpio_config_t as_output = {
-    .pin_bit_mask = 1ULL << PIN_TOUCH_INT,
-    .mode = GPIO_MODE_OUTPUT,
-    .pull_up_en = GPIO_PULLUP_DISABLE,
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,
-    .intr_type = GPIO_INTR_DISABLE,
-  };
-  const gpio_config_t as_input = {
-    .pin_bit_mask = 1ULL << PIN_TOUCH_INT,
-    .mode = GPIO_MODE_INPUT,
-    .pull_up_en = GPIO_PULLUP_ENABLE,
-    .pull_down_en = GPIO_PULLDOWN_DISABLE,
-    .intr_type = GPIO_INTR_DISABLE,
-  };
-  (void)gpio_config(&as_output);
-  (void)gpio_set_level(PIN_TOUCH_INT, 0);
-  vTaskDelay(pdMS_TO_TICKS(6));
-  (void)gpio_set_level(PIN_TOUCH_INT, 1);
-  (void)gpio_config(&as_input);
-  vTaskDelay(pdMS_TO_TICKS(60));
-}
+bool waveshare_display_snapshot(uint8_t *out, size_t capacity) {
+  uint16_t *destination = (uint16_t *)(void *)out;
+  const uint16_t *source;
+  size_t y;
 
-/* Releases whatever this board holds in reset behind its TCA9554 expander. */
-static void release_expander_resets(void) {
-  i2c_master_dev_handle_t expander = NULL;
-  const i2c_device_config_t expander_config = {
-    .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-    .device_address = 0x20,
-    .scl_speed_hz = 100000,
-  };
-  if (i2c_master_bus_add_device(
-          waveshare_audio_i2c_bus(), &expander_config, &expander) != ESP_OK) {
-    return;
+  if (out == NULL || capacity < (size_t)WAVESHARE_SNAPSHOT_BYTES ||
+      snapshot_pixels == NULL) {
+    return false;
   }
-  {
-    const uint8_t outputs_high[] = {0x01, 0xff};
-    const uint8_t all_outputs[] = {0x03, 0x00};
-    (void)i2c_master_transmit(expander, outputs_high, sizeof(outputs_high), 100);
-    (void)i2c_master_transmit(expander, all_outputs, sizeof(all_outputs), 100);
+  if (!bsp_display_lock(1000)) {
+    return false;
   }
-  (void)i2c_master_bus_rm_device(expander);
-  vTaskDelay(pdMS_TO_TICKS(50));
-}
+  if (lv_snapshot_take_to_draw_buf(
+          lv_screen_active(), LV_COLOR_FORMAT_RGB565, &snapshot_buf) !=
+      LV_RESULT_OK) {
+    bsp_display_unlock();
+    return false;
+  }
+  bsp_display_unlock();
 
-static bool attach_touch(void) {
-  esp_lcd_panel_io_handle_t touch_io = NULL;
-  const esp_lcd_panel_io_i2c_config_t touch_io_config =
-      ESP_LCD_TOUCH_IO_I2C_FT5x06_CONFIG();
-  const esp_lcd_touch_config_t touch_config = {
-    .x_max = WAVESHARE_DISPLAY_WIDTH,
-    .y_max = WAVESHARE_DISPLAY_HEIGHT,
-    .rst_gpio_num = -1,
-    .int_gpio_num = -1, /* read gating is ours; see touch_read */
-    .levels = {.reset = 0, .interrupt = 0},
-    .flags = {.swap_xy = 0, .mirror_x = 0, .mirror_y = 0},
-  };
-  if (touch_handle != NULL) {
-    return true;
+  /* Half scale: legible on a laptop, a quarter of the bytes to ship. */
+  source = (const uint16_t *)(const void *)snapshot_buf.data;
+  for (y = 0U; y < (size_t)WAVESHARE_SNAPSHOT_HEIGHT; ++y) {
+    size_t x;
+    const uint16_t *row =
+        &source[y * 2U * (snapshot_buf.header.stride / 2U)];
+    for (x = 0U; x < (size_t)WAVESHARE_SNAPSHOT_WIDTH; ++x) {
+      destination[y * (size_t)WAVESHARE_SNAPSHOT_WIDTH + x] = row[x * 2U];
+    }
   }
-  pulse_touch_interrupt();
-  if (i2c_master_probe(waveshare_audio_i2c_bus(), 0x38, 100) != ESP_OK) {
-    return false;
-  }
-  if (esp_lcd_new_panel_io_i2c(
-          waveshare_audio_i2c_bus(), &touch_io_config, &touch_io) != ESP_OK) {
-    return false;
-  }
-  if (esp_lcd_touch_new_i2c_ft5x06(touch_io, &touch_config, &touch_handle) !=
-      ESP_OK) {
-    touch_handle = NULL;
-    (void)esp_lcd_panel_io_del(touch_io);
-    return false;
-  }
-  {
-    lv_indev_t *indev = lv_indev_create();
-    lv_indev_set_type(indev, LV_INDEV_TYPE_POINTER);
-    lv_indev_set_read_cb(indev, touch_read);
-    lv_indev_set_display(indev, ui_display);
-  }
-  ESP_LOGI(tag, "touch controller attached");
   return true;
 }
 
-static bool flush_ready(
-    esp_lcd_panel_io_handle_t io,
-    esp_lcd_panel_io_event_data_t *event,
-    void *context) {
-  (void)io;
-  (void)event;
-  lv_display_flush_ready((lv_display_t *)context);
-  return false;
-}
-
-static void flush_cb(lv_display_t *display, const lv_area_t *area, uint8_t *pixels) {
-  esp_lcd_panel_handle_t panel = lv_display_get_user_data(display);
-  /* The panel takes big-endian RGB565 over QSPI. */
-  lv_draw_sw_rgb565_swap(pixels, lv_area_get_size(area));
-  esp_lcd_panel_draw_bitmap(
-      panel, area->x1, area->y1, area->x2 + 1, area->y2 + 1, pixels);
-}
-
-static uint32_t lvgl_tick(void) {
-  return (uint32_t)(esp_timer_get_time() / 1000);
-}
-
-static void lvgl_task(void *argument) {
-  uint32_t ticks_since_touch_retry = 0U;
-  (void)argument;
-  for (;;) {
-    refresh_ui();
-    const uint32_t next = lv_timer_handler();
-    /* Keep courting a sleeping touch controller until it answers. */
-    if (touch_handle == NULL && ++ticks_since_touch_retry >= 30U) {
-      ticks_since_touch_retry = 0U;
-      (void)attach_touch();
-    }
-    vTaskDelay(pdMS_TO_TICKS(next > 30U ? 30U : (next < 5U ? 5U : next)));
+/*
+ * The panel, the touch controller and their neighbours come out of reset only
+ * when EXIO0/1/2/6 on the board's TCA9554 are pulsed low and then high — the
+ * sequence in Waveshare's own sketches. Nothing in the BSP does it (its
+ * BSP_LCD_RST is "not connected"), and without it the panel stays dark no
+ * matter what is written to it: the vendor's own LVGL demo is black too.
+ */
+static void release_board_resets(void) {
+  const uint32_t pins = IO_EXPANDER_PIN_NUM_0 | IO_EXPANDER_PIN_NUM_1 |
+      IO_EXPANDER_PIN_NUM_2 | IO_EXPANDER_PIN_NUM_6;
+  esp_io_expander_handle_t expander = bsp_io_expander_init();
+  if (expander == NULL) {
+    ESP_LOGW(tag, "no io expander; panel may stay in reset");
+    return;
   }
+  (void)esp_io_expander_set_dir(expander, pins, IO_EXPANDER_OUTPUT);
+  (void)esp_io_expander_set_level(expander, pins, 0);
+  vTaskDelay(pdMS_TO_TICKS(20));
+  (void)esp_io_expander_set_level(expander, pins, 1);
+  vTaskDelay(pdMS_TO_TICKS(20));
 }
 
 bool waveshare_display_init(void) {
-  esp_lcd_panel_io_handle_t panel_io = NULL;
-  esp_lcd_panel_handle_t panel = NULL;
-  lv_display_t *display = NULL;
-
   ui.lock = xSemaphoreCreateMutex();
   if (ui.lock == NULL) return false;
   snprintf(ui.status, sizeof(ui.status), "starting");
 
-  spi_bus_config_t bus_config = SH8601_PANEL_BUS_QSPI_CONFIG(
-      PIN_LCD_PCLK,
-      PIN_LCD_D0,
-      PIN_LCD_D1,
-      PIN_LCD_D2,
-      PIN_LCD_D3,
-      WAVESHARE_DISPLAY_WIDTH * DRAW_BUFFER_LINES * 2);
-  if (spi_bus_initialize(SPI2_HOST, &bus_config, SPI_DMA_CH_AUTO) != ESP_OK) {
-    ESP_LOGE(tag, "qspi bus init failed");
+  release_board_resets();
+  if (bsp_display_start() == NULL) {
+    ESP_LOGE(tag, "bsp display start failed");
     return false;
   }
+  (void)bsp_display_brightness_set(90);
 
-  esp_lcd_panel_io_spi_config_t io_config =
-      SH8601_PANEL_IO_QSPI_CONFIG(PIN_LCD_CS, NULL, NULL);
-  io_config.pclk_hz = 40 * 1000 * 1000;
-  io_config.trans_queue_depth = 10;
-  if (esp_lcd_new_panel_io_spi(SPI2_HOST, &io_config, &panel_io) != ESP_OK) {
-    ESP_LOGE(tag, "panel io failed");
-    return false;
-  }
-
-  const sh8601_vendor_config_t vendor_config = {
-    .init_cmds = vendor_init,
-    .init_cmds_size = sizeof(vendor_init) / sizeof(vendor_init[0]),
-    .flags = {.use_qspi_interface = 1},
-  };
-  const esp_lcd_panel_dev_config_t panel_config = {
-    .reset_gpio_num = -1,
-    .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
-    .bits_per_pixel = 16,
-    .vendor_config = (void *)&vendor_config,
-    .flags = {.reset_active_high = 1},
-  };
-  if (esp_lcd_new_panel_sh8601(panel_io, &panel_config, &panel) != ESP_OK) {
-    ESP_LOGE(tag, "sh8601 init failed");
-    return false;
-  }
-  (void)esp_lcd_panel_reset(panel);
-  (void)esp_lcd_panel_init(panel);
-  (void)esp_lcd_panel_invert_color(panel, false);
-  (void)esp_lcd_panel_disp_on_off(panel, true);
-
-  lv_init();
-  lv_tick_set_cb(lvgl_tick);
-  display = lv_display_create(WAVESHARE_DISPLAY_WIDTH, WAVESHARE_DISPLAY_HEIGHT);
-  if (display == NULL) {
-    ESP_LOGE(tag, "lvgl display creation failed");
-    return false;
-  }
+  /*
+   * Snapshots render at full resolution before being halved, and LVGL's own
+   * heap is far too small for a 368x448 frame — so the buffer is ours, in
+   * PSRAM, allocated once.
+   */
   {
-    const size_t buffer_bytes = WAVESHARE_DISPLAY_WIDTH * DRAW_BUFFER_LINES * 2U;
-    void *first = heap_caps_malloc(buffer_bytes, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
-    void *second = heap_caps_malloc(buffer_bytes, MALLOC_CAP_DMA | MALLOC_CAP_SPIRAM);
-    if (first == NULL || second == NULL) {
-      ESP_LOGE(tag, "lvgl draw buffers unavailable");
-      return false;
+    const uint32_t stride = (uint32_t)WAVESHARE_DISPLAY_WIDTH * 2U;
+    const size_t bytes = (size_t)stride * WAVESHARE_DISPLAY_HEIGHT;
+    snapshot_pixels = heap_caps_malloc(bytes, MALLOC_CAP_SPIRAM);
+    if (snapshot_pixels != NULL) {
+      lv_draw_buf_init(
+          &snapshot_buf,
+          WAVESHARE_DISPLAY_WIDTH,
+          WAVESHARE_DISPLAY_HEIGHT,
+          LV_COLOR_FORMAT_RGB565,
+          stride,
+          snapshot_pixels,
+          (uint32_t)bytes);
+    } else {
+      ESP_LOGW(tag, "no PSRAM for screenshots; takeScreenshot will fail");
     }
-    lv_display_set_buffers(
-        display, first, second, buffer_bytes, LV_DISPLAY_RENDER_MODE_PARTIAL);
-  }
-  ui_display = display;
-  lv_display_set_user_data(display, panel);
-  lv_display_set_flush_cb(display, flush_cb);
-  {
-    const esp_lcd_panel_io_callbacks_t callbacks = {
-      .on_color_trans_done = flush_ready,
-    };
-    (void)esp_lcd_panel_io_register_event_callbacks(panel_io, &callbacks, display);
   }
 
-  release_expander_resets();
-  attach_touch();
-
+  if (!bsp_display_lock(0)) {
+    ESP_LOGE(tag, "lvgl lock failed");
+    return false;
+  }
   build_ui();
   ui.dirty = true;
-  if (xTaskCreatePinnedToCore(lvgl_task, "iterate-ui", 8192, NULL, 4, NULL, 0) !=
-      pdPASS) {
-    ESP_LOGE(tag, "lvgl task creation failed");
-    return false;
-  }
-  ESP_LOGI(tag, "iterate UI up on 368x448 AMOLED");
+  refresh_ui();
+  (void)lv_timer_create(refresh_timer, REFRESH_PERIOD_MS, NULL);
+  bsp_display_unlock();
+
+  ESP_LOGI(tag, "iterate UI up on %dx%d AMOLED",
+           WAVESHARE_DISPLAY_WIDTH, WAVESHARE_DISPLAY_HEIGHT);
   return true;
 }

@@ -29,3 +29,14 @@ CONFIG_LV_USE_PERF_MONITOR=n
 # LVGL's own pool is internal RAM the Wi-Fi driver needs; this UI is a handful
 # of labels and one button, so 24 KiB is ample.
 CONFIG_LV_MEM_SIZE_KILOBYTES=24
+
+# Screenshots: the takeScreenshot capability renders the active screen into a
+# PSRAM draw buffer of our own (LVGL's pool is far too small for a frame).
+CONFIG_LV_USE_SNAPSHOT=y
+
+# The BSP's default 100-line LVGL buffer (73 KiB) is allocated with
+# MALLOC_CAP_DEFAULT, so it can land in PSRAM — and then every flush needs an
+# equally large internal bounce buffer for SPI DMA, which this build cannot
+# afford next to Wi-Fi ("spi transmit (queue) color failed"). 24 lines makes
+# the bounce cheap either way.
+CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=24

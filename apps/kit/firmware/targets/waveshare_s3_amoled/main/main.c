@@ -436,13 +436,17 @@ void app_main(void) {
             configuration_result.status));
     return;
   }
-  if (!waveshare_audio_init()) {
-    ESP_LOGE(tag, "audio bring-up failed");
-    return;
-  }
-  /* After audio: the display shares the I2C bus the codec bring-up creates. */
+  /*
+   * Display first: its bring-up pulses the board's shared reset lines (the
+   * panel, the touch controller and their neighbours hang off one TCA9554),
+   * and doing that after the codec is configured would reset the codec.
+   */
   if (!waveshare_display_init()) {
     ESP_LOGE(tag, "display bring-up failed");
+    return;
+  }
+  if (!waveshare_audio_init()) {
+    ESP_LOGE(tag, "audio bring-up failed");
     return;
   }
   waveshare_display_set_state(WAVESHARE_UI_CONNECTING);

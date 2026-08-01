@@ -37,6 +37,7 @@
 #include "driver/i2s_std.h"
 #include "esp_codec_dev.h"
 #include "esp_codec_dev_defaults.h"
+#include "bsp/esp-bsp.h"
 #include "esp_log.h"
 #include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
@@ -119,21 +120,17 @@ static bool power_rails_up(void) {
 }
 
 bool waveshare_audio_init(void) {
-  const i2c_master_bus_config_t bus_config = {
-    .i2c_port = I2C_NUM_0,
-    .sda_io_num = PIN_I2C_SDA,
-    .scl_io_num = PIN_I2C_SCL,
-    .clk_source = I2C_CLK_SRC_DEFAULT,
-    .glitch_ignore_cnt = 7,
-    .intr_priority = 0,
-    .trans_queue_depth = 0,
-    .flags = {.enable_internal_pullup = 1},
-  };
   i2s_chan_handle_t tx = NULL;
   i2s_chan_handle_t rx = NULL;
 
-  if (i2c_new_master_bus(&bus_config, &i2c_bus) != ESP_OK) {
-    ESP_LOGE(tag, "i2c bus init failed");
+  /*
+   * One owner for I2C0: the BSP creates it (same SDA 15 / SCL 14) and the
+   * codec, the PMIC and the touch controller all ride that bus. Two creators
+   * of the same port is an error, and the display needs it either way.
+   */
+  i2c_bus = bsp_i2c_get_handle();
+  if (i2c_bus == NULL) {
+    ESP_LOGE(tag, "i2c bus unavailable");
     return false;
   }
   if (!power_rails_up()) {

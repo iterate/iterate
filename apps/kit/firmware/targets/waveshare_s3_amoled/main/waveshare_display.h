@@ -2,6 +2,7 @@
 #define ITERATE_KIT_WAVESHARE_DISPLAY_H
 
 #include <stdbool.h>
+#include <stddef.h>
 #include <stdint.h>
 
 #ifdef __cplusplus
@@ -52,6 +53,20 @@ void waveshare_display_set_call_active(bool active);
 
 /** Same intent as pressing the button; drives the startCall/hangUp tools. */
 void waveshare_display_request_call(bool requested);
+
+enum {
+  /* Screenshots ship at half scale: legible, and 1/4 of the bytes. */
+  WAVESHARE_SNAPSHOT_WIDTH = WAVESHARE_DISPLAY_WIDTH / 2,
+  WAVESHARE_SNAPSHOT_HEIGHT = WAVESHARE_DISPLAY_HEIGHT / 2,
+  WAVESHARE_SNAPSHOT_BYTES = WAVESHARE_SNAPSHOT_WIDTH * WAVESHARE_SNAPSHOT_HEIGHT * 2,
+};
+
+/**
+ * Render what is on screen into `out` as half-scale RGB565 little-endian,
+ * `WAVESHARE_SNAPSHOT_BYTES` long — so a test can see the device's screen
+ * without a camera. Safe from any task; takes the LVGL lock.
+ */
+bool waveshare_display_snapshot(uint8_t *out, size_t capacity);
 
 #ifdef __cplusplus
 }
