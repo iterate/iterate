@@ -122,6 +122,13 @@ export const firmwareCatalog: readonly FirmwareDevice[] = [
     installMethod: { kind: "esp-serial", chipFamily: "ESP32-S3" },
     releases: [],
   },
+  {
+    id: "waveshare-s3-amoled",
+    name: "Waveshare ESP32-S3 Touch AMOLED 1.8",
+    description: "ES8311 voice device; the voicelab single-WebSocket target",
+    installMethod: { kind: "esp-serial", chipFamily: "ESP32-S3" },
+    releases: [],
+  },
 ];
 
 export function findFirmwareDevice(deviceId: string) {
