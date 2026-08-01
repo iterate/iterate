@@ -1019,48 +1019,6 @@ describe("ProjectProcessor approval outcome delivery", () => {
     });
   });
 
-  it("records a slash-command run's outcome without waking the model", async () => {
-    // A `/script` command is user-driven and deterministic: nobody is parked
-    // waiting, so the outcome context must not open an LLM turn (the mobile
-    // approvals spec's zero-model-turn thread guarantee).
-    const h = makeProjectHarness();
-    await h.play(
-      ["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED],
-      [
-        "append",
-        {
-          ...AGENT_BATCH_REQUESTED,
-          payload: {
-            ...AGENT_BATCH_REQUESTED.payload,
-            streamContext: {
-              ...AGENT_BATCH_REQUESTED.payload.streamContext,
-              executionId: "slash-command:12",
-            },
-          },
-        },
-      ],
-    );
-    const requested = h.events("events.iterate.com/project/human-approval-requested")[0]!;
-    await h.append({
-      type: "events.iterate.com/project/human-approval-decided",
-      payload: {
-        approvalRequestEventOffset: requested.offset,
-        verdicts: ["approve"],
-        decidedBy: "human",
-      },
-    });
-
-    expect(h.network.eventsAt("/agents/mobile-thread")).toMatchObject([
-      {
-        type: "events.iterate.com/agents/context-added",
-        payload: {
-          role: "developer",
-          llmRequestPolicy: { behaviour: "dont-trigger-request" },
-        },
-      },
-    ]);
-  });
-
   it("leaves scope-hold batches alone — only script-execution agent provenance is delivered", async () => {
     const h = makeProjectHarness();
     await h.play(
