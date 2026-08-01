@@ -140,12 +140,6 @@ using connection = await stream.openConnection({
 The callback exists only for that RPC session. Calling `connection.close()`,
 disposing it, or disconnecting closes it. No subscription is appended.
 
-Sustained consumers use the `iterate/client` session keeper. It proactively
-rotates the outer `/api` WebSocket before the Worker invocation approaches its
-subrequest budget; reopening only this callback on the same socket does not
-reset that budget. Consumers retain the last delivered event offset, pass it
-back as `replayAfterOffset`, and deduplicate a brief replacement seam by offset.
-
 ## Subscription actions
 
 Every durable subscription begins with
@@ -182,9 +176,7 @@ checkpoint, and `processEventBatch` callback. Every ordered callback batch
 carries the same ID. If the source stream is recreated while the host survives,
 the host resets compatible stored progress for the new ID and fences any stale
 callback; it never reuses the old checkpoint. The processor stores its
-checkpoint with its reduced state. After 8,000 acknowledged callback batches,
-the source records a `budget-rotation` close and wakes a fresh processor
-invocation from that checkpoint without entering failure backoff.
+checkpoint with its reduced state.
 
 ### Receiving stream
 

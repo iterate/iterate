@@ -1,7 +1,7 @@
 // `iterate/client` — the framework-free itx client.
 //
-// The shared session keeper (see ./itx/itx-session.ts for the model: one active
-// WebSocket per process, bounded successor overlap, invisible reconnect, terminal-auth
+// The one-socket session keeper (see ./itx/itx-session.ts for the model: one
+// WebSocket per process, generations, invisible reconnect, terminal-auth
 // parking, half-open verification) plus the shared wire pieces that ride it:
 // the live-state snapshot+patch codec and the ownership-chain disposal helper.
 // React bindings live in `iterate/sdk/itx/react`; the node one-shot dial (ws, custom

@@ -1,6 +1,6 @@
 /**
- * itx-session — the framework-free half of the itx client: one active
- * WebSocket per process (browser tab, TUI, phone), connected to an OS deployment's `/api`,
+ * itx-session — the framework-free half of the itx client: ONE WebSocket per
+ * process (browser tab, TUI, phone), connected to an OS deployment's `/api`,
  * `authenticate()`d into a **Session** (the catalog that vends project itxs via
  * `session.projects.get(slug)`), and kept alive through transport gaps.
  *
@@ -23,10 +23,10 @@
  *     capnweb's WebSocket needs.
  *
  * ───────────────────────────────────────────────────────────────────────────
- * THE SESSION MODEL — one active socket, generations, invisible reconnect
+ * THE SESSION MODEL — one socket, generations, invisible reconnect
  * ───────────────────────────────────────────────────────────────────────────
  *
- *  • ONE ACTIVE WebSocket for the whole process, kept in module state (so in a
+ *  • ONE WebSocket for the whole process, kept in module state (so in a
  *    browser it persists across client-side navigation). One connection attempt is a
  *    GENERATION ({@link Generation}): its WebSocket and its connecting
  *    promise. The session is the AWAITED `authenticate()` result — one settled
@@ -35,9 +35,7 @@
  *    fork identities: native promises assimilate thenables). The connection timeout
  *    spans the whole handshake (TCP/TLS/upgrade AND authenticate), and a REAL
  *    auth rejection over a working socket is terminal — it surfaces from the
- *    connecting promise instead of looping. A high-volume generation opens an
- *    authenticated successor before retiring its predecessor, so a bounded
- *    two-socket overlap exists during proactive budget rotation.
+ *    connecting promise instead of looping.
  *
  *  • RECONNECT IS INVISIBLE. Readers see an immutable {@link Snapshot};
  *    `snapshot.session` holds the LAST live session and is kept across a
@@ -45,12 +43,9 @@
  *    {@link firstConnect} promise, which survives failed connection attempts (paced
  *    reconnects happen behind it; an individual attempt's rejection never reaches a suspended
  *    React tree) and rejects only on a TERMINAL failure. Kept-across-the-gap
- *    applies to TRANSPORT gaps only: a terminal auth rejection on an ordinary
- *    reconnect is an AUTHORITY loss — the halted snapshot drops the (already
- *    dead) session so the real error surfaces instead of zombie stubs. A
- *    proactive successor rejection is different: its predecessor is provably
- *    still live, so the failed candidate is discarded and the predecessor
- *    remains authoritative until an explicit reset or natural transport loss.
+ *    applies to TRANSPORT gaps only: a terminal auth rejection on a reconnect is
+ *    an AUTHORITY loss — the halted snapshot drops the (already dead) session
+ *    so the real error surfaces instead of zombie stubs.
  *
  *  • PROJECT STUBS ARE SESSION-OWNED. `session.projects.get` allocates a
  *    capnweb import-table entry, so deriving stubs ad hoc (or inside React
@@ -131,7 +126,7 @@ export function configureIterateSession(config: IterateSessionConfig): void {
 
   const generation = current;
   current = undefined;
-  retireGenerationAndPredecessor(generation);
+  retireGeneration(generation);
   const retiredSession = snapshot?.session;
   snapshot = undefined;
   if (retiredSession !== undefined) disposeSession(retiredSession);
@@ -167,8 +162,7 @@ function missingConnectionTarget(): never {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// The shared socket: one active WebSocket per process, with a bounded
-// predecessor/successor overlap during proactive budget rotation.
+// The one socket: a single live WebSocket per process, in module state.
 // ─────────────────────────────────────────────────────────────────────────────
 
 const CONNECTION_TIMEOUT_MS = 15_000;
@@ -178,19 +172,6 @@ const CONNECTION_TIMEOUT_MS = 15_000;
 // lives inside the connecting promise, so `use()` semantics are unchanged.
 const RECONNECT_BACKOFF_MIN_MS = 250;
 const RECONNECT_BACKOFF_MAX_MS = 10_000;
-/**
- * Cloudflare charges long-lived `/api` invocations for the Durable Object work
- * behind callback traffic. Paid Workers default to 10,000 subrequests. One
- * server-to-client Cap'n Web message is not an exact subrequest counter, but
- * sustained callback delivery produces one per batch; rotating at 8,000 gives
- * a successor 20% of the default budget to authenticate even if the OS
- * deployment's larger explicit limit was omitted.
- */
-const TRANSPORT_MESSAGE_ROTATION_THRESHOLD = 8_000;
-/** Give reconnect-aware effects time to claim the proactive predecessor before retiring it. */
-const TRANSPORT_ROTATION_OVERLAP_GRACE_MS = 5_000;
-/** Bound a claimed predecessor even when a successor callback can never establish. */
-const TRANSPORT_ROTATION_MAX_OVERLAP_MS = 30_000;
 /**
  * How often a live transport (the socket verifier) and a mounted subscription
  * (the watchdog) prove they are not silently dead. ONE shared cadence: the two
@@ -224,10 +205,6 @@ type Generation = {
   liveness: ReturnType<typeof setInterval> | undefined;
   /** Single-flight latch for {@link verifyTransport}, per generation. */
   verifying: boolean;
-  /** Still-live transport kept while this proactive successor authenticates. */
-  predecessor: Generation | undefined;
-  /** Authenticated predecessor retained briefly while subscriptions move to this generation. */
-  overlap: TransportOverlap | undefined;
   /**
    * HALTED after a terminal auth rejection: the generation keeps owning the
    * slot (so a render can never trigger another connection attempt — every re-render of an
@@ -237,15 +214,6 @@ type Generation = {
    * explicit {@link reconnectIterateSession} (or a page load) revives.
    */
   failed: boolean;
-};
-
-type TransportOverlap = {
-  /** Current successor attempt carrying this overlap; changes across transport retries. */
-  owner: Generation;
-  generation: Generation;
-  session: SessionStub;
-  leases: number;
-  timeout: ReturnType<typeof setTimeout>;
 };
 
 /**
@@ -288,26 +256,6 @@ export const subscribeSession = (onChange: () => void) => {
   listeners.add(onChange);
   return () => void listeners.delete(onChange);
 };
-
-/**
- * Keep the predecessor transport alive while a reconnect-aware consumer opens
- * its callback on a proactively rotated successor. The lease is a no-op for
- * ordinary reconnects and initial connections. Release is idempotent; the
- * transport also has a hard upper bound so a failed consumer cannot leak it.
- */
-export function retainIterateSessionPredecessor(): () => void {
-  const overlap = current?.overlap;
-  if (overlap === undefined) return () => {};
-  overlap.leases += 1;
-  let released = false;
-  return () => {
-    if (released) return;
-    released = true;
-    if (overlap.owner.overlap !== overlap) return;
-    overlap.leases -= 1;
-    if (overlap.leases === 0) finishTransportOverlap(overlap.owner);
-  };
-}
 
 /**
  * One real project stub per (session, slug), cached in module state so a
@@ -366,10 +314,7 @@ export function connectItx(slug: string): Promise<ProjectStub> {
   return connectIterateSession().then((session) => projectStubFor(session, slug));
 }
 
-function startConnectionAttempt(
-  predecessor?: Generation,
-  transferredOverlap?: TransportOverlap,
-): Generation {
+function startConnectionAttempt(): Generation {
   const target = resolveConnectionTarget();
 
   const id = ++generationCounter;
@@ -385,11 +330,8 @@ function startConnectionAttempt(
     ping: undefined,
     liveness: undefined,
     verifying: false,
-    predecessor,
-    overlap: transferredOverlap,
     failed: false,
   };
-  if (transferredOverlap !== undefined) transferredOverlap.owner = generation;
   current = generation;
   // Keep showing the last session while the new generation connects (invisible
   // reconnect). Before the FIRST session, awaiters must share the stable
@@ -400,18 +342,11 @@ function startConnectionAttempt(
     firstConnect = Promise.withResolvers<SessionStub>();
     void firstConnect.promise.catch(() => {});
   }
-  // A proactive successor stays invisible until it authenticates. The same is
-  // true when a later attempt inherits an already-published successor's live
-  // overlap. Publishing either generation now would make reconnect-aware effects
-  // close their predecessor callback and wait on the not-yet-ready socket.
-  // Ordinary recovery has no live predecessor and publishes immediately.
-  if (predecessor === undefined && transferredOverlap === undefined) {
-    setSnapshot({
-      generation: id,
-      session: priorSession,
-      connecting: firstConnect?.promise ?? promise,
-    });
-  }
+  setSnapshot({
+    generation: id,
+    session: priorSession,
+    connecting: firstConnect?.promise ?? promise,
+  });
 
   /** Authentication established a session: publish it and retire the predecessor. */
   const publish = (root: SessionStub, ping: () => Promise<void>) => {
@@ -420,30 +355,25 @@ function startConnectionAttempt(
     generation.liveness = setInterval(() => {
       if (current === generation) void verifyTransport(generation);
     }, LIVENESS_INTERVAL_MS);
-    const retiringSession = snapshot?.session;
-    const retiringGeneration = generation.predecessor;
-    generation.predecessor = undefined;
-    if (
-      generation.overlap === undefined &&
-      retiringSession !== undefined &&
-      retiringGeneration !== undefined
-    ) {
-      generation.overlap = startTransportOverlap(generation, retiringGeneration, retiringSession);
-    }
+    // Retire the PREVIOUS published session — exactly once, now that its
+    // successor is live. It was kept alive through the reconnect gap so
+    // useIterateSession()/useItx() never handed out a disposed stub; dispose its
+    // project-stub cache + the stub itself only here.
+    //
+    // Safe even though this runs the same turn as setSnapshot (before React
+    // commits the re-render whose subscription cleanups unsubscribe): a
+    // successor only connects after `current` was cleared, and every path clears
+    // it AFTER closing the prior socket (the close handler, reconnectIfCurrent,
+    // reconnectIterateSession). So the prior transport is ALWAYS already closed
+    // here — its subscriptions are already dead (capnweb rejects on close) and
+    // their unsubscribe cleanups are catch-wrapped. This releases already-dead
+    // local refs, never a live subscription.
+    const retiring = snapshot?.session;
     setSnapshot({ generation: id, session: root, connecting: promise });
     resolve(root);
     firstConnect?.resolve(root);
     firstConnect = undefined;
-    if (retiringSession !== undefined && generation.overlap?.session !== retiringSession) {
-      // Ordinary reconnect, or recovery after a just-published successor died:
-      // the snapshot session is dead and is not the live overlap session.
-      disposeSession(retiringSession);
-    }
-    // Proactive budget rotation installed (or transferred) its overlap BEFORE
-    // publishing the snapshot, so reconnect-aware listeners could synchronously
-    // lease the old transport. With no consumer lease it retains the original
-    // short grace; claimed predecessors retire as soon as every successor is
-    // established. A transferred overlap keeps its original hard deadline.
+    if (retiring !== undefined) disposeSession(retiring);
   };
 
   const beginWebSocketConnection = () => {
@@ -456,7 +386,6 @@ function startConnectionAttempt(
     const ws = new WebSocket(target.url.href);
     generation.ws = ws;
     let established = false;
-    let generationMessagesReceived = 0;
     // The timeout spans TCP/TLS/upgrade AND the authenticate
     // round trip — so a server that accepts the socket but never answers
     // authenticate call, so an unanswered authenticate becomes a paced reconnect.
@@ -468,9 +397,8 @@ function startConnectionAttempt(
       current = undefined;
       consecutiveConnectionFailures += 1;
       reject(new Error("itx WebSocket closed before connecting"));
-      const recovery = takeRecoveryHandoff(generation);
       retireGeneration(generation);
-      startConnectionAttempt(recovery.predecessor, recovery.overlap);
+      startConnectionAttempt();
     }, CONNECTION_TIMEOUT_MS);
 
     ws.addEventListener("open", () => {
@@ -548,15 +476,14 @@ function startConnectionAttempt(
           // terminal error to the boundary; the prior session's refs are
           // released here (they were dead already).
           const terminal = error instanceof Error ? error : new Error(String(error));
-          reject(terminal);
-          if (restoreProactivePredecessor(generation)) return;
           generation.failed = true;
+          reject(terminal);
           firstConnect?.reject(terminal);
           firstConnect = undefined;
           const zombieSession = snapshot?.session;
           setSnapshot({ generation: id, session: undefined, connecting: promise });
           if (zombieSession !== undefined) disposeSession(zombieSession);
-          retireGenerationAndPredecessor(generation);
+          retireGeneration(generation);
           return;
         }
         clearTimeout(timeout);
@@ -577,16 +504,6 @@ function startConnectionAttempt(
       })();
     });
 
-    ws.addEventListener("message", () => {
-      if (!established || current !== generation) return;
-      generationMessagesReceived += 1;
-      if (generationMessagesReceived !== TRANSPORT_MESSAGE_ROTATION_THRESHOLD) return;
-      // Keep this socket and all of its callbacks alive until the fresh socket
-      // authenticates. The successor owns `current` immediately, making this
-      // trigger single-shot even if more batches arrive during its handshake.
-      startConnectionAttempt(generation);
-    });
-
     ws.addEventListener("close", () => {
       clearTimeout(timeout);
       // A HALTED generation stays the owner: its socket closing must not
@@ -600,12 +517,11 @@ function startConnectionAttempt(
         // post-establish death is a transient to recover from immediately.
         if (!established) consecutiveConnectionFailures += 1;
         current = undefined;
-        const recovery = takeRecoveryHandoff(generation);
         // With a live session in hand this is the INVISIBLE reconnect
         // (the snapshot keeps showing it); with none it keeps first-load
         // callers on the stable first-connect promise — a paced retry, never
         // a wedge or an error boundary.
-        startConnectionAttempt(recovery.predecessor, recovery.overlap);
+        startConnectionAttempt();
       }
       // Once a connection attempt has resolved this is a no-op; a connection attempt that closed BEFORE
       // establishing rejects so imperative `connectIterateSession()` awaiters fail fast.
@@ -654,97 +570,6 @@ function disposeSession(session: SessionStub): void {
 }
 
 /**
- * Detach the still-live side of a proactive rotation so a transport retry can
- * adopt it without firing listeners or resetting its hard overlap deadline.
- */
-function takeRecoveryHandoff(generation: Generation): {
-  predecessor: Generation | undefined;
-  overlap: TransportOverlap | undefined;
-} {
-  const predecessor = generation.predecessor;
-  const overlap = generation.overlap;
-  generation.predecessor = undefined;
-  generation.overlap = undefined;
-  return { predecessor, overlap };
-}
-
-/**
- * Roll a failed proactive candidate back to the transport it was replacing.
- *
- * A terminal authentication answer on an ordinary reconnect invalidates the
- * session: its previous socket is already dead, so the halted error snapshot is
- * the only truthful state. During make-before-break rotation, however, either
- * `predecessor` or the carried `overlap` is still a functioning authenticated
- * transport. A failed successor must not turn that healthy callback leg into
- * an outage. Restore it without retrying the terminal handshake; a later
- * semantic reset or natural close gets a fresh authentication boundary.
- */
-function restoreProactivePredecessor(generation: Generation): boolean {
-  const predecessor = generation.predecessor;
-  const overlap = generation.overlap;
-  const restoredGeneration = predecessor ?? overlap?.generation;
-  if (restoredGeneration === undefined) return false;
-
-  generation.predecessor = undefined;
-  generation.overlap = undefined;
-  current = restoredGeneration;
-
-  if (overlap !== undefined) {
-    clearTimeout(overlap.timeout);
-    const failedPublishedSession = snapshot?.session;
-    setSnapshot({
-      generation: ++generationCounter,
-      session: overlap.session,
-      connecting: restoredGeneration.connecting,
-    });
-    if (failedPublishedSession !== undefined && failedPublishedSession !== overlap.session) {
-      disposeSession(failedPublishedSession);
-    }
-  }
-
-  retireGeneration(generation);
-  return true;
-}
-
-/** Install the short unclaimed grace and the hard bound for a claimed predecessor. */
-function startTransportOverlap(
-  successor: Generation,
-  predecessor: Generation,
-  predecessorSession: SessionStub,
-): TransportOverlap {
-  const overlap: TransportOverlap = {
-    owner: successor,
-    generation: predecessor,
-    session: predecessorSession,
-    leases: 0,
-    timeout: setTimeout(finishGrace, TRANSPORT_ROTATION_OVERLAP_GRACE_MS),
-  };
-  return overlap;
-
-  function finishGrace(): void {
-    if (overlap.owner.overlap !== overlap) return;
-    if (overlap.leases === 0) {
-      finishTransportOverlap(overlap.owner);
-      return;
-    }
-    overlap.timeout = setTimeout(
-      () => finishTransportOverlap(overlap.owner),
-      TRANSPORT_ROTATION_MAX_OVERLAP_MS - TRANSPORT_ROTATION_OVERLAP_GRACE_MS,
-    );
-  }
-}
-
-/** Finish the bounded make-before-break window of a proactive transport rotation. */
-function finishTransportOverlap(generation: Generation): void {
-  const overlap = generation.overlap;
-  if (overlap === undefined) return;
-  generation.overlap = undefined;
-  clearTimeout(overlap.timeout);
-  retireGeneration(overlap.generation);
-  disposeSession(overlap.session);
-}
-
-/**
  * FORCED retirement (a reconnect, not an observed close): release resources,
  * abort capnweb through its bootstrap stub, then ask the socket to close.
  * Disposing the bootstrap synchronously rejects every pending and future call;
@@ -754,20 +579,11 @@ function finishTransportOverlap(generation: Generation): void {
  * is the caller's job).
  */
 function retireGeneration(generation: Generation): void {
-  finishTransportOverlap(generation);
   disposeGeneration(generation);
   generation.rejectConnecting(new Error("itx WebSocket closed before connecting"));
   generation.rpcRoot?.[Symbol.dispose]?.();
   generation.rpcRoot = undefined;
   generation.ws?.close();
-}
-
-/** Forced authority/target changes must also retire a still-live proactive predecessor. */
-function retireGenerationAndPredecessor(generation: Generation): void {
-  const predecessor = generation.predecessor;
-  generation.predecessor = undefined;
-  retireGeneration(generation);
-  if (predecessor !== undefined) retireGeneration(predecessor);
 }
 
 /**
@@ -823,9 +639,8 @@ async function verifyTransport(generation: Generation): Promise<void> {
 function reconnectIfCurrent(generation: Generation): void {
   if (current !== generation) return;
   current = undefined; // FIRST: the close retireGeneration triggers must not auto-reconnect
-  const recovery = takeRecoveryHandoff(generation);
   retireGeneration(generation);
-  startConnectionAttempt(recovery.predecessor, recovery.overlap);
+  startConnectionAttempt();
 }
 
 /**
@@ -839,7 +654,7 @@ export function reconnectIterateSession(): void {
   const generation = current;
   if (generation !== undefined) {
     current = undefined; // FIRST: the close retireGeneration triggers must not auto-reconnect
-    retireGenerationAndPredecessor(generation);
+    retireGeneration(generation);
   }
   // A deliberate reset connects NOW: clear any backoff inherited from earlier
   // closed-before-open failures so the new-claims socket doesn't wait out a
@@ -867,7 +682,7 @@ export function retryFailedIterateSession(): void {
 export function disconnectIterateSession(): void {
   const generation = current;
   current = undefined;
-  if (generation !== undefined) retireGenerationAndPredecessor(generation);
+  if (generation !== undefined) retireGeneration(generation);
   const retiredSession = snapshot?.session;
   snapshot = undefined;
   if (retiredSession !== undefined) disposeSession(retiredSession);

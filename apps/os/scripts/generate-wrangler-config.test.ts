@@ -54,7 +54,7 @@ it("names the top-level configs by service so cf:service script tags stay env-le
   expect(workerBundlerConfig.name).toBe("os-worker-bundler");
 });
 
-it("gives long-lived OS invocations explicit subrequest headroom", () => {
+it("gives long-lived OS invocations the maximum subrequest headroom", () => {
   expect(config.limits).toEqual({ subrequests: 10_000_000 });
   expect(typecheckerConfig).not.toHaveProperty("limits");
   expect(workerBundlerConfig).not.toHaveProperty("limits");

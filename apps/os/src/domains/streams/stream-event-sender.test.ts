@@ -1753,7 +1753,6 @@ async function flushMicrotasks() {
 function connectionsHarness(
   options: {
     events?: StreamEvent[];
-    hostedCallbackBatchLimit?: number;
     readBatch?: ConstructorParameters<typeof StreamConnections>[0]["hooks"]["readBatch"];
     onAppend?: (args: {
       connections: StreamConnections;
@@ -1794,9 +1793,6 @@ function connectionsHarness(
   let connections!: StreamConnections;
   connections = new StreamConnections({
     idleTeardownMs: 60_000,
-    ...(options.hostedCallbackBatchLimit === undefined
-      ? {}
-      : { hostedCallbackBatchLimit: options.hostedCallbackBatchLimit }),
     hooks: {
       // Force several batches so the test can observe the one-at-a-time gate.
       readBatch:
@@ -2118,42 +2114,6 @@ describe("StreamConnections hosted delivery watchdog", () => {
       inFlightConnectionGeneration: 7,
     });
     expect(disposed).not.toHaveBeenCalled();
-  });
-
-  it("recycles an acknowledged hosted callback before its invocation budget expires", async () => {
-    const appended: unknown[] = [];
-    const h = connectionsHarness({
-      hostedCallbackBatchLimit: 2,
-      onAppend: ({ event }) => {
-        appended.push(event);
-      },
-    });
-    const calls: DeliveryCall[] = [];
-    const disposed = vi.fn();
-    const connection = h.connections.openHosted({
-      connectionKey: "processor",
-      expectedHostedDelivery: h.expectedDelivery,
-      processEventBatch: recordingProcessEventBatch(calls, disposed),
-      replayAfterOffset: 0,
-    });
-
-    connection.sendQueued();
-    calls[0]!.report("ok");
-    await flushMicrotasks();
-    expect(calls).toHaveLength(2);
-
-    calls[1]!.report("ok");
-    await flushMicrotasks();
-
-    expect(calls).toHaveLength(2);
-    expect(connection.isLive()).toBe(false);
-    expect(disposed).toHaveBeenCalledOnce();
-    expect(h.deliveryFailures).not.toHaveBeenCalled();
-    expect(h.durableDeliveryWakes).toHaveBeenCalledOnce();
-    expect(appended).toContainEqual({
-      type: "events.iterate.com/stream/connection-closed",
-      payload: { connectionKey: "processor", reason: "budget-rotation" },
-    });
   });
 
   it("gives each matching hosted event an acknowledgement boundary without rescanning non-matches", async () => {
