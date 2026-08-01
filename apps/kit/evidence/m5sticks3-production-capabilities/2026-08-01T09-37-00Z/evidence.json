@@ -1,0 +1,75 @@
+{
+  "capturedAt": "2026-08-01T09:37:00Z",
+  "gitCommitBeforeEvidence": "8ecaa3b703a9d725ce42aad8ed405d9621b9edba",
+  "deployment": "production",
+  "project": {
+    "id": "prj_bd8785e119fe4f1d8631bb95e1dea748",
+    "slug": "kit-stick-voice-e2e-20260731"
+  },
+  "capabilityPath": ["kit", "m5sticks3"],
+  "screenCapture": {
+    "method": "captureScreen",
+    "byteLength": 1133,
+    "width": 240,
+    "height": 135,
+    "format": "png",
+    "sha256": "a4ba3b91ec96d28420dd457345c599ec055e1520f62e2c312857462f0584c0e4",
+    "file": "screen.png",
+    "observedText": ["ITERATE VOICE", "READY", "TOP: start call", "Then hold FRONT to talk"]
+  },
+  "metricsSubscription": {
+    "method": "subscribeToMetrics",
+    "uptimeMs": 939299,
+    "freeHeapBytes": 8377292,
+    "minimumFreeHeapBytes": 8173564,
+    "freeInternalHeapBytes": 96063,
+    "minimumFreeInternalHeapBytes": 72703,
+    "freePsramBytes": 8305500,
+    "taskStackHighWaterBytes": 656,
+    "cpuPermille": 163,
+    "audio": {
+      "captureSent": 495,
+      "captureDropped": 0,
+      "captureFailures": 0,
+      "uplinkSent": 495,
+      "uplinkDropped": 0,
+      "uplinkDepth": 0,
+      "uplinkHighWater": 9,
+      "downlinkReceived": 176,
+      "downlinkDropped": 0,
+      "downlinkDepth": 0,
+      "playbackSubmitted": 176,
+      "playbackCompleted": 176,
+      "playbackFlushed": 0,
+      "playbackDepth": 0,
+      "playbackFailures": 0,
+      "protocolFailures": 0
+    }
+  },
+  "productionAgentProof": {
+    "agentPath": "/agents/kit-device-proof-20260801",
+    "request": "changeColour(red), captureScreen(), attach the returned PNG to the visible chat reply",
+    "elapsedMs": 60767,
+    "responseEventOffset": 531,
+    "responseCreatedAt": "2026-08-01T09:39:57.391Z",
+    "assistantMessage": "M5StickS3 colour changed to red. I captured and attached its current screen.",
+    "attachment": {
+      "contentType": "image/png",
+      "filename": "m5sticks3-screen.png",
+      "projectFilePath": "/agents/kit-device-proof-20260801/b9472385-m5sticks3-screen.png",
+      "size": 1139,
+      "sha256": "e80cb84e65c1296106c0549899fc48d5745886c87e8d6eeb87d760ee3f4ede54",
+      "retainedFile": "agent-screen-red.png",
+      "observedBackground": "red"
+    }
+  },
+  "finalDeviceState": {
+    "changeColourResult": true,
+    "background": "green",
+    "captureByteLength": 1133,
+    "captureSha256": "a4ba3b91ec96d28420dd457345c599ec055e1520f62e2c312857462f0584c0e4",
+    "status": "ready"
+  },
+  "result": "pass",
+  "notes": "Both observations crossed production os.iterate.com/api and the device's mounted Cap'n Web capability. The screenshot was read from the panel framebuffer; no camera oracle was used."
+}

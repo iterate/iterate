@@ -77,6 +77,44 @@ the 264 ms only with an explicit expiry policy, and replacing Grok's generated
 opening sentence with cached audio could remove generation time but would
 change the product contract. Neither shortcut has been silently introduced.
 
+## Production capability UI and live-metrics proof (2026-08-01 09:37 UTC)
+
+The panel is now observable through the same production Cap'n Web mount that a
+normal app/OS agent receives. From a production project-scoped ITX session,
+`itx.kit.m5sticks3.captureScreen()` returned a complete 1,133-byte, 240×135 PNG
+with SHA-256
+`a4ba3b91ec96d28420dd457345c599ec055e1520f62e2c312857462f0584c0e4`.
+The decoded framebuffer says `ITERATE VOICE`, `READY`, `TOP: start call`, and
+`Then hold FRONT to talk`. This is the device's framebuffer result, not a
+camera-based UI guess. The retained image and structured invocation evidence
+are under
+`apps/kit/evidence/m5sticks3-production-capabilities/2026-08-01T09-37-00Z/`.
+
+The same project-scoped session subscribed to
+`itx.kit.m5sticks3.subscribeToMetrics(cb)` and received the live callback from
+the physical C peer. At 939,299 ms uptime it reported 8,377,292 free heap bytes,
+96,063 free internal/DMA heap bytes, 8,305,500 free PSRAM bytes, 656 bytes of
+minimum task-stack headroom, and 163 permille CPU. Its cumulative audio ledger
+remained exact: 495 capture/uplink frames, 176 received/submitted/completed
+downlink frames, empty current queues, and zero capture, uplink, downlink,
+playback, or protocol failures. This closes the later screenshot request and
+the original requirement that metrics be streamed into userspace; it is not a
+simulator or direct-USB observation.
+
+A second proof used the product's ordinary production agent loop, not the
+operator script as a surrogate. `/agents/kit-device-proof-20260801` received a
+normal user chat request, generated an ITX script that called
+`changeColour("red")` and `captureScreen()`, then sent a visible web-chat reply
+with the returned bytes attached as `m5sticks3-screen.png`. Event offset 531
+contains the 1,139-byte attachment in project file storage. Downloading and
+decoding that attachment produced a 240×135 PNG with SHA-256
+`e80cb84e65c1296106c0549899fc48d5745886c87e8d6eeb87d760ee3f4ede54`;
+its framebuffer is visibly red and retains the complete call instructions.
+The round trip took 60.767 seconds because it included a full general-agent LLM
+turn; this is evidence of agent usability, not the device capability's latency
+budget. The exact attached image is retained as `agent-screen-red.png` beside
+the direct capability evidence.
+
 ## Morning-ready deployed conversation checkpoint (2026-08-01)
 
 ### Current-source three-turn acceptance at 06:37 UTC
