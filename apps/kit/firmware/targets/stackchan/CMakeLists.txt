@@ -8,6 +8,7 @@ list(APPEND EXTRA_COMPONENT_DIRS
   "${CMAKE_CURRENT_LIST_DIR}/../../idf-components/capnweb"
   "${CMAKE_CURRENT_LIST_DIR}/../../components/core"
   "${CMAKE_CURRENT_LIST_DIR}/../../components/capabilities"
+  "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_core_s3_audio"
   "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_esp_idf"
 )
 
@@ -27,5 +28,20 @@ add_custom_target(verify-bsp-source-selection ALL
     "${CMAKE_BINARY_DIR}/project_description.json"
     "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_esp_idf/idf_overrides/espressif__m5stack_core_s3"
   DEPENDS "${PROJECT_NAME}.elf"
+  VERBATIM
+)
+
+# I2S_ISR_IRAM_SAFE covers ESP-IDF's driver but cannot prove the application
+# callback, BSP seam, atomics, copy routine, or static context placement. Make
+# the linked-ELF proof part of every ordinary build so it cannot go stale after
+# a compiler, SDK, or innocent-looking diagnostics change.
+add_custom_target(iterate-kit-core-s3-realtime-elf-audit ALL
+  COMMAND "${CMAKE_COMMAND}"
+    "-DOBJDUMP=${CMAKE_OBJDUMP}"
+    "-DELF=$<TARGET_FILE:${CMAKE_PROJECT_NAME}.elf>"
+    "-DCONFIG_FILE=${SDKCONFIG}"
+    -P "${CMAKE_CURRENT_LIST_DIR}/../../cmake/audit_core_s3_realtime_elf.cmake"
+  DEPENDS ${CMAKE_PROJECT_NAME}.elf
+  COMMENT "Auditing CoreS3 realtime ISR placement"
   VERBATIM
 )

@@ -3,6 +3,7 @@ import { KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE } from "../userspace/config-worker
 import {
   completedProviderToolCall,
   completedProviderOutputTranscript,
+  parseAvailableProductionGrokProviderEvents,
   parseProductionGrokProviderEvents,
 } from "./production-grok-provider-events.ts";
 
@@ -140,6 +141,29 @@ describe("production Grok provider event evidence", () => {
     expect(retained.map((event) => event.providerType)).toEqual(providerTypes);
     expect(retained.map((event) => event.raw)).toEqual(rawBySequence);
     expect(retained.map((event) => event.sequence)).toEqual([1, 2, 3, 4]);
+  });
+
+  test("allows failure evidence to retain an observed non-one prefix without weakening strict parsing", () => {
+    const events = [4, 6].map((sequence) => ({
+      createdAt: `2026-08-01T00:00:0${sequence}.000Z`,
+      offset: 100 + sequence,
+      path: "/devices/m5sticks3",
+      payload: {
+        providerType: "error",
+        raw: `{"type":"error","sequence":${sequence}}`,
+        receivedAtMs: 1_000 + sequence,
+        sequence,
+        sessionId: "failed-session",
+      },
+      type: KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
+    }));
+
+    expect(
+      parseAvailableProductionGrokProviderEvents(events, "failed-session").map(
+        (event) => event.sequence,
+      ),
+    ).toEqual([4, 6]);
+    expect(() => parseProductionGrokProviderEvents(events, "failed-session")).toThrow("expected 1");
   });
 
   test("extracts the completed spoken transcript from the exact raw frame", () => {

@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DeviceConfiguration } from "./config-image.ts";
 import type { FirmwareDevice } from "./catalog.ts";
-import { prepareLocalEspIdfFlashPlan } from "./local-idf-build.ts";
+import { prepareLocalEspIdfFlashPlan, readLocalEspIdfNamedPartition } from "./local-idf-build.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -68,6 +68,24 @@ async function createBuildFixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("prepareLocalEspIdfFlashPlan", () => {
+  it("reads the exact named region needed before existing device configuration can be decoded", async () => {
+    /*
+     * An unattended proof has to read credentials before it can construct a
+     * flash plan. The compiled table—not a model-specific TypeScript offset—
+     * must therefore be independently inspectable through the same parser the
+     * flasher trusts, or StackChan can silently read a valid-sized wrong page.
+     */
+    const buildDirectory = await createBuildFixture();
+
+    await expect(
+      readLocalEspIdfNamedPartition({
+        buildDirectory,
+        device,
+        partitionLabel: "iterate_kit",
+      }),
+    ).resolves.toEqual({ offset: 0x11_0000, size: 4096 });
+  });
+
   it("feeds a local IDF build through the same verified plan used by the browser", async () => {
     const buildDirectory = await createBuildFixture();
 

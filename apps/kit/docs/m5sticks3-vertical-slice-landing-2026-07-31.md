@@ -59,6 +59,40 @@ provider variability behind prompt-specific assumptions.
 
 ### Raw Grok event stream
 
+The 2026-08-01 unattended production check makes this lane directly usable as
+a forensic artifact rather than leaving raw frames nested inside a large proof
+manifest. Its exact 45-frame JSONL is retained at
+`apps/kit/evidence/m5sticks3-production-grok-raw-stream-check/2026-08-01T00-12-03-066Z/provider-events.jsonl`.
+The records are stream offsets 621–665 and provider sequences 1–45 for one PCM
+session. They include the progressively refined microphone transcription, the
+final input transcript, the `changeColour({ colour: "green" })` arguments and
+correlated `{ colour: "green", ok: true }` output, both response lifecycles,
+the completed output transcript, and pings. There is no provider `error` frame
+and no provider text about a WebSocket failure. The independently captured Mac
+microphone transcript exactly matches Grok's completed output transcript:
+`The deploy iterate stick voice path is working.`
+
+That run's network interval is valid and its digital ledger is exact: 482
+microphone frames reached the deployed worker, 168 return frames were accepted,
+submitted, and completed by the Stick, and every drop, reset, disconnect,
+transport-error, and protocol-failure delta is zero. The overall manifest
+remains honestly `audio-invalid` because the conservative energy oracle found
+only one 20 ms window above 2.5 times the _maximum_ one-second ambient RMS,
+instead of four, despite the exact independent speech transcript and a 3.50x
+response/ambient maximum ratio. This is retained as an acoustic-oracle false
+negative candidate, not rewritten as a clean automated pass and not used to
+weaken any transport gate.
+
+The immediately preceding failed check is also retained under
+`2026-07-31T23-58-19-288Z/`. Its ten exact provider frames contain no provider
+error. The phrase `WebSocket disconnected without sending Close frame.` came
+from the userspace bridge's device-side close diagnostic after the firmware
+discarded 13 stale microphone frames and replaced the `/pcm` generation; it
+was not something Grok said. A regression now recovers the failed generation's
+counters from the worker's bounded `previousSession` report, writes
+`network.json` even on early proof failure, and exits the finite proof CLI after
+flushing its result rather than waiting indefinitely on a closing RPC socket.
+
 The worker cross-posts the exact raw JSON of every non-PCM Grok frame to the
 normal Iterate stream `/devices/m5sticks3` as
 `events.iterate.com/kit/provider-event`. Each record has a session id, monotonic

@@ -44,5 +44,10 @@ CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
 # every Iterate callback/callee in the linked ELF before a physical build is
 # accepted; otherwise a cache-disabled flash operation could stall audio.
 CONFIG_I2S_ISR_IRAM_SAFE=y
+# Atomic publication in PSRAM must never fetch the workaround from flash while
+# the cache is disabled. The final ELF audit separately verifies our callback
+# and raw-copy call graph; this option closes ESP-IDF's documented S3 atomic
+# erratum path rather than relying on whichever default the SDK picks.
+CONFIG_STDATOMIC_S32C1I_SPIRAM_WORKAROUND=y
 CONFIG_CODEC_I2C_BACKWARD_COMPATIBLE=n
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y

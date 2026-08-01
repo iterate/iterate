@@ -19,14 +19,17 @@ import {
 import {
   completedProviderOutputTranscript,
   completedProviderToolCall,
+  parseAvailableProductionGrokProviderEvents,
   parseProductionGrokProviderEvents,
   type CompletedProviderToolCall,
   type ProductionGrokProviderEvent,
 } from "../src/device/production-grok-provider-events.ts";
+import { writeProductionGrokProviderEventsArtifact } from "../src/device/production-grok-provider-events-artifact.ts";
 import {
   parseProductionGrokCliOptions,
   type PttAuthority,
 } from "../src/device/production-grok-cli-options.ts";
+import type { ProductionDeviceProofProvenance } from "../src/device/production-device-proof.ts";
 import { assessPhysicalSpeechTranscription } from "../src/device/physical-speech-transcription.ts";
 import { parseKitControlDiagnostics } from "../src/device/kit-control-diagnostics.ts";
 import { MacOsPcm16Capture } from "../src/device/macos-pcm16-capture.ts";
@@ -42,7 +45,10 @@ import {
   type RemoteDnsAndTlsConnectMeasurement,
 } from "../src/device/physical-network-reachability.ts";
 import { inspectRetainedPcm16Artifact } from "../src/device/retained-pcm16-artifact.ts";
-import { waitForProductionPcmMetrics } from "../src/device/production-pcm-generation.ts";
+import {
+  productionPcmGenerationProgress,
+  waitForProductionPcmMetrics,
+} from "../src/device/production-pcm-generation.ts";
 import {
   transcribePcm16WithXaiStreamingStt,
   type XaiStreamingSttResult,
@@ -72,6 +78,7 @@ const executeFile = promisify(execFile);
 interface ProductionPcmMetrics extends PcmSessionMetrics {
   deviceEvents: DeviceEventSessionMetrics;
   deviceMetrics: DeviceMetricsSessionMetrics;
+  previousSession?: ProductionPcmMetrics | null;
   providerEvents: ProviderEventStreamMetrics;
   sessionId: string;
 }
@@ -95,6 +102,7 @@ interface KitVoiceProofWorker {
 export async function proveProductionM5StickS3Grok(
   args: readonly string[],
   environment: Readonly<Record<string, string | undefined>>,
+  deviceProvenance?: ProductionDeviceProofProvenance,
 ) {
   const options = parseProductionGrokCliOptions(args, environment);
   const devicePath = ["kit", options.deviceId] as const;
@@ -496,7 +504,7 @@ export async function proveProductionM5StickS3Grok(
       }
       if (baselineWorker !== undefined) {
         try {
-          failureProviderEventEvidence = parseProductionGrokProviderEvents(
+          failureProviderEventEvidence = parseAvailableProductionGrokProviderEvents(
             await providerEventStream.getEvents({
               afterOffset: providerEventStart.streamMaxOffset,
               eventTypes: [KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE],
@@ -571,6 +579,80 @@ export async function proveProductionM5StickS3Grok(
     }
   }
 
+  /*
+   * Persist raw provider control frames before any acoustic analysis can fail.
+   * On an already-failed run the final pre-cleanup stream snapshot is the most
+   * complete view; otherwise the accepted terminal snapshot is authoritative.
+   * Either way this is one exact PCM session and one device-owned stream.
+   */
+  const retainedProviderEvents =
+    failureProviderEventEvidence && failureProviderEventEvidence.length > 0
+      ? failureProviderEventEvidence
+      : providerEventEvidence;
+  const providerEventsArtifact =
+    retainedProviderEvents && retainedProviderEvents.length > 0
+      ? await writeProductionGrokProviderEventsArtifact({
+          artifactPath: join(runRoot, "provider-events.jsonl"),
+          deviceId: options.deviceId,
+          events: retainedProviderEvents,
+          sensitiveValues: [options.projectApiKey, options.xaiApiKey],
+        })
+      : undefined;
+
+  let failureNetworkArtifact: ReturnType<typeof buildPhysicalNetworkRunArtifact> | undefined;
+  let failureNetworkArtifactPath: string | undefined;
+  if (runFailure !== undefined && networkCapture !== undefined) {
+    /*
+     * A transport failure is exactly when attribution matters most. The old
+     * branch wrote the raw probes but skipped the classifier because acoustic
+     * completion fields were absent; that left a human to eyeball RSSI and
+     * socket counters and could easily turn a bad interval into folklore.
+     *
+     * Audio remains failed here regardless of the network verdict. A concrete
+     * socket/link incident classifies the run `network-invalid`; healthy
+     * network evidence classifies it `audio-invalid`; incomplete observations
+     * remain `indeterminate`. None of those outcomes can become a pass.
+     */
+    try {
+      const failedGenerationProgress = baselineWorker
+        ? productionPcmGenerationProgress({
+            baseline: baselineWorker,
+            observations: [
+              firstHeldWorker,
+              continuingHeldWorker,
+              terminalWorker,
+              failureWorkerSnapshot,
+            ],
+          })
+        : { downlinkFrames: 0, sessionId: "unobserved", uplinkFrames: 0 };
+      const attributedNetworkCapture = withRemoteDnsAndConnectMeasurement(
+        networkCapture,
+        networkMeasurement ? await networkMeasurement : undefined,
+      );
+      networkCapture = attributedNetworkCapture;
+      failureNetworkArtifact = buildPhysicalNetworkRunArtifact({
+        ...attributedNetworkCapture,
+        audio: {
+          failure: runFailure.message,
+          passed: false,
+        },
+        pcmEvidence: {
+          kind: "device-observed",
+          progress: {
+            deviceToWorkerBytes:
+              failedGenerationProgress.uplinkFrames * ITERATE_KIT_PCM_FRAME_BYTES,
+            workerToDeviceBytes:
+              failedGenerationProgress.downlinkFrames * ITERATE_KIT_PCM_FRAME_BYTES,
+          },
+        },
+      });
+      failureNetworkArtifactPath = join(runRoot, "network.json");
+      await writePhysicalNetworkRunArtifact(failureNetworkArtifactPath, failureNetworkArtifact);
+    } catch (error) {
+      failureSnapshotErrors.push(`networkArtifact: ${errorMessage(error)}`);
+    }
+  }
+
   if (
     !completedCapture ||
     !networkCapture ||
@@ -606,6 +688,16 @@ export async function proveProductionM5StickS3Grok(
         remotePttStopped,
       },
       network: networkCapture,
+      networkArtifact:
+        failureNetworkArtifact && failureNetworkArtifactPath
+          ? {
+              artifactPath: failureNetworkArtifactPath,
+              classification: failureNetworkArtifact.classification,
+              reasons: failureNetworkArtifact.network.reasons,
+            }
+          : null,
+      provenance: deviceProvenance ?? null,
+      providerEventsArtifact,
       providerEvents: failureProviderEventEvidence,
       schemaVersion: 2,
       snapshotErrors: failureSnapshotErrors,
@@ -737,11 +829,7 @@ export async function proveProductionM5StickS3Grok(
           outcome: "not-observed" as const,
         },
       };
-  networkCapture.dnsAndConnect = {
-    coverage: { ...networkCapture.audioInterval },
-    kind: "measured",
-    ...dnsAndConnect,
-  };
+  networkCapture = withRemoteDnsAndConnectMeasurement(networkCapture, dnsAndConnect);
   const audioPassed =
     runFailure === undefined &&
     digitalAssessment.passed &&
@@ -843,6 +931,8 @@ export async function proveProductionM5StickS3Grok(
       slug: options.projectSlug,
       workerHost: options.workerHost,
     },
+    provenance: deviceProvenance ?? null,
+    providerEventsArtifact,
     providerEvents: {
       events: providerEventEvidence,
       eventType: KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
@@ -863,6 +953,7 @@ export async function proveProductionM5StickS3Grok(
     manifestPath,
     networkArtifactPath,
     passed,
+    providerEventsArtifactPath: providerEventsArtifact?.path,
     recordingPath: completedCapture.artifactPath,
   };
 }
@@ -1183,6 +1274,41 @@ function serializeError(error: Error): Record<string, unknown> {
       error.cause instanceof Error ? serializeError(error.cause) : String(error.cause);
   }
   return details;
+}
+
+function withRemoteDnsAndConnectMeasurement(
+  capture: PhysicalNetworkMonitorCapture,
+  measurement?: RemoteDnsAndTlsConnectMeasurement,
+): PhysicalNetworkMonitorCapture {
+  /*
+   * The classifier requires DNS/TLS coverage to name a remote-worker interval
+   * valid. If setup failed before the bounded probe was started, encode that
+   * absence explicitly instead of borrowing a later successful lookup or
+   * pretending this production route was direct LAN. The exact media interval
+   * remains the coverage authority in both success and failure artifacts.
+   */
+  const observed = measurement ?? {
+    connect: {
+      durationMs: null,
+      error: null,
+      maximumHealthyDurationMs: 1_000,
+      outcome: "not-observed" as const,
+    },
+    dns: {
+      durationMs: null,
+      error: null,
+      maximumHealthyDurationMs: 500,
+      outcome: "not-observed" as const,
+    },
+  };
+  return {
+    ...capture,
+    dnsAndConnect: {
+      coverage: { ...capture.audioInterval },
+      kind: "measured",
+      ...observed,
+    },
+  };
 }
 
 if (

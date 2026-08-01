@@ -5,18 +5,20 @@ export interface ProductionPcmGenerationMetrics {
   sessionId: string;
 }
 
-export interface ProductionPcmMetricsReader<Metrics extends ProductionPcmGenerationMetrics> {
-  pcmMetrics(): Promise<Metrics | null>;
+export interface ProductionPcmFrameMetrics extends ProductionPcmGenerationMetrics {
+  downlinkFrames: number;
+  previousSession?: ProductionPcmFrameMetrics | null;
+  uplinkFrames: number;
 }
 
-interface ProductionPcmWaitOptions<Metrics extends ProductionPcmGenerationMetrics> {
-  allowClosedExpectedSession?: boolean;
-  description: string;
-  expectedSessionId?: string;
-  pollIntervalMs?: number;
-  predicate(metrics: Metrics): boolean;
-  timeoutMs: number;
-  worker: ProductionPcmMetricsReader<Metrics>;
+export interface ProductionPcmGenerationProgress {
+  downlinkFrames: number;
+  sessionId: string;
+  uplinkFrames: number;
+}
+
+export interface ProductionPcmMetricsReader<Metrics extends ProductionPcmGenerationMetrics> {
+  pcmMetrics(): Promise<Metrics | null>;
 }
 
 export class ProductionPcmGenerationChangedError<
@@ -58,6 +60,43 @@ export class ProductionPcmWaitTimeoutError<
 }
 
 /**
+ * Recovers byte-accounting progress for exactly one deployed PCM generation.
+ *
+ * A reconnect replaces the active worker metrics before a 100 ms proof poll
+ * necessarily sees the close. The worker deliberately retains the just-closed
+ * report as `previousSession`; that is the causal evidence for the failed
+ * interval, while the replacement's counters belong to a new conversation.
+ * Looking through only this one bounded retention slot mirrors the worker's
+ * contract and prevents a harness-side history or cross-generation sum.
+ */
+export function productionPcmGenerationProgress(input: {
+  baseline: ProductionPcmFrameMetrics;
+  observations: readonly (ProductionPcmFrameMetrics | null | undefined)[];
+}): ProductionPcmGenerationProgress {
+  const sessionId = input.baseline.sessionId;
+  let maximumDownlinkFrames = input.baseline.downlinkFrames;
+  let maximumUplinkFrames = input.baseline.uplinkFrames;
+
+  for (const observation of input.observations) {
+    const matching =
+      observation?.sessionId === sessionId
+        ? observation
+        : observation?.previousSession?.sessionId === sessionId
+          ? observation.previousSession
+          : undefined;
+    if (!matching) continue;
+    maximumDownlinkFrames = Math.max(maximumDownlinkFrames, matching.downlinkFrames);
+    maximumUplinkFrames = Math.max(maximumUplinkFrames, matching.uplinkFrames);
+  }
+
+  return {
+    downlinkFrames: maximumDownlinkFrames - input.baseline.downlinkFrames,
+    sessionId,
+    uplinkFrames: maximumUplinkFrames - input.baseline.uplinkFrames,
+  };
+}
+
+/**
  * Polls the worker's public diagnostics capability while preserving one PCM
  * generation as a causal unit.
  *
@@ -95,4 +134,14 @@ export async function waitForProductionPcmMetrics<Metrics extends ProductionPcmG
   }
 
   throw new ProductionPcmWaitTimeoutError(options.description, lastObservedMetrics);
+}
+
+interface ProductionPcmWaitOptions<Metrics extends ProductionPcmGenerationMetrics> {
+  allowClosedExpectedSession?: boolean;
+  description: string;
+  expectedSessionId?: string;
+  pollIntervalMs?: number;
+  predicate(metrics: Metrics): boolean;
+  timeoutMs: number;
+  worker: ProductionPcmMetricsReader<Metrics>;
 }

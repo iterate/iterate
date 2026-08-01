@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
 import {
+  productionPcmGenerationProgress,
   ProductionPcmGenerationChangedError,
   waitForProductionPcmMetrics,
 } from "./production-pcm-generation.ts";
@@ -47,5 +48,54 @@ describe("production PCM generation wait", () => {
       observedSessionId: "replacement",
     });
     expect(index).toBe(2);
+  });
+
+  test("attributes progress to the failed generation after a fast replacement", () => {
+    /*
+     * The Stick deliberately reconnects after discarding stale microphone
+     * history. By the time the proof reads metrics, the active counters may
+     * belong to the replacement while the worker retains the failed session
+     * under `previousSession`. Mixing those generations would either erase
+     * real byte progress or make the replacement look like part of the failed
+     * conversation. Failure attribution must recover only the exact baseline
+     * generation and preserve its cumulative frame delta.
+     */
+    const baseline = {
+      closed: false,
+      downlinkFrames: 3,
+      sessionId: "expected",
+      uplinkFrames: 7,
+    };
+    const replacement = {
+      closed: false,
+      downlinkFrames: 0,
+      previousSession: {
+        closed: true,
+        downlinkFrames: 5,
+        sessionId: "expected",
+        uplinkFrames: 161,
+      },
+      sessionId: "replacement",
+      uplinkFrames: 90,
+    };
+
+    expect(
+      productionPcmGenerationProgress({
+        baseline,
+        observations: [
+          {
+            closed: false,
+            downlinkFrames: 4,
+            sessionId: "expected",
+            uplinkFrames: 20,
+          },
+          replacement,
+        ],
+      }),
+    ).toEqual({
+      downlinkFrames: 2,
+      sessionId: "expected",
+      uplinkFrames: 154,
+    });
   });
 });

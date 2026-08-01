@@ -30,12 +30,7 @@ export async function prepareLocalEspIdfFlashPlan(input: {
 
   const buildDirectory = resolve(input.buildDirectory);
   const metadata = await readFlasherMetadata(buildDirectory);
-  const expectedChip = esptoolChipName(input.device.installMethod.chipFamily);
-  if (metadata.chip !== expectedChip) {
-    throw new Error(
-      `ESP-IDF build targets ${metadata.chip}; ${input.device.name} requires ${expectedChip}.`,
-    );
-  }
+  assertBuildMatchesDevice(metadata.chip, input.device);
 
   const parts = await Promise.all(
     metadata.files.map(async ({ address, relativePath }): Promise<LocalPart> => {
@@ -84,6 +79,34 @@ export async function prepareLocalEspIdfFlashPlan(input: {
 }
 
 /**
+ * Reads one partition address from the exact compiled image selected for a
+ * physical device run. This intentionally performs no flash access: callers
+ * use the result to read the already-provisioned board before they possess the
+ * credentials needed to construct a new flash plan. Sharing the binary parser
+ * with `prepareLocalEspIdfFlashPlan` keeps reads and writes on one authority.
+ */
+export async function readLocalEspIdfNamedPartition(input: {
+  buildDirectory: string;
+  device: FirmwareDevice;
+  partitionLabel: string;
+}) {
+  if (input.device.installMethod.kind !== "esp-serial") {
+    throw new Error(`${input.device.name} is not an ESP serial device.`);
+  }
+  const buildDirectory = resolve(input.buildDirectory);
+  const metadata = await readFlasherMetadata(buildDirectory);
+  assertBuildMatchesDevice(metadata.chip, input.device);
+  const partitionTable = metadata.files.find(({ relativePath }) =>
+    relativePath.split("\\").join("/").endsWith("partition_table/partition-table.bin"),
+  );
+  if (!partitionTable) {
+    throw new Error("ESP-IDF build does not include its compiled partition table.");
+  }
+  const path = resolveBuildPath(buildDirectory, partitionTable.relativePath);
+  return findCompiledPartition(new Uint8Array(await readFile(path)), input.partitionLabel);
+}
+
+/**
  * ESP-IDF's compiled partition table is the flash authority. Reading the
  * provisioning region from that binary prevents a target-specific TypeScript
  * constant from silently drifting away from the image that will actually boot.
@@ -125,6 +148,16 @@ function findCompiledPartition(bytes: Uint8Array, requestedLabel: string) {
     throw new Error(`ESP-IDF partition table does not contain ${requestedLabel}.`);
   }
   return result;
+}
+
+function assertBuildMatchesDevice(chip: string, device: FirmwareDevice): void {
+  if (device.installMethod.kind !== "esp-serial") {
+    throw new Error(`${device.name} is not an ESP serial device.`);
+  }
+  const expectedChip = esptoolChipName(device.installMethod.chipFamily);
+  if (chip !== expectedChip) {
+    throw new Error(`ESP-IDF build targets ${chip}; ${device.name} requires ${expectedChip}.`);
+  }
 }
 
 async function readFlasherMetadata(buildDirectory: string) {

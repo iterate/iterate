@@ -53,6 +53,40 @@ export interface ProductionGrokProviderEvent {
 }
 
 /**
+ * Selects and validates every available frame for one device/session without
+ * requiring sequence continuity. Failure capture uses this path because a
+ * missing prefix or middle frame is evidence to retain, not a reason to throw
+ * the remaining raw provider observations away.
+ */
+export function parseAvailableProductionGrokProviderEvents(
+  value: unknown,
+  sessionId: string,
+  deviceId = DEFAULT_KIT_DEVICE_ID,
+): ProductionGrokProviderEvent[] {
+  const envelopes = z.array(StreamEventEnvelope).parse(value);
+  const streamPath = kitDeviceEventStreamPath(deviceId);
+  return (
+    envelopes
+      /*
+       * Path is the ownership boundary; session id is only a generation key
+       * inside that boundary. Filter before parsing payloads so corrupt or
+       * schema-incompatible evidence from another board cannot invalidate the
+       * selected device's otherwise complete physical run.
+       */
+      .filter(
+        (event) => event.path === streamPath && event.type === KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
+      )
+      .map((event) => ({
+        ...ProviderEventPayload.parse(event.payload),
+        createdAt: event.createdAt,
+        offset: event.offset,
+      }))
+      .filter((event) => event.sessionId === sessionId)
+      .sort((left, right) => left.sequence - right.sequence)
+  );
+}
+
+/**
  * Validates the normal Iterate stream boundary and selects one exact provider
  * generation. Sequence continuity is part of the evidence: a transcript that
  * silently lost the error frame between two healthy frames would be worse than
@@ -63,25 +97,7 @@ export function parseProductionGrokProviderEvents(
   sessionId: string,
   deviceId = DEFAULT_KIT_DEVICE_ID,
 ): ProductionGrokProviderEvent[] {
-  const envelopes = z.array(StreamEventEnvelope).parse(value);
-  const streamPath = kitDeviceEventStreamPath(deviceId);
-  const selected = envelopes
-    /*
-     * Path is the ownership boundary; session id is only a generation key
-     * inside that boundary. Filter before parsing payloads so corrupt or
-     * schema-incompatible evidence from another board cannot invalidate the
-     * selected device's otherwise complete physical run.
-     */
-    .filter(
-      (event) => event.path === streamPath && event.type === KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
-    )
-    .map((event) => ({
-      ...ProviderEventPayload.parse(event.payload),
-      createdAt: event.createdAt,
-      offset: event.offset,
-    }))
-    .filter((event) => event.sessionId === sessionId)
-    .sort((left, right) => left.sequence - right.sequence);
+  const selected = parseAvailableProductionGrokProviderEvents(value, sessionId, deviceId);
 
   for (const [index, event] of selected.entries()) {
     const expectedSequence = index + 1;

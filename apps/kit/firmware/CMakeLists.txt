@@ -228,6 +228,27 @@ add_test(
   NAME iterate-kit-pcm-clock-playback-test
   COMMAND iterate-kit-pcm-clock-playback-test)
 
+add_executable(iterate-kit-core-s3-capture-reserve-test
+  tests/core_s3_capture_reserve_test.c
+  platforms/iterate_core_s3_audio/core_s3_capture_reserve.c
+)
+target_include_directories(
+  iterate-kit-core-s3-capture-reserve-test PRIVATE
+  platforms/iterate_core_s3_audio/include
+  components/core/include
+)
+target_compile_features(
+  iterate-kit-core-s3-capture-reserve-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-core-s3-capture-reserve-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+add_test(
+  NAME iterate-kit-core-s3-capture-reserve-test
+  COMMAND iterate-kit-core-s3-capture-reserve-test)
+
 add_executable(iterate-kit-device-events-test
   tests/device_events_test.c
 )
@@ -1018,6 +1039,25 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-m5sticks3-events-test
   COMMAND iterate-kit-m5sticks3-events-test
+)
+
+add_executable(iterate-kit-stackchan-control-test
+  tests/stackchan_control_test.c
+)
+target_compile_features(
+  iterate-kit-stackchan-control-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-stackchan-control-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-stackchan-control-test PRIVATE iterate-kit-stackchan
+)
+add_test(
+  NAME iterate-kit-stackchan-control-test
+  COMMAND iterate-kit-stackchan-control-test
 )
 
 # Source annotations do not prove where an ESP-IDF linker ultimately places an
