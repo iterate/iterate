@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "driver/i2c_master.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -27,6 +29,9 @@ bool waveshare_audio_read(int16_t *destination, size_t samples);
 
 /** Blocking playout of exactly `samples` mono PCM16 samples. */
 bool waveshare_audio_write(const int16_t *pcm, size_t samples);
+
+/** The shared I2C0 bus (codec, PMIC, touch). NULL before init. */
+i2c_master_bus_handle_t waveshare_audio_i2c_bus(void);
 
 /** Log the ES8311's ADC-path registers (bring-up diagnostics). */
 void waveshare_audio_dump_registers(void);

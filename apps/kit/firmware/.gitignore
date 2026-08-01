@@ -1,0 +1,3 @@
+
+# esp-idf pulls component dependencies into the target dir at build time.
+targets/*/managed_components/

@@ -1,2 +1,5 @@
 dependencies:
   espressif/esp_codec_dev: "~1.5.6"
+  waveshare/esp_lcd_sh8601: "1.0.2"
+  espressif/esp_lcd_touch_ft5x06: "^1.0.6"
+  lvgl/lvgl: "~9.2.0"

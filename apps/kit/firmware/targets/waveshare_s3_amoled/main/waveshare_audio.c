@@ -301,6 +301,10 @@ bool waveshare_audio_init(void) {
   return true;
 }
 
+i2c_master_bus_handle_t waveshare_audio_i2c_bus(void) {
+  return i2c_bus;
+}
+
 void waveshare_audio_probe_din(void) {
   /*
    * Is anything driving the ADC data line? Sample the pad under an internal

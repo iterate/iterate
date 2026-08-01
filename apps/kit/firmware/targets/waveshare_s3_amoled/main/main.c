@@ -1,14 +1,22 @@
 /*
- * Waveshare ESP32-S3 Touch AMOLED 1.8 — full-duplex voicelab client.
+ * Waveshare ESP32-S3 Touch AMOLED 1.8 — the Iterate voice device.
+ *
+ * The whole product is here: an on-screen Iterate UI (start call / hang up,
+ * live transcript), a live capability at kit.waveshare so an agent can drive
+ * the screen and the call, and the voice pipe itself.
  *
  * ONE Cap'n Web WebSocket to /api carries everything, exactly like the
  * TypeScript voicelab client: authenticate -> projects.get -> streams.get,
  * then 50 Hz one-way appends of ephemeral voicelab/mic-frame events (real
  * ES8311 microphone), and a live openConnection callback delivering
  * voicelab/spk-frame events (decoded to the speaker) plus grok-events
- * (speech_started = barge-in flush, response.done = end of answer). A
- * voicelab bridge (node or userspace worker) on the same stream holds the
- * Grok session.
+ * (speech_started = barge-in flush, response.done = end of answer,
+ * transcript deltas to the screen).
+ *
+ * Nothing runs off-device: pressing "start call" calls the project's OWN
+ * userspace worker (itx.worker.startCall) over that same socket, and the
+ * worker holds the Grok session detached. No laptop bridge, no second
+ * connection.
  *
  * Echo control: this board has no hardware AEC reference, so the mic lane
  * sends silence while the speaker is active (plus a short tail). Voice
@@ -28,6 +36,7 @@
 #include <string.h>
 
 #include "esp_attr.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
 #include "esp_timer.h"
@@ -40,11 +49,14 @@
 #include "capnweb/capnweb.h"
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
+#include "iterate/kit/peer.h"
 #include "iterate/kit/platforms/esp_idf_configuration.h"
 #include "iterate/kit/platforms/esp_idf_itx_transport.h"
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/voicelab_stream.h"
 #include "waveshare_audio.h"
+#include "waveshare_display.h"
+#include "waveshare_tools.h"
 
 static const char tag[] = "iterate-voicelab";
 
@@ -97,6 +109,10 @@ enum {
   PING_INTERVAL_MS = 5000,
 };
 
+#define STREAM_PATH "/voicelab/dev-waveshare"
+#define CALL_ID "wsdev"
+#define GREETING "Hi, I am your Iterate device. What can I do for you?"
+
 struct mic_frame {
   int16_t samples[FRAME_SAMPLES];
 };
@@ -115,6 +131,8 @@ static struct {
   size_t inbox_lengths[CONTROL_INBOX_SLOTS];
   size_t outbox_lengths[CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_esp_idf_itx_transport transport;
+  struct iterate_kit_peer peer;
+  struct iterate_kit_module modules[1];
   struct iterate_kit_voicelab voicelab;
   uint32_t voicelab_generation;
   uint32_t frame_sequence;
@@ -135,14 +153,17 @@ static struct {
   uint32_t barge_in_flushes;
 } runtime;
 
-static enum capnweb_status inert_dispatch(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
-  (void)context;
-  (void)call;
-  return capnweb_reply_set_null(reply);
-}
+/* What `itx.kit.waveshare` looks like to whoever holds the capability. */
+static const char peer_description[] =
+    "{\"instructions\":\"An Iterate voice device: a 368x448 AMOLED showing "
+    "the call state and live transcript, a touch button that starts and ends "
+    "calls, a microphone and a speaker.\","
+    "\"children\":{"
+    "\"setBackground\":\"Fill the screen background with a colour — hex "
+    "(#1e293b) or a name (navy, teal, iterate).\","
+    "\"startCall\":\"Start a voice call, exactly as pressing the on-screen "
+    "button does.\","
+    "\"hangUp\":\"End the current call.\"}}";
 
 /*
  * A Cap'n Web session's capability ids die with it. Appending through a
@@ -191,6 +212,27 @@ static void on_control(
     runtime.speaker_discard_bytes =
         (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
     ++runtime.barge_in_flushes;
+    waveshare_display_set_state(WAVESHARE_UI_LISTENING);
+  } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
+    waveshare_display_set_state(WAVESHARE_UI_LISTENING);
+  } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
+    /* The bridge hung up (its idle timeout, Grok closing, or our own
+     * hangup echoing back) — the button must agree with reality. */
+    waveshare_display_request_call(false);
+    waveshare_display_set_call_active(false);
+    waveshare_display_set_state(WAVESHARE_UI_IDLE);
+    waveshare_display_set_status("call ended");
+  }
+}
+
+/* Transcript deltas land on screen as they arrive; the assistant's open line
+ * is replaced until it is final. */
+static void on_transcript(
+    void *context, bool from_user, const char *text, bool final) {
+  (void)context;
+  waveshare_display_push_transcript(from_user ? "you" : "iterate", text, final);
+  if (!from_user) {
+    waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
   }
 }
 
@@ -281,6 +323,18 @@ static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "waveshare"};
   struct iterate_kit_itx_connection_options options;
   struct iterate_kit_esp_idf_itx_transport_options transport_options;
+  struct iterate_kit_peer_options peer_options;
+
+  runtime.modules[0] = waveshare_tools_module();
+  peer_options = (struct iterate_kit_peer_options){
+    peer_description,
+    sizeof(peer_description) - 1U,
+    runtime.modules,
+    sizeof(runtime.modules) / sizeof(runtime.modules[0]),
+  };
+  if (iterate_kit_peer_init(&runtime.peer, &peer_options) != CAPNWEB_OK) {
+    return false;
+  }
 
   memset(&options, 0, sizeof(options));
   options.pending_calls = runtime.pending_calls;
@@ -299,12 +353,8 @@ static bool initialise_connection(void) {
   options.project_api_key = runtime.configuration.project_api_key;
   options.mount_path = mount_path;
   options.mount_path_count = sizeof(mount_path) / sizeof(mount_path[0]);
-  options.capability = (struct capnweb_capability){
-    inert_dispatch,
-    NULL,
-    NULL,
-  };
-  options.instructions = "Waveshare voicelab voice client";
+  options.capability = iterate_kit_peer_capability(&runtime.peer);
+  options.instructions = "Iterate voice device (Waveshare ESP32-S3 AMOLED)";
   options.session_ended = on_session_ended;
   options.session_ended_context = NULL;
   if (iterate_kit_itx_connection_init(&runtime.connection, &options) !=
@@ -390,6 +440,19 @@ void app_main(void) {
     ESP_LOGE(tag, "audio bring-up failed");
     return;
   }
+  /* After audio: the display shares the I2C bus the codec bring-up creates. */
+  if (!waveshare_display_init()) {
+    ESP_LOGE(tag, "display bring-up failed");
+    return;
+  }
+  waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
+  waveshare_display_set_status("connecting to iterate");
+  ESP_LOGI(
+      tag,
+      "heap after display: internal=%u dma=%u total=%u",
+      (unsigned int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+      (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA),
+      (unsigned int)esp_get_free_heap_size());
   runtime.mic_queue =
       xQueueCreate(MIC_QUEUE_DEPTH, sizeof(struct mic_frame));
   runtime.speaker_buffer = xStreamBufferCreateWithCaps(
@@ -486,12 +549,13 @@ void app_main(void) {
         &runtime.connection.session,
         runtime.configuration.project_id,
         runtime.configuration.project_api_key,
-        "/voicelab/dev-waveshare",
-        "wsdev",
+        STREAM_PATH,
+        CALL_ID,
         now_ms,
         NULL,
         on_speaker_pcm,
         on_control,
+        on_transcript,
         NULL,
       };
       if (iterate_kit_voicelab_start(&runtime.voicelab, &options) ==
@@ -513,6 +577,17 @@ void app_main(void) {
           iterate_kit_voicelab_state_name(runtime.voicelab.state),
           iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
       runtime.last_voicelab_state = runtime.voicelab.state;
+      if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) {
+        waveshare_display_set_state(WAVESHARE_UI_IDLE);
+        waveshare_display_set_status(STREAM_PATH);
+      } else if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED) {
+        /* A dead session takes the call with it; the button starts over. */
+        waveshare_display_request_call(false);
+        waveshare_display_set_call_active(false);
+        waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
+        waveshare_display_set_status(
+            iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
+      }
     }
 
     if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
@@ -532,7 +607,41 @@ void app_main(void) {
           CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
       static struct mic_frame frame_storage[4];
       static uint64_t drain_window_at;
-      if (now >= drain_window_at &&
+      static uint64_t next_call_attempt_at;
+      static bool call_active_shown;
+
+      /*
+       * The button IS the call model: pressing it asks this project's own
+       * userspace worker to open the Grok session (one RPC on the socket we
+       * already hold), pressing it again appends the durable call-ended the
+       * worker is subscribed to. Nothing off-device participates.
+       */
+      const bool wants_call = waveshare_display_call_requested();
+      if (wants_call && !runtime.voicelab.call_active &&
+          !runtime.voicelab.call_pending && outbox_free >= 5U &&
+          now >= next_call_attempt_at) {
+        next_call_attempt_at = now + 8000U; /* a start takes ~1-3s; don't spam */
+        if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==
+            CAPNWEB_OK) {
+          waveshare_display_set_status("starting call");
+        }
+      }
+      if (!wants_call && runtime.voicelab.call_active && outbox_free >= 5U) {
+        (void)iterate_kit_voicelab_end_call(&runtime.voicelab, "button");
+        waveshare_display_set_status("call ended");
+        waveshare_display_set_state(WAVESHARE_UI_IDLE);
+      }
+      if (runtime.voicelab.call_active != call_active_shown) {
+        call_active_shown = runtime.voicelab.call_active;
+        waveshare_display_set_call_active(call_active_shown);
+        if (call_active_shown) {
+          waveshare_display_set_state(WAVESHARE_UI_LISTENING);
+          waveshare_display_set_status("call live");
+        }
+      }
+
+      /* Mic frames are only worth sending while a call is up. */
+      if (runtime.voicelab.call_active && now >= drain_window_at &&
           uxQueueMessagesWaiting(runtime.mic_queue) >= 4U) {
         drain_window_at =
             (drain_window_at == 0U || now - drain_window_at > 400U)
