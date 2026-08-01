@@ -750,6 +750,84 @@ enum capnweb_status iterate_kit_voicelab_append_frame(
   return status;
 }
 
+enum capnweb_status iterate_kit_voicelab_append_frames(
+    struct iterate_kit_voicelab *voicelab,
+    const uint8_t *const *frames,
+    size_t frame_count,
+    size_t frame_length,
+    uint32_t sequence,
+    uint64_t captured_at_ms) {
+  int written;
+  size_t offset;
+  size_t encoded_length;
+  size_t index;
+  enum capnweb_status status;
+  if (voicelab == NULL ||
+      frames == NULL ||
+      frame_count == 0U ||
+      frame_count > ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND ||
+      frame_length == 0U ||
+      frame_length > ITERATE_KIT_VOICELAB_FRAME_BYTES) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
+    return CAPNWEB_E_STATE;
+  }
+  for (index = 0U; index < frame_count; ++index) {
+    if (frames[index] == NULL) {
+      return CAPNWEB_E_INVALID_ARGUMENT;
+    }
+  }
+  offset = 0U;
+  voicelab->args_buffer[offset++] = '[';
+  for (index = 0U; index < frame_count; ++index) {
+    written = snprintf(
+        voicelab->args_buffer + offset,
+        sizeof(voicelab->args_buffer) - offset,
+        "%s{\"type\":\"voicelab/mic-frame\",\"ephemeral\":true,"
+        "\"payload\":{\"callId\":\"%s\",\"seq\":%" PRIu32
+        ",\"t\":%" PRIu64 ",\"pcm\":\"",
+        index == 0U ? "" : ",",
+        voicelab->options.call_id,
+        sequence + (uint32_t)index,
+        captured_at_ms);
+    if (written < 0 ||
+        (size_t)written >= sizeof(voicelab->args_buffer) - offset) {
+      return CAPNWEB_E_LIMIT;
+    }
+    offset += (size_t)written;
+    encoded_length = base64_encode(
+        frames[index],
+        frame_length,
+        voicelab->args_buffer + offset,
+        sizeof(voicelab->args_buffer) - offset - sizeof("\"}}]"));
+    if (encoded_length == 0U) {
+      return CAPNWEB_E_LIMIT;
+    }
+    offset += encoded_length;
+    if (offset + 4U >= sizeof(voicelab->args_buffer)) {
+      return CAPNWEB_E_LIMIT;
+    }
+    memcpy(voicelab->args_buffer + offset, "\"}}", 3U);
+    offset += 3U;
+  }
+  voicelab->args_buffer[offset++] = ']';
+
+  status = capnweb_session_call_oneway_path(
+      voicelab->options.session,
+      voicelab->stream_capability,
+      append_path,
+      1U,
+      voicelab->args_buffer,
+      offset);
+  if (status == CAPNWEB_OK) {
+    voicelab->frames_sent += (uint32_t)frame_count;
+  } else {
+    ++voicelab->frame_send_failures;
+  }
+  return status;
+}
+
 enum capnweb_status iterate_kit_voicelab_append_raw(
     struct iterate_kit_voicelab *voicelab,
     const char *events_json_array,

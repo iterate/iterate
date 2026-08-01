@@ -1,0 +1,780 @@
+/*
+ * SPDX-FileCopyrightText: 2023 Espressif Systems (Shanghai) CO LTD
+ *
+ * SPDX-License-Identifier: Apache-2.0
+ */
+#include <string.h>
+#include <stdlib.h>
+#include "audio_codec_data_if.h"
+#include "esp_codec_dev_defaults.h"
+#include "freertos/FreeRTOS.h"
+#include "esp_idf_version.h"
+#include "hal/i2s_types.h"
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+#include "driver/i2s_std.h"
+#include "driver/i2s_tdm.h"
+#include "driver/i2s_pdm.h"
+#else
+#include "driver/i2s.h"
+#endif
+#include "esp_codec_dev_os.h"
+#include "esp_log.h"
+
+#define TAG "I2S_IF"
+
+#define DEFAULT_WAIT_TIMEOUT (1000)
+
+typedef struct {
+    audio_codec_data_if_t        base;
+    bool                         is_open;
+    uint8_t                      port;
+    void                        *out_handle;
+    void                        *in_handle;
+    bool                         out_enable;
+    bool                         in_enable;
+    bool                         in_disable_pending;
+    bool                         out_disable_pending;
+    bool                         in_reconfig;
+    bool                         out_reconfig;
+    esp_codec_dev_sample_info_t  in_fs;
+    esp_codec_dev_sample_info_t  out_fs;
+    esp_codec_dev_sample_info_t  fs;
+    i2s_clock_src_t              clk_src;
+} i2s_data_t;
+
+typedef struct i2s_data_keep_t i2s_data_keep_t;
+struct i2s_data_keep_t {
+    i2s_data_t                   *i2s_data;
+    esp_codec_dev_mutex_handle_t  mutex;
+    i2s_data_keep_t              *next;
+};
+
+static i2s_data_keep_t *i2s_data_list = NULL;
+
+static esp_codec_dev_mutex_handle_t try_alloc_mutex(uint8_t port)
+{
+    i2s_data_keep_t *cur = i2s_data_list;
+    while (cur != NULL) {
+        if (cur->i2s_data->port == port) {
+            return cur->mutex;
+        }
+        cur = cur->next;
+    }
+    return esp_codec_dev_mutex_create();
+}
+
+static esp_codec_dev_mutex_handle_t get_mutex(i2s_data_t *i2s_data)
+{
+    i2s_data_keep_t *cur = i2s_data_list;
+    while (cur != NULL) {
+        if (cur->i2s_data == i2s_data) {
+            return cur->mutex;
+        }
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+static void try_free_mutex(uint8_t port, esp_codec_dev_mutex_handle_t mutex)
+{
+    uint8_t ref_count = 0;
+    i2s_data_keep_t *cur = i2s_data_list;
+    while (cur != NULL) {
+        if (cur->i2s_data->port == port) {
+            ref_count++;
+        }
+        cur = cur->next;
+    }
+    if (ref_count == 0) {
+        esp_codec_dev_mutex_destroy(mutex);
+    }
+}
+
+static void _i2s_lock(i2s_data_t *i2s_data, const char *func)
+{
+    esp_codec_dev_mutex_handle_t mutex = get_mutex(i2s_data);
+    if (mutex) {
+        int ret = esp_codec_dev_mutex_lock(mutex, DEFAULT_WAIT_TIMEOUT);
+        if (ret != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "Lock failed in %s", func);
+        }
+    }
+}
+
+static void _i2s_unlock(i2s_data_t *i2s_data)
+{
+    esp_codec_dev_mutex_handle_t mutex = get_mutex(i2s_data);
+    if (mutex) {
+        esp_codec_dev_mutex_unlock(mutex);
+    }
+}
+
+static void add_to_keeper(i2s_data_t *i2s_data)
+{
+    i2s_data_keep_t *keep_info = (i2s_data_keep_t *) calloc(1, sizeof(i2s_data_keep_t));
+    if (keep_info == NULL) {
+        ESP_LOGE(TAG, "Out of memory for keeper");
+        return;
+    }
+    keep_info->mutex = try_alloc_mutex(i2s_data->port);
+    keep_info->i2s_data = i2s_data;
+    if (i2s_data_list == NULL)  {
+        i2s_data_list = keep_info;
+    } else {
+        keep_info->next = i2s_data_list;
+        i2s_data_list = keep_info;
+    }
+}
+
+static void remove_from_keeper(i2s_data_t *i2s_data)
+{
+    i2s_data_keep_t *pre = NULL;
+    i2s_data_keep_t *cur = i2s_data_list;
+    while (cur != NULL) {
+        if (cur->i2s_data == i2s_data) {
+            if (pre == NULL) {
+                i2s_data_list = cur->next;
+            } else {
+                pre->next = cur->next;
+            }
+            try_free_mutex(i2s_data->port, cur->mutex);
+            free(cur);
+            break;
+        }
+        pre = cur;
+        cur = cur->next;
+    }
+}
+
+static i2s_data_t *get_paired(i2s_data_t *i2s_data, bool playback)
+{
+    i2s_data_keep_t *cur = i2s_data_list;
+    /* Same port may list a split RX/TX pair first; defer single-node full duplex until no half-duplex peer matches. */
+    i2s_data_t *duplex_fallback = NULL;
+    while (cur != NULL) {
+        if (cur->i2s_data->port == i2s_data->port) {
+            if (cur->i2s_data->in_handle && cur->i2s_data->out_handle) {
+                duplex_fallback = cur->i2s_data;
+                cur = cur->next;
+                continue;
+            }
+            if (playback && cur->i2s_data->in_handle) {
+                return cur->i2s_data;
+            } else if (playback == false && cur->i2s_data->out_handle) {
+                return cur->i2s_data;
+            }
+        }
+        cur = cur->next;
+    }
+    return duplex_fallback;
+}
+
+static bool _i2s_valid_fmt(esp_codec_dev_sample_info_t *fs)
+{
+    if (fs->sample_rate == 0 ||
+        fs->sample_rate >= 192000) {
+        ESP_LOGE(TAG, "Bad sample_rate %d", (int) fs->sample_rate);
+    }
+    if (fs->channel == 0 ||
+        (fs->channel >> 1 << 1) != fs->channel) {
+        ESP_LOGE(TAG, "Not support channel %d", fs->channel);
+        return false;
+    }
+    if (fs->bits_per_sample < 8 || fs->bits_per_sample > 32 ||
+       (fs->bits_per_sample >> 3 << 3) != fs->bits_per_sample) {
+        ESP_LOGE(TAG, "Not support bits_per_sample %d", fs->bits_per_sample);
+        return false;
+    }
+    return true;
+}
+
+static int _i2s_drv_enable(i2s_data_t *i2s_data, bool playback, bool enable)
+{
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    i2s_chan_handle_t channel = (i2s_chan_handle_t) (
+        playback ? i2s_data->out_handle : i2s_data->in_handle);
+    if (channel == NULL) {
+        return ESP_CODEC_DEV_NOT_FOUND;
+    }
+    int ret;
+    if (enable) {
+        ret = i2s_channel_enable(channel);
+    } else {
+        ret = i2s_channel_disable(channel);
+    }
+    return ret == ESP_OK ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_DRV_ERR;
+#endif
+    return ESP_CODEC_DEV_OK;
+}
+
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+static uint8_t get_active_channel(esp_codec_dev_sample_info_t *fs)
+{
+    if (fs->channel_mask == 0) {
+        return fs->channel;
+    }
+    int channel = 0;
+    uint16_t mask = fs->channel_mask;
+    while (mask > 0) {
+        if (mask & 1) {
+            channel++;
+        }
+        mask >>= 1;
+    }
+    return channel;
+}
+
+static uint8_t get_bits(i2s_data_t *i2s_data, bool playback)
+{
+    uint8_t total_bits = i2s_data->fs.bits_per_sample * i2s_data->fs.channel;
+    if (playback) {
+        return total_bits / i2s_data->out_fs.channel;
+    }
+    return total_bits / i2s_data->in_fs.channel;
+}
+
+static int set_drv_fs(i2s_chan_handle_t channel, bool playback, uint8_t slot_bits, i2s_clock_src_t clk_src, esp_codec_dev_sample_info_t *fs)
+{
+    i2s_chan_info_t channel_info = {0};
+    int ret = ESP_CODEC_DEV_OK;
+    i2s_channel_get_info(channel, &channel_info);
+    switch (channel_info.mode) {
+        case I2S_COMM_MODE_STD: {
+            uint8_t data_bits = fs->bits_per_sample;
+            uint8_t active_channel = get_active_channel(fs);
+            if (fs->channel > 2) {
+                slot_bits = slot_bits * fs->channel / 2;
+                active_channel = 2;
+                data_bits = slot_bits;
+            }
+            i2s_std_slot_mask_t slot_mask = fs->channel_mask ? (i2s_std_slot_mask_t)fs->channel_mask : I2S_STD_SLOT_BOTH;
+            i2s_std_slot_config_t slot_cfg = I2S_STD_PHILIPS_SLOT_DEFAULT_CONFIG(slot_bits, active_channel);
+            slot_cfg.slot_mask = slot_mask & I2S_STD_SLOT_BOTH; // Only support 2 slots, the max mask is I2S_STD_SLOT_BOTH
+            if (slot_bits > data_bits) {
+                slot_cfg.data_bit_width = data_bits;
+            }
+            slot_cfg.slot_bit_width = slot_bits;
+            i2s_std_clk_config_t clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(fs->sample_rate);
+            if (clk_src) {
+                clk_cfg.clk_src = clk_src;
+            }
+            if (fs->mclk_multiple) {
+                clk_cfg.mclk_multiple = fs->mclk_multiple;
+            }
+            if (slot_bits == 24 && (clk_cfg.mclk_multiple % 3) != 0) {
+                clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_384;
+            }
+            ret = i2s_channel_reconfig_std_slot(channel, &slot_cfg);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to reconfig STD slot, ret: %d", ret);
+                return ESP_CODEC_DEV_DRV_ERR;
+            }
+            ret = i2s_channel_reconfig_std_clock(channel, &clk_cfg);
+            if (ret != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to reconfig STD clock, ret: %d", ret);
+                return ESP_CODEC_DEV_DRV_ERR;
+            }
+            ESP_LOGI(TAG, "STD: %s, data_bit: %d, slot_bit: %d, ws_width: %d, slot_mode: %s, slot_mask: 0x%x",
+                channel_info.dir == I2S_DIR_RX ? "RX" : "TX", (int)slot_cfg.data_bit_width, (int)slot_cfg.slot_bit_width, (int)slot_cfg.ws_width,
+                slot_cfg.slot_mode == I2S_SLOT_MODE_MONO ? "MONO" : "STEREO", (int)slot_cfg.slot_mask);
+            ESP_LOGI(TAG, "STD: %s, sample_rate_hz: %d, mclk_multiple: %d, clk_src: %d",
+                channel_info.dir == I2S_DIR_RX ? "RX" : "TX", (int)clk_cfg.sample_rate_hz, (int)clk_cfg.mclk_multiple, (int)clk_cfg.clk_src);
+        }
+        break;
+#if SOC_I2S_SUPPORTS_PDM
+        case I2S_COMM_MODE_PDM: {
+            if (playback == false) {
+#if SOC_I2S_SUPPORTS_PDM_RX
+                i2s_pdm_rx_clk_config_t clk_cfg = I2S_PDM_RX_CLK_DEFAULT_CONFIG(fs->sample_rate);
+                if (clk_src) {
+                    clk_cfg.clk_src = clk_src;
+                }
+                if (fs->mclk_multiple) {
+                    clk_cfg.mclk_multiple = fs->mclk_multiple;
+                }
+                i2s_pdm_rx_slot_config_t slot_cfg = I2S_PDM_RX_SLOT_DEFAULT_CONFIG(slot_bits, I2S_SLOT_MODE_STEREO);
+                i2s_pdm_slot_mask_t slot_mask = fs->channel_mask ? (i2s_pdm_slot_mask_t)fs->channel_mask : I2S_PDM_SLOT_BOTH;
+                // Stereo channel mask is ignored in driver, need use mono instead
+                if (fs->channel_mask && fs->channel_mask < 3) {
+                    slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
+                }
+                slot_cfg.slot_mask = slot_mask;
+                if (slot_bits > fs->bits_per_sample) {
+                    slot_cfg.data_bit_width = fs->bits_per_sample;
+                    slot_cfg.slot_bit_width = slot_bits;
+                }
+                ret = i2s_channel_reconfig_pdm_rx_clock(channel, &clk_cfg);
+                if (ret != ESP_OK) {
+                    return ESP_CODEC_DEV_DRV_ERR;
+                }
+                ret = i2s_channel_reconfig_pdm_rx_slot(channel, &slot_cfg);
+                if (ret != ESP_OK) {
+                    return ESP_CODEC_DEV_DRV_ERR;
+                }
+                ESP_LOGI(TAG, "PDM RX mode, data_bit: %d, slot_bit: %d, sample_rate: %d, slot_mask: 0x%x",
+                         fs->bits_per_sample, slot_bits, (int)fs->sample_rate, (int)fs->channel_mask);
+#else
+                ESP_LOGE(TAG, "PDM RX not supported");
+                return ESP_CODEC_DEV_NOT_SUPPORT;
+#endif  /* SOC_I2S_SUPPORTS_PDM_RX */
+            } else {
+#if SOC_I2S_SUPPORTS_PDM_TX
+                i2s_pdm_tx_clk_config_t clk_cfg = I2S_PDM_TX_CLK_DEFAULT_CONFIG(fs->sample_rate);
+                if (clk_src) {
+                    clk_cfg.clk_src = clk_src;
+                }
+                if (fs->mclk_multiple) {
+                    clk_cfg.mclk_multiple = fs->mclk_multiple;
+                }
+                clk_cfg.up_sample_fs = fs->sample_rate / 100;
+                i2s_pdm_tx_slot_config_t slot_cfg = I2S_PDM_TX_SLOT_DEFAULT_CONFIG(slot_bits, I2S_SLOT_MODE_STEREO);
+                // Stereo channel mask is ignored, need use mono instead
+                if (fs->channel_mask && fs->channel_mask < 3) {
+                    slot_cfg.slot_mode = I2S_SLOT_MODE_MONO;
+                }
+#if SOC_I2S_HW_VERSION_1
+                i2s_pdm_slot_mask_t slot_mask = fs->channel_mask ?
+                        (i2s_pdm_slot_mask_t) fs->channel_mask : I2S_PDM_SLOT_BOTH;
+                slot_cfg.slot_mask = slot_mask;
+#endif  /* SOC_I2S_HW_VERSION_1 */
+                if (slot_bits > fs->bits_per_sample) {
+                    slot_cfg.data_bit_width = fs->bits_per_sample;
+                    slot_cfg.slot_bit_width = slot_bits;
+                }
+                ret = i2s_channel_reconfig_pdm_tx_clock(channel, &clk_cfg);
+                if (ret != ESP_OK) {
+                    return ESP_CODEC_DEV_DRV_ERR;
+                }
+                ret = i2s_channel_reconfig_pdm_tx_slot(channel, &slot_cfg);
+                if (ret != ESP_OK) {
+                    return ESP_CODEC_DEV_DRV_ERR;
+                }
+                ESP_LOGI(TAG, "PDM TX mode, data_bit: %d, slot_bit: %d, sample_rate: %d, slot_mask: 0x%x",
+                         fs->bits_per_sample, slot_bits, (int)fs->sample_rate, (int)fs->channel_mask);
+#else
+                ESP_LOGE(TAG, "PDM TX not supported");
+                return ESP_CODEC_DEV_NOT_SUPPORT;
+#endif  /* SOC_I2S_SUPPORTS_PDM_TX */
+            }
+        }
+        break;
+#endif  /* SOC_I2S_SUPPORTS_PDM */
+#if SOC_I2S_SUPPORTS_TDM
+        case I2S_COMM_MODE_TDM: {
+            i2s_tdm_clk_config_t clk_cfg = I2S_TDM_CLK_DEFAULT_CONFIG(fs->sample_rate);
+            if (clk_src) {
+                clk_cfg.clk_src = clk_src;
+            }
+            if (slot_bits == 24) {
+                clk_cfg.mclk_multiple = I2S_MCLK_MULTIPLE_384;
+            }
+            if (fs->mclk_multiple) {
+                clk_cfg.mclk_multiple = fs->mclk_multiple;
+            }
+            i2s_tdm_slot_config_t slot_cfg = I2S_TDM_PHILIPS_SLOT_DEFAULT_CONFIG(
+                slot_bits,
+                I2S_SLOT_MODE_STEREO,
+                (i2s_tdm_slot_mask_t)fs->channel_mask);
+            slot_cfg.total_slot = fs->channel;
+            // When use STD mode, left align is true by default, but when use TDM mode, left align is false by default
+            // so need set to true to keep the same with STD mode
+            slot_cfg.left_align = true;
+            if (slot_bits > fs->bits_per_sample) {
+                slot_cfg.data_bit_width = fs->bits_per_sample;
+            }
+            slot_cfg.slot_bit_width = slot_bits;
+            slot_cfg.ws_width = slot_bits * fs->channel / 2;
+            ret = i2s_channel_reconfig_tdm_slot(channel, &slot_cfg);
+            if (ret != ESP_OK) {
+                return ESP_CODEC_DEV_DRV_ERR;
+            }
+            ret = i2s_channel_reconfig_tdm_clock(channel, &clk_cfg);
+            if (ret != ESP_OK) {
+                return ESP_CODEC_DEV_DRV_ERR;
+            }
+            ESP_LOGI(TAG, "TDM: %s, data_bit: %d, slot_bit: %d, ws_width: %d, total_slot: %d, slot_mask: 0x%x",
+                channel_info.dir == I2S_DIR_RX ? "RX" : "TX", (int)slot_cfg.data_bit_width, (int)slot_cfg.slot_bit_width,
+                (int)slot_cfg.ws_width, (int)slot_cfg.total_slot, (int)slot_cfg.slot_mask);
+            ESP_LOGI(TAG, "TDM: %s, sample_rate_hz: %d, mclk_multiple: %d, clk_src: %d",
+                    channel_info.dir == I2S_DIR_RX ? "RX" : "TX", (int)clk_cfg.sample_rate_hz, (int)clk_cfg.mclk_multiple, (int)clk_cfg.clk_src);
+        }
+        break;
+#endif  /* SOC_I2S_SUPPORTS_TDM */
+        default:
+            return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    return ret;
+}
+
+static int set_fs(i2s_data_t *i2s_data, bool playback, bool skip)
+{
+    i2s_chan_handle_t channel = (i2s_chan_handle_t) (playback ? i2s_data->out_handle : i2s_data->in_handle);
+    i2s_chan_info_t channel_info = {0};
+    esp_codec_dev_sample_info_t *fs = playback ? &i2s_data->out_fs : &i2s_data->in_fs;
+    uint8_t bits_per_sample = get_bits(i2s_data, playback);
+    i2s_channel_get_info(channel, &channel_info);
+    int ret = set_drv_fs(channel, playback, bits_per_sample, i2s_data->clk_src, fs);
+    if (ret != ESP_CODEC_DEV_OK) {
+        return ret;
+    }
+    i2s_data_t *paired = get_paired(i2s_data, playback);
+    // Set RX clock will not take effect if in full duplex mode, need update TX clock also
+    if (skip == false && playback == false && paired && paired->out_handle != NULL && paired->out_enable == false) {
+        // TX is master, set to RX not take effect need reconfig TX also
+        channel = (i2s_chan_handle_t) paired->out_handle;
+        _i2s_drv_enable(paired, true, false);
+        ret = set_drv_fs(channel, true, bits_per_sample, i2s_data->clk_src, fs);
+        _i2s_drv_enable(paired, true, true);
+    }
+    return ret;
+}
+
+static int check_fs_compatible(i2s_data_t *i2s_data, bool playback, esp_codec_dev_sample_info_t *fs)
+{
+    // Set fs directly when only enable one channel
+    i2s_data_t *paired = get_paired(i2s_data, playback);
+    esp_codec_dev_sample_info_t *channel_fs = playback ? &i2s_data->out_fs : &i2s_data->in_fs;
+    if ((paired == NULL) ||
+        (playback && paired->in_enable == false) ||
+        (!playback && paired->out_enable == false)) {
+        memcpy(&i2s_data->fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        if (paired && paired != i2s_data) {
+            memcpy(&paired->fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        }
+        memcpy(channel_fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        if (paired != NULL) {
+            ESP_LOGI(TAG, "Paired data: %p, current mode: %s, paired in_enable: %d, paired out_enable: %d",
+                     paired, playback ? "playback" : "record", paired->in_enable, paired->out_enable);
+        } else {
+            ESP_LOGI(TAG, "No paired data, current mode: %s", playback ? "playback" : "record");
+        }
+        return set_fs(i2s_data, playback, false);
+    }
+    if (fs->sample_rate != paired->fs.sample_rate) {
+        ESP_LOGE(TAG, "Current mode %s conflict sample_rate %d with peer mode sample_rate %d",
+                 playback ? "playback" : "record", (int)fs->sample_rate, (int)i2s_data->fs.sample_rate);
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+    // Channel and bits same, set directly
+    if (fs->channel == paired->fs.channel &&
+        fs->bits_per_sample == paired->fs.bits_per_sample) {
+        memcpy(&i2s_data->fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        memcpy(channel_fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        ESP_LOGI(TAG, "Current mode(%s) and peer mode have same sample_rate %d, channel %d, bits_per_sample %d",
+                 playback ? "playback" : "record", (int)fs->sample_rate, fs->channel, fs->bits_per_sample);
+        return set_fs(i2s_data, playback, false);
+    }
+    memcpy(channel_fs, fs, sizeof(esp_codec_dev_sample_info_t));
+    uint16_t want_bits = fs->channel * fs->bits_per_sample;
+    uint16_t run_bits = paired->fs.channel * paired->fs.bits_per_sample;
+    int ret;
+    if (run_bits > want_bits) {
+        // eg. Open with 4ch 16bit firstly, then open with 2ch 16bit, need extend slot bits to 2ch 32bit
+        i2s_chan_handle_t channel = (i2s_chan_handle_t)(playback ? i2s_data->out_handle : i2s_data->in_handle);
+        int slot_bits = run_bits / fs->channel;
+        ret = set_drv_fs(channel, playback, slot_bits, i2s_data->clk_src, fs);
+        if (ret != ESP_CODEC_DEV_OK) {
+            ESP_LOGE(TAG, "set_drv_fs failed");
+        } else {
+            ESP_LOGI(TAG, "Current mode %s has extended slot bits from %d to %d", playback ? "playback" : "record", want_bits, run_bits);
+        }
+        return ret;
+    }
+    // Need expand peer channel bits
+    ESP_LOGI(TAG, "Peer mode %s need extend bits %d to %d", !playback ? "playback" : "record", run_bits, want_bits);
+    do {
+        if (want_bits > run_bits) {
+            if (playback == false) {
+                paired->out_reconfig = true;
+            } else {
+                paired->in_reconfig = true;
+            }
+            ret = _i2s_drv_enable(paired, !playback, false);
+            if (ret != ESP_CODEC_DEV_OK) {
+                break;
+            }
+            memcpy(&paired->fs, fs, sizeof(esp_codec_dev_sample_info_t));
+            memcpy(&i2s_data->fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        }
+        // Need set fs before enable
+        ret = set_fs(i2s_data, playback, false);
+        if (ret != ESP_CODEC_DEV_OK) {
+            break;
+        }
+        if (want_bits > run_bits) {
+            ret = set_fs(paired, !playback, true);
+            if (ret != ESP_CODEC_DEV_OK) {
+                break;
+            }
+            ret = _i2s_drv_enable(paired, !playback, true);
+            if (ret != ESP_CODEC_DEV_OK) {
+                break;
+            }
+        }
+    } while (0);
+    i2s_data->out_reconfig = i2s_data->in_reconfig = false;
+    paired->out_reconfig = paired->in_reconfig = false;
+    return ret;
+}
+#endif  /* ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0) */
+
+static int _i2s_data_open(const audio_codec_data_if_t *h, void *data_cfg, int cfg_size)
+{
+    i2s_data_t *i2s_data = (i2s_data_t *)h;
+    if (h == NULL || data_cfg == NULL || cfg_size != sizeof(audio_codec_i2s_cfg_t)) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    audio_codec_i2s_cfg_t *i2s_cfg = (audio_codec_i2s_cfg_t *)data_cfg;
+    i2s_data->is_open    = true;
+    i2s_data->port       = i2s_cfg->port;
+    i2s_data->out_handle = i2s_cfg->tx_handle;
+    i2s_data->in_handle  = i2s_cfg->rx_handle;
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    if (i2s_data->in_handle && i2s_data->out_handle == NULL) {
+        i2s_chan_info_t channel_info = {0};
+        i2s_channel_get_info(i2s_data->in_handle, &channel_info);
+        // If use duplex mode, out_handle is the pair of in_handle, otherwise out_handle is NULL
+        i2s_data->out_handle = channel_info.pair_chan;
+        ESP_LOGI(TAG, "Auto get out handle %p from in handle %p when duplex mode", i2s_data->out_handle, i2s_data->in_handle);
+    }
+    i2s_data->clk_src = (i2s_clock_src_t)i2s_cfg->clk_src;
+#endif
+    add_to_keeper(i2s_data);
+    return ESP_CODEC_DEV_OK;
+}
+
+static bool _i2s_data_is_open(const audio_codec_data_if_t *h)
+{
+    i2s_data_t *i2s_data = (i2s_data_t *) h;
+    if (i2s_data) {
+        return i2s_data->is_open;
+    }
+    return false;
+}
+
+static int _i2s_data_enable(const audio_codec_data_if_t *h, esp_codec_dev_type_t dev_type, bool enable)
+{
+    i2s_data_t *i2s_data = (i2s_data_t *) h;
+    if (i2s_data == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (i2s_data->is_open == false) {
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    int ret = ESP_CODEC_DEV_OK;
+    _i2s_lock(i2s_data, __func__);
+    if (dev_type == ESP_CODEC_DEV_TYPE_IN_OUT) {
+        ret = _i2s_drv_enable(i2s_data, true, enable);
+        ret = _i2s_drv_enable(i2s_data, false, enable);
+    } else {
+        bool playback = dev_type & ESP_CODEC_DEV_TYPE_OUT ? true : false;
+        i2s_data_t *paired = get_paired(i2s_data, playback);
+        // When RX is working TX disable should be blocked
+        if (enable == false && playback && i2s_data->out_handle && paired && paired->in_enable) {
+            ESP_LOGI(TAG, "Pending out channel for in channel running");
+            i2s_data->out_disable_pending = true;
+        }
+    #if SOC_I2S_HW_VERSION_1
+        // For ESP32 and ESP32S3 if disable RX, TX also not work need pending until TX not used
+        else if (enable == false && playback == false && i2s_data->in_handle && paired && paired->out_enable) {
+            ESP_LOGI(TAG, "Pending in channel for out channel running");
+            i2s_data->in_disable_pending = true;
+        }
+    #endif
+        else {
+            ret = _i2s_drv_enable(i2s_data, playback, enable);
+            // Disable TX when RX disable if TX disable is pending
+            if (enable == false) {
+                if (playback == false && paired && paired->out_disable_pending)  {
+                    ret = _i2s_drv_enable(paired, true, enable);
+                    paired->out_disable_pending = false;
+                }
+                if (playback == true && paired && paired->in_disable_pending)  {
+                    ret = _i2s_drv_enable(paired, false, enable);
+                    paired->in_disable_pending = false;
+                }
+            } else {
+                // Force to clear pending flags if enable again
+                if (playback) {
+                    i2s_data->out_disable_pending = false;
+                } else {
+                    i2s_data->in_disable_pending = false;
+                }
+            }
+        }
+    }
+    if (dev_type & ESP_CODEC_DEV_TYPE_IN) {
+        i2s_data->in_enable = enable;
+    }
+    if (dev_type & ESP_CODEC_DEV_TYPE_OUT) {
+        i2s_data->out_enable = enable;
+    }
+    _i2s_unlock(i2s_data);
+    return ret;
+}
+
+static int _i2s_data_set_fmt(const audio_codec_data_if_t *h, esp_codec_dev_type_t dev_type, esp_codec_dev_sample_info_t *fs)
+{
+    i2s_data_t *i2s_data = (i2s_data_t *) h;
+    if (i2s_data == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (i2s_data->is_open == false) {
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    esp_codec_dev_sample_info_t eq_fs;
+    if (fs->channel == 1) {
+        // When using one channel replace to select channel 0 in default
+        memcpy(&eq_fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        fs = &eq_fs;
+        fs->channel = 2;
+        fs->channel_mask = ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0);
+    }
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    if (fs->channel_mask == 0) {
+        // Add channel mask automatically when not set
+        memcpy(&eq_fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        fs = &eq_fs;
+        for (int i = 0; i < fs->channel; i++) {
+            fs->channel_mask |= ESP_CODEC_DEV_MAKE_CHANNEL_MASK(i);
+        }
+    }
+#endif
+    if (_i2s_valid_fmt(fs) == false) {
+        return ESP_CODEC_DEV_NOT_SUPPORT;
+    }
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    int ret;
+    _i2s_lock(i2s_data, __func__);
+    // disable internally
+    if (dev_type & ESP_CODEC_DEV_TYPE_OUT) {
+        _i2s_drv_enable(i2s_data, true, false);
+    }
+    if (dev_type & ESP_CODEC_DEV_TYPE_IN) {
+        _i2s_drv_enable(i2s_data, false, false);
+    }
+    if ((dev_type & ESP_CODEC_DEV_TYPE_IN) != 0 &&
+        (dev_type & ESP_CODEC_DEV_TYPE_OUT) != 0) {
+        // Device support playback and record at same time
+        memcpy(&i2s_data->fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        memcpy(&i2s_data->in_fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        memcpy(&i2s_data->out_fs, fs, sizeof(esp_codec_dev_sample_info_t));
+        ret = set_fs(i2s_data, true, true);
+        ret = set_fs(i2s_data, false, true);
+    } else {
+        ret = check_fs_compatible(i2s_data, dev_type & ESP_CODEC_DEV_TYPE_OUT ? true : false, fs);
+    }
+    _i2s_unlock(i2s_data);
+    return ret;
+#else
+    // When use multichannel data
+    if (fs->channel_mask) {
+        i2s_channel_t sel_channel = 0;
+#if SOC_I2S_SUPPORTS_TDM
+        sel_channel = (i2s_channel_t)(fs->channel_mask << 16);
+#else
+        if (fs->channel_mask == ESP_CODEC_DEV_MAKE_CHANNEL_MASK(0)) {
+            sel_channel = 1;
+        } else {
+            ESP_LOGE(TAG, "IC not support TDM");
+            return ESP_CODEC_DEV_NOT_FOUND;
+        }
+#endif
+        i2s_set_clk(i2s_data->port, fs->sample_rate, fs->bits_per_sample, sel_channel);
+    } else {
+        i2s_set_clk(i2s_data->port, fs->sample_rate, fs->bits_per_sample, fs->channel);
+    }
+    i2s_zero_dma_buffer(i2s_data->port);
+    memcpy(&i2s_data->fs, fs, sizeof(esp_codec_dev_sample_info_t));
+#endif
+    return ESP_CODEC_DEV_OK;
+}
+
+static int _i2s_data_read(const audio_codec_data_if_t *h, uint8_t *data, int size)
+{
+    i2s_data_t *i2s_data = (i2s_data_t *) h;
+    if (i2s_data == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (i2s_data->is_open == false) {
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    size_t bytes_read = 0;
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    i2s_chan_handle_t rx_chan = (i2s_chan_handle_t) i2s_data->in_handle;
+    if (rx_chan == NULL) {
+        return ESP_CODEC_DEV_DRV_ERR;
+    }
+    if (i2s_data->in_reconfig) {
+        memset(data, 0, size);
+        esp_codec_dev_sleep(10);
+        return ESP_CODEC_DEV_OK;
+    }
+    int ret = i2s_channel_read(rx_chan, data, size, &bytes_read, DEFAULT_WAIT_TIMEOUT);
+#else
+    int ret = i2s_read(i2s_data->port, data, size, &bytes_read, portMAX_DELAY);
+#endif
+    return ret == 0 ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_DRV_ERR;
+}
+
+static int _i2s_data_write(const audio_codec_data_if_t *h, uint8_t *data, int size)
+{
+    i2s_data_t *i2s_data = (i2s_data_t *) h;
+    if (i2s_data == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    if (i2s_data->is_open == false) {
+        return ESP_CODEC_DEV_WRONG_STATE;
+    }
+    size_t bytes_written = 0;
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+    i2s_chan_handle_t tx_chan = (i2s_chan_handle_t) i2s_data->out_handle;
+    if (tx_chan == NULL) {
+        return ESP_CODEC_DEV_DRV_ERR;
+    }
+    if (i2s_data->out_reconfig) {
+        esp_codec_dev_sleep(10);
+        return ESP_CODEC_DEV_OK;
+    }
+    int ret = i2s_channel_write(tx_chan, data, size, &bytes_written, DEFAULT_WAIT_TIMEOUT);
+#else
+    int ret = i2s_write(i2s_data->port, data, size, &bytes_written, portMAX_DELAY);
+#endif
+    return ret == 0 ? ESP_CODEC_DEV_OK : ESP_CODEC_DEV_DRV_ERR;
+}
+
+static int _i2s_data_close(const audio_codec_data_if_t *h)
+{
+    i2s_data_t *i2s_data = (i2s_data_t *) h;
+    if (i2s_data == NULL) {
+        return ESP_CODEC_DEV_INVALID_ARG;
+    }
+    memset(&i2s_data->fs, 0, sizeof(esp_codec_dev_sample_info_t));
+    memset(&i2s_data->in_fs, 0, sizeof(esp_codec_dev_sample_info_t));
+    memset(&i2s_data->out_fs, 0, sizeof(esp_codec_dev_sample_info_t));
+    i2s_data->is_open = false;
+    remove_from_keeper(i2s_data);
+    return ESP_CODEC_DEV_OK;
+}
+
+const audio_codec_data_if_t *audio_codec_new_i2s_data(audio_codec_i2s_cfg_t *i2s_cfg)
+{
+    i2s_data_t *i2s_data = calloc(1, sizeof(i2s_data_t));
+    if (i2s_data == NULL) {
+        ESP_LOGE(TAG, "No memory for instance");
+        return NULL;
+    }
+    i2s_data->base.open = _i2s_data_open;
+    i2s_data->base.is_open = _i2s_data_is_open;
+    i2s_data->base.enable = _i2s_data_enable;
+    i2s_data->base.read = _i2s_data_read;
+    i2s_data->base.write = _i2s_data_write;
+    i2s_data->base.set_fmt = _i2s_data_set_fmt;
+    i2s_data->base.close = _i2s_data_close;
+    int ret = _i2s_data_open(&i2s_data->base, i2s_cfg, sizeof(audio_codec_i2s_cfg_t));
+    if (ret != 0) {
+        free(i2s_data);
+        return NULL;
+    }
+    return &i2s_data->base;
+}

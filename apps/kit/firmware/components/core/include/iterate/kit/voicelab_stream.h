@@ -18,7 +18,13 @@ enum {
    * under ~1.1 KiB, inside one 2 KiB control outbox slot.
    */
   ITERATE_KIT_VOICELAB_FRAME_BYTES = 640,
-  ITERATE_KIT_VOICELAB_ARGS_CAPACITY = 1536,
+  /*
+   * The taskless control socket sustains ~40-50 TLS messages/s (measured
+   * on-device), so mic frames aggregate: up to 3 frames (60 ms) per append
+   * = ~17 pushes/s. The args buffer holds that three-event array.
+   */
+  ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND = 3,
+  ITERATE_KIT_VOICELAB_ARGS_CAPACITY = 3328,
   /* Base64 scratch for one inbound speaker frame (854 chars + padding slack). */
   ITERATE_KIT_VOICELAB_B64_CAPACITY = 1200,
   /*
@@ -161,6 +167,20 @@ enum capnweb_status iterate_kit_voicelab_append_frame(
     struct iterate_kit_voicelab *voicelab,
     const uint8_t *pcm,
     size_t pcm_length,
+    uint32_t sequence,
+    uint64_t captured_at_ms);
+
+/**
+ * One-way append of up to MAX_FRAMES_PER_APPEND consecutive mic frames as
+ * one atomic multi-event append — divides the outbound message rate (each
+ * push costs an outbox slot and a TLS write, and outbox exhaustion is
+ * session-fatal in this peer). Sequences run from `sequence` upward.
+ */
+enum capnweb_status iterate_kit_voicelab_append_frames(
+    struct iterate_kit_voicelab *voicelab,
+    const uint8_t *const *frames,
+    size_t frame_count,
+    size_t frame_length,
     uint32_t sequence,
     uint64_t captured_at_ms);
 

@@ -272,15 +272,20 @@ static void downlink_flow(void) {
   assert(fixture.voicelab.state == ITERATE_KIT_VOICELAB_READY);
   assert(fixture.voicelab.has_connection_capability);
 
-  /* The platform invokes the exported callback: push, result never pulled. */
+  /* The platform invokes the exported callback exactly like the live wire:
+   * a push with an EMPTY path, followed by a release of the result import
+   * (the zero-return-frame lane never pulls). */
   receive(
       &fixture,
-      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "[\"push\",[\"pipeline\",-1,[],[{\"projectId\":\"prj_test\","
+      "\"path\":\"/voicelab/dev-test\",\"streamId\":\"sid\",\"events\":[["
       "{\"type\":\"voicelab/spk-frame\",\"offset\":40,"
       "\"payload\":{\"seq\":0,\"pcm\":\"QUJDRA\"}},"
       "{\"type\":\"voicelab/grok-event\",\"offset\":41,"
       "\"payload\":{\"event\":{\"type\":\"input_audio_buffer.speech_started\"}}}"
-      "]],\"scannedThroughOffset\":41,\"state\":null}]]]");
+      "]],\"scannedAfterOffset\":39,\"scannedThroughOffset\":41,"
+      "\"streamMaxOffset\":41,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",1,1]");
   assert(fixture.voicelab.spk_frames_received == 1U);
   assert(spoken_length == 4U);
   assert(memcmp(spoken, "ABCD", 4U) == 0);
@@ -288,7 +293,8 @@ static void downlink_flow(void) {
   assert(speech_started_count == 1);
   assert(fixture.voicelab.last_event_offset == 41);
 
-  /* Redelivery of the same offsets (recycle overlap) is deduped. */
+  /* Redelivery of the same offsets (recycle overlap) is deduped; every
+   * invocation is push + release, and pending slots must recycle. */
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
@@ -297,8 +303,20 @@ static void downlink_flow(void) {
       "{\"type\":\"voicelab/grok-event\",\"offset\":42,"
       "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
       "]],\"scannedThroughOffset\":42,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",2,1]");
   assert(fixture.voicelab.spk_frames_received == 1U);
   assert(response_done_count == 1);
+  assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
+  {
+    size_t occupied = 0U;
+    size_t index;
+    for (index = 0U; index < CALL_CAPACITY; ++index) {
+      if (fixture.pending_calls[index].occupied) {
+        ++occupied;
+      }
+    }
+    assert(occupied == 0U);
+  }
 
   /* Proactive recycle: successor opens under g2, incumbent released after. */
   fixture.voicelab.batches_on_connection =

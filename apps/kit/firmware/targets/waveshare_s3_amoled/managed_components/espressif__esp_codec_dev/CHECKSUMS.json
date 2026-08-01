@@ -1,0 +1,472 @@
+{
+  "version": "1.0",
+  "algorithm": "sha256",
+  "created_at": "2026-06-25T13:40:37.751333+00:00",
+  "files": [
+    {
+      "path": "README.md",
+      "size": 9891,
+      "hash": "382be51ead9466581daba3631203e9e74ad9303c819348b63ee6a4dc40d25f2a"
+    },
+    {
+      "path": "esp_codec_dev_if.c",
+      "size": 1539,
+      "hash": "f186e338082f101513ea058b9283697ba33602bbf55f133640c8fa0746880d21"
+    },
+    {
+      "path": "esp_codec_dev_vol.c",
+      "size": 2054,
+      "hash": "3ec591e1757b331832c2b68c267bc18d0c6edc8b2a6933184c16935ca9ba102c"
+    },
+    {
+      "path": "audio_codec_sw_vol.h",
+      "size": 577,
+      "hash": "71996ac3c9cf3bfb7f37d5b5dafa8c4fdf023ff68d5d680d9353f9a08ed85001"
+    },
+    {
+      "path": "LICENSE",
+      "size": 11358,
+      "hash": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "Kconfig",
+      "size": 2996,
+      "hash": "64b2b9e8803189e548b1871a3fd64d70d2c25304cac06d51b01268ce8de68625"
+    },
+    {
+      "path": "README_CN.md",
+      "size": 9250,
+      "hash": "65dc13ea18e28ba1f02b90d599c657a46ae446fab5d56f355a1690742891193d"
+    },
+    {
+      "path": "CHANGELOG.md",
+      "size": 5023,
+      "hash": "efc7d7e31ade95c06f0dabdbcdb2e79c1815eca1eba7cd941fd77a89fa7ffabf"
+    },
+    {
+      "path": "CMakeLists.txt",
+      "size": 3440,
+      "hash": "2936cbae16ca8d851c1272282ce97032c02855a05bd162718e05b3f537a10bd4"
+    },
+    {
+      "path": "esp_codec_dev.c",
+      "size": 16518,
+      "hash": "b7a17e2ad412f4c08e0e9324aea0f217a49305510fd80e7ef3420fb31d7fd2ce"
+    },
+    {
+      "path": "idf_component.yml",
+      "size": 351,
+      "hash": "9b933ca7ca16413fb771ca9bffa30afc205f81c3f7b00da4b3238a8174b3ad36"
+    },
+    {
+      "path": "audio_codec_sw_vol.c",
+      "size": 4053,
+      "hash": "b8951fa4db5f32fe01315cc8b657f2a82a99fb1076d17ee87f866622addf7385"
+    },
+    {
+      "path": "platform/audio_codec_data_i2s.c",
+      "size": 30470,
+      "hash": "b30d62d4e3e4a2dbfcdb95c6b137109f88997a19281236c6f8fe16a8f52dc9d7"
+    },
+    {
+      "path": "platform/audio_codec_ctrl_i2c.c",
+      "size": 7177,
+      "hash": "aa399a105b52b3f077c6a08a7dc4448d04c7dd8581ebc91c63f22aab9b0b3620"
+    },
+    {
+      "path": "platform/esp_codec_dev_os.c",
+      "size": 1047,
+      "hash": "c201cd789b0c5fbd85fc4d1702e28c472b0bdac40e333a879e64477693b49993"
+    },
+    {
+      "path": "platform/audio_codec_gpio.c",
+      "size": 1672,
+      "hash": "2c87ffb6b65ce58f842223cdbc53e4b3c4138476617892afb532d3faccb8926c"
+    },
+    {
+      "path": "platform/audio_codec_ctrl_spi.c",
+      "size": 4923,
+      "hash": "a0b279f5e2ee58ee10eeae429cdeccd5c09427ccf32f1ccc0fa859484a532834"
+    },
+    {
+      "path": "platform/audio_codec_data_adc.c",
+      "size": 31759,
+      "hash": "302bab9cd63dfebf4ba56c3c07f03451fd3be552193f44c9ae78ab9cdc6d61e9"
+    },
+    {
+      "path": "interface/audio_codec_ctrl_if.h",
+      "size": 1460,
+      "hash": "b985f54597b01afd2633b3df843a47d718a722784ebb9bbe76ece9fb1de7c3d4"
+    },
+    {
+      "path": "interface/audio_codec_if.h",
+      "size": 2277,
+      "hash": "3b2a798b8e9df3a19bc327a0b7f619bdc902aa99da16519a7f7b586aadb59443"
+    },
+    {
+      "path": "interface/audio_codec_vol_if.h",
+      "size": 1222,
+      "hash": "d0b980fde0262a21dde7c39fad688a3935c829f80dced02f56fcc821700a0bee"
+    },
+    {
+      "path": "interface/audio_codec_data_if.h",
+      "size": 1675,
+      "hash": "3a9a63e4c8f49fa8624f16e835cf8d8cb88d8a6ea5b8028cd24d55ad15468459"
+    },
+    {
+      "path": "interface/audio_codec_gpio_if.h",
+      "size": 1331,
+      "hash": "a4e0ccb45810ccbd3c1d7719b0c9f8bb9cf19c31c3f1cff4a8c4910d292feda9"
+    },
+    {
+      "path": "include/esp_codec_dev_vol.h",
+      "size": 3780,
+      "hash": "2ee723bc80dc9cc3478eeaf6920fbce2dc707dfef33d9b4deb2d9175d702c572"
+    },
+    {
+      "path": "include/esp_codec_dev_os.h",
+      "size": 1367,
+      "hash": "51cfe15563e7178f6a947d44a9e07dbf4af3a34e4941e5d1ae08bcf67d2a745b"
+    },
+    {
+      "path": "include/esp_codec_dev_defaults.h",
+      "size": 3828,
+      "hash": "69af681898be83d520894805a571a5254c31997164fe30364e0e3800d5fc41be"
+    },
+    {
+      "path": "include/esp_codec_dev.h",
+      "size": 10608,
+      "hash": "255074726d8949757b2c58e75de85cb3aaf11bf9ab4ee96c29b39bf06000f7c6"
+    },
+    {
+      "path": "include/esp_codec_dev_types.h",
+      "size": 2917,
+      "hash": "182e02a3fe868bcfdf881d4e6b64c6d6f0fbfb75c55e7892960ef722994f4088"
+    },
+    {
+      "path": "include/esp_codec_adc.h",
+      "size": 2762,
+      "hash": "90ff8040f8951b614e019365ea5347013219f81c0cbc894a728323ca9febae94"
+    },
+    {
+      "path": "test_apps/codec_dev_test/README.md",
+      "size": 575,
+      "hash": "ec1a71ce7f8d37dbface5c5eced3e098e2e57acf189f08b1b94a489b8d40c571"
+    },
+    {
+      "path": "test_apps/codec_dev_test/pytest_esp_codec_dev_test.py",
+      "size": 792,
+      "hash": "09d758f0ab2c98cf596e0ec0e52c76f4d1134592c67a735e2e72b08763f4feda"
+    },
+    {
+      "path": "test_apps/codec_dev_test/CMakeLists.txt",
+      "size": 288,
+      "hash": "318e4d4b90c7cb4fe6adb6ba52a0542276aefb5d8fefd426cb9e168b03e4f365"
+    },
+    {
+      "path": "test_apps/codec_dev_test/sdkconfig.defaults",
+      "size": 232,
+      "hash": "fc066ce2d5ad720cdfaf1ce28f8eed9b574beb81e3f3cd5486fba5a6c1b1b48e"
+    },
+    {
+      "path": "test_apps/codec_dev_test/main/my_codec.c",
+      "size": 11977,
+      "hash": "2fd315f0c41f48cdbeac2dcc3a63d3a70ea4d9526b0fe21aea8186a6b5ece25f"
+    },
+    {
+      "path": "test_apps/codec_dev_test/main/test_my_codec.c",
+      "size": 11711,
+      "hash": "831b2dfdeac1613778efd3819542f93f19961c375e29537bdc443c01c9a8fbc5"
+    },
+    {
+      "path": "test_apps/codec_dev_test/main/my_codec.h",
+      "size": 2503,
+      "hash": "a77dd525773dd091d9a52adfa5a0a2432e8c02927a2c6e1d0aaeb677515e251f"
+    },
+    {
+      "path": "test_apps/codec_dev_test/main/test_board.h",
+      "size": 628,
+      "hash": "3995be109f25f2ddb0c7c48fe4dd098bf09ccca4bb5a5bfb9d800447ab7aec73"
+    },
+    {
+      "path": "test_apps/codec_dev_test/main/test_board.c",
+      "size": 45980,
+      "hash": "9afc0c2b4e467991788041efb675e677b8de157070a0a5739e8f3e1e9fa4837b"
+    },
+    {
+      "path": "test_apps/codec_dev_test/main/CMakeLists.txt",
+      "size": 332,
+      "hash": "12f6582a7f072770198848c10eeeab930839058cc6b47525e7a928eae49ef52e"
+    },
+    {
+      "path": "test_apps/codec_dev_test/main/idf_component.yml",
+      "size": 114,
+      "hash": "09b076343ccf72e403b0ce98cb48f5fa5a41110f483b7ec1a4d6ab90bfca7959"
+    },
+    {
+      "path": "test_apps/codec_dev_test/main/test_app_main.c",
+      "size": 452,
+      "hash": "c7f5f80ba1f331df7d167975ddf81b61d59074ae9342cd55ba6c7c44b05d1b49"
+    },
+    {
+      "path": "device/cjc8910/cjc8910.c",
+      "size": 13174,
+      "hash": "c384dd64c01be710aaf4d3019bb956b46d275f554d2d9f67d8fb9e1afcfb92fe"
+    },
+    {
+      "path": "device/cjc8910/cjc8910_reg.h",
+      "size": 2942,
+      "hash": "6118f46f9f3f4dd67a96eabc397d99637f7d09edd4799f5a7e8795a6af51a2fa"
+    },
+    {
+      "path": "device/es7243/es7243.c",
+      "size": 7020,
+      "hash": "0c9743cdf7c35ce6419c79dae3b3b9ec43401b155d1f5a83ffdf3141f5ccc640"
+    },
+    {
+      "path": "device/aw88298/aw88298_reg.h",
+      "size": 1493,
+      "hash": "519f1f68fc695a8c7300381dbf661568bd401b737adbb0e4a8836cad7b734761"
+    },
+    {
+      "path": "device/aw88298/aw88298.c",
+      "size": 11363,
+      "hash": "72351441560a3b20cdad509fab82d73325792006faf34fa5c4855ee1045db5e8"
+    },
+    {
+      "path": "device/es7210/es7210_reg.h",
+      "size": 2608,
+      "hash": "12b2a719e5feefa248e239c8368227dde8fd0a60c7f055eca60e800fc7371dcc"
+    },
+    {
+      "path": "device/es7210/es7210.c",
+      "size": 22270,
+      "hash": "8c741993683579ffbffd05a227533f4a54d086921de8ed99ff6c12f6574d5921"
+    },
+    {
+      "path": "device/include/dummy_codec.h",
+      "size": 1346,
+      "hash": "2eea31cad4a9ba482d308083b896a1cb29cdaa58fddccff035c5c2123f4a7cea"
+    },
+    {
+      "path": "device/include/es8388_codec.h",
+      "size": 1474,
+      "hash": "7684143aad5eba2f207aeca5724dafce00470f772e5a110fa8396b42096a19a4"
+    },
+    {
+      "path": "device/include/cjc8910_codec.h",
+      "size": 1608,
+      "hash": "f9bc61e0a36f5aa18b41c16a5e80765549c88a158eb251081d19d27ed9f293ed"
+    },
+    {
+      "path": "device/include/aw88298_dac.h",
+      "size": 1200,
+      "hash": "f895ff195d124620850b10823c81d62a97fbd3c6f3746ecce4ff74add9f9bc19"
+    },
+    {
+      "path": "device/include/es8374_codec.h",
+      "size": 1384,
+      "hash": "6ccc5aa7a6f5b673ea736e88970e9f09edd79b86407f76898ba446cc0e3f7e46"
+    },
+    {
+      "path": "device/include/es7210_adc.h",
+      "size": 1557,
+      "hash": "1bb47ab66891f094c5adbfd3478f785d7b258cd678414e63fb433063623450a1"
+    },
+    {
+      "path": "device/include/es8156_dac.h",
+      "size": 1202,
+      "hash": "97a35683fa07e65d32044ee8676e7410d6313202bd873de9672075188eb3d97a"
+    },
+    {
+      "path": "device/include/es7243e_adc.h",
+      "size": 806,
+      "hash": "8140808faa22fba5d0c4d6caf85a735e52288b5626953f327a900e2cec5ec484"
+    },
+    {
+      "path": "device/include/es7243_adc.h",
+      "size": 948,
+      "hash": "c7b97a977cc8f643657d6abb867b67ad2d4dfa07987bac64c5087f18056c0bb9"
+    },
+    {
+      "path": "device/include/es8311_codec.h",
+      "size": 2130,
+      "hash": "e10f30ab57a2bb6b46d257a7ccba9726b61e1f201182eec2c71731e837db3dca"
+    },
+    {
+      "path": "device/include/tas5805m_dac.h",
+      "size": 1269,
+      "hash": "e98f0bf5260dbe0acf94a4554401daa088570111666828287dea8b870761defd"
+    },
+    {
+      "path": "device/include/zl38063_codec.h",
+      "size": 1548,
+      "hash": "49bce27ec37c285c32f5bc25d586731b0c2723f399d30749db8b140a74d12699"
+    },
+    {
+      "path": "device/include/es8389_codec.h",
+      "size": 2131,
+      "hash": "50c7edcc30e24fe3edbb4008d700cb231f7b6210bfd42bb055c6da71e16f21ba"
+    },
+    {
+      "path": "device/es8374/es8374.c",
+      "size": 24792,
+      "hash": "9a66fb4165f809024ab5e8c23d12afb79798c4cfe174a4c3500733924e675d3c"
+    },
+    {
+      "path": "device/es8388/es8388.c",
+      "size": 15855,
+      "hash": "ec526881badcd91a6977f36f4b46f6623522cc122d24542d6e08d5b12be7e457"
+    },
+    {
+      "path": "device/es8388/es8388_reg.h",
+      "size": 2048,
+      "hash": "1e5523c87dd67382ac0bd855d0d67f6ba54f6f051168ee60ad14c3767e55c686"
+    },
+    {
+      "path": "device/zl38063/Readme_twolf.txt",
+      "size": 1764,
+      "hash": "e92a9013a8481cc52c49e865935b75feb94ac6e7bfb54fd63eca32376f486513"
+    },
+    {
+      "path": "device/zl38063/zl38063.c",
+      "size": 9841,
+      "hash": "030a6ca280906e6e6f8e892db33ce8484a1b44b1c9ad3d09e19f425bed313d79"
+    },
+    {
+      "path": "device/zl38063/LICENSE.txt",
+      "size": 1074,
+      "hash": "d8023d14377b7e734064165e0ddf5961d0bfc1ab037bc63ad682cf295369964d"
+    },
+    {
+      "path": "device/dummy/dummy_codec.c",
+      "size": 4356,
+      "hash": "024e23fd4b6b3e9f49794a99e894b9bef08745cc2b7142631aa2ea1c699d6b28"
+    },
+    {
+      "path": "device/es8156/es8156_reg.h",
+      "size": 1909,
+      "hash": "bce7036d649980d25594c5b523d915d37f5432102b316331d757b6a7e99aa5f2"
+    },
+    {
+      "path": "device/es8156/es8156.c",
+      "size": 9262,
+      "hash": "c0f5948925be73b988d55da4ee8b2ea8da6d65c60d7484763e1711580d59becd"
+    },
+    {
+      "path": "device/es8389/es8389_reg.h",
+      "size": 6932,
+      "hash": "536e8e49c9b3f63a1905efe171df87b875a3e6d062034ece627f967823caf278"
+    },
+    {
+      "path": "device/es8389/es8389.c",
+      "size": 38326,
+      "hash": "f4e7183665e73698556a25fac54de7fbcaa3829116cfcc455b4d4f3c12e4dd0e"
+    },
+    {
+      "path": "device/es8311/es8311_reg.h",
+      "size": 3346,
+      "hash": "a65d5cdc26413ad4cba4250f64ad92e4ab9f37e9c8829a3eb17a57711cdb87ed"
+    },
+    {
+      "path": "device/es8311/es8311.c",
+      "size": 27995,
+      "hash": "89bea26707abf7313806c2fc15299a22bcd96d8072d83794ff0e2dd2afd20dbe"
+    },
+    {
+      "path": "device/tas5805m/tas5805m.c",
+      "size": 8692,
+      "hash": "9fa1e48d2587d5e6bcfa3961d2751a00026b1cce191b0d92f833cdd00d956603"
+    },
+    {
+      "path": "device/tas5805m/tas5805m_reg.h",
+      "size": 1062,
+      "hash": "2a2e4e1411d942df7600d8ebacfdb131dd971a13720cbe07fd4b68a2e14f230d"
+    },
+    {
+      "path": "device/tas5805m/tas5805m_reg_cfg.h",
+      "size": 47890,
+      "hash": "a37db933972d59249432408d90c2508ee9041be6721ef47128e3939dcd61b02f"
+    },
+    {
+      "path": "device/priv_include/es_common.h",
+      "size": 3803,
+      "hash": "bbc2d51cbb01d2a2e8d0430252a2fad40a0d1813c0b7bca9765ea2364bc3eb46"
+    },
+    {
+      "path": "device/es7243e/es7243e.c",
+      "size": 9063,
+      "hash": "ab7b7e10e89efbe400033ef2fe036f223d38e7ea568c9d51db4c999a24dde675"
+    },
+    {
+      "path": "device/zl38063/api_lib/vproc_data_types.h",
+      "size": 4458,
+      "hash": "2f32da045f3f7743c3685d5155c5d11cd78a1ab1f0c6193dfeffe30e6527777f"
+    },
+    {
+      "path": "device/zl38063/api_lib/vprocTwolf_access.h",
+      "size": 3353,
+      "hash": "8ef569af1e6741df3ff0415e43b8828b775bfaa05d5eceb3908362d38df23d43"
+    },
+    {
+      "path": "device/zl38063/api_lib/tw_spi_access.h",
+      "size": 165,
+      "hash": "1419b7a2c60788347ad18c52d3e8b3e587d048d710265b1d4ac98408ac996031"
+    },
+    {
+      "path": "device/zl38063/api_lib/vprocTwolf_access.c",
+      "size": 38589,
+      "hash": "9af28b4a43d88cfb0ab4bab2829a0a7a54d42b2b0908eddecdb915f601e8926a"
+    },
+    {
+      "path": "device/zl38063/api_lib/vproc_common.h",
+      "size": 3884,
+      "hash": "7c7bbe33e834f8763582b3df4b03909bd057a6ae31b238846b9576c6f3fb4a15"
+    },
+    {
+      "path": "device/zl38063/api_lib/vproc_common.c",
+      "size": 2161,
+      "hash": "163f66fb4bee3f3cc1e59f5d0f107dd19fa5f342ab850ed115e39d48e0cd2656"
+    },
+    {
+      "path": "device/zl38063/example_apps/tw_ldfw.c",
+      "size": 3863,
+      "hash": "bb07bf0f22bb11b623be5328a4eb84be9ed55727b85a8497f3c4ca0b311bd492"
+    },
+    {
+      "path": "device/zl38063/example_apps/tw_ldfwcfg.c",
+      "size": 7195,
+      "hash": "1e1c37d14deef033e513ded2fa271c01c507de7ff01e03240fbfb194ca49ccd5"
+    },
+    {
+      "path": "device/zl38063/example_apps/tw_ldcfg.c",
+      "size": 5224,
+      "hash": "2e479e77ad54b0e32ff5f6fb908a73ed91962541bff3840e57099e602defa89f"
+    },
+    {
+      "path": "device/zl38063/example_apps/tw_spi_access.c",
+      "size": 17688,
+      "hash": "3441de4604efe139ae6a999dd7f5704af12bf449c47d03dc486966ef17f2c215"
+    },
+    {
+      "path": "device/zl38063/example_apps/tw_hal_verify.c",
+      "size": 10535,
+      "hash": "a740e22b1cb2052acbf3f79351cf21b457fabddc4d1b6ec104d65e5d81765df9"
+    },
+    {
+      "path": "device/zl38063/firmware/zl38063_firmware.h",
+      "size": 609,
+      "hash": "de16e742a3dafee05c7d0849d7e0b924378497db9ccdeddcf058123e32b14def"
+    },
+    {
+      "path": "device/zl38063/firmware/zl38063_config.h",
+      "size": 458,
+      "hash": "d1585d3853a5466163329759e63faf780c86016e26bf9b170fa1fa3bf347c086"
+    },
+    {
+      "path": "device/zl38063/firmware/libfirmware.a",
+      "size": 114686,
+      "hash": "032ef57d40aad4e365b270658cb8dd7bc819202b43ec8793bed29df1b93981ca"
+    }
+  ]
+}
