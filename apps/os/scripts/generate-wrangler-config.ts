@@ -580,8 +580,9 @@ export const config = {
   // stream callback batches. Cloudflare's paid default is 10,000 subrequests
   // per invocation; that silently strands an otherwise-healthy long-lived
   // socket. Keep a finite guardrail, but give the transport enough headroom
-  // for successor-first recycling (the platform maximum is 10,000,000).
-  limits: { subrequests: 1_000_000 },
+  // for successor-first recycling. Use the platform maximum so sustained
+  // callback consumers have the most headroom Cloudflare permits.
+  limits: { subrequests: 10_000_000 },
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   // SSR + API paths reach the worker because no asset file matches them.

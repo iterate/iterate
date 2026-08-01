@@ -108,7 +108,7 @@ outer `/api` Worker invocation. Its paid-plan default is 10,000 subrequests per
 invocation, even when the WebSocket itself remains healthy. Opening another
 stream callback on the same ITX socket does not reset that counter.
 
-OS deployments set an explicit 1,000,000-subrequest ceiling, and the
+OS deployments set the explicit 10,000,000-subrequest platform maximum, and the
 `iterate/client` session keeper proactively authenticates a successor `/api`
 socket after 8,000 inbound messages. It publishes the successor before retiring
 the predecessor. Reconnect-aware effects lease that predecessor until every
