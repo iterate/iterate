@@ -22,6 +22,9 @@ static const char *const subscribe_path[] = {"subscribeToMetrics"};
 static const char *const subscribe_playback_path[] = {
   "subscribeToPlaybackMetrics",
 };
+static const char *const subscribe_aec_path[] = {
+  "subscribeToAecMetrics",
+};
 static const char *const get_diagnostics_path[] = {"getDiagnostics"};
 
 static struct iterate_kit_poll_result poll_ok(void) {
@@ -133,6 +136,7 @@ _Static_assert(
 enum {
   PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT = 35,
   PLAYBACK_VIEW_RUNTIME_FIELD_COUNT = 19,
+  AEC_VIEW_FIELD_COUNT = 24,
 };
 
 struct playback_metrics_expression_workspace {
@@ -159,6 +163,18 @@ struct playback_metrics_expression_workspace {
   struct capnweb_expression root_object;
 };
 
+struct aec_metrics_expression_workspace {
+  /*
+   * This diagnostic is deliberately flat: every value belongs to one exact
+   * signal window, so nested signal/timing objects would add punctuation and
+   * stack workspace without clarifying lifetime. The compile-time count and
+   * maximum-width wire test make future schema growth explicit.
+   */
+  struct capnweb_expression values[AEC_VIEW_FIELD_COUNT];
+  struct capnweb_object_field fields[AEC_VIEW_FIELD_COUNT];
+  struct capnweb_expression root_object;
+};
+
 union any_metrics_expression_workspace {
   /*
    * Only one callback expression exists at a time. Cap'n Web serializes it
@@ -168,6 +184,7 @@ union any_metrics_expression_workspace {
    */
   struct metrics_expression_workspace general;
   struct playback_metrics_expression_workspace playback;
+  struct aec_metrics_expression_workspace aec;
 };
 
 _Static_assert(
@@ -930,6 +947,79 @@ static bool build_playback_metrics_expression(
   return true;
 }
 
+static bool build_aec_metrics_expression(
+    const struct iterate_kit_metrics_sample *sample,
+    struct aec_metrics_expression_workspace *workspace) {
+  const struct iterate_kit_aec_metrics_sample *const detail =
+      &sample->aec_detail;
+  size_t count = 0U;
+  if (!sample->has_aec_detail || detail->schema_version == 0U ||
+      detail->sample_stride == 0U ||
+      detail->window_started_at_ms > detail->produced_at_ms) {
+    /*
+     * Zero-filled signal data is actively dangerous: it would say that a quiet
+     * clean channel proved AEC suppression when the platform never measured a
+     * sample. Reject malformed platform evidence before opening a callback
+     * message, preserving a visible driver failure instead of a false pass.
+     */
+    return false;
+  }
+
+#define SET_AEC_INTEGER(public_name, member)                               \
+  do {                                                                    \
+    if (count >= AEC_VIEW_FIELD_COUNT) {                                  \
+      return false;                                                       \
+    }                                                                     \
+    set_integer_field(                                                    \
+        &workspace->values[count],                                        \
+        &workspace->fields[count],                                        \
+        public_name,                                                      \
+        sizeof(public_name) - 1U,                                         \
+        detail->member);                                                  \
+    ++count;                                                              \
+  } while (0)
+
+  SET_AEC_INTEGER("schemaVersion", schema_version);
+  SET_AEC_INTEGER("sequence", sequence);
+  SET_AEC_INTEGER("windowStartedAtMs", window_started_at_ms);
+  SET_AEC_INTEGER("producedAtMs", produced_at_ms);
+  SET_AEC_INTEGER("sampleStride", sample_stride);
+  SET_AEC_INTEGER("sampledSamples", sampled_samples);
+  SET_AEC_INTEGER("nearPeak", near_peak);
+  SET_AEC_INTEGER("referencePeak", reference_peak);
+  SET_AEC_INTEGER("cleanPeak", clean_peak);
+  SET_AEC_INTEGER("nearMeanAbsolute", near_mean_absolute);
+  SET_AEC_INTEGER("referenceMeanAbsolute", reference_mean_absolute);
+  SET_AEC_INTEGER("cleanMeanAbsolute", clean_mean_absolute);
+  SET_AEC_INTEGER(
+      "lifetimeFramesProcessed", lifetime_frames_processed);
+  SET_AEC_INTEGER("lifetimeRecreates", lifetime_recreates);
+  SET_AEC_INTEGER(
+      "lifetimeRecreateFailures", lifetime_recreate_failures);
+  SET_AEC_INTEGER("lastLinearUs", last_linear_us);
+  SET_AEC_INTEGER("maximumLinearUs", maximum_linear_us);
+  SET_AEC_INTEGER("lastNlpUs", last_nlp_us);
+  SET_AEC_INTEGER("maximumNlpUs", maximum_nlp_us);
+  SET_AEC_INTEGER("lastCaptureToUplinkUs", last_capture_to_uplink_us);
+  SET_AEC_INTEGER(
+      "maximumCaptureToUplinkUs", maximum_capture_to_uplink_us);
+  SET_AEC_INTEGER(
+      "lifetimeCaptureReserveDroppedChunks",
+      lifetime_capture_reserve_dropped_chunks);
+  SET_AEC_INTEGER(
+      "lifetimeCaptureBridgeErrors", lifetime_capture_bridge_errors);
+  SET_AEC_INTEGER(
+      "lifetimeSignalMeasurementFailures",
+      lifetime_signal_measurement_failures);
+#undef SET_AEC_INTEGER
+
+  if (count != AEC_VIEW_FIELD_COUNT) {
+    return false;
+  }
+  set_object(&workspace->root_object, workspace->fields, count);
+  return true;
+}
+
 static enum capnweb_status subscribe_view(
     void *context,
     const struct capnweb_call *call,
@@ -995,6 +1085,14 @@ static enum capnweb_status subscribe_playback(
     struct capnweb_reply *reply) {
   return subscribe_view(
       context, call, reply, ITERATE_KIT_METRICS_PLAYBACK);
+}
+
+static enum capnweb_status subscribe_aec(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  return subscribe_view(
+      context, call, reply, ITERATE_KIT_METRICS_AEC);
 }
 
 static void diagnostics_reply_released(void *context) {
@@ -1392,6 +1490,16 @@ static struct iterate_kit_poll_result poll(
         return result;
       }
       root = &workspace.playback.root_object;
+    } else if (subscription->view == ITERATE_KIT_METRICS_AEC) {
+      if (!build_aec_metrics_expression(&sample, &workspace.aec)) {
+        (void)release_callback_budget(metrics, subscription);
+        const struct iterate_kit_poll_result result = {
+          ITERATE_KIT_POLL_DRIVER_ERROR,
+          CAPNWEB_OK,
+        };
+        return result;
+      }
+      root = &workspace.aec.root_object;
     } else {
       /*
        * A corrupt view selector is owner-state corruption, not a request for
@@ -1536,14 +1644,48 @@ enum iterate_kit_status iterate_kit_metrics_init(
 
 struct iterate_kit_module iterate_kit_metrics_module(
     struct iterate_kit_metrics *metrics) {
-  static const struct iterate_kit_method methods[] = {
+  static const struct iterate_kit_method base_methods[] = {
+    {subscribe_path, 1U, subscribe},
+    {get_diagnostics_path, 1U, get_diagnostics},
+  };
+  static const struct iterate_kit_method playback_methods[] = {
     {subscribe_path, 1U, subscribe},
     {subscribe_playback_path, 1U, subscribe_playback},
     {get_diagnostics_path, 1U, get_diagnostics},
   };
+  static const struct iterate_kit_method aec_methods[] = {
+    {subscribe_path, 1U, subscribe},
+    {subscribe_aec_path, 1U, subscribe_aec},
+    {get_diagnostics_path, 1U, get_diagnostics},
+  };
+  static const struct iterate_kit_method all_methods[] = {
+    {subscribe_path, 1U, subscribe},
+    {subscribe_playback_path, 1U, subscribe_playback},
+    {subscribe_aec_path, 1U, subscribe_aec},
+    {get_diagnostics_path, 1U, get_diagnostics},
+  };
+  const bool playback =
+      metrics != NULL && metrics->options.enable_playback_view;
+  const bool aec = metrics != NULL && metrics->options.enable_aec_view;
+  const struct iterate_kit_method *methods;
+  size_t method_count;
+  if (playback && aec) {
+    methods = all_methods;
+    method_count = sizeof(all_methods) / sizeof(all_methods[0]);
+  } else if (playback) {
+    methods = playback_methods;
+    method_count = sizeof(playback_methods) /
+        sizeof(playback_methods[0]);
+  } else if (aec) {
+    methods = aec_methods;
+    method_count = sizeof(aec_methods) / sizeof(aec_methods[0]);
+  } else {
+    methods = base_methods;
+    method_count = sizeof(base_methods) / sizeof(base_methods[0]);
+  }
   const struct iterate_kit_module module = {
     .methods = methods,
-    .method_count = sizeof(methods) / sizeof(methods[0]),
+    .method_count = method_count,
     .context = metrics,
     .poll = poll,
     .close = close_metrics,

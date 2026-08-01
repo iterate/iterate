@@ -74,6 +74,25 @@ struct Simulation {
   iterate_kit_device profile{};
 };
 
+iterate_kit_status requestPlaybackInterruption(
+    void *context, std::uint32_t *token) {
+  if (context == nullptr || token == nullptr) return ITERATE_KIT_INVALID_ARGUMENT;
+  /*
+   * The host has no DMA descriptors to retire, so acknowledgement can be
+   * immediate. Still using the asynchronous token seam is important: it keeps
+   * the production capability lifecycle under test instead of bypassing it
+   * with a simulator-only synchronous method.
+   */
+  *token = 1U;
+  return ITERATE_KIT_OK;
+}
+
+iterate_kit_status pollPlaybackInterruption(
+    void *context, std::uint32_t token) {
+  if (context == nullptr || token != 1U) return ITERATE_KIT_INVALID_ARGUMENT;
+  return ITERATE_KIT_OK;
+}
+
 iterate_kit_status moveServos(
     void *context,
     std::int32_t yawDegrees,
@@ -257,11 +276,19 @@ capnweb_status initialize(
     {&simulation, takePhoto},
     256U * 1024U,
     {
+      &simulation,
+      requestPlaybackInterruption,
+      pollPlaybackInterruption,
+      50U,
+    },
+    {
       session,
       {&simulation.common, iterate::kit::simulator::sampleMetrics},
       simulation.subscriptions,
       subscriptionCapacity,
       25U,
+      false,
+      true,
       simulation.diagnosticsExpression,
       sizeof(simulation.diagnosticsExpression),
       nullptr,

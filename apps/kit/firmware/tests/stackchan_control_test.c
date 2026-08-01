@@ -259,6 +259,8 @@ static void fixture_init(struct fixture *fixture) {
       sizeof(fixture->metrics_subscriptions) /
           sizeof(fixture->metrics_subscriptions[0]),
       1000U,
+      false,
+      true,
       fixture->diagnostics_expression,
       sizeof(fixture->diagnostics_expression),
       NULL,

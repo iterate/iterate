@@ -2,6 +2,7 @@
 #define ITERATE_KIT_PLATFORMS_CORE_S3_AUDIO_OWNER_H
 
 #include "iterate/kit/aec_capture_bridge.h"
+#include "iterate/kit/aec_signal_window.h"
 #include "iterate/kit/audio.h"
 #include "iterate/kit/pcm_capture_turn.h"
 #include "iterate/kit/pcm_clock_playback.h"
@@ -112,6 +113,7 @@ struct iterate_kit_core_s3_audio_owner_metrics {
   uint32_t capture_failures;
   uint32_t last_capture_to_uplink_us;
   uint32_t maximum_capture_to_uplink_us;
+  uint32_t aec_signal_measurement_failures;
   uint32_t aec_input_partial_samples;
   uint32_t clean_egress_partial_samples;
   uint32_t capture_turn_poll_failures;
@@ -122,6 +124,13 @@ struct iterate_kit_core_s3_audio_owner_metrics {
   uint32_t internal_heap_largest_block_bytes;
   uint32_t psram_heap_free_bytes;
   uint32_t psram_heap_largest_block_bytes;
+};
+
+struct iterate_kit_core_s3_aec_signal_metrics {
+  uint32_t sequence;
+  uint64_t window_started_at_us;
+  uint64_t produced_at_us;
+  struct iterate_kit_aec_signal_summary signal;
 };
 
 /**
@@ -196,6 +205,20 @@ iterate_kit_core_s3_audio_owner_request_uplink_active(bool active);
 
 void iterate_kit_core_s3_audio_owner_metrics_snapshot(
     struct iterate_kit_core_s3_audio_owner_metrics *snapshot);
+
+/**
+ * Copies the newest exact near/reference/clean signal window.
+ *
+ * The implementation holds its cross-core critical section only while copying
+ * fixed metadata and seven scalars. Sample walking and integer division happen
+ * outside that section, so a diagnostics callback cannot stretch an audio
+ * deadline. The audio owner rotates windows on its own one-second clock; an
+ * unrelated getDiagnostics() call therefore cannot consume the interval that
+ * an AEC subscriber was waiting to observe.
+ */
+enum iterate_kit_status
+iterate_kit_core_s3_audio_owner_aec_signal_metrics_snapshot(
+    struct iterate_kit_core_s3_aec_signal_metrics *snapshot);
 
 #ifdef __cplusplus
 }

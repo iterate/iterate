@@ -121,6 +121,49 @@ struct iterate_kit_playback_metrics_sample {
 };
 
 /**
+ * One bounded AEC signal window from a full-duplex audio owner.
+ *
+ * Peaks and mean absolute amplitudes describe the same sampled positions in
+ * the pre-AEC near/reference streams and the post-AEC clean stream. That
+ * alignment matters: three unrelated lifetime peaks cannot tell whether a
+ * physical utterance reached the microphone or whether AEC removed it. The
+ * device intentionally publishes integer mean absolute amplitude rather than
+ * RMS. It avoids square-root/floating-point work on the audio target while the
+ * host can still derive suppression ratios for speaker-only intervals.
+ *
+ * This remains separate from the general metrics callback because that wire
+ * object has less than one hundred and twenty bytes of measured headroom. A
+ * dedicated serialization view reuses the same sampler and subscriber slots;
+ * it does not add a task, queue, sample history, or per-frame allocation.
+ */
+struct iterate_kit_aec_metrics_sample {
+  uint32_t schema_version;
+  uint32_t sequence;
+  int64_t window_started_at_ms;
+  int64_t produced_at_ms;
+  uint32_t sample_stride;
+  uint32_t sampled_samples;
+  uint32_t near_peak;
+  uint32_t reference_peak;
+  uint32_t clean_peak;
+  uint32_t near_mean_absolute;
+  uint32_t reference_mean_absolute;
+  uint32_t clean_mean_absolute;
+  uint32_t lifetime_frames_processed;
+  uint32_t lifetime_recreates;
+  uint32_t lifetime_recreate_failures;
+  uint32_t last_linear_us;
+  uint32_t maximum_linear_us;
+  uint32_t last_nlp_us;
+  uint32_t maximum_nlp_us;
+  uint32_t last_capture_to_uplink_us;
+  uint32_t maximum_capture_to_uplink_us;
+  uint32_t lifetime_capture_reserve_dropped_chunks;
+  uint32_t lifetime_capture_bridge_errors;
+  uint32_t lifetime_signal_measurement_failures;
+};
+
+/**
  * Latest classified control-transport incident retained across reconnect.
  *
  * A metrics callback belongs to the Cap'n Web session that carried it, so the
@@ -301,6 +344,8 @@ struct iterate_kit_metrics_sample {
   } audio;
   bool has_playback_detail;
   struct iterate_kit_playback_metrics_sample playback_detail;
+  bool has_aec_detail;
+  struct iterate_kit_aec_metrics_sample aec_detail;
   bool has_control_diagnostics;
   struct iterate_kit_control_diagnostics_sample control_diagnostics;
 };
@@ -321,6 +366,7 @@ struct iterate_kit_metrics;
 enum iterate_kit_metrics_view {
   ITERATE_KIT_METRICS_GENERAL = 0,
   ITERATE_KIT_METRICS_PLAYBACK,
+  ITERATE_KIT_METRICS_AEC,
 };
 
 /**
@@ -356,6 +402,14 @@ struct iterate_kit_metrics_options {
   /* Monotonic milliseconds; zero is rejected to prevent a busy poll loop. */
   uint64_t interval_ms;
   /*
+   * Detailed views are mounted only when the target can populate their exact
+   * contracts. A method which always fails is not a capability: advertising
+   * CoreS3 AEC on a no-AEC Stick (or direct-DMA playback on CoreS3) would make
+   * discovery lie and push platform branching into every caller.
+   */
+  bool enable_playback_view;
+  bool enable_aec_view;
+  /*
    * getDiagnostics() returns a dynamic object through Cap'n Web's borrowed
    * expression reply. The protocol may retain that reply until a later pull,
    * so stack storage is invalid and heap allocation would make failure
@@ -379,13 +433,13 @@ struct iterate_kit_metrics_options {
  * profiles account for the exact static RAM cost at compile time.
  */
 /*
- * Schema v3's worst-width control and network objects occupy less than 1472
- * bytes. A 1536-byte fixed tier preserves 64 bytes of deliberate schema
+ * Schema v4's worst-width control and network objects occupy less than 1728
+ * bytes. A 1792-byte fixed tier preserves 64 bytes of deliberate schema
  * headroom while costing one retained buffer per mounted device—not one slot
  * in every control ring. The maximum-width serializer regression is the
  * authority for changing this value.
  */
-#define ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY 1536U
+#define ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY 1792U
 
 /**
  * Allocation-free subscription scheduler. Polling samples once per interval

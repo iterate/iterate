@@ -35,6 +35,8 @@
 #define CORE_S3_AEC_FILTER_LENGTH 4
 #define CORE_S3_AEC_REFERENCE_GAIN_DB 0.0F
 #define CORE_S3_AEC_NLP_LEVEL 2
+#define CORE_S3_AEC_SIGNAL_SAMPLE_STRIDE 8U
+#define CORE_S3_AEC_SIGNAL_WINDOW_US UINT64_C(1000000)
 #define CORE_S3_TDM_NEAR_SLOT 0U
 #define CORE_S3_TDM_REFERENCE_SLOT 1U
 #define CORE_S3_AW88298_I2SCTRL_REG 0x06
@@ -82,6 +84,7 @@ struct core_s3_atomic_metrics {
   volatile uint32_t maximum_aec_nlp_us;
   volatile uint32_t last_capture_to_uplink_us;
   volatile uint32_t maximum_capture_to_uplink_us;
+  volatile uint32_t aec_signal_measurement_failures;
   volatile uint32_t aec_input_partial_samples;
   volatile uint32_t clean_egress_partial_samples;
   volatile uint32_t capture_turn_poll_failures;
@@ -119,6 +122,12 @@ struct core_s3_audio_owner {
       __attribute__((aligned(16)));
   int16_t clean_egress[ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME]
       __attribute__((aligned(16)));
+  struct iterate_kit_aec_signal_window current_aec_signal_window;
+  struct iterate_kit_aec_signal_window latest_aec_signal_window;
+  uint64_t current_aec_signal_started_at_us;
+  uint64_t latest_aec_signal_started_at_us;
+  uint64_t latest_aec_signal_produced_at_us;
+  uint32_t latest_aec_signal_sequence;
 
   StaticTask_t io_task_control;
   StaticTask_t aec_task_control;
@@ -150,6 +159,16 @@ struct core_s3_audio_owner {
  */
 static DRAM_ATTR struct core_s3_audio_owner owner
     __attribute__((aligned(16)));
+
+/*
+ * The AEC task on core 1 is the only writer; the low-rate Cap'n Web owner may
+ * snapshot on the other core. A FreeRTOS spinlock is preferable to seven
+ * independent atomic exchanges: exchanging fields one by one can split one
+ * DSP frame across adjacent windows and fabricate a suppression ratio. Both
+ * sides hold this lock for a fixed seven-scalar merge/copy only. Sample walking
+ * and division are explicitly outside it.
+ */
+static portMUX_TYPE aec_signal_window_mux = portMUX_INITIALIZER_UNLOCKED;
 
 static uint32_t monotonic_us_since(int64_t started_at_us) {
   const int64_t elapsed = esp_timer_get_time() - started_at_us;
@@ -225,6 +244,39 @@ static void atomic_note_maximum(
 
 static uint32_t atomic_load(const volatile uint32_t *value) {
   return __atomic_load_n(value, __ATOMIC_RELAXED);
+}
+
+static void merge_aec_signal_observation(
+    struct core_s3_audio_owner *state,
+    const struct iterate_kit_aec_signal_window *observation,
+    uint64_t observed_at_us) {
+  portENTER_CRITICAL(&aec_signal_window_mux);
+  if (state->current_aec_signal_started_at_us == 0U) {
+    state->current_aec_signal_started_at_us = observed_at_us;
+  }
+  if (observed_at_us >= state->current_aec_signal_started_at_us &&
+      observed_at_us - state->current_aec_signal_started_at_us >=
+          CORE_S3_AEC_SIGNAL_WINDOW_US &&
+      state->current_aec_signal_window.sampled_samples != 0U) {
+    /*
+     * Rotation is driven by the continuous audio clock, not by a subscriber.
+     * Thus a slow callback merely misses old latest-state windows; it cannot
+     * accumulate telemetry or change the boundaries seen by realtime code.
+     */
+    iterate_kit_aec_signal_window_take(
+        &state->current_aec_signal_window,
+        &state->latest_aec_signal_window);
+    state->latest_aec_signal_started_at_us =
+        state->current_aec_signal_started_at_us;
+    state->latest_aec_signal_produced_at_us = observed_at_us;
+    if (state->latest_aec_signal_sequence != UINT32_MAX) {
+      ++state->latest_aec_signal_sequence;
+    }
+    state->current_aec_signal_started_at_us = observed_at_us;
+  }
+  iterate_kit_aec_signal_window_merge(
+      &state->current_aec_signal_window, observation);
+  portEXIT_CRITICAL(&aec_signal_window_mux);
 }
 
 static void mirror_capture_bridge_metrics(void) {
@@ -490,6 +542,31 @@ static enum iterate_kit_status process_aec(
   const int64_t nlp_started_at_us = esp_timer_get_time();
   (void)aec_nlp_process(state->aec, clean_samples);
   const uint32_t nlp_us = monotonic_us_since(nlp_started_at_us);
+
+  struct iterate_kit_aec_signal_window observation;
+  const enum iterate_kit_status signal_status =
+      iterate_kit_aec_signal_window_measure(
+          near_samples,
+          reference_samples,
+          clean_samples,
+          sample_count,
+          CORE_S3_AEC_SIGNAL_SAMPLE_STRIDE,
+          &observation);
+  if (signal_status == ITERATE_KIT_OK) {
+    const int64_t observed_at_us = esp_timer_get_time();
+    merge_aec_signal_observation(
+        state,
+        &observation,
+        observed_at_us < 0 ? 0U : (uint64_t)observed_at_us);
+  } else {
+    /*
+     * Instrumentation must never terminate or delay the audio graph, but it
+     * also must not disappear. This counter invalidates any AEC evidence window
+     * whose aligned measurement unexpectedly failed.
+     */
+    atomic_saturating_increment(
+        &state->metrics.aec_signal_measurement_failures);
+  }
 
   atomic_saturating_increment(&state->metrics.aec_frames);
   __atomic_store_n(
@@ -1215,6 +1292,7 @@ void iterate_kit_core_s3_audio_owner_metrics_snapshot(
   COPY_ATOMIC_METRIC(maximum_aec_nlp_us);
   COPY_ATOMIC_METRIC(last_capture_to_uplink_us);
   COPY_ATOMIC_METRIC(maximum_capture_to_uplink_us);
+  COPY_ATOMIC_METRIC(aec_signal_measurement_failures);
   COPY_ATOMIC_METRIC(aec_input_partial_samples);
   COPY_ATOMIC_METRIC(clean_egress_partial_samples);
   COPY_ATOMIC_METRIC(capture_turn_poll_failures);
@@ -1266,4 +1344,39 @@ void iterate_kit_core_s3_audio_owner_metrics_snapshot(
   snapshot->psram_heap_largest_block_bytes =
       (uint32_t)heap_caps_get_largest_free_block(
           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+
+enum iterate_kit_status
+iterate_kit_core_s3_audio_owner_aec_signal_metrics_snapshot(
+    struct iterate_kit_core_s3_aec_signal_metrics *snapshot) {
+  struct iterate_kit_aec_signal_window window;
+  if (snapshot == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+
+  portENTER_CRITICAL(&aec_signal_window_mux);
+  if (owner.latest_aec_signal_sequence == 0U) {
+    window = owner.current_aec_signal_window;
+    snapshot->sequence = 0U;
+    snapshot->window_started_at_us =
+        owner.current_aec_signal_started_at_us;
+    snapshot->produced_at_us = 0U;
+  } else {
+    window = owner.latest_aec_signal_window;
+    snapshot->sequence = owner.latest_aec_signal_sequence;
+    snapshot->window_started_at_us =
+        owner.latest_aec_signal_started_at_us;
+    snapshot->produced_at_us =
+        owner.latest_aec_signal_produced_at_us;
+  }
+  portEXIT_CRITICAL(&aec_signal_window_mux);
+
+  if (snapshot->produced_at_us == 0U) {
+    const int64_t now_us = esp_timer_get_time();
+    snapshot->produced_at_us = now_us < 0 ? 0U : (uint64_t)now_us;
+  }
+  return iterate_kit_aec_signal_window_summarize(
+      &window,
+      CORE_S3_AEC_SIGNAL_SAMPLE_STRIDE,
+      &snapshot->signal);
 }

@@ -436,8 +436,10 @@ capnweb_status initialize(
       /*
        * Accelerated sampling keeps host e2e tests short. This is not the
        * product's eventual one-second metrics period or an ESP CPU budget.
-       */
+      */
       25U,
+      true,
+      false,
       simulation.diagnosticsExpression,
       sizeof(simulation.diagnosticsExpression),
       nullptr,
@@ -469,6 +471,7 @@ capnweb_status initialize(
       simulation.eventNotifications,
       eventNotificationCapacity,
       nullptr,
+      ITERATE_KIT_AUDIO_PUSH_TO_TALK,
     },
     {nullptr, nullptr},
     /*

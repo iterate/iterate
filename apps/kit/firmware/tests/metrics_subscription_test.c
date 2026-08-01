@@ -51,6 +51,7 @@ struct fixture {
   size_t dispatch_method_index;
   bool maximum_metrics;
   bool include_playback;
+  bool include_aec;
   bool include_buffers;
   bool include_control_diagnostics;
   bool invalid_buffer_evidence;
@@ -180,6 +181,8 @@ static enum iterate_kit_status sample_metrics(
       {0},
       false,
     },
+    false,
+    {0},
     false,
     {0},
     false,
@@ -336,6 +339,54 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 71U;
   sample->playback_detail.runtime.pcm_network_max_work_cycles =
       fixture->maximum_metrics ? UINT32_MAX : 72U;
+  sample->has_aec_detail = fixture->include_aec;
+  sample->aec_detail.schema_version = 1U;
+  sample->aec_detail.sequence =
+      fixture->maximum_metrics ? UINT32_MAX : 73U;
+  sample->aec_detail.window_started_at_ms =
+      fixture->maximum_metrics ? INT64_MAX : 74;
+  sample->aec_detail.produced_at_ms =
+      fixture->maximum_metrics ? INT64_MAX : 75;
+  sample->aec_detail.sample_stride =
+      fixture->maximum_metrics ? UINT32_MAX : 8U;
+  sample->aec_detail.sampled_samples =
+      fixture->maximum_metrics ? UINT32_MAX : 2000U;
+  sample->aec_detail.near_peak =
+      fixture->maximum_metrics ? UINT32_MAX : 12000U;
+  sample->aec_detail.reference_peak =
+      fixture->maximum_metrics ? UINT32_MAX : 9000U;
+  sample->aec_detail.clean_peak =
+      fixture->maximum_metrics ? UINT32_MAX : 5000U;
+  sample->aec_detail.near_mean_absolute =
+      fixture->maximum_metrics ? UINT32_MAX : 1100U;
+  sample->aec_detail.reference_mean_absolute =
+      fixture->maximum_metrics ? UINT32_MAX : 800U;
+  sample->aec_detail.clean_mean_absolute =
+      fixture->maximum_metrics ? UINT32_MAX : 250U;
+  sample->aec_detail.lifetime_frames_processed =
+      fixture->maximum_metrics ? UINT32_MAX : 76U;
+  sample->aec_detail.lifetime_recreates =
+      fixture->maximum_metrics ? UINT32_MAX : 77U;
+  sample->aec_detail.lifetime_recreate_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 78U;
+  sample->aec_detail.last_linear_us =
+      fixture->maximum_metrics ? UINT32_MAX : 79U;
+  sample->aec_detail.maximum_linear_us =
+      fixture->maximum_metrics ? UINT32_MAX : 80U;
+  sample->aec_detail.last_nlp_us =
+      fixture->maximum_metrics ? UINT32_MAX : 81U;
+  sample->aec_detail.maximum_nlp_us =
+      fixture->maximum_metrics ? UINT32_MAX : 82U;
+  sample->aec_detail.last_capture_to_uplink_us =
+      fixture->maximum_metrics ? UINT32_MAX : 83U;
+  sample->aec_detail.maximum_capture_to_uplink_us =
+      fixture->maximum_metrics ? UINT32_MAX : 84U;
+  sample->aec_detail.lifetime_capture_reserve_dropped_chunks =
+      fixture->maximum_metrics ? UINT32_MAX : 85U;
+  sample->aec_detail.lifetime_capture_bridge_errors =
+      fixture->maximum_metrics ? UINT32_MAX : 86U;
+  sample->aec_detail.lifetime_signal_measurement_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 87U;
   sample->has_control_diagnostics =
       fixture->include_control_diagnostics;
   sample->control_diagnostics.schema_version = 4U;
@@ -471,14 +522,17 @@ static void fixture_init_with_subscription_count(
               sizeof(fixture->subscriptions[0]));
 
   metrics_options = (struct iterate_kit_metrics_options){
-    &fixture->session,
-    {fixture, sample_metrics},
-    fixture->subscriptions,
-    subscription_count,
-    1000U,
-    fixture->diagnostics_expression,
-    sizeof(fixture->diagnostics_expression),
-    NULL,
+    .session = &fixture->session,
+    .driver = {fixture, sample_metrics},
+    .subscriptions = fixture->subscriptions,
+    .subscription_count = subscription_count,
+    .interval_ms = 1000U,
+    .enable_playback_view = true,
+    .enable_aec_view = true,
+    .diagnostics_expression_buffer = fixture->diagnostics_expression,
+    .diagnostics_expression_capacity =
+        sizeof(fixture->diagnostics_expression),
+    .callback_budget = NULL,
   };
   assert(
       iterate_kit_metrics_init(
@@ -733,7 +787,7 @@ static void playback_metrics_use_a_bounded_dedicated_view(void) {
   fixture.maximum_metrics = true;
   fixture.dispatch_method_index = 1U;
 
-  assert(fixture.module.method_count == 3U);
+  assert(fixture.module.method_count == 4U);
   assert(
       strcmp(
           fixture.module.methods[1].path[0],
@@ -833,6 +887,83 @@ static void playback_metrics_use_a_bounded_dedicated_view(void) {
 }
 
 /*
+ * A server-VAD failure is otherwise impossible to attribute from lifetime
+ * capture counters: StackChan's own greeting can set the boot-wide peak, then
+ * hide whether a later physical prompt reached the near microphone, leaked
+ * into the speaker-reference channel, survived AEC, or was suppressed before
+ * the provider lane. Keep that interval evidence in a dedicated latest-state
+ * callback. Adding it to the nearly-full general metrics object would make an
+ * endurance counter's tenth digit capable of breaking every metrics update.
+ *
+ * This method-level assertion is intentionally the first red slice. It proves
+ * the public Cap'n Web surface must actually mount the diagnostic view; a
+ * device-local C struct alone would not let the production harness observe it.
+ */
+static void aec_metrics_are_mounted_as_a_dedicated_view(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  fixture.maximum_metrics = true;
+  fixture.include_aec = true;
+  fixture.dispatch_method_index = 2U;
+
+  assert(fixture.module.method_count == 4U);
+  assert(
+      strcmp(
+          fixture.module.methods[2].path[0],
+          "subscribeToAecMetrics") == 0);
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToAecMetrics\"],"
+      "[[\"export\",-9223372036854775807]]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      fixture.module.poll(fixture.module.context, 0U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.captured_count == 3U);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"schemaVersion\":1,"
+          "\"sequence\":4294967295,"
+          "\"windowStartedAtMs\":9223372036854775807,"
+          "\"producedAtMs\":9223372036854775807,"
+          "\"sampleStride\":4294967295,"
+          "\"sampledSamples\":4294967295") != NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"nearPeak\":4294967295,"
+          "\"referencePeak\":4294967295,"
+          "\"cleanPeak\":4294967295,"
+          "\"nearMeanAbsolute\":4294967295,"
+          "\"referenceMeanAbsolute\":4294967295,"
+          "\"cleanMeanAbsolute\":4294967295") != NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"lifetimeFramesProcessed\":4294967295,"
+          "\"lifetimeRecreates\":4294967295,"
+          "\"lifetimeRecreateFailures\":4294967295,"
+          "\"lastLinearUs\":4294967295,"
+          "\"maximumLinearUs\":4294967295,"
+          "\"lastNlpUs\":4294967295,"
+          "\"maximumNlpUs\":4294967295") != NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"lastCaptureToUplinkUs\":4294967295,"
+          "\"maximumCaptureToUplinkUs\":4294967295,"
+          "\"lifetimeCaptureReserveDroppedChunks\":4294967295,"
+          "\"lifetimeCaptureBridgeErrors\":4294967295,"
+          "\"lifetimeSignalMeasurementFailures\":4294967295") !=
+      NULL);
+  assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
  * The M5StickS3 owner loop polls metrics before consuming at most four inbound
  * Cap'n Web messages. Two ready subscriptions each serialize one push and one
  * pull, so that first phase can publish four messages. Four already-dispatched
@@ -866,7 +997,7 @@ static void metrics_fanout_and_inbound_resolutions_fit_one_owner_burst(
   receive(&fixture, "[\"release\",2,1]");
 
   fixture.include_control_diagnostics = true;
-  fixture.dispatch_method_index = 2U;
+  fixture.dispatch_method_index = 3U;
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
@@ -924,15 +1055,15 @@ static void control_diagnostics_are_available_as_a_one_shot_snapshot(void) {
   struct fixture fixture;
   fixture_init(&fixture);
   fixture.include_control_diagnostics = true;
-  fixture.dispatch_method_index = 2U;
+  fixture.dispatch_method_index = 3U;
   fixture.wifi_connected = true;
   fixture.has_wifi_rssi_dbm = true;
   fixture.wifi_rssi_dbm = -67;
 
-  assert(fixture.module.method_count == 3U);
+  assert(fixture.module.method_count == 4U);
   assert(
       strcmp(
-          fixture.module.methods[2].path[0],
+          fixture.module.methods[3].path[0],
           "getDiagnostics") == 0);
   receive(
       &fixture,
@@ -1005,7 +1136,7 @@ static void network_diagnostics_omit_unobserved_wifi_rssi(void) {
   struct fixture fixture;
   fixture_init(&fixture);
   fixture.include_control_diagnostics = true;
-  fixture.dispatch_method_index = 2U;
+  fixture.dispatch_method_index = 3U;
   fixture.wifi_connected = true;
   fixture.wifi_rssi_dbm = -21;
 
@@ -1045,7 +1176,7 @@ static void control_diagnostics_do_not_overwrite_an_unpulled_snapshot(void) {
   struct fixture fixture;
   fixture_init(&fixture);
   fixture.include_control_diagnostics = true;
-  fixture.dispatch_method_index = 2U;
+  fixture.dispatch_method_index = 3U;
 
   receive(
       &fixture,
@@ -1082,7 +1213,7 @@ static void maximum_control_diagnostics_fit_the_static_reply_budget(void) {
   fixture_init(&fixture);
   fixture.include_control_diagnostics = true;
   fixture.maximum_metrics = true;
-  fixture.dispatch_method_index = 2U;
+  fixture.dispatch_method_index = 3U;
   fixture.wifi_connected = true;
   fixture.has_wifi_rssi_dbm = true;
   fixture.wifi_rssi_dbm = INT32_MIN;
@@ -1230,6 +1361,7 @@ int main(void) {
   audio_metrics_fit_one_control_message();
   maximum_audio_counters_fit_one_control_message();
   playback_metrics_use_a_bounded_dedicated_view();
+  aec_metrics_are_mounted_as_a_dedicated_view();
   metrics_fanout_and_inbound_resolutions_fit_one_owner_burst();
   control_diagnostics_are_available_as_a_one_shot_snapshot();
   network_diagnostics_omit_unobserved_wifi_rssi();

@@ -332,10 +332,12 @@ void waveshare_audio_amplifier(bool on) {
   if (on == current) return;
   current = on;
   (void)gpio_set_level(PIN_PA, on ? 1 : 0);
-  if (on) {
-    /* Let the rail settle so the first frame is not a thump. */
-    vTaskDelay(pdMS_TO_TICKS(2));
-  }
+  /*
+   * No delay on the way up. This is called from the receive path, ~160 ms of
+   * playout prefill before the first sample is written, so the amp settles
+   * for free — and blocking here would stall the task that decodes speaker
+   * PCM. Blocking is exactly what must not happen on that task.
+   */
 }
 
 i2c_master_bus_handle_t waveshare_audio_i2c_bus(void) {

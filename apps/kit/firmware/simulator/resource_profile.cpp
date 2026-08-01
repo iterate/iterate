@@ -151,6 +151,19 @@ struct CountingTransport {
   bool message_open = false;
 };
 
+iterate_kit_status request_playback_interruption(
+    void *context, std::uint32_t *token) {
+  if (context == nullptr || token == nullptr) return ITERATE_KIT_INVALID_ARGUMENT;
+  *token = 1U;
+  return ITERATE_KIT_OK;
+}
+
+iterate_kit_status poll_playback_interruption(
+    void *context, std::uint32_t token) {
+  if (context == nullptr || token != 1U) return ITERATE_KIT_INVALID_ARGUMENT;
+  return ITERATE_KIT_OK;
+}
+
 iterate_kit_status render_png(
     void *, const char *, std::size_t) {
   /*
@@ -312,11 +325,19 @@ int main() {
     {&hardware, take_photo},
     1U,
     {
+      &hardware,
+      request_playback_interruption,
+      poll_playback_interruption,
+      50U,
+    },
+    {
       &session,
       {&hardware, sample_metrics},
       subscriptions,
       subscription_capacity,
       1'000U,
+      false,
+      false,
       nullptr,
       0U,
       nullptr,

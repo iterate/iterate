@@ -228,6 +228,8 @@ static void fixture_init(struct fixture *fixture) {
       &fixture->subscription,
       1U,
       1000U,
+      true,
+      false,
       NULL,
       0U,
       NULL,

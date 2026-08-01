@@ -12,6 +12,7 @@ add_subdirectory(vendor/capnweb)
 
 add_library(iterate-kit-core STATIC
   components/core/src/aec_capture_bridge.c
+  components/core/src/aec_signal_window.c
   components/core/src/audio_intent_reconciler.c
   components/core/src/audio.c
   components/core/src/configuration.c
@@ -215,6 +216,23 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-aec-capture-bridge-test
   COMMAND iterate-kit-aec-capture-bridge-test)
+
+add_executable(iterate-kit-aec-signal-window-test
+  tests/aec_signal_window_test.c
+)
+target_compile_features(
+  iterate-kit-aec-signal-window-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-aec-signal-window-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-aec-signal-window-test PRIVATE iterate-kit-core)
+add_test(
+  NAME iterate-kit-aec-signal-window-test
+  COMMAND iterate-kit-aec-signal-window-test)
 
 add_executable(iterate-kit-pcm-clock-playback-test
   tests/pcm_clock_playback_test.c

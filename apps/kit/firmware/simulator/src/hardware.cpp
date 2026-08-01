@@ -114,6 +114,40 @@ iterate_kit_status sampleMetrics(
   detail.runtime.pcm_receive_chunks = 61U;
   detail.runtime.control_network_max_work_cycles = 31'000U;
   detail.runtime.pcm_network_max_work_cycles = 29'000U;
+
+  /*
+   * StackChan mounts this second detailed view while M5Stick does not. The
+   * common simulator sampler populates both because the profile, rather than
+   * the fake hardware, owns capability discovery. These fixed values exercise
+   * the exact bounded Cap'n Web shape; they are deliberately not presented as
+   * a model of ESP-SR suppression or physical microphone energy.
+   */
+  sample->has_aec_detail = true;
+  auto &aec = sample->aec_detail;
+  aec.schema_version = 1U;
+  aec.sequence = detail.sequence;
+  aec.window_started_at_ms = sample->uptime_ms;
+  aec.produced_at_ms = sample->uptime_ms;
+  aec.sample_stride = 8U;
+  aec.sampled_samples = 2'000U;
+  aec.near_peak = 12'000U;
+  aec.reference_peak = 10'000U;
+  aec.clean_peak = 1'500U;
+  aec.near_mean_absolute = 2'400U;
+  aec.reference_mean_absolute = 2'000U;
+  aec.clean_mean_absolute = 300U;
+  aec.lifetime_frames_processed = 31U;
+  aec.lifetime_recreates = 1U;
+  aec.lifetime_recreate_failures = 0U;
+  aec.last_linear_us = 1'100U;
+  aec.maximum_linear_us = 1'300U;
+  aec.last_nlp_us = 240U;
+  aec.maximum_nlp_us = 280U;
+  aec.last_capture_to_uplink_us = 3'100U;
+  aec.maximum_capture_to_uplink_us = 3'500U;
+  aec.lifetime_capture_reserve_dropped_chunks = 0U;
+  aec.lifetime_capture_bridge_errors = 0U;
+  aec.lifetime_signal_measurement_failures = 0U;
   /*
    * The stdio simulator has no ESP WebSocket or Wi-Fi layers, but it still
    * implements the same one-shot schema so host code can prove capability and
@@ -121,7 +155,7 @@ iterate_kit_status sampleMetrics(
    * values are never cited as evidence about physical network reliability.
    */
   sample->has_control_diagnostics = true;
-  sample->control_diagnostics.schema_version = 3U;
+  sample->control_diagnostics.schema_version = 4U;
   sample->control_diagnostics.produced_at_ms = sample->uptime_ms;
   /*
    * The host simulator has neither an ESP station nor a PCM WebSocket. Publish

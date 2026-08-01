@@ -132,6 +132,11 @@ enum {
    * and the DMA's 90 ms is the only tolerance the whole path has.
    */
   SPEAKER_PREFILL_BYTES = 160 * 32,
+  /*
+   * How long the speaker must stay dry before the amplifier is powered down.
+   * Long enough that a network hiccup mid-answer never power-cycles it.
+   */
+  SPEAKER_IDLE_POWERDOWN_MS = 1500,
   /* Longest a released turn waits for the uplink before committing anyway. */
   TURN_FLUSH_TIMEOUT_MS = 1500,
   STATS_INTERVAL_MS = 5000,
@@ -272,6 +277,15 @@ static void on_speaker_pcm(
     ++runtime.speaker_overflow_drops;
     return;
   }
+  /*
+   * Power the amplifier the moment audio ARRIVES, not when the first sample
+   * is written. A class-D amp needs tens of milliseconds to settle, and
+   * raising it two milliseconds before the first write meant the opening of
+   * every answer played into an amp that was not up yet — heard as the first
+   * half-word being clipped or missing. Enabling it here spends the playout
+   * prefill (160 ms) as settle time, which costs nothing.
+   */
+  waveshare_audio_amplifier(true);
   (void)xStreamBufferSend(runtime.speaker_buffer, pcm, pcm_length, 0);
 }
 
@@ -339,6 +353,7 @@ static void playback_task(void *argument) {
    * into continuous stutter: the deficit was never recovered.
    */
   bool priming = true;
+  uint64_t last_write_ms = 0U;
   (void)argument;
   for (;;) {
     size_t received;
@@ -353,12 +368,18 @@ static void playback_task(void *argument) {
     received = xStreamBufferReceive(
         runtime.speaker_buffer, chunk, sizeof(chunk), pdMS_TO_TICKS(20));
     if (received == 0U) {
-      /* Starved: re-prime rather than dribble frames into a dry DMA, and
-       * drop the amplifier so its noise floor is not left sitting in front
-       * of the microphone between turns. */
+      /*
+       * Starved: re-prime rather than dribble frames into a dry DMA. The
+       * amplifier is NOT dropped here — a momentary gap mid-answer would
+       * power-cycle it and clip the audio either side. It goes down only
+       * after sustained silence, below.
+       */
       priming = true;
       ++runtime.speaker_underruns;
-      waveshare_audio_amplifier(false);
+      if (last_write_ms != 0U &&
+          now_ms(NULL) - last_write_ms > SPEAKER_IDLE_POWERDOWN_MS) {
+        waveshare_audio_amplifier(false);
+      }
       continue;
     }
     if (runtime.speaker_discard_bytes > 0U) {
@@ -374,7 +395,6 @@ static void playback_task(void *argument) {
       memmove(chunk, (const uint8_t *)chunk + skipped, received - skipped);
       received -= skipped;
     }
-    waveshare_audio_amplifier(true);
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
       waveshare_recorder_write_speaker(chunk, received);
@@ -384,7 +404,8 @@ static void playback_task(void *argument) {
      * finish arriving seconds before the speaker finishes, and a gate timed
      * from arrival reopens the microphone while the board is still talking.
      */
-    runtime.speaker_last_write_ms = now_ms(NULL);
+    last_write_ms = now_ms(NULL);
+    runtime.speaker_last_write_ms = last_write_ms;
   }
 }
 

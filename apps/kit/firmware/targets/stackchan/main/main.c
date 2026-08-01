@@ -216,6 +216,7 @@ static enum iterate_kit_status sample_runtime_metrics(
   struct iterate_kit_esp_idf_itx_transport_metrics control;
   struct iterate_kit_esp_idf_pcm_transport_metrics pcm;
   struct iterate_kit_core_s3_audio_owner_metrics owner;
+  struct iterate_kit_core_s3_aec_signal_metrics aec_signal;
   const int64_t now_us = esp_timer_get_time();
   int64_t cpu_permille = -1;
   uint32_t stack_headroom;
@@ -242,12 +243,23 @@ static enum iterate_kit_status sample_runtime_metrics(
   memset(&control, 0, sizeof(control));
   memset(&pcm, 0, sizeof(pcm));
   memset(&owner, 0, sizeof(owner));
+  memset(&aec_signal, 0, sizeof(aec_signal));
   memset(&access_point, 0, sizeof(access_point));
   iterate_kit_esp_idf_itx_transport_metrics(
       &state->control_transport, &control);
   iterate_kit_esp_idf_pcm_transport_metrics(
       &state->pcm_transport, &pcm);
   iterate_kit_core_s3_audio_owner_metrics_snapshot(&owner);
+  if (iterate_kit_core_s3_audio_owner_aec_signal_metrics_snapshot(
+          &aec_signal) != ITERATE_KIT_OK) {
+    /*
+     * A malformed signal snapshot invalidates AEC attribution, but general
+     * metrics must not quietly publish around it. Returning a driver error
+     * keeps the failed interval visible and prevents a zero-filled clean
+     * channel from being mistaken for successful echo cancellation.
+     */
+    return ITERATE_KIT_STATE_ERROR;
+  }
 
   sample->uptime_ms = (now_us - state->booted_at_us) / 1000;
   sample->free_heap_bytes = esp_get_free_heap_size();
@@ -342,8 +354,55 @@ static enum iterate_kit_status sample_runtime_metrics(
    */
   sample->has_playback_detail = false;
 
+  sample->has_aec_detail = true;
+  sample->aec_detail.schema_version = 1U;
+  sample->aec_detail.sequence = aec_signal.sequence;
+  sample->aec_detail.window_started_at_ms =
+      aec_signal.window_started_at_us >= (uint64_t)state->booted_at_us
+      ? (int64_t)((aec_signal.window_started_at_us -
+                   (uint64_t)state->booted_at_us) /
+                  1000U)
+      : 0;
+  sample->aec_detail.produced_at_ms =
+      aec_signal.produced_at_us >= (uint64_t)state->booted_at_us
+      ? (int64_t)((aec_signal.produced_at_us -
+                   (uint64_t)state->booted_at_us) /
+                  1000U)
+      : sample->uptime_ms;
+  sample->aec_detail.sample_stride = aec_signal.signal.sample_stride;
+  sample->aec_detail.sampled_samples =
+      aec_signal.signal.sampled_samples;
+  sample->aec_detail.near_peak = aec_signal.signal.near_peak;
+  sample->aec_detail.reference_peak =
+      aec_signal.signal.reference_peak;
+  sample->aec_detail.clean_peak = aec_signal.signal.clean_peak;
+  sample->aec_detail.near_mean_absolute =
+      aec_signal.signal.near_mean_absolute;
+  sample->aec_detail.reference_mean_absolute =
+      aec_signal.signal.reference_mean_absolute;
+  sample->aec_detail.clean_mean_absolute =
+      aec_signal.signal.clean_mean_absolute;
+  sample->aec_detail.lifetime_frames_processed = owner.aec_frames;
+  sample->aec_detail.lifetime_recreates = owner.aec_recreates;
+  sample->aec_detail.lifetime_recreate_failures =
+      owner.aec_recreate_failures;
+  sample->aec_detail.last_linear_us = owner.last_aec_linear_us;
+  sample->aec_detail.maximum_linear_us = owner.maximum_aec_linear_us;
+  sample->aec_detail.last_nlp_us = owner.last_aec_nlp_us;
+  sample->aec_detail.maximum_nlp_us = owner.maximum_aec_nlp_us;
+  sample->aec_detail.last_capture_to_uplink_us =
+      owner.last_capture_to_uplink_us;
+  sample->aec_detail.maximum_capture_to_uplink_us =
+      owner.maximum_capture_to_uplink_us;
+  sample->aec_detail.lifetime_capture_reserve_dropped_chunks =
+      owner.capture_reserve.chunks_discarded;
+  sample->aec_detail.lifetime_capture_bridge_errors =
+      owner.capture_bridge_errors;
+  sample->aec_detail.lifetime_signal_measurement_failures =
+      owner.aec_signal_measurement_failures;
+
   sample->has_control_diagnostics = true;
-  sample->control_diagnostics.schema_version = 3U;
+  sample->control_diagnostics.schema_version = 4U;
   sample->control_diagnostics.produced_at_ms = sample->uptime_ms;
   sample->control_diagnostics.websocket_start_attempts =
       control.websocket_start_attempts;
@@ -427,6 +486,22 @@ static enum iterate_kit_status sample_runtime_metrics(
       pcm.websocket_disconnects;
   sample->control_diagnostics.network.pcm_websocket_errors =
       pcm.websocket_errors;
+  sample->control_diagnostics.network.pcm_websocket_raw_write_failures =
+      pcm.websocket_raw_write_failures;
+  sample->control_diagnostics.network.pcm_transport_failure_incidents =
+      pcm.websocket_transport_failure_incidents;
+  sample->control_diagnostics.network.pcm_last_failure_operation =
+      (uint32_t)pcm.websocket_last_failure_operation;
+  sample->control_diagnostics.network.pcm_last_raw_result =
+      pcm.websocket_last_raw_result;
+  sample->control_diagnostics.network.pcm_last_socket_errno =
+      pcm.websocket_last_socket_errno;
+  sample->control_diagnostics.network.pcm_last_esp_tls_error =
+      pcm.websocket_last_esp_tls_error;
+  sample->control_diagnostics.network.pcm_last_tls_stack_error =
+      pcm.websocket_last_tls_stack_error;
+  sample->control_diagnostics.network.pcm_last_tls_cert_flags =
+      pcm.websocket_last_tls_cert_flags;
   if (esp_wifi_sta_get_ap_info(&access_point) == ESP_OK) {
     sample->control_diagnostics.network.has_wifi_rssi_dbm = true;
     sample->control_diagnostics.network.wifi_rssi_dbm = access_point.rssi;
@@ -558,6 +633,12 @@ static bool initialise_device(struct stackchan_runtime *state) {
   device_options.metrics.subscription_count =
       STACKCHAN_METRICS_SUBSCRIPTION_CAPACITY;
   device_options.metrics.interval_ms = 1000U;
+  /*
+   * CoreS3 is the first target that can report aligned near/reference/clean
+   * AEC windows. Mount that view explicitly; leaving this as a generic metrics
+   * method would make no-AEC targets advertise evidence they cannot produce.
+   */
+  device_options.metrics.enable_aec_view = true;
   device_options.metrics.diagnostics_expression_buffer =
       state->diagnostics_expression;
   device_options.metrics.diagnostics_expression_capacity =

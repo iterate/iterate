@@ -977,7 +977,7 @@ iterate_kit_status sampleRuntimeMetrics(
    */
   auto &diagnostics = sample->control_diagnostics;
   sample->has_control_diagnostics = true;
-  diagnostics.schema_version = 3U;
+  diagnostics.schema_version = 4U;
   diagnostics.produced_at_ms = sample->uptime_ms;
   diagnostics.websocket_start_attempts =
       control.websocket_start_attempts;
@@ -1055,6 +1055,23 @@ iterate_kit_status sampleRuntimeMetrics(
       pcm.websocket_disconnects;
   diagnostics.network.pcm_websocket_errors =
       pcm.websocket_errors;
+  diagnostics.network.pcm_websocket_raw_write_failures =
+      pcm.websocket_raw_write_failures;
+  diagnostics.network.pcm_transport_failure_incidents =
+      pcm.websocket_transport_failure_incidents;
+  diagnostics.network.pcm_last_failure_operation =
+      static_cast<std::uint32_t>(
+          pcm.websocket_last_failure_operation);
+  diagnostics.network.pcm_last_raw_result =
+      pcm.websocket_last_raw_result;
+  diagnostics.network.pcm_last_socket_errno =
+      pcm.websocket_last_socket_errno;
+  diagnostics.network.pcm_last_esp_tls_error =
+      pcm.websocket_last_esp_tls_error;
+  diagnostics.network.pcm_last_tls_stack_error =
+      pcm.websocket_last_tls_stack_error;
+  diagnostics.network.pcm_last_tls_cert_flags =
+      pcm.websocket_last_tls_cert_flags;
   /*
    * AP info is sampled here on the low-rate application/diagnostics path, never
    * in the PCM network or audio-owner tasks. A roam can make this lookup fail
@@ -1186,6 +1203,8 @@ bool initialiseDevice(Runtime &state) {
       state.subscriptions,
       subscriptionCapacity,
       1000U,
+      true,
+      false,
       state.diagnosticsExpression,
       sizeof(state.diagnosticsExpression),
       nullptr,
@@ -1207,6 +1226,7 @@ bool initialiseDevice(Runtime &state) {
       state.eventNotifications,
       eventNotificationCapacity,
       nullptr,
+      ITERATE_KIT_AUDIO_PUSH_TO_TALK,
     },
     {
       &state,
