@@ -5,12 +5,11 @@
 // token-by-token as chunks arrive over the stream subscription.
 
 import { useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { llmResponseForDisplay } from "../lib/activity-display.ts";
 import type { AgentUiActivity, AgentUiStep } from "../lib/feed.ts";
 import { summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
-import CodeEditor from "./code-editor.tsx";
 
 export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
   const isLive = activity.status !== "done";
@@ -107,8 +106,14 @@ function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {
   return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
 }
 
+// Read-only previews render as a native monospace <Text> — no webview. The
+// full CodeMirror DOM component (code-editor.tsx) is reserved for surfaces
+// that actually edit (the repo workspace): a webview per feed row is heavy,
+// loads asynchronously, and fails closed to a blank box when its bundle
+// cannot load. Plain text cannot be blank. No syntax highlighting for now —
+// reliability over color (`language` stays in the props for when a native
+// highlighter earns its way in).
 export function CodeBlock({
-  language,
   text,
   muted,
 }: {
@@ -116,20 +121,16 @@ export function CodeBlock({
   text: string;
   muted: boolean;
 }) {
-  const lineCount = text.split("\n").length;
-  const height = Math.min(260, Math.max(58, lineCount * 19 + 24));
   return (
-    <View style={[styles.codeViewer, { height }, muted && styles.codeMuted]}>
-      <CodeEditor
-        dom={{ scrollEnabled: true, style: { flex: 1, height } }}
-        editable={false}
-        onChange={async () => {
-          throw new Error("A read-only code block attempted to change.");
-        }}
-        path={`snippet.${language === "typescript" ? "ts" : language}`}
-        value={text}
-      />
-    </View>
+    <ScrollView
+      style={[styles.codeViewer, muted && styles.codeMuted]}
+      nestedScrollEnabled
+      contentContainerStyle={styles.codeContent}
+    >
+      <Text selectable style={styles.codeText}>
+        {text}
+      </Text>
+    </ScrollView>
   );
 }
 
@@ -179,7 +180,18 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     borderRadius: radius.sm,
     overflow: "hidden",
+    // The old webview heuristic's bounds: short blocks keep a visible well,
+    // long ones scroll inside the card instead of swallowing the feed.
+    minHeight: 58,
     maxHeight: 260,
+    flexGrow: 0,
+  },
+  codeContent: { padding: spacing.sm },
+  codeText: {
+    color: colors.text,
+    fontFamily: "Menlo",
+    fontSize: 12,
+    lineHeight: 18,
   },
   codeMuted: { opacity: 0.72 },
   error: { color: colors.danger, fontSize: 12 },
