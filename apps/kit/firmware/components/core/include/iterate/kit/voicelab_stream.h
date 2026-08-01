@@ -55,6 +55,8 @@ enum iterate_kit_voicelab_control {
   ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE,
   /** The bridge hung up (our own hangup, its idle timeout, or Grok's close). */
   ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED,
+  /** The bridge's provider session is live; the call is usable. */
+  ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED,
 };
 
 /** One decoded speaker PCM frame (16 kHz mono S16LE) from the stream. */
@@ -173,6 +175,15 @@ struct iterate_kit_voicelab {
   /* Accumulates assistant transcript deltas for the open line. */
   char transcript_buffer[256];
   size_t transcript_length;
+  /*
+   * The provider announces one spoken turn under two events —
+   * conversation.item.added and
+   * conversation.item.input_audio_transcription.completed — both carrying
+   * the same text. Whichever arrives first wins; the item id is what makes
+   * the second one recognisable as a repeat rather than a genuine second
+   * utterance of the same words.
+   */
+  char last_user_item_id[48];
   uint8_t pcm_buffer[ITERATE_KIT_VOICELAB_FRAME_BYTES];
 };
 

@@ -60,10 +60,9 @@ static lv_obj_t *screen_root;
 static lv_obj_t *state_label;
 static lv_obj_t *status_label;
 static lv_obj_t *transcript_label;
-static lv_obj_t *call_button;
-static lv_obj_t *call_button_label;
-static lv_obj_t *talk_button;
-static lv_obj_t *talk_button_label;
+static lv_obj_t *hint_label;
+static lv_obj_t *top_button_label;
+static lv_obj_t *bottom_button_label;
 /* Snapshot staging: full-resolution RGB565 in PSRAM, reused per capture. */
 static lv_draw_buf_t snapshot_buf;
 static uint8_t *snapshot_pixels;
@@ -208,25 +207,6 @@ static uint32_t state_colour(enum waveshare_ui_state state) {
   }
 }
 
-static void call_button_pressed(lv_event_t *event) {
-  (void)event;
-  xSemaphoreTake(ui.lock, portMAX_DELAY);
-  ui.call_requested = !ui.call_requested;
-  if (!ui.call_requested) ui.talk_held = false;
-  ui.dirty = true;
-  xSemaphoreGive(ui.lock);
-}
-
-/* Held, not clicked: the screen mirrors what the PWR button does. */
-static void talk_button_event(lv_event_t *event) {
-  const lv_event_code_t code = lv_event_get_code(event);
-  const bool held = code == LV_EVENT_PRESSED;
-  if (code != LV_EVENT_PRESSED && code != LV_EVENT_RELEASED) return;
-  xSemaphoreTake(ui.lock, portMAX_DELAY);
-  ui.talk_held = held && ui.call_requested;
-  ui.dirty = true;
-  xSemaphoreGive(ui.lock);
-}
 
 static void build_ui(void) {
   screen_root = lv_screen_active();
@@ -254,30 +234,35 @@ static void build_ui(void) {
 
   transcript_label = lv_label_create(screen_root);
   lv_label_set_long_mode(transcript_label, LV_LABEL_LONG_WRAP);
-  lv_obj_set_width(transcript_label, WAVESHARE_DISPLAY_WIDTH - 32);
+  lv_obj_set_width(transcript_label, WAVESHARE_DISPLAY_WIDTH - 32 - 56);
   lv_label_set_text(transcript_label, "");
   lv_obj_set_style_text_color(transcript_label, lv_color_hex(0xe8eaed), 0);
   lv_obj_set_style_text_font(transcript_label, &lv_font_montserrat_16, 0);
   lv_obj_align(transcript_label, LV_ALIGN_TOP_LEFT, 0, 100);
 
-  talk_button = lv_button_create(screen_root);
-  lv_obj_set_size(talk_button, WAVESHARE_DISPLAY_WIDTH - 32, 96);
-  lv_obj_align(talk_button, LV_ALIGN_BOTTOM_MID, 0, -80);
-  lv_obj_add_event_cb(talk_button, talk_button_event, LV_EVENT_PRESSED, NULL);
-  lv_obj_add_event_cb(talk_button, talk_button_event, LV_EVENT_RELEASED, NULL);
-  talk_button_label = lv_label_create(talk_button);
-  lv_label_set_text(talk_button_label, "hold to talk");
-  lv_obj_set_style_text_font(talk_button_label, &lv_font_montserrat_20, 0);
-  lv_obj_center(talk_button_label);
+  /*
+   * The two physical buttons live on the right edge, so their labels sit
+   * against that edge at the height of the button they name.
+   */
+  top_button_label = lv_label_create(screen_root);
+  lv_label_set_text(top_button_label, "call  >");
+  lv_obj_set_style_text_color(top_button_label, lv_color_hex(0x8a8f98), 0);
+  lv_obj_set_style_text_font(top_button_label, &lv_font_montserrat_14, 0);
+  lv_obj_align(top_button_label, LV_ALIGN_TOP_RIGHT, 0, 4);
 
-  call_button = lv_button_create(screen_root);
-  lv_obj_set_size(call_button, WAVESHARE_DISPLAY_WIDTH - 32, 64);
-  lv_obj_align(call_button, LV_ALIGN_BOTTOM_MID, 0, 0);
-  lv_obj_add_event_cb(call_button, call_button_pressed, LV_EVENT_CLICKED, NULL);
-  call_button_label = lv_label_create(call_button);
-  lv_label_set_text(call_button_label, "start call");
-  lv_obj_set_style_text_font(call_button_label, &lv_font_montserrat_20, 0);
-  lv_obj_center(call_button_label);
+  bottom_button_label = lv_label_create(screen_root);
+  lv_label_set_text(bottom_button_label, "talk  >");
+  lv_obj_set_style_text_color(bottom_button_label, lv_color_hex(0x8a8f98), 0);
+  lv_obj_set_style_text_font(bottom_button_label, &lv_font_montserrat_14, 0);
+  lv_obj_align(bottom_button_label, LV_ALIGN_BOTTOM_RIGHT, 0, -24);
+
+  hint_label = lv_label_create(screen_root);
+  lv_label_set_long_mode(hint_label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(hint_label, WAVESHARE_DISPLAY_WIDTH - 32);
+  lv_label_set_text(hint_label, "");
+  lv_obj_set_style_text_color(hint_label, lv_color_hex(0x8a8f98), 0);
+  lv_obj_set_style_text_font(hint_label, &lv_font_montserrat_16, 0);
+  lv_obj_align(hint_label, LV_ALIGN_BOTTOM_LEFT, 0, 0);
 }
 
 static void refresh_ui(void) {
@@ -321,21 +306,34 @@ static void refresh_ui(void) {
   lv_obj_set_style_text_color(state_label, lv_color_hex(state_colour(state)), 0);
   lv_label_set_text(status_label, status);
   lv_label_set_text(transcript_label, transcript);
-  lv_label_set_text(call_button_label, call_requested ? "hang up" : "start call");
-  lv_obj_set_style_bg_color(
-      call_button,
-      lv_color_hex(call_requested ? 0xdc2626 : 0x2563eb),
+  /* The buttons are physical; the screen only says what they do. */
+  lv_label_set_text(
+      hint_label,
+      talk_held ? "release to send"
+      : call_active ? "hold the lower button to talk"
+      : call_requested ? "starting…"
+                       : "press the upper button to call");
+  lv_label_set_text(top_button_label, call_requested ? "end call  >" : "call  >");
+  lv_obj_set_style_text_color(
+      bottom_button_label,
+      lv_color_hex(talk_held ? 0x4ade80 : call_active ? 0xe8eaed : 0x8a8f98),
       0);
-  lv_obj_set_style_border_width(call_button, call_active ? 2 : 0, 0);
-  lv_obj_set_style_border_color(call_button, lv_color_hex(0x4ade80), 0);
-  lv_label_set_text(talk_button_label, talk_held ? "listening…" : "hold to talk");
-  lv_obj_set_style_bg_color(
-      talk_button, lv_color_hex(talk_held ? 0x16a34a : 0x334155), 0);
-  if (call_active) {
-    lv_obj_clear_flag(talk_button, LV_OBJ_FLAG_HIDDEN);
-  } else {
-    lv_obj_add_flag(talk_button, LV_OBJ_FLAG_HIDDEN);
-  }
+  lv_label_set_text(bottom_button_label, talk_held ? "talking  >" : "talk  >");
+}
+
+/*
+ * The SH8601 takes pixels over QSPI in even-aligned windows: a flush whose
+ * left edge or width is odd lands shifted, which shows up as rectangles of
+ * stale image where a label was redrawn. LVGL invalidates whatever bounds a
+ * widget happens to have, so every invalidated area is snapped outwards here.
+ */
+static void align_invalidated_area(lv_event_t *event) {
+  lv_area_t *area = lv_event_get_param(event);
+  if (area == NULL) return;
+  area->x1 &= ~1;
+  area->y1 &= ~1;
+  area->x2 |= 1;
+  area->y2 |= 1;
 }
 
 static void refresh_timer(lv_timer_t *timer) {
@@ -437,9 +435,15 @@ bool waveshare_display_init(void) {
     ESP_LOGE(tag, "lvgl lock failed");
     return false;
   }
+  lv_display_add_event_cb(
+      lv_display_get_default(),
+      align_invalidated_area,
+      LV_EVENT_INVALIDATE_AREA,
+      NULL);
   build_ui();
   ui.dirty = true;
   refresh_ui();
+  lv_obj_invalidate(lv_screen_active()); /* paint the whole panel once */
   (void)lv_timer_create(refresh_timer, REFRESH_PERIOD_MS, NULL);
   bsp_display_unlock();
 

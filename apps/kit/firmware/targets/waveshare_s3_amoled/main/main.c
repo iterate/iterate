@@ -221,7 +221,11 @@ static void on_control(
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
     /* The answer is complete: back to waiting for the next turn. */
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
-    waveshare_display_set_status("hold PWR to talk");
+    waveshare_display_set_status("hold the lower button to talk");
+  } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
+    waveshare_display_set_call_active(true);
+    waveshare_display_set_state(WAVESHARE_UI_IDLE);
+    waveshare_display_set_status("hold the lower button to talk");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
     /* The bridge hung up (its idle timeout, Grok closing, or our own
      * hangup echoing back) — the button must agree with reality. */
@@ -493,7 +497,17 @@ void app_main(void) {
     (void)iterate_kit_esp_idf_itx_transport_poll(&runtime.transport, 4U);
     waveshare_buttons_poll();
     if (waveshare_buttons_take_call_press()) {
-      waveshare_display_request_call(!waveshare_display_call_requested());
+      const bool wanted = !waveshare_display_call_requested();
+      ESP_LOGI(tag, "BOOT pressed: call %s", wanted ? "requested" : "ended");
+      waveshare_display_request_call(wanted);
+    }
+    {
+      static bool talk_logged;
+      const bool talk = waveshare_buttons_talk_held();
+      if (talk != talk_logged) {
+        talk_logged = talk;
+        ESP_LOGI(tag, "PWR %s", talk ? "down (talking)" : "up (commit)");
+      }
     }
 
     if (runtime.transport.state != runtime.last_transport_state) {
@@ -647,7 +661,7 @@ void app_main(void) {
         waveshare_display_set_call_active(call_active_shown);
         if (call_active_shown) {
           waveshare_display_set_state(WAVESHARE_UI_IDLE);
-          waveshare_display_set_status("hold PWR to talk");
+          waveshare_display_set_status("hold the lower button to talk");
         }
       }
 
@@ -668,7 +682,7 @@ void app_main(void) {
           (void)iterate_kit_voicelab_mark_turn(
               &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_START);
           waveshare_display_set_state(WAVESHARE_UI_LISTENING);
-          waveshare_display_set_status("listening");
+          waveshare_display_set_status("listening — release to send");
         } else {
           (void)iterate_kit_voicelab_mark_turn(
               &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_COMMIT);

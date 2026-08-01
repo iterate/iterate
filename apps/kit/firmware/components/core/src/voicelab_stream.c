@@ -222,10 +222,15 @@ static void flush_assistant_transcript(
   }
 }
 
-/** Copy a string value out and hand it to the transcript callback. */
+/**
+ * Hand one user line to the transcript callback, at most once per
+ * conversation item. `item_id_value` may be NULL, in which case the line is
+ * always emitted.
+ */
 static void emit_user_transcript(
     struct iterate_kit_voicelab *voicelab,
-    const struct capnweb_value *text_value) {
+    const struct capnweb_value *text_value,
+    const struct capnweb_value *item_id_value) {
   char text[192];
   size_t length = 0U;
   if (voicelab->options.on_transcript == NULL ||
@@ -233,6 +238,19 @@ static void emit_user_transcript(
           CAPNWEB_OK ||
       length == 0U) {
     return;
+  }
+  if (item_id_value != NULL) {
+    char item_id[sizeof(voicelab->last_user_item_id)];
+    size_t item_id_length = 0U;
+    if (capnweb_value_copy_string(
+            item_id_value, item_id, sizeof(item_id), &item_id_length) ==
+            CAPNWEB_OK &&
+        item_id_length > 0U) {
+      if (strcmp(item_id, voicelab->last_user_item_id) == 0) {
+        return;
+      }
+      memcpy(voicelab->last_user_item_id, item_id, item_id_length + 1U);
+    }
   }
   voicelab->options.on_transcript(
       voicelab->options.downlink_context, true, text, true);
@@ -295,17 +313,23 @@ static void handle_grok_event(
   if (capnweb_value_string_equals(
           &type_value, "conversation.item.input_audio_transcription.completed")) {
     struct capnweb_value transcript_value;
+    struct capnweb_value item_id_value;
+    const bool has_item_id =
+        capnweb_value_object_get(&event_value, "item_id", &item_id_value);
     if (capnweb_value_object_get(
             &event_value, "transcript", &transcript_value)) {
-      emit_user_transcript(voicelab, &transcript_value);
+      emit_user_transcript(
+          voicelab, &transcript_value, has_item_id ? &item_id_value : NULL);
     }
     return;
   }
   if (capnweb_value_string_equals(&type_value, "conversation.item.added")) {
     struct capnweb_value item;
     struct capnweb_value role;
+    struct capnweb_value item_id_value;
     struct capnweb_value content_wrapper;
     struct capnweb_value content;
+    bool has_item_id;
     size_t index;
     if (!capnweb_value_object_get(&event_value, "item", &item) ||
         !capnweb_value_object_get(&item, "role", &role) ||
@@ -314,12 +338,14 @@ static void handle_grok_event(
         !capnweb_value_get_expression_array(&content_wrapper, &content)) {
       return;
     }
+    has_item_id = capnweb_value_object_get(&item, "id", &item_id_value);
     for (index = 0U; index < capnweb_value_array_size(&content); ++index) {
       struct capnweb_value part;
       struct capnweb_value transcript_value;
       if (capnweb_value_array_at(&content, index, &part) &&
           capnweb_value_object_get(&part, "transcript", &transcript_value)) {
-        emit_user_transcript(voicelab, &transcript_value);
+        emit_user_transcript(
+            voicelab, &transcript_value, has_item_id ? &item_id_value : NULL);
         return;
       }
     }
@@ -374,6 +400,20 @@ static enum capnweb_status batch_dispatch(
       handle_spk_frame(voicelab, &payload);
     } else if (capnweb_value_string_equals(&type_value, "voicelab/grok-event")) {
       handle_grok_event(voicelab, &payload);
+    } else if (capnweb_value_string_equals(
+                   &type_value, "voicelab/call-accepted")) {
+      /*
+       * The stream is what says a call is live, not the startCall reply: the
+       * reply can be slow or lost, and a call opened by anyone else counts
+       * just the same.
+       */
+      voicelab->call_active = true;
+      voicelab->call_pending = false;
+      if (voicelab->options.on_control != NULL) {
+        voicelab->options.on_control(
+            voicelab->options.downlink_context,
+            ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED);
+      }
     } else if (capnweb_value_string_equals(&type_value, "voicelab/call-ended")) {
       voicelab->call_active = false;
       if (voicelab->options.on_control != NULL) {
@@ -456,7 +496,7 @@ bool iterate_kit_voicelab_needs_recycle(
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab) {
   static const char *const open_path[] = {"openConnection"};
-  struct capnweb_expression event_type_items[3];
+  struct capnweb_expression event_type_items[4];
   struct capnweb_expression event_types;
   struct capnweb_expression connection_key;
   struct capnweb_expression max_events;
@@ -513,9 +553,13 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
     CAPNWEB_EXPRESSION_STRING,
     {.string = {"voicelab/call-ended", sizeof("voicelab/call-ended") - 1U}},
   };
+  event_type_items[3] = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {"voicelab/call-accepted", sizeof("voicelab/call-accepted") - 1U}},
+  };
   event_types = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_ARRAY,
-    {.array = {event_type_items, 3U}},
+    {.array = {event_type_items, 4U}},
   };
   connection_key = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
@@ -963,7 +1007,6 @@ static void start_call_completed(
   struct iterate_kit_voicelab *voicelab = context;
   voicelab->call_pending = false;
   if (result->kind == CAPNWEB_RESULT_VALUE && result->status == CAPNWEB_OK) {
-    voicelab->call_active = true;
     ++voicelab->call_starts;
   } else {
     ++voicelab->call_failures;

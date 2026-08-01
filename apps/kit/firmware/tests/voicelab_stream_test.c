@@ -215,11 +215,14 @@ static char heard_user[192];
 static char heard_assistant[256];
 static bool assistant_final;
 
+static int heard_user_count;
+
 static void record_transcript(
     void *context, bool from_user, const char *text, bool final) {
   (void)context;
   if (from_user) {
     snprintf(heard_user, sizeof(heard_user), "%s", text);
+    ++heard_user_count;
     return;
   }
   snprintf(heard_assistant, sizeof(heard_assistant), "%s", text);
@@ -284,7 +287,7 @@ static void downlink_flow(void) {
         strstr(
             open_message,
             "\"eventTypes\":[[\"voicelab/spk-frame\",\"voicelab/grok-event\","
-      "\"voicelab/call-ended\"]]") !=
+      "\"voicelab/call-ended\",\"voicelab/call-accepted\"]]") !=
         NULL);
     assert(strstr(open_message, "\"maxDeliveryEvents\":2") != NULL);
     assert(strstr(open_message, "\"maxDeliveryBytes\":2600") != NULL);
@@ -349,11 +352,50 @@ static void downlink_flow(void) {
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
       "{\"type\":\"voicelab/grok-event\",\"offset\":47,"
       "\"payload\":{\"event\":{\"type\":\"conversation.item.added\","
-      "\"item\":{\"role\":\"user\",\"content\":[[{\"type\":"
+      "\"item\":{\"id\":\"item_1\",\"role\":\"user\",\"content\":[[{\"type\":"
       "\"input_audio\",\"transcript\":\"what is the capital of France\"}]]}}}}"
       "]],\"scannedThroughOffset\":47,\"state\":null}]]]");
   receive(&fixture, "[\"release\",4,1]");
   assert(strcmp(heard_user, "what is the capital of France") == 0);
+  assert(heard_user_count == 1);
+
+  /* The SAME turn also arrives as a transcription.completed. One spoken turn
+   * is one line on screen, however many events describe it. */
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"voicelab/grok-event\",\"offset\":48,"
+      "\"payload\":{\"event\":{\"type\":"
+      "\"conversation.item.input_audio_transcription.completed\","
+      "\"item_id\":\"item_1\","
+      "\"transcript\":\"what is the capital of France\"}}}"
+      "]],\"scannedThroughOffset\":48,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",5,1]");
+  assert(heard_user_count == 1);
+
+  /* A genuinely new turn with the same words is still its own line. */
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"voicelab/grok-event\",\"offset\":49,"
+      "\"payload\":{\"event\":{\"type\":"
+      "\"conversation.item.input_audio_transcription.completed\","
+      "\"item_id\":\"item_2\","
+      "\"transcript\":\"what is the capital of France\"}}}"
+      "]],\"scannedThroughOffset\":49,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",6,1]");
+  assert(heard_user_count == 2);
+
+  /* call-accepted on the stream is what makes a call live. */
+  assert(!fixture.voicelab.call_active);
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"voicelab/call-accepted\",\"offset\":50,"
+      "\"payload\":{\"callId\":\"wsdev\",\"bridge\":\"worker\"}}"
+      "]],\"scannedThroughOffset\":50,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",7,1]");
+  assert(fixture.voicelab.call_active);
 
   /* Redelivery of the same offsets (recycle overlap) is deduped; every
    * invocation is push + release, and pending slots must recycle. */
@@ -365,7 +407,7 @@ static void downlink_flow(void) {
       "{\"type\":\"voicelab/grok-event\",\"offset\":42,"
       "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
       "]],\"scannedThroughOffset\":42,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",5,1]");
+  receive(&fixture, "[\"release\",8,1]");
   assert(fixture.voicelab.spk_frames_received == 1U);
   assert(response_done_count == 1);
   assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
@@ -491,8 +533,11 @@ int main(void) {
         CAPNWEB_E_STATE);
     receive(&fixture, "[\"resolve\",7,[{\"ok\":true}]]");
     assert(!fixture.voicelab.call_pending);
-    assert(fixture.voicelab.call_active);
     assert(fixture.voicelab.call_starts == 1U);
+    /* The reply does not make the call live — the stream's call-accepted
+     * does, because the reply can be slow or lost and a call opened by
+     * anyone else counts just the same. */
+    assert(!fixture.voicelab.call_active);
 
     before = fixture.captured_count;
     assert(
