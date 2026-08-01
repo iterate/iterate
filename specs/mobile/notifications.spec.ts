@@ -163,41 +163,30 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // Both lanes journaled side by side — the comparison this spec exists for.
     await page.getByText("Skipped — already on screen").waitFor({ timeout: 5_000 });
 
-    // ── Decide the parked batch (as another approver's device would), so
-    // the notification's expansion shows a full historical record: verdict,
-    // reason, and the thread's status at the time.
-    const requestedEvents = await itx.streams.get("/").getEvents({
-      eventTypes: ["events.iterate.com/project/human-approval-requested"],
-    });
-    const elsewhereBatch = requestedEvents.find(
-      (event) =>
-        (event.payload as { streamContext?: { streamPath?: string } }).streamContext?.streamPath ===
-        "/agents/elsewhere-thread",
-    );
-    await itx.streams.get("/").append({
-      type: "events.iterate.com/project/human-approval-decided",
-      payload: {
-        approvalRequestEventOffset: elsewhereBatch!.offset,
-        verdicts: ["reject"],
-        decidedBy: "human",
-        reason: "not while the spec is watching",
-      },
-    });
-
-    // ── Approval rows now EXPAND instead of navigating: tapping the sent
-    // push's row unfolds the same rich detail the Approvals history renders
-    // — the held request, the verdict with the human's reason, and the
-    // #2372 thread-context status line.
+    // ── Approval rows EXPAND instead of navigating — and with the
+    // standalone Approvals screen retired, the expansion is also where an
+    // open batch gets DECIDED. Tapping the sent push's row unfolds the held
+    // request still awaiting its decision, with Reject / Approve right
+    // there.
     await page
       .getByTestId(/^notification-row-/)
       .filter({ hasText: "Send failed" })
       .click();
     await spinnerWaiter.settings.run({ disabled: true }, async () => {
-      await page
-        .getByText("Rejected because: not while the spec is watching")
-        .waitFor({ timeout: 30_000 });
-      await page.getByText("Sending the launch webhook").waitFor({ timeout: 15_000 });
+      await page.getByText("Awaiting decision").waitFor({ timeout: 30_000 });
       await page.getByText("egress-echo?elsewhere=1").waitFor({ timeout: 15_000 });
+    });
+
+    // Reject it from the expansion with a typed reason (the web build's
+    // window.prompt stands in for the native reason sheet). Departure of
+    // the buttons is the success signal: the decision refetches the batch,
+    // the actions unmount, and the historical record takes their place —
+    // verdict, the human's reason, and the #2372 thread-context line.
+    const reason = "not while the spec is watching";
+    await rejectFromExpansion(page, reason);
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await page.getByText(`Rejected because: ${reason}`).waitFor({ timeout: 30_000 });
+      await page.getByText("Sending the launch webhook").waitFor({ timeout: 15_000 });
     });
 
     // The chat deep-link lives INSIDE the expansion now — its "Open thread"
@@ -226,6 +215,36 @@ function waitForBatchCardButton(page: Page, name: string) {
   return spinnerWaiter.settings.run({ disabled: true }, () =>
     page.getByRole("button", { name }).waitFor({ timeout: 30_000 }),
   );
+}
+
+/**
+ * Press the expansion's Reject and answer the reason prompt — the retried
+ * press + button-departure success signal of approvals.spec.ts's
+ * decideBatch, for the notification surface: RN-web's Pressable
+ * occasionally drops a synthesized press outright, and a decision must not
+ * silently not-happen. The armed dialog handler is removed after every
+ * attempt so a stale one cannot answer a later prompt.
+ */
+async function rejectFromExpansion(page: Page, reason: string) {
+  const button = page.getByRole("button", { name: "Reject" });
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const handler = (dialog: import("@playwright/test").Dialog) =>
+      void Promise.resolve(dialog.accept(reason)).catch(() => {});
+    page.once("dialog", handler);
+    try {
+      await spinnerWaiter.settings.run({ disabled: true }, async () => {
+        await button.click({ timeout: 10_000 }).catch(() => {});
+        await button.waitFor({ state: "detached", timeout: 15_000 });
+      });
+      return;
+    } catch {
+      // Press lost or decision not landed — re-arm and press again. The
+      // door honors the FIRST decision, so a duplicate press is harmless.
+    } finally {
+      page.off("dialog", handler);
+    }
+  }
+  throw new Error("The Reject decision never left the expansion after 3 presses.");
 }
 
 /** Same helper as specs/mobile/approvals.spec.ts. */

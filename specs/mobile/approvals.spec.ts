@@ -19,8 +19,11 @@
 //
 // Web-platform approximations, deliberate and dev-only: secure storage is
 // localStorage with confirm()-gated reads (apps/mobile/src/lib/secure-store.ts),
-// and pushes don't exist on web — but nothing needs them: the dialog lives
-// in the thread the human is watching.
+// and pushes don't exist on web — the spec enrolls this browser's device
+// identity server-side so each batch's notification journals a row for the
+// final act: the Notifications view (the approvals surface, now that the
+// standalone screen is retired), where each row expands into the batch's
+// history wearing the thread's status at the time.
 
 import { expect, type Page } from "@playwright/test";
 import { spinnerWaiter } from "middlewright";
@@ -31,6 +34,11 @@ import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp
 import { resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
 
+// The browser's device identity, fixed BEFORE the app boots (the web build's
+// secure store is localStorage), so the server-side enrollment below and the
+// Notifications view read the same device stream.
+const DEVICE_ID = "spec-web-approver";
+
 test("approve and reject script bursts from inside the chat thread", async ({ page }, testInfo) => {
   const osBaseUrl = await resolveOsBaseUrl();
   const echo = await startEgressEcho();
@@ -39,6 +47,9 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // OTP (fixed dev code) → org+project onboarding → project access →
     // consent → back in the app.
     const projectSlug = `mobile-approvals-${Date.now().toString(36)}`;
+    await page.addInitScript((deviceId) => {
+      localStorage.setItem("iterate.secure-store.iterate.mobileDeviceId.v1", deviceId);
+    }, DEVICE_ID);
     await page.goto("/");
     await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
     const popupPromise = page.waitForEvent("popup");
@@ -92,6 +103,18 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       },
     });
     await itx.processor.waitUntilProcessed({ offset: rulesConfigured!.offset, timeoutMs: 15_000 });
+    // Enroll this browser's device identity server-side (the web build has
+    // no push channel of its own) so every batch's notification opens a row
+    // on the device stream — what the Notifications view reads below. The
+    // in-thread dialogs claim both batches, so the rows settle suppressed
+    // and the undeliverable token is never dialed.
+    await itx.devices.get(DEVICE_ID).enroll({
+      appVersion: "spec",
+      expoPushToken: `ExponentPushToken[${DEVICE_ID}-never-deliverable]`,
+      label: "Spec web approver",
+      notificationsStatus: "granted",
+      platform: "ios",
+    });
     // Outwait the egress gate's ~5s rules cache before the first burst.
     await new Promise((resolve) => setTimeout(resolve, 6_000));
 
@@ -196,17 +219,25 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     });
     expect(llmRequests).toEqual([]);
 
-    // ── The context travels to the approvals screen: both settled batches
-    // are history rows now, and each card wears the thread's STATUS at the
-    // time of its run — thread name + the agent-maintained title/activity,
-    // shown IN FULL — so "what was this run even doing?" reads without
-    // opening the thread. Scoped disables throughout: screen transitions and
-    // the context line's one-shot fetch resolve between spinners, the same
-    // frame-gap reason as waitForBatchCardButton.
+    // ── The context travels to the NOTIFICATIONS view — the approvals
+    // surface now that the standalone screen is retired: each batch's row
+    // expands into its full history, wearing the thread's STATUS at the time
+    // of its run — thread name + the agent-maintained title/activity, shown
+    // IN FULL — so "what was this run even doing?" reads without opening the
+    // thread. Scoped disables throughout: screen transitions, the row
+    // expansions, and the context line's one-shot fetch resolve between
+    // spinners, the same frame-gap reason as waitForBatchCardButton.
     await page.goBack(); // chat → chat list: browser history IS the app's back stack on web
     await spinnerWaiter.settings.run({ disabled: true }, async () => {
       await page.getByLabel("Open project menu").click({ timeout: 30_000 });
-      await page.getByRole("button", { name: "Approvals" }).click({ timeout: 15_000 });
+      await page.getByRole("button", { name: "Notifications" }).click({ timeout: 15_000 });
+    });
+    // Newest first: the reject burst's row sits above the approve burst's.
+    const batchRows = page.getByTestId(/^notification-row-/);
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await batchRows.nth(1).waitFor({ timeout: 30_000 });
+      await batchRows.first().click({ timeout: 15_000 });
+      await batchRows.nth(1).click({ timeout: 15_000 });
     });
     const threadName = agentPath.replace(/^\/agents\//, "");
     // The line is a link (tap = open the thread), one per card, each unique
