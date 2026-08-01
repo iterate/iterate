@@ -7,7 +7,6 @@ import {
   deriveOpenBatches,
   deriveRecentResolvedBatches,
   EVENT,
-  focusOpenBatch,
   hostBreakdown,
   safeHost,
   scriptCodeForApproval,
@@ -181,12 +180,6 @@ test("an expired undecided batch is no longer open even with no decision event",
 test("safeHost falls back to the raw string for an unparseable URL", () => {
   expect(safeHost("https://api.stripe.com/v1/transfers")).toBe("api.stripe.com");
   expect(safeHost("not a url")).toBe("not a url");
-});
-
-test("a notification-targeted batch is focused at the front of the queue", () => {
-  const open = deriveOpenBatches([requested(10, "first"), requested(20, "from-notification")]);
-
-  expect(focusOpenBatch(open, 20).map((batch) => batch.offset)).toEqual([20, 10]);
 });
 
 test("the host breakdown counts a burst's hosts, busiest first", () => {

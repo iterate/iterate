@@ -296,14 +296,6 @@ export function deriveBatchDetail(
   return { payload: requested.payload as RequestedPayload, resolved: null, complete: false };
 }
 
-/** Put the batch opened from a notification first without disturbing the queue's other items. */
-export function focusOpenBatch(batches: OpenBatch[], targetOffset: number | null): OpenBatch[] {
-  if (targetOffset === null) return batches;
-  const target = batches.find((batch) => batch.offset === targetOffset);
-  if (!target) return batches;
-  return [target, ...batches.filter((batch) => batch.offset !== targetOffset)];
-}
-
 /**
  * Page the project stream once and return deriveOpenBatches' result, plus
  * the highest offset seen so a live tail resumes exactly past it. The e2e's

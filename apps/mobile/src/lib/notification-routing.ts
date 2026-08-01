@@ -12,8 +12,10 @@ export function pushNotificationRoute(data: PushNotificationData) {
   if (typeof data.projectId !== "string") return null;
   if (data.destination?.kind === "approvals") {
     if (typeof data.destination.approvalRequestEventOffset !== "number") return null;
+    // The standalone Approvals screen is retired: batch pushes land on the
+    // Notifications view, which pre-expands the matching row's detail.
     return {
-      pathname: "/project/[projectId]/approvals" as const,
+      pathname: "/project/[projectId]/notifications" as const,
       params: {
         projectId: data.projectId,
         approvalRequestEventOffset: String(data.destination.approvalRequestEventOffset),

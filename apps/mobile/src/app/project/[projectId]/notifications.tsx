@@ -5,20 +5,28 @@
 // there) and stays live, so a push settling while the screen is open updates
 // its row in place.
 //
-// Approval rows EXPAND in place (collapsed by default) into the same rich
-// batch detail the Approvals screen's history cards render — requests,
-// rule, verdicts, reason, the thread's status at the time, the originating
-// script — via the shared ApprovalBatchBody; the chat deep-link lives
-// inside the expansion as its "Open thread" affordance. Non-approval rows
-// keep tap-to-navigate (lib/notification-routing.ts), exactly like tapping
-// the real push.
+// Approval rows EXPAND in place (collapsed by default) into the full batch
+// detail — requests, rule, verdicts, reason, the thread's status at the
+// time, the originating script — via the shared ApprovalBatchBody; a
+// still-open batch gets the decide actions right in the expansion. This
+// screen IS the approvals surface now (the standalone Approvals screen is
+// retired): the approver-key banner sits on top, and approvals-destination
+// pushes land here with the matching row pre-expanded. The chat deep-link
+// lives inside the expansion as its "Open thread" affordance; non-approval
+// rows keep tap-to-navigate (lib/notification-routing.ts), exactly like
+// tapping the real push.
 
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import { useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
-import { ApprovalBatchBody, ThreadContextLine } from "../../../components/approval-batch.tsx";
+import {
+  ApprovalBatchActions,
+  ApprovalBatchBody,
+  ThreadContextLine,
+} from "../../../components/approval-batch.tsx";
+import { ApproverKeyBanner } from "../../../components/approver-key-banner.tsx";
 import { deriveBatchDetail, EVENT } from "../../../lib/approvals.ts";
 import { getMobileDeviceId } from "../../../lib/device-identity.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
@@ -34,7 +42,17 @@ import { colors, radius, spacing } from "../../../lib/theme.ts";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
 
 export default function NotificationsScreen() {
-  const { projectId, slug } = useLocalSearchParams<{ projectId: string; slug?: string }>();
+  const { projectId, slug, approvalRequestEventOffset } = useLocalSearchParams<{
+    projectId: string;
+    slug?: string;
+    approvalRequestEventOffset?: string;
+  }>();
+  // An approvals-destination push (scope holds still emit these) lands here
+  // with the batch it is about — that row starts expanded. No scroll-to: the
+  // list is newest-first, so a fresh push's row is at or near the top.
+  const parsedTargetOffset = Number(approvalRequestEventOffset);
+  const targetOffset =
+    Number.isSafeInteger(parsedTargetOffset) && parsedTargetOffset > 0 ? parsedTargetOffset : null;
 
   const server = useQuery({
     queryKey: ["server"],
@@ -67,6 +85,7 @@ export default function NotificationsScreen() {
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: slug ? `${slug} notifications` : "Notifications" }} />
+      {baseUrl === undefined ? null : <ApproverKeyBanner baseUrl={baseUrl} projectId={projectId} />}
       {events.isPending || device.isPending ? (
         <View style={styles.center}>
           <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
@@ -97,6 +116,10 @@ export default function NotificationsScreen() {
               projectId={projectId}
               projectSlug={slug || ""}
               row={row}
+              targeted={
+                row.approvalRequestEventOffset !== null &&
+                row.approvalRequestEventOffset === targetOffset
+              }
             />
           )}
         />
@@ -116,13 +139,18 @@ function NotificationRow({
   projectId,
   projectSlug,
   row,
+  targeted,
 }: {
   baseUrl: string;
   projectId: string;
   projectSlug: string;
   row: DeviceNotificationRow;
+  targeted: boolean;
 }) {
-  const [expanded, setExpanded] = useState(false);
+  // ActivityCard's toggle pattern: an untouched toggle falls back to the
+  // default — expanded when this row is what a push navigated here for.
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  const expanded = toggled ?? targeted;
   const expandable = row.approvalRequestEventOffset !== null;
   const openDestination = () => {
     const route = pushNotificationRoute({
@@ -137,7 +165,7 @@ function NotificationRow({
       <Pressable
         accessibilityRole="button"
         accessibilityState={expandable ? { expanded } : undefined}
-        onPress={() => (expandable ? setExpanded(!expanded) : openDestination())}
+        onPress={() => (expandable ? setToggled(!expanded) : openDestination())}
       >
         <View style={styles.rowHeader}>
           {expandable ? <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text> : null}
@@ -161,7 +189,6 @@ function NotificationRow({
           batchOffset={row.approvalRequestEventOffset}
           projectId={projectId}
           projectSlug={projectSlug}
-          row={row}
         />
       ) : null}
     </View>
@@ -181,14 +208,13 @@ function ApprovalNotificationDetail({
   batchOffset,
   projectId,
   projectSlug,
-  row,
 }: {
   baseUrl: string;
   batchOffset: number;
   projectId: string;
   projectSlug: string;
-  row: DeviceNotificationRow;
 }) {
+  const queryClient = useQueryClient();
   const batch = useQuery({
     queryKey: ["notification-approval-batch", baseUrl, projectId, batchOffset],
     queryFn: async () => {
@@ -238,6 +264,7 @@ function ApprovalNotificationDetail({
   }
   const { payload, resolved } = batch.data;
   const streamContext = payload.streamContext;
+  const expired = Date.parse(payload.expiresAt) <= Date.now();
   return (
     <View style={styles.detail}>
       <View style={styles.decisionRow}>
@@ -276,25 +303,23 @@ function ApprovalNotificationDetail({
         resolved={resolved}
         surface="notification"
       />
-      {streamContext?.kind === "script-execution" &&
-      streamContext.streamPath.startsWith("/agents/") ? null : (
-        // Script batches get their "Open thread" affordance inside the body;
-        // everything else keeps a road to where the push would have gone.
-        <Pressable
-          accessibilityRole="link"
-          onPress={() => {
-            const route = pushNotificationRoute({
-              destination: row.destination || undefined,
-              projectId,
-              requestOffset: row.requestOffset,
-            });
-            if (route !== null) router.push(route);
-          }}
-          style={styles.openLink}
-        >
-          <Text style={styles.openLinkText}>Open in Approvals</Text>
-        </Pressable>
-      )}
+      {resolved === null && !expired ? (
+        // A still-open batch is decidable right here — this screen is the
+        // approvals surface now. An expired-undecided one shows nothing
+        // extra: the door's expiry decision lands within the provisional
+        // refetch window and flips the badge to Expired.
+        <ApprovalBatchActions
+          baseUrl={baseUrl}
+          offset={batchOffset}
+          onDecided={() =>
+            queryClient.invalidateQueries({
+              queryKey: ["notification-approval-batch", baseUrl, projectId, batchOffset],
+            })
+          }
+          payload={payload}
+          projectId={projectId}
+        />
+      ) : null}
     </View>
   );
 }
@@ -351,8 +376,6 @@ const styles = StyleSheet.create({
   rejectReason: { color: colors.danger, fontSize: 12 },
   detailMuted: { color: colors.textMuted, fontSize: 12 },
   detailError: { color: colors.danger, fontSize: 12 },
-  openLink: { marginTop: spacing.sm, minHeight: 24, justifyContent: "center" },
-  openLinkText: { color: colors.accent, fontSize: 12, fontWeight: "600" },
   body: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
   status: { color: colors.textMuted, fontSize: 12, fontStyle: "italic" },
   suppressed: { color: colors.accent },

@@ -11,15 +11,19 @@
 // - RequestDetails (internal): one request's inspectable details plus its
 //   per-index outcome on a resolved batch.
 //
-// The surfaces keep what is genuinely theirs: headline/summary rows, decide
-// buttons, targeting, and top-level expansion state.
+// - ApprovalBatchActions: Approve-all (Face ID signature) / Reject-with-
+//   reason for a still-open batch — one decision, one signature, one event.
+//
+// The surfaces keep what is genuinely theirs: headline/summary rows,
+// targeting, and top-level expansion state.
 
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router } from "expo-router";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import {
   approvalBodyForDisplay,
+  decide,
   safeHost,
   scriptCodeForApproval,
   type HeldRequest,
@@ -27,6 +31,8 @@ import {
   type ResolvedBatch,
   type Verdict,
 } from "../lib/approvals.ts";
+import { approverKeyStatus, signWithApproverKey } from "../lib/approver.ts";
+import { promptForRejectReason } from "../lib/reject-reason.ts";
 import {
   SCRIPT_RUN_SETTLED_TYPE,
   SUMMARY_UPDATED_TYPE,
@@ -208,6 +214,102 @@ export function ApprovalBatchBody({
         <Text style={styles.meta}>
           {payload.ruleKey} · expires {new Date(payload.expiresAt).toLocaleTimeString()}
         </Text>
+      </View>
+    </>
+  );
+}
+
+/**
+ * Decide a still-open batch from wherever its detail renders: ONE decision
+ * covering every request — approve all behind the Face ID signature, or
+ * reject all with an optional typed reason that rides back to the calling
+ * script's 403 body. Moved from the retired Approvals screen's respond
+ * mutation, verbatim: always sign approvals (an unsigned decision a keyed
+ * project ignores would strand the hold as "submitted" with no visible
+ * retry), and rejections never sign — deny is the fail-safe direction.
+ * `onDecided` lets the mounting surface refetch whatever derived the open
+ * state.
+ */
+export function ApprovalBatchActions({
+  baseUrl,
+  offset,
+  onDecided,
+  payload,
+  projectId,
+}: {
+  baseUrl: string;
+  offset: number;
+  onDecided: () => void;
+  payload: RequestedPayload;
+  projectId: string;
+}) {
+  const key = useQuery({
+    queryKey: ["approver-key-status", projectId, baseUrl],
+    queryFn: () => approverKeyStatus(baseUrl, projectId),
+  });
+  const enrolledKey = key.data?.kind === "enrolled" ? key.data.key : null;
+  const respond = useMutation({
+    mutationFn: async (decision: "approve" | "reject") => {
+      const project = await getProjectItx(baseUrl, projectId);
+      const stream = project.streams.get("/");
+      const verdicts = payload.requests.map(
+        (): Verdict => (decision === "approve" ? "approve" : "reject"),
+      );
+      if (decision === "reject") {
+        const reason = await promptForRejectReason(payload.requests.length);
+        if (reason === null) return; // cancelled — leave the batch held
+        await decide({
+          stream,
+          projectId,
+          offset,
+          payload,
+          verdicts,
+          reason: reason || undefined,
+          sign: null,
+        });
+        return;
+      }
+      if (!enrolledKey) throw new Error("Enroll this device before approving.");
+      await decide({
+        stream,
+        projectId,
+        offset,
+        payload,
+        verdicts,
+        sign: (message) => signWithApproverKey(projectId, message),
+      });
+    },
+    onSuccess: onDecided,
+  });
+  const single = payload.requests.length === 1;
+  return (
+    <>
+      {respond.isError ? <Text style={styles.error}>{String(respond.error.message)}</Text> : null}
+      <View style={styles.actions}>
+        <Pressable
+          accessibilityRole="button"
+          style={[styles.button, styles.reject]}
+          disabled={respond.isPending}
+          onPress={() => respond.mutate("reject")}
+        >
+          <Text style={styles.rejectText}>{single ? "Reject" : "Reject all"}</Text>
+        </Pressable>
+        <Pressable
+          accessibilityRole="button"
+          style={[styles.button, styles.approve, enrolledKey === null && styles.buttonDisabled]}
+          disabled={respond.isPending || enrolledKey === null}
+          onPress={() => respond.mutate("approve")}
+        >
+          <Text style={styles.approveText}>
+            {respond.isPending
+              ? "Signing…"
+              : enrolledKey === null
+                ? "Enroll to approve"
+                : single
+                  ? "Approve (Face ID)"
+                  : `Approve all ${payload.requests.length} (Face ID)`}
+          </Text>
+        </Pressable>
       </View>
     </>
   );
@@ -441,4 +543,16 @@ const styles = StyleSheet.create({
     padding: spacing.sm,
   },
   error: { color: colors.danger, fontSize: 14, textAlign: "center" },
+  actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
+  button: {
+    flex: 1,
+    borderRadius: radius.sm,
+    paddingVertical: 10,
+    alignItems: "center",
+  },
+  reject: { borderColor: colors.danger, borderWidth: 1 },
+  rejectText: { color: colors.danger, fontSize: 14, fontWeight: "600" },
+  approve: { backgroundColor: colors.accent },
+  buttonDisabled: { opacity: 0.4 },
+  approveText: { color: colors.background, fontSize: 14, fontWeight: "600" },
 });
