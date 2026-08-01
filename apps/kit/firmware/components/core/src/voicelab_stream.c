@@ -278,8 +278,32 @@ static void handle_grok_event(
     voicelab->transcript_length = 0U;
     return;
   }
+  if (capnweb_value_string_equals(
+          &type_value, "response.output_audio_transcript.done")) {
+    /*
+     * The authoritative complete line. Preferring it over the accumulated
+     * deltas makes delta loss, truncation and reordering cosmetic rather
+     * than corrupting: whatever ends up on screen came from one field.
+     */
+    struct capnweb_value transcript_value;
+    size_t length = 0U;
+    if (capnweb_value_object_get(&event_value, "transcript", &transcript_value) &&
+        capnweb_value_copy_string(
+            &transcript_value,
+            voicelab->transcript_buffer,
+            sizeof(voicelab->transcript_buffer),
+            &length) != CAPNWEB_E_INVALID_ARGUMENT) {
+      if (length >= sizeof(voicelab->transcript_buffer)) {
+        length = sizeof(voicelab->transcript_buffer) - 1U;
+      }
+      voicelab->transcript_length = length;
+      flush_assistant_transcript(voicelab, true);
+    }
+    return;
+  }
   if (capnweb_value_string_equals(&type_value, "response.done")) {
     flush_assistant_transcript(voicelab, true);
+    voicelab->transcript_length = 0U; /* never carry text into the next answer */
     if (voicelab->options.on_control != NULL) {
       voicelab->options.on_control(
           voicelab->options.downlink_context,
@@ -290,17 +314,45 @@ static void handle_grok_event(
   if (capnweb_value_string_equals(
           &type_value, "response.output_audio_transcript.delta")) {
     struct capnweb_value delta_value;
-    char delta[96];
+    char delta[256];
     size_t delta_length = 0U;
-    if (!capnweb_value_object_get(&event_value, "delta", &delta_value) ||
-        capnweb_value_copy_string(
-            &delta_value, delta, sizeof(delta), &delta_length) != CAPNWEB_OK) {
+    enum capnweb_status copied;
+    if (!capnweb_value_object_get(&event_value, "delta", &delta_value)) {
       return;
     }
-    /* Oldest text is dropped rather than truncating the newest words. */
+    copied = capnweb_value_copy_string(
+        &delta_value, delta, sizeof(delta), &delta_length);
+    /*
+     * E_LIMIT still NUL-terminates and reports the FULL length, so treating
+     * it as failure discarded the whole delta — a sentence-sized one simply
+     * vanished from the line. Take what fits instead.
+     */
+    if (copied != CAPNWEB_OK && copied != CAPNWEB_E_LIMIT) {
+      return;
+    }
+    if (delta_length >= sizeof(delta)) {
+      delta_length = sizeof(delta) - 1U;
+    }
+    /*
+     * Keep the NEWEST words on overflow, not the oldest: restarting at zero
+     * threw away everything said so far, so a long answer appeared to begin
+     * mid-sentence ("twenty-six, twenty-seven, ..."). Slide the buffer
+     * instead, so the line stays coherent at its tail.
+     */
     if (voicelab->transcript_length + delta_length >=
         sizeof(voicelab->transcript_buffer)) {
-      voicelab->transcript_length = 0U;
+      const size_t keep = sizeof(voicelab->transcript_buffer) / 2U;
+      if (voicelab->transcript_length > keep) {
+        memmove(
+            voicelab->transcript_buffer,
+            voicelab->transcript_buffer + voicelab->transcript_length - keep,
+            keep);
+        voicelab->transcript_length = keep;
+      }
+      if (voicelab->transcript_length + delta_length >=
+          sizeof(voicelab->transcript_buffer)) {
+        voicelab->transcript_length = 0U;
+      }
     }
     memcpy(
         voicelab->transcript_buffer + voicelab->transcript_length,
@@ -1107,6 +1159,11 @@ enum capnweb_status iterate_kit_voicelab_mark_turn(
   }
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
     return CAPNWEB_E_STATE;
+  }
+  if (turn == ITERATE_KIT_VOICELAB_TURN_START) {
+    /* A new turn cancels whatever answer was mid-flight; its partial text
+     * must not prefix the next one. */
+    voicelab->transcript_length = 0U;
   }
   length = snprintf(
       voicelab->args_buffer,

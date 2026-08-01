@@ -275,7 +275,13 @@ bool waveshare_audio_init(void) {
      * quiet for Grok's server VAD to open a turn; +12 dB puts normal speech
      * near -30 dBFS with peaks still ~12 dB below clipping.
      */
-    (void)esp_codec_dev_set_in_gain(codec_dev, 30.0f);
+    /*
+     * 24 dB, not 30: at 30 the capture railed — 326 samples pinned to full
+     * scale in one session, worst case 46.9 ms of continuous clipping — which
+     * corrupts exactly the speech the model has to transcribe. Normal talk
+     * now peaks around -12 dBFS with real headroom.
+     */
+    (void)esp_codec_dev_set_in_gain(codec_dev, 24.0f);
     /*
      * As loud as it gets without audible distortion. Measured by acoustic
      * loopback — play a 440Hz tone, capture it on this board's own

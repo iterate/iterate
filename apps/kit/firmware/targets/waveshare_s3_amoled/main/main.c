@@ -133,6 +133,19 @@ enum {
    */
   SPEAKER_PREFILL_BYTES = 160 * 32,
   /*
+   * Recovering from a starve does NOT re-buy the full opening prefill. It
+   * used to, so a single late frame cost 160 ms of inserted silence —
+   * measured at 45 starves per 3099 frames, roughly 7 s of stutter per
+   * minute of speech. Mid-answer the bridge is already streaming, so a much
+   * smaller cushion is enough to carry on.
+   */
+  SPEAKER_REPRIME_BYTES = 40 * 32,
+  /*
+   * And a starve is only real if the buffer stays empty. One empty read is
+   * ordinary jitter between a 20 ms write and a ~20 ms arrival cadence.
+   */
+  SPEAKER_STARVE_READS = 3,
+  /*
    * How long the speaker must stay dry before the amplifier is powered down.
    * Long enough that a network hiccup mid-answer never power-cycles it.
    */
@@ -203,6 +216,7 @@ static struct {
   bool talking;
   /* Release pressed, but the capture queue is not yet on the wire. */
   bool flushing_turn;
+  volatile bool speaker_reprime;
   uint64_t flush_deadline_ms;
 } runtime;
 
@@ -300,6 +314,7 @@ static void on_control(
      * corrupt it. */
     runtime.speaker_discard_bytes =
         (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
+    runtime.speaker_reprime = true;
     ++runtime.barge_in_flushes;
     waveshare_display_set_state(WAVESHARE_UI_LISTENING);
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
@@ -329,7 +344,7 @@ static void on_transcript(
   (void)context;
   waveshare_display_push_transcript(from_user ? "you" : "iterate", text, final);
   if (final) {
-    waveshare_recorder_log("%s: %s", from_user ? "you" : "grok", text);
+    waveshare_recorder_log("%s %s", from_user ? "you:" : "iterate:", text);
   }
   if (!from_user) {
     waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
@@ -353,27 +368,46 @@ static void playback_task(void *argument) {
    * into continuous stutter: the deficit was never recovered.
    */
   bool priming = true;
+  bool started_once = false;
+  uint32_t empty_reads = 0U;
   uint64_t last_write_ms = 0U;
   (void)argument;
   for (;;) {
     size_t received;
+    if (runtime.speaker_reprime) {
+      runtime.speaker_reprime = false;
+      priming = true;
+      started_once = false; /* a real boundary: buy the full cushion */
+    }
     if (priming) {
-      if (xStreamBufferBytesAvailable(runtime.speaker_buffer) <
-          (size_t)SPEAKER_PREFILL_BYTES) {
-        vTaskDelay(pdMS_TO_TICKS(10));
+      const size_t target = started_once ? (size_t)SPEAKER_REPRIME_BYTES
+                                         : (size_t)SPEAKER_PREFILL_BYTES;
+      if (xStreamBufferBytesAvailable(runtime.speaker_buffer) < target) {
+        vTaskDelay(pdMS_TO_TICKS(5));
         continue;
       }
       priming = false;
+      started_once = true;
+      empty_reads = 0U;
     }
     received = xStreamBufferReceive(
         runtime.speaker_buffer, chunk, sizeof(chunk), pdMS_TO_TICKS(20));
     if (received == 0U) {
       /*
-       * Starved: re-prime rather than dribble frames into a dry DMA. The
-       * amplifier is NOT dropped here — a momentary gap mid-answer would
-       * power-cycle it and clip the audio either side. It goes down only
+       * One empty read is ordinary jitter, not a starve: the DMA still holds
+       * ~90 ms and the next frame is usually already in flight. Only a run of
+       * them means the pipe is genuinely dry, and only then is it worth
+       * re-buying a cushion — treating every hiccup as a starve is what
+       * turned jitter into audible stutter.
+       *
+       * The amplifier is NOT dropped here either; a momentary gap would
+       * power-cycle it and clip the audio on both sides. It goes down only
        * after sustained silence, below.
        */
+      if (++empty_reads < (uint32_t)SPEAKER_STARVE_READS) {
+        continue;
+      }
+      empty_reads = 0U;
       priming = true;
       ++runtime.speaker_underruns;
       if (last_write_ms != 0U &&
@@ -404,6 +438,7 @@ static void playback_task(void *argument) {
      * finish arriving seconds before the speaker finishes, and a gate timed
      * from arrival reopens the microphone while the board is still talking.
      */
+    empty_reads = 0U;
     last_write_ms = now_ms(NULL);
     runtime.speaker_last_write_ms = last_write_ms;
   }
@@ -881,6 +916,13 @@ void app_main(void) {
         waveshare_recorder_log("turn start");
         runtime.speaker_discard_bytes =
             (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
+        /*
+         * The discard empties the ring, so the next answer's first frame
+         * would otherwise play with zero cushion and starve immediately —
+         * putting a hole at the START of every answer after a turn. Ask the
+         * playback task to re-buy its cushion.
+         */
+        runtime.speaker_reprime = true;
         (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
         runtime.frame_sequence = 0U;
         (void)iterate_kit_voicelab_mark_turn(
@@ -957,9 +999,27 @@ void app_main(void) {
               frame_storage, take * sizeof(frame_storage[0]));
         }
       }
+      /*
+       * Recycling opens a NEW connection — a TLS-backed round trip — inline
+       * on this task, which is the same task that decodes speaker PCM. The
+       * steady-state cushion is only the 160 ms prefill plus ~90 ms of DMA,
+       * so a recycle mid-answer starves the DAC and costs an audible hole.
+       * At ~600 batches that lands roughly 12 s into every answer and again
+       * every 12 s after — "it gets worse as the session goes on".
+       *
+       * So it waits for a quiet moment: no audio queued and nothing being
+       * spoken. The budget it is racing is ~1000 pushes and it becomes due
+       * at 600, so there is ample room to wait for a gap between turns.
+       */
       if (outbox_free >= 4U &&
           iterate_kit_voicelab_needs_recycle(&runtime.voicelab)) {
-        (void)iterate_kit_voicelab_recycle_connection(&runtime.voicelab);
+        const bool speaker_idle =
+            xStreamBufferBytesAvailable(runtime.speaker_buffer) == 0U;
+        if ((speaker_idle && !runtime.talking) ||
+            runtime.voicelab.batches_on_connection >
+                ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES + 250U) {
+          (void)iterate_kit_voicelab_recycle_connection(&runtime.voicelab);
+        }
       }
       if (next_ping_at == 0U) {
         next_ping_at = now + 1000U;

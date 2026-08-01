@@ -32,7 +32,13 @@ static const char tag[] = "waveshare-ui";
 
 enum {
   TRANSCRIPT_LINES = 6,
-  TRANSCRIPT_LINE_CHARS = 96,
+  /*
+   * Long enough for a whole answer. At 96 the line was hard-cut at ~90
+   * characters (a 4-char speaker prefix eats into it), so any answer past
+   * that appeared frozen on screen while the voice kept going — which reads
+   * as stuck or duplicated text.
+   */
+  TRANSCRIPT_LINE_CHARS = 288,
   STATUS_CHARS = 64,
   /* How often the published snapshot is painted, in milliseconds. */
   REFRESH_PERIOD_MS = 100,
@@ -41,6 +47,13 @@ enum {
 struct transcript_line {
   char text[TRANSCRIPT_LINE_CHARS];
   bool from_device_user;
+  /*
+   * Open-ness belongs to the LINE, not to the widget. It used to be one
+   * global flag, so a user line arriving mid-answer closed the assistant's
+   * growing line — and the next delta then started a NEW line containing the
+   * whole accumulated answer again. That is the repeated text on screen.
+   */
+  bool open;
 };
 
 static struct {
@@ -49,7 +62,6 @@ static struct {
   char status[STATUS_CHARS];
   struct transcript_line lines[TRANSCRIPT_LINES];
   size_t line_count;
-  bool last_line_open; /* newest line is a growing partial */
   uint32_t background;
   bool call_requested;
   bool call_active;
@@ -165,7 +177,7 @@ static void push_transcript_locked(void *argument) {
    * A partial line is rewritten in place until it is marked final, so a
    * streaming reply grows on screen instead of stacking duplicates.
    */
-  if (ui.last_line_open && ui.line_count > 0U &&
+  if (ui.line_count > 0U && ui.lines[ui.line_count - 1U].open &&
       ui.lines[ui.line_count - 1U].from_device_user == is_user) {
     line = &ui.lines[ui.line_count - 1U];
   } else {
@@ -180,9 +192,9 @@ static void push_transcript_locked(void *argument) {
       line->text,
       sizeof(line->text),
       "%s %s",
-      is_user ? "you" : "grok",
+      is_user ? "you:" : "iterate:",
       update->text);
-  ui.last_line_open = !update->final;
+  line->open = !update->final;
 }
 
 void waveshare_display_push_transcript(

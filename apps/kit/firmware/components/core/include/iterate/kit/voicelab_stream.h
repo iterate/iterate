@@ -184,7 +184,7 @@ struct iterate_kit_voicelab {
   char args_buffer[ITERATE_KIT_VOICELAB_ARGS_CAPACITY];
   char b64_buffer[ITERATE_KIT_VOICELAB_B64_CAPACITY];
   /* Accumulates assistant transcript deltas for the open line. */
-  char transcript_buffer[256];
+  char transcript_buffer[512];
   size_t transcript_length;
   /*
    * The provider announces one spoken turn under two events —
@@ -194,7 +194,7 @@ struct iterate_kit_voicelab {
    * the second one recognisable as a repeat rather than a genuine second
    * utterance of the same words.
    */
-  char last_user_item_id[48];
+  char last_user_item_id[80];
   uint8_t pcm_buffer[ITERATE_KIT_VOICELAB_FRAME_BYTES];
 };
 
