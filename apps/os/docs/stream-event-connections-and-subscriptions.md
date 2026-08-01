@@ -101,6 +101,35 @@ using connection = await stream.openConnection({
 A stream-ID mismatch, invalid cursor, or excessive replay gap rejects before an
 existing callback with the same key is replaced.
 
+### Sustain high-rate callbacks
+
+Cloudflare counts the Durable Object calls behind callback delivery against the
+outer `/api` Worker invocation. Its paid-plan default is 10,000 subrequests per
+invocation, even when the WebSocket itself remains healthy. Opening another
+stream callback on the same ITX socket does not reset that counter.
+
+OS deployments set an explicit 1,000,000-subrequest ceiling, and the
+`iterate/client` session keeper proactively authenticates a successor `/api`
+socket after 8,000 inbound messages. It publishes the successor before retiring
+the predecessor, with a bounded five-second transport overlap so
+reconnect-aware effects can move their callbacks. Long-lived Node and TUI
+consumers must use that keeper (`configureIterateSession` plus
+`connectIterateSession`); `iterate/node` is deliberately a one-shot dial for
+bounded scripts and tests.
+
+A callback consumer still owns delivery continuity across every reconnect:
+
+- advance its cursor only from event offsets it actually delivered;
+- reopen with `replayAfterOffset` set to that cursor;
+- use a stable connection key so the replacement fences the old callback;
+- deduplicate a possible overlap by event offset.
+
+Durable events replay across the seam. Ephemeral events exist only while their
+exact callback is open and therefore cannot be recovered after any disconnect.
+The current platform limits and configuration field are documented in
+[Workers limits](https://developers.cloudflare.com/workers/platform/limits/)
+and [Wrangler configuration](https://developers.cloudflare.com/workers/wrangler/configuration/#limits).
+
 ### Watch reduced state without receiving events
 
 ```ts
@@ -403,6 +432,12 @@ Because the hosted processor stores the checkpoint, its subscription has no
 `delivery.start` on the source stream. The source
 stream's random `streamId` fences the checkpoint against a deleted and
 recreated stream at the same path.
+
+The source retires a hosted callback after 8,000 acknowledged batches, records
+`connection-closed` with reason `budget-rotation`, and immediately wakes a
+fresh processor invocation. The new callback resumes from the processor's
+durable checkpoint. This expected rotation never enters the delivery-failure
+backoff ladder.
 
 ## Filters and start positions
 

@@ -150,6 +150,14 @@ const DELIVERY_BATCH_LIMIT = 1000;
 const HOSTED_CALLBACK_EVENT_LIMIT = 1;
 const HOSTED_SCAN_EVENT_LIMIT = 100;
 
+/**
+ * Retire a hosted callback before Cloudflare's default 10,000-subrequest
+ * worker-invocation budget can strand it. A fresh wake resumes from the
+ * processor's durable checkpoint; this rotation is expected and never enters
+ * the delivery-failure backoff ladder.
+ */
+const HOSTED_CALLBACK_BATCH_ROTATION_LIMIT = 8_000;
+
 /** Soft cap on a delivery batch's payload bytes (large events shrink the batch). */
 const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
 
@@ -1572,13 +1580,20 @@ function deliveryErrorDiagnostics(error: unknown): {
 export class StreamConnections {
   readonly #hooks: StreamConnectionsHooks;
   readonly #idleTeardownMs: number;
+  readonly #hostedCallbackBatchLimit: number;
   readonly #connections = new Map<string, StreamConnection>();
   #idleTeardownAtMs: number | null = null;
   #tearingDown = false;
   #lastPingRoundAtMs: number | null = null;
 
-  constructor(args: { idleTeardownMs: number; hooks: StreamConnectionsHooks }) {
+  constructor(args: {
+    idleTeardownMs: number;
+    hostedCallbackBatchLimit?: number;
+    hooks: StreamConnectionsHooks;
+  }) {
     this.#idleTeardownMs = args.idleTeardownMs;
+    this.#hostedCallbackBatchLimit =
+      args.hostedCallbackBatchLimit ?? HOSTED_CALLBACK_BATCH_ROTATION_LIMIT;
     this.#hooks = args.hooks;
   }
 
@@ -2092,9 +2107,17 @@ export class StreamConnections {
                     );
                   }
                   // Run after this sendQueuedBatches's finally clears
-                  // `sendLoopRunning`; this is the only path that dispatches
-                  // the next hosted batch.
-                  queueMicrotask(() => connection.sendQueued());
+                  // `sendLoopRunning`. At the rotation boundary, close the
+                  // acknowledged callback and let the durable wake path open
+                  // a fresh worker invocation instead of dispatching again on
+                  // a callback whose subrequest budget is nearly exhausted.
+                  queueMicrotask(() => {
+                    if (connection.batchesSent >= this.#hostedCallbackBatchLimit) {
+                      connection.close("budget-rotation");
+                    } else {
+                      connection.sendQueued();
+                    }
+                  });
                 } else if (
                   parsed.outcome === "error" &&
                   connection.isLive() &&
@@ -2177,7 +2200,11 @@ export class StreamConnections {
           type: "events.iterate.com/stream/connection-closed",
           payload: { connectionKey, reason, ...(error === undefined ? {} : { error }) },
         });
-        if (reason === "rpc-broken" || reason === "delivery-failed") {
+        if (
+          reason === "rpc-broken" ||
+          reason === "delivery-failed" ||
+          reason === "budget-rotation"
+        ) {
           this.#hooks.sendDueSubscriptions();
         }
       },

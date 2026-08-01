@@ -576,6 +576,12 @@ export const config = {
   // subrequests (including project egress) must traverse Worker routes
   // instead of going to origin.
   compatibility_flags: ["nodejs_compat", "global_fetch_strictly_public"],
+  // One /api WebSocket invocation can legitimately relay many thousands of
+  // stream callback batches. Cloudflare's paid default is 10,000 subrequests
+  // per invocation; that silently strands an otherwise-healthy long-lived
+  // socket. Keep a finite guardrail, but give the transport enough headroom
+  // for successor-first recycling (the platform maximum is 10,000,000).
+  limits: { subrequests: 1_000_000 },
   // No `assets` here: the vite plugin injects the client build's assets
   // config into the OUTPUT wrangler.json (dist/…) that deploys actually use.
   // SSR + API paths reach the worker because no asset file matches them.

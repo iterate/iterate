@@ -269,12 +269,13 @@ export function useIterateSessionQuery<T>({
 // ─────────────────────────────────────────────────────────────────────────────
 
 /**
- * The cancellation contract an async reconnectable setup
- * runs under. `disposed` flips the moment THIS run is superseded — unmount,
- * deps change, or a reconnect re-run — and it flips BEFORE the run's own
- * cleanup executes. Everything a setup does after an `await` must be gated on
- * it: without the shared signal, a run cancelled mid-await can't know, and its
- * late continuation would overwrite the successor's state.
+ * The cancellation contract an async reconnectable setup runs under.
+ * `disposed` flips before the run's cleanup executes. A semantic teardown
+ * (unmount, disable, or dependency change) flips it immediately; a transport
+ * generation change flips it only after the successor setup has completed, so
+ * long-lived callbacks move make-before-break. Everything a setup does after
+ * an `await` must be gated on it: without the shared signal, a cancelled run's
+ * late continuation could overwrite its successor's state.
  */
 type ItxEffectSignal = { readonly disposed: boolean };
 
@@ -298,8 +299,10 @@ type RootConnection<Root> =
  *     return () => sub.unsubscribe();
  *   }, []);
  *
- * A late cleanup (setup resolved after this run was superseded) still executes.
- * `enabled: false` renders it fully inert.
+ * Generation changes are observed inside the semantic-lifetime effect. Its
+ * active setup remains live while the successor connects and is cleaned up
+ * immediately after the successor setup resolves. A late cleanup from a
+ * superseded candidate still executes. `enabled: false` renders it fully inert.
  */
 function useReconnectableEffect<Root>(
   setup: (root: Root, signal: ItxEffectSignal) => Promise<void | (() => void)>,
@@ -311,52 +314,79 @@ function useReconnectableEffect<Root>(
   },
 ): void {
   const enabled = opts?.enabled ?? true;
-  // A socket death replaces the generation; that number in the deps re-runs the
-  // effect on it (the reconnect recovery).
-  const generation = useSyncExternalStore(
-    subscribeSession,
-    () => (enabled ? currentSnapshot().generation : 0),
-    () => 0,
-  );
   useEffect(() => {
     if (!enabled) return;
-    const signal = { disposed: false };
-    let cleanup: void | (() => void);
-    if (connection.connect !== undefined) {
+    let stopped = false;
+    let observedGeneration = -1;
+    let candidate: { signal: { disposed: boolean } } | undefined;
+    let active: { signal: { disposed: boolean }; cleanup: void | (() => void) } | undefined;
+
+    const startGeneration = () => {
+      const generation = currentSnapshot().generation;
+      if (generation === observedGeneration) return;
+      observedGeneration = generation;
+
+      // A newer socket superseded an in-flight setup. The active predecessor,
+      // however, stays live until this candidate has fully opened.
+      if (candidate !== undefined) candidate.signal.disposed = true;
+      const run = { signal: { disposed: false } };
+      candidate = run;
+
+      if (connection.connect === undefined) {
+        const error = new Error(connection.missingMessage);
+        if (opts?.onConnectionError) opts.onConnectionError(error);
+        else console.error(error.message);
+        return;
+      }
+
       // Await the connection INSIDE the effect: mounting never suspends the tree.
       connection.connect().then(
         (root) => {
-          if (signal.disposed) return;
-          setup(root, signal).then(
-            (late) => {
-              // Setup resolved after this run was superseded: run its cleanup now.
-              if (signal.disposed) late?.();
-              else cleanup = late;
+          if (stopped || run.signal.disposed) return;
+          setup(root, run.signal).then(
+            (cleanup) => {
+              if (stopped || run.signal.disposed || candidate !== run) {
+                cleanup?.();
+                return;
+              }
+              candidate = undefined;
+              const predecessor = active;
+              active = { signal: run.signal, cleanup };
+              if (predecessor !== undefined) {
+                predecessor.signal.disposed = true;
+                predecessor.cleanup?.();
+              }
             },
             (error: unknown) => {
-              if (!signal.disposed) {
+              if (candidate === run) candidate = undefined;
+              if (!stopped && !run.signal.disposed) {
                 console.error("reconnectable itx effect setup failed", error);
               }
             },
           );
         },
         (error: unknown) => {
-          if (signal.disposed) return;
+          if (candidate === run) candidate = undefined;
+          if (stopped || run.signal.disposed) return;
           if (opts?.onConnectionError) opts.onConnectionError(error);
           else console.error("reconnectable itx effect connect failed", error);
         },
       );
-    } else {
-      const error = new Error(connection.missingMessage);
-      if (opts?.onConnectionError) opts.onConnectionError(error);
-      else console.error(error.message);
-    }
-    return () => {
-      signal.disposed = true;
-      cleanup?.();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- connection key + caller's deps; setup/read factory are fresh per run
-  }, [enabled, connection.key, generation, ...deps]);
+
+    const unsubscribe = subscribeSession(startGeneration);
+    startGeneration();
+    return () => {
+      stopped = true;
+      unsubscribe();
+      if (candidate !== undefined) candidate.signal.disposed = true;
+      if (active !== undefined) {
+        active.signal.disposed = true;
+        active.cleanup?.();
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- connection key + caller's deps define one semantic lifetime; setup/read factory are fresh per run
+  }, [enabled, connection.key, ...deps]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

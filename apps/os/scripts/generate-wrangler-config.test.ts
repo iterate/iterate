@@ -54,6 +54,12 @@ it("names the top-level configs by service so cf:service script tags stay env-le
   expect(workerBundlerConfig.name).toBe("os-worker-bundler");
 });
 
+it("gives long-lived OS invocations explicit subrequest headroom", () => {
+  expect(config.limits).toEqual({ subrequests: 1_000_000 });
+  expect(typecheckerConfig).not.toHaveProperty("limits");
+  expect(workerBundlerConfig).not.toHaveProperty("limits");
+});
+
 it("gives every deployed env its own worker name derived from the service name", () => {
   for (const [envName, envBlock] of Object.entries(config.env)) {
     expect(envBlock.name, envName).toMatch(/^os-/);

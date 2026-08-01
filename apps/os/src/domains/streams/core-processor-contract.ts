@@ -324,6 +324,11 @@ export const ConnectionCloseReason = z.enum([
   /** The hosted processor's subscription was removed. */
   "subscription-removed",
   /**
+   * The hosted callback completed its bounded share of deliveries and was
+   * retired so a fresh worker invocation can resume from the durable cursor.
+   */
+  "budget-rotation",
+  /**
    * The stream went quiet for longer than its idle window, so the Stream DO
    * deliberately dropped every hosted connection so both sides can
    * hibernate instead of accruing billable duration on idle cross-isolate RPC

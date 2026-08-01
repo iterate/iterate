@@ -80,6 +80,7 @@ class FakeWebSocket {
   input: string | URL;
   url: string;
   closeEmitsEvent = true;
+  closeCalls = 0;
   private handlers: Record<string, Array<() => void>> = {};
   constructor(url: string | URL) {
     this.input = url;
@@ -90,6 +91,7 @@ class FakeWebSocket {
     (this.handlers[type] ??= []).push(cb);
   }
   close() {
+    this.closeCalls += 1;
     if (this.closeEmitsEvent) this.fire("close");
   }
   fire(type: string) {
@@ -134,6 +136,36 @@ describe("itx session socket", () => {
     expect(onlySocket().url).toContain("/api");
     await openLatest();
     await expect(a).resolves.toMatchObject({ url: expect.stringContaining("/api") });
+  });
+
+  test("high-volume sessions connect a successor before retiring the callback transport", async () => {
+    vi.useFakeTimers();
+    try {
+      const { connectIterateSession } = await import("./react.ts");
+      const first = connectIterateSession();
+      const firstSocket = onlySocket();
+      firstSocket.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+      const firstSession = await first;
+
+      for (let message = 0; message < 7_999; message += 1) firstSocket.fire("message");
+      expect(FakeWebSocket.instances).toHaveLength(1);
+
+      firstSocket.fire("message");
+      expect(FakeWebSocket.instances).toHaveLength(2);
+      expect(firstSocket.closeCalls).toBe(0);
+
+      FakeWebSocket.instances[1]!.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(firstSocket.closeCalls).toBe(0);
+      expect(firstSession[Symbol.dispose]).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(firstSocket.closeCalls).toBe(1);
+      expect(firstSession[Symbol.dispose]).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   test("connectItx narrows the ONE session to a project stub — no second socket", async () => {
@@ -754,6 +786,33 @@ describe("useStreamConnection liveness", () => {
     await harness.advance(0);
     expect(harness.open).toHaveBeenCalledTimes(2); // fresh generation reopened
     expect(harness.status()).toBe("live");
+    await harness.unmount();
+  });
+
+  test("budget rotation opens the successor callback before closing its predecessor", async () => {
+    const lifecycle: string[] = [];
+    let handles = 0;
+    const harness = await mountConnection(() => {
+      handles += 1;
+      const handle = handles;
+      lifecycle.push(`open-${handle}`);
+      return {
+        ping: () => true,
+        close: () => lifecycle.push(`close-${handle}`),
+      };
+    });
+    const firstSocket = FakeWebSocket.instances.at(-1)!;
+
+    await harness.act(() => {
+      for (let message = 0; message < 8_000; message += 1) firstSocket.fire("message");
+    });
+    expect(FakeWebSocket.instances).toHaveLength(2);
+    expect(lifecycle).toEqual(["open-1"]);
+
+    await harness.act(() => FakeWebSocket.instances[1]!.fire("open"));
+    await harness.advance(0);
+
+    expect(lifecycle.slice(0, 3)).toEqual(["open-1", "open-2", "close-1"]);
     await harness.unmount();
   });
 
