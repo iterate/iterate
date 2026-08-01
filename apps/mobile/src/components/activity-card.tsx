@@ -4,12 +4,14 @@
 // live-streaming): every step with its thinking text and code, updating
 // token-by-token as chunks arrive over the stream subscription.
 
-import { useState } from "react";
+import { useId, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { llmResponseForDisplay } from "../lib/activity-display.ts";
 import type { AgentUiActivity, AgentUiStep } from "../lib/feed.ts";
 import { summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import CodeEditor from "./code-editor.tsx";
 
 export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
   const isLive = activity.status !== "done";
@@ -106,14 +108,21 @@ function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {
   return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
 }
 
-// Read-only previews render as a native monospace <Text> — no webview. The
-// full CodeMirror DOM component (code-editor.tsx) is reserved for surfaces
-// that actually edit (the repo workspace): a webview per feed row is heavy,
-// loads asynchronously, and fails closed to a blank box when its bundle
-// cannot load. Plain text cannot be blank. No syntax highlighting for now —
-// reliability over color (`language` stays in the props for when a native
-// highlighter earns its way in).
+// If the CodeMirror webview never reports ready in dev, flag it after this
+// long instead of silently staying on plain text forever.
+const EDITOR_READY_WATCHDOG_MS = 10_000;
+
+// Progressive enhancement: a native monospace <Text> renders IMMEDIATELY (a
+// native view cannot be blank), while the CodeMirror DOM component mounts
+// invisibly behind it. Only a POSITIVE ready signal from inside the webview
+// (the `onReady` function prop, marshaled across the expo/dom bridge exactly
+// like `onChange`) swaps the highlighted editor in — if the webview's bundle
+// never loads (the observed on-device failure: a blank fixed-height box),
+// the text simply stays and the feed remains readable. In dev a watchdog
+// badge appears when ready never arrives, so broken webviews get noticed
+// and reported rather than papered over.
 export function CodeBlock({
+  language,
   text,
   muted,
 }: {
@@ -121,16 +130,55 @@ export function CodeBlock({
   text: string;
   muted: boolean;
 }) {
+  // The webview's readiness is remote truth ("did the EditorView mount over
+  // there?"), so it is modeled as a mutation: `mutate` IS the ready
+  // callback, and the swap derives from `.isSuccess` — no useState/useEffect.
+  const editorReady = useMutation({ mutationFn: async () => {} });
+  const watchdogId = useId();
+  const watchdog = useQuery({
+    queryKey: ["code-editor-ready-watchdog", watchdogId],
+    queryFn: () =>
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(true), EDITOR_READY_WATCHDOG_MS)),
+    enabled: __DEV__ && !editorReady.isSuccess,
+    staleTime: Infinity,
+  });
+  const stalled = __DEV__ && !editorReady.isSuccess && watchdog.data === true;
+
+  // The old webview height heuristic, kept as the container's fixed height so
+  // the text → editor swap cannot cause a layout jump (CodeMirror fills
+  // whatever box it is given).
+  const lineCount = text.split("\n").length;
+  const height = Math.min(260, Math.max(58, lineCount * 19 + 24));
   return (
-    <ScrollView
-      style={[styles.codeViewer, muted && styles.codeMuted]}
-      nestedScrollEnabled
-      contentContainerStyle={styles.codeContent}
-    >
-      <Text selectable style={styles.codeText}>
-        {text}
-      </Text>
-    </ScrollView>
+    <View style={[styles.codeViewer, { height }, muted && styles.codeMuted]}>
+      <View
+        pointerEvents={editorReady.isSuccess ? "auto" : "none"}
+        style={[styles.editorLayer, !editorReady.isSuccess && styles.editorLayerHidden]}
+      >
+        <CodeEditor
+          dom={{ scrollEnabled: true, style: { flex: 1, height } }}
+          editable={false}
+          onChange={async () => {
+            throw new Error("A read-only code block attempted to change.");
+          }}
+          onReady={async () => editorReady.mutate()}
+          path={`snippet.${language === "typescript" ? "ts" : language}`}
+          value={text}
+        />
+      </View>
+      {editorReady.isSuccess ? null : (
+        <ScrollView
+          nestedScrollEnabled
+          style={styles.textLayer}
+          contentContainerStyle={styles.codeContent}
+        >
+          <Text selectable style={styles.codeText}>
+            {text}
+          </Text>
+        </ScrollView>
+      )}
+      {stalled ? <Text style={styles.editorStalledBadge}>editor webview never ready</Text> : null}
+    </View>
   );
 }
 
@@ -180,11 +228,19 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     borderRadius: radius.sm,
     overflow: "hidden",
-    // The old webview heuristic's bounds: short blocks keep a visible well,
-    // long ones scroll inside the card instead of swallowing the feed.
-    minHeight: 58,
     maxHeight: 260,
-    flexGrow: 0,
+  },
+  // The editor mounts underneath the text so it can become ready; opacity
+  // (not unmounting) keeps the webview loading while the text shows.
+  editorLayer: { ...StyleSheet.absoluteFillObject },
+  editorLayerHidden: { opacity: 0 },
+  textLayer: { flex: 1, backgroundColor: colors.background },
+  editorStalledBadge: {
+    position: "absolute",
+    right: 4,
+    top: 4,
+    color: colors.danger,
+    fontSize: 9,
   },
   codeContent: { padding: spacing.sm },
   codeText: {
