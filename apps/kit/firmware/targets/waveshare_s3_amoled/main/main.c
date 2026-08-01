@@ -546,9 +546,16 @@ void app_main(void) {
   waveshare_display_set_status("connecting to iterate");
   ESP_LOGI(
       tag,
-      "heap after display: internal=%u dma=%u total=%u",
+      /*
+       * The largest CONTIGUOUS DMA block is the number that predicts a display
+       * freeze: free-size hides fragmentation, and a flush needs one
+       * contiguous ~15 KiB internal allocation. If this dips near that, the
+       * next flush is the one that fails.
+       */
+      "heap after display: internal=%u dma=%u dmaLargest=%u total=%u",
       (unsigned int)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
       (unsigned int)heap_caps_get_free_size(MALLOC_CAP_DMA),
+      (unsigned int)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
       (unsigned int)esp_get_free_heap_size());
   runtime.mic_queue =
       xQueueCreate(MIC_QUEUE_DEPTH, sizeof(struct mic_frame));
