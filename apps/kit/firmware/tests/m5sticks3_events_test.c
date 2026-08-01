@@ -404,6 +404,10 @@ static void fresh_subscription_replaces_idle_pcm_generation(void) {
   assert(
       strstr(
           fixture.captured[captured_before_delivery],
+          "\"conversationActive\":true") != NULL);
+  assert(
+      strstr(
+          fixture.captured[captured_before_delivery],
           "[\"pipeline\",-1,[]") == NULL);
 
   capnweb_session_close(&fixture.session);

@@ -1,0 +1,68 @@
+#ifndef ITERATE_KIT_WAVESHARE_RECORDER_H
+#define ITERATE_KIT_WAVESHARE_RECORDER_H
+
+#include <stdbool.h>
+#include <stddef.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/**
+ * Per-call flight recorder on the SD card.
+ *
+ * Each call wipes the recording directory and starts fresh: both PCM lanes as
+ * raw 16 kHz mono S16LE (playable with `ffplay -f s16le -ar 16000 -ch_layout
+ * mono`), and a line log of every turn edge, transcript line and error. The
+ * point is to be able to listen to exactly what the microphone sent and what
+ * the speaker played for the same call, which is the only honest way to
+ * argue about echo, clipping or dropouts.
+ *
+ * Every entry point is a no-op when there is no card, so a device without one
+ * behaves exactly as before.
+ */
+bool waveshare_recorder_init(void);
+
+/** True when a card is mounted and calls are being recorded. */
+bool waveshare_recorder_available(void);
+
+/** True while a recording is open. */
+bool waveshare_recorder_recording(void);
+
+/** Bytes written to each lane since the recording opened. */
+void waveshare_recorder_counters(
+    size_t *mic_bytes, size_t *speaker_bytes, size_t *log_bytes);
+
+/** Wipe the directory and open a fresh set of files for this call. */
+void waveshare_recorder_begin_call(const char *call_id);
+
+/** Close the current recording, if any. */
+void waveshare_recorder_end_call(const char *reason);
+
+/** Uplink PCM, exactly as sent. */
+void waveshare_recorder_write_mic(const void *pcm, size_t bytes);
+
+/** Downlink PCM, exactly as played. */
+void waveshare_recorder_write_speaker(const void *pcm, size_t bytes);
+
+/**
+ * Read `length` bytes at `offset` from a recorded file (`mic.pcm`,
+ * `speaker.pcm`, `call.log`). Returns the number of bytes read, so a caller
+ * can pull a recording off the device over ordinary RPC. Rejects any name
+ * with a path separator.
+ */
+size_t waveshare_recorder_read(
+    const char *name, size_t offset, void *out, size_t capacity);
+
+/** Byte length of a recorded file, or 0 if it does not exist. */
+size_t waveshare_recorder_size(const char *name);
+
+/** One line in the call log; `printf` formatting. */
+void waveshare_recorder_log(const char *format, ...)
+    __attribute__((format(printf, 1, 2)));
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

@@ -58,6 +58,7 @@
 #include "waveshare_audio.h"
 #include "waveshare_buttons.h"
 #include "waveshare_display.h"
+#include "waveshare_recorder.h"
 #include "waveshare_tools.h"
 
 static const char tag[] = "iterate-voicelab";
@@ -160,6 +161,9 @@ static const char peer_description[] =
     "format,bytes,chunkSize,chunks} and readScreenshotChunk(i) returns each "
     "chunk as bytes.\","
     "\"readScreenshotChunk\":\"Read chunk i of the last takeScreenshot.\","
+    "\"recording\":{\"size\":\"Bytes of a recorded file from the current "
+    "call: mic.pcm and speaker.pcm are 16kHz mono s16le, call.log is text.\","
+    "\"read\":\"Read (name, byteOffset) and get the next chunk as bytes.\"},"
     "\"conversation\":{\"start\":\"Start a voice call — the same intent as "
     "the BOOT button.\","
     "\"hangUp\":\"End the current call.\"},"
@@ -219,6 +223,7 @@ static void on_control(
     ++runtime.barge_in_flushes;
     waveshare_display_set_state(WAVESHARE_UI_LISTENING);
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
+    waveshare_recorder_log("answer complete");
     /* The answer is complete: back to waiting for the next turn. */
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
     waveshare_display_set_status("hold the lower button to talk");
@@ -227,6 +232,7 @@ static void on_control(
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
     waveshare_display_set_status("hold the lower button to talk");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
+    waveshare_recorder_end_call("bridge hung up");
     /* The bridge hung up (its idle timeout, Grok closing, or our own
      * hangup echoing back) — the button must agree with reality. */
     waveshare_display_request_call(false);
@@ -242,6 +248,9 @@ static void on_transcript(
     void *context, bool from_user, const char *text, bool final) {
   (void)context;
   waveshare_display_push_transcript(from_user ? "you" : "iterate", text, final);
+  if (final) {
+    waveshare_recorder_log("%s: %s", from_user ? "you" : "grok", text);
+  }
   if (!from_user) {
     waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
   }
@@ -264,6 +273,7 @@ static void playback_task(void *argument) {
     }
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
+      waveshare_recorder_write_speaker(chunk, received);
     }
     /*
      * Stamp the echo gate from PLAYBACK, not arrival: paced delivery can
@@ -453,6 +463,7 @@ void app_main(void) {
     return;
   }
   (void)waveshare_buttons_init();
+  (void)waveshare_recorder_init();
   waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
   waveshare_display_set_status("connecting to iterate");
   ESP_LOGI(
@@ -653,8 +664,20 @@ void app_main(void) {
       }
       if (!wants_call && runtime.voicelab.call_active && outbox_free >= 5U) {
         (void)iterate_kit_voicelab_end_call(&runtime.voicelab, "button");
+        waveshare_recorder_end_call("button");
         waveshare_display_set_status("call ended");
         waveshare_display_set_state(WAVESHARE_UI_IDLE);
+      }
+      /*
+       * Recording follows the call's state, not an edge: a call can already
+       * be live when this device joins (the bridge outlives us), and that is
+       * exactly when a recording is still wanted.
+       */
+      if (runtime.voicelab.call_active && !waveshare_recorder_recording()) {
+        waveshare_recorder_begin_call(CALL_ID);
+      } else if (!runtime.voicelab.call_active &&
+                 waveshare_recorder_recording()) {
+        waveshare_recorder_end_call("call no longer active");
       }
       if (runtime.voicelab.call_active != call_active_shown) {
         call_active_shown = runtime.voicelab.call_active;
@@ -674,6 +697,7 @@ void app_main(void) {
       if (wants_talk != runtime.talking && runtime.voicelab.call_active &&
           outbox_free >= 5U) {
         runtime.talking = wants_talk;
+        waveshare_recorder_log("turn %s", wants_talk ? "start" : "commit");
         if (wants_talk) {
           runtime.speaker_discard_bytes =
               (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
@@ -714,6 +738,7 @@ void app_main(void) {
               runtime.frame_sequence,
               now);
           runtime.frame_sequence += 4U;
+          waveshare_recorder_write_mic(frame_storage, sizeof(frame_storage));
         }
       }
       if (outbox_free >= 7U &&

@@ -28,6 +28,7 @@
 #include "capnweb/capnweb.h"
 #include "esp_attr.h"
 #include "waveshare_display.h"
+#include "waveshare_recorder.h"
 
 static const char *const set_background_path[] = {"setBackground"};
 /* Same vocabulary as the M5StickS3's capability, so one agent drives both. */
@@ -36,6 +37,9 @@ static const char *const hang_up_path[] = {"conversation", "hangUp"};
 static const char *const talk_start_path[] = {"pushToTalk", "start"};
 static const char *const talk_stop_path[] = {"pushToTalk", "stop"};
 static const char *const take_screenshot_path[] = {"takeScreenshot"};
+static const char *const recording_status_path[] = {"recording", "status"};
+static const char *const recording_size_path[] = {"recording", "size"};
+static const char *const recording_read_path[] = {"recording", "read"};
 static const char *const read_screenshot_chunk_path[] = {"readScreenshotChunk"};
 
 enum {
@@ -50,6 +54,8 @@ enum {
 };
 
 EXT_RAM_BSS_ATTR static uint8_t screenshot_pixels[WAVESHARE_SNAPSHOT_BYTES];
+static uint8_t recording_chunk[SCREENSHOT_CHUNK_BYTES];
+static char recording_name[32];
 static bool screenshot_valid;
 static char screenshot_meta[192];
 
@@ -246,6 +252,89 @@ static enum capnweb_status read_screenshot_chunk(
       reply, &screenshot_pixels[offset], length, NULL, NULL);
 }
 
+/*
+ * Recordings come off the device the same way screenshots do: ask for the
+ * size, then read chunks that each fit one control message. No second
+ * transport, and nobody has to take the card out.
+ */
+static enum capnweb_status recording_status(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  static char status_text[224];
+  size_t mic_bytes = 0U;
+  size_t speaker_bytes = 0U;
+  size_t log_bytes = 0U;
+  int length;
+  (void)context;
+  (void)call;
+  waveshare_recorder_counters(&mic_bytes, &speaker_bytes, &log_bytes);
+  length = snprintf(
+      status_text,
+      sizeof(status_text),
+      "{\"card\":%s,\"recording\":%s,\"written\":{\"mic\":%u,"
+      "\"speaker\":%u,\"log\":%u},\"onDisk\":{\"mic\":%u,"
+      "\"speaker\":%u,\"log\":%u}}",
+      waveshare_recorder_available() ? "true" : "false",
+      waveshare_recorder_recording() ? "true" : "false",
+      (unsigned int)mic_bytes,
+      (unsigned int)speaker_bytes,
+      (unsigned int)log_bytes,
+      (unsigned int)waveshare_recorder_size("mic.pcm"),
+      (unsigned int)waveshare_recorder_size("speaker.pcm"),
+      (unsigned int)waveshare_recorder_size("call.log"));
+  if (length < 0 || (size_t)length >= sizeof(status_text)) {
+    return capnweb_reply_set_error(reply, "Error", "status overflow");
+  }
+  return capnweb_reply_set_borrowed_expression(
+      reply, status_text, (size_t)length, NULL, NULL);
+}
+
+static enum capnweb_status recording_size(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value value = {0};
+  size_t length = 0U;
+  (void)context;
+  if (call == NULL || !call->has_arguments ||
+      !capnweb_value_array_at(&call->arguments, 0U, &value) ||
+      capnweb_value_copy_string(
+          &value, recording_name, sizeof(recording_name), &length) !=
+          CAPNWEB_OK) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "expected a file name, e.g. \"mic.pcm\"");
+  }
+  return capnweb_reply_set_int64(
+      reply, (int64_t)waveshare_recorder_size(recording_name));
+}
+
+static enum capnweb_status recording_read(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  struct capnweb_value name_value = {0};
+  struct capnweb_value offset_value = {0};
+  int64_t offset = -1;
+  size_t name_length = 0U;
+  size_t read_bytes;
+  (void)context;
+  if (call == NULL || !call->has_arguments ||
+      !capnweb_value_array_at(&call->arguments, 0U, &name_value) ||
+      capnweb_value_copy_string(
+          &name_value, recording_name, sizeof(recording_name), &name_length) !=
+          CAPNWEB_OK ||
+      !capnweb_value_array_at(&call->arguments, 1U, &offset_value) ||
+      !capnweb_value_get_int64(&offset_value, &offset) || offset < 0) {
+    return capnweb_reply_set_error(
+        reply, "TypeError", "expected (name, byteOffset)");
+  }
+  read_bytes = waveshare_recorder_read(
+      recording_name, (size_t)offset, recording_chunk,
+      sizeof(recording_chunk));
+  return capnweb_reply_set_bytes(reply, recording_chunk, read_bytes, NULL, NULL);
+}
+
 struct iterate_kit_module waveshare_tools_module(void) {
   static const struct iterate_kit_method methods[] = {
     {set_background_path, 1U, set_background},
@@ -254,6 +343,9 @@ struct iterate_kit_module waveshare_tools_module(void) {
     {talk_start_path, 2U, talk_start},
     {talk_stop_path, 2U, talk_stop},
     {take_screenshot_path, 1U, take_screenshot},
+    {recording_status_path, 2U, recording_status},
+    {recording_size_path, 2U, recording_size},
+    {recording_read_path, 2U, recording_read},
     {read_screenshot_chunk_path, 1U, read_screenshot_chunk},
   };
   struct iterate_kit_module module = {0};
