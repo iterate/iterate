@@ -7,19 +7,10 @@
 // every request. See apps/mobile/src/lib/approvals.ts for the protocol.
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { router, Stack, useLocalSearchParams } from "expo-router";
-import type { StreamEvent } from "iterate/sdk/itx/react";
+import { Stack, useLocalSearchParams } from "expo-router";
 import { useMemo } from "react";
-import {
-  ActivityIndicator,
-  FlatList,
-  Pressable,
-  ScrollView,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
-import { CodeBlock } from "../../../components/activity-card.tsx";
+import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { ApprovalBatchBody, ThreadContextLine } from "../../../components/approval-batch.tsx";
 import { promptForRejectReason } from "../../../lib/reject-reason.ts";
 import {
   approverKeyStatus,
@@ -32,22 +23,14 @@ import {
   deriveRecentResolvedBatches,
   EVENT,
   focusOpenBatch,
-  approvalBodyForDisplay,
   decide,
   hostBreakdown,
   safeHost,
-  scriptCodeForApproval,
-  type HeldRequest,
   type OpenBatch,
   type RequestedPayload,
   type ResolvedBatch,
   type Verdict,
 } from "../../../lib/approvals.ts";
-import {
-  SCRIPT_RUN_SETTLED_TYPE,
-  SUMMARY_UPDATED_TYPE,
-  threadContextForScriptRun,
-} from "../../../lib/chat.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
 import { getServerBaseUrl } from "../../../lib/storage.ts";
@@ -296,12 +279,10 @@ function BatchCard({
 }) {
   const queryClient = useQueryClient();
   const single = payload.requests.length === 1;
+  // Top-level expansion only — the members/script sub-toggles moved into the
+  // shared ApprovalBatchBody.
   const detailsKey = ["approval-details", projectId, offset, interaction.kind];
-  const initialDetails = {
-    expanded: interaction.kind === "pending",
-    members: false,
-    script: false,
-  };
+  const initialDetails = { expanded: interaction.kind === "pending" };
   const details = useQuery({
     queryKey: detailsKey,
     queryFn: async () => initialDetails,
@@ -309,34 +290,6 @@ function BatchCard({
     staleTime: Infinity,
   });
   const streamContext = payload.streamContext;
-  const script = useQuery({
-    queryKey:
-      streamContext?.kind === "script-execution"
-        ? [
-            "approval-source-script",
-            baseUrl,
-            projectId,
-            streamContext.streamPath,
-            streamContext.scriptRunRequestedEventOffset,
-          ]
-        : ["approval-source-script", baseUrl, projectId, "none", offset],
-    queryFn: async () => {
-      if (streamContext?.kind !== "script-execution") {
-        throw new Error("This approval has no codemode script source.");
-      }
-      const project = await getProjectItx(baseUrl, projectId);
-      const event = await project.streams.get(streamContext.streamPath).getEvent({
-        offset: streamContext.scriptRunRequestedEventOffset,
-      });
-      return scriptCodeForApproval(payload, event);
-    },
-    enabled: details.data.script && streamContext?.kind === "script-execution",
-    staleTime: Infinity,
-  });
-  const toggle = (section: "expanded" | "members" | "script") => {
-    queryClient.setQueryData(detailsKey, { ...details.data, [section]: !details.data[section] });
-  };
-
   const headline = single
     ? `${payload.requests[0]!.method} ${safeHost(payload.requests[0]!.url)}`
     : `Script run · ${payload.requests.length} requests`;
@@ -351,7 +304,12 @@ function BatchCard({
         <Pressable
           accessibilityRole="button"
           accessibilityState={{ expanded: details.data.expanded }}
-          onPress={() => toggle("expanded")}
+          onPress={() =>
+            queryClient.setQueryData(detailsKey, {
+              ...details.data,
+              expanded: !details.data.expanded,
+            })
+          }
           style={styles.compactSummary}
         >
           <Text numberOfLines={1} style={[styles.method, styles.compactMethod]}>
@@ -387,116 +345,15 @@ function BatchCard({
 
       {details.data.expanded ? (
         <>
-          {single ? (
-            <RequestDetails
-              outcome={
-                resolved
-                  ? {
-                      verdict: resolved.verdicts[0]!,
-                      settle: resolved.outcomes[0] || null,
-                      decidedBy: resolved.decidedBy,
-                    }
-                  : null
-              }
-              request={payload.requests[0]!}
-              standalone
-            />
-          ) : (
-            <View style={styles.detailSection}>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => toggle("members")}
-                style={styles.detailHeader}
-              >
-                <Text style={styles.chevron}>{details.data.members ? "▾" : "▸"}</Text>
-                <Text style={styles.detailTitle}>Requests ({payload.requests.length})</Text>
-              </Pressable>
-              {details.data.members ? (
-                <View style={styles.groupMembers}>
-                  {payload.requests.map((request, index) => (
-                    <View key={index} style={styles.memberCard}>
-                      <RequestDetails
-                        outcome={
-                          resolved
-                            ? {
-                                verdict: resolved.verdicts[index]!,
-                                settle: resolved.outcomes[index] || null,
-                                decidedBy: resolved.decidedBy,
-                              }
-                            : null
-                        }
-                        request={request}
-                        standalone={false}
-                      />
-                    </View>
-                  ))}
-                </View>
-              ) : null}
-            </View>
-          )}
-
-          {streamContext?.kind === "script-execution" ? (
-            <View style={styles.detailSection}>
-              <View style={styles.sourceHeader}>
-                <View style={styles.sourceCopy}>
-                  <Text style={styles.detailLabel}>Triggered by codemode</Text>
-                  <Text style={styles.sourceMeta} selectable>
-                    {streamContext.streamPath} · script event #
-                    {streamContext.scriptRunRequestedEventOffset}
-                  </Text>
-                </View>
-                {streamContext.streamPath.startsWith("/agents/") ? (
-                  <Pressable
-                    accessibilityRole="link"
-                    onPress={() =>
-                      router.push({
-                        pathname: "/project/[projectId]/chat",
-                        params: { path: streamContext.streamPath, projectId, slug: projectSlug },
-                      })
-                    }
-                    style={styles.threadLink}
-                  >
-                    <Text style={styles.threadLinkText}>Show thread</Text>
-                  </Pressable>
-                ) : null}
-              </View>
-              <Pressable
-                accessibilityRole="button"
-                onPress={() => toggle("script")}
-                style={styles.detailHeader}
-              >
-                <Text style={styles.chevron}>{details.data.script ? "▾" : "▸"}</Text>
-                <Text style={styles.detailTitle}>Script</Text>
-              </Pressable>
-              {details.data.script ? (
-                script.isPending ? (
-                  <ActivityIndicator
-                    accessibilityLabel="Loading"
-                    color={colors.textMuted}
-                    size="small"
-                  />
-                ) : script.isError ? (
-                  <Text style={styles.error}>{script.error.message}</Text>
-                ) : (
-                  <CodeBlock language="typescript" muted={false} text={script.data} />
-                )
-              ) : null}
-            </View>
-          ) : streamContext ? (
-            <Text style={styles.sourceMeta}>Triggered from {streamContext.scopePath}</Text>
-          ) : (
-            <Text style={styles.sourceMeta}>Source metadata unavailable for this request.</Text>
-          )}
-
-          <View style={styles.policy}>
-            <Text style={styles.detailLabel}>Approval policy</Text>
-            <Text style={styles.policyDescription}>
-              {payload.ruleDescription || payload.ruleKey}
-            </Text>
-            <Text style={styles.meta}>
-              {payload.ruleKey} · expires {new Date(payload.expiresAt).toLocaleTimeString()}
-            </Text>
-          </View>
+          <ApprovalBatchBody
+            baseUrl={baseUrl}
+            offset={offset}
+            payload={payload}
+            projectId={projectId}
+            projectSlug={projectSlug}
+            resolved={resolved}
+            surface={interaction.kind}
+          />
 
           {interaction.kind === "resolved" ? null : interaction.submitted ? (
             <Text style={styles.submitted}>submitted — awaiting the egress door…</Text>
@@ -533,163 +390,6 @@ function BatchCard({
             </View>
           )}
         </>
-      ) : null}
-    </View>
-  );
-}
-
-/**
- * "What was this run even doing?" — the thread's agent-maintained STATUS as
- * of this script run (threadContextForScriptRun folds `agent/summary-updated`
- * through the run's own settlement), pinned to the card so the queue and
- * history read without opening each thread. A snapshot deliberately, not live
- * status: the fold is bounded by immutable history, so it works identically
- * for open and settled batches. The status renders IN FULL (it wraps — a
- * clipped status answers nothing) and taps through to the thread. Statusless
- * threads render no line at all — same as while the one-shot fetch is
- * pending or failed, which is what keeps the card spinner-free.
- */
-function ThreadContextLine({
-  baseUrl,
-  executionId,
-  projectId,
-  projectSlug,
-  streamPath,
-}: {
-  baseUrl: string;
-  executionId: string;
-  projectId: string;
-  projectSlug: string;
-  streamPath: string;
-}) {
-  const context = useQuery({
-    queryKey: ["approval-thread-context", baseUrl, projectId, streamPath, executionId],
-    queryFn: async () => {
-      const project = await getProjectItx(baseUrl, projectId);
-      const stream = project.streams.get(streamPath);
-      // Summary events are sparse (a handful per turn), and getEvents
-      // filters by type in SQL before applying its page limit — so even a
-      // very long thread reads as one small page; the loop is only for the
-      // pathological >500-status thread.
-      const events: StreamEvent[] = [];
-      let cursor = 0;
-      while (true) {
-        const page = await stream.getEvents({
-          afterOffset: cursor,
-          eventTypes: [SUMMARY_UPDATED_TYPE, SCRIPT_RUN_SETTLED_TYPE],
-        });
-        if (page.length === 0) break;
-        events.push(...page);
-        cursor = page.at(-1)!.offset;
-      }
-      return threadContextForScriptRun(events, { executionId });
-    },
-    // Cache forever only once the fold window is CLOSED (the run's settle
-    // event was in view) — then the result, status or null, is immutable.
-    // Before that it is provisional: agents Promise.all their status append
-    // with the work itself, so a held approval can render this card before
-    // the status lands; a forever-cached premature null would never heal.
-    staleTime: (query) => (query.state.data?.settled ? Infinity : 5_000),
-    refetchInterval: (query) => (query.state.data?.settled ? false : 5_000),
-  });
-  const status = context.data?.status;
-  if (!status) return null;
-  return (
-    <Pressable
-      accessibilityRole="link"
-      onPress={() =>
-        router.push({
-          pathname: "/project/[projectId]/chat",
-          params: { path: streamPath, projectId, slug: projectSlug },
-        })
-      }
-      style={styles.threadContext}
-    >
-      <Text style={styles.threadContextText}>
-        <Text style={styles.threadContextName}>{streamPath.replace(/^\/agents\//, "")}</Text>
-        {` · ${[status.title, status.activity].filter(Boolean).join(" — ")}`}
-      </Text>
-    </Pressable>
-  );
-}
-
-/**
- * One held request's inspectable details — URL, spent secrets, body hash and
- * bounded body preview — plus its per-index outcome on a resolved batch.
- * Body previews render inline (no per-request toggle): the batch expander
- * above is the reveal step.
- */
-function RequestDetails({
-  outcome,
-  request,
-  standalone,
-}: {
-  outcome: {
-    verdict: Verdict;
-    settle: { status: number | null; error: string | null } | null;
-    decidedBy: "human" | "expiry";
-  } | null;
-  request: HeldRequest;
-  standalone: boolean;
-}) {
-  const body = approvalBodyForDisplay(request);
-  return (
-    <View style={{ gap: 4 }}>
-      {standalone ? null : (
-        <Text style={styles.memberHeadline}>
-          {request.method} {safeHost(request.url)}
-        </Text>
-      )}
-      {outcome ? (
-        <Text style={styles.outcomeDetail}>
-          {outcome.verdict === "reject"
-            ? outcome.decidedBy === "expiry"
-              ? "Expired"
-              : "Rejected"
-            : outcome.settle === null
-              ? "Approved — awaiting the egress door…"
-              : outcome.settle.error !== null
-                ? `Delivery failed · ${outcome.settle.error}`
-                : `Upstream ${outcome.settle.status || "status unavailable"}`}
-        </Text>
-      ) : null}
-      <Text style={styles.url} selectable>
-        {request.url}
-      </Text>
-      {request.secretPaths.length > 0 ? (
-        <Text style={styles.secretLine}>spends {request.secretPaths.join(", ")}</Text>
-      ) : null}
-      <Text style={styles.meta} selectable>
-        body sha256: {request.body?.sha256 || "none"}
-      </Text>
-      {body ? (
-        <View style={styles.detailSection}>
-          <Text style={styles.detailTitle}>
-            {body.truncated ? "Request body prefix" : "Request body"}
-            {request.body?.encoding === "base64" || body.truncated ? (
-              <Text style={styles.detailHint}>
-                {"  "}
-                {[
-                  request.body?.encoding === "base64" ? "base64" : "",
-                  body.truncated
-                    ? `64 KiB cap · ${body.originalByteLength?.toLocaleString() || "unknown"} bytes total`
-                    : "",
-                ]
-                  .filter(Boolean)
-                  .join(" · ")}
-              </Text>
-            ) : null}
-          </Text>
-          {body.language === "json" ? (
-            <CodeBlock language="json" muted={false} text={body.text} />
-          ) : (
-            <ScrollView style={styles.bodyScroller} nestedScrollEnabled>
-              <Text style={styles.bodyText} selectable>
-                {body.text}
-              </Text>
-            </ScrollView>
-          )}
-        </View>
       ) : null}
     </View>
   );
@@ -749,68 +449,7 @@ const styles = StyleSheet.create({
   },
   approvedBadge: { borderColor: colors.accent, color: colors.accent },
   rejectedBadge: { borderColor: colors.danger, color: colors.danger },
-  outcomeDetail: { color: colors.textMuted, fontSize: 11 },
   method: { color: colors.text, fontSize: 15, fontWeight: "600" },
-  memberHeadline: { color: colors.text, fontSize: 13, fontWeight: "600" },
-  url: { color: colors.textMuted, fontSize: 12, fontFamily: "Menlo", flexShrink: 1 },
-  secretLine: { color: colors.working, fontSize: 12 },
-  meta: { color: colors.textFaint, fontSize: 11 },
-  detailSection: {
-    borderTopColor: colors.border,
-    borderTopWidth: StyleSheet.hairlineWidth,
-    gap: spacing.xs,
-    marginTop: spacing.sm,
-    paddingTop: spacing.sm,
-  },
-  detailHeader: {
-    alignItems: "center",
-    flexDirection: "row",
-    gap: spacing.xs,
-    minHeight: 32,
-  },
-  chevron: { color: colors.textFaint, fontSize: 12, textAlign: "center", width: 14 },
-  detailTitle: { color: colors.text, flex: 1, fontSize: 13, fontWeight: "600" },
-  detailHint: { color: colors.textFaint, fontFamily: "Menlo", fontSize: 10 },
-  bodyScroller: {
-    backgroundColor: colors.background,
-    borderRadius: radius.sm,
-    maxHeight: 260,
-  },
-  bodyText: {
-    color: colors.textMuted,
-    fontFamily: "Menlo",
-    fontSize: 11,
-    lineHeight: 17,
-    padding: spacing.sm,
-  },
-  threadContext: { justifyContent: "center", minHeight: 24 },
-  threadContextText: { color: colors.textMuted, fontSize: 12 },
-  threadContextName: { color: colors.accent, fontWeight: "600" },
-  sourceHeader: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
-  sourceCopy: { flex: 1, gap: 2 },
-  detailLabel: {
-    color: colors.textFaint,
-    fontSize: 10,
-    fontWeight: "700",
-    textTransform: "uppercase",
-  },
-  sourceMeta: { color: colors.textMuted, fontFamily: "Menlo", fontSize: 10, flexShrink: 1 },
-  threadLink: {
-    borderColor: colors.border,
-    borderRadius: radius.full,
-    borderWidth: 1,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-  },
-  threadLinkText: { color: colors.accent, fontSize: 11, fontWeight: "600" },
-  policy: {
-    backgroundColor: colors.background,
-    borderRadius: radius.sm,
-    gap: 3,
-    marginTop: spacing.sm,
-    padding: spacing.sm,
-  },
-  policyDescription: { color: colors.text, fontSize: 13 },
   submitted: { color: colors.textMuted, fontSize: 12, marginTop: spacing.xs },
   actions: { flexDirection: "row", gap: spacing.sm, marginTop: spacing.sm },
   button: {
@@ -826,14 +465,6 @@ const styles = StyleSheet.create({
   approveText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   groupHosts: { color: colors.textMuted, fontFamily: "Menlo", fontSize: 11 },
   rejectReason: { color: colors.danger, fontSize: 12 },
-  groupMembers: {
-    gap: spacing.sm,
-  },
-  memberCard: {
-    backgroundColor: colors.background,
-    borderRadius: radius.sm,
-    padding: spacing.sm,
-  },
   recent: { marginTop: spacing.lg, gap: spacing.sm },
   recentTitle: { color: colors.textFaint, fontSize: 11, textTransform: "uppercase" },
   empty: { color: colors.textMuted, fontSize: 14 },

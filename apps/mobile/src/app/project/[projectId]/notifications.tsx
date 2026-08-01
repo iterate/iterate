@@ -3,12 +3,23 @@
 // suppression the in-thread approval claim produces. The list reads THIS
 // device's own stream (the device processor journals the whole obligation
 // there) and stays live, so a push settling while the screen is open updates
-// its row in place. Tapping a row deep-links to the same place tapping the
-// real push would have (lib/notification-routing.ts).
+// its row in place.
+//
+// Approval rows EXPAND in place (collapsed by default) into the same rich
+// batch detail the Approvals screen's history cards render — requests,
+// rule, verdicts, reason, the thread's status at the time, the originating
+// script — via the shared ApprovalBatchBody; the chat deep-link lives
+// inside the expansion as its "Open thread" affordance. Non-approval rows
+// keep tap-to-navigate (lib/notification-routing.ts), exactly like tapping
+// the real push.
 
 import { useQuery } from "@tanstack/react-query";
 import { router, Stack, useLocalSearchParams } from "expo-router";
+import type { StreamEvent } from "iterate/sdk/itx/react";
+import { useState } from "react";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
+import { ApprovalBatchBody, ThreadContextLine } from "../../../components/approval-batch.tsx";
+import { deriveBatchDetail, EVENT } from "../../../lib/approvals.ts";
 import { getMobileDeviceId } from "../../../lib/device-identity.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import {
@@ -53,15 +64,6 @@ export default function NotificationsScreen() {
   });
   const rows = deriveDeviceNotifications(events.data || []);
 
-  const openDestination = (row: DeviceNotificationRow) => {
-    const route = pushNotificationRoute({
-      destination: row.destination || undefined,
-      projectId,
-      requestOffset: row.requestOffset,
-    });
-    if (route !== null) router.push(route);
-  };
-
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: slug ? `${slug} notifications` : "Notifications" }} />
@@ -90,29 +92,208 @@ export default function NotificationsScreen() {
           refreshing={events.isRefetching}
           onRefresh={() => events.refetch()}
           renderItem={({ item: row }) => (
-            <Pressable
-              accessibilityRole="button"
-              onPress={() => openDestination(row)}
-              style={styles.row}
-              testID={`notification-row-${row.requestOffset}`}
-            >
-              <View style={styles.rowHeader}>
-                <Text numberOfLines={1} style={styles.title}>
-                  {row.title}
-                </Text>
-                <Text style={styles.date}>{formatRequestedAt(row.requestedAt)}</Text>
-              </View>
-              {row.body === "" ? null : (
-                <Text numberOfLines={2} style={styles.body}>
-                  {row.body}
-                </Text>
-              )}
-              <Text style={[styles.status, row.status.kind === "suppressed" && styles.suppressed]}>
-                {row.status.label}
-              </Text>
-            </Pressable>
+            <NotificationRow
+              baseUrl={baseUrl!}
+              projectId={projectId}
+              projectSlug={slug || ""}
+              row={row}
+            />
           )}
         />
+      )}
+    </View>
+  );
+}
+
+/**
+ * One notification. Approval rows (they carry the batch identity) toggle an
+ * inline detail expansion — ActivityCard's useState toggle precedent, the
+ * chevron marking the affordance; the deep link lives INSIDE the expansion.
+ * Everything else keeps the push's tap-to-navigate behavior.
+ */
+function NotificationRow({
+  baseUrl,
+  projectId,
+  projectSlug,
+  row,
+}: {
+  baseUrl: string;
+  projectId: string;
+  projectSlug: string;
+  row: DeviceNotificationRow;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const expandable = row.approvalRequestEventOffset !== null;
+  const openDestination = () => {
+    const route = pushNotificationRoute({
+      destination: row.destination || undefined,
+      projectId,
+      requestOffset: row.requestOffset,
+    });
+    if (route !== null) router.push(route);
+  };
+  return (
+    <View style={styles.row} testID={`notification-row-${row.requestOffset}`}>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityState={expandable ? { expanded } : undefined}
+        onPress={() => (expandable ? setExpanded(!expanded) : openDestination())}
+      >
+        <View style={styles.rowHeader}>
+          {expandable ? <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text> : null}
+          <Text numberOfLines={1} style={styles.title}>
+            {row.title}
+          </Text>
+          <Text style={styles.date}>{formatRequestedAt(row.requestedAt)}</Text>
+        </View>
+        {row.body === "" ? null : (
+          <Text numberOfLines={2} style={styles.body}>
+            {row.body}
+          </Text>
+        )}
+        <Text style={[styles.status, row.status.kind === "suppressed" && styles.suppressed]}>
+          {row.status.label}
+        </Text>
+      </Pressable>
+      {expanded && row.approvalRequestEventOffset !== null ? (
+        <ApprovalNotificationDetail
+          baseUrl={baseUrl}
+          batchOffset={row.approvalRequestEventOffset}
+          projectId={projectId}
+          projectSlug={projectSlug}
+          row={row}
+        />
+      ) : null}
+    </View>
+  );
+}
+
+/**
+ * The expanded approval detail under a notification row: the batch's events
+ * fetched one-shot from the project root stream by offset, rendered with the
+ * SAME shared pieces the Approvals screen's history cards use. Decided-and-
+ * settled history is immutable and caches forever; an undecided batch stays
+ * provisional and refetches — the same settledness gating as the
+ * thread-context line.
+ */
+function ApprovalNotificationDetail({
+  baseUrl,
+  batchOffset,
+  projectId,
+  projectSlug,
+  row,
+}: {
+  baseUrl: string;
+  batchOffset: number;
+  projectId: string;
+  projectSlug: string;
+  row: DeviceNotificationRow;
+}) {
+  const batch = useQuery({
+    queryKey: ["notification-approval-batch", baseUrl, projectId, batchOffset],
+    queryFn: async () => {
+      const project = await getProjectItx(baseUrl, projectId);
+      const stream = project.streams.get("/");
+      // Page from just below the batch's own offset: its decided/settled
+      // events can only come after it. Approval events are sparse and
+      // SQL-filtered before the page limit, so the loop is only for the
+      // pathological many-batches-later case.
+      const events: StreamEvent[] = [];
+      let cursor = batchOffset - 1;
+      while (true) {
+        const page = await stream.getEvents({
+          afterOffset: cursor,
+          eventTypes: [EVENT.requested, EVENT.decided, EVENT.settled],
+        });
+        if (page.length === 0) break;
+        events.push(...page);
+        cursor = page.at(-1)!.offset;
+      }
+      return deriveBatchDetail(events, batchOffset);
+    },
+    staleTime: (query) => (query.state.data?.complete ? Infinity : 5_000),
+    refetchInterval: (query) => (query.state.data?.complete ? false : 5_000),
+  });
+
+  if (batch.isPending) {
+    return (
+      <View style={styles.detail}>
+        <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} size="small" />
+      </View>
+    );
+  }
+  if (batch.isError) {
+    return (
+      <View style={styles.detail}>
+        <Text style={styles.detailError}>{String(batch.error.message)}</Text>
+      </View>
+    );
+  }
+  if (batch.data === null) {
+    return (
+      <View style={styles.detail}>
+        <Text style={styles.detailMuted}>This batch's history isn't on the stream anymore.</Text>
+      </View>
+    );
+  }
+  const { payload, resolved } = batch.data;
+  const streamContext = payload.streamContext;
+  return (
+    <View style={styles.detail}>
+      <View style={styles.decisionRow}>
+        {resolved ? (
+          <Text
+            style={[
+              styles.outcomeBadge,
+              resolved.decisionSummary === "Approved" ? styles.approvedBadge : styles.rejectedBadge,
+            ]}
+          >
+            {resolved.decisionSummary}
+          </Text>
+        ) : (
+          <Text style={styles.detailMuted}>Awaiting decision</Text>
+        )}
+      </View>
+      {resolved?.reason ? (
+        <Text style={styles.rejectReason}>Rejected because: {resolved.reason}</Text>
+      ) : null}
+      {streamContext?.kind === "script-execution" &&
+      streamContext.streamPath.startsWith("/agents/") ? (
+        <ThreadContextLine
+          baseUrl={baseUrl}
+          executionId={streamContext.executionId}
+          projectId={projectId}
+          projectSlug={projectSlug}
+          streamPath={streamContext.streamPath}
+        />
+      ) : null}
+      <ApprovalBatchBody
+        baseUrl={baseUrl}
+        offset={batchOffset}
+        payload={payload}
+        projectId={projectId}
+        projectSlug={projectSlug}
+        resolved={resolved}
+        surface="notification"
+      />
+      {streamContext?.kind === "script-execution" &&
+      streamContext.streamPath.startsWith("/agents/") ? null : (
+        // Script batches get their "Open thread" affordance inside the body;
+        // everything else keeps a road to where the push would have gone.
+        <Pressable
+          accessibilityRole="link"
+          onPress={() => {
+            const route = pushNotificationRoute({
+              destination: row.destination || undefined,
+              projectId,
+              requestOffset: row.requestOffset,
+            });
+            if (route !== null) router.push(route);
+          }}
+          style={styles.openLink}
+        >
+          <Text style={styles.openLinkText}>Open in Approvals</Text>
+        </Pressable>
       )}
     </View>
   );
@@ -144,9 +325,34 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     gap: 4,
   },
-  rowHeader: { flexDirection: "row", justifyContent: "space-between", gap: spacing.sm },
-  title: { color: colors.text, fontSize: 14, fontWeight: "600", flexShrink: 1 },
+  rowHeader: { alignItems: "center", flexDirection: "row", gap: spacing.sm },
+  chevron: { color: colors.textFaint, fontSize: 12, width: 12 },
+  title: { color: colors.text, flex: 1, fontSize: 14, fontWeight: "600" },
   date: { color: colors.textFaint, fontSize: 12 },
+  detail: {
+    borderTopColor: colors.border,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    gap: 4,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+  },
+  decisionRow: { flexDirection: "row" },
+  outcomeBadge: {
+    borderRadius: radius.full,
+    borderWidth: 1,
+    fontSize: 11,
+    fontWeight: "700",
+    overflow: "hidden",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+  },
+  approvedBadge: { borderColor: colors.accent, color: colors.accent },
+  rejectedBadge: { borderColor: colors.danger, color: colors.danger },
+  rejectReason: { color: colors.danger, fontSize: 12 },
+  detailMuted: { color: colors.textMuted, fontSize: 12 },
+  detailError: { color: colors.danger, fontSize: 12 },
+  openLink: { marginTop: spacing.sm, minHeight: 24, justifyContent: "center" },
+  openLinkText: { color: colors.accent, fontSize: 12, fontWeight: "600" },
   body: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
   status: { color: colors.textMuted, fontSize: 12, fontStyle: "italic" },
   suppressed: { color: colors.accent },
