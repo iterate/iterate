@@ -126,6 +126,8 @@ enum {
    */
   SPEAKER_PREFILL_BYTES = 160 * 32,
   STATS_INTERVAL_MS = 5000,
+  /* How long the transport may stay FAILED before the device reboots itself. */
+  UNHEALTHY_RESTART_MS = 120000,
   PING_INTERVAL_MS = 5000,
 };
 
@@ -687,6 +689,32 @@ void app_main(void) {
     }
 
     const uint64_t now = now_ms(NULL);
+
+    /*
+     * The transport can latch a fatal state that nothing ever clears — most
+     * reachably when the network task's stack high-water (a minimum-EVER
+     * measurement) dips below its floor once, which then forbids every
+     * future reconnect for the life of the boot. A human's remedy is the
+     * power button, so make that the device's remedy too, bounded and loud,
+     * rather than sitting on "connecting" forever.
+     */
+    {
+      static uint64_t unhealthy_since;
+      const bool healthy =
+          runtime.transport.state != ITERATE_KIT_ESP_IDF_ITX_FAILED;
+      if (healthy) {
+        unhealthy_since = 0U;
+      } else if (unhealthy_since == 0U) {
+        unhealthy_since = now;
+      } else if (now - unhealthy_since > UNHEALTHY_RESTART_MS) {
+        ESP_LOGE(
+            tag,
+            "transport unrecoverable for %us — restarting",
+            (unsigned int)(UNHEALTHY_RESTART_MS / 1000U));
+        waveshare_recorder_end_call("device restart");
+        esp_restart();
+      }
+    }
 
     if (runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
         runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY &&

@@ -255,10 +255,11 @@ static void fixture_init(struct fixture *fixture) {
     .event_storage = fixture->event_storage,
     .event_capacity = EVENT_CAPACITY,
     .event_stream = {
-      &fixture->session,
-      fixture->event_notifications,
-      EVENT_CAPACITY,
-      NULL,
+      .session = &fixture->session,
+      .storage = fixture->event_notifications,
+      .capacity = EVENT_CAPACITY,
+      .callback_budget = NULL,
+      .audio_mode = ITERATE_KIT_AUDIO_PUSH_TO_TALK,
     },
     .event_observer = {
       fixture,

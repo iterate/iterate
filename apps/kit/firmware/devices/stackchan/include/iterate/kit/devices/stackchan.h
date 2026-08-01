@@ -7,7 +7,6 @@
 #include "iterate/kit/capabilities/device_event_stream.h"
 #include "iterate/kit/capabilities/leds.h"
 #include "iterate/kit/capabilities/metrics.h"
-#include "iterate/kit/capabilities/push_to_talk.h"
 #include "iterate/kit/capabilities/screen.h"
 #include "iterate/kit/capabilities/servos.h"
 #include "iterate/kit/device.h"
@@ -29,7 +28,7 @@ enum {
    * than allowing each module to consume its independent maximum. Each target
    * still has to prove that its transport storage fits this profile budget.
    */
-  ITERATE_KIT_STACKCHAN_MODULE_COUNT = 8,
+  ITERATE_KIT_STACKCHAN_MODULE_COUNT = 7,
   ITERATE_KIT_STACKCHAN_EVENTS_PER_POLL = 4,
   ITERATE_KIT_STACKCHAN_EVENT_CAPACITY = 8,
   ITERATE_KIT_STACKCHAN_EVENT_NOTIFICATION_CAPACITY = 8,
@@ -63,7 +62,7 @@ struct iterate_kit_stackchan_options {
 /**
  * Optional owner-task adapter for a board's PCM lifecycle and diagnostics.
  *
- * The profile first enforces its conversation/PTT state rules, then invokes
+ * The profile first enforces its conversation state rules, then invokes
  * `handler`; only ITERATE_KIT_OK commits profile state, while every result
  * reaches the event stream. `observer` is a diagnostic mirror invoked after
  * the stream records the result. Both callbacks run on the cooperative peer
@@ -92,23 +91,21 @@ struct iterate_kit_stackchan {
   struct iterate_kit_device_event_queue events;
   struct iterate_kit_device_event_stream event_stream;
   struct iterate_kit_conversation conversation;
-  struct iterate_kit_push_to_talk push_to_talk;
   struct iterate_kit_screen screen;
   struct iterate_kit_servos servos;
   struct iterate_kit_leds leds;
   struct iterate_kit_camera camera;
   struct iterate_kit_metrics metrics;
   struct iterate_kit_stackchan_control_driver control_driver;
-  /* Conversation/socket intent and a manual turn are distinct states. */
+  /* Conversation/socket intent is the sole device-side voice state. */
   bool conversation_active;
-  bool push_to_talk_active;
 };
 
 extern const struct iterate_kit_device_manifest
     iterate_kit_stackchan_manifest;
 
 /**
- * Assembles all eight generic modules after hardware drivers/storage are ready.
+ * Assembles all seven generic modules after hardware drivers/storage are ready.
  * No module is exposed on error; initialization itself performs no hardware
  * I/O and allocates nothing.
  */
@@ -147,17 +144,6 @@ enum iterate_kit_status iterate_kit_stackchan_publish_conversation(
 bool iterate_kit_stackchan_is_conversation_active(
     const struct iterate_kit_stackchan *device);
 
-/**
- * Publishes a physical/remote-equivalent push-to-talk edge. A press is rejected
- * during processing when no conversation is active; release remains safe and
- * idempotent so a queued hang-up/release race cannot leave a held turn behind.
- */
-enum iterate_kit_status iterate_kit_stackchan_publish_push_to_talk(
-    struct iterate_kit_stackchan *device,
-    bool active,
-    enum iterate_kit_device_event_source source);
-bool iterate_kit_stackchan_is_push_to_talk_active(
-    const struct iterate_kit_stackchan *device);
 void iterate_kit_stackchan_event_metrics(
     const struct iterate_kit_stackchan *device,
     struct iterate_kit_device_event_queue_metrics *metrics);

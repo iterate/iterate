@@ -182,9 +182,14 @@ static enum capnweb_status subscribe(
         stream->coalesced_notifications,
     .result = ITERATE_KIT_OK,
     .type = (uint8_t)(
-        stream->current_active
-            ? ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED
-            : ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED),
+        stream->options.audio_mode ==
+                ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC
+            ? (stream->conversation_active
+                  ? ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED
+                  : ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED)
+            : (stream->current_active
+                  ? ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED
+                  : ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED)),
     .source = (uint8_t)ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM,
     .conversation_active = stream->conversation_active,
     .snapshot = true,
@@ -487,7 +492,9 @@ enum iterate_kit_status iterate_kit_device_event_stream_init(
       options->session == NULL ||
       options->storage == NULL ||
       !power_of_two(options->capacity) ||
-      options->capacity > (size_t)UINT32_MAX / 2U) {
+      options->capacity > (size_t)UINT32_MAX / 2U ||
+      (options->audio_mode != ITERATE_KIT_AUDIO_PUSH_TO_TALK &&
+       options->audio_mode != ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC)) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   memset(stream, 0, sizeof(*stream));

@@ -1,6 +1,7 @@
 #ifndef ITERATE_KIT_CAPABILITIES_DEVICE_EVENT_STREAM_H
 #define ITERATE_KIT_CAPABILITIES_DEVICE_EVENT_STREAM_H
 
+#include "iterate/kit/audio.h"
 #include "iterate/kit/capabilities/callback_budget.h"
 #include "iterate/kit/device_events.h"
 #include "iterate/kit/peer.h"
@@ -47,6 +48,12 @@ struct iterate_kit_device_event_stream_options {
   struct iterate_kit_device_event_notification *storage;
   size_t capacity;
   struct iterate_kit_callback_budget *callback_budget;
+  /*
+   * Selects the state represented by the first subscription snapshot. A PTT
+   * device snapshots its held/released speech gate; a continuous-AEC device
+   * snapshots conversation lifetime because server VAD owns speech turns.
+   */
+  enum iterate_kit_audio_mode audio_mode;
 };
 
 /**

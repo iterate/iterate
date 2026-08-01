@@ -160,6 +160,8 @@ enum capnweb_status iterate_kit_m5sticks3_init(
   event_stream_options = options->event_stream;
   event_stream_options.callback_budget =
       &device->callback_budget;
+  event_stream_options.audio_mode =
+      iterate_kit_m5sticks3_manifest.audio_mode;
   /*
    * Initialization is transactional at the composition boundary: no peer is
    * exposed until every required module accepts its borrowed storage/driver.

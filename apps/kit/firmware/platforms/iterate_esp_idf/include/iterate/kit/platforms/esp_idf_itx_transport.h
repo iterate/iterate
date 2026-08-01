@@ -55,9 +55,9 @@ enum {
       ITERATE_KIT_ESP_IDF_WEBSOCKET_TLS_OWNER_STACK_BYTES,
   ITERATE_KIT_ESP_IDF_NETWORK_TASK_MINIMUM_HEADROOM_BYTES = 512,
   /*
-   * 4 KiB: one aggregated realtime append (three 20 ms base64 PCM frames,
-   * ~2.9 KiB) and one capped stream delivery batch (~2.6 KiB event bytes +
-   * envelope) must each fit a single message — the voicelab single-socket
+   * One aggregated realtime append (six 20 ms base64 PCM frames, ~5.9 KiB)
+   * and one capped stream delivery batch (~5.2 KiB event bytes + envelope)
+   * must each fit a single message — the voicelab single-socket
    * clients send/receive both. A message larger than this cap silently
    * exceeds the embedded receive/transmit scratch below, which surfaces as
    * an unexplained generation death, so the cap and the ring slot size must

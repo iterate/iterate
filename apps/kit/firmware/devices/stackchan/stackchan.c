@@ -12,12 +12,13 @@
  * PCM remains outside this capability profile: the target composes the shared
  * realtime lane and owns board-specific microphone/speaker processing. The
  * control handler is only an owner-task transition seam and never queues
- * samples. That separation lets this manifest truthfully advertise manual PTT
- * without importing the known-bad accumulating StackChan WebSocket queue.
+ * samples. That separation lets this manifest truthfully advertise continuous
+ * local AEC/server-VAD policy without importing the known-bad accumulating
+ * StackChan WebSocket queue.
  */
 static const char description[] =
     "{\"instructions\":\"An Iterate StackChan with health metrics, screen, "
-    "head servos, RGB LEDs, camera, and manual push-to-talk voice. PCM "
+    "head servos, RGB LEDs, camera, and full-duplex AEC voice. PCM "
     "media uses the target's separate realtime WebSocket lane.\",\"children\":{"
     "\"subscribeToMetrics\":\"Call a callback immediately and once per "
     "configured interval with bounded runtime metrics.\","
@@ -31,8 +32,6 @@ static const char description[] =
     "\"hangUp\":\"End the current conversation intent.\","
     "\"interruptPlayback\":\"Purge assistant speech and acknowledge only "
     "after the physical speaker owner has reset.\"},"
-    "\"pushToTalk\":{\"start\":\"Start one manual microphone turn.\","
-    "\"stop\":\"Commit the current microphone turn.\"},"
     "\"servos\":\"Head servos; call servos.move(...).\","
     "\"leds\":\"RGB LEDs; call leds.set(...) or leds.fill(...).\","
     "\"takePhoto\":\"Capture and return one bounded image byte array.\"}}";
@@ -40,7 +39,7 @@ static const char description[] =
 const struct iterate_kit_device_manifest iterate_kit_stackchan_manifest = {
   "stackchan",
   "M5Stack StackChan",
-  ITERATE_KIT_AUDIO_PUSH_TO_TALK,
+  ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC,
 };
 
 static enum iterate_kit_status handle_event(
@@ -54,16 +53,9 @@ static enum iterate_kit_status handle_event(
 
   switch ((enum iterate_kit_device_event_type)event->type) {
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
-      /*
-       * A manual turn belongs to an existing PCM conversation. Accepting a
-       * stray press would ask the target to capture with no remote generation,
-       * where fresh speech can only be dropped or accidentally retained.
-       */
-      if (!device->conversation_active) {
-        return ITERATE_KIT_STATE_ERROR;
-      }
-      break;
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
+      /* Grok server VAD, not a second device state machine, owns speech turns. */
+      return ITERATE_KIT_STATE_ERROR;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
       break;
@@ -87,22 +79,16 @@ static enum iterate_kit_status handle_event(
 
   switch ((enum iterate_kit_device_event_type)event->type) {
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
-      device->push_to_talk_active = true;
-      break;
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
-      /* Release is intentionally safe outside a conversation. */
-      device->push_to_talk_active = false;
-      break;
+      return ITERATE_KIT_STATE_ERROR;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
       device->conversation_active = true;
       break;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
       /*
-       * Conversation teardown is a containing lifecycle boundary. Clearing a
-       * held manual turn here prevents a later physical release from being
-       * required to restore a coherent idle snapshot after disconnect.
+       * Conversation teardown is the only microphone publication boundary;
+       * server VAD deliberately creates no device-side held/released state.
        */
-      device->push_to_talk_active = false;
       device->conversation_active = false;
       break;
     case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
@@ -172,6 +158,7 @@ enum capnweb_status iterate_kit_stackchan_init(
         .storage = device->event_notifications,
         .capacity = ITERATE_KIT_STACKCHAN_EVENT_NOTIFICATION_CAPACITY,
         .callback_budget = &device->callback_budget,
+        .audio_mode = iterate_kit_stackchan_manifest.audio_mode,
       };
   /*
    * Do not expose a partially assembled peer. Every module validates its
@@ -219,9 +206,7 @@ enum capnweb_status iterate_kit_stackchan_init(
           &device->conversation, &device->events) != ITERATE_KIT_OK ||
       iterate_kit_conversation_bind_playback_interruption(
           &device->conversation,
-          &options->playback_interruption) != ITERATE_KIT_OK ||
-      iterate_kit_push_to_talk_init(
-          &device->push_to_talk, &device->events) != ITERATE_KIT_OK) {
+          &options->playback_interruption) != ITERATE_KIT_OK) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
 
@@ -237,11 +222,9 @@ enum capnweb_status iterate_kit_stackchan_init(
   device->modules[2] = iterate_kit_screen_module(&device->screen);
   device->modules[3] =
       iterate_kit_conversation_module(&device->conversation);
-  device->modules[4] =
-      iterate_kit_push_to_talk_module(&device->push_to_talk);
-  device->modules[5] = iterate_kit_servos_module(&device->servos);
-  device->modules[6] = iterate_kit_leds_module(&device->leds);
-  device->modules[7] = iterate_kit_camera_module(&device->camera);
+  device->modules[4] = iterate_kit_servos_module(&device->servos);
+  device->modules[5] = iterate_kit_leds_module(&device->leds);
+  device->modules[6] = iterate_kit_camera_module(&device->camera);
   /*
    * Routing remains one fixed table even though the public description is
    * nested. Each generic module owns its method path, avoiding a per-profile
@@ -347,26 +330,6 @@ enum iterate_kit_status iterate_kit_stackchan_publish_conversation(
 bool iterate_kit_stackchan_is_conversation_active(
     const struct iterate_kit_stackchan *device) {
   return device != NULL && device->conversation_active;
-}
-
-enum iterate_kit_status iterate_kit_stackchan_publish_push_to_talk(
-    struct iterate_kit_stackchan *device,
-    bool active,
-    enum iterate_kit_device_event_source source) {
-  if (device == NULL) {
-    return ITERATE_KIT_INVALID_ARGUMENT;
-  }
-  return iterate_kit_device_event_publish(
-      &device->events,
-      active
-          ? ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED
-          : ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED,
-      source);
-}
-
-bool iterate_kit_stackchan_is_push_to_talk_active(
-    const struct iterate_kit_stackchan *device) {
-  return device != NULL && device->push_to_talk_active;
 }
 
 void iterate_kit_stackchan_event_metrics(
