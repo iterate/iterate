@@ -132,11 +132,10 @@ v1 — reliability over color; note it as a possible follow-up.
       `onChange`); modeled as a useMutation whose `mutate` IS the callback,
       swap derived from `.isSuccess`. Dev-only "editor webview never ready"
       badge after a 10s watchdog (a useQuery timer, `enabled: __DEV__`)_
-- [x] Prompt guidance against silent turns — _agent-defaults.ts: summary
-      instruction gains "never set waitingFor in a script that still awaits
-      work"; prompt gains "do something visible with an awaited result".
-      Budget ceiling 4100 → 4200, dated note in
-      agent-prompt-budgets.test.ts_
+- ~~Prompt guidance against silent turns~~ _added then REVERTED (75215ecd4)
+      per Misha — he wants to mull the framing (candidate principle: egress
+      rules make no difference to how scripts should be written; holds are
+      ordinary slow fetches). Lives on in the silent-turn-nudge task's notes_
 - [x] Placeholder task for the general silent-turn nudge —
       _tasks/agent-silent-turn-nudge.md, `status: needs-grilling`_
 - [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
