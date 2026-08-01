@@ -318,7 +318,10 @@ static void append_stats(uint64_t now) {
       ",\"batches\":%" PRIu32 ",\"connGeneration\":%" PRIu32
       ",\"rttMs\":%" PRIu32 ",\"pings\":%" PRIu32
       ",\"heapFree\":%" PRIu32 ",\"heapMin\":%" PRIu32
-      ",\"wsSent\":%" PRIu32 ",\"outboxDiscarded\":%" PRIu32 "}}]",
+      ",\"wsSent\":%" PRIu32 ",\"outboxDiscarded\":%" PRIu32
+      ",\"inboxPublished\":%" PRIu32 ",\"inboxConsumed\":%" PRIu32
+      ",\"inboxDiscarded\":%" PRIu32 ",\"inboxHighWater\":%" PRIu32
+      ",\"sessionGeneration\":%" PRIu32 "}}]",
       runtime.stats_sequence++,
       now,
       runtime.voicelab.frames_sent,
@@ -339,7 +342,12 @@ static void append_stats(uint64_t now) {
       (uint32_t)esp_get_free_heap_size(),
       (uint32_t)esp_get_minimum_free_heap_size(),
       metrics.control_messages_sent,
-      metrics.control_outbox_discarded);
+      metrics.control_outbox_discarded,
+      metrics.control_inbox.messages_published,
+      metrics.control_inbox.messages_consumed,
+      metrics.control_inbox_discarded,
+      metrics.control_inbox.high_water_slots,
+      runtime.connection.generation);
   if (length > 0 && (size_t)length < sizeof(runtime.stats_buffer)) {
     (void)iterate_kit_voicelab_append_raw(
         &runtime.voicelab, runtime.stats_buffer, (size_t)length);
@@ -402,6 +410,28 @@ void app_main(void) {
           "transport state=%s",
           iterate_kit_esp_idf_itx_transport_state_name(
               runtime.transport.state));
+      if (runtime.last_transport_state == ITERATE_KIT_ESP_IDF_ITX_READY) {
+        struct iterate_kit_esp_idf_itx_transport_metrics metrics;
+        iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &metrics);
+        ESP_LOGE(
+            tag,
+            "left ready: recvStatus=%" PRId32 " wsClose=%" PRId32
+            " wsErrType=%" PRId32 " tlsErr=%" PRId32 " errno=%" PRId32
+            " protoFail=%" PRIu32 " recvFail=%" PRIu32 " sendFail=%" PRIu32
+            " inboxDiscard=%" PRIu32 " outboxDiscard=%" PRIu32
+            " appCapnweb=%" PRId32,
+            metrics.last_control_receive_status,
+            metrics.last_websocket_close_status_code,
+            metrics.last_websocket_error_type,
+            metrics.last_websocket_tls_error,
+            metrics.last_websocket_transport_errno,
+            metrics.protocol_failures,
+            metrics.control_receive_failures,
+            metrics.control_send_failures,
+            metrics.control_inbox_discarded,
+            metrics.control_outbox_discarded,
+            metrics.last_application_capnweb_status);
+      }
       if (runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_FAILED) {
         struct iterate_kit_esp_idf_itx_transport_metrics metrics;
         iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &metrics);
@@ -468,59 +498,60 @@ void app_main(void) {
         runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
         runtime.voicelab_generation == runtime.connection.generation) {
       /*
-       * Aggregated, paced, headroom-gated drain: one three-frame (60 ms)
-       * append per window — ~17 pushes/s against the taskless control
-       * socket's measured ~40-50 TLS-messages/s ceiling. Outbox exhaustion
-       * is SESSION-FATAL in this peer (finish_message terminalizes on
-       * backpressure), so the append is skipped without headroom; the
-       * freshest-wins mic queue makes that loss honest.
+       * EVERY producer gates on outbox headroom: exhaustion is
+       * SESSION-FATAL in this peer (finish_message terminalizes on
+       * backpressure), and the measured drain is only ~25-50 messages/s.
+       * Mic frames aggregate to 4-frame/80ms appends (12.5 pushes/s);
+       * frames are skipped without headroom — the freshest-wins mic queue
+       * makes that loss honest.
        */
-      static struct mic_frame frame_storage[3];
+      struct iterate_kit_spsc_ring_metrics outbox_metrics;
+      iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
+      const size_t outbox_free =
+          CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
+      static struct mic_frame frame_storage[4];
       static uint64_t drain_window_at;
       if (now >= drain_window_at &&
-          uxQueueMessagesWaiting(runtime.mic_queue) >= 3U) {
-        struct iterate_kit_spsc_ring_metrics outbox_metrics;
-        iterate_kit_spsc_ring_metrics(
-            &runtime.control_outbox, &outbox_metrics);
+          uxQueueMessagesWaiting(runtime.mic_queue) >= 4U) {
         drain_window_at =
-            (drain_window_at == 0U || now - drain_window_at > 300U)
-            ? now + 3U * FRAME_MS
-            : drain_window_at + 3U * FRAME_MS;
-        if (outbox_metrics.current_slots + 3U <= CONTROL_OUTBOX_SLOTS &&
-            xQueueReceive(runtime.mic_queue, &frame_storage[0], 0) == pdTRUE &&
-            xQueueReceive(runtime.mic_queue, &frame_storage[1], 0) == pdTRUE &&
-            xQueueReceive(runtime.mic_queue, &frame_storage[2], 0) == pdTRUE) {
-          const uint8_t *frame_pointers[3] = {
-            (const uint8_t *)frame_storage[0].samples,
-            (const uint8_t *)frame_storage[1].samples,
-            (const uint8_t *)frame_storage[2].samples,
-          };
+            (drain_window_at == 0U || now - drain_window_at > 400U)
+            ? now + 4U * FRAME_MS
+            : drain_window_at + 4U * FRAME_MS;
+        if (outbox_free >= 5U) {
+          size_t index;
+          const uint8_t *frame_pointers[4];
+          for (index = 0U; index < 4U; ++index) {
+            (void)xQueueReceive(runtime.mic_queue, &frame_storage[index], 0);
+            frame_pointers[index] =
+                (const uint8_t *)frame_storage[index].samples;
+          }
           if (speaker_is_active(now)) {
             memset(frame_storage, 0, sizeof(frame_storage));
-            runtime.mic_frames_gated += 3U;
+            runtime.mic_frames_gated += 4U;
           }
           (void)iterate_kit_voicelab_append_frames(
               &runtime.voicelab,
               frame_pointers,
-              3U,
+              4U,
               sizeof(frame_storage[0].samples),
               runtime.frame_sequence,
               now);
-          runtime.frame_sequence += 3U;
+          runtime.frame_sequence += 4U;
         }
       }
-      if (iterate_kit_voicelab_needs_recycle(&runtime.voicelab)) {
+      if (outbox_free >= 7U &&
+          iterate_kit_voicelab_needs_recycle(&runtime.voicelab)) {
         (void)iterate_kit_voicelab_recycle_connection(&runtime.voicelab);
       }
       if (next_ping_at == 0U) {
         next_ping_at = now + 1000U;
         next_stats_at = now + STATS_INTERVAL_MS;
       }
-      if (now >= next_ping_at) {
+      if (now >= next_ping_at && outbox_free >= 5U) {
         (void)iterate_kit_voicelab_ping(&runtime.voicelab);
         next_ping_at = now + PING_INTERVAL_MS;
       }
-      if (now >= next_stats_at) {
+      if (now >= next_stats_at && outbox_free >= 5U) {
         append_stats(now);
         next_stats_at = now + STATS_INTERVAL_MS;
       }
