@@ -53,6 +53,7 @@ static struct {
   size_t speaker_dropped;
   StreamBufferHandle_t mic_queue;
   StreamBufferHandle_t speaker_queue;
+  StreamBufferHandle_t log_queue;
 } recorder;
 
 static uint64_t now_ms(void) {
@@ -94,7 +95,10 @@ bool waveshare_recorder_init(void) {
       LANE_BUFFER_BYTES, 1U, MALLOC_CAP_SPIRAM);
   recorder.speaker_queue = xStreamBufferCreateWithCaps(
       LANE_BUFFER_BYTES, 1U, MALLOC_CAP_SPIRAM);
-  if (recorder.mic_queue == NULL || recorder.speaker_queue == NULL) {
+  recorder.log_queue =
+      xStreamBufferCreateWithCaps(4096, 1U, MALLOC_CAP_SPIRAM);
+  if (recorder.mic_queue == NULL || recorder.speaker_queue == NULL ||
+      recorder.log_queue == NULL) {
     ESP_LOGW(tag, "no PSRAM for recorder queues; recording disabled");
     return false;
   }
@@ -214,6 +218,14 @@ void waveshare_recorder_drain(void) {
               recorder.speaker_queue, scratch, sizeof(scratch), 0)) > 0U) {
     if (recorder.speaker != NULL) {
       recorder.speaker_bytes += fwrite(scratch, 1U, taken, recorder.speaker);
+    }
+  }
+  while ((taken = xStreamBufferReceive(
+              recorder.log_queue, scratch, sizeof(scratch), 0)) > 0U) {
+    if (recorder.log != NULL) {
+      (void)fwrite(scratch, 1U, taken, recorder.log);
+      (void)fflush(recorder.log);
+      recorder.log_bytes = (size_t)ftell(recorder.log);
     }
   }
 }

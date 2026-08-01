@@ -166,6 +166,7 @@ iterate_kit_audio_hardware M5UnifiedHalfDuplex::audioHardware() {
     stopCapture,
     stopPlayback,
     flushPlayback,
+    preparePlayback,
   };
 }
 
@@ -563,6 +564,17 @@ iterate_kit_status M5UnifiedHalfDuplex::flushPlayback(void *context) {
    * the second call still revisits the lane and discards that narrow suffix.
    */
   return platform.audioOwner_.suspendForCapture();
+}
+
+iterate_kit_status M5UnifiedHalfDuplex::preparePlayback(void *context) {
+  auto &platform = *static_cast<M5UnifiedHalfDuplex *>(context);
+  /*
+   * This is intentionally the same hardware transition used after Mic.end(),
+   * but exposed at the conversation boundary as well. A freshly opened call
+   * can receive Grok's greeting before any PTT cycle, and the audio owner—not
+   * transport arrival—is the authority on whether those samples reach DMA.
+   */
+  return platform.audioOwner_.resumeAfterCapture();
 }
 
 iterate_kit_status M5UnifiedHalfDuplex::pollCapture(

@@ -290,7 +290,13 @@ bool waveshare_audio_init(void) {
      * near -30 dBFS with peaks still ~12 dB below clipping.
      */
     (void)esp_codec_dev_set_in_gain(microphone_dev, 36.0f);
-    (void)esp_codec_dev_set_out_vol(speaker_dev, 100);
+        /*
+     * 100 maps to 0 dB — the DAC at full scale into a small class-D PA on a
+     * 3.3V rail, which clips and sags on loud passages. That crackle tracks
+     * speech level rather than network events, so it is easy to mistake for
+     * a buffer fault.
+     */
+    (void)esp_codec_dev_set_out_vol(speaker_dev, 72);
   }
   ESP_LOGI(tag, "ES8311 duplex audio ready at 16 kHz");
   waveshare_audio_dump_registers();

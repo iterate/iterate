@@ -97,9 +97,23 @@ enum {
   FRAME_BYTES = FRAME_SAMPLES * 2,
   MIC_QUEUE_DEPTH = 32,
   MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND,
-  /* 1 MiB of PSRAM speaker staging ≈ 32 s of audio — Grok bursts whole
-   * answers; barge-in flushes this, underrun never should. */
-  SPEAKER_BUFFER_BYTES = 1024 * 1024,
+  /*
+   * The speaker buffer holds JITTER, never an answer. A 1 MiB (32 s) buffer
+   * was the single worst defect here: the bridge paced above realtime, so
+   * every answer accumulated until the buffer filled, and then
+   * xStreamBufferSend committed the HEAD of a frame and discarded the tail —
+   * a click at an arbitrary waveform phase every 20 ms, heard as static that
+   * got worse the longer the answer ran. 1 s is ample for network jitter now
+   * that the bridge paces at ~1.05x, and whole frames are dropped rather
+   * than split.
+   */
+  SPEAKER_BUFFER_BYTES = 32000,
+  /*
+   * Playback will not start, or resume after starving, until this much audio
+   * is queued. Without it the first frame starts the speaker with zero margin
+   * and the DMA's 90 ms is the only tolerance the whole path has.
+   */
+  SPEAKER_PREFILL_BYTES = 160 * 32,
   STATS_INTERVAL_MS = 5000,
   PING_INTERVAL_MS = 5000,
 };
@@ -149,6 +163,8 @@ static struct {
   uint32_t mic_frames_gated;
   uint32_t speaker_frames_played;
   uint32_t speaker_overflow_drops;
+  uint32_t speaker_underruns;
+  uint32_t speaker_bad_frames;
   uint32_t barge_in_flushes;
   bool talking;
 } runtime;
@@ -208,10 +224,21 @@ static void on_speaker_pcm(
     void *context, const uint8_t *pcm, size_t pcm_length, int64_t sequence) {
   (void)context;
   (void)sequence;
-  if (xStreamBufferSend(runtime.speaker_buffer, pcm, pcm_length, 0) <
-      pcm_length) {
-    ++runtime.speaker_overflow_drops;
+  /*
+   * A frame goes in whole or not at all. A partial write splices the head of
+   * one frame onto the next at an arbitrary phase, which is a click — and at
+   * a full buffer that happens to EVERY frame. An odd length would shift the
+   * 16-bit sample grid permanently, so it is refused outright.
+   */
+  if ((pcm_length & 1U) != 0U) {
+    ++runtime.speaker_bad_frames;
+    return;
   }
+  if (xStreamBufferSpacesAvailable(runtime.speaker_buffer) < pcm_length) {
+    ++runtime.speaker_overflow_drops;
+    return;
+  }
+  (void)xStreamBufferSend(runtime.speaker_buffer, pcm, pcm_length, 0);
 }
 
 static void on_control(
@@ -272,18 +299,43 @@ static void recorder_task(void *argument) {
 
 static void playback_task(void *argument) {
   static int16_t chunk[FRAME_SAMPLES];
+  /*
+   * Starts buffering, and returns to buffering whenever the queue runs dry.
+   * Resuming at zero margin is why a single network excursion used to turn
+   * into continuous stutter: the deficit was never recovered.
+   */
+  bool priming = true;
   (void)argument;
   for (;;) {
-    const size_t received = xStreamBufferReceive(
-        runtime.speaker_buffer, chunk, sizeof(chunk), pdMS_TO_TICKS(100));
+    size_t received;
+    if (priming) {
+      if (xStreamBufferBytesAvailable(runtime.speaker_buffer) <
+          (size_t)SPEAKER_PREFILL_BYTES) {
+        vTaskDelay(pdMS_TO_TICKS(10));
+        continue;
+      }
+      priming = false;
+    }
+    received = xStreamBufferReceive(
+        runtime.speaker_buffer, chunk, sizeof(chunk), pdMS_TO_TICKS(20));
     if (received == 0U) {
+      /* Starved: re-prime rather than dribble frames into a dry DMA. */
+      priming = true;
+      ++runtime.speaker_underruns;
       continue;
     }
     if (runtime.speaker_discard_bytes > 0U) {
+      /*
+       * Discard only what was asked for. Dropping the whole chunk threw away
+       * up to 20 ms of the NEXT answer on the last chunk of a flush — the
+       * first syllable after a barge-in.
+       */
       const uint32_t discard = runtime.speaker_discard_bytes;
-      runtime.speaker_discard_bytes =
-          discard > received ? discard - (uint32_t)received : 0U;
-      continue;
+      const size_t skipped = discard < received ? (size_t)discard : received;
+      runtime.speaker_discard_bytes = (uint32_t)(discard - skipped);
+      if (skipped == received) continue;
+      memmove(chunk, (const uint8_t *)chunk + skipped, received - skipped);
+      received -= skipped;
     }
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
@@ -309,15 +361,6 @@ static void capture_task(void *argument) {
       continue;
     }
     ++runtime.mic_frames_captured;
-    if (runtime.mic_frames_captured % 250U == 1U) {
-      /* Bring-up: is the codec giving us audio, or is corruption ours? */
-      ESP_LOGI(
-          tag,
-          "raw mic samples: %d %d %d %d %d %d %d %d",
-          frame.samples[0], frame.samples[1], frame.samples[2],
-          frame.samples[3], frame.samples[4], frame.samples[5],
-          frame.samples[6], frame.samples[7]);
-    }
     if (xQueueSend(runtime.mic_queue, &frame, 0) != pdTRUE) {
       /* Freshest wins: discard the OLDEST frame, keep this one. Stale
        * speech after a network hiccup is worse than a gap. */
@@ -411,7 +454,8 @@ static void append_stats(uint64_t now) {
       ",\"micCaptured\":%" PRIu32 ",\"micDropped\":%" PRIu32
       ",\"micGated\":%" PRIu32
       ",\"spkFrames\":%" PRIu32 ",\"spkPlayed\":%" PRIu32
-      ",\"spkOverflow\":%" PRIu32 ",\"spkSeqGaps\":%" PRIu32
+      ",\"spkOverflow\":%" PRIu32 ",\"spkUnderruns\":%" PRIu32
+      ",\"spkBadFrames\":%" PRIu32 ",\"spkSeqGaps\":%" PRIu32
       ",\"spkDecodeFailures\":%" PRIu32 ",\"bargeIns\":%" PRIu32
       ",\"batches\":%" PRIu32 ",\"connGeneration\":%" PRIu32
       ",\"rttMs\":%" PRIu32 ",\"pings\":%" PRIu32
@@ -430,6 +474,8 @@ static void append_stats(uint64_t now) {
       runtime.voicelab.spk_frames_received,
       runtime.speaker_frames_played,
       runtime.speaker_overflow_drops,
+      runtime.speaker_underruns,
+      runtime.speaker_bad_frames,
       runtime.voicelab.spk_seq_gaps,
       runtime.voicelab.spk_decode_failures,
       runtime.barge_in_flushes,
@@ -507,15 +553,16 @@ void app_main(void) {
     return;
   }
   (void)xTaskCreatePinnedToCore(
-      capture_task, "vl-capture", 4096, NULL, 17, NULL, 1);
+      capture_task, "vl-capture", 4096, NULL, 18, NULL, 1);
   (void)xTaskCreatePinnedToCore(
-      playback_task, "vl-playback", 4096, NULL, 18, NULL, 1);
+      playback_task, "vl-playback", 4096, NULL, 19, NULL, 1);
   /*
-   * Below everything that touches audio or the network: the card is a
-   * diagnostic, and must never be the reason a frame is late.
+   * Below the app task (priority 1), which is the sole consumer of the
+   * control inbox and therefore the speaker's producer. At priority 2 the
+   * card's multi-hundred-millisecond erases preempted the downlink.
    */
   (void)xTaskCreatePinnedToCore(
-      recorder_task, "vl-recorder", 4096, NULL, 2, NULL, 0);
+      recorder_task, "vl-recorder", 4096, NULL, 1, NULL, 0);
   ESP_LOGI(
       tag,
       "voicelab voice client ready: static_bytes=%u stream=/voicelab/dev-waveshare",

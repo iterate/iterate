@@ -68,6 +68,11 @@ static enum iterate_kit_status flush_playback(void *context) {
   return ITERATE_KIT_OK;
 }
 
+static enum iterate_kit_status prepare_playback(void *context) {
+  record_operation(context, 'R');
+  return ITERATE_KIT_OK;
+}
+
 static enum iterate_kit_status send_event(
     void *context, enum iterate_kit_audio_event event) {
   struct fake_audio *audio = context;
@@ -149,6 +154,7 @@ static struct iterate_kit_audio_options options(
     stop_capture,
     stop_playback,
     flush_playback,
+    prepare_playback,
   };
   const struct iterate_kit_audio_egress egress = {
     audio,
@@ -165,6 +171,36 @@ static struct iterate_kit_audio_options options(
     },
   };
   return result;
+}
+
+/*
+ * Hanging up must purge queued speech immediately, but the next Button-B call
+ * has to restore speaker ownership before userspace can send its opening
+ * greeting. Previously only PTT release resumed the half-duplex output, so a
+ * call that began with Grok speaking discarded the whole greeting and looked
+ * like several seconds of unexplained connection delay. Keep preparation an
+ * explicit lifecycle edge rather than smuggling it into a sleep or first PCM
+ * frame, where failure would be late and much harder to attribute.
+ */
+static void next_conversation_prepares_playback_after_hang_up(void) {
+  struct fake_audio audio = {0};
+  struct iterate_kit_audio_controller controller = {0};
+  const struct iterate_kit_audio_options audio_options =
+      options(&audio, ITERATE_KIT_AUDIO_PUSH_TO_TALK);
+
+  assert(
+      iterate_kit_audio_controller_init(
+          &controller,
+          &audio_options) ==
+      ITERATE_KIT_OK);
+  assert(
+      iterate_kit_audio_interrupt_playback(&controller) ==
+      ITERATE_KIT_OK);
+  assert(
+      iterate_kit_audio_prepare_playback(&controller) ==
+      ITERATE_KIT_OK);
+  assert(audio.operation_count == 2U);
+  assert(memcmp(audio.operations, "FR", 2U) == 0);
 }
 
 /*
@@ -542,6 +578,7 @@ static void disconnected_egress_drops_current_frames_without_driver_failure(
 }
 
 int main(void) {
+  next_conversation_prepares_playback_after_hang_up();
   ptt_is_half_duplex_and_never_queues_mic_frames();
   full_duplex_aec_keeps_capture_running_during_interruption();
   capture_started_event_failure_cannot_leave_mic_hot();

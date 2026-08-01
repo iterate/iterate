@@ -155,6 +155,7 @@ iterate_kit_audio_controller makeController(FakeEgress &egress) {
       okHardware,
       okHardware,
       okHardware,
+      okHardware,
     },
     {
       &egress,

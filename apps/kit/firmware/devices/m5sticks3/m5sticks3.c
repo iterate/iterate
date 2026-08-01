@@ -74,9 +74,22 @@ static enum iterate_kit_status handle_event(
        * race where hang-up and the physical release are queued together.
        */
       return iterate_kit_audio_push_to_talk(&device->audio, false);
-    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
-      device->conversation_active = true;
-      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED: {
+      /*
+       * Hang-up leaves the half-duplex speaker deliberately suspended after
+       * purging the previous generation. Grok speaks first in a new call, so
+       * waiting for the first PTT release to restore the speaker silently
+       * discarded the entire greeting even though `/pcm` delivered it on
+       * time. Treat hardware readiness as part of accepting the start event:
+       * userspace receives success only after new downlink PCM can be played.
+       */
+      const enum iterate_kit_status status =
+          iterate_kit_audio_prepare_playback(&device->audio);
+      if (status == ITERATE_KIT_OK) {
+        device->conversation_active = true;
+      }
+      return status;
+    }
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED: {
       enum iterate_kit_status status =
           iterate_kit_audio_push_to_talk(&device->audio, false);

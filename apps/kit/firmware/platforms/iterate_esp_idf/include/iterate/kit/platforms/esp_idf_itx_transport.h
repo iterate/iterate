@@ -139,6 +139,8 @@ struct iterate_kit_esp_idf_itx_transport_metrics {
   uint32_t control_messages_sent;
   uint32_t control_messages_discarded;
   uint32_t control_inbox_discarded;
+  /** Reads deliberately skipped because the inbox was full (backpressure). */
+  uint32_t control_inbox_deferrals;
   uint32_t control_outbox_discarded;
   uint32_t control_receive_failures;
   uint32_t control_send_failures;
@@ -281,6 +283,7 @@ struct iterate_kit_esp_idf_itx_transport {
   uint32_t control_messages_sent;
   uint32_t control_messages_discarded;
   uint32_t control_inbox_discarded;
+  uint32_t control_inbox_deferrals;
   uint32_t control_outbox_discarded;
   uint32_t control_receive_failures;
   uint32_t control_send_failures;

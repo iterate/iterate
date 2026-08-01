@@ -46,6 +46,7 @@ static bool valid_options(const struct iterate_kit_audio_options *options) {
       options->hardware.stop_capture != NULL &&
       options->hardware.stop_playback != NULL &&
       options->hardware.flush_playback != NULL &&
+      options->hardware.prepare_playback != NULL &&
       options->egress.send_event != NULL &&
       options->egress.send_pcm != NULL &&
       options->capture.poll != NULL;
@@ -270,6 +271,31 @@ enum iterate_kit_status iterate_kit_audio_interrupt_playback(
     send_event(controller, ITERATE_KIT_AUDIO_INTERRUPTION);
   }
   return remember(controller, ITERATE_KIT_OK);
+}
+
+enum iterate_kit_status iterate_kit_audio_prepare_playback(
+    struct iterate_kit_audio_controller *controller) {
+  enum iterate_kit_status status;
+  if (controller == NULL || !controller->initialized) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  /*
+   * In the push-to-talk profile, capture and speaker ownership are mutually
+   * exclusive. Refusing an early prepare is safer than allowing a call-state
+   * transition to steal I2S pins from an active microphone. The device event
+   * owner serializes normal use, so this branch represents a real lifecycle
+   * defect rather than a retryable race.
+   */
+  if (controller->options.mode == ITERATE_KIT_AUDIO_PUSH_TO_TALK &&
+      (controller->capture_active || controller->push_to_talk_active)) {
+    return remember(controller, ITERATE_KIT_STATE_ERROR);
+  }
+  if (controller->playback_flush_pending) {
+    return remember(controller, ITERATE_KIT_STATE_ERROR);
+  }
+  status = controller->options.hardware.prepare_playback(
+      controller->options.hardware.context);
+  return remember(controller, status);
 }
 
 enum iterate_kit_status iterate_kit_audio_push_to_talk(

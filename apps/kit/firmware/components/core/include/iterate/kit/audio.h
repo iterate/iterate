@@ -31,6 +31,9 @@ typedef void (*iterate_kit_audio_send_complete_fn)(
  * Hardware operations are synchronous and must not retain any arguments.
  * A half-duplex adapter must make stop_playback() stop DMA immediately and
  * flush_playback() release every speaker buffer before start_capture().
+ * prepare_playback() restores speaker ownership at an explicit conversation
+ * boundary. Keeping that edge separate from flush avoids briefly restarting
+ * the speaker while a push-to-talk press is about to claim the peripheral.
  */
 struct iterate_kit_audio_hardware {
   void *context;
@@ -38,6 +41,7 @@ struct iterate_kit_audio_hardware {
   enum iterate_kit_status (*stop_capture)(void *context);
   enum iterate_kit_status (*stop_playback)(void *context);
   enum iterate_kit_status (*flush_playback)(void *context);
+  enum iterate_kit_status (*prepare_playback)(void *context);
 };
 
 /**
@@ -128,6 +132,18 @@ enum iterate_kit_status iterate_kit_audio_note_playback_started(
  * push-to-talk interruption.
  */
 enum iterate_kit_status iterate_kit_audio_interrupt_playback(
+    struct iterate_kit_audio_controller *controller);
+
+/**
+ * Makes the hardware ready to consume the next downlink frame.
+ *
+ * A hang-up deliberately leaves a half-duplex speaker suspended after its
+ * destructive flush. The next conversation must cross this explicit fence
+ * before userspace is allowed to send an opening greeting; otherwise valid
+ * PCM can be accepted by the transport and then discarded below it until the
+ * first microphone cycle happens to restore speaker ownership.
+ */
+enum iterate_kit_status iterate_kit_audio_prepare_playback(
     struct iterate_kit_audio_controller *controller);
 
 enum iterate_kit_status iterate_kit_audio_push_to_talk(

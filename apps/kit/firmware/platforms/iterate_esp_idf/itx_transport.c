@@ -530,6 +530,31 @@ static bool service_websocket_control(
   return false;
 }
 
+/*
+ * Real backpressure, and the reason the inbox can no longer overflow.
+ *
+ * Reading a message the inbox cannot hold is fatal by design: dropping it
+ * would let the peer believe an RPC was delivered that the capability task
+ * never saw. But nothing obliged us to read it. The transport owns
+ * non-blocking reads, so when there is no room we simply do not read — the
+ * bytes stay in lwIP, the TCP window closes, and the sender backs off. That
+ * turns the ring size into a latency knob instead of a liveness cliff.
+ *
+ * Deferring is only safe at a message boundary: mid-message, a slot is
+ * already reserved and the remaining fragments must be consumed to keep the
+ * JSON contiguous. `write_acquired` is exactly that flag.
+ */
+static bool inbox_has_room(
+    struct iterate_kit_esp_idf_itx_transport *transport) {
+  struct iterate_kit_spsc_ring_metrics metrics;
+  if (transport->control_inbox.write_acquired) {
+    return true; /* mid-message: the slot is already ours */
+  }
+  iterate_kit_spsc_ring_metrics(transport->options.control_inbox, &metrics);
+  return metrics.current_slots <
+      (uint32_t)transport->options.control_inbox->slot_count;
+}
+
 static void receive_control_messages(
     struct iterate_kit_esp_idf_itx_transport *transport) {
   unsigned int received;
@@ -538,6 +563,15 @@ static void receive_control_messages(
        atomic_load_u32(&transport->socket_connected);
        ++received) {
     struct iterate_kit_esp_idf_websocket_chunk chunk;
+    if (!inbox_has_room(transport)) {
+      /*
+       * Full: leave it on the socket. The consumer drains every poll, so this
+       * resolves in milliseconds; if it somehow does not, the peer's own
+       * timeouts apply rather than us corrupting the session.
+       */
+      atomic_saturating_increment(&transport->control_inbox_deferrals);
+      return;
+    }
     const enum iterate_kit_esp_idf_websocket_receive_result result =
         iterate_kit_esp_idf_websocket_connection_receive(
             &transport->websocket, 0, &chunk);
@@ -1528,6 +1562,8 @@ void iterate_kit_esp_idf_itx_transport_metrics(
       atomic_load_u32(&transport->control_messages_discarded);
   metrics->control_inbox_discarded =
       atomic_load_u32(&transport->control_inbox_discarded);
+  metrics->control_inbox_deferrals =
+      atomic_load_u32(&transport->control_inbox_deferrals);
   metrics->control_outbox_discarded =
       atomic_load_u32(&transport->control_outbox_discarded);
   metrics->control_receive_failures =

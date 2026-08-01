@@ -53,6 +53,7 @@ struct fixture {
   size_t observed_count;
   size_t start_capture_count;
   size_t stop_capture_count;
+  size_t prepare_playback_count;
   size_t capture_poll_count;
   size_t screen_colour_count;
   int last_screen_colour;
@@ -155,6 +156,12 @@ static enum iterate_kit_status stop_capture(void *context) {
   return ITERATE_KIT_OK;
 }
 
+static enum iterate_kit_status prepare_playback(void *context) {
+  struct fixture *fixture = context;
+  ++fixture->prepare_playback_count;
+  return ITERATE_KIT_OK;
+}
+
 static enum iterate_kit_status audio_ok(void *context) {
   (void)context;
   return ITERATE_KIT_OK;
@@ -233,6 +240,7 @@ static void fixture_init(struct fixture *fixture) {
         stop_capture,
         audio_ok,
         audio_ok,
+        prepare_playback,
       },
       {
         fixture,
@@ -494,6 +502,7 @@ static void remote_and_physical_conversation_controls_share_one_event_path(void)
   assert(iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
   assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
   assert(fixture.start_capture_count == 0U);
+  assert(fixture.prepare_playback_count == 1U);
 
   receive(
       &fixture,
@@ -502,6 +511,7 @@ static void remote_and_physical_conversation_controls_share_one_event_path(void)
   assert(iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
   assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
   assert(fixture.stop_capture_count == 0U);
+  assert(fixture.prepare_playback_count == 1U);
   assert(
       iterate_kit_m5sticks3_poll(&fixture.device, 1U).status ==
       ITERATE_KIT_POLL_OK);
@@ -519,6 +529,7 @@ static void remote_and_physical_conversation_controls_share_one_event_path(void)
   assert(iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
   assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
   assert(fixture.start_capture_count == 0U);
+  assert(fixture.prepare_playback_count == 2U);
 
   assert(
       iterate_kit_m5sticks3_publish_conversation(
@@ -595,6 +606,7 @@ static void flattened_host_invocation_reaches_the_static_method_table(void) {
   assert(iterate_kit_m5sticks3_is_conversation_active(&fixture.device));
   assert(!iterate_kit_m5sticks3_is_capturing(&fixture.device));
   assert(fixture.start_capture_count == 0U);
+  assert(fixture.prepare_playback_count == 1U);
   assert(fixture.observed_count == 1U);
   assert(
       fixture.observed[0].source ==

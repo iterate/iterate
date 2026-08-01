@@ -40,3 +40,22 @@ CONFIG_LV_USE_SNAPSHOT=y
 # afford next to Wi-Fi ("spi transmit (queue) color failed"). 24 lines makes
 # the bounce cheap either way.
 CONFIG_BSP_DISPLAY_LVGL_BUF_HEIGHT=24
+
+# The app task is the SOLE consumer of the control inbox and therefore the
+# speaker's producer: it decodes base64 PCM and pushes it to the playback
+# buffer within a 20ms budget. At the default priority 1 on core 0 it sat
+# behind Wi-Fi (23), lwIP (18), the event loop (20), the WebSocket task (5)
+# and LVGL (4) — so the downlink was serviced only when nothing else wanted
+# the CPU, which is precisely when inbound audio peaks. Priority 6 on core 1
+# puts it on the audio core, above LVGL and the recorder, below the two
+# dedicated audio tasks.
+CONFIG_ESP_MAIN_TASK_PRIORITY=6
+CONFIG_ESP_MAIN_TASK_AFFINITY_CPU1=y
+
+# The I2S EOF ISR must not be deferred by a flash/cache stall; the M5StickS3
+# sets this for the same reason.
+CONFIG_I2S_ISR_IRAM_SAFE=y
+
+# 1ms ticks: pdMS_TO_TICKS(5) rounds to 0 at 100Hz, so the app loop's delay
+# silently became a 10ms tick and halved the inbox drain rate.
+CONFIG_FREERTOS_HZ=1000

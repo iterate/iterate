@@ -162,6 +162,7 @@ class M5UnifiedHalfDuplex {
   static iterate_kit_status stopCapture(void *context);
   static iterate_kit_status stopPlayback(void *context);
   static iterate_kit_status flushPlayback(void *context);
+  static iterate_kit_status preparePlayback(void *context);
   static iterate_kit_status pollCapture(
       void *context,
       iterate_kit_audio_capture_submit_fn submit,
