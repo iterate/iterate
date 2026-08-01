@@ -142,7 +142,7 @@ export function CodeBlock({
     enabled: __DEV__ && !editorReady.isSuccess,
     staleTime: Infinity,
   });
-  const stalled = __DEV__ && !editorReady.isSuccess && watchdog.data === true;
+  const stalled = __DEV__ && !editorReady.isSuccess && watchdog.data;
 
   // The old webview height heuristic, kept as the container's fixed height so
   // the text → editor swap cannot cause a layout jump (CodeMirror fills
