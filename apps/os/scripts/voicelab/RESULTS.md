@@ -245,3 +245,35 @@ laptop CLI and ESP32 identically, and the bridge lives in userspace next to
 the rest of the project. For product use it needs the resilience discipline
 (recycling + turn-level retry) baked into a client library rather than
 each client.
+
+## Postscript: the ESP32 device, after actually making it work
+
+The measurements above answered the original question — realtime voice does
+ride the streams abstraction, at a cost of roughly 100-300 ms of ttfa. Making
+the ESP32 side genuinely _usable_ took considerably longer, and none of the
+defects were in the transport. Recording them because every one was invisible
+from the outside and expensive to find:
+
+| symptom                                   | actual cause                                                                                                                                                                                                                                                                                                                             |
+| ----------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "insane static", worse on long answers    | the bridge paced at 2x realtime while the device played at 1x, so audio accumulated until the device's 1 MiB buffer filled — then `xStreamBufferSend` committed the HEAD of each frame and dropped the tail. A click at an arbitrary phase every 20 ms.                                                                                  |
+| assistant answered every turn 2-3 times   | a bridge DO is keyed by stream path, so a second `startCall` joined the first instead of replacing it. Two Grok sockets, both answering the same turn, audio interleaved.                                                                                                                                                                |
+| "it doesn't hear what I'm saying"         | (a) 8-frame appends needed 7.8 KiB of a 7600-byte args buffer, so the append was abandoned — and that path returned before the failure counter, so every statistic read "0 sent, 0 failures"; (b) releasing the button committed the turn while up to 640 ms of captured speech was still queued, discarding the end of every utterance. |
+| every user line duplicated on screen      | one spoken turn is announced under two provider events carrying the same text; both were rendered. Deduped by conversation item id.                                                                                                                                                                                                      |
+| device stuck on "connecting" until reboot | the control inbox had no flow control, and overflowing it is session-fatal by design. No buffer size fixes that — the transport now stops reading when there is no room, so TCP's window does the work.                                                                                                                                  |
+| microphone "broadband noise"              | two ES8311 instances over one I2S data interface: opening the speaker reconfigured the channel pair the mic had just set up. Not the DAC reference the `no_dac_ref` workaround blamed.                                                                                                                                                   |
+| speaker quiet AND distorted               | volume 100 overdrives the amplifier (2nd harmonic −16.8 dB vs −34.9 dB at 60), so turning it up made it worse.                                                                                                                                                                                                                           |
+
+Two things paid for themselves repeatedly:
+
+- **A per-call flight recorder on the SD card**, readable over itx. Both PCM
+  lanes plus a line log, so "does it sound bad" becomes "here are the bytes
+  that went on the wire". The uplink under-send was found this way within
+  minutes of it existing.
+- **Acoustic loopback.** The device plays a tone and records it with its own
+  microphone, so the analog chain is measurable from a script. That is what
+  separated amplifier distortion from mic clipping, which no amount of
+  listening would have settled.
+
+The device transcribes room speech accurately end to end. The streams
+abstraction was never the bottleneck.
