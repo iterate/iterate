@@ -67,7 +67,13 @@ void waveshare_recorder_write_speaker(const void *pcm, size_t bytes);
 size_t waveshare_recorder_read(
     const char *name, size_t offset, void *out, size_t capacity);
 
-/** Byte length of a recorded file, or 0 if it does not exist. */
+/**
+ * Byte length of a recorded file. Answered from counters the recorder task
+ * maintains, NOT from the filesystem: stat() on FatFs can block the caller
+ * for up to FF_FS_TIMEOUT (10s), and the caller here is the task that
+ * answers every RPC and produces every speaker frame. A capability call must
+ * never be able to wedge the device.
+ */
 size_t waveshare_recorder_size(const char *name);
 
 /** One line in the call log; `printf` formatting. */

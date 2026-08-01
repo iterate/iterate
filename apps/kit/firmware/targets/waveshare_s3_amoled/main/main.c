@@ -40,6 +40,7 @@
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_task_wdt.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
@@ -800,6 +801,13 @@ void app_main(void) {
    * wrong: below LVGL and the recorder both.
    */
   vTaskPrioritySet(NULL, 4);
+  /*
+   * Subscribe to the hardware watchdog. If this loop ever stops feeding it —
+   * blocked on I2C, on FatFs, on anything — the chip reboots itself. Every
+   * other recovery path in this firmware runs on this task and therefore
+   * cannot rescue it.
+   */
+  (void)esp_task_wdt_add(NULL);
   const struct iterate_kit_esp_configuration_result configuration_result =
       iterate_kit_esp_read_configuration(&runtime.configuration);
   if (configuration_result.status != ITERATE_KIT_ESP_CONFIGURATION_OK) {
@@ -882,6 +890,7 @@ void app_main(void) {
   uint64_t talk_idle_since = 0;
 
   for (;;) {
+    (void)esp_task_wdt_reset();
     (void)iterate_kit_esp_idf_itx_transport_poll(&runtime.transport, 16U);
     /*
      * The talk button lives on the TCA9554, so every poll is an I2C

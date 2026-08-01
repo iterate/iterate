@@ -66,10 +66,12 @@ CONFIG_LV_USE_SNAPSHOT=y
 # flash, a 16KB instruction cache with 32-byte lines — while also executing
 # code out of that same 40MHz PSRAM bus that the audio buffers ride.
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
-CONFIG_SPIRAM_SPEED_80M=y
-CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
-CONFIG_ESP32S3_DATA_CACHE_LINE_64B=y
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+# PSRAM stays at the board's original 40MHz and flash at DIO. Pushing PSRAM to
+# 80MHz "to match the reference" produced consistent TLS signature-verification
+# failures ("PK verify failed", "Certificate matched but signature verification
+# failed") — the device could not open a connection at all. Marginal memory
+# timing corrupts crypto long before it corrupts anything you can see.
 
 # Keep internal DMA memory available for Wi-Fi and the SPI drivers. The LCD
 # path allocates a full-size internal bounce buffer per flush when its draw
@@ -90,3 +92,14 @@ CONFIG_GDMA_ISR_IRAM_SAFE=y
 # lwIP is priority 18 and UNPINNED by default, so it preempts the audio tasks
 # on core 1 at will. Pin it to the network core.
 CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+
+# Hardware watchdog on the app task. Every software self-heal in this firmware
+# runs ON that task, so none of them can fire when it is the thing that is
+# stuck — and a stuck app task means no RPCs are answered at all, which looks
+# exactly like a dead device. FatFs alone can block for 10s (FF_FS_TIMEOUT).
+# The TWDT is the only recovery that does not depend on the fault not having
+# happened.
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=20
+CONFIG_ESP_TASK_WDT_PANIC=y

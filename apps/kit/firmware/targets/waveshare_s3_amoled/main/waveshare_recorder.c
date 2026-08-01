@@ -19,6 +19,7 @@
 #include <unistd.h>
 
 #include "bsp/esp-bsp.h"
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -61,6 +62,25 @@ static volatile bool begin_requested;
 static volatile bool end_requested;
 static char pending_call_id[32];
 static char pending_end_reason[64];
+/* Recorder-task-served file reads; see waveshare_recorder_read. */
+static volatile bool read_pending;
+static volatile bool read_done;
+static char read_name[32];
+static size_t read_offset;
+static size_t read_capacity;
+static size_t read_length;
+/* PSRAM: internal RAM is the TLS handshake's working set, and starving it
+ * fails the connection outright with MBEDTLS_ERR_SSL_ALLOC_FAILED. */
+EXT_RAM_BSS_ATTR static uint8_t read_buffer[6144];
+
+/* A recording is read by name; a separator would let a caller walk the card. */
+static bool recording_path(const char *name, char *out, size_t capacity) {
+  if (name == NULL || name[0] == '\0' || strchr(name, '/') != NULL ||
+      strstr(name, "..") != NULL) {
+    return false;
+  }
+  return snprintf(out, capacity, RECORDING_DIR "/%s", name) < (int)capacity;
+}
 
 static uint64_t now_ms(void) {
   return (uint64_t)(esp_timer_get_time() / 1000);
@@ -247,6 +267,22 @@ void waveshare_recorder_drain(void) {
     begin_requested = false;
     begin_call_now(pending_call_id);
   }
+  if (read_pending && !read_done) {
+    char path[128];
+    read_length = 0U;
+    if (recording_path(read_name, path, sizeof(path))) {
+      FILE *file;
+      sync_open_files();
+      file = fopen(path, "rb");
+      if (file != NULL) {
+        if (fseek(file, (long)read_offset, SEEK_SET) == 0) {
+          read_length = fread(read_buffer, 1U, read_capacity, file);
+        }
+        (void)fclose(file);
+      }
+    }
+    read_done = true;
+  }
   while ((taken = xStreamBufferReceive(
               recorder.mic_queue, scratch, sizeof(scratch), 0)) > 0U) {
     if (recorder.mic != NULL) {
@@ -273,48 +309,46 @@ void waveshare_recorder_drain(void) {
   }
 }
 
-/* A recording is read by name; a separator would let a caller walk the card. */
-static bool recording_path(const char *name, char *out, size_t capacity) {
-  if (name == NULL || name[0] == '\0' || strchr(name, '/') != NULL ||
-      strstr(name, "..") != NULL) {
-    return false;
-  }
-  return snprintf(out, capacity, RECORDING_DIR "/%s", name) < (int)capacity;
-}
 
 size_t waveshare_recorder_size(const char *name) {
-  char path[128];
-  struct stat status;
-  if (!recorder.mounted || !recording_path(name, path, sizeof(path))) {
-    ESP_LOGW(tag, "size(%s): not mounted or bad name", name == NULL ? "?" : name);
-    return 0U;
-  }
-  if (stat(path, &status) != 0) {
-    ESP_LOGW(tag, "size(%s): stat failed on %s", name, path);
-    return 0U;
-  }
-  return (size_t)status.st_size;
+  if (!recorder.mounted || name == NULL) return 0U;
+  if (strcmp(name, "mic.pcm") == 0) return recorder.mic_bytes;
+  if (strcmp(name, "speaker.pcm") == 0) return recorder.speaker_bytes;
+  if (strcmp(name, "call.log") == 0) return recorder.log_bytes;
+  return 0U;
 }
 
 size_t waveshare_recorder_read(
     const char *name, size_t offset, void *out, size_t capacity) {
-  char path[128];
-  FILE *file;
-  size_t read_bytes;
-  if (!recorder.mounted || out == NULL || capacity == 0U ||
-      !recording_path(name, path, sizeof(path))) {
+  const uint64_t deadline = now_ms() + 3000U;
+  size_t taken;
+  if (!recorder.mounted || out == NULL || capacity == 0U || name == NULL) {
     return 0U;
   }
-  sync_open_files(); /* a reader must see what has been written so far */
-  file = fopen(path, "rb");
-  if (file == NULL) return 0U;
-  if (fseek(file, (long)offset, SEEK_SET) != 0) {
-    (void)fclose(file);
-    return 0U;
+  /*
+   * Hand the request to the recorder task rather than touching the
+   * filesystem here. This runs on the task that answers every RPC and feeds
+   * the speaker; a card that is slow (or wedged) would otherwise take the
+   * whole device with it, which is exactly what was happening.
+   */
+  if (read_pending) return 0U;
+  snprintf(read_name, sizeof(read_name), "%s", name);
+  read_offset = offset;
+  read_capacity = capacity > sizeof(read_buffer) ? sizeof(read_buffer) : capacity;
+  read_length = 0U;
+  read_done = false;
+  read_pending = true;
+  while (!read_done) {
+    if (now_ms() > deadline) {
+      read_pending = false;
+      return 0U;
+    }
+    vTaskDelay(pdMS_TO_TICKS(5) > 0U ? pdMS_TO_TICKS(5) : 1U);
   }
-  read_bytes = fread(out, 1U, capacity, file);
-  (void)fclose(file);
-  return read_bytes;
+  taken = read_length < capacity ? read_length : capacity;
+  memcpy(out, read_buffer, taken);
+  read_pending = false;
+  return taken;
 }
 
 /*

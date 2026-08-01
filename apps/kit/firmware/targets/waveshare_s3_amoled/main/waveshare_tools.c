@@ -62,7 +62,8 @@ enum {
 };
 
 EXT_RAM_BSS_ATTR static uint8_t screenshot_pixels[WAVESHARE_SNAPSHOT_BYTES];
-static uint8_t recording_chunk[SCREENSHOT_CHUNK_BYTES];
+/* PSRAM, for the same reason as the recorder's read buffer. */
+EXT_RAM_BSS_ATTR static uint8_t recording_chunk[SCREENSHOT_CHUNK_BYTES];
 static char recording_name[32];
 static bool screenshot_valid;
 static char screenshot_meta[192];
