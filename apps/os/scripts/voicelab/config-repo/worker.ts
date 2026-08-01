@@ -158,24 +158,48 @@ export class VoiceBridge extends IterateDurableObject {
       });
     };
 
-    // ?pace=1: drip speaker events in 5-event appends every 50ms (2x
-    // realtime) instead of relaying Grok's burst instantly. A constrained
-    // consumer (ESP32) takes each delivery into a bounded inbox and cannot
-    // absorb hundreds of messages in one TCP clump; a laptop can.
+    /*
+     * ?pace=1: drip speaker events instead of relaying Grok's burst instantly.
+     * A constrained consumer takes each delivery into a bounded inbox and
+     * cannot absorb hundreds of messages in one TCP clump.
+     *
+     * The rate must be realtime, and it must not DRIFT. Anything faster than
+     * the device plays accumulates for the whole answer: at 2x a 60s answer
+     * left 30s queued, which overran the device buffer and shredded the
+     * waveform; even a 5% lead accumulated 3s and overflowed a 1s buffer.
+     *
+     * So the schedule is absolute, not an interval: frame N is due at
+     * start + N*20ms. A late tick catches up instead of compounding, and the
+     * device's buffer holds jitter rather than a growing backlog.
+     */
     const pacing = url.searchParams.get("pace") === "1";
     const paceQueue: Parameters<typeof stream.append>[0][] = [];
-    let paceTimer: ReturnType<typeof setInterval> | null = null;
+    let paceTimer: ReturnType<typeof setTimeout> | null = null;
+    let paceStartedAt = 0;
+    let pacedFrames = 0;
     const pacePump = () => {
       if (paceTimer !== null) return;
-      paceTimer = setInterval(() => {
+      if (paceQueue.length === 0) return;
+      if (paceStartedAt === 0) {
+        // First frames of a response go immediately: that is the device's
+        // prefill, and delaying it is pure added latency.
+        paceStartedAt = Date.now();
+        pacedFrames = 0;
+      }
+      const tick = () => {
+        paceTimer = null;
         const slice = paceQueue.splice(0, 5);
         if (slice.length === 0) {
-          if (paceTimer !== null) clearInterval(paceTimer);
-          paceTimer = null;
+          paceStartedAt = 0;
           return;
         }
         fireAppend(...slice);
-      }, 50);
+        pacedFrames += slice.length;
+        // Absolute deadline: frame N is due at start + N*20ms.
+        const due = paceStartedAt + pacedFrames * 20;
+        paceTimer = setTimeout(tick, Math.max(0, due - Date.now()));
+      };
+      tick();
     };
 
     const appendSpkPcm = (bytes: Uint8Array, tGrok: number) => {
@@ -320,6 +344,7 @@ export class VoiceBridge extends IterateDurableObject {
             const text = typeof payload.text === "string" ? payload.text.trim() : "";
             if (text.length === 0 || text.length > 4096) break;
             paceQueue.length = 0;
+            paceStartedAt = 0;
             if (responseActive) {
               upstream.send(JSON.stringify({ type: "response.cancel" }));
               responseActive = false;
@@ -342,6 +367,7 @@ export class VoiceBridge extends IterateDurableObject {
             if (payload.action === "start") {
               // Everything queued is answer the user just talked over.
               paceQueue.length = 0;
+              paceStartedAt = 0;
               if (responseActive) {
                 upstream.send(JSON.stringify({ type: "response.cancel" }));
                 responseActive = false;
@@ -419,7 +445,7 @@ export class VoiceBridge extends IterateDurableObject {
       if (closedDown) return;
       closedDown = true;
       clearInterval(watchdog);
-      if (paceTimer !== null) clearInterval(paceTimer);
+      if (paceTimer !== null) clearTimeout(paceTimer);
       fireAppend({
         type: "voicelab/call-ended",
         payload: {
