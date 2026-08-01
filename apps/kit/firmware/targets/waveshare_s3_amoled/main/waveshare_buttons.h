@@ -2,6 +2,7 @@
 #define ITERATE_KIT_WAVESHARE_BUTTONS_H
 
 #include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,8 +21,18 @@ extern "C" {
  */
 bool waveshare_buttons_init(void);
 
-/** True for one poll after the call button goes down. */
+/** True for one poll after the call button goes down (short press). */
 bool waveshare_buttons_take_call_press(void);
+
+/**
+ * True once when the call button has been held past the reboot threshold.
+ * A long hold is the device's escape hatch: firmware can wedge in ways only
+ * a power cycle clears, and this board's power button is awkward to reach.
+ */
+bool waveshare_buttons_take_call_long_press(void);
+
+/** Milliseconds the call button has been held, 0 when it is up. */
+uint32_t waveshare_buttons_call_held_ms(void);
 
 /** True while the talk button is held. */
 bool waveshare_buttons_talk_held(void);

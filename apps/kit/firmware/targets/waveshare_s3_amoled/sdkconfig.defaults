@@ -75,3 +75,9 @@ CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
 # path allocates a full-size internal bounce buffer per flush when its draw
 # buffer is in PSRAM, and exhausting this heap is what fails a flush.
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=98304
+
+# 1ms ticks. At the 100Hz default, pdMS_TO_TICKS() of anything under 10ms
+# rounds to ZERO — and vTaskDelay(0) does not block, so a millisecond-scale
+# wait becomes a busy spin. That is not theoretical: the playback task span
+# at priority 9 and starved the idle task until the watchdog fired.
+CONFIG_FREERTOS_HZ=1000

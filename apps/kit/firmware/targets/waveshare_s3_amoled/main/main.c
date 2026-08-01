@@ -152,6 +152,8 @@ enum {
   SPEAKER_IDLE_POWERDOWN_MS = 1500,
   /* Longest a released turn waits for the uplink before committing anyway. */
   TURN_FLUSH_TIMEOUT_MS = 1500,
+  /* Button scan cadence; each scan costs an I2C transaction. */
+  BUTTON_POLL_MS = 25,
   STATS_INTERVAL_MS = 5000,
   /* How long the transport may stay FAILED before the device reboots itself. */
   UNHEALTHY_RESTART_MS = 120000,
@@ -173,6 +175,15 @@ EXT_RAM_BSS_ATTR static uint8_t
 #define STREAM_PATH "/voicelab/dev-waveshare"
 #define CALL_ID "wsdev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
+
+/*
+ * pdMS_TO_TICKS() truncates, so any wait shorter than one tick becomes zero —
+ * and vTaskDelay(0) yields without blocking, which turns a short sleep into a
+ * busy spin that can starve the idle task and trip the watchdog. Always wait
+ * at least one tick.
+ */
+#define DELAY_MS(ms) \
+  vTaskDelay(pdMS_TO_TICKS(ms) > 0U ? pdMS_TO_TICKS(ms) : 1U)
 
 struct mic_frame {
   int16_t samples[FRAME_SAMPLES];
@@ -383,7 +394,7 @@ static void playback_task(void *argument) {
       const size_t target = started_once ? (size_t)SPEAKER_REPRIME_BYTES
                                          : (size_t)SPEAKER_PREFILL_BYTES;
       if (xStreamBufferBytesAvailable(runtime.speaker_buffer) < target) {
-        vTaskDelay(pdMS_TO_TICKS(5));
+        DELAY_MS(5);
         continue;
       }
       priming = false;
@@ -451,7 +462,7 @@ static void capture_task(void *argument) {
   (void)argument;
   for (;;) {
     if (!waveshare_audio_read(frame.samples, FRAME_SAMPLES)) {
-      vTaskDelay(pdMS_TO_TICKS(100));
+      DELAY_MS(100);
       continue;
     }
     ++runtime.mic_frames_captured;
@@ -613,7 +624,16 @@ void app_main(void) {
    * left this at 1 through several rounds of "priority fixes"). So it raises
    * itself, above everything on this core except Wi-Fi, lwIP and the timers.
    */
-  vTaskPrioritySet(NULL, 10);
+  /*
+   * 4, deliberately BELOW the WebSocket/TLS task at 5 that feeds this one.
+   * At 10 the consumer outranked its own producer on the same core, and this
+   * loop polls hard — so the network task got starved and everything felt
+   * laggy: buttons late, UI stale, the greeting never arriving. Above LVGL
+   * (2) and the recorder (1), below the producer. Priority 1 (the FreeRTOS
+   * default, and what this was before) is the other extreme and was equally
+   * wrong: below LVGL and the recorder both.
+   */
+  vTaskPrioritySet(NULL, 4);
   const struct iterate_kit_esp_configuration_result configuration_result =
       iterate_kit_esp_read_configuration(&runtime.configuration);
   if (configuration_result.status != ITERATE_KIT_ESP_CONFIGURATION_OK) {
@@ -692,10 +712,42 @@ void app_main(void) {
 
   uint64_t next_stats_at = 0;
   uint64_t next_ping_at = 0;
+  uint64_t next_button_poll_at = 0;
 
   for (;;) {
     (void)iterate_kit_esp_idf_itx_transport_poll(&runtime.transport, 4U);
-    waveshare_buttons_poll();
+    /*
+     * The talk button lives on the TCA9554, so every poll is an I2C
+     * transaction on the bus the codec and touch controller share. At the
+     * loop's 5 ms cadence that was 200 reads a second of pure contention;
+     * 25 ms is still far faster than a human can press.
+     */
+    if (now_ms(NULL) >= next_button_poll_at) {
+      next_button_poll_at = now_ms(NULL) + BUTTON_POLL_MS;
+      waveshare_buttons_poll();
+    }
+    if (waveshare_buttons_take_call_long_press()) {
+      ESP_LOGW(tag, "call button held — restarting");
+      waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
+      waveshare_display_set_status("restarting…");
+      waveshare_recorder_end_call("user restart");
+      DELAY_MS(400); /* let the screen show it */
+      esp_restart();
+    }
+    {
+      /* Show the hold progressing, so it is discoverable rather than folklore. */
+      static bool showing_hold;
+      const uint32_t held = waveshare_buttons_call_held_ms();
+      if (held > 600U) {
+        showing_hold = true;
+        waveshare_display_set_status("keep holding to restart…");
+      } else if (showing_hold) {
+        showing_hold = false;
+        waveshare_display_set_status(
+            runtime.voicelab.call_active ? "hold the lower button to talk"
+                                         : "press the upper button to call");
+      }
+    }
     if (waveshare_buttons_take_call_press()) {
       const bool wanted = !waveshare_display_call_requested();
       ESP_LOGI(tag, "BOOT pressed: call %s", wanted ? "requested" : "ended");
@@ -1035,6 +1087,6 @@ void app_main(void) {
       }
     }
 
-    vTaskDelay(pdMS_TO_TICKS(5) == 0 ? 1 : pdMS_TO_TICKS(5));
+    DELAY_MS(5);
   }
 }

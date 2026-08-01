@@ -31,7 +31,8 @@
 static const char tag[] = "waveshare-ui";
 
 enum {
-  TRANSCRIPT_LINES = 6,
+  /* Each message is now two rows plus a blank one, so fewer fit. */
+  TRANSCRIPT_LINES = 4,
   /*
    * Long enough for a whole answer. At 96 the line was hard-cut at ~90
    * characters (a 4-char speaker prefix eats into it), so any answer past
@@ -188,10 +189,11 @@ static void push_transcript_locked(void *argument) {
     line = &ui.lines[ui.line_count++];
   }
   line->from_device_user = is_user;
+  /* Label on its own row; refresh_ui puts a blank row between messages. */
   snprintf(
       line->text,
       sizeof(line->text),
-      "%s %s",
+      "%s\n%s",
       is_user ? "you:" : "iterate:",
       update->text);
   line->open = !update->final;
@@ -256,6 +258,7 @@ static void build_ui(void) {
   lv_label_set_text(transcript_label, "");
   lv_obj_set_style_text_color(transcript_label, lv_color_hex(0xe8eaed), 0);
   lv_obj_set_style_text_font(transcript_label, &lv_font_montserrat_16, 0);
+  lv_obj_set_style_text_line_space(transcript_label, 3, 0);
   lv_obj_align(transcript_label, LV_ALIGN_TOP_LEFT, 0, 100);
 
   /*
@@ -305,7 +308,7 @@ static void refresh_ui(void) {
         transcript + offset,
         sizeof(transcript) - offset,
         "%s%s",
-        index == 0U ? "" : "\n",
+        index == 0U ? "" : "\n\n", /* blank row between messages */
         ui.lines[index].text);
     if (written < 0 || (size_t)written >= sizeof(transcript) - offset) break;
     offset += (size_t)written;

@@ -18,6 +18,8 @@ enum {
   /* PWR sits on the expander, and reads HIGH while pressed. */
   EXPANDER_PIN_TALK = IO_EXPANDER_PIN_NUM_4,
   DEBOUNCE_MS = 30,
+  /* Hold the call button this long to reboot. */
+  REBOOT_HOLD_MS = 3000,
 };
 
 static struct {
@@ -25,6 +27,9 @@ static struct {
   bool call_down;
   bool talk_down;
   bool call_press_pending;
+  bool call_long_press_pending;
+  bool call_long_press_fired;
+  uint64_t call_down_since_ms;
   uint64_t call_changed_at_ms;
   uint64_t talk_changed_at_ms;
   bool initialized;
@@ -69,7 +74,22 @@ void waveshare_buttons_poll(void) {
       now - buttons.call_changed_at_ms >= DEBOUNCE_MS) {
     buttons.call_changed_at_ms = now;
     buttons.call_down = call_down;
-    if (call_down) buttons.call_press_pending = true;
+    if (call_down) {
+      buttons.call_down_since_ms = now;
+      buttons.call_long_press_fired = false;
+    } else if (!buttons.call_long_press_fired) {
+      /*
+       * The short press is only committed on RELEASE, so a hold that is on
+       * its way to a reboot does not also toggle the call.
+       */
+      buttons.call_press_pending = true;
+    }
+  }
+  if (buttons.call_down && !buttons.call_long_press_fired &&
+      buttons.call_down_since_ms != 0U &&
+      now - buttons.call_down_since_ms >= REBOOT_HOLD_MS) {
+    buttons.call_long_press_fired = true;
+    buttons.call_long_press_pending = true;
   }
 
   if (buttons.expander != NULL) {
@@ -90,6 +110,17 @@ bool waveshare_buttons_take_call_press(void) {
   const bool pressed = buttons.call_press_pending;
   buttons.call_press_pending = false;
   return pressed;
+}
+
+bool waveshare_buttons_take_call_long_press(void) {
+  const bool fired = buttons.call_long_press_pending;
+  buttons.call_long_press_pending = false;
+  return fired;
+}
+
+uint32_t waveshare_buttons_call_held_ms(void) {
+  if (!buttons.call_down || buttons.call_down_since_ms == 0U) return 0U;
+  return (uint32_t)(now_ms() - buttons.call_down_since_ms);
 }
 
 bool waveshare_buttons_talk_held(void) {
