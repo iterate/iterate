@@ -120,6 +120,36 @@ void iterate_kit_websocket_tx_reset(
   publish_pending_wire_bytes(tx);
 }
 
+enum iterate_kit_websocket_tx_data_cancel_result
+iterate_kit_websocket_tx_cancel_unwritten_data(
+    struct iterate_kit_websocket_tx *tx) {
+  if (tx == NULL || !tx->initialized) {
+    return ITERATE_KIT_WEBSOCKET_TX_DATA_CANCEL_FAILED;
+  }
+  if (tx->active_kind !=
+      ITERATE_KIT_WEBSOCKET_TX_ACTIVE_DATA) {
+    return ITERATE_KIT_WEBSOCKET_TX_DATA_NOT_ACTIVE;
+  }
+  if (!iterate_kit_websocket_frame_writer_busy(&tx->frame)) {
+    return ITERATE_KIT_WEBSOCKET_TX_DATA_CANCEL_FAILED;
+  }
+  if (tx->frame.frame_offset > 0U) {
+    return
+        ITERATE_KIT_WEBSOCKET_TX_DATA_PARTIALLY_WRITTEN;
+  }
+
+  /*
+   * Do not call reset(): peer PING/CLOSE obligations may have arrived while
+   * this data frame waited for socket capacity. Only the zero-byte data frame
+   * is disposable; the next poll_control() must still observe those bounded
+   * obligations.
+   */
+  iterate_kit_websocket_frame_writer_reset(&tx->frame);
+  clear_active(tx);
+  publish_pending_wire_bytes(tx);
+  return ITERATE_KIT_WEBSOCKET_TX_DATA_CANCELLED;
+}
+
 enum iterate_kit_status iterate_kit_websocket_tx_init(
     struct iterate_kit_websocket_tx *tx,
     const struct iterate_kit_websocket_tx_options *options) {

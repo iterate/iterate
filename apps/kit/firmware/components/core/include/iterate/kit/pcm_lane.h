@@ -123,8 +123,9 @@ enum iterate_kit_status iterate_kit_pcm_lane_init(
 
 /**
  * Copies one exact v1 frame and its capture-completion timestamp into the
- * bounded uplink queue. A full queue drops the new frame with BACKPRESSURE;
- * it never evicts an older frame silently.
+ * bounded uplink queue. The final physical slot is reserved for the ordered
+ * PTT-release marker, so audio reports BACKPRESSURE at capacity minus one; it
+ * never evicts an older frame silently or makes turn termination best-effort.
  */
 enum iterate_kit_status iterate_kit_pcm_lane_submit_uplink_at(
     struct iterate_kit_pcm_lane *lane,

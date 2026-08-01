@@ -53,6 +53,8 @@ enum iterate_kit_voicelab_control {
   /** Barge-in: the user is speaking — flush local playback immediately. */
   ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED = 0,
   ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE,
+  /** The bridge hung up (our own hangup, its idle timeout, or Grok's close). */
+  ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED,
 };
 
 /** One decoded speaker PCM frame (16 kHz mono S16LE) from the stream. */
@@ -64,6 +66,16 @@ typedef void (*iterate_kit_voicelab_speaker_fn)(
 
 typedef void (*iterate_kit_voicelab_control_fn)(
     void *context, enum iterate_kit_voicelab_control control);
+
+/**
+ * A line of conversation as it arrives. `from_user` distinguishes what the
+ * device's microphone was heard saying from what the assistant replied;
+ * `final` marks the completed line (assistant text streams in as deltas, so
+ * a caller should replace the open line until it is final). `text` is
+ * NUL-terminated and only valid for the duration of the call.
+ */
+typedef void (*iterate_kit_voicelab_transcript_fn)(
+    void *context, bool from_user, const char *text, bool final);
 
 enum iterate_kit_voicelab_failure {
   ITERATE_KIT_VOICELAB_FAILURE_NONE = 0,
@@ -103,6 +115,7 @@ struct iterate_kit_voicelab_options {
    */
   iterate_kit_voicelab_speaker_fn on_speaker;
   iterate_kit_voicelab_control_fn on_control;
+  iterate_kit_voicelab_transcript_fn on_transcript;
   void *downlink_context;
 };
 
@@ -137,6 +150,11 @@ struct iterate_kit_voicelab {
   bool has_callback_capability;
   uint32_t frames_sent;
   uint32_t frame_send_failures;
+  /* Call control: startCall is in flight / the bridge answered / it hung up. */
+  bool call_pending;
+  bool call_active;
+  uint32_t call_starts;
+  uint32_t call_failures;
   bool ping_pending;
   uint64_t ping_started_ms;
   uint32_t ping_count;
@@ -152,6 +170,9 @@ struct iterate_kit_voicelab {
   int64_t last_event_offset;
   char args_buffer[ITERATE_KIT_VOICELAB_ARGS_CAPACITY];
   char b64_buffer[ITERATE_KIT_VOICELAB_B64_CAPACITY];
+  /* Accumulates assistant transcript deltas for the open line. */
+  char transcript_buffer[256];
+  size_t transcript_length;
   uint8_t pcm_buffer[ITERATE_KIT_VOICELAB_FRAME_BYTES];
 };
 
@@ -194,6 +215,26 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
     struct iterate_kit_voicelab *voicelab,
     const char *events_json_array,
     size_t length);
+
+/**
+ * Ask the project's own userspace worker to open the Grok call for this
+ * stream — `itx.worker.startCall({path, callId, pace, greet})`, over the one
+ * session this device already has. Nothing outside the platform holds the
+ * call open afterwards: no laptop bridge, no second socket. One start in
+ * flight at a time; `call_active` turns true when the worker answers.
+ * `greeting` may be NULL and must not contain characters needing JSON
+ * escaping.
+ */
+enum capnweb_status iterate_kit_voicelab_start_call(
+    struct iterate_kit_voicelab *voicelab, const char *greeting);
+
+/**
+ * Hang up: a durable voicelab/call-ended event carrying this call's id, which
+ * is what the bridge watches for. One-way — the bridge's own call-ended echo
+ * confirms it.
+ */
+enum capnweb_status iterate_kit_voicelab_end_call(
+    struct iterate_kit_voicelab *voicelab, const char *reason);
 
 /**
  * Pulled append of a tiny durable voicelab/ping event. The resolution echo

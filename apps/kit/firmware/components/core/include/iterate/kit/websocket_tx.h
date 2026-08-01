@@ -79,6 +79,13 @@ enum iterate_kit_websocket_tx_active_kind {
   ITERATE_KIT_WEBSOCKET_TX_ACTIVE_CONTROL,
 };
 
+enum iterate_kit_websocket_tx_data_cancel_result {
+  ITERATE_KIT_WEBSOCKET_TX_DATA_NOT_ACTIVE = 0,
+  ITERATE_KIT_WEBSOCKET_TX_DATA_CANCELLED,
+  ITERATE_KIT_WEBSOCKET_TX_DATA_PARTIALLY_WRITTEN,
+  ITERATE_KIT_WEBSOCKET_TX_DATA_CANCEL_FAILED,
+};
+
 /**
  * Allocation-free, single-owner RFC 6455 transmit state machine.
  *
@@ -162,6 +169,21 @@ iterate_kit_websocket_tx_poll_control(
  * Discards all connection-bound transmit state after disconnect/restart.
  */
 void iterate_kit_websocket_tx_reset(
+    struct iterate_kit_websocket_tx *tx);
+
+/**
+ * Cancels an active data frame only while it is wholly local.
+ *
+ * A masked frame that received WOULD_BLOCK before its first raw byte is merely
+ * workspace, so a freshness policy may discard it without replacing the
+ * connection. Once even one byte has crossed raw_write(), RFC 6455 requires
+ * the rest of that exact frame on the same byte stream; this function then
+ * reports PARTIALLY_WRITTEN and changes nothing. Pending or active control
+ * work is preserved because it carries peer protocol obligations rather than
+ * stale application audio.
+ */
+enum iterate_kit_websocket_tx_data_cancel_result
+iterate_kit_websocket_tx_cancel_unwritten_data(
     struct iterate_kit_websocket_tx *tx);
 
 void iterate_kit_websocket_tx_metrics(

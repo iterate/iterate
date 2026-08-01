@@ -68,6 +68,20 @@ enum iterate_kit_status iterate_kit_spsc_ring_write_acquire(
     void **data,
     size_t *capacity);
 
+/**
+ * Acquires producer storage while leaving `reserved_slots` unavailable to this
+ * class of message. The reservation is logical, not a second allocation: a
+ * caller with stronger ordering requirements can still use ordinary
+ * write_acquire() for the final slot. Rejection is counted as normal producer
+ * backpressure, preserving the same observability as a physically full ring.
+ */
+enum iterate_kit_status
+iterate_kit_spsc_ring_write_acquire_reserving(
+    struct iterate_kit_spsc_ring *ring,
+    size_t reserved_slots,
+    void **data,
+    size_t *capacity);
+
 enum iterate_kit_status iterate_kit_spsc_ring_write_publish(
     struct iterate_kit_spsc_ring *ring,
     size_t length);

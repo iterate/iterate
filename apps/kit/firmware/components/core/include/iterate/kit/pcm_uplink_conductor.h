@@ -59,6 +59,8 @@ struct iterate_kit_pcm_uplink_conductor_options {
 
 struct iterate_kit_pcm_uplink_conductor_metrics {
   struct iterate_kit_pcm_uplink_sender_metrics sender;
+  uint32_t in_place_freshness_recoveries;
+  uint32_t socket_restarts;
   uint32_t policy_time_normalizations;
   uint32_t maximum_policy_time_adjustment_ms;
   uint32_t owner_clock_regressions;
@@ -98,6 +100,8 @@ struct iterate_kit_pcm_uplink_conductor {
   uint64_t policy_time_floor_ms;
   uint32_t maximum_work_steps;
   uint32_t connection_generation;
+  uint32_t in_place_freshness_recoveries;
+  uint32_t socket_restarts;
   uint32_t policy_time_normalizations;
   uint32_t maximum_policy_time_adjustment_ms;
   uint32_t owner_clock_regressions;

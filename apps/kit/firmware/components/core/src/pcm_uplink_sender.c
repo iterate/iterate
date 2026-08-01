@@ -111,6 +111,80 @@ static enum iterate_kit_status release_pending(
 
 static enum iterate_kit_status acquire_if_needed(
     struct iterate_kit_pcm_uplink_sender *sender,
+    uint64_t now_ms);
+
+/*
+ * A freshness purge and a connection-generation purge have different
+ * boundaries. The latter must destroy everything because delivery on the old
+ * stream is uncertain. The former runs only while the conductor can prove the
+ * current WebSocket frame has written zero bytes; it may discard stale audio,
+ * but must retain an already-ordered PTT end marker. Dropping that marker would
+ * leave userspace waiting for a boundary which this producer will never emit
+ * again after capture has stopped.
+ *
+ * Stop at the first marker rather than scanning beyond it. The single producer
+ * publishes the marker after its last accepted audio frame, and the lane
+ * reserves one slot so publication cannot fail merely because audio filled the
+ * queue. Retaining the marker acquired also prevents a later turn from
+ * overtaking it. Its age is not speech freshness; reset only its send-progress
+ * clock so the next poll can put the zero-length frame on the still-valid
+ * socket.
+ */
+static enum iterate_kit_status
+discard_stale_audio_preserving_end_marker(
+    struct iterate_kit_pcm_uplink_sender *sender,
+    uint64_t now_ms,
+    uint32_t *discarded_frames) {
+  uint32_t discarded = 0U;
+  enum iterate_kit_status status;
+  bool reset_requested;
+  if (discarded_frames != NULL) {
+    *discarded_frames = 0U;
+  }
+  if (sender == NULL ||
+      !sender->initialized ||
+      discarded_frames == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+
+  status =
+      iterate_kit_pcm_lane_take_uplink_epoch_reset_request(
+          sender->options.lane, &reset_requested);
+  if (status != ITERATE_KIT_OK) {
+    return status;
+  }
+  (void)reset_requested;
+
+  for (;;) {
+    status = acquire_if_needed(sender, now_ms);
+    if (status == ITERATE_KIT_UNAVAILABLE) {
+      break;
+    }
+    if (status != ITERATE_KIT_OK) {
+      return status;
+    }
+    if (sender->pending_frame == NULL &&
+        sender->pending_frame_bytes == 0U) {
+      sender->frame_started_at_ms = now_ms;
+      sender->last_progress_at_ms = now_ms;
+      break;
+    }
+    if (release_pending(sender) != ITERATE_KIT_OK) {
+      return ITERATE_KIT_STATE_ERROR;
+    }
+    if (discarded != UINT32_MAX) {
+      ++discarded;
+    }
+    atomic_saturating_increment(&sender->frames_discarded);
+  }
+  atomic_store_relaxed(
+      &sender->consecutive_send_deferrals, 0U);
+  *discarded_frames = discarded;
+  return ITERATE_KIT_OK;
+}
+
+static enum iterate_kit_status acquire_if_needed(
+    struct iterate_kit_pcm_uplink_sender *sender,
     uint64_t now_ms) {
   enum iterate_kit_status status;
   if (sender->frame_acquired) {
@@ -137,7 +211,8 @@ static enum iterate_kit_pcm_uplink_sender_poll_result
 restart_for_freshness(
     struct iterate_kit_pcm_uplink_sender *sender,
     enum iterate_kit_pcm_uplink_restart_reason reason,
-    uint64_t now_ms) {
+    uint64_t now_ms,
+    struct iterate_kit_pcm_uplink_sender_event *event) {
   uint32_t discarded_frames = 0U;
   uint32_t oldest_capture_age_ms;
   uint64_t normalized_now_ms;
@@ -174,8 +249,10 @@ restart_for_freshness(
   oldest_capture_age_ms = saturating_age_ms(
       normalized_now_ms,
       sender->pending_capture_completed_at_ms);
-  if (iterate_kit_pcm_uplink_sender_discard_pending(
-          sender, &discarded_frames) != ITERATE_KIT_OK) {
+  if (discard_stale_audio_preserving_end_marker(
+          sender,
+          normalized_now_ms,
+          &discarded_frames) != ITERATE_KIT_OK) {
     atomic_saturating_increment(&sender->send_failures);
     return ITERATE_KIT_PCM_UPLINK_SENDER_FAILED;
   }
@@ -189,6 +266,10 @@ restart_for_freshness(
       discarded_frames);
   atomic_store_relaxed(
       &sender->last_restart_reason, (uint32_t)reason);
+  if (event != NULL) {
+    event->restart_reason = reason;
+    event->restart_requested = true;
+  }
   return ITERATE_KIT_PCM_UPLINK_SENDER_RESTART;
 }
 
@@ -240,7 +321,8 @@ iterate_kit_pcm_uplink_sender_poll(
     return restart_for_freshness(
         sender,
         ITERATE_KIT_PCM_UPLINK_RESTART_PRODUCER_BACKPRESSURE,
-        now_ms);
+        now_ms,
+        event);
   }
 
   queue_status = acquire_if_needed(sender, now_ms);
@@ -253,20 +335,26 @@ iterate_kit_pcm_uplink_sender_poll(
   }
   normalized_now_ms =
       frame_policy_now_ms(sender, now_ms);
-  if (normalized_now_ms -
-          sender->pending_capture_completed_at_ms >=
+  const bool end_marker =
+      sender->pending_frame == NULL &&
+      sender->pending_frame_bytes == 0U;
+  if (!end_marker &&
+      normalized_now_ms -
+              sender->pending_capture_completed_at_ms >=
       sender->options.maximum_capture_age_ms) {
     return restart_for_freshness(
         sender,
         ITERATE_KIT_PCM_UPLINK_RESTART_CAPTURE_STALE,
-        normalized_now_ms);
+        normalized_now_ms,
+        event);
   }
   if (normalized_now_ms - sender->frame_started_at_ms >=
       sender->options.maximum_frame_send_duration_ms) {
     return restart_for_freshness(
         sender,
         ITERATE_KIT_PCM_UPLINK_RESTART_FRAME_SEND_TIMEOUT,
-        normalized_now_ms);
+        normalized_now_ms,
+        event);
   }
   outcome = sender->options.send(
       sender->options.send_context,
@@ -274,9 +362,6 @@ iterate_kit_pcm_uplink_sender_poll(
       sender->pending_frame_bytes);
 
   if (outcome == ITERATE_KIT_PCM_UPLINK_SEND_COMPLETE) {
-    const bool end_marker =
-        sender->pending_frame == NULL &&
-        sender->pending_frame_bytes == 0U;
     const uint32_t capture_age_ms = saturating_age_ms(
         normalized_now_ms,
         sender->pending_capture_completed_at_ms);
@@ -335,14 +420,16 @@ iterate_kit_pcm_uplink_sender_poll(
     return restart_for_freshness(
         sender,
         ITERATE_KIT_PCM_UPLINK_RESTART_NO_PROGRESS_TIMEOUT,
-        normalized_now_ms);
+        normalized_now_ms,
+        event);
   }
 
   if (outcome == ITERATE_KIT_PCM_UPLINK_SEND_DISCONNECTED) {
     return restart_for_freshness(
         sender,
         ITERATE_KIT_PCM_UPLINK_RESTART_TRANSPORT_DISCONNECTED,
-        normalized_now_ms);
+        normalized_now_ms,
+        event);
   }
 
   atomic_saturating_increment(&sender->send_failures);

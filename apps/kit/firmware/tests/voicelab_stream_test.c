@@ -12,10 +12,12 @@
 #include <string.h>
 
 enum {
-  TOKEN_CAPACITY = 128,
+  /* Matches the device: a delivery batch carrying a nested
+   * conversation.item.added transcript needs more than a trivial budget. */
+  TOKEN_CAPACITY = 256,
   CALL_CAPACITY = 8,
   OUTPUT_CAPACITY = 64,
-  CAPTURE_CAPACITY = 24,
+  CAPTURE_CAPACITY = 32,
   MESSAGE_CAPACITY = 2048,
 };
 
@@ -132,10 +134,12 @@ static void fixture_init(struct fixture *fixture) {
 }
 
 static void receive(struct fixture *fixture, const char *message) {
-  assert(
-      capnweb_session_receive(
-          &fixture->session, message, strlen(message)) ==
-      CAPNWEB_OK);
+  const enum capnweb_status status =
+      capnweb_session_receive(&fixture->session, message, strlen(message));
+  if (status != CAPNWEB_OK) {
+    fprintf(stderr, "receive failed status=%d for %s\n", (int)status, message);
+  }
+  assert(status == CAPNWEB_OK);
 }
 
 static void start_and_mount(struct fixture *fixture) {
@@ -147,6 +151,7 @@ static void start_and_mount(struct fixture *fixture) {
     "wsdev",
     fixture_now_ms,
     fixture,
+    NULL,
     NULL,
     NULL,
     NULL,
@@ -185,7 +190,8 @@ static void start_and_mount(struct fixture *fixture) {
   receive(fixture, "[\"resolve\",3,[\"export\",-12]]");
   assert(fixture->voicelab.state == ITERATE_KIT_VOICELAB_READY);
   assert(fixture->voicelab.has_stream_capability);
-  assert(!fixture->voicelab.has_project_capability);
+  /* Kept for the session's life: worker.startCall is dialled on it. */
+  assert(fixture->voicelab.has_project_capability);
   assert(!fixture->voicelab.has_session_capability);
 }
 
@@ -203,6 +209,21 @@ static void record_speaker(
     spoken_length = pcm_length;
   }
   spoken_sequence = sequence;
+}
+
+static char heard_user[192];
+static char heard_assistant[256];
+static bool assistant_final;
+
+static void record_transcript(
+    void *context, bool from_user, const char *text, bool final) {
+  (void)context;
+  if (from_user) {
+    snprintf(heard_user, sizeof(heard_user), "%s", text);
+    return;
+  }
+  snprintf(heard_assistant, sizeof(heard_assistant), "%s", text);
+  assistant_final = final;
 }
 
 static void record_control(
@@ -235,6 +256,7 @@ static void downlink_flow(void) {
       &fixture,
       record_speaker,
       record_control,
+      record_transcript,
       NULL,
     };
     assert(
@@ -261,7 +283,8 @@ static void downlink_flow(void) {
     assert(
         strstr(
             open_message,
-            "\"eventTypes\":[[\"voicelab/spk-frame\",\"voicelab/grok-event\"]]") !=
+            "\"eventTypes\":[[\"voicelab/spk-frame\",\"voicelab/grok-event\","
+      "\"voicelab/call-ended\"]]") !=
         NULL);
     assert(strstr(open_message, "\"maxDeliveryEvents\":2") != NULL);
     assert(strstr(open_message, "\"maxDeliveryBytes\":2600") != NULL);
@@ -293,6 +316,45 @@ static void downlink_flow(void) {
   assert(speech_started_count == 1);
   assert(fixture.voicelab.last_event_offset == 41);
 
+  /* Assistant text streams as deltas and completes; the user's line arrives
+   * whole on conversation.item.added. */
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"voicelab/grok-event\",\"offset\":43,"
+      "\"payload\":{\"event\":{\"type\":\"response.created\"}}},"
+      "{\"type\":\"voicelab/grok-event\",\"offset\":44,"
+      "\"payload\":{\"event\":{\"type\":"
+      "\"response.output_audio_transcript.delta\",\"delta\":\"Hel\"}}}"
+      "]],\"scannedThroughOffset\":44,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",2,1]");
+  assert(strcmp(heard_assistant, "Hel") == 0);
+  assert(!assistant_final);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"voicelab/grok-event\",\"offset\":45,"
+      "\"payload\":{\"event\":{\"type\":"
+      "\"response.output_audio_transcript.delta\",\"delta\":\"lo.\"}}},"
+      "{\"type\":\"voicelab/grok-event\",\"offset\":46,"
+      "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
+      "]],\"scannedThroughOffset\":46,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",3,1]");
+  assert(strcmp(heard_assistant, "Hello.") == 0);
+  assert(assistant_final);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"voicelab/grok-event\",\"offset\":47,"
+      "\"payload\":{\"event\":{\"type\":\"conversation.item.added\","
+      "\"item\":{\"role\":\"user\",\"content\":[[{\"type\":"
+      "\"input_audio\",\"transcript\":\"what is the capital of France\"}]]}}}}"
+      "]],\"scannedThroughOffset\":47,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",4,1]");
+  assert(strcmp(heard_user, "what is the capital of France") == 0);
+
   /* Redelivery of the same offsets (recycle overlap) is deduped; every
    * invocation is push + release, and pending slots must recycle. */
   receive(
@@ -303,7 +365,7 @@ static void downlink_flow(void) {
       "{\"type\":\"voicelab/grok-event\",\"offset\":42,"
       "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
       "]],\"scannedThroughOffset\":42,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",2,1]");
+  receive(&fixture, "[\"release\",5,1]");
   assert(fixture.voicelab.spk_frames_received == 1U);
   assert(response_done_count == 1);
   assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
@@ -399,6 +461,55 @@ int main(void) {
     assert(fixture.captured_count == before + 2U);
     assert(
         fixture.captured_lengths[before] < MESSAGE_CAPACITY);
+  }
+
+  /* Call control: startCall is a pulled call onto the project's OWN worker,
+   * hangup is a durable one-way append the bridge is subscribed to. */
+  {
+    const char *start_message = NULL;
+    const char *end_message = NULL;
+    size_t index;
+    before = fixture.captured_count;
+    assert(
+        iterate_kit_voicelab_start_call(&fixture.voicelab, "Ready.") ==
+        CAPNWEB_OK);
+    assert(fixture.voicelab.call_pending);
+    for (index = before; index < fixture.captured_count; ++index) {
+      if (strstr(fixture.captured[index], "startCall") != NULL) {
+        start_message = fixture.captured[index];
+      }
+    }
+    assert(start_message != NULL);
+    assert(strstr(start_message, "[\"worker\",\"startCall\"]") != NULL);
+    assert(strstr(start_message, "\"path\":\"/voicelab/dev-test\"") != NULL);
+    assert(strstr(start_message, "\"callId\":\"wsdev\"") != NULL);
+    assert(strstr(start_message, "\"pace\":true") != NULL);
+    assert(strstr(start_message, "\"greet\":\"Ready.\"") != NULL);
+    /* One start in flight at a time. */
+    assert(
+        iterate_kit_voicelab_start_call(&fixture.voicelab, NULL) ==
+        CAPNWEB_E_STATE);
+    receive(&fixture, "[\"resolve\",7,[{\"ok\":true}]]");
+    assert(!fixture.voicelab.call_pending);
+    assert(fixture.voicelab.call_active);
+    assert(fixture.voicelab.call_starts == 1U);
+
+    before = fixture.captured_count;
+    assert(
+        iterate_kit_voicelab_end_call(&fixture.voicelab, "button") ==
+        CAPNWEB_OK);
+    assert(!fixture.voicelab.call_active);
+    for (index = before; index < fixture.captured_count; ++index) {
+      if (strstr(fixture.captured[index], "call-ended") != NULL) {
+        end_message = fixture.captured[index];
+      }
+    }
+    assert(end_message != NULL);
+    assert(strstr(end_message, "\"callId\":\"wsdev\"") != NULL);
+    assert(strstr(end_message, "\"reason\":\"button\"") != NULL);
+    /* Durable: no ephemeral marker, or the bridge would still see it but
+     * nothing would record that the call was hung up. */
+    assert(strstr(end_message, "ephemeral") == NULL);
   }
 
   /* Raw diagnostics appends share the one-way lane. */

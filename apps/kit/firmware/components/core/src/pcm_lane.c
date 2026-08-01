@@ -130,8 +130,11 @@ static enum iterate_kit_status publish_uplink_copy(
   size_t capacity = 0U;
   struct iterate_kit_pcm_uplink_slot *slot;
   enum iterate_kit_status status =
-      iterate_kit_spsc_ring_write_acquire(
-          ring, &destination, &capacity);
+      iterate_kit_spsc_ring_write_acquire_reserving(
+          ring,
+          1U,
+          &destination,
+          &capacity);
   if (status != ITERATE_KIT_OK) {
     return status;
   }

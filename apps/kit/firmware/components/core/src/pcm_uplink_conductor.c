@@ -269,6 +269,9 @@ finish_generation(
           conductor, &discarded_frames) != ITERATE_KIT_OK) {
     return ITERATE_KIT_PCM_UPLINK_CONDUCTOR_FAILED;
   }
+  if (result == ITERATE_KIT_PCM_UPLINK_CONDUCTOR_RESTART) {
+    atomic_saturating_increment(&conductor->socket_restarts);
+  }
   (void)discarded_frames;
   return result;
 }
@@ -382,6 +385,46 @@ iterate_kit_pcm_uplink_conductor_poll(
     }
     if (sender_result ==
         ITERATE_KIT_PCM_UPLINK_SENDER_RESTART) {
+      enum iterate_kit_websocket_tx_data_cancel_result
+          cancel_result;
+      if (!event.restart_requested ||
+          event.restart_reason ==
+              ITERATE_KIT_PCM_UPLINK_RESTART_NONE) {
+        return finish_generation(
+            conductor,
+            ITERATE_KIT_PCM_UPLINK_CONDUCTOR_FAILED);
+      }
+
+      /*
+       * Purging stale microphone slots and replacing a socket are separate
+       * decisions. A zero-byte masked frame has not changed the peer's RFC
+       * 6455 parse state, so destroying DNS/TCP/TLS here only lengthens a
+       * transient stall. Conversely, retaining a socket after any prefix was
+       * accepted would make the next frame begin inside the old payload. The
+       * transmitter is the only layer that knows that boundary exactly.
+       *
+       * A transport disconnect is never eligible even though its writer reset
+       * may now look idle: that idle state was caused by loss of the stream,
+       * not proof that the existing connection remains usable.
+       */
+      cancel_result =
+          iterate_kit_websocket_tx_cancel_unwritten_data(
+              conductor->tx);
+      if (cancel_result ==
+          ITERATE_KIT_WEBSOCKET_TX_DATA_CANCEL_FAILED) {
+        return finish_generation(
+            conductor,
+            ITERATE_KIT_PCM_UPLINK_CONDUCTOR_FAILED);
+      }
+      if (event.restart_reason !=
+              ITERATE_KIT_PCM_UPLINK_RESTART_TRANSPORT_DISCONNECTED &&
+          cancel_result !=
+              ITERATE_KIT_WEBSOCKET_TX_DATA_PARTIALLY_WRITTEN) {
+        atomic_saturating_increment(
+            &conductor->in_place_freshness_recoveries);
+        made_progress = true;
+        continue;
+      }
       return finish_generation(
           conductor,
           ITERATE_KIT_PCM_UPLINK_CONDUCTOR_RESTART);
@@ -434,6 +477,11 @@ void iterate_kit_pcm_uplink_conductor_metrics(
   }
   iterate_kit_pcm_uplink_sender_metrics(
       &conductor->sender, &metrics->sender);
+  metrics->in_place_freshness_recoveries =
+      atomic_load_u32(
+          &conductor->in_place_freshness_recoveries);
+  metrics->socket_restarts =
+      atomic_load_u32(&conductor->socket_restarts);
   metrics->policy_time_normalizations =
       atomic_load_u32(
           &conductor->policy_time_normalizations);

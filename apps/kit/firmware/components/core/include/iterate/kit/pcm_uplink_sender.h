@@ -101,8 +101,10 @@ struct iterate_kit_pcm_uplink_sender_metrics {
 struct iterate_kit_pcm_uplink_sender_event {
   uint64_t capture_completed_at_ms;
   uint64_t transport_accepted_at_ms;
+  enum iterate_kit_pcm_uplink_restart_reason restart_reason;
   bool end_marker;
   bool transport_accepted;
+  bool restart_requested;
 };
 
 /**
@@ -111,7 +113,11 @@ struct iterate_kit_pcm_uplink_sender_event {
  * A temporary platform send deferral keeps ownership of the oldest frame so
  * it can be retried without copying or reordering. Both time without byte
  * progress and total frame age are bounded. An expired frame is discarded
- * observably and the caller is instructed to replace the socket.
+ * observably and the caller is instructed to establish a fresh application
+ * epoch. The composing conductor may retain the socket only when its RFC 6455
+ * transmitter proves that zero bytes of the cancelled frame crossed the raw
+ * boundary; a partial frame or disconnected transport still requires socket
+ * replacement.
  *
  * `now_ms` is a monotonic consumer-side sample. Because the microphone producer
  * publishes its own timestamp from another core, a just-acquired frame may be

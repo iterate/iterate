@@ -11,6 +11,8 @@ static const char *const authenticate_path[] = {"authenticate"};
 static const char *const streams_get_path[] = {"streams", "get"};
 static const char *const project_path[] = {"projects", "get"};
 static const char *const append_path[] = {"append"};
+/* The project's own worker.ts — dotted paths flatten into one RPC. */
+static const char *const start_call_path[] = {"worker", "startCall"};
 
 static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
@@ -202,25 +204,125 @@ static void handle_spk_frame(
   }
 }
 
+/** Emit the assistant line accumulated so far, then reset the buffer. */
+static void flush_assistant_transcript(
+    struct iterate_kit_voicelab *voicelab, bool final) {
+  if (voicelab->options.on_transcript == NULL ||
+      voicelab->transcript_length == 0U) {
+    return;
+  }
+  voicelab->transcript_buffer[voicelab->transcript_length] = '\0';
+  voicelab->options.on_transcript(
+      voicelab->options.downlink_context,
+      false,
+      voicelab->transcript_buffer,
+      final);
+  if (final) {
+    voicelab->transcript_length = 0U;
+  }
+}
+
+/** Copy a string value out and hand it to the transcript callback. */
+static void emit_user_transcript(
+    struct iterate_kit_voicelab *voicelab,
+    const struct capnweb_value *text_value) {
+  char text[192];
+  size_t length = 0U;
+  if (voicelab->options.on_transcript == NULL ||
+      capnweb_value_copy_string(text_value, text, sizeof(text), &length) !=
+          CAPNWEB_OK ||
+      length == 0U) {
+    return;
+  }
+  voicelab->options.on_transcript(
+      voicelab->options.downlink_context, true, text, true);
+}
+
 static void handle_grok_event(
     struct iterate_kit_voicelab *voicelab,
     const struct capnweb_value *payload) {
   struct capnweb_value event_value;
   struct capnweb_value type_value;
-  if (voicelab->options.on_control == NULL ||
-      !capnweb_value_object_get(payload, "event", &event_value) ||
+  if (!capnweb_value_object_get(payload, "event", &event_value) ||
       !capnweb_value_object_get(&event_value, "type", &type_value)) {
     return;
   }
   if (capnweb_value_string_equals(
           &type_value, "input_audio_buffer.speech_started")) {
-    voicelab->options.on_control(
-        voicelab->options.downlink_context,
-        ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED);
-  } else if (capnweb_value_string_equals(&type_value, "response.done")) {
-    voicelab->options.on_control(
-        voicelab->options.downlink_context,
-        ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE);
+    if (voicelab->options.on_control != NULL) {
+      voicelab->options.on_control(
+          voicelab->options.downlink_context,
+          ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED);
+    }
+    return;
+  }
+  if (capnweb_value_string_equals(&type_value, "response.created")) {
+    voicelab->transcript_length = 0U;
+    return;
+  }
+  if (capnweb_value_string_equals(&type_value, "response.done")) {
+    flush_assistant_transcript(voicelab, true);
+    if (voicelab->options.on_control != NULL) {
+      voicelab->options.on_control(
+          voicelab->options.downlink_context,
+          ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE);
+    }
+    return;
+  }
+  if (capnweb_value_string_equals(
+          &type_value, "response.output_audio_transcript.delta")) {
+    struct capnweb_value delta_value;
+    char delta[96];
+    size_t delta_length = 0U;
+    if (!capnweb_value_object_get(&event_value, "delta", &delta_value) ||
+        capnweb_value_copy_string(
+            &delta_value, delta, sizeof(delta), &delta_length) != CAPNWEB_OK) {
+      return;
+    }
+    /* Oldest text is dropped rather than truncating the newest words. */
+    if (voicelab->transcript_length + delta_length >=
+        sizeof(voicelab->transcript_buffer)) {
+      voicelab->transcript_length = 0U;
+    }
+    memcpy(
+        voicelab->transcript_buffer + voicelab->transcript_length,
+        delta,
+        delta_length);
+    voicelab->transcript_length += delta_length;
+    flush_assistant_transcript(voicelab, false);
+    return;
+  }
+  if (capnweb_value_string_equals(
+          &type_value, "conversation.item.input_audio_transcription.completed")) {
+    struct capnweb_value transcript_value;
+    if (capnweb_value_object_get(
+            &event_value, "transcript", &transcript_value)) {
+      emit_user_transcript(voicelab, &transcript_value);
+    }
+    return;
+  }
+  if (capnweb_value_string_equals(&type_value, "conversation.item.added")) {
+    struct capnweb_value item;
+    struct capnweb_value role;
+    struct capnweb_value content_wrapper;
+    struct capnweb_value content;
+    size_t index;
+    if (!capnweb_value_object_get(&event_value, "item", &item) ||
+        !capnweb_value_object_get(&item, "role", &role) ||
+        !capnweb_value_string_equals(&role, "user") ||
+        !capnweb_value_object_get(&item, "content", &content_wrapper) ||
+        !capnweb_value_get_expression_array(&content_wrapper, &content)) {
+      return;
+    }
+    for (index = 0U; index < capnweb_value_array_size(&content); ++index) {
+      struct capnweb_value part;
+      struct capnweb_value transcript_value;
+      if (capnweb_value_array_at(&content, index, &part) &&
+          capnweb_value_object_get(&part, "transcript", &transcript_value)) {
+        emit_user_transcript(voicelab, &transcript_value);
+        return;
+      }
+    }
   }
 }
 
@@ -272,6 +374,13 @@ static enum capnweb_status batch_dispatch(
       handle_spk_frame(voicelab, &payload);
     } else if (capnweb_value_string_equals(&type_value, "voicelab/grok-event")) {
       handle_grok_event(voicelab, &payload);
+    } else if (capnweb_value_string_equals(&type_value, "voicelab/call-ended")) {
+      voicelab->call_active = false;
+      if (voicelab->options.on_control != NULL) {
+        voicelab->options.on_control(
+            voicelab->options.downlink_context,
+            ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED);
+      }
     }
   }
   return capnweb_reply_set_null(reply);
@@ -347,7 +456,7 @@ bool iterate_kit_voicelab_needs_recycle(
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab) {
   static const char *const open_path[] = {"openConnection"};
-  struct capnweb_expression event_type_items[2];
+  struct capnweb_expression event_type_items[3];
   struct capnweb_expression event_types;
   struct capnweb_expression connection_key;
   struct capnweb_expression max_events;
@@ -400,9 +509,13 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
     CAPNWEB_EXPRESSION_STRING,
     {.string = {"voicelab/grok-event", sizeof("voicelab/grok-event") - 1U}},
   };
+  event_type_items[2] = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {"voicelab/call-ended", sizeof("voicelab/call-ended") - 1U}},
+  };
   event_types = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_ARRAY,
-    {.array = {event_type_items, 2U}},
+    {.array = {event_type_items, 3U}},
   };
   connection_key = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
@@ -490,14 +603,12 @@ static void stream_completed(
     return;
   }
   voicelab->has_stream_capability = true;
-  status = release_remote(
-      voicelab,
-      &voicelab->project_capability,
-      &voicelab->has_project_capability);
-  if (status != CAPNWEB_OK) {
-    (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_RELEASE, status);
-    return;
-  }
+  /*
+   * The project capability is deliberately KEPT for the session's life: it is
+   * what `worker.startCall` is dialled on, so the device can open its own
+   * call. One import slot is a cheap price for not needing a second
+   * projects.get round trip per call.
+   */
   if (voicelab->options.on_speaker == NULL) {
     voicelab->state = ITERATE_KIT_VOICELAB_READY;
     voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_NONE;
@@ -845,6 +956,90 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
       1U,
       events_json_array,
       length);
+}
+
+static void start_call_completed(
+    void *context, const struct capnweb_result *result) {
+  struct iterate_kit_voicelab *voicelab = context;
+  voicelab->call_pending = false;
+  if (result->kind == CAPNWEB_RESULT_VALUE && result->status == CAPNWEB_OK) {
+    voicelab->call_active = true;
+    ++voicelab->call_starts;
+  } else {
+    ++voicelab->call_failures;
+  }
+}
+
+enum capnweb_status iterate_kit_voicelab_start_call(
+    struct iterate_kit_voicelab *voicelab, const char *greeting) {
+  int length;
+  enum capnweb_status status;
+  if (voicelab == NULL) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  if (voicelab->state != ITERATE_KIT_VOICELAB_READY ||
+      voicelab->call_pending || !voicelab->has_project_capability) {
+    return CAPNWEB_E_STATE;
+  }
+  /*
+   * `pace` asks the worker to drip speaker frames at ~2x realtime: this
+   * inbox is bounded and cannot absorb a whole answer arriving in one TCP
+   * clump.
+   */
+  length = snprintf(
+      voicelab->args_buffer,
+      sizeof(voicelab->args_buffer),
+      "[{\"path\":\"%s\",\"callId\":\"%s\",\"pace\":true%s%s%s}]",
+      voicelab->options.stream_path,
+      voicelab->options.call_id,
+      greeting != NULL ? ",\"greet\":\"" : "",
+      greeting != NULL ? greeting : "",
+      greeting != NULL ? "\"" : "");
+  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
+    return CAPNWEB_E_LIMIT;
+  }
+  status = capnweb_session_call_path(
+      voicelab->options.session,
+      voicelab->project_capability,
+      start_call_path,
+      sizeof(start_call_path) / sizeof(start_call_path[0]),
+      voicelab->args_buffer,
+      (size_t)length,
+      start_call_completed,
+      voicelab);
+  if (status == CAPNWEB_OK) {
+    voicelab->call_pending = true;
+  }
+  return status;
+}
+
+enum capnweb_status iterate_kit_voicelab_end_call(
+    struct iterate_kit_voicelab *voicelab, const char *reason) {
+  int length;
+  if (voicelab == NULL) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
+    return CAPNWEB_E_STATE;
+  }
+  length = snprintf(
+      voicelab->args_buffer,
+      sizeof(voicelab->args_buffer),
+      "[{\"type\":\"voicelab/call-ended\",\"payload\":{"
+      "\"callId\":\"%s\",\"reason\":\"%s\"}}]",
+      voicelab->options.call_id,
+      reason != NULL ? reason : "hangup");
+  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
+    return CAPNWEB_E_LIMIT;
+  }
+  voicelab->call_active = false;
+  return capnweb_session_call_oneway_path(
+      voicelab->options.session,
+      voicelab->stream_capability,
+      append_path,
+      1U,
+      voicelab->args_buffer,
+      (size_t)length);
 }
 
 static void ping_completed(
