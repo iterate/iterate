@@ -228,6 +228,7 @@ static struct {
   /* Release pressed, but the capture queue is not yet on the wire. */
   bool flushing_turn;
   volatile bool speaker_reprime;
+  uint32_t flush_frames_left;
   uint64_t flush_deadline_ms;
 } runtime;
 
@@ -992,14 +993,23 @@ void app_main(void) {
        * then is the commit sent.
        */
       if (!wants_talk && runtime.talking && !runtime.flushing_turn) {
+        /*
+         * Flush exactly what was captured UP TO the release, and no more.
+         * Waiting for the queue to empty could not work: the capture task
+         * keeps filling it every 20ms regardless, so "empty" was a race the
+         * sender only won transiently — and four turns in ten hit the
+         * deadline instead, dropping their tail.
+         */
         runtime.flushing_turn = true;
+        runtime.flush_frames_left =
+            (uint32_t)uxQueueMessagesWaiting(runtime.mic_queue);
         runtime.flush_deadline_ms = now + TURN_FLUSH_TIMEOUT_MS;
         waveshare_display_set_status("sending");
       }
       if (runtime.flushing_turn && outbox_free >= 3U &&
-          (uxQueueMessagesWaiting(runtime.mic_queue) == 0U ||
+          (runtime.flush_frames_left == 0U ||
            now >= runtime.flush_deadline_ms)) {
-        const bool timed_out = uxQueueMessagesWaiting(runtime.mic_queue) > 0U;
+        const bool timed_out = runtime.flush_frames_left > 0U;
         runtime.talking = false;
         runtime.flushing_turn = false;
         waveshare_recorder_log(
@@ -1016,8 +1026,16 @@ void app_main(void) {
         /* A partial batch is only worth sending at the end of a turn. */
         const size_t needed =
             runtime.flushing_turn ? 1U : (size_t)MIC_FRAMES_PER_APPEND;
-        if (runtime.talking && now >= drain_window_at && queued >= needed &&
-            outbox_free >= 3U) {
+        /*
+         * The window paces the uplink at exactly capture rate, so any
+         * backlog is permanent — four of ten turns in one call hit the
+         * flush deadline with audio still queued ("tail dropped"). When a
+         * backlog exists, send immediately instead of waiting for the
+         * window, so the sender can actually catch up.
+         */
+        const bool behind = queued >= (size_t)(MIC_FRAMES_PER_APPEND * 2U);
+        if (runtime.talking && (behind || now >= drain_window_at) &&
+            queued >= needed && outbox_free >= 3U) {
           const size_t take = queued < (size_t)MIC_FRAMES_PER_APPEND
               ? queued
               : (size_t)MIC_FRAMES_PER_APPEND;
@@ -1047,6 +1065,9 @@ void app_main(void) {
               runtime.frame_sequence,
               now);
           runtime.frame_sequence += (uint32_t)take;
+          runtime.flush_frames_left = runtime.flush_frames_left > take
+              ? runtime.flush_frames_left - (uint32_t)take
+              : 0U;
           waveshare_recorder_write_mic(
               frame_storage, take * sizeof(frame_storage[0]));
         }

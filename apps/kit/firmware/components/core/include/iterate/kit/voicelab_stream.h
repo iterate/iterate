@@ -175,6 +175,14 @@ struct iterate_kit_voicelab {
   uint32_t last_rtt_ms;
   /* Downlink accounting (single-owner: dispatch runs on the session task). */
   uint32_t connection_generation;
+  /*
+   * A recycle is asynchronous: batches_on_connection only resets when the
+   * successor resolves. Without this flag needs_recycle() stayed true for
+   * the whole round trip and the caller's poll loop opened a new connection
+   * every iteration — 22 of them in one call, against a budget of one per
+   * 600 batches.
+   */
+  bool recycle_pending;
   uint32_t batches_on_connection;
   uint32_t spk_frames_received;
   uint32_t spk_decode_failures;

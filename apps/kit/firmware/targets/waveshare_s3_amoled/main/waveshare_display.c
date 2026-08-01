@@ -122,7 +122,13 @@ void waveshare_display_set_background(uint32_t rgb) {
 }
 
 static void set_call_active_locked(void *argument) {
-  ui.call_active = *(bool *)argument;
+  const bool active = *(bool *)argument;
+  if (ui.call_active && !active) {
+    /* A finished call's transcript belongs to that call, not the next one. */
+    ui.line_count = 0U;
+    memset(ui.lines, 0, sizeof(ui.lines));
+  }
+  ui.call_active = active;
   if (!ui.call_active) ui.call_requested = false;
 }
 

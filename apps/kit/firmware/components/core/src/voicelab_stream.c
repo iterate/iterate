@@ -487,6 +487,7 @@ static void connection_opened(
   if (voicelab->state == ITERATE_KIT_VOICELAB_CLOSED) {
     return;
   }
+  voicelab->recycle_pending = false;
   if (result->kind == CAPNWEB_RESULT_SESSION_ENDED) {
     (void)fail(
         voicelab,
@@ -515,6 +516,7 @@ static void connection_opened(
   }
   voicelab->has_connection_capability = true;
   voicelab->batches_on_connection = 0U;
+  voicelab->recycle_pending = false;
   status = release_remote(
       voicelab,
       &voicelab->previous_connection_capability,
@@ -531,6 +533,7 @@ static void connection_opened(
 bool iterate_kit_voicelab_needs_recycle(
     const struct iterate_kit_voicelab *voicelab) {
   return voicelab != NULL &&
+      !voicelab->recycle_pending &&
       voicelab->state == ITERATE_KIT_VOICELAB_READY &&
       voicelab->has_connection_capability &&
       voicelab->batches_on_connection >=
@@ -668,7 +671,7 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
     CAPNWEB_EXPRESSION_OBJECT,
     {.object = {fields, 6U}},
   };
-  return capnweb_session_call_expressions(
+  status = capnweb_session_call_expressions(
       voicelab->options.session,
       voicelab->stream_capability,
       open_path,
@@ -677,6 +680,10 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
       1U,
       connection_opened,
       voicelab);
+  if (status == CAPNWEB_OK) {
+    voicelab->recycle_pending = true;
+  }
+  return status;
 }
 
 static void stream_completed(
