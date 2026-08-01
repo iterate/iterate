@@ -225,6 +225,10 @@ target_compile_options(iterate-kit-pcm-clock-playback-test PRIVATE
   -Werror
   -Wpedantic
 )
+target_include_directories(
+  iterate-kit-pcm-clock-playback-test PRIVATE
+  targets/stackchan/main
+)
 target_link_libraries(
   iterate-kit-pcm-clock-playback-test PRIVATE iterate-kit-core)
 add_test(

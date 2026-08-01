@@ -2,6 +2,7 @@
 
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/spsc_ring.h"
+#include "stackchan_realtime_policy.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -26,6 +27,7 @@ static void test_assert(
 
 enum {
   lane_capacity = 8,
+  userspace_initial_lead_frames = 8,
   wire_samples = ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME,
   core_s3_dma_samples = 128,
 };
@@ -257,6 +259,55 @@ static void stale_frames_are_purged_before_current_playback(void) {
 }
 
 /*
+ * The userspace bridge intentionally sends eight 20 ms frames as a finite
+ * startup lead before pacing at the hardware rate. StackChan receives that
+ * burst at essentially one instant, so its eighth frame is about 152 ms old
+ * when the 8 ms CoreS3 clock first needs it. A freshness limit below that lead
+ * creates a deterministic stale-discard/underrun pair even on a perfect
+ * network. This cross-layer example exists because testing stale purging alone
+ * cannot reveal a target policy that rejects valid, deliberately early audio.
+ */
+static void stackchan_accepts_the_userspace_startup_lead(void) {
+  struct fixture fixture = {0};
+  int16_t output[core_s3_dma_samples];
+  size_t rendered_samples = 0U;
+  initialise_with_limits(
+      &fixture,
+      STACKCHAN_MAXIMUM_DOWNLINK_FRAME_AGE_MS,
+      lane_capacity);
+  for (size_t frame = 0U; frame < userspace_initial_lead_frames; ++frame) {
+    publish_frame(
+        &fixture,
+        (int16_t)(frame * wire_samples),
+        1000U);
+  }
+
+  for (size_t chunk = 0U;
+       chunk <
+           (userspace_initial_lead_frames * wire_samples) /
+               core_s3_dma_samples;
+       ++chunk) {
+    struct iterate_kit_pcm_clock_playback_result result;
+    TEST_ASSERT(
+        iterate_kit_pcm_clock_playback_render(
+            &fixture.playback,
+            1000U + chunk * 8U,
+            output,
+            core_s3_dma_samples,
+            &result) == ITERATE_KIT_OK);
+    rendered_samples += result.content_samples;
+  }
+
+  const struct iterate_kit_pcm_clock_playback_metrics *metrics =
+      iterate_kit_pcm_clock_playback_metrics(&fixture.playback);
+  TEST_ASSERT(
+      rendered_samples ==
+      userspace_initial_lead_frames * wire_samples);
+  TEST_ASSERT(metrics->stale_frames_discarded == 0U);
+  TEST_ASSERT(metrics->underrun_incidents == 0U);
+}
+
+/*
  * Freshness scanning must itself have a hard CPU bound. If a corrupt caller
  * configured a deeper lane, dropping every stale item in one 8 ms audio pass
  * could starve the codec. Exhaustion renders silence for this clock edge and
@@ -357,6 +408,7 @@ int main(void) {
   reframes_wire_audio_into_clock_chunks_exactly();
   mid_response_gap_becomes_current_silence_not_backlog();
   stale_frames_are_purged_before_current_playback();
+  stackchan_accepts_the_userspace_startup_lead();
   stale_scan_budget_bounds_each_audio_pass();
   reset_discards_the_retained_prior_generation();
   return 0;

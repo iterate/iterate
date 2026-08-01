@@ -10,6 +10,7 @@
 #include "iterate/kit/platforms/esp_idf_websocket_policy.h"
 #include "iterate/kit/platforms/stackchan_hardware.h"
 #include "iterate/kit/spsc_ring.h"
+#include "stackchan_realtime_policy.h"
 
 #include "esp_err.h"
 #include "esp_heap_caps.h"
@@ -736,7 +737,8 @@ void app_main(void) {
 
   memset(&audio_options, 0, sizeof(audio_options));
   audio_options.lane = &runtime.pcm_lane;
-  audio_options.maximum_downlink_frame_age_ms = 120U;
+  audio_options.maximum_downlink_frame_age_ms =
+      STACKCHAN_MAXIMUM_DOWNLINK_FRAME_AGE_MS;
   audio_options.maximum_lane_items_per_dma_chunk = 4U;
   audio_options.speaker_volume_percent = 100;
   audio_options.microphone_gain_db = 24;
