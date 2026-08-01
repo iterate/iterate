@@ -9,6 +9,9 @@ CONFIG_ESP_CONSOLE_UART_DEFAULT=n
 CONFIG_SPIRAM=y
 CONFIG_SPIRAM_MODE_OCT=y
 CONFIG_SPIRAM_BOOT_INIT=y
+# Control-plane message payloads are explicitly annotated for PSRAM so two TLS
+# clients retain internal heap. PCM/audio buffers remain unannotated/internal.
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_LOG_DEFAULT_LEVEL=3
 CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y

@@ -76,18 +76,20 @@ enum {
   OUTPUT_CAPACITY = 128,
   /*
    * Inbox slots take one whole delivery batch each (the connection is opened
-   * with maxDeliveryBytes 2600 + envelope), so 4 KiB is ample there. Outbox
-   * slots have to hold an eight-frame mic append, which is about 7 KiB.
+   * with maxDeliveryBytes 5200 + envelope) and outbox slots an eight-frame
+   * mic append, about 7 KiB. 8 KiB serves both.
    */
-  CONTROL_INBOX_SLOT_CAPACITY = 4096,
+  CONTROL_INBOX_SLOT_CAPACITY = 8192,
   CONTROL_OUTBOX_SLOT_CAPACITY = 8192,
   /*
-   * The inbox rides PSRAM (256 KiB): speaker audio arrives as ~1.3 KiB
-   * delivery batches and a paced answer still clumps at TCP granularity;
-   * 64 slots absorb a full clump without tripping the terminal
-   * message-loss path.
+   * The inbox rides PSRAM (512 KiB), and overflowing it is SESSION-FATAL, so
+   * it is sized for the worst legitimate burst rather than the average: a
+   * paced answer clumps at TCP granularity, and pulling a recording off the
+   * card adds a call per chunk on top. Measured high-water was 46 of 64
+   * during ordinary use — close enough to the edge that the session died
+   * under a recording pull concurrent with a call. 128 leaves real headroom.
    */
-  CONTROL_INBOX_SLOTS = 64,
+  CONTROL_INBOX_SLOTS = 128,
   /* Bigger slots, half as many: the same 64 KiB of internal RAM. */
   CONTROL_OUTBOX_SLOTS = 8,
   FRAME_MS = 20,
@@ -256,6 +258,15 @@ static void on_transcript(
   }
   if (!from_user) {
     waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
+  }
+}
+
+/* Owns every SD write, so card latency never touches an audio task. */
+static void recorder_task(void *argument) {
+  (void)argument;
+  for (;;) {
+    waveshare_recorder_drain();
+    vTaskDelay(pdMS_TO_TICKS(100));
   }
 }
 
@@ -496,9 +507,15 @@ void app_main(void) {
     return;
   }
   (void)xTaskCreatePinnedToCore(
-      capture_task, "vl-capture", 4096, NULL, 10, NULL, 1);
+      capture_task, "vl-capture", 4096, NULL, 17, NULL, 1);
   (void)xTaskCreatePinnedToCore(
-      playback_task, "vl-playback", 4096, NULL, 12, NULL, 1);
+      playback_task, "vl-playback", 4096, NULL, 18, NULL, 1);
+  /*
+   * Below everything that touches audio or the network: the card is a
+   * diagnostic, and must never be the reason a frame is late.
+   */
+  (void)xTaskCreatePinnedToCore(
+      recorder_task, "vl-recorder", 4096, NULL, 2, NULL, 0);
   ESP_LOGI(
       tag,
       "voicelab voice client ready: static_bytes=%u stream=/voicelab/dev-waveshare",

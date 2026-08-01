@@ -565,13 +565,20 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
     CAPNWEB_EXPRESSION_STRING,
     {.string = {key_text, (size_t)key_length}},
   };
+  /*
+   * Four events per batch, not two. The inbound MESSAGE count is what the
+   * bounded inbox spends, and overflowing it is session-fatal: a long answer
+   * at 100 speaker events/s arrived as 50 batches/s and overran the ring
+   * (measured inboxDiscarded=8 mid-story, which killed the session). Same
+   * audio in half the messages.
+   */
   max_events = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_INT64,
-    {.integer = 2},
+    {.integer = 4},
   };
   max_bytes = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_INT64,
-    {.integer = 2600},
+    {.integer = 5200},
   };
   no_state = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_BOOLEAN,

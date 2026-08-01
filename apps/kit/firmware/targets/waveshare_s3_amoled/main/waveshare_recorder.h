@@ -23,6 +23,15 @@ extern "C" {
  */
 bool waveshare_recorder_init(void);
 
+/**
+ * Drain whatever the audio lanes handed over, writing it to the card. Runs on
+ * the recorder's own low-priority task: a FatFs write can block for hundreds
+ * of milliseconds while the card erases a block, and doing that on the
+ * playback task starves the I2S feed — which is heard as static, not as a
+ * slow recording.
+ */
+void waveshare_recorder_drain(void);
+
 /** True when a card is mounted and calls are being recorded. */
 bool waveshare_recorder_available(void);
 

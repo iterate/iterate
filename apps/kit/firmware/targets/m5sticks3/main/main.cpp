@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <limits>
 
+#include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -55,11 +56,13 @@
  * remount must never queue behind microphone samples, and purging stale audio
  * must not corrupt a capability session.
  *
- * `runtime` and all queues/workspaces are static. There is no application-level
- * allocation after boot, so sizeof/runtime logs and linker size reports account
- * for the memory we control. ESP-IDF/TLS/M5Unified still own opaque
- * allocations; their heap minima and classified buffer evidence are exported
- * as diagnostics instead of pretending those bytes are exactly observable.
+ * `runtime` and all queues/workspaces are static. Non-realtime control payload
+ * storage is explicitly placed in PSRAM; latency-critical PCM storage stays in
+ * internal SRAM. There is no application-level allocation after boot, so the
+ * boot memory log and linker size reports account for the memory we control.
+ * ESP-IDF/TLS/M5Unified still own opaque allocations; their heap minima and
+ * classified buffer evidence are exported as diagnostics instead of pretending
+ * those bytes are exactly observable.
  */
 namespace {
 
@@ -137,21 +140,40 @@ constexpr std::size_t controlInboxSlotCount = 8U;
 constexpr std::size_t controlOutboxSlotCount = 8U;
 /*
  * Slot count and slot width solve different measured problems. Both
- * directions need eight messages of burst reserve, but only egress carries an
- * eight-frame, base64 VoiceLab microphone append. Ingress is bounded by the
- * peer's 2.6 KiB delivery batch plus envelope and therefore fits 4 KiB.
+ * directions need eight messages of burst reserve, while this target's
+ * request, callback, metrics, and 2.8 KiB screenshot envelopes fit 4 KiB. The
+ * eight-frame base64 VoiceLab append which requires the transport-wide 8 KiB
+ * maximum belongs to the Waveshare target; Stick microphone audio uses the
+ * separate binary /pcm socket and can never create that control message.
  *
- * Using the transport-wide 8 KiB maximum for both directions charged the
- * eight-slot inbox an impossible extra 32 KiB and made this target overflow
- * internal DRAM by 8.7 KiB at link time. Keep the rings in internal SRAM—the
- * network task relies on deterministic cache-independent mailboxes—but size
- * them for their actual wire shapes instead of moving realtime coordination to
- * PSRAM or undoing the measured eight-frame egress batching fix.
+ * Using that cross-target maximum for both rings charged this target 64 KiB of
+ * impossible envelopes. The first half made it overflow internal DRAM by 8.7
+ * KiB at link time; retaining the other half left as little as 79 bytes of
+ * internal heap after the warm PCM TLS socket connected. Slot metadata stays
+ * in internal SRAM, but the non-realtime payload bytes live in PSRAM so a rare
+ * screenshot/control burst cannot compete with TLS or audio DMA for scarce
+ * internal memory. Audio rings deliberately remain internal: unlike RPC, they
+ * must keep progressing during flash/cache stalls. This does not shrink either
+ * PCM reserve or undo Waveshare's measured batching fix.
  */
 constexpr std::size_t controlInboxSlotCapacity = 4096U;
-constexpr std::size_t controlOutboxSlotCapacity = 8192U;
+constexpr std::size_t controlOutboxSlotCapacity = 4096U;
 constexpr std::size_t controlMessagesPerPoll = 4U;
 constexpr std::size_t controlRemoteCallLifecycleMessages = 3U;
+/*
+ * These are static rather than heap allocations so their exact bound and
+ * address class are established by the linker before either network task can
+ * start. A failed/missing PSRAM chip therefore fails boot initialization
+ * explicitly instead of turning a later call into a non-deterministic malloc
+ * failure. Only the byte payloads move out; ring indices and lengths remain in
+ * Runtime's internal SRAM for cheap cross-task admission bookkeeping.
+ */
+EXT_RAM_BSS_ATTR static std::uint8_t
+    controlInboxStorage[controlInboxSlotCount]
+                         [controlInboxSlotCapacity];
+EXT_RAM_BSS_ATTR static std::uint8_t
+    controlOutboxStorage[controlOutboxSlotCount]
+                          [controlOutboxSlotCapacity];
 /*
  * The wire frame is the storage unit everywhere. Partial/sample-sized slots
  * would require an extra assembler and make buffer-depth latency ambiguous.
@@ -285,17 +307,12 @@ struct Runtime {
       eventNotifications[eventNotificationCapacity]{};
   /*
    * Control rings cross application, ESP callback, and network task boundaries
-   * with one producer/consumer each. Storage/length arrays are inline so the
-   * exact per-direction capacity cannot change at runtime.
+   * with one producer/consumer each. Fixed length arrays remain inline, while
+   * their much larger byte payload arrays are statically placed in PSRAM above.
+   * Neither capacity can change at runtime.
    */
   iterate_kit_spsc_ring controlInboxRing{};
   iterate_kit_spsc_ring controlOutboxRing{};
-  std::uint8_t
-      controlInboxStorage[controlInboxSlotCount]
-                           [controlInboxSlotCapacity]{};
-  std::uint8_t
-      controlOutboxStorage[controlOutboxSlotCount]
-                            [controlOutboxSlotCapacity]{};
   std::size_t controlInboxLengths[controlInboxSlotCount]{};
   std::size_t controlOutboxLengths[controlOutboxSlotCount]{};
   /*
@@ -1116,13 +1133,13 @@ bool initialiseRings(Runtime &state) {
    */
   return iterate_kit_spsc_ring_init(
              &state.controlInboxRing,
-             state.controlInboxStorage,
+             controlInboxStorage,
              controlInboxSlotCapacity,
              controlInboxSlotCount,
              state.controlInboxLengths) == ITERATE_KIT_OK &&
       iterate_kit_spsc_ring_init(
              &state.controlOutboxRing,
-             state.controlOutboxStorage,
+             controlOutboxStorage,
              controlOutboxSlotCapacity,
              controlOutboxSlotCount,
              state.controlOutboxLengths) == ITERATE_KIT_OK &&
@@ -1149,9 +1166,10 @@ bool initialiseRings(Runtime &state) {
 bool initialiseDevice(Runtime &state) {
   /*
    * This options object is only a wiring description; every referenced storage
-   * block lives in static Runtime. A one-second metrics cadence gives useful
-   * delay/memory trends without turning diagnostics into dominant control
-   * traffic or allocating an unbounded subscription history.
+   * block has static lifetime (Runtime plus the PSRAM control payload arrays).
+   * A one-second metrics cadence gives useful delay/memory trends without
+   * turning diagnostics into dominant control traffic or allocating an
+   * unbounded subscription history.
    */
   const iterate_kit_m5sticks3_options options{
     state.platform.screenDriver(),
@@ -1338,8 +1356,8 @@ extern "C" void app_main(void) {
       static_cast<unsigned int>(
           sizeof(runtime.eventNotifications)),
       static_cast<unsigned int>(
-          sizeof(runtime.controlInboxStorage) +
-          sizeof(runtime.controlOutboxStorage)),
+          sizeof(controlInboxStorage) +
+          sizeof(controlOutboxStorage)),
       static_cast<unsigned int>(
           sizeof(runtime.pcmUplinkStorage) +
           sizeof(runtime.pcmDownlinkStorage)),

@@ -19,12 +19,25 @@
 #include <unistd.h>
 
 #include "bsp/esp-bsp.h"
+#include "esp_heap_caps.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/stream_buffer.h"
+#include "freertos/task.h"
 
 static const char tag[] = "waveshare-recorder";
 
 #define RECORDING_DIR BSP_SD_MOUNT_POINT "/iterate"
+
+enum {
+  /*
+   * A second of audio per lane in PSRAM. The card is usually far faster than
+   * realtime; this only has to cover the occasional multi-hundred-millisecond
+   * erase, and dropping recorder bytes is always better than dropping audio.
+   */
+  LANE_BUFFER_BYTES = 64 * 1024,
+};
 
 static struct {
   bool mounted;
@@ -36,6 +49,10 @@ static struct {
   size_t mic_bytes;
   size_t speaker_bytes;
   size_t log_bytes;
+  size_t mic_dropped;
+  size_t speaker_dropped;
+  StreamBufferHandle_t mic_queue;
+  StreamBufferHandle_t speaker_queue;
 } recorder;
 
 static uint64_t now_ms(void) {
@@ -72,6 +89,14 @@ bool waveshare_recorder_init(void) {
       ESP_LOGW(tag, "cannot create " RECORDING_DIR "; recording disabled");
       return false;
     }
+  }
+  recorder.mic_queue = xStreamBufferCreateWithCaps(
+      LANE_BUFFER_BYTES, 1U, MALLOC_CAP_SPIRAM);
+  recorder.speaker_queue = xStreamBufferCreateWithCaps(
+      LANE_BUFFER_BYTES, 1U, MALLOC_CAP_SPIRAM);
+  if (recorder.mic_queue == NULL || recorder.speaker_queue == NULL) {
+    ESP_LOGW(tag, "no PSRAM for recorder queues; recording disabled");
+    return false;
   }
   recorder.mounted = true;
   ESP_LOGI(tag, "recording calls to " RECORDING_DIR);
@@ -156,14 +181,41 @@ void waveshare_recorder_end_call(const char *reason) {
   close_files();
 }
 
+/*
+ * The audio lanes only ever hand bytes to a queue — never to the filesystem.
+ * A full queue drops rather than blocks: losing recorder bytes is always
+ * better than stalling playback or capture.
+ */
 void waveshare_recorder_write_mic(const void *pcm, size_t bytes) {
-  if (recorder.mic == NULL || pcm == NULL || bytes == 0U) return;
-  recorder.mic_bytes += fwrite(pcm, 1U, bytes, recorder.mic);
+  if (recorder.mic_queue == NULL || pcm == NULL || bytes == 0U) return;
+  if (xStreamBufferSend(recorder.mic_queue, pcm, bytes, 0) < bytes) {
+    ++recorder.mic_dropped;
+  }
 }
 
 void waveshare_recorder_write_speaker(const void *pcm, size_t bytes) {
-  if (recorder.speaker == NULL || pcm == NULL || bytes == 0U) return;
-  recorder.speaker_bytes += fwrite(pcm, 1U, bytes, recorder.speaker);
+  if (recorder.speaker_queue == NULL || pcm == NULL || bytes == 0U) return;
+  if (xStreamBufferSend(recorder.speaker_queue, pcm, bytes, 0) < bytes) {
+    ++recorder.speaker_dropped;
+  }
+}
+
+void waveshare_recorder_drain(void) {
+  static uint8_t scratch[4096];
+  size_t taken;
+  if (recorder.mic_queue == NULL) return;
+  while ((taken = xStreamBufferReceive(
+              recorder.mic_queue, scratch, sizeof(scratch), 0)) > 0U) {
+    if (recorder.mic != NULL) {
+      recorder.mic_bytes += fwrite(scratch, 1U, taken, recorder.mic);
+    }
+  }
+  while ((taken = xStreamBufferReceive(
+              recorder.speaker_queue, scratch, sizeof(scratch), 0)) > 0U) {
+    if (recorder.speaker != NULL) {
+      recorder.speaker_bytes += fwrite(scratch, 1U, taken, recorder.speaker);
+    }
+  }
 }
 
 /* A recording is read by name; a separator would let a caller walk the card. */
