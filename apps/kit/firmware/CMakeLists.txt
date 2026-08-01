@@ -12,6 +12,7 @@ add_subdirectory(vendor/capnweb)
 
 add_library(iterate-kit-core STATIC
   components/core/src/aec_capture_bridge.c
+  components/core/src/audio_intent_reconciler.c
   components/core/src/audio.c
   components/core/src/configuration.c
   components/core/src/cpu_usage.c
@@ -1101,6 +1102,25 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-stackchan-control-test
   COMMAND iterate-kit-stackchan-control-test
+)
+
+add_executable(iterate-kit-audio-intent-reconciler-test
+  tests/audio_intent_reconciler_test.c
+)
+target_compile_features(
+  iterate-kit-audio-intent-reconciler-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-audio-intent-reconciler-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-audio-intent-reconciler-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-audio-intent-reconciler-test
+  COMMAND iterate-kit-audio-intent-reconciler-test
 )
 
 # Source annotations do not prove where an ESP-IDF linker ultimately places an

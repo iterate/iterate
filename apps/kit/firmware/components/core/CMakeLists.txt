@@ -1,6 +1,7 @@
 idf_component_register(
   SRCS
     "src/aec_capture_bridge.c"
+    "src/audio_intent_reconciler.c"
     "src/audio.c"
     "src/configuration.c"
     "src/cpu_usage.c"

@@ -9,16 +9,16 @@
  * Hardware access stays behind injected drivers so the same capability
  * contract can run in the host rig and on ESP-IDF without preprocessor forks.
  *
- * PCM and AEC remain deliberately absent until the board path meets the
- * realtime guarantees. The control handler is only an owner-task transition
- * seam: it does not queue samples or claim that the manifest has audio. This
- * lets the userspace Worker depend on one conversation/PTT/event contract now
- * without reusing the known-bad queued StackChan audio implementation.
+ * PCM remains outside this capability profile: the target composes the shared
+ * realtime lane and owns board-specific microphone/speaker processing. The
+ * control handler is only an owner-task transition seam and never queues
+ * samples. That separation lets this manifest truthfully advertise manual PTT
+ * without importing the known-bad accumulating StackChan WebSocket queue.
  */
 static const char description[] =
     "{\"instructions\":\"An Iterate StackChan with health metrics, screen, "
-    "head servos, RGB LEDs, camera, and bounded voice-control intent. PCM "
-    "media is integrated separately by the target.\",\"children\":{"
+    "head servos, RGB LEDs, camera, and manual push-to-talk voice. PCM "
+    "media uses the target's separate realtime WebSocket lane.\",\"children\":{"
     "\"subscribeToMetrics\":\"Call a callback immediately and once per "
     "configured interval with bounded runtime metrics.\","
     "\"subscribeToEvents\":\"Call one callback with the current push-to-talk "
@@ -38,7 +38,7 @@ static const char description[] =
 const struct iterate_kit_device_manifest iterate_kit_stackchan_manifest = {
   "stackchan",
   "M5Stack StackChan",
-  ITERATE_KIT_AUDIO_NONE,
+  ITERATE_KIT_AUDIO_PUSH_TO_TALK,
 };
 
 static enum iterate_kit_status handle_event(

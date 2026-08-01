@@ -525,10 +525,27 @@ static void push_to_talk_cannot_escape_the_conversation_lifetime(void) {
   fixture_close(&fixture);
 }
 
+/*
+ * The manifest is operational input, not decorative metadata: userspace and
+ * flash tooling use it to decide whether the mounted device owns a manual PCM
+ * turn. Leaving the earlier control-only placeholder here would make a fully
+ * wired CoreS3 target advertise AUDIO_NONE and invite a second, target-local
+ * interpretation of the same conversation/PTT capability. Pin the shared
+ * contract before the physical target composition changes.
+ */
+static void manifest_advertises_the_shared_manual_pcm_contract(void) {
+  assert(iterate_kit_stackchan_manifest.slug != NULL);
+  assert(strcmp(iterate_kit_stackchan_manifest.slug, "stackchan") == 0);
+  assert(
+      iterate_kit_stackchan_manifest.audio_mode ==
+      ITERATE_KIT_AUDIO_PUSH_TO_TALK);
+}
+
 int main(void) {
   remote_and_physical_controls_share_one_owner_queue();
   change_colour_keeps_the_shared_red_green_contract();
   event_and_metrics_subscriptions_share_bounded_profile_state();
   push_to_talk_cannot_escape_the_conversation_lifetime();
+  manifest_advertises_the_shared_manual_pcm_contract();
   return 0;
 }
