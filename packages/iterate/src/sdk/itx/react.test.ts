@@ -168,6 +168,75 @@ describe("itx session socket", () => {
     }
   });
 
+  test("a terminal auth failure on a budget successor keeps the live predecessor", async () => {
+    vi.useFakeTimers();
+    try {
+      const { connectIterateSession } = await import("./react.ts");
+      const first = connectIterateSession();
+      const predecessorSocket = onlySocket();
+      predecessorSocket.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+      const predecessorSession = await first;
+
+      control.authError = new Error("successor credentials rejected");
+      for (let message = 0; message < 8_000; message += 1) {
+        predecessorSocket.fire("message");
+      }
+      const successorSocket = FakeWebSocket.instances[1]!;
+      successorSocket.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(successorSocket.closeCalls).toBe(1);
+      expect(predecessorSocket.closeCalls).toBe(0);
+      expect(predecessorSession[Symbol.dispose]).not.toHaveBeenCalled();
+      expect(connectIterateSession()).toBe(first);
+      await expect(connectIterateSession()).resolves.toBe(predecessorSession);
+      expect(FakeWebSocket.instances).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("a terminal auth failure after successor transport loss restores the carried predecessor", async () => {
+    vi.useFakeTimers();
+    try {
+      const { connectIterateSession } = await import("./react.ts");
+      const { retainIterateSessionPredecessor } = await import("../../itx/itx-session.ts");
+      const first = connectIterateSession();
+      const predecessorSocket = onlySocket();
+      predecessorSocket.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+      const predecessorSession = await first;
+
+      for (let message = 0; message < 8_000; message += 1) {
+        predecessorSocket.fire("message");
+      }
+      const firstSuccessorSocket = FakeWebSocket.instances[1]!;
+      firstSuccessorSocket.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+      const failedSuccessorSession = control.lastRoot as {
+        [Symbol.dispose]: ReturnType<typeof vi.fn>;
+      };
+      const releasePredecessor = retainIterateSessionPredecessor();
+
+      firstSuccessorSocket.fire("close");
+      const retrySocket = FakeWebSocket.instances[2]!;
+      control.authError = new Error("replacement credentials rejected");
+      retrySocket.fire("open");
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(retrySocket.closeCalls).toBe(1);
+      expect(predecessorSocket.closeCalls).toBe(0);
+      expect(predecessorSession[Symbol.dispose]).not.toHaveBeenCalled();
+      expect(failedSuccessorSession[Symbol.dispose]).toHaveBeenCalledOnce();
+      expect(connectIterateSession()).toBe(first);
+      await expect(connectIterateSession()).resolves.toBe(predecessorSession);
+      releasePredecessor();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   test("connectItx narrows the ONE session to a project stub — no second socket", async () => {
     const { connectIterateSession, connectItx } = await import("./react.ts");
     const session = connectIterateSession(); // connects the one socket

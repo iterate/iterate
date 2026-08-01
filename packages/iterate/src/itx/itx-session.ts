@@ -45,9 +45,12 @@
  *    {@link firstConnect} promise, which survives failed connection attempts (paced
  *    reconnects happen behind it; an individual attempt's rejection never reaches a suspended
  *    React tree) and rejects only on a TERMINAL failure. Kept-across-the-gap
- *    applies to TRANSPORT gaps only: a terminal auth rejection on a reconnect is
- *    an AUTHORITY loss — the halted snapshot drops the (already dead) session
- *    so the real error surfaces instead of zombie stubs.
+ *    applies to TRANSPORT gaps only: a terminal auth rejection on an ordinary
+ *    reconnect is an AUTHORITY loss — the halted snapshot drops the (already
+ *    dead) session so the real error surfaces instead of zombie stubs. A
+ *    proactive successor rejection is different: its predecessor is provably
+ *    still live, so the failed candidate is discarded and the predecessor
+ *    remains authoritative until an explicit reset or natural transport loss.
  *
  *  • PROJECT STUBS ARE SESSION-OWNED. `session.projects.get` allocates a
  *    capnweb import-table entry, so deriving stubs ad hoc (or inside React
@@ -545,8 +548,9 @@ function startConnectionAttempt(
           // terminal error to the boundary; the prior session's refs are
           // released here (they were dead already).
           const terminal = error instanceof Error ? error : new Error(String(error));
-          generation.failed = true;
           reject(terminal);
+          if (restoreProactivePredecessor(generation)) return;
+          generation.failed = true;
           firstConnect?.reject(terminal);
           firstConnect = undefined;
           const zombieSession = snapshot?.session;
@@ -662,6 +666,44 @@ function takeRecoveryHandoff(generation: Generation): {
   generation.predecessor = undefined;
   generation.overlap = undefined;
   return { predecessor, overlap };
+}
+
+/**
+ * Roll a failed proactive candidate back to the transport it was replacing.
+ *
+ * A terminal authentication answer on an ordinary reconnect invalidates the
+ * session: its previous socket is already dead, so the halted error snapshot is
+ * the only truthful state. During make-before-break rotation, however, either
+ * `predecessor` or the carried `overlap` is still a functioning authenticated
+ * transport. A failed successor must not turn that healthy callback leg into
+ * an outage. Restore it without retrying the terminal handshake; a later
+ * semantic reset or natural close gets a fresh authentication boundary.
+ */
+function restoreProactivePredecessor(generation: Generation): boolean {
+  const predecessor = generation.predecessor;
+  const overlap = generation.overlap;
+  const restoredGeneration = predecessor ?? overlap?.generation;
+  if (restoredGeneration === undefined) return false;
+
+  generation.predecessor = undefined;
+  generation.overlap = undefined;
+  current = restoredGeneration;
+
+  if (overlap !== undefined) {
+    clearTimeout(overlap.timeout);
+    const failedPublishedSession = snapshot?.session;
+    setSnapshot({
+      generation: ++generationCounter,
+      session: overlap.session,
+      connecting: restoredGeneration.connecting,
+    });
+    if (failedPublishedSession !== undefined && failedPublishedSession !== overlap.session) {
+      disposeSession(failedPublishedSession);
+    }
+  }
+
+  retireGeneration(generation);
+  return true;
 }
 
 /** Install the short unclaimed grace and the hard bound for a claimed predecessor. */
