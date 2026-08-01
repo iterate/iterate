@@ -1,5 +1,5 @@
 ---
-status: ready
+status: implemented
 size: medium
 ---
 
@@ -7,7 +7,15 @@ size: medium
 
 ## Status summary
 
-Spec committed, implementation not started. Two production bugs Misha hit on
+Implemented, all gates green (typecheck/lint/knip/full unit suite, egress
+e2e, both mobile specs). Both bugs fixed: the project processor now relays
+every accepted approval decision (human and expiry) as developer context to
+the originating agent thread, and mobile code previews render natively. One
+deviation from the spec, found by the mobile approvals spec: slash-command
+runs get the context WITHOUT the model wake (`dont-trigger-request`) — see
+the implementation log. Remaining: PR review.
+
+Two production bugs Misha hit on
 device (prod project `misha`, thread `mobile/2026-08-01t03-30-40-828z`).
 
 ## Bug 1: after approving, nothing happened and the agent got confused
@@ -97,14 +105,64 @@ v1 — reliability over color; note it as a possible follow-up.
 
 ## Checklist
 
-- [ ] Decision-outcome context appended to the originating agent thread
-      (human and expiry decisions; scope holds unaffected)
-- [ ] Unit test + egress e2e extension
-- [ ] `CodeBlock` renders natively (webview only used for editing surfaces)
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
+- [x] Decision-outcome context appended to the originating agent thread
+      (human and expiry decisions; scope holds unaffected) — _new
+      `human-approval-decided` case in the project processor's per-event lane
+      (project-processor-implementation.ts): getEvent the requested batch,
+      mirror the door's `evaluateDecision` acceptance, `appendTo` the agent
+      stream; contract adds decided to consumes, `agents/context-added` to
+      emits, AgentProcessorContract to processorDeps_
+- [x] Unit test + egress e2e extension — _5 cases in
+      project-processor.test.ts ("approval outcome delivery" describe);
+      burst test in egress-approvals.e2e.test.ts now asserts the decision
+      context lands on the agent thread_
+- [x] `CodeBlock` renders natively (webview only used for editing surfaces)
+      — _selectable monospace `<Text>` in a bounded ScrollView
+      (activity-card.tsx); code-editor.tsx untouched, still used by
+      repo.tsx only_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
+      — _all green from the worktree root; mobile/approvals and
+      mobile/notifications specs pass against local dev_
 
 ## Out of scope
 
 - Teaching agents to await held fetches (model behavior, not protocol)
 - Syntax highlighting for native previews
 - Expiry pre-approve/retry flows (separate design task)
+
+## Implementation log
+
+- Mechanism chosen: the per-event lane on the project processor itself, with
+  `args.appendTo(streamContext.streamPath, ...)` — the same sibling-stream
+  door the birth saga uses for `/scheduler/primary` etc. (all project
+  streams share the DO). No new state fold: the decided event carries the
+  batch offset, and `this.stream.getEvent({ offset })` reads the requested
+  event from the processor's own stream — always committed, since it sits
+  below the decided event's offset.
+- The relay mirrors the door's acceptance policy via the existing pure
+  helpers (`evaluateDecision` + `buildApprovalMessage`): verdict-count
+  mismatch and unsigned/badly-signed approvals are ignored, so the agent is
+  never told about a decision that released nothing. Keys come from the
+  fold at the decided event's offset.
+- Actor is `{ type: "integration", name: "egress-approvals" }` — the
+  `stream-error` precedent: non-script, so `contextClearsWaitingFor` treats
+  it as an external wake; demoted to user role at prompt time (decision
+  data, not instructions).
+- Idempotency: `this.idempotencyKey("approval-outcome", event)` — keyed on
+  the decided event's offset per the spec (a second signed decision on the
+  same batch would append a second, accurate, context item; the door
+  ignores it, rare enough to accept).
+- **Deviation**: batches from slash-command runs (`executionId` prefix
+  `slash-command:`) get `llmRequestPolicy: dont-trigger-request`. Found by
+  the mobile approvals spec's headline "zero model turns" assertion: a
+  `/script` run is user-driven with no parked agent, so waking the model on
+  its decision is pure chatter. Agent-initiated runs keep
+  `after-current-request` — the strand fix proper.
+- Known-flaky, pre-existing, unrelated: the "approved worker WebSocket
+  egress" e2e fails on this machine's local dev servers ("WebSocket echo
+  failed") — same failure documented at the merge base in
+  tasks/complete/2026-07-28-grouped-approvals.md. All other egress e2e
+  tests pass, including the extended burst test.
+- The local dev server intermittently wedges into an unhealthy "fetch
+  failed" loop after heavy e2e runs and needs `pnpm dev restart --detach`
+  (machine-local; also pre-existing).
