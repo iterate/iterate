@@ -1171,6 +1171,20 @@ void iterate_kit_core_s3_audio_owner_metrics_snapshot(
   snapshot->clean_uplink_drops = clean_uplink_drops > UINT32_MAX
       ? UINT32_MAX
       : (uint32_t)clean_uplink_drops;
+  /*
+   * These three counters are the mutually exclusive top-level boundaries at
+   * which captured PCM can fail: hardware read, DSP/bridge processing, and
+   * publication of a completed PTT turn. Do not add AEC recreate failures:
+   * the bridge records that same incident in capture_bridge_errors, and an
+   * innocent-looking sum would make one failure appear twice in userspace.
+   */
+  const uint64_t capture_failures =
+      (uint64_t)snapshot->codec_read_errors +
+      snapshot->capture_bridge_errors +
+      snapshot->capture_turn_poll_failures;
+  snapshot->capture_failures = capture_failures > UINT32_MAX
+      ? UINT32_MAX
+      : (uint32_t)capture_failures;
   for (size_t slot = 0U;
        slot < ITERATE_KIT_CORE_S3_TDM_SLOT_COUNT;
        ++slot) {

@@ -342,7 +342,7 @@ static bool build_buffers_expression(
 static bool build_audio_expression(
     const struct iterate_kit_metrics_sample *sample,
     struct metrics_expression_workspace *workspace) {
-  size_t audio_count = 5U;
+  size_t audio_count = 0U;
   set_integer_field(
       &workspace->capture_values[0],
       &workspace->capture_fields[0],
@@ -523,71 +523,72 @@ static bool build_audio_expression(
       sizeof(workspace->downlink_fields) /
           sizeof(workspace->downlink_fields[0]));
 
-  set_integer_field(
-      &workspace->playback_values[0],
-      &workspace->playback_fields[0],
-      "submitted",
-      9U,
-      sample->audio.playback.submitted);
-  set_integer_field(
-      &workspace->playback_values[1],
-      &workspace->playback_fields[1],
-      "completed",
-      9U,
-      sample->audio.playback.completed);
-  set_integer_field(
-      &workspace->playback_values[2],
-      &workspace->playback_fields[2],
-      "flushed",
-      7U,
-      sample->audio.playback.flushed);
-  set_integer_field(
-      &workspace->playback_values[3],
-      &workspace->playback_fields[3],
-      "depth",
-      5U,
-      sample->audio.playback.depth);
-  set_integer_field(
-      &workspace->playback_values[4],
-      &workspace->playback_fields[4],
-      "highWater",
-      9U,
-      sample->audio.playback.high_water);
-  set_integer_field(
-      &workspace->playback_values[5],
-      &workspace->playback_fields[5],
-      "failures",
-      8U,
-      sample->audio.playback.failures);
-  set_object(
-      &workspace->playback_object,
-      workspace->playback_fields,
-      sizeof(workspace->playback_fields) /
-          sizeof(workspace->playback_fields[0]));
-
   set_object_field(
-      &workspace->audio_fields[0],
+      &workspace->audio_fields[audio_count++],
       "capture",
       7U,
       &workspace->capture_object);
   set_object_field(
-      &workspace->audio_fields[1],
+      &workspace->audio_fields[audio_count++],
       "uplink",
       6U,
       &workspace->uplink_object);
   set_object_field(
-      &workspace->audio_fields[2],
+      &workspace->audio_fields[audio_count++],
       "downlink",
       8U,
       &workspace->downlink_object);
-  set_object_field(
-      &workspace->audio_fields[3],
-      "playback",
-      8U,
-      &workspace->playback_object);
+  if (sample->audio.has_playback) {
+    set_integer_field(
+        &workspace->playback_values[0],
+        &workspace->playback_fields[0],
+        "submitted",
+        9U,
+        sample->audio.playback.submitted);
+    set_integer_field(
+        &workspace->playback_values[1],
+        &workspace->playback_fields[1],
+        "completed",
+        9U,
+        sample->audio.playback.completed);
+    set_integer_field(
+        &workspace->playback_values[2],
+        &workspace->playback_fields[2],
+        "flushed",
+        7U,
+        sample->audio.playback.flushed);
+    set_integer_field(
+        &workspace->playback_values[3],
+        &workspace->playback_fields[3],
+        "depth",
+        5U,
+        sample->audio.playback.depth);
+    set_integer_field(
+        &workspace->playback_values[4],
+        &workspace->playback_fields[4],
+        "highWater",
+        9U,
+        sample->audio.playback.high_water);
+    set_integer_field(
+        &workspace->playback_values[5],
+        &workspace->playback_fields[5],
+        "failures",
+        8U,
+        sample->audio.playback.failures);
+    set_object(
+        &workspace->playback_object,
+        workspace->playback_fields,
+        sizeof(workspace->playback_fields) /
+            sizeof(workspace->playback_fields[0]));
+    set_object_field(
+        &workspace->audio_fields[audio_count++],
+        "playback",
+        8U,
+        &workspace->playback_object);
+  }
   set_integer_field(
       &workspace->protocol_failures,
-      &workspace->audio_fields[4],
+      &workspace->audio_fields[audio_count++],
       "protocolFailures",
       16U,
       sample->audio.protocol_failures);

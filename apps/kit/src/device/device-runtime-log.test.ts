@@ -172,6 +172,31 @@ describe("device runtime log", () => {
     });
   });
 
+  test("retains transport audio evidence when playback evidence is unavailable", () => {
+    const { playback: _unavailable, ...audioWithoutPlayback } = validKitAudioMetrics;
+    expect(
+      parseKitMetricsCallback({
+        cpuPermille: 73,
+        freeHeapBytes: 312_000,
+        freeInternalHeapBytes: 220_000,
+        freePsramBytes: 0,
+        minimumFreeHeapBytes: 280_000,
+        minimumFreeInternalHeapBytes: 200_000,
+        taskStackHighWaterBytes: 4_096,
+        uptimeMs: 1_203,
+        audio: audioWithoutPlayback,
+      }),
+    ).toMatchObject({
+      family: "capability",
+      kind: "metrics",
+      values: {
+        audio_sent: 101,
+        downlink_accepted: 98,
+        uplink_sent: 99,
+      },
+    });
+  });
+
   test("rejects malformed Cap'n Web metrics instead of treating them as measurements", () => {
     expect(
       parseKitMetricsCallback({

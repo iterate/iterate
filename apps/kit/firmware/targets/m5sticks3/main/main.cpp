@@ -640,6 +640,7 @@ iterate_kit_status sampleRuntimeMetrics(
       playbackFailures, playback.ownerClockRegressions);
   sample->audio.playback.failures = addMetricValue(
       playbackFailures, playback.stateErrors);
+  sample->audio.has_playback = true;
   sample->audio.protocol_failures =
       saturatingMetricValue(pcm.protocol_failures);
   /*

@@ -190,13 +190,15 @@ const kitAudioMetricFields = [
   [["downlink", "depth"], "downlink_current"],
   [["downlink", "highWater"], "downlink_high_water"],
   [["downlink", "failures"], "downlink_failures"],
+  [["protocolFailures"], "protocol_failures"],
+] as const;
+const kitPlaybackMetricFields = [
   [["playback", "submitted"], "playback_submitted"],
   [["playback", "completed"], "playback_completed"],
   [["playback", "flushed"], "playback_flushed"],
   [["playback", "depth"], "playback_current"],
   [["playback", "highWater"], "playback_high_water"],
   [["playback", "failures"], "playback_failures"],
-  [["protocolFailures"], "protocol_failures"],
 ] as const;
 const pcmUplinkRestartReasons = new Set([
   "none",
@@ -242,6 +244,19 @@ export function parseKitMetricsCallback(value: unknown): DeviceRuntimeLogObserva
         return malformedKitMetrics(`audio.${path.join(".")} must be a safe integer`);
       }
       values[runtimeName] = metric;
+    }
+    const unparsedPlayback =
+      typeof audio === "object" && audio !== null && !Array.isArray(audio)
+        ? Reflect.get(audio, "playback")
+        : undefined;
+    if (unparsedPlayback !== undefined) {
+      for (const [path, runtimeName] of kitPlaybackMetricFields) {
+        const metric = nestedSafeInteger(audio, path);
+        if (metric === undefined) {
+          return malformedKitMetrics(`audio.${path.join(".")} must be a safe integer`);
+        }
+        values[runtimeName] = metric;
+      }
     }
     const lastRestartReason = nestedString(audio, ["uplink", "lastRestartReason"]);
     if (lastRestartReason === undefined || !pcmUplinkRestartReasons.has(lastRestartReason)) {

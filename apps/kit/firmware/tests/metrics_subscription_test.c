@@ -50,6 +50,7 @@ struct fixture {
   struct iterate_kit_module module;
   size_t dispatch_method_index;
   bool maximum_metrics;
+  bool include_playback;
   bool include_buffers;
   bool include_control_diagnostics;
   bool invalid_buffer_evidence;
@@ -175,6 +176,7 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 28U,
       false,
       {0},
+      false,
     },
     false,
     {0},
@@ -212,6 +214,7 @@ static enum iterate_kit_status sample_metrics(
   sample->audio.uplink.last_restart_frames_discarded =
       fixture->maximum_metrics ? maximum_counter : 41U;
   sample->audio.has_buffers = fixture->include_buffers;
+  sample->audio.has_playback = fixture->include_playback;
   sample->audio.buffers.uplink_application.evidence =
       ITERATE_KIT_BUFFER_OBSERVED;
   sample->audio.buffers.uplink_application.current_bytes =
@@ -438,6 +441,7 @@ static void fixture_init_with_subscription_count(
   struct capnweb_session_options session_options;
   memset(fixture, 0, sizeof(*fixture));
   fixture->capture_limit = CAPTURE_CAPACITY;
+  fixture->include_playback = true;
   assert(
       subscription_count > 0U &&
       subscription_count <=
@@ -1114,6 +1118,36 @@ static void buffer_metrics_preserve_the_strength_of_their_evidence(void) {
 }
 
 /*
+ * CoreS3 can prove capture and every transport queue today, but its 8 ms
+ * synchronous codec writes do not carry the 20 ms content-frame identity
+ * required for submitted/completed conservation. Publishing zero counters
+ * would falsely certify clean playback. The optional object lets those real
+ * metrics remain useful while making unavailable physical evidence explicit.
+ */
+static void unavailable_playback_evidence_is_omitted_not_zero_filled(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+  fixture.include_playback = false;
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+      "[[\"export\",-1]]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      fixture.module.poll(fixture.module.context, 0U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.captured_count == 3U);
+  assert(strstr(fixture.captured[1], "\"capture\":") != NULL);
+  assert(strstr(fixture.captured[1], "\"downlink\":") != NULL);
+  assert(strstr(fixture.captured[1], "\"playback\":") == NULL);
+  assert(strstr(fixture.captured[1], "\"protocolFailures\":28") != NULL);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
  * Treating an out-of-range driver enum as UNAVAILABLE would hide a firmware
  * defect behind an apparently deliberate lack of instrumentation. The sample
  * must fail before Cap'n Web opens a callback message, leaving no truncated
@@ -1154,6 +1188,7 @@ int main(void) {
   control_diagnostics_do_not_overwrite_an_unpulled_snapshot();
   maximum_control_diagnostics_fit_the_static_reply_budget();
   buffer_metrics_preserve_the_strength_of_their_evidence();
+  unavailable_playback_evidence_is_omitted_not_zero_filled();
   invalid_buffer_evidence_is_a_visible_driver_error();
   return 0;
 }

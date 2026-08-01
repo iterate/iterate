@@ -273,6 +273,13 @@ struct iterate_kit_metrics_sample {
       struct iterate_kit_buffer_metrics tls_egress;
       struct iterate_kit_buffer_metrics wifi_egress;
     } buffers;
+    /*
+     * Some codec owners can observe transport/capture queues but cannot prove
+     * discrete 20 ms content-frame submission and physical completion. Such a
+     * target must leave this false so the wire object omits `playback`; zeros
+     * would otherwise claim six healthy measurements that were never made.
+     */
+    bool has_playback;
   } audio;
   bool has_playback_detail;
   struct iterate_kit_playback_metrics_sample playback_detail;

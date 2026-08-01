@@ -91,6 +91,14 @@ struct iterate_kit_core_s3_audio_owner_metrics {
   uint32_t maximum_aec_nlp_us;
   uint32_t clean_uplink_frames;
   uint32_t clean_uplink_drops;
+  /*
+   * One canonical count of terminal capture-pipeline failures. This is not a
+   * sum of every detailed diagnostic below: for example, an AEC recreate
+   * failure is already observed as a capture-bridge failure. Keeping the
+   * aggregate non-overlapping lets the shared metrics schema expose a useful
+   * error counter without double-counting one physical incident.
+   */
+  uint32_t capture_failures;
   uint32_t last_capture_to_uplink_us;
   uint32_t maximum_capture_to_uplink_us;
   uint32_t aec_input_partial_samples;

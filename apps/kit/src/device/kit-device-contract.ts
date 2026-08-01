@@ -57,7 +57,12 @@ export interface KitAudioMetrics {
     highWater: number;
     failures: number;
   };
-  playback: {
+  /**
+   * Present only when the hardware owner can conserve discrete 20 ms content
+   * frames through physical submission/completion. Transport-only zeros are
+   * not measurements and therefore must be represented by absence.
+   */
+  playback?: {
     submitted: number;
     completed: number;
     flushed: number;
