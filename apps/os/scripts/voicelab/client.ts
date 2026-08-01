@@ -51,6 +51,15 @@ export interface ClientOptions extends VoicelabConnectOptions {
    * userspace VoiceBridge DO instead of relying on a running node bridge.
    */
   workerUrl?: string;
+  /**
+   * Detached worker bridge: start the call with one `itx.worker.startCall`
+   * over this same session and let it hold itself open. Nothing local stays
+   * running for the call — no node bridge, no anchor socket. This is the
+   * shape a device uses.
+   */
+  detached?: boolean;
+  /** Line the assistant speaks as soon as the call is live (detached mode). */
+  greet?: string;
   /** Soak mode: re-speak the same utterance after each answer until --turns is reached. */
   repeatSay?: boolean;
 }
@@ -239,10 +248,38 @@ export async function client(options: ClientOptions) {
       ...(options.model ? { model: options.model } : {}),
       ...(options.voice ? { voice: options.voice } : {}),
       effort: options.effort === "high" ? "high" : "none",
-      bridge: options.workerUrl ? "worker" : "node",
+      bridge: options.detached ? "worker-detached" : options.workerUrl ? "worker" : "node",
     },
   });
   console.error(`client: call-requested on ${streamPath} (callId=${callId})`);
+
+  // Detached mode: one RPC starts a call that outlives this process. The
+  // only thing this client does afterwards is push mic frames and play what
+  // comes back — exactly what the ESP32 does.
+  if (options.detached) {
+    // `itx.worker` is typed as the config-repo TEMPLATE's worker; this
+    // project's worker.ts (scripts/voicelab/config-repo/worker.ts) adds
+    // startCall, so the call is declared at the call site.
+    const worker = itx.worker as unknown as {
+      startCall(options: Record<string, unknown>): Promise<{
+        ok?: boolean;
+        reason?: string;
+        startMs?: number;
+      }>;
+    };
+    const started = await worker.startCall({
+      callId,
+      effort: options.effort === "high" ? "high" : "none",
+      path: streamPath,
+      ...(options.greet ? { greet: options.greet } : {}),
+      ...(options.model ? { model: options.model } : {}),
+      ...(options.voice ? { voice: options.voice } : {}),
+    });
+    if (started.ok !== true) {
+      throw new Error(`worker.startCall refused: ${started.reason ?? JSON.stringify(started)}`);
+    }
+    console.error(`client: detached worker bridge live in ${started.startMs}ms`);
+  }
 
   // Worker-bridge mode: the anchor socket starts (and keeps alive) the
   // userspace VoiceBridge DO. It carries no audio.
@@ -333,7 +370,7 @@ export async function client(options: ClientOptions) {
       framesPerAppend,
       effort: options.effort === "high" ? "high" : "none",
       synthetic: !options.mic,
-      bridge: options.workerUrl ? "worker" : "node",
+      bridge: options.detached ? "worker-detached" : options.workerUrl ? "worker" : "node",
       ...(impair.describe === null ? {} : { impairment: impair.describe }),
     },
     micFramesSent,
