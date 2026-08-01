@@ -64,15 +64,26 @@
 static const char tag[] = "iterate-voicelab";
 
 enum {
-  PENDING_CALL_CAPACITY = 8,
+  /*
+   * Occupancy is inbound-call-rate x round-trip: every delivery batch is a
+   * push holding a slot until the server's release arrives. At ~12 batches/s
+   * and 160 ms RTT that is already 2, and a concurrent recording pull adds
+   * one per chunk. Exhausting this aborts the SESSION, so it is sized for
+   * the burst, not the average.
+   */
+  PENDING_CALL_CAPACITY = 16,
   EXPORT_CAPACITY = 4,
   IMPORT_CAPACITY = 16,
   /*
    * Replies to pulled calls and inbound delivery batches both parse inside
-   * this budget; exhaustion is a session-terminal abort, so it is sized for
-   * the largest legitimate message (a 2-event capped delivery batch).
+   * this budget, one token per JSON key, value, object and array —
+   * exhaustion ABORTS THE SESSION. A capped batch of 4 speaker frames is
+   * ~72, but a single Grok response.done carries a nested event object that
+   * alone runs to several hundred. 256 was sized for a 2-event batch and was
+   * never re-checked when the cap doubled; 1024 costs 12 KiB of otherwise
+   * idle PSRAM-eligible RAM and takes this off the table.
    */
-  TOKEN_CAPACITY = 256,
+  TOKEN_CAPACITY = 1024,
   OUTPUT_CAPACITY = 128,
   /*
    * Inbox slots take one whole delivery batch each (the connection is opened
@@ -156,7 +167,7 @@ static struct {
   struct iterate_kit_voicelab voicelab;
   uint32_t voicelab_generation;
   uint32_t frame_sequence;
-  char stats_buffer[640];
+  char stats_buffer[896];
   uint32_t stats_sequence;
   enum iterate_kit_esp_idf_itx_transport_state last_transport_state;
   enum iterate_kit_voicelab_state last_voicelab_state;
@@ -470,7 +481,11 @@ static void append_stats(uint64_t now) {
       ",\"wsSent\":%" PRIu32 ",\"outboxDiscarded\":%" PRIu32
       ",\"inboxPublished\":%" PRIu32 ",\"inboxConsumed\":%" PRIu32
       ",\"inboxDiscarded\":%" PRIu32 ",\"inboxHighWater\":%" PRIu32
-      ",\"sessionGeneration\":%" PRIu32 "}}]",
+      ",\"sessionGeneration\":%" PRIu32
+      ",\"protoFailures\":%" PRIu32 ",\"recvFailures\":%" PRIu32
+      ",\"sendFailures\":%" PRIu32 ",\"inboxDeferrals\":%" PRIu32
+      ",\"lastAppStatus\":%" PRId32
+      ",\"dmaLargest\":%" PRIu32 "}}]",
       runtime.stats_sequence++,
       now,
       runtime.voicelab.frames_sent,
@@ -498,7 +513,13 @@ static void append_stats(uint64_t now) {
       metrics.control_inbox.messages_consumed,
       metrics.control_inbox_discarded,
       metrics.control_inbox.high_water_slots,
-      runtime.connection.generation);
+      runtime.connection.generation,
+      metrics.protocol_failures,
+      metrics.control_receive_failures,
+      metrics.control_send_failures,
+      metrics.control_inbox_deferrals,
+      metrics.last_application_capnweb_status,
+      (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DMA));
   if (length > 0 && (size_t)length < sizeof(runtime.stats_buffer)) {
     (void)iterate_kit_voicelab_append_raw(
         &runtime.voicelab, runtime.stats_buffer, (size_t)length);

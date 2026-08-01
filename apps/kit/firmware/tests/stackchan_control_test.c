@@ -418,7 +418,8 @@ static bool captured_contains(
  * owner poll establishes one order, and the outer audio adapter plus event
  * observer see the same processed transition and provenance exactly once.
  */
-static void remote_and_physical_controls_share_one_owner_queue(void) {
+static void remote_and_physical_conversation_controls_share_one_owner_queue(
+    void) {
   struct fixture fixture;
   struct iterate_kit_device_event_queue_metrics metrics;
   fixture_init(&fixture);
@@ -439,32 +440,31 @@ static void remote_and_physical_controls_share_one_owner_queue(void) {
 
   receive(
       &fixture,
-      "[\"push\",[\"pipeline\",0,[\"pushToTalk\",\"start\"],[]]]");
+      "[\"push\",[\"pipeline\",0,[\"conversation\",\"hangUp\"],[]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(!iterate_kit_stackchan_is_push_to_talk_active(&fixture.device));
+  assert(iterate_kit_stackchan_is_conversation_active(&fixture.device));
   assert(fixture.handled_count == 1U);
   assert(
       iterate_kit_stackchan_poll(&fixture.device, 1U).status ==
       ITERATE_KIT_POLL_OK);
-  assert(iterate_kit_stackchan_is_push_to_talk_active(&fixture.device));
+  assert(!iterate_kit_stackchan_is_conversation_active(&fixture.device));
   assert(fixture.handled_count == 2U);
 
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"conversation\",\"start\"],[]]]");
+  receive(&fixture, "[\"pull\",2]");
   assert(
-      iterate_kit_stackchan_publish_push_to_talk(
+      iterate_kit_stackchan_poll(&fixture.device, 2U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(iterate_kit_stackchan_is_conversation_active(&fixture.device));
+
+  assert(
+      iterate_kit_stackchan_publish_conversation(
           &fixture.device,
           false,
           ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
       ITERATE_KIT_OK);
-  assert(
-      iterate_kit_stackchan_poll(&fixture.device, 2U).status ==
-      ITERATE_KIT_POLL_OK);
-  assert(!iterate_kit_stackchan_is_push_to_talk_active(&fixture.device));
-
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"conversation\",\"hangUp\"],[]]]");
-  receive(&fixture, "[\"pull\",2]");
-  assert(iterate_kit_stackchan_is_conversation_active(&fixture.device));
   assert(
       iterate_kit_stackchan_poll(&fixture.device, 3U).status ==
       ITERATE_KIT_POLL_OK);
@@ -480,22 +480,22 @@ static void remote_and_physical_controls_share_one_owner_queue(void) {
       ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
   assert(
       fixture.handled[1].type ==
-      ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED);
+      ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED);
   assert(
       fixture.handled[1].source ==
       ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE);
   assert(
       fixture.handled[2].type ==
-      ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED);
+      ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED);
   assert(
       fixture.handled[2].source ==
-      ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
+      ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE);
   assert(
       fixture.handled[3].type ==
       ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED);
   assert(
       fixture.handled[3].source ==
-      ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE);
+      ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
   for (size_t index = 0U; index < fixture.observed_count; ++index) {
     assert(fixture.observed_results[index] == ITERATE_KIT_OK);
   }
@@ -566,15 +566,9 @@ static void event_and_metrics_subscriptions_share_bounded_profile_state(void) {
           ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
       ITERATE_KIT_OK);
   assert(
-      iterate_kit_stackchan_publish_push_to_talk(
-          &fixture.device,
-          true,
-          ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
-      ITERATE_KIT_OK);
-  assert(
       iterate_kit_stackchan_poll(&fixture.device, 0U).status ==
       ITERATE_KIT_POLL_OK);
-  assert(iterate_kit_stackchan_is_push_to_talk_active(&fixture.device));
+  assert(iterate_kit_stackchan_is_conversation_active(&fixture.device));
 
   receive(
       &fixture,
@@ -594,10 +588,10 @@ static void event_and_metrics_subscriptions_share_bounded_profile_state(void) {
   assert(fixture.metrics_sample_count == 1U);
   assert(captured_contains(&fixture, "[\"pipeline\",-1,[]"));
   assert(captured_contains(&fixture, "\"snapshot\":true"));
-  assert(captured_contains(&fixture, "\"active\":true"));
   assert(
       captured_contains(
-          &fixture, "\"type\":\"pushToTalk.started\""));
+          &fixture, "\"type\":\"conversation.started\""));
+  assert(captured_contains(&fixture, "\"conversationActive\":true"));
   assert(captured_contains(&fixture, "[\"pipeline\",-2,[]"));
   assert(captured_contains(&fixture, "\"uptimeMs\":123"));
   assert(captured_contains(&fixture, "\"freeHeapBytes\":456"));
@@ -612,35 +606,17 @@ static void event_and_metrics_subscriptions_share_bounded_profile_state(void) {
  * bytes as live speech. Release remains idempotent so hang-up/release ordering
  * cannot wedge the profile in a held state.
  */
-static void push_to_talk_cannot_escape_the_conversation_lifetime(void) {
+static void full_duplex_profile_does_not_mount_push_to_talk(void) {
   struct fixture fixture;
   fixture_init(&fixture);
 
-  assert(
-      iterate_kit_stackchan_publish_push_to_talk(
-          &fixture.device,
-          true,
-          ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
-      ITERATE_KIT_OK);
-  assert(
-      iterate_kit_stackchan_poll(&fixture.device, 0U).status ==
-      ITERATE_KIT_POLL_DRIVER_ERROR);
-  assert(!iterate_kit_stackchan_is_push_to_talk_active(&fixture.device));
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"pushToTalk\",\"start\"],[]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(captured_contains(&fixture, "unknown device capability"));
   assert(fixture.handled_count == 0U);
-  assert(fixture.observed_count == 1U);
-  assert(fixture.observed_results[0] == ITERATE_KIT_STATE_ERROR);
-
-  assert(
-      iterate_kit_stackchan_publish_push_to_talk(
-          &fixture.device,
-          false,
-          ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
-      ITERATE_KIT_OK);
-  assert(
-      iterate_kit_stackchan_poll(&fixture.device, 1U).status ==
-      ITERATE_KIT_POLL_OK);
-  assert(!iterate_kit_stackchan_is_push_to_talk_active(&fixture.device));
-  assert(fixture.handled_count == 1U);
+  assert(fixture.observed_count == 0U);
   fixture_close(&fixture);
 }
 
@@ -652,21 +628,21 @@ static void push_to_talk_cannot_escape_the_conversation_lifetime(void) {
  * interpretation of the same conversation/PTT capability. Pin the shared
  * contract before the physical target composition changes.
  */
-static void manifest_advertises_the_shared_manual_pcm_contract(void) {
+static void manifest_advertises_the_shared_full_duplex_aec_contract(void) {
   assert(iterate_kit_stackchan_manifest.slug != NULL);
   assert(strcmp(iterate_kit_stackchan_manifest.slug, "stackchan") == 0);
   assert(
       iterate_kit_stackchan_manifest.audio_mode ==
-      ITERATE_KIT_AUDIO_PUSH_TO_TALK);
+      ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC);
 }
 
 int main(void) {
   playback_interruption_acknowledges_the_audio_owner();
   playback_interruption_timeout_is_visible_and_drainable();
-  remote_and_physical_controls_share_one_owner_queue();
+  remote_and_physical_conversation_controls_share_one_owner_queue();
   change_colour_keeps_the_shared_red_green_contract();
   event_and_metrics_subscriptions_share_bounded_profile_state();
-  push_to_talk_cannot_escape_the_conversation_lifetime();
-  manifest_advertises_the_shared_manual_pcm_contract();
+  full_duplex_profile_does_not_mount_push_to_talk();
+  manifest_advertises_the_shared_full_duplex_aec_contract();
   return 0;
 }
