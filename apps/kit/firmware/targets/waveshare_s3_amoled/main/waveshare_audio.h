@@ -27,6 +27,14 @@ bool waveshare_audio_init(void);
 /** Blocking capture of exactly `samples` mono PCM16 samples. */
 bool waveshare_audio_read(int16_t *destination, size_t samples);
 
+/**
+ * Power the class-D amplifier. It is deliberately NOT held on for the life of
+ * the board: the amp sits centimetres from the microphone with no AEC
+ * reference, and its idle noise floor is audible. The playback path raises it
+ * before the first frame and drops it when the speaker runs dry.
+ */
+void waveshare_audio_amplifier(bool on);
+
 /** Blocking playout of exactly `samples` mono PCM16 samples. */
 bool waveshare_audio_write(const int16_t *pcm, size_t samples);
 

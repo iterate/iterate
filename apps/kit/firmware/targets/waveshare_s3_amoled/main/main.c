@@ -339,9 +339,12 @@ static void playback_task(void *argument) {
     received = xStreamBufferReceive(
         runtime.speaker_buffer, chunk, sizeof(chunk), pdMS_TO_TICKS(20));
     if (received == 0U) {
-      /* Starved: re-prime rather than dribble frames into a dry DMA. */
+      /* Starved: re-prime rather than dribble frames into a dry DMA, and
+       * drop the amplifier so its noise floor is not left sitting in front
+       * of the microphone between turns. */
       priming = true;
       ++runtime.speaker_underruns;
+      waveshare_audio_amplifier(false);
       continue;
     }
     if (runtime.speaker_discard_bytes > 0U) {
@@ -357,6 +360,7 @@ static void playback_task(void *argument) {
       memmove(chunk, (const uint8_t *)chunk + skipped, received - skipped);
       received -= skipped;
     }
+    waveshare_audio_amplifier(true);
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
       waveshare_recorder_write_speaker(chunk, received);

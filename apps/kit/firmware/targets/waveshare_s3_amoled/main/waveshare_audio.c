@@ -204,7 +204,11 @@ bool waveshare_audio_init(void) {
       .ctrl_if = ctrl_interface,
       .gpio_if = gpio_interface,
       .codec_mode = ESP_CODEC_DEV_WORK_MODE_BOTH,
-      .pa_pin = PIN_PA,
+      /*
+       * The amplifier is driven by hand (waveshare_audio_amplifier), not
+       * latched on by the codec for the life of the board.
+       */
+      .pa_pin = -1,
       .pa_reverted = false,
       .master_mode = false,
       .use_mclk = true,
@@ -283,6 +287,31 @@ bool waveshare_audio_init(void) {
    * diagnosing, never on the shipping path.
    */
   return true;
+}
+
+void waveshare_audio_amplifier(bool on) {
+  static bool configured;
+  static bool current;
+  if (!configured) {
+    const gpio_config_t pa_config = {
+      .pin_bit_mask = 1ULL << PIN_PA,
+      .mode = GPIO_MODE_OUTPUT,
+      .pull_up_en = GPIO_PULLUP_DISABLE,
+      .pull_down_en = GPIO_PULLDOWN_DISABLE,
+      .intr_type = GPIO_INTR_DISABLE,
+    };
+    if (gpio_config(&pa_config) != ESP_OK) return;
+    configured = true;
+    current = false;
+    (void)gpio_set_level(PIN_PA, 0);
+  }
+  if (on == current) return;
+  current = on;
+  (void)gpio_set_level(PIN_PA, on ? 1 : 0);
+  if (on) {
+    /* Let the rail settle so the first frame is not a thump. */
+    vTaskDelay(pdMS_TO_TICKS(2));
+  }
 }
 
 i2c_master_bus_handle_t waveshare_audio_i2c_bus(void) {
