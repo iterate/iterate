@@ -1052,6 +1052,64 @@ return await itx.projects.get(pid).__describe();
       return { pages, search };
     },
   }),
+  projectExample<{
+    parallelSearch: {
+      web_search(input: {
+        objective: string;
+        search_queries: string[];
+        session_id?: string;
+      }): Promise<unknown>;
+      web_fetch(input: {
+        urls: string[];
+        objective?: string | null;
+        search_queries?: string[] | null;
+        full_content?: boolean;
+        session_id?: string;
+      }): Promise<unknown>;
+    };
+  }>({
+    id: "parallel-web-research",
+    e2eProven: false,
+    title: "Search and fetch with Parallel Search MCP",
+    description:
+      "Mounts Parallel's public MCP endpoint as a durable project capability, then uses web_search for current web results and web_fetch for focused content from a specific URL. The default endpoint needs no account or API key. External service — interactive-only.",
+    runtimes: ALL_RUNTIMES,
+    fn: async (
+      itx,
+      vars: {
+        fetchObjective?: string;
+        objective?: string;
+        searchQueries?: string[];
+        url?: string;
+      },
+    ) => {
+      await itx.provideCapability({
+        expression: ["mcp", ["connect", { url: "https://search.parallel.ai/mcp" }]],
+        instructions:
+          "Parallel Search MCP. Call itx.parallelSearch.web_search({ objective, search_queries, session_id }) for current web results and itx.parallelSearch.web_fetch({ urls, objective, session_id }) for focused page content.",
+        path: ["parallelSearch"],
+        type: "itx-call",
+      });
+
+      const sessionId = crypto.randomUUID();
+      const [search, page] = await Promise.all([
+        itx.parallelSearch.web_search({
+          objective:
+            vars.objective ?? "Find current documentation about Cloudflare Durable Objects",
+          search_queries: vars.searchQueries ?? ["Cloudflare Durable Objects documentation"],
+          session_id: sessionId,
+        }),
+        itx.parallelSearch.web_fetch({
+          urls: [vars.url ?? "https://developers.cloudflare.com/durable-objects/"],
+          objective:
+            vars.fetchObjective ?? "Extract how Durable Objects coordinate stateful applications",
+          session_id: sessionId,
+        }),
+      ]);
+
+      return { page, search };
+    },
+  }),
   // String-authored: connect() returns Promise<McpClientRpc> and the first
   // call pipelines a dynamically-named tool onto the un-awaited promise —
   // untypeable in the published surface (tool names come from the server),

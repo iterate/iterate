@@ -983,6 +983,42 @@ return { pages, search };
 `.trim(),
   },
   {
+    id: "parallel-web-research",
+    e2eProven: false,
+    title: "Search and fetch with Parallel Search MCP",
+    description:
+      "Mounts Parallel's public MCP endpoint as a durable project capability, then uses web_search for current web results and web_fetch for focused content from a specific URL. The default endpoint needs no account or API key. External service — interactive-only.",
+    context: "project",
+    runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
+    code: `
+await itx.provideCapability({
+  expression: ["mcp", ["connect", { url: "https://search.parallel.ai/mcp" }]],
+  instructions:
+    "Parallel Search MCP. Call itx.parallelSearch.web_search({ objective, search_queries, session_id }) for current web results and itx.parallelSearch.web_fetch({ urls, objective, session_id }) for focused page content.",
+  path: ["parallelSearch"],
+  type: "itx-call",
+});
+
+const sessionId = crypto.randomUUID();
+const [search, page] = await Promise.all([
+  itx.parallelSearch.web_search({
+    objective:
+      vars.objective ?? "Find current documentation about Cloudflare Durable Objects",
+    search_queries: vars.searchQueries ?? ["Cloudflare Durable Objects documentation"],
+    session_id: sessionId,
+  }),
+  itx.parallelSearch.web_fetch({
+    urls: [vars.url ?? "https://developers.cloudflare.com/durable-objects/"],
+    objective:
+      vars.fetchObjective ?? "Extract how Durable Objects coordinate stateful applications",
+    session_id: sessionId,
+  }),
+]);
+
+return { page, search };
+`.trim(),
+  },
+  {
     id: "connect-public-mcp",
     e2eProven: false,
     title: "Connect a public MCP server, then mount it",

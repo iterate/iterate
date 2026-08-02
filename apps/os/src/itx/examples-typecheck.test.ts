@@ -126,6 +126,12 @@ const EXAMPLE_MOUNTS: Record<string, CapabilityDescription[]> = {
       "export type ExaTools = { web_search_exa(input: { query: string; numResults?: number }): Promise<unknown>; web_fetch_exa(input: { urls: string[]; maxCharacters?: number }): Promise<unknown> };",
     ),
   ],
+  "parallel-web-research": [
+    mount(
+      ["parallelSearch"],
+      "export type ParallelSearchTools = { web_search(input: { objective: string; search_queries: string[]; session_id?: string }): Promise<unknown>; web_fetch(input: { urls: string[]; objective?: string | null; search_queries?: string[] | null; full_content?: boolean; session_id?: string }): Promise<unknown> };",
+    ),
+  ],
 };
 
 /**

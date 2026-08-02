@@ -35,6 +35,9 @@
 //   exa-web-search  calls Exa's public MCP server (external service, rate
 //                   limited); interactive reading material, same rationale as
 //                   ai-models.
+//   parallel-web-research
+//                   calls Parallel's public MCP server (external service,
+//                   rate limited); interactive reading material.
 //   ai-generate-text
 //                   depends on remote Workers AI model availability and
 //                   billing; interactive reading material.
