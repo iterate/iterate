@@ -1742,7 +1742,17 @@ void app_main(void) {
        * from a stalled TRANSPORT: if the pulse keeps printing, the loop is
        * running and the network is stuck; if it stops, the loop is.
        */
-      if (runtime.talking || now - runtime.last_pulse_ms < 3000U) {
+      /*
+       * The pulse used to cover only the TURN, which is the half of a
+       * conversation that was already working. Choppy playback lives in the
+       * other half: it needs received-versus-played-versus-concealed and how
+       * much audio was standing in the ring, once a second, while the answer
+       * is happening. A count taken afterwards cannot show a lane that
+       * delivered 240ms and then went quiet for two seconds, which is what
+       * a listener hears as clipping in and out.
+       */
+      if (runtime.talking || runtime.voicelab.call_active ||
+          now - runtime.last_pulse_ms < 3000U) {
         if (now - runtime.last_pulse_ms >= 1000U) {
           struct iterate_kit_esp_idf_itx_transport_metrics pulse;
           iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &pulse);
@@ -1750,14 +1760,25 @@ void app_main(void) {
           ESP_LOGI(
               tag,
               "pulse loops=%" PRIu32 " outbox=%u/%u inPub=%" PRIu32
-              " inCon=%" PRIu32 " sent=%" PRIu32 " frames=%" PRIu32,
+              " inCon=%" PRIu32 " sent=%" PRIu32 " frames=%" PRIu32
+              " | batches=%" PRIu32 " rx=%" PRIu32 " gaps=%" PRIu32
+              " played=%" PRIu32 " conceal=%" PRIu32 " under=%" PRIu32
+              " ringMs=%u",
               runtime.loop_count,
               (unsigned int)outbox_metrics.current_slots,
               (unsigned int)CONTROL_OUTBOX_SLOTS,
               pulse.control_inbox.messages_published,
               pulse.control_inbox.messages_consumed,
               pulse.control_messages_sent,
-              runtime.voicelab.frames_sent);
+              runtime.voicelab.frames_sent,
+              runtime.voicelab.batches_on_connection,
+              runtime.voicelab.spk_frames_received,
+              runtime.voicelab.spk_seq_gaps,
+              runtime.speaker_frames_played,
+              runtime.speaker_conceal_frames,
+              runtime.speaker_underruns,
+              (unsigned int)(xStreamBufferBytesAvailable(runtime.speaker_buffer) /
+                             32U));
         }
       }
       if (now >= next_stats_at && outbox_free >= 3U) {
