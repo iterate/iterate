@@ -146,11 +146,114 @@ Its near-term recommendations were reconciled as follows:
   endurance ladder and any DSP tuning based on longer far-end/double-talk
   measurements.
 
+## Talking-head avatar restoration
+
+The Home Assistant Voice Preview Edition portability slice subsequently
+passed, so the deliberately deferred StackChan face was restored without
+forking the audio transport. This is a bounded feature proof layered on the
+network-valid voice manifest above. It is not a claim that a later
+network-invalid combined run somehow supersedes or weakens that manifest.
+
+The reusable, allocation-free C engine now lives in
+`firmware/components/avatar`. Four generated sprite atlases share a registry,
+keyframe/stage machinery, and a host-testable animator. StackChan contributes
+only the hardware sidecar: a speaker-DMA observer publishes the newest
+speaker-clocked PCM observation into a one-slot mailbox, and a low-priority
+core-1 task performs lossy analysis and direct RGB565 rendering. The mailbox
+can overwrite stale observations but cannot queue delayed animation or block
+capture, AEC, playback, or PCM networking. Its one permanent 160×120 DMA
+framebuffer is 38,400 internal bytes; build-time assertions reject accidental
+PSRAM placement because ESP32-S3 SPI DMA cannot use that memory.
+
+The deployed Cap'n Web surface exposes
+`itx.kit.stackchan.subscribeToAvatarMetrics(cb)`. A production invocation
+received three consecutive one-second callbacks from the physical device.
+They reported `ready: true`, an advancing physical speaker sample clock,
+advancing analyzer/render/display counters, zero malformed observations,
+mailbox failures, snapshot races, render failures, transfer failures, or
+transfer timeouts, a 38,400-byte framebuffer, and 2,400 bytes of minimum avatar
+task stack headroom. A separate production invocation of
+`subscribeToMetrics(cb)` reported 6,959,644 free heap bytes, 46,627 free
+internal bytes, 6,937,288 free PSRAM bytes, 1,588 bytes of general task stack
+headroom, 276 permille CPU while idle, empty audio queues, and zero audio or
+protocol failures.
+
+### Current-source physical and production evidence
+
+The retained combined run is:
+
+`apps/kit/evidence/stackchan-avatar-production-grok/2026-08-02T17-33-11-000Z/failure.json`
+
+Its overall result remains correctly failed: correlated device/router/worker
+reachability gaps made the interval `network-invalid`, the independent Mac
+transcript ended after `Production audio signal amber is`, and a later
+interruption phase timed out. It also recorded 250 intentional uplink freshness
+drops and eight bounded in-place freshness recoveries. Those facts are not
+relabelled as an audio pass.
+
+Within that failed combined run, however, the separately assessed avatar lane
+passed every gate during actual Grok playout:
+
+- 14,310 new speaker-clock observations and 1,831,680 physical playout samples;
+- 12,131 analyzed observations, 1,380 rendered/displayed frames, and 121 frames
+  with a visibly open mouth;
+- 2,180 latest-only mailbox overwrites matched by 2,180 analyzer sequence gaps,
+  with no hidden queue and no other loss class;
+- zero malformed observations, mailbox failures, snapshot races, render
+  failures, transfer failures, or transfer timeouts; and
+- maximum handoff/analyzer/render/display times of 8.000/21.221/23.910/28.541
+  ms respectively.
+
+The same interval's AEC assessment passed on 75 unique windows with 27.68 dB
+far-end suppression, a 1.019 near-end clean/raw ratio, and zero recreation,
+capture-reserve, bridge, or signal failures. Grok completed the ordinary
+response `Production audio signal amber is clear and audible.` This makes the
+mouth progress a speaker-clocked response to current production PCM rather
+than an idle animation or retained LCD pixels.
+
+After moving StackChan to a separate USB port, flashing the final build, and
+letting it remount in production, Jonas confirmed the physical result
+verbatim: “I've plugged him in separately into a different port, and now I can
+see the face again.” The flash tool independently resolved and printed MAC
+`68:EE:8F:D8:53:20` on `/dev/cu.usbmodem2101`; no port suffix was trusted as
+identity.
+
+### Display/Wi-Fi isolation and resource gates
+
+The final BSP override pins only the LCD SPI completion interrupt to core 1,
+beside the deliberately lossy avatar task, rather than accepting ESP-IDF's
+initializing-core default on Wi-Fi's core 0. The audio I2S interrupt affinity
+is unchanged. A generated-source regression first failed on the old build and
+now verifies the patched ESP-IDF translation unit itself, so an upstream-source
+refresh cannot silently remove the affinity.
+
+The freshly built/flashed binary is 1,257,296 bytes (`0x132f50`), SHA-256
+`c9d2ed3edf2c18b4d8288155541272f7845a3a29472a635aeb4eebbbd22a26e9`,
+leaving 76% of the five-megabyte application partition free. The realtime ISR
+ELF audit and patched-BSP source audit passed. The complete native host suite
+passed 67/67 tests, including all six avatar-engine tests and the regression
+that rotates a fixed callback budget past a backpressured subscriber. The
+avatar/AEC TypeScript assessment suites passed 8/8 tests and the Kit
+TypeScript typecheck passed.
+
+The ISR-isolated build improved the immediately preceding StackChan-only ping
+loss from 5–8.33% to 1/100 packets. It did not make the following interval a
+valid audio oracle: StackChan averaged 15.21 ms and peaked at 92.762 ms while
+the router simultaneously averaged 10.55 ms and peaked at 90.587 ms, and the
+Cloudflare worker peaked at 287.269 ms. The router lost no packets and the
+device remained mounted with RSSI -67 dBm and zero control/PCM/Wi-Fi failure
+counters. Because the spikes were correlated outside the device, no repeated
+Grok run was spent on that interval and no DSP conclusion was drawn from it.
+The stricter next combined acceptance remains one fresh network-valid run; the
+avatar restoration itself is physically visible, production-clocked,
+capability-observable, resource-bounded, and host-tested.
+
 ## Next ordered work
 
-The next hardware portability proof is Home Assistant Voice Preview Edition
-through the same userspace, PCM, capability, provider-event, metrics, and
-network-evidence architecture. Face/avatar rendering remains deferred until
-that audio/capability path works. StackChan follow-up work must not fork a
-second transport or queueing model merely to add endurance or product
-capabilities.
+The original Stick → StackChan → Home Assistant Voice Preview Edition hardware
+portability order is complete. Remaining work is explicit follow-up rather
+than a hidden avatar gate: obtain a fresh network-valid combined avatar/voice
+interval when RF conditions return to the earlier -55 to -57 dBm range, then
+continue the 1 → 2 → 10 minute endurance ladder and the already-recorded
+watchdog/DSP hardening. StackChan follow-up work must not fork a second
+transport or queueing model merely to add endurance or product capabilities.

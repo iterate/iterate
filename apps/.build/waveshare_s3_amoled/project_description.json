@@ -1,7 +1,7 @@
 {
   "version": "1.2",
   "project_name": "iterate-kit-waveshare-s3-amoled",
-  "project_version": "v2026-07-28-21-00-57-107-ge7d829ebe-dirty",
+  "project_version": "v2026-07-28-21-00-57-115-g0f2ff5396-dirty",
   "project_path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/waveshare_s3_amoled",
   "idf_path": "/Users/jonastemplestein/esp/esp-idf",
   "build_dir": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled",

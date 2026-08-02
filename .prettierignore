@@ -33,6 +33,11 @@ pnpm-workspace.yaml
 **/.repomix-*
 **/.iterate/
 
+# The avatar publisher emits C include fragments, not prose.  Formatting these
+# fragments can join preprocessor directives to comments and make a clean CMake
+# build fail even though an incremental ESP-IDF build still uses the old object.
+apps/kit/firmware/components/avatar/src/*_generated.inc
+
 # shadcn/ui and AI Elements components (auto-generated)
 **/components/ui/
 **/components/ai-elements/

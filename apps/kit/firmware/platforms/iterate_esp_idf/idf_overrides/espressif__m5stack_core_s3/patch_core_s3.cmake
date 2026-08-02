@@ -347,6 +347,26 @@ endfunction()
 function(iterate_kit_patch_core_s3_codec_source input_path output_path)
   file(READ "${input_path}" source)
   set(search [=[
+        .max_transfer_sz = max_transfer_sz,
+    };
+]=])
+  set(replacement [=[
+        .max_transfer_sz = max_transfer_sz,
+        /*
+         * ITERATE PATCH: this SPI bus is created from app_main on core 0,
+         * where ESP-IDF also pins Wi-Fi. AUTO affinity consequently places
+         * every LCD DMA completion interrupt beside the radio even though
+         * the lossy avatar task itself runs on core 1. Keep display work in
+         * one scheduling domain; the separately initialized I2S interrupt
+         * deliberately retains its measured baseline affinity.
+         */
+        .isr_cpu_id = ESP_INTR_CPU_AFFINITY_1,
+    };
+]=])
+  iterate_kit_core_s3_replace_exactly_once(
+    source "${search}" "${replacement}" "LCD SPI ISR affinity")
+
+  set(search [=[
     es7210_codec_cfg_t es7210_cfg = {
         .ctrl_if = i2c_ctrl_if,
     };
@@ -367,4 +387,3 @@ function(iterate_kit_patch_core_s3_codec_source input_path output_path)
     source "${search}" "${replacement}" "ES7210 MIC3 hardware reference")
   file(WRITE "${output_path}" "${source}")
 endfunction()
-

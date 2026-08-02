@@ -64,7 +64,7 @@
 #define STACKCHAN_IMPORT_CAPACITY 8U
 #define STACKCHAN_TOKEN_CAPACITY 64U
 #define STACKCHAN_OUTPUT_CAPACITY 128U
-#define STACKCHAN_METRICS_SUBSCRIPTION_CAPACITY 2U
+#define STACKCHAN_METRICS_SUBSCRIPTION_CAPACITY 3U
 #define STACKCHAN_SCREEN_URL_CAPACITY 513U
 #define STACKCHAN_MAXIMUM_PHOTO_BYTES (512U * 1024U)
 #define STACKCHAN_PLAYBACK_INTERRUPTION_ACK_TIMEOUT_MS 50U
@@ -407,6 +407,51 @@ static enum iterate_kit_status sample_runtime_metrics(
   sample->aec_detail.lifetime_signal_measurement_failures =
       owner.aec_signal_measurement_failures;
 
+  /*
+   * The visual sidecar gets a dedicated Cap'n Web serialization view because
+   * general metrics is already at its fixed 2 KiB wire budget. Snapshotting
+   * the same owner here adds no task, history, or frame-path work; it lets the
+   * production harness distinguish live mouth/display progress from pixels
+   * merely retained in the LCD controller across an application reset.
+   */
+  sample->has_avatar_detail = true;
+  sample->avatar_detail.schema_version = 1U;
+  sample->avatar_detail.produced_at_ms = sample->uptime_ms;
+  sample->avatar_detail.ready = avatar.ready;
+  sample->avatar_detail.playout_observations =
+      avatar.playout_observations;
+  sample->avatar_detail.malformed_observations =
+      avatar.malformed_observations;
+  sample->avatar_detail.mailbox_overwrites = avatar.mailbox_overwrites;
+  sample->avatar_detail.mailbox_failures = avatar.mailbox_failures;
+  sample->avatar_detail.analyzer_frames = avatar.analyzer_frames;
+  sample->avatar_detail.analyzer_sequence_gaps =
+      avatar.analyzer_sequence_gaps;
+  sample->avatar_detail.mouth_open_rendered_frames =
+      avatar.mouth_open_rendered_frames;
+  sample->avatar_detail.snapshot_races = avatar.snapshot_races;
+  sample->avatar_detail.rendered_frames = avatar.rendered_frames;
+  sample->avatar_detail.render_failures = avatar.render_failures;
+  sample->avatar_detail.display_transfers = avatar.display_transfers;
+  sample->avatar_detail.display_transfer_failures =
+      avatar.display_transfer_failures;
+  sample->avatar_detail.display_transfer_timeouts =
+      avatar.display_transfer_timeouts;
+  sample->avatar_detail.maximum_handoff_delay_us =
+      avatar.maximum_handoff_delay_us;
+  sample->avatar_detail.maximum_analyzer_us =
+      avatar.maximum_analyzer_us;
+  sample->avatar_detail.maximum_render_us = avatar.maximum_render_us;
+  sample->avatar_detail.maximum_display_transfer_us =
+      avatar.maximum_display_transfer_us;
+  sample->avatar_detail.analyzer_stack_minimum_free_bytes =
+      avatar.analyzer_stack_minimum_free_bytes;
+  sample->avatar_detail.physical_playout_sample_clock =
+      avatar.physical_playout_sample_clock;
+  sample->avatar_detail.current_avatar_index =
+      avatar.current_avatar_index;
+  sample->avatar_detail.framebuffer_bytes = avatar.framebuffer_bytes;
+
   sample->has_control_diagnostics = true;
   sample->control_diagnostics.schema_version = 4U;
   sample->control_diagnostics.produced_at_ms = sample->uptime_ms;
@@ -645,6 +690,7 @@ static bool initialise_device(struct stackchan_runtime *state) {
    * method would make no-AEC targets advertise evidence they cannot produce.
    */
   device_options.metrics.enable_aec_view = true;
+  device_options.metrics.enable_avatar_view = true;
   device_options.metrics.diagnostics_expression_buffer =
       state->diagnostics_expression;
   device_options.metrics.diagnostics_expression_capacity =

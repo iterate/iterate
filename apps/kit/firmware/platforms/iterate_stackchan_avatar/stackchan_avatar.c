@@ -68,6 +68,17 @@ _Static_assert(
     "visual work must stay off the StackChan Wi-Fi core");
 #define STACKCHAN_AVATAR_RENDER_INTERVAL_MS 66U
 #define STACKCHAN_AVATAR_DISPLAY_TRANSFER_TIMEOUT_MS 50U
+#define STACKCHAN_AVATAR_FRAMEBUFFER_CAPS \
+  (MALLOC_CAP_INTERNAL | MALLOC_CAP_DMA | MALLOC_CAP_8BIT)
+/*
+ * ESP-IDF 5.4's ESP32-S3 SPI host explicitly cannot access external memory.
+ * Keep this compile-time tripwire beside the allocation policy: adding PSRAM
+ * either makes the requested heap capability set impossible or silently
+ * restores the driver's per-transfer internal bounce allocation.
+ */
+_Static_assert(
+    (STACKCHAN_AVATAR_FRAMEBUFFER_CAPS & MALLOC_CAP_SPIRAM) == 0U,
+    "StackChan's SPI framebuffer must not request PSRAM");
 #define STACKCHAN_AVATAR_DISPLAY_X \
   ((BSP_LCD_H_RES - FACE_RENDER_WIDTH) / 2U)
 #define STACKCHAN_AVATAR_DISPLAY_Y \
@@ -88,6 +99,7 @@ struct stackchan_avatar_atomic_metrics {
   volatile uint32_t mailbox_failures;
   volatile uint32_t analyzer_frames;
   volatile uint32_t analyzer_sequence_gaps;
+  volatile uint32_t mouth_open_rendered_frames;
   volatile uint32_t snapshot_races;
   volatile uint32_t rendered_frames;
   volatile uint32_t render_failures;
@@ -135,9 +147,10 @@ struct stackchan_avatar_owner {
 
 /*
  * Every object touched by the I2S callback is forced into internal DRAM. The
- * framebuffer is the sole PSRAM allocation and is never read from interrupt
- * context. This avoids cache-disabled surprises in the callback while keeping
- * the 38.4 KiB visual luxury out of scarce DMA/internal memory.
+ * framebuffer is also internal because ESP32-S3 SPI cannot DMA directly from
+ * PSRAM; keeping it here prevents the driver from doing hidden bounce-buffer
+ * allocations on every LCD transfer. The tradeoff is an explicit 38.4 KiB
+ * startup cost which the resource proof must measure and gate.
  */
 static DRAM_ATTR struct stackchan_avatar_owner owner
     __attribute__((aligned(16)));
@@ -352,6 +365,15 @@ static bool render_avatar(void) {
     atomic_saturating_increment(&owner.metrics.render_failures);
     return false;
   }
+  if (render_key.controls.mouth_open != 0U) {
+    /*
+     * Count only a mouth-open frame whose LCD transfer completed. Analyzer
+     * state alone cannot prove the talking pose reached the panel, while a
+     * pre-transfer increment would turn a timed-out DMA into false evidence.
+     */
+    atomic_saturating_increment(
+        &owner.metrics.mouth_open_rendered_frames);
+  }
   atomic_saturating_increment(&owner.metrics.rendered_frames);
   return true;
 }
@@ -474,10 +496,18 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
    * generic CoreS3 startup consumed a task, a touch driver, approximately
    * 12.8 KiB even after tuning its DMA strip, and enough linked code/state to
    * leave only 3.6 KiB of minimum internal heap during a real Grok turn. The
-   * direct panel path has one explicit PSRAM buffer and no display queue above
+   * direct panel path has one explicit DMA buffer and no display queue above
    * ESP-IDF's own DMA transaction. It renders at native 160x120 in the centre
    * rather than spending four times the memory bandwidth on cosmetic 2x
    * scaling. Audio deadlines, not screen coverage, set this policy.
+   *
+   * ESP32-S3 PSRAM is not SPI-DMA-capable in ESP-IDF 5.4. Asking the heap for
+   * SPIRAM|DMA therefore returns NULL, while asking only for SPIRAM makes the
+   * SPI driver allocate and copy through an internal bounce buffer on every
+   * transfer. The internal allocation below is deliberately permanent: it
+   * makes startup fail honestly if the memory budget is unavailable and keeps
+   * steady-state rendering allocation-free. It also removes PSRAM/cache
+   * contention from the display transfer that runs beside the AEC owner.
    */
   owner.display_transfer_complete = xSemaphoreCreateBinaryStatic(
       &owner.display_transfer_control);
@@ -487,7 +517,7 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
   owner.framebuffer = heap_caps_aligned_alloc(
       64U,
       FACE_RENDER_FRAME_BYTES,
-      MALLOC_CAP_SPIRAM | MALLOC_CAP_DMA | MALLOC_CAP_8BIT);
+      STACKCHAN_AVATAR_FRAMEBUFFER_CAPS);
   if (owner.framebuffer == NULL) {
     return ESP_ERR_NO_MEM;
   }
@@ -555,7 +585,7 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
   __atomic_store_n(&owner.ready, 1U, __ATOMIC_RELEASE);
   ESP_LOGI(
       TAG,
-      "ready: avatar=%s count=%u framebuffer=%u bytes PSRAM+DMA; "
+      "ready: avatar=%s count=%u framebuffer=%u bytes internal DMA; "
       "display=direct 160x120@15Hz centered; "
       "handoff=latest-only 1x128 samples; visual=core1 priority2",
       face_avatar_registry_current_slug(&owner.registry),
@@ -626,6 +656,7 @@ void iterate_kit_stackchan_avatar_metrics_snapshot(
   COPY_ATOMIC_METRIC(mailbox_failures);
   COPY_ATOMIC_METRIC(analyzer_frames);
   COPY_ATOMIC_METRIC(analyzer_sequence_gaps);
+  COPY_ATOMIC_METRIC(mouth_open_rendered_frames);
   COPY_ATOMIC_METRIC(snapshot_races);
   COPY_ATOMIC_METRIC(rendered_frames);
   COPY_ATOMIC_METRIC(render_failures);

@@ -25,6 +25,9 @@ static const char *const subscribe_playback_path[] = {
 static const char *const subscribe_aec_path[] = {
   "subscribeToAecMetrics",
 };
+static const char *const subscribe_avatar_path[] = {
+  "subscribeToAvatarMetrics",
+};
 static const char *const get_diagnostics_path[] = {"getDiagnostics"};
 
 static struct iterate_kit_poll_result poll_ok(void) {
@@ -90,6 +93,13 @@ static struct capnweb_expression integer_expression(int64_t value) {
   return expression;
 }
 
+static struct capnweb_expression boolean_expression(bool value) {
+  struct capnweb_expression expression = {0};
+  expression.kind = CAPNWEB_EXPRESSION_BOOLEAN;
+  expression.value.boolean = value;
+  return expression;
+}
+
 struct metrics_expression_workspace {
   /*
    * Expressions point into this aggregate and into the driver sample. Cap'n
@@ -138,6 +148,7 @@ enum {
   PLAYBACK_VIEW_RUNTIME_FIELD_COUNT = 19,
   AEC_VIEW_FIELD_COUNT = 24,
   RAW_CLEAN_AEC_VIEW_FIELD_COUNT = 21,
+  AVATAR_VIEW_FIELD_COUNT = 24,
 };
 
 struct playback_metrics_expression_workspace {
@@ -188,6 +199,17 @@ struct raw_clean_aec_metrics_expression_workspace {
   struct capnweb_expression root_object;
 };
 
+struct avatar_metrics_expression_workspace {
+  /*
+   * This is a flat latest-state diagnostic. Nesting transfer/timing groups
+   * would add punctuation and expression bookkeeping without changing the
+   * ownership model: every value describes the same physical avatar owner.
+   */
+  struct capnweb_expression values[AVATAR_VIEW_FIELD_COUNT];
+  struct capnweb_object_field fields[AVATAR_VIEW_FIELD_COUNT];
+  struct capnweb_expression root_object;
+};
+
 union any_metrics_expression_workspace {
   /*
    * Only one callback expression exists at a time. Cap'n Web serializes it
@@ -199,6 +221,7 @@ union any_metrics_expression_workspace {
   struct playback_metrics_expression_workspace playback;
   struct aec_metrics_expression_workspace aec;
   struct raw_clean_aec_metrics_expression_workspace raw_clean_aec;
+  struct avatar_metrics_expression_workspace avatar;
 };
 
 _Static_assert(
@@ -212,6 +235,19 @@ static void set_integer_field(
     size_t key_length,
     int64_t integer) {
   *value = integer_expression(integer);
+  *field = (struct capnweb_object_field){
+    {key, key_length},
+    value,
+  };
+}
+
+static void set_boolean_field(
+    struct capnweb_expression *value,
+    struct capnweb_object_field *field,
+    const char *key,
+    size_t key_length,
+    bool boolean) {
+  *value = boolean_expression(boolean);
   *field = (struct capnweb_object_field){
     {key, key_length},
     value,
@@ -1111,6 +1147,82 @@ static bool build_raw_clean_aec_metrics_expression(
   return true;
 }
 
+static bool build_avatar_metrics_expression(
+    const struct iterate_kit_metrics_sample *sample,
+    struct avatar_metrics_expression_workspace *workspace) {
+  const struct iterate_kit_avatar_metrics_sample *const detail =
+      &sample->avatar_detail;
+  size_t count = 0U;
+  if (!sample->has_avatar_detail || detail->schema_version != 1U) {
+    /*
+     * An absent visual owner must not serialize a zero-filled healthy face.
+     * `ready=false` remains a valid sampled state; absence of the schema is
+     * what distinguishes unsupported telemetry from a failed owner.
+     */
+    return false;
+  }
+
+#define SET_AVATAR_INTEGER(public_name, member)                          \
+  do {                                                                  \
+    if (count >= AVATAR_VIEW_FIELD_COUNT) {                             \
+      return false;                                                     \
+    }                                                                   \
+    set_integer_field(                                                  \
+        &workspace->values[count],                                      \
+        &workspace->fields[count],                                      \
+        public_name,                                                    \
+        sizeof(public_name) - 1U,                                       \
+        detail->member);                                                \
+    ++count;                                                            \
+  } while (0)
+
+  SET_AVATAR_INTEGER("schemaVersion", schema_version);
+  SET_AVATAR_INTEGER("producedAtMs", produced_at_ms);
+  set_boolean_field(
+      &workspace->values[count],
+      &workspace->fields[count],
+      "ready",
+      sizeof("ready") - 1U,
+      detail->ready);
+  ++count;
+  SET_AVATAR_INTEGER("playoutObservations", playout_observations);
+  SET_AVATAR_INTEGER("malformedObservations", malformed_observations);
+  SET_AVATAR_INTEGER("mailboxOverwrites", mailbox_overwrites);
+  SET_AVATAR_INTEGER("mailboxFailures", mailbox_failures);
+  SET_AVATAR_INTEGER("analyzerFrames", analyzer_frames);
+  SET_AVATAR_INTEGER("analyzerSequenceGaps", analyzer_sequence_gaps);
+  SET_AVATAR_INTEGER(
+      "mouthOpenRenderedFrames", mouth_open_rendered_frames);
+  SET_AVATAR_INTEGER("snapshotRaces", snapshot_races);
+  SET_AVATAR_INTEGER("renderedFrames", rendered_frames);
+  SET_AVATAR_INTEGER("renderFailures", render_failures);
+  SET_AVATAR_INTEGER("displayTransfers", display_transfers);
+  SET_AVATAR_INTEGER(
+      "displayTransferFailures", display_transfer_failures);
+  SET_AVATAR_INTEGER(
+      "displayTransferTimeouts", display_transfer_timeouts);
+  SET_AVATAR_INTEGER(
+      "maximumHandoffDelayUs", maximum_handoff_delay_us);
+  SET_AVATAR_INTEGER("maximumAnalyzerUs", maximum_analyzer_us);
+  SET_AVATAR_INTEGER("maximumRenderUs", maximum_render_us);
+  SET_AVATAR_INTEGER(
+      "maximumDisplayTransferUs", maximum_display_transfer_us);
+  SET_AVATAR_INTEGER(
+      "analyzerStackMinimumFreeBytes",
+      analyzer_stack_minimum_free_bytes);
+  SET_AVATAR_INTEGER(
+      "physicalPlayoutSampleClock", physical_playout_sample_clock);
+  SET_AVATAR_INTEGER("currentAvatarIndex", current_avatar_index);
+  SET_AVATAR_INTEGER("framebufferBytes", framebuffer_bytes);
+#undef SET_AVATAR_INTEGER
+
+  if (count != AVATAR_VIEW_FIELD_COUNT) {
+    return false;
+  }
+  set_object(&workspace->root_object, workspace->fields, count);
+  return true;
+}
+
 static enum capnweb_status subscribe_view(
     void *context,
     const struct capnweb_call *call,
@@ -1241,6 +1353,14 @@ static enum capnweb_status subscribe_aec(
       metrics != NULL && metrics->options.enable_raw_clean_aec_view
           ? ITERATE_KIT_METRICS_RAW_CLEAN_AEC
           : ITERATE_KIT_METRICS_AEC);
+}
+
+static enum capnweb_status subscribe_avatar(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  return subscribe_view(
+      context, call, reply, ITERATE_KIT_METRICS_AVATAR);
 }
 
 static void diagnostics_reply_released(void *context) {
@@ -1535,7 +1655,10 @@ static struct iterate_kit_poll_result poll(
     void *context, uint64_t now_ms) {
   struct iterate_kit_metrics *metrics = context;
   bool has_ready_subscription = false;
+  bool recorded_backpressured_subscription = false;
   size_t index;
+  size_t scan_offset;
+  size_t scan_start;
   struct iterate_kit_metrics_sample sample = {0};
   union any_metrics_expression_workspace workspace;
   enum iterate_kit_status sample_status;
@@ -1543,9 +1666,14 @@ static struct iterate_kit_poll_result poll(
     return poll_capnweb(CAPNWEB_E_STATE);
   }
 
-  for (index = 0U;
-       index < metrics->options.subscription_count;
-       ++index) {
+  scan_start = metrics->next_subscription_index;
+  for (scan_offset = 0U;
+       scan_offset < metrics->options.subscription_count;
+       ++scan_offset) {
+    index = scan_start + scan_offset;
+    if (index >= metrics->options.subscription_count) {
+      index -= metrics->options.subscription_count;
+    }
     struct iterate_kit_metrics_subscription *subscription =
         &metrics->options.subscriptions[index];
     if (subscription->release_pending) {
@@ -1591,9 +1719,13 @@ static struct iterate_kit_poll_result poll(
     return result;
   }
 
-  for (index = 0U;
-       index < metrics->options.subscription_count;
-       ++index) {
+  for (scan_offset = 0U;
+       scan_offset < metrics->options.subscription_count;
+       ++scan_offset) {
+    index = scan_start + scan_offset;
+    if (index >= metrics->options.subscription_count) {
+      index -= metrics->options.subscription_count;
+    }
     struct iterate_kit_metrics_subscription *subscription =
         &metrics->options.subscriptions[index];
     const struct capnweb_expression *root;
@@ -1608,7 +1740,18 @@ static struct iterate_kit_poll_result poll(
        * Another callback-producing module owns the complete safe wire burst.
        * Metrics are latest-state data, so waiting for a later poll is both
        * lossless in meaning and cheaper than queueing an obsolete sample.
+       *
+       * Retain only the first denied slot. Starting the next interval there
+       * gives it first access after completions free the budget. Merely
+       * continuing an index-zero scan caused a two-call budget to starve the
+       * third production subscriber forever even though all calls completed
+       * between intervals. We do not rotate when every ready subscriber was
+       * admitted, preserving stable ordering when fairness is unnecessary.
        */
+      if (!recorded_backpressured_subscription) {
+        metrics->next_subscription_index = index;
+        recorded_backpressured_subscription = true;
+      }
       continue;
     }
     if (budget_status != ITERATE_KIT_OK) {
@@ -1660,6 +1803,17 @@ static struct iterate_kit_poll_result poll(
         return result;
       }
       root = &workspace.raw_clean_aec.root_object;
+    } else if (subscription->view == ITERATE_KIT_METRICS_AVATAR) {
+      if (!build_avatar_metrics_expression(
+              &sample, &workspace.avatar)) {
+        (void)release_callback_budget(metrics, subscription);
+        const struct iterate_kit_poll_result result = {
+          ITERATE_KIT_POLL_DRIVER_ERROR,
+          CAPNWEB_OK,
+        };
+        return result;
+      }
+      root = &workspace.avatar.root_object;
     } else {
       /*
        * A corrupt view selector is owner-state corruption, not a request for
@@ -1761,6 +1915,7 @@ static void session_ended(void *context) {
    * transport, makes reconnect start from an empty ownership ledger.
    */
   metrics->next_sample_at_ms = 0U;
+  metrics->next_subscription_index = 0U;
   metrics->pending_result = poll_ok();
   /*
    * capnweb_session_close() releases borrowed replies before the transport
@@ -1820,10 +1975,34 @@ struct iterate_kit_module iterate_kit_metrics_module(
     {subscribe_aec_path, 1U, subscribe_aec},
     {get_diagnostics_path, 1U, get_diagnostics},
   };
+  static const struct iterate_kit_method playback_aec_methods[] = {
+    {subscribe_path, 1U, subscribe},
+    {subscribe_playback_path, 1U, subscribe_playback},
+    {subscribe_aec_path, 1U, subscribe_aec},
+    {get_diagnostics_path, 1U, get_diagnostics},
+  };
+  static const struct iterate_kit_method avatar_methods[] = {
+    {subscribe_path, 1U, subscribe},
+    {subscribe_avatar_path, 1U, subscribe_avatar},
+    {get_diagnostics_path, 1U, get_diagnostics},
+  };
+  static const struct iterate_kit_method playback_avatar_methods[] = {
+    {subscribe_path, 1U, subscribe},
+    {subscribe_playback_path, 1U, subscribe_playback},
+    {subscribe_avatar_path, 1U, subscribe_avatar},
+    {get_diagnostics_path, 1U, get_diagnostics},
+  };
+  static const struct iterate_kit_method aec_avatar_methods[] = {
+    {subscribe_path, 1U, subscribe},
+    {subscribe_aec_path, 1U, subscribe_aec},
+    {subscribe_avatar_path, 1U, subscribe_avatar},
+    {get_diagnostics_path, 1U, get_diagnostics},
+  };
   static const struct iterate_kit_method all_methods[] = {
     {subscribe_path, 1U, subscribe},
     {subscribe_playback_path, 1U, subscribe_playback},
     {subscribe_aec_path, 1U, subscribe_aec},
+    {subscribe_avatar_path, 1U, subscribe_avatar},
     {get_diagnostics_path, 1U, get_diagnostics},
   };
   const bool playback =
@@ -1831,11 +2010,29 @@ struct iterate_kit_module iterate_kit_metrics_module(
   const bool aec = metrics != NULL && metrics->options.enable_aec_view;
   const bool raw_clean_aec =
       metrics != NULL && metrics->options.enable_raw_clean_aec_view;
+  const bool avatar =
+      metrics != NULL && metrics->options.enable_avatar_view;
   const struct iterate_kit_method *methods;
   size_t method_count;
-  if (playback && (aec || raw_clean_aec)) {
+  if (avatar && playback && (aec || raw_clean_aec)) {
     methods = all_methods;
     method_count = sizeof(all_methods) / sizeof(all_methods[0]);
+  } else if (avatar && playback) {
+    methods = playback_avatar_methods;
+    method_count = sizeof(playback_avatar_methods) /
+        sizeof(playback_avatar_methods[0]);
+  } else if (avatar && (aec || raw_clean_aec)) {
+    methods = aec_avatar_methods;
+    method_count = sizeof(aec_avatar_methods) /
+        sizeof(aec_avatar_methods[0]);
+  } else if (avatar) {
+    methods = avatar_methods;
+    method_count = sizeof(avatar_methods) /
+        sizeof(avatar_methods[0]);
+  } else if (playback && (aec || raw_clean_aec)) {
+    methods = playback_aec_methods;
+    method_count = sizeof(playback_aec_methods) /
+        sizeof(playback_aec_methods[0]);
   } else if (playback) {
     methods = playback_methods;
     method_count = sizeof(playback_methods) /

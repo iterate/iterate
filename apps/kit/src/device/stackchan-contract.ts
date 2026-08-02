@@ -1,5 +1,6 @@
 import type {
   KitAecMetrics,
+  KitAvatarMetrics,
   KitDevice,
   KitDeviceDescription,
   KitMetrics,
@@ -10,6 +11,7 @@ export type StackChanDescription = KitDeviceDescription;
 
 export interface StackChan extends KitDevice {
   subscribeToAecMetrics(callback: (metrics: KitAecMetrics) => void): Promise<void>;
+  subscribeToAvatarMetrics(callback: (metrics: KitAvatarMetrics) => void): Promise<void>;
   servos: {
     move(input: { yawDegrees: number; pitchDegrees: number; speed: number }): Promise<boolean>;
   };

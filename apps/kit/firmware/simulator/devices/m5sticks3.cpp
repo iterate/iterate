@@ -444,6 +444,7 @@ capnweb_status initialize(
       true,
       false,
       false,
+      false,
       simulation.diagnosticsExpression,
       sizeof(simulation.diagnosticsExpression),
       nullptr,

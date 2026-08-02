@@ -262,6 +262,7 @@ static void fixture_init(struct fixture *fixture) {
       false,
       true,
       false,
+      false,
       fixture->diagnostics_expression,
       sizeof(fixture->diagnostics_expression),
       NULL,

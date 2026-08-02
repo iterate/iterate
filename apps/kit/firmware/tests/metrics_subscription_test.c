@@ -44,7 +44,8 @@ struct fixture {
   size_t captured_count;
   bool message_open;
   struct iterate_kit_metrics metrics;
-  struct iterate_kit_metrics_subscription subscriptions[2];
+  struct iterate_kit_metrics_subscription subscriptions[3];
+  struct iterate_kit_callback_budget callback_budget;
   char diagnostics_expression
       [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY];
   struct iterate_kit_module module;
@@ -52,6 +53,7 @@ struct fixture {
   bool maximum_metrics;
   bool include_playback;
   bool include_aec;
+  bool include_avatar;
   bool include_raw_clean_aec;
   bool include_buffers;
   bool include_control_diagnostics;
@@ -182,6 +184,8 @@ static enum iterate_kit_status sample_metrics(
       {0},
       false,
     },
+    false,
+    {0},
     false,
     {0},
     false,
@@ -390,6 +394,33 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 86U;
   sample->aec_detail.lifetime_signal_measurement_failures =
       fixture->maximum_metrics ? UINT32_MAX : 87U;
+  sample->has_avatar_detail = fixture->include_avatar;
+  sample->avatar_detail.schema_version = 1U;
+  sample->avatar_detail.produced_at_ms =
+      fixture->maximum_metrics ? INT64_MAX : 88;
+  sample->avatar_detail.ready = true;
+  sample->avatar_detail.playout_observations = maximum_counter;
+  sample->avatar_detail.malformed_observations = maximum_counter;
+  sample->avatar_detail.mailbox_overwrites = maximum_counter;
+  sample->avatar_detail.mailbox_failures = maximum_counter;
+  sample->avatar_detail.analyzer_frames = maximum_counter;
+  sample->avatar_detail.analyzer_sequence_gaps = maximum_counter;
+  sample->avatar_detail.mouth_open_rendered_frames = maximum_counter;
+  sample->avatar_detail.snapshot_races = maximum_counter;
+  sample->avatar_detail.rendered_frames = maximum_counter;
+  sample->avatar_detail.render_failures = maximum_counter;
+  sample->avatar_detail.display_transfers = maximum_counter;
+  sample->avatar_detail.display_transfer_failures = maximum_counter;
+  sample->avatar_detail.display_transfer_timeouts = maximum_counter;
+  sample->avatar_detail.maximum_handoff_delay_us = maximum_counter;
+  sample->avatar_detail.maximum_analyzer_us = maximum_counter;
+  sample->avatar_detail.maximum_render_us = maximum_counter;
+  sample->avatar_detail.maximum_display_transfer_us = maximum_counter;
+  sample->avatar_detail.analyzer_stack_minimum_free_bytes =
+      maximum_counter;
+  sample->avatar_detail.physical_playout_sample_clock = maximum_counter;
+  sample->avatar_detail.current_avatar_index = maximum_counter;
+  sample->avatar_detail.framebuffer_bytes = maximum_counter;
   sample->has_raw_clean_aec_detail = fixture->include_raw_clean_aec;
   sample->raw_clean_aec_detail.schema_version = 3U;
   sample->raw_clean_aec_detail.sequence =
@@ -554,9 +585,12 @@ static enum capnweb_status dispatch(
 static void fixture_init_with_aec_topology(
     struct fixture *fixture,
     size_t subscription_count,
-    bool raw_clean_aec) {
+    bool raw_clean_aec,
+    bool avatar,
+    size_t callback_budget_capacity) {
   struct iterate_kit_metrics_options metrics_options;
   struct capnweb_session_options session_options;
+  struct iterate_kit_callback_budget *callback_budget = NULL;
   memset(fixture, 0, sizeof(*fixture));
   fixture->capture_limit = CAPTURE_CAPACITY;
   fixture->include_playback = true;
@@ -565,6 +599,13 @@ static void fixture_init_with_aec_topology(
       subscription_count <=
           sizeof(fixture->subscriptions) /
               sizeof(fixture->subscriptions[0]));
+  if (callback_budget_capacity > 0U) {
+    assert(
+        iterate_kit_callback_budget_init(
+            &fixture->callback_budget, callback_budget_capacity) ==
+        ITERATE_KIT_OK);
+    callback_budget = &fixture->callback_budget;
+  }
 
   metrics_options = (struct iterate_kit_metrics_options){
     .session = &fixture->session,
@@ -575,10 +616,11 @@ static void fixture_init_with_aec_topology(
     .enable_playback_view = true,
     .enable_aec_view = !raw_clean_aec,
     .enable_raw_clean_aec_view = raw_clean_aec,
+    .enable_avatar_view = avatar,
     .diagnostics_expression_buffer = fixture->diagnostics_expression,
     .diagnostics_expression_capacity =
         sizeof(fixture->diagnostics_expression),
-    .callback_budget = NULL,
+    .callback_budget = callback_budget,
   };
   assert(
       iterate_kit_metrics_init(
@@ -610,7 +652,7 @@ static void fixture_init_with_aec_topology(
 static void fixture_init_with_subscription_count(
     struct fixture *fixture, size_t subscription_count) {
   fixture_init_with_aec_topology(
-      fixture, subscription_count, false);
+      fixture, subscription_count, false, false, 0U);
 }
 
 static void fixture_init(struct fixture *fixture) {
@@ -618,7 +660,11 @@ static void fixture_init(struct fixture *fixture) {
 }
 
 static void fixture_init_raw_clean_aec(struct fixture *fixture) {
-  fixture_init_with_aec_topology(fixture, 1U, true);
+  fixture_init_with_aec_topology(fixture, 1U, true, false, 0U);
+}
+
+static void fixture_init_avatar(struct fixture *fixture) {
+  fixture_init_with_aec_topology(fixture, 1U, false, true, 0U);
 }
 
 static void receive(struct fixture *fixture, const char *message) {
@@ -1079,6 +1125,75 @@ static void aec_metrics_are_mounted_as_a_dedicated_view(void) {
 }
 
 /*
+ * A physically visible face is not enough acceptance evidence: LCD controller
+ * memory can retain an old image across an application reset. Exercise the
+ * public Cap'n Web seam that lets the production harness prove current audio
+ * observations reached the animator, mouth-open frames were rendered, and the
+ * panel completed those transfers without timeout. Keeping this as its own
+ * bounded view avoids overflowing the nearly-full general metrics message.
+ */
+static void avatar_metrics_are_mounted_as_a_bounded_dedicated_view(void) {
+  struct fixture fixture;
+  fixture_init_avatar(&fixture);
+  fixture.maximum_metrics = true;
+  fixture.include_avatar = true;
+  fixture.dispatch_method_index = 3U;
+
+  assert(fixture.module.method_count == 5U);
+  assert(
+      strcmp(
+          fixture.module.methods[3].path[0],
+          "subscribeToAvatarMetrics") == 0);
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToAvatarMetrics\"],"
+      "[[\"export\",-9223372036854775807]]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      fixture.module.poll(fixture.module.context, 0U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.captured_count == 3U);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"schemaVersion\":1,"
+          "\"producedAtMs\":9223372036854775807,"
+          "\"ready\":true,"
+          "\"playoutObservations\":4294967295") != NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"analyzerSequenceGaps\":4294967295,"
+          "\"mouthOpenRenderedFrames\":4294967295,"
+          "\"snapshotRaces\":4294967295,"
+          "\"renderedFrames\":4294967295") != NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"displayTransfers\":4294967295,"
+          "\"displayTransferFailures\":4294967295,"
+          "\"displayTransferTimeouts\":4294967295") != NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"maximumHandoffDelayUs\":4294967295,"
+          "\"maximumAnalyzerUs\":4294967295,"
+          "\"maximumRenderUs\":4294967295,"
+          "\"maximumDisplayTransferUs\":4294967295") != NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"analyzerStackMinimumFreeBytes\":4294967295,"
+          "\"physicalPlayoutSampleClock\":4294967295,"
+          "\"currentAvatarIndex\":4294967295,"
+          "\"framebufferBytes\":4294967295") != NULL);
+  assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
  * HAVPE's XMOS bus exposes two simultaneous capture taps: raw microphone and
  * the post-AEC clean channel. It does not expose the private far-end reference
  * used inside XMOS. Serialising a zero reference would turn missing evidence
@@ -1138,6 +1253,71 @@ static void raw_clean_aec_metrics_preserve_the_truthful_topology(void) {
           "\"maximumCaptureToUplinkUs\":4294967295") != NULL);
   assert(strstr(fixture.captured[1], "\"referencePeak\"") == NULL);
   assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
+ * The first production avatar proof mounted three latest-state callbacks:
+ * userspace general metrics plus harness-only AEC and avatar views. The shared
+ * transport profile deliberately admits only two callback calls at once. A
+ * fixed index-zero scan therefore delivered AEC and avatar every second while
+ * starving userspace general metrics forever; the provider became ready, but
+ * the acceptance harness could not observe that state and timed out.
+ *
+ * Backpressure is expected and no sample should be queued, but every ready
+ * subscriber must eventually get first access to the bounded budget. Recreate
+ * the exact two-of-three shape through real Cap'n Web callback completions and
+ * require the subscriber skipped in the first interval to run in the second.
+ * This guards scheduler fairness without increasing callback capacity, wire
+ * burst size, heap use, or work performed in one owner pass.
+ */
+static void callback_budget_rotates_past_a_backpressured_subscriber(void) {
+  struct fixture fixture;
+  fixture_init_with_aec_topology(
+      &fixture, 3U, false, true, 2U);
+  fixture.include_aec = true;
+  fixture.include_avatar = true;
+
+  fixture.dispatch_method_index = 2U;
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToAecMetrics\"],"
+      "[[\"export\",-1]]]]");
+  receive(&fixture, "[\"pull\",1]");
+  fixture.dispatch_method_index = 3U;
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToAvatarMetrics\"],"
+      "[[\"export\",-2]]]]");
+  receive(&fixture, "[\"pull\",2]");
+  fixture.dispatch_method_index = 0U;
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+      "[[\"export\",-3]]]]");
+  receive(&fixture, "[\"pull\",3]");
+
+  assert(
+      fixture.module.poll(fixture.module.context, 0U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.subscriptions[0].call_in_flight);
+  assert(fixture.subscriptions[1].call_in_flight);
+  assert(!fixture.subscriptions[2].call_in_flight);
+  assert(fixture.callback_budget.in_flight == 2U);
+
+  receive(&fixture, "[\"release\",1,1]");
+  receive(&fixture, "[\"resolve\",1,null]");
+  receive(&fixture, "[\"release\",2,1]");
+  receive(&fixture, "[\"resolve\",2,null]");
+  assert(fixture.callback_budget.in_flight == 0U);
+
+  assert(
+      fixture.module.poll(fixture.module.context, 1000U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.subscriptions[2].call_in_flight);
+  assert(fixture.callback_budget.in_flight == 2U);
 
   capnweb_session_close(&fixture.session);
   fixture.module.session_ended(fixture.module.context);
@@ -1543,7 +1723,9 @@ int main(void) {
   maximum_audio_counters_fit_one_control_message();
   playback_metrics_use_a_bounded_dedicated_view();
   aec_metrics_are_mounted_as_a_dedicated_view();
+  avatar_metrics_are_mounted_as_a_bounded_dedicated_view();
   raw_clean_aec_metrics_preserve_the_truthful_topology();
+  callback_budget_rotates_past_a_backpressured_subscriber();
   metrics_fanout_and_inbound_resolutions_fit_one_owner_burst();
   control_diagnostics_are_available_as_a_one_shot_snapshot();
   network_diagnostics_omit_unobserved_wifi_rssi();

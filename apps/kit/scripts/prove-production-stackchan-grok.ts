@@ -17,6 +17,7 @@ import {
 import { parseKitControlDiagnostics } from "../src/device/kit-control-diagnostics.ts";
 import type {
   KitAecMetrics,
+  KitAvatarMetrics,
   KitControlDiagnostics,
   KitRawCleanAecMetrics,
 } from "../src/device/kit-device-contract.ts";
@@ -48,6 +49,10 @@ import {
   assessStackChanAecRun,
   parseKitAecMetrics,
 } from "../src/device/stackchan-aec-assessment.ts";
+import {
+  assessStackChanAvatarRun,
+  parseKitAvatarMetrics,
+} from "../src/device/stackchan-avatar-assessment.ts";
 import {
   assessVoicePeAecRun,
   parseKitRawCleanAecMetrics,
@@ -218,15 +223,18 @@ export async function proveProductionStackChanGrok(
   });
 
   const aecSamples: Array<TimedSample<KitAecMetrics>> = [];
+  const avatarSamples: Array<TimedSample<KitAvatarMetrics>> = [];
   const rawCleanAecSamples: Array<TimedSample<KitRawCleanAecMetrics>> = [];
   let callbackFailure: Error | undefined;
   /*
-   * StackChan deliberately budgets two latest-state metric callbacks. The
+   * StackChan deliberately budgets three latest-state metric callbacks. The
    * userspace worker must own one general-metrics slot because streaming those
    * metrics through the mounted capability is part of this proof. The harness
-   * owns only the second, AEC-specific slot. An earlier version subscribed to
-   * both views here, exhausted the device budget, and made the worker retry
-   * subscribeToMetrics seven times while audio itself remained healthy.
+   * owns the AEC and avatar-specific slots. An earlier two-slot version
+   * subscribed to more views than the device advertised, made the worker retry
+   * subscribeToMetrics seven times, and contaminated an otherwise healthy
+   * audio proof. Keeping all three owners explicit makes capacity exhaustion a
+   * test failure instead of a hidden callback replacement.
    */
   if (requiresLegacyAecView) {
     await invoke<void>(
@@ -238,6 +246,24 @@ export async function proveProductionStackChanGrok(
             if (aecSamples.length > 720) aecSamples.shift();
           } catch (error) {
             callbackFailure = new Error(`${deviceName} AEC callback was malformed.`, {
+              cause: error,
+            });
+          }
+        },
+      ],
+    );
+    await invoke<void>(
+      [...devicePath, "subscribeToAvatarMetrics"],
+      [
+        (value: unknown) => {
+          try {
+            avatarSamples.push({
+              receivedAtMs: Date.now(),
+              value: parseKitAvatarMetrics(value),
+            });
+            if (avatarSamples.length > 720) avatarSamples.shift();
+          } catch (error) {
+            callbackFailure = new Error(`${deviceName} avatar callback was malformed.`, {
               cause: error,
             });
           }
@@ -290,12 +316,17 @@ export async function proveProductionStackChanGrok(
   let conversationStarted = false;
   let conversationEnded = false;
   let acceptanceAecIndex = 0;
+  let acceptanceAvatarIndex = 0;
 
   try {
     await waitForCallbackSamples(
       () => callbackFailure,
-      () => (requiresLegacyAecView ? aecSamples.length : rawCleanAecSamples.length) >= 1,
-      "an initial AEC capability sample",
+      () =>
+        (requiresLegacyAecView ? aecSamples.length : rawCleanAecSamples.length) >= 1 &&
+        (!requiresLegacyAecView || avatarSamples.length >= 1),
+      requiresLegacyAecView
+        ? "initial AEC and avatar capability samples"
+        : "an initial AEC capability sample",
     );
     const hangUpAcknowledged =
       (await invoke<boolean>([...devicePath, "conversation", "hangUp"])) === true;
@@ -378,6 +409,7 @@ export async function proveProductionStackChanGrok(
       0,
       (requiresLegacyAecView ? aecSamples.length : rawCleanAecSamples.length) - 1,
     );
+    acceptanceAvatarIndex = Math.max(0, avatarSamples.length - 1);
     let providerSequenceBaseline = await latestProviderSequence(
       providerEventStream,
       providerEventStart.streamMaxOffset,
@@ -738,12 +770,18 @@ export async function proveProductionStackChanGrok(
   const relevantRawCleanAecSamples = rawCleanAecSamples
     .slice(acceptanceAecIndex)
     .map((sample) => sample.value);
+  const relevantAvatarSamples = avatarSamples
+    .slice(acceptanceAvatarIndex)
+    .map((sample) => sample.value);
   const aecAssessment = requiresLegacyAecView
     ? assessStackChanAecRun(relevantAecSamples)
     : assessVoicePeAecRun(relevantRawCleanAecSamples, {
         farEndSequences: [...voicePeFarEndEvidenceSequences],
         nearEndSequences: [...voicePeNearEndEvidenceSequences],
       });
+  const avatarAssessment = requiresLegacyAecView
+    ? assessStackChanAvatarRun(relevantAvatarSamples)
+    : null;
   const digitalAssessment =
     baselineWorker &&
     mediaBaselineWorker &&
@@ -763,6 +801,9 @@ export async function proveProductionStackChanGrok(
           reasons: ["The run did not retain complete digital boundary evidence."],
         };
   if (!aecAssessment.passed) runFailure ??= new Error(aecAssessment.reasons.join("; "));
+  if (avatarAssessment && !avatarAssessment.passed) {
+    runFailure ??= new Error(avatarAssessment.reasons.join("; "));
+  }
   if (!digitalAssessment.passed) runFailure ??= new Error(digitalAssessment.reasons.join("; "));
 
   let physicalSpeechAssessment: ReturnType<typeof assessPhysicalSpeechTranscription> | undefined;
@@ -871,6 +912,7 @@ export async function proveProductionStackChanGrok(
   const audioPassed =
     runFailure === undefined &&
     aecAssessment.passed &&
+    (avatarAssessment?.passed ?? true) &&
     digitalAssessment.passed &&
     physicalSpeechAssessment?.passed === true;
   const networkArtifact =
@@ -914,6 +956,13 @@ export async function proveProductionStackChanGrok(
       requiredForThisRun: true,
       samples: requiresLegacyAecView ? aecSamples : rawCleanAecSamples,
     },
+    avatar: requiresLegacyAecView
+      ? {
+          assessment: avatarAssessment,
+          requiredForThisRun: true,
+          samples: avatarSamples,
+        }
+      : null,
     device: {
       diagnostics: {
         preflight: preflightDiagnostics ?? null,
@@ -955,6 +1004,7 @@ export async function proveProductionStackChanGrok(
   }
   return {
     aec: aecAssessment,
+    avatar: avatarAssessment,
     manifestPath,
     networkClassification: networkArtifact.classification,
     passed,

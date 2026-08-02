@@ -204,6 +204,43 @@ struct iterate_kit_raw_clean_aec_metrics_sample {
 };
 
 /**
+ * Latest-state evidence from a deliberately lossy talking-head sidecar.
+ *
+ * This view proves current firmware is observing the physical speaker clock
+ * and completing LCD transfers; a face left in panel GRAM across a reset is
+ * not sufficient evidence. Visual mailbox overwrites and sequence gaps are
+ * expected load-shedding, while failures/timeouts and missing progress are
+ * defects. The view remains separate from general metrics because that fixed
+ * 2 KiB wire message has no safe schema headroom for these counters.
+ */
+struct iterate_kit_avatar_metrics_sample {
+  uint32_t schema_version;
+  int64_t produced_at_ms;
+  bool ready;
+  uint32_t playout_observations;
+  uint32_t malformed_observations;
+  uint32_t mailbox_overwrites;
+  uint32_t mailbox_failures;
+  uint32_t analyzer_frames;
+  uint32_t analyzer_sequence_gaps;
+  uint32_t mouth_open_rendered_frames;
+  uint32_t snapshot_races;
+  uint32_t rendered_frames;
+  uint32_t render_failures;
+  uint32_t display_transfers;
+  uint32_t display_transfer_failures;
+  uint32_t display_transfer_timeouts;
+  uint32_t maximum_handoff_delay_us;
+  uint32_t maximum_analyzer_us;
+  uint32_t maximum_render_us;
+  uint32_t maximum_display_transfer_us;
+  uint32_t analyzer_stack_minimum_free_bytes;
+  uint32_t physical_playout_sample_clock;
+  uint32_t current_avatar_index;
+  uint32_t framebuffer_bytes;
+};
+
+/**
  * Latest classified control-transport incident retained across reconnect.
  *
  * A metrics callback belongs to the Cap'n Web session that carried it, so the
@@ -391,6 +428,8 @@ struct iterate_kit_metrics_sample {
   bool has_raw_clean_aec_detail;
   struct iterate_kit_raw_clean_aec_metrics_sample
       raw_clean_aec_detail;
+  bool has_avatar_detail;
+  struct iterate_kit_avatar_metrics_sample avatar_detail;
 };
 
 struct iterate_kit_metrics_driver {
@@ -411,6 +450,7 @@ enum iterate_kit_metrics_view {
   ITERATE_KIT_METRICS_PLAYBACK,
   ITERATE_KIT_METRICS_AEC,
   ITERATE_KIT_METRICS_RAW_CLEAN_AEC,
+  ITERATE_KIT_METRICS_AVATAR,
 };
 
 /**
@@ -460,6 +500,8 @@ struct iterate_kit_metrics_options {
    * method name ambiguous and is rejected during initialization.
    */
   bool enable_raw_clean_aec_view;
+  /* Mounts subscribeToAvatarMetrics only for a physical visual owner. */
+  bool enable_avatar_view;
   /*
    * getDiagnostics() returns a dynamic object through Cap'n Web's borrowed
    * expression reply. The protocol may retain that reply until a later pull,
@@ -502,6 +544,14 @@ struct iterate_kit_metrics_options {
 struct iterate_kit_metrics {
   struct iterate_kit_metrics_options options;
   uint64_t next_sample_at_ms;
+  /*
+   * A constrained profile may admit fewer callback calls than it has ready
+   * subscriptions. Remember the first slot denied by that shared budget so
+   * the next interval starts there instead of permanently favoring low array
+   * indexes. This is a cursor, not a queue: skipped samples remain discarded
+   * and the RAM cost is one machine word regardless of subscriber count.
+   */
+  size_t next_subscription_index;
   struct iterate_kit_poll_result pending_result;
   bool diagnostics_reply_in_flight;
   bool initialized;

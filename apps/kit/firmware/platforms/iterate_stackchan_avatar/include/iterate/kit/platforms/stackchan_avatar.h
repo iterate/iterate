@@ -30,6 +30,7 @@ struct iterate_kit_stackchan_avatar_metrics {
   uint32_t mailbox_failures;
   uint32_t analyzer_frames;
   uint32_t analyzer_sequence_gaps;
+  uint32_t mouth_open_rendered_frames;
   uint32_t snapshot_races;
   uint32_t rendered_frames;
   uint32_t render_failures;
@@ -52,11 +53,13 @@ struct iterate_kit_stackchan_avatar_metrics {
 /**
  * Starts StackChan's single physical display owner and visual analyzer.
  *
- * Startup allocates one 160x120 RGB565 DMA framebuffer in PSRAM. Steady-state
- * playout observation, PCM analysis, rendering, and direct LCD transfer
- * allocate nothing. This is a physical-board singleton because the CoreS3
- * panel is a singleton; presenting it as an instantiable object would promise
- * hardware concurrency the board cannot provide.
+ * Startup allocates one 160x120 RGB565 DMA framebuffer in internal memory.
+ * ESP32-S3 SPI cannot DMA from PSRAM, so this permanent cost avoids a hidden
+ * per-transfer bounce allocation. Steady-state playout observation, PCM
+ * analysis, rendering, and direct LCD transfer allocate nothing. This is a
+ * physical-board singleton because the CoreS3 panel is a singleton;
+ * presenting it as an instantiable object would promise hardware concurrency
+ * the board cannot provide.
  */
 esp_err_t iterate_kit_stackchan_avatar_start(void);
 

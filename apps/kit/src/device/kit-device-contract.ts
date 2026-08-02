@@ -226,6 +226,43 @@ export interface KitAecMetrics {
 }
 
 /**
+ * Latest-state proof from a talking-head display owner.
+ *
+ * Mailbox overwrites and analyzer sequence gaps are intentional visual
+ * load-shedding: the face jumps to current playout instead of accumulating
+ * delay. Failures, timeouts, or counters that stop advancing during audible
+ * playback are defects. `mouthOpenRenderedFrames` counts only frames whose LCD
+ * transfer completed, so retained pixels from an earlier boot cannot pass the
+ * production harness.
+ */
+export interface KitAvatarMetrics {
+  schemaVersion: 1;
+  producedAtMs: number;
+  ready: boolean;
+  playoutObservations: number;
+  malformedObservations: number;
+  mailboxOverwrites: number;
+  mailboxFailures: number;
+  analyzerFrames: number;
+  analyzerSequenceGaps: number;
+  mouthOpenRenderedFrames: number;
+  snapshotRaces: number;
+  renderedFrames: number;
+  renderFailures: number;
+  displayTransfers: number;
+  displayTransferFailures: number;
+  displayTransferTimeouts: number;
+  maximumHandoffDelayUs: number;
+  maximumAnalyzerUs: number;
+  maximumRenderUs: number;
+  maximumDisplayTransferUs: number;
+  analyzerStackMinimumFreeBytes: number;
+  physicalPlayoutSampleClock: number;
+  currentAvatarIndex: number;
+  framebufferBytes: number;
+}
+
+/**
  * Aligned AEC evidence from a hardware coprocessor with a private reference.
  *
  * HAVPE's XMOS publishes an original microphone and its selected processed

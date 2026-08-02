@@ -1,6 +1,6 @@
 # Connected Iterate Kit device inventory
 
-Recorded on 2026-07-30 and last re-enumerated non-disruptively on 2026-08-01.
+Recorded on 2026-07-30 and last re-enumerated non-disruptively on 2026-08-02.
 This is both the current four-board inventory and the safety procedure for
 finding the boards again after the shared USB hub is unplugged, moved, or
 enumerated in a different order.
@@ -36,20 +36,22 @@ the diagnosis needs. Resolving the port by USB metadata remains safe.
 information on macOS, but `serial.tools.list_ports` is preferred because it
 also reports the `/dev/cu.*` path needed by ESP-IDF tools.
 
-## Boards on the shared hub
+## Connected boards
 
-| Board                                  | Stable USB serial / ROM MAC | Observed port           | Observed location | Current-firmware evidence                                                                          |
-| -------------------------------------- | --------------------------- | ----------------------- | ----------------- | -------------------------------------------------------------------------------------------------- |
-| StackChan / M5Stack CoreS3             | `68:EE:8F:D8:53:20`         | `/dev/cu.usbmodem11401` | `1-1.4`           | Known StackChan target; another agent owned it during the original inventory                       |
-| M5StickS3                              | `70:04:1D:D5:45:88`         | `/dev/cu.usbmodem11201` | `1-1.2`           | Known free Stick target and the first physical Iterate Kit firmware target                         |
-| Waveshare ESP32-S3 touch-screen device | `1C:DB:D4:7A:16:C8`         | `/dev/cu.usbmodem11301` | `1-1.3`           | App descriptor: project `phone_s3_box_3`, version `v0.4.2-25-geda7c9e-dirty`, ESP-IDF `v5.5-beta1` |
-| Home Assistant Voice Preview Edition   | `D8:3B:DA:46:20:34`         | `/dev/cu.usbmodem11101` | `1-1.1`           | App descriptor: project `voice-pe-speaker-reference`, version `2026.2.4`, ESP-IDF `5.5.2`          |
+| Board                                  | Stable USB serial / ROM MAC | Observed port           | Observed location | Current-firmware evidence                                                          |
+| -------------------------------------- | --------------------------- | ----------------------- | ----------------- | ---------------------------------------------------------------------------------- |
+| StackChan / M5Stack CoreS3             | `68:EE:8F:D8:53:20`         | `/dev/cu.usbmodem2101`  | `2-1`             | Separately connected; Iterate voice/AEC/avatar firmware, face physically confirmed |
+| M5StickS3                              | `70:04:1D:D5:45:88`         | `/dev/cu.usbmodem11301` | `1-1.3`           | Iterate voice firmware and first physical Iterate Kit firmware target              |
+| Waveshare ESP32-S3 touch-screen device | `1C:DB:D4:7A:16:C8`         | `/dev/cu.usbmodem11201` | `1-1.2`           | Iterate voice firmware                                                             |
+| Home Assistant Voice Preview Edition   | `D8:3B:DA:46:20:34`         | `/dev/cu.usbmodem11101` | `1-1.1`           | Iterate voice/AEC firmware                                                         |
 
 The ports and locations in this table are observations from the most recent
 enumeration, not arguments to save in a script. The 2026-08-01 hub reconnect
 swapped StackChan and Home Assistant's old suffixes/locations while leaving
-their serials unchanged, which is direct evidence for making the stable serial
-the persistent key a CLI or physical test manifest stores.
+their serials unchanged. On 2026-08-02, moving StackChan off the shared hub
+changed it again to location `2-1` and suffix `2101`, with the same serial.
+Both are direct evidence for making the stable serial the persistent key a CLI
+or physical test manifest stores.
 
 `/dev/cu.usbserial-0001` is an unrelated CP2102/CeilSense device and is not an
 Iterate Kit flash target.

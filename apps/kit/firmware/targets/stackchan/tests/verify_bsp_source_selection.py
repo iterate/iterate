@@ -49,6 +49,24 @@ def main() -> None:
     if any("managed_components" in source.parts for source in sources):
         fail(f"managed CoreS3 BSP source leaked into the build: {sources}")
 
+    # The LCD bus is created during app_main on core 0, which is also ESP-IDF's
+    # Wi-Fi core for this target. AUTO affinity therefore looked harmless in
+    # source review but put every full-frame SPI completion interrupt beside
+    # the radio. A separate idle probe under avatar load measured device-only
+    # ICMP loss while the router stayed clean; the production voice interval
+    # had broader network trouble and is deliberately not used to claim
+    # causality. Inspect the generated translation unit, not the patch
+    # template, so a future exact-source rewrite cannot silently drop this
+    # low-cost isolation while we continue collecting clean interval evidence.
+    patched_board_source = next(
+        (source for source in sources if source.name == "m5stack_core_s3.c"), None
+    )
+    if patched_board_source is None:
+        fail("generated CoreS3 board source is absent")
+    patched_board_text = patched_board_source.read_text(encoding="utf-8")
+    if ".isr_cpu_id = ESP_INTR_CPU_AFFINITY_1" not in patched_board_text:
+        fail("LCD SPI ISR is not pinned away from the Wi-Fi core")
+
     required_header = (
         expected_component_dir
         / "include"
