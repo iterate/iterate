@@ -12,7 +12,6 @@ import {
 } from "../src/device/causal-speech-energy-analysis.ts";
 import {
   devicePlaybackCompleted,
-  devicePlaybackResponseCompleted,
   deviceUplinkStreaming,
   parseKitMetricsCallback,
   type DeviceRuntimeMetrics,
@@ -270,7 +269,6 @@ export async function proveProductionM5StickS3Grok(
   let continuingHeldWorker: ProductionPcmMetrics | undefined;
   let baselineWorker: ProductionPcmMetrics | undefined;
   let preflightWorker: ProductionPcmMetrics | undefined;
-  let preflightDevice: DeviceRuntimeMetrics | undefined;
   let baselineDevice: DeviceRuntimeMetrics | undefined;
   let idleAfterHangUpWorker: ProductionPcmMetrics | undefined;
   let firstHeldDevice: DeviceRuntimeMetrics | undefined;
@@ -320,30 +318,39 @@ export async function proveProductionM5StickS3Grok(
       if (!preflightEnded) {
         throw new Error("The device rejected the preflight conversation hang-up transition.");
       }
-      preflightWorker = await waitForProductionPcmConversationIdle({
-        description: "one stable warm device PCM lane before call start",
-        minimumStableMs: 1_000,
-        timeoutMs: 15_000,
-        worker,
-      });
-      preflightWorker = await waitForWorkerMetrics(
-        worker,
-        (metrics) => {
-          const device = latestWorkerDeviceMetrics(metrics);
-          return (
-            productionPcmConversationIsIdle(metrics) &&
-            device !== undefined &&
-            queuesAreEmpty(device)
-          );
-        },
-        "a current drained device sample on the stable warm PCM lane",
-        10_000,
-        preflightWorker.sessionId,
-      );
-      preflightDevice = requireLatestWorkerDeviceMetrics(preflightWorker);
-      baselineDiagnostics = await readDiagnostics();
-      baselinePlayback = await waitForStablePlayback(playbackSamples, () => playbackCallbackError);
-      console.log(`pcm_lane=warm_idle session_id=${preflightWorker.sessionId}`);
+    }
+
+    /*
+     * Call setup is transport setup, not a voice turn. Capture the exact idle
+     * counters before either the remote or physical start edge so the proof
+     * fails if setup itself creates a provider response. Waiting merely for a
+     * quiet speaker queue was insufficient: the old unsolicited greeting
+     * could play cleanly and still satisfy every transport invariant.
+     */
+    preflightWorker = await waitForProductionPcmConversationIdle({
+      description: "one stable warm device PCM lane before call start",
+      minimumStableMs: 1_000,
+      timeoutMs: 15_000,
+      worker,
+    });
+    preflightWorker = await waitForWorkerMetrics(
+      worker,
+      (metrics) => {
+        const device = latestWorkerDeviceMetrics(metrics);
+        return (
+          productionPcmConversationIsIdle(metrics) && device !== undefined && queuesAreEmpty(device)
+        );
+      },
+      "a current drained device sample on the stable warm PCM lane",
+      10_000,
+      preflightWorker.sessionId,
+    );
+    const callStartBaselineWorker = preflightWorker;
+    baselineDiagnostics = await readDiagnostics();
+    baselinePlayback = await waitForStablePlayback(playbackSamples, () => playbackCallbackError);
+    console.log(`pcm_lane=warm_idle session_id=${preflightWorker.sessionId}`);
+
+    if (options.pttAuthority === "remote") {
       remoteConversationStarted =
         (await invoke<boolean>([...devicePath, "conversation", "start"])) === true;
       if (!remoteConversationStarted) {
@@ -360,39 +367,61 @@ export async function proveProductionM5StickS3Grok(
       worker,
       (metrics) => {
         const device = latestWorkerDeviceMetrics(metrics);
-        const greetingFrames =
-          preflightWorker === undefined
-            ? undefined
-            : metrics.downlinkFrames - preflightWorker.downlinkFrames;
         return (
           !metrics.closed &&
           !metrics.interrupted &&
+          metrics.conversationActive &&
           metrics.providerAvailable &&
           metrics.providerSessionReadyAtMs !== null &&
-          metrics.initialGreetingRequests === 1 &&
-          metrics.providerResponsesCompleted >= 1 &&
+          metrics.initialGreetingRequests === callStartBaselineWorker.initialGreetingRequests &&
+          metrics.providerResponseCreateMessagesSent ===
+            callStartBaselineWorker.providerResponseCreateMessagesSent &&
+          metrics.providerResponsesCompleted ===
+            callStartBaselineWorker.providerResponsesCompleted &&
+          metrics.downlinkFrames === callStartBaselineWorker.downlinkFrames &&
           !metrics.providerResponseActive &&
           metrics.downlinkQueuedBytes === 0 &&
           metrics.deviceMetrics.samplesReceived > 0 &&
           device !== undefined &&
-          (preflightDevice === undefined ||
-            (greetingFrames !== undefined &&
-              devicePlaybackResponseCompleted(preflightDevice, device, greetingFrames))) &&
           queuesAreEmpty(device)
         );
       },
-      "a connected Grok PCM bridge with userspace device metrics",
+      "a connected and silent Grok PCM bridge with userspace device metrics",
       options.pttAuthority === "remote" ? 30_000 : physicalPressTimeoutMs,
-      preflightWorker?.sessionId,
+      preflightWorker.sessionId,
     );
-    baselineWorker = connectedWorker;
-    const connectedDevice = requireLatestWorkerDeviceMetrics(connectedWorker);
+    /*
+     * `session.updated` and a response request were adjacent in the former
+     * greeting path. A bounded post-ready quiet window catches a delayed
+     * request rather than declaring success at the first ready snapshot.
+     */
+    await delay(1_000);
+    const silentConnectedWorker = await waitForWorkerMetrics(
+      worker,
+      (metrics) =>
+        metrics.conversationActive &&
+        metrics.providerAvailable &&
+        metrics.providerSessionReadyAtMs !== null &&
+        metrics.initialGreetingRequests === callStartBaselineWorker.initialGreetingRequests &&
+        metrics.providerResponseCreateMessagesSent ===
+          callStartBaselineWorker.providerResponseCreateMessagesSent &&
+        metrics.providerResponsesCompleted === callStartBaselineWorker.providerResponsesCompleted &&
+        metrics.downlinkFrames === callStartBaselineWorker.downlinkFrames &&
+        !metrics.providerResponseActive &&
+        metrics.downlinkQueuedBytes === 0 &&
+        !metrics.closed,
+      "a silent Grok session which has not created a response before PTT",
+      5_000,
+      connectedWorker.sessionId,
+    );
+    baselineWorker = silentConnectedWorker;
+    const connectedDevice = requireLatestWorkerDeviceMetrics(silentConnectedWorker);
     baselineDevice = connectedDevice;
     baselinePlayback = await waitForStablePlayback(playbackSamples, () => playbackCallbackError);
     console.log(
-      `pcm_conversation=connected session_id=${connectedWorker.sessionId} ` +
-        `device_metric_samples=${connectedWorker.deviceMetrics.samplesReceived} ` +
-        `startup=${JSON.stringify(connectedWorker.startup ?? null)}`,
+      `pcm_conversation=connected_silent session_id=${silentConnectedWorker.sessionId} ` +
+        `device_metric_samples=${silentConnectedWorker.deviceMetrics.samplesReceived} ` +
+        `startup=${JSON.stringify(silentConnectedWorker.startup ?? null)}`,
     );
 
     /*
@@ -433,7 +462,7 @@ export async function proveProductionM5StickS3Grok(
        * surplus; a per-turn boundary makes the first divergence terminal and
        * proves that repeated Button-A cycles do not accumulate stale audio.
        */
-      const turnBaselineWorker = terminalWorker ?? connectedWorker;
+      const turnBaselineWorker = terminalWorker ?? silentConnectedWorker;
       const turnBaselineDevice = requireLatestWorkerDeviceMetrics(turnBaselineWorker);
       const turnBaselineDiagnostics = turn === 1 ? baselineDiagnostics : await readDiagnostics();
       const turnBaselinePlayback = terminalPlayback ?? baselinePlayback;
