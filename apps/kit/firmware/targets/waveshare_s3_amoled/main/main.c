@@ -531,8 +531,19 @@ static void on_control(
      * concealed frames and the metric could never reach zero.
      */
     runtime.speaker_answer_done = true;
-    /* Speaker sequences restart with the next answer. */
-    iterate_kit_playout_interrupt(&runtime.playout);
+    /*
+     * It must NOT interrupt the playout, however tempting "the answer is
+     * over, reset for the next one" looks. `response.done` is one small text
+     * event and the answer is hundreds of large audio events, all sent as
+     * fast as the wire takes them, so the completion routinely arrives
+     * FIRST. Interrupting here marks the answer abandoned and every frame of
+     * it that follows is refused as stale.
+     *
+     * Measured on the device: 258 frames received, none played, and a
+     * transcript proving the model had spoken. The next answer carries a
+     * higher number and supersedes this one by itself; there is nothing to
+     * reset.
+     */
     waveshare_recorder_log("answer complete");
     /* The answer is complete: back to waiting for the next turn. */
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
