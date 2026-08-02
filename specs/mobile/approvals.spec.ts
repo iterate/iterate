@@ -58,16 +58,16 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       projectSlug,
       testInfo,
     });
-    await popup.getByRole("button", { name: "Continue" }).click({ timeout: 30_000 });
-    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 30_000 });
+    await popup.getByRole("button", { name: "Continue" }).click();
+    await popup.getByRole("button", { name: "Allow access" }).click();
 
     // Opening the project auto-enrolls this browser's approval key — no
     // manual enroll step anywhere below. The first project list rides a COLD
     // itx WebSocket to the deployment (~20-30s against preview slots) — a
     // product-latency problem worth fixing at the source, not something more
     // spinner UI can paper over.
-    await page.getByText(projectSlug).click({ timeout: 60_000 });
-    await page.getByText("New chat").waitFor({ timeout: 30_000 });
+    await page.getByText(projectSlug).click();
+    await page.getByText("New chat").waitFor();
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
 
     // ── Admin-side policy, the one non-user step: a hold rule on the echo
@@ -167,7 +167,6 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
               eventTypes: ["events.iterate.com/capability-host/script-run-settled"],
             })
           ).length,
-        { timeout: 60_000 },
       )
       .toBe(1);
 
@@ -189,9 +188,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // the thread — the approved burst with 200s, the rejected one with 403s
     // whose bodies carry the human's reason verbatim (the cue an agent would
     // read to retry differently).
-    await expect
-      .poll(async () => (await readOutcomeMessages()).length, { timeout: 60_000 })
-      .toBe(2);
+    await expect.poll(async () => (await readOutcomeMessages()).length).toBe(2);
     const outcomes = Object.fromEntries(
       (await readOutcomeMessages()).map((message) => {
         const [marker, json] = message.split(" outcomes: ");
@@ -225,16 +222,14 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     const rejectedCard = page
       .getByTestId(/^activity-card-/)
       .filter({ has: page.getByText("✗", { exact: true }) });
-    await approvedCard.waitFor({ timeout: 5_000 });
-    await rejectedCard.waitFor({ timeout: 5_000 });
-    await approvedCard.click({ timeout: 5_000 });
-    await approvedCard.getByRole("button", { name: "Approvals" }).click({ timeout: 5_000 });
-    await approvedCard.getByText("Approved", { exact: true }).waitFor({ timeout: 5_000 });
-    await approvedCard
-      .getByText("The mobile approvals spec holds these for a human")
-      .waitFor({ timeout: 5_000 });
+    await approvedCard.waitFor();
+    await rejectedCard.waitFor();
+    await approvedCard.click();
+    await approvedCard.getByRole("button", { name: "Approvals" }).click();
+    await approvedCard.getByText("Approved", { exact: true }).waitFor();
+    await approvedCard.getByText("The mobile approvals spec holds these for a human").waitFor();
     // Collapse it back so the thread reads clean for the next act.
-    await approvedCard.getByText("✓", { exact: true }).click({ timeout: 5_000 });
+    await approvedCard.getByText("✓", { exact: true }).click();
 
     // ── The context travels to the NOTIFICATIONS view — the approvals
     // surface now that the standalone screen is retired: each batch's row
@@ -243,13 +238,13 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // IN FULL — so "what was this run even doing?" reads without opening the
     // thread.
     await page.goBack(); // chat → chat list: browser history IS the app's back stack on web
-    await page.getByLabel("Open project menu").click({ timeout: 5_000 });
-    await page.getByRole("button", { name: "Notifications" }).click({ timeout: 5_000 });
+    await page.getByLabel("Open project menu").click();
+    await page.getByRole("button", { name: "Notifications" }).click();
     // Newest first: the reject burst's row sits above the approve burst's.
     const batchRows = page.getByTestId(/^notification-row-/);
-    await batchRows.nth(1).waitFor({ timeout: 15_000 });
-    await batchRows.first().click({ timeout: 5_000 });
-    await batchRows.nth(1).click({ timeout: 5_000 });
+    await batchRows.nth(1).waitFor();
+    await batchRows.first().click();
+    await batchRows.nth(1).click();
     const threadName = agentPath.replace(/^\/agents\//, "");
     // The line is a link (tap = open the thread), one per card, each unique
     // by its lane's status title. Full-text equality, not substring: a
@@ -258,8 +253,8 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // activity-only update.
     const approveContext = page.getByRole("link", { name: /Refund sweep/ });
     const rejectContext = page.getByRole("link", { name: /Invoice chase/ });
-    await approveContext.waitFor({ timeout: 15_000 });
-    await rejectContext.waitFor({ timeout: 15_000 });
+    await approveContext.waitFor();
+    await rejectContext.waitFor();
     expect(await approveContext.textContent()).toBe(
       `${threadName} · Refund sweep — Emailing 3 customers about order refunds`,
     );
@@ -268,8 +263,8 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     );
 
     // Tapping the line deep-links back into the thread it snapshotted.
-    await approveContext.click({ timeout: 5_000 });
-    await page.getByPlaceholder("Message").waitFor({ timeout: 15_000 });
+    await approveContext.click();
+    await page.getByPlaceholder("Message").waitFor();
     expect(decodeURIComponent(new URL(page.url()).searchParams.get("path")!)).toBe(agentPath);
   } finally {
     await echo.close();
@@ -293,7 +288,7 @@ async function sendChatMessage(page: Page, message: string) {
  * script run still spins.
  */
 function waitForBatchCardButton(page: Page, name: string) {
-  return page.getByRole("button", { name }).waitFor({ timeout: 30_000 });
+  return page.getByRole("button", { name }).waitFor();
 }
 
 /**
@@ -320,8 +315,8 @@ async function decideBatch(
       void Promise.resolve(answerDialog(dialog)).catch(() => {});
     page.once("dialog", handler);
     try {
-      await button.click({ timeout: 10_000 }).catch(() => {});
-      await button.waitFor({ state: "detached", timeout: 15_000 });
+      await button.click().catch(() => {});
+      await button.waitFor({ state: "detached" });
       return;
     } catch {
       // Press lost or decision not landed — re-arm and press again. The

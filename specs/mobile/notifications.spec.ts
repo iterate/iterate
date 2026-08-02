@@ -58,10 +58,10 @@ test("the approval push is suppressed in the watched thread and sent when you're
       projectSlug,
       testInfo,
     });
-    await popup.getByRole("button", { name: "Continue" }).click({ timeout: 30_000 });
-    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 30_000 });
-    await page.getByText(projectSlug).click({ timeout: 60_000 });
-    await page.getByText("New chat").waitFor({ timeout: 30_000 });
+    await popup.getByRole("button", { name: "Continue" }).click();
+    await popup.getByRole("button", { name: "Allow access" }).click();
+    await page.getByText(projectSlug).click();
+    await page.getByText("New chat").waitFor();
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
 
     // ── Admin-side setup: a hold rule on the echo host, and the device
@@ -126,20 +126,17 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // beat, the panel settles at translateX(0) at this exact viewport. Wait
     // for the item to stop moving before pressing.
     const notificationsItem = page.getByRole("button", { name: "Notifications" });
-    await notificationsItem.waitFor({ timeout: 5_000 });
+    await notificationsItem.waitFor();
     await expect
-      .poll(
-        async () => {
-          const before = (await notificationsItem.boundingBox())!.x;
-          await page.waitForTimeout(120);
-          const after = (await notificationsItem.boundingBox())!.x;
-          return after - before;
-        },
-        { timeout: 5_000 },
-      )
+      .poll(async () => {
+        const before = (await notificationsItem.boundingBox())!.x;
+        await page.waitForTimeout(120);
+        const after = (await notificationsItem.boundingBox())!.x;
+        return after - before;
+      })
       .toBe(0);
     await notificationsItem.click();
-    await page.getByText("Skipped — already on screen").waitFor({ timeout: 15_000 });
+    await page.getByText("Skipped — already on screen").waitFor();
 
     // ── Lane two: the user stays HERE while a different thread's batch
     // parks. No dialog renders, nothing claims the batch, the grace window
@@ -172,12 +169,11 @@ test("the approval push is suppressed in the watched thread and sent when you're
               eventTypes: ["events.iterate.com/device/notification-settled"],
             })
           ).length,
-        { timeout: 30_000 },
       )
       .toBe(2);
-    await page.getByText("Send failed").waitFor({ timeout: 15_000 });
+    await page.getByText("Send failed").waitFor();
     // Both lanes journaled side by side — the comparison this spec exists for.
-    await page.getByText("Skipped — already on screen").waitFor({ timeout: 5_000 });
+    await page.getByText("Skipped — already on screen").waitFor();
 
     // ── Approval rows EXPAND instead of navigating — and with the
     // standalone Approvals screen retired, the expansion is also where an
@@ -188,8 +184,8 @@ test("the approval push is suppressed in the watched thread and sent when you're
       .getByTestId(/^notification-row-/)
       .filter({ hasText: "Send failed" })
       .click();
-    await page.getByText("Awaiting decision").waitFor({ timeout: 15_000 });
-    await page.getByText("egress-echo?elsewhere=1").waitFor({ timeout: 5_000 });
+    await page.getByText("Awaiting decision").waitFor();
+    await page.getByText("egress-echo?elsewhere=1").waitFor();
 
     // Reject it from the expansion with a typed reason (the web build's
     // window.prompt stands in for the native reason sheet). Departure of
@@ -198,8 +194,8 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // verdict, the human's reason, and the #2372 thread-context line.
     const reason = "not while the spec is watching";
     await rejectFromExpansion(page, reason);
-    await page.getByText(`Rejected because: ${reason}`).waitFor({ timeout: 5_000 });
-    await page.getByText("Sending the launch webhook").waitFor({ timeout: 5_000 });
+    await page.getByText(`Rejected because: ${reason}`).waitFor();
+    await page.getByText("Sending the launch webhook").waitFor();
 
     // The chat deep-link lives INSIDE the expansion now — its "Open thread"
     // lands in the thread that caused the push, where tapping the real push
@@ -208,7 +204,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // The heading, specifically: expo-router keeps the Notifications screen
     // mounted-but-hidden behind the chat, and its thread-context line also
     // says "elsewhere-thread" — a bare text locator finds that hidden copy.
-    await page.getByRole("heading", { name: "elsewhere-thread" }).waitFor({ timeout: 15_000 });
+    await page.getByRole("heading", { name: "elsewhere-thread" }).waitFor();
     expect(decodeURIComponent(page.url())).toContain("/agents/elsewhere-thread");
   } finally {
     await echo.close();
@@ -221,7 +217,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
  * parked script run's activity spinner covers the wait the whole way.
  */
 function waitForBatchCardButton(page: Page, name: string) {
-  return page.getByRole("button", { name }).waitFor({ timeout: 30_000 });
+  return page.getByRole("button", { name }).waitFor();
 }
 
 /**
@@ -239,8 +235,8 @@ async function rejectFromExpansion(page: Page, reason: string) {
       void Promise.resolve(dialog.accept(reason)).catch(() => {});
     page.once("dialog", handler);
     try {
-      await button.click({ timeout: 10_000 }).catch(() => {});
-      await button.waitFor({ state: "detached", timeout: 15_000 });
+      await button.click().catch(() => {});
+      await button.waitFor({ state: "detached" });
       return;
     } catch {
       // Press lost or decision not landed — re-arm and press again. The
