@@ -1,8 +1,88 @@
 # Home Assistant Voice Preview Edition vertical-slice landing — 2026-08-02
 
-Status: the narrow production hardware portability slice is achieved. Longer
-endurance and a dedicated long-playback echo census remain follow-up gates;
-this document does not claim those are complete.
+Status: the earlier narrow production hardware portability slice is retained,
+but the current HAVPE landing is **not complete**. A subsequent physical
+count-to-100 request exposed a reproducible class of long-downlink failure:
+Grok generated the complete response, while the 32-slot device receive lane
+reached its bound and the `/pcm` generation disappeared after about 30.68
+seconds. The exact incident and ongoing correction are recorded in
+[`voice-device-adventures-2026-08-02.md`](./voice-device-adventures-2026-08-02.md).
+No short smoke below should be read as overriding that failed endurance gate.
+
+## Current firmware: ring UI and physical call/reset control
+
+The current build uses nine of the first-party HAVPE's twelve addressable ring
+pixels as three independent status sectors:
+
+- pixels 0–2 show connectivity and network quality: red while Wi-Fi is absent,
+  amber while Wi-Fi is present but the Cap'n Web control mount is not ready,
+  then one to three red/amber/green RSSI bars once mounted;
+- pixels 3–5 are a blue speaker-output amplitude meter. Both audio sectors are
+  amber while `/pcm` connects and red if the PCM transport fails;
+- pixels 6–8 show microphone state: one dim green pixel means the continuous
+  AEC-clean capture path is listening, and one to three brighter green pixels
+  show microphone amplitude;
+- pixels 9–11 are deliberately dark and reserved rather than being given an
+  ambiguous fourth meaning.
+
+The status renderer runs only in the low-priority cooperative owner, at a 20 Hz
+ceiling, and samples RSSI at 1 Hz. It stages all twelve pixels before one RMT
+refresh and skips equal frames. The realtime microphone owner reuses the peak
+already computed by its AEC observation; the realtime speaker owner inspects
+one in eight native 16 kHz samples, or 2,000 comparisons per second. Each only
+raises an atomic scalar peak. Neither audio owner touches LEDs, allocates,
+logs, waits for the UI, or queues UI history. The UI destructively takes both
+peak holds each interval, so pausing it cannot replay old activity. A remote
+`leds.set` or `leds.fill` capability remains visible for three seconds before
+status rendering retakes the ring.
+
+The current build owns the centre button on active-low GPIO0. A short press
+toggles the full-duplex server-VAD conversation on **release** through the same
+portable voice-satellite event owner used by remote RPC. Holding for three
+seconds arms a whole-ring magenta reboot indicator; releasing then calls
+`esp_restart()`. Reboot waits for the debounced release because GPIO0 is an
+ESP32-S3 boot strap: restarting while it remains low can enter the ROM
+downloader. This is an application reboot, not a factory reset, so Wi-Fi and
+project provisioning remain intact. A button held during boot is treated as
+baseline and does nothing until released.
+
+`iterate-kit-havpe-ui-test` pins sector ownership, RSSI boundaries, silent
+listening, speaker/microphone levels, PCM failure, reboot-arm precedence,
+short-press exclusivity, boot-held suppression, release-before-reboot, and
+clock rollback. `iterate-kit-debounced-button-test` separately preserves the
+electrical bounce and timing contract. Both pass under the host build; the
+ESP-IDF target builds with warnings as errors.
+
+The exact current image was freshly built and flashed to stable USB identity
+`D8:3B:DA:46:20:34`, preserving the existing production and Wi-Fi
+configuration. Esptool identified that MAC and hash-verified every written
+region. The padded application is 1,073,520 bytes (`0x106170`, SHA-256
+`99b5d2b3c312d99a9a482a2f8ce055a1bb0a36f431de27e912f04937b822a40e`);
+the logical image is 1,073,406 bytes. DIRAM is 210,019 bytes with 131,741
+remaining. Separately reported IRAM remains 16,383 of 16,384 bytes, so the
+existing one-byte hardening risk has not been concealed.
+
+The finite post-flash production smoke is retained at
+`apps/kit/evidence/home-assistant-voice-preview-edition-ring-ui/2026-08-02T19-34-37-000Z/manifest.json`.
+Through `os.iterate.com` and
+`itx.kit.homeAssistantVoicePreviewEdition`, one real-Grok conversation made
+exactly one `/pcm` connection and the remote hang-up made exactly one
+disconnect. A Mac-spoken prompt produced 1,198 clean capture publications,
+1,166 WebSocket uplink frames, and 136 received downlink frames. RSSI was -39
+to -45 dBm. There were zero Wi-Fi disconnects, control/PCM WebSocket errors,
+raw-write failures, transport incidents, protocol failures, downlink drops,
+audio failures, or freshness restarts. The production `leds.fill` capability
+also acknowledged a green frame, after which the bounded status-UI override
+expired.
+
+This short smoke intentionally does not replace the acoustic/AEC acceptance
+run below. It observed 164 producer-backpressure drops and then discarded the
+remaining 31-frame uplink tail at lifecycle shutdown (`195 - 164`), the
+existing bounded freshness policy rather than a retry queue. Because this
+smoke did not retain interval snapshots around those lifecycle edges, it is
+not promoted as a new frame-conservation acceptance run. The mechanical
+button and long-hold reboot are host-modelled and flashed but were not
+physically actuated by the unattended proof.
 
 ## Retained acceptance run
 
@@ -96,6 +176,21 @@ These failures demonstrate the intended attribution rule: network trouble can
 explain a rejected audio interval, but cannot make it pass. The separate clean
 run above is the acceptance authority.
 
+Three current-source revalidation runs after the retained acceptance were also
+kept rather than thresholded into passes. All three reached real Grok, produced
+the exact expected provider turns with no self-echo turn, conserved every
+clean-capture frame, and reported zero provider, PCM, reconnect, or AEC
+failure. They measured 14.383 dB (1,904/1,904 frames), 19.282 dB
+(1,852/1,852), and 25.152 dB (1,801/1,801) of far-end suppression. The first
+failed independent Mac transcription; the second combined an unrelated
+acoustic prefix with a 163.222 ms worker RTT; the third captured unrelated
+ambient speech (`No, no`) and a 112.372 ms device RTT. They remain rejected at
+`home-assistant-voice-preview-edition-current-valid`,
+`home-assistant-voice-preview-edition-current-rerun-valid`, and
+`home-assistant-voice-preview-edition-current-final-valid`. Their clean digital
+and AEC evidence strengthens the implementation diagnosis without weakening
+the acoustic or network-validity gates.
+
 ## Scorer and review reconciliation
 
 Metrics schema v3 exposes the exact raw and clean absolute sums that firmware
@@ -122,8 +217,8 @@ not silently treated as complete.
   vertical proof as endurance.
 - Reduce or rigorously account for the reported one-byte IRAM margin before
   broad feature growth.
-- Retain physical-button and manual user-flow provenance separately from the
-  remote capability-driven unattended harness.
+- Retain a mechanical centre-button/manual user-flow provenance run separately
+  from the now-green shared debounce/event-owner and remote production smoke.
 - Continue with the already recorded final ordering: restore the StackChan
   talking-head sprite renderer through the shared normalized renderer seam;
   do not couple sprites back into either realtime audio owner.
