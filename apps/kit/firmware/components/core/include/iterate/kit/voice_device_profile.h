@@ -74,22 +74,19 @@ enum {
    */
   ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES = 960000,
   /*
-   * 1000 ms of true cushion, plus one hardware ring.
+   * 300 ms of true cushion, plus one hardware ring.
    *
-   * 390 ms was sized for a sender that PACED frames to arrive just in time.
-   * That sender is gone: the whole answer now leaves as fast as the wire
-   * takes it, and it arrives in clumps — measured at 139 frames (2.8 s of
-   * speech) inside one second, then nothing for the next. Starting playback
-   * on 390 ms and then running dry between clumps is where the remaining
-   * holes come from: the device concealed, and one second later held 1.4
-   * seconds of audio it could have been playing.
+   * Raised to 1000 ms on the theory that a bigger cushion would stop the
+   * holes. It did not: measured on the CLI, concealment went 1.06% -> 1.24%,
+   * slightly WORSE, because the holes were never starvation. The real causes
+   * were a ring too small to hold an answer and a debt mechanism deleting
+   * frames, both since fixed.
    *
-   * Waiting for a second of it costs almost nothing in latency, because at
-   * those arrival rates a second of audio lands in well under a second — and
-   * an answer too short to reach the mark is played the moment the sender
-   * says it is finished, which is what makes raising this safe at all.
+   * So this goes back down, because prefill is pure added latency before the
+   * first word and buys nothing once the sender ships whole answers. The
+   * device holds a 30 s ring; it does not need to wait a second to start.
    */
-  ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 1000 * 32 + 2880,
+  ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 300 * 32 + 2880,
   ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS = 400,
   /*
    * Backlog beyond which a frame is skipped to catch up — now effectively
