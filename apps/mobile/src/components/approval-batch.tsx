@@ -216,9 +216,9 @@ export function ApprovalBatchBody({
             </>
           ) : null}
         </View>
-      ) : showThreadInfo && streamContext ? (
+      ) : showThreadInfo && streamContext?.kind === "scope" ? (
         <Text style={styles.sourceMeta}>Triggered from {streamContext.scopePath}</Text>
-      ) : showThreadInfo ? (
+      ) : showThreadInfo && streamContext === undefined ? (
         <Text style={styles.sourceMeta}>Source metadata unavailable for this request.</Text>
       ) : null}
 
