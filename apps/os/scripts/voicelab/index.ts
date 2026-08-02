@@ -13,3 +13,4 @@ export { reveal } from "./reveal.ts";
 export { reliability } from "./reliability.ts";
 export { soak } from "./soak.ts";
 export { talk } from "./talk.ts";
+export { wire } from "./wire.ts";
