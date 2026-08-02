@@ -77,9 +77,60 @@ During turn three the worker route suffered repeated 147-404 ms probes and
 timeouts; the PCM socket disconnected and the deployed generation was
 replaced. The harness stopped immediately and classified the interval
 `network-invalid` rather than blaming the audio engine or claiming the two
-completed turns as a pass. A current strict-silent-start, multi-turn artifact
-with every network gate valid remains the final evidence gate for this
-hardening checkpoint.
+completed turns as a pass. That rejected interval remains useful fault
+evidence; the final clean-network gate is closed by the later run below.
+
+### Network-valid silent-start acceptance closure (2026-08-02 08:13 UTC)
+
+After the upstream route recovered, a freshly reset physical Stick completed a
+new unattended three-turn run through the same installed production userspace
+object and one `/pcm` generation. Call-open produced no provider or device PCM.
+Provider session readiness arrived 739 ms after the remote conversation-start
+event; all three later answers followed explicit non-empty remote PTT releases.
+The terminal worker ledger contains exactly three `response.create` messages,
+three completed responses, zero initial-greeting requests, zero unsolicited
+responses, and zero unsolicited PCM bytes.
+
+The physical transport ledger is exact. The Stick captured and userspace
+accepted 1,489 microphone frames. Userspace emitted 420 response frames and the
+device accepted, submitted to I2S DMA, and completed all 420. Each individual
+turn also conserved frames (495/128, 480/144, and 514/148 uplink/downlink).
+There were no audio drops, socket drops, playback flushes, underruns, freshness
+drops, DMA deadline misses, queue overflows, resets, protocol failures, or
+restart incidents. Forty-five live metric callbacks arrived during the run;
+both Cap'n Web event and metric subscriptions remained ready with one attempt
+and zero failures. The terminal minimum internal/DMA heap was 54,571 bytes,
+main-task headroom was 2,272 bytes, audio-owner headroom was 6,652 bytes, and
+sampled CPU was 214 permille. All live queues drained to zero.
+
+This artifact is automatically `valid`, not merely a digitally clean result
+during an unknown network interval. All 46 device, router, and production
+worker probes replied. Their maximum RTTs were respectively 68.145 ms,
+14.503 ms, and 26.655 ms; the worker average was 14.655 ms. All 47 device link
+samples stayed associated at -50 through -48 dBm. DNS took 1.095 ms, the
+measured HTTPS connection took 132.385 ms, and the PCM socket remained open
+with zero disconnects, reconnects, lower-transport failures, or transport
+errors throughout the 45.369-second evidence interval.
+
+Grok invoked `changeColour({colour: "green"})` through `env.ITX` and the result
+was `{colour: "green", ok: true}`. The worker durably appended all 108 observed
+non-PCM provider events with zero pending, dropped, or failed appends. The
+nearby Mac independently transcribed the first physical reply exactly as
+`I'll use the tool to change the color to green.`, matching the provider
+transcript. The unchanged fixed 120-RMS acoustic threshold still recorded zero
+active windows; under the explicitly approved landing rule this is retained as
+an `independent-stt-provisional` acoustic pass, not hidden or used to relax any
+transport, frame, reset, brownout, or network criterion. The stricter acoustic
+amplitude gate remains follow-up work.
+
+The immutable evidence is under
+`apps/kit/evidence/m5sticks3-silent-start-strict-auth-16dma-valid/2026-08-02T08-13-42-361Z/iterate-kit-acoustic-QuSRLw/`.
+Its manifest, network report, raw provider journal, and Mac PCM capture hashes
+are respectively
+`0c3ee652313fb2d62f961301181526b94287e9837e9f9274d61afdae6523d9ca`,
+`7f53d609eed89778905512867800b9b5af8bae33b5dedca5f3ae7c84cb59fa0e`,
+`eef9bfb89b4163ebb7ba55a670a5c68a072dc6f76937677ebdc8cf6f27d1561a`,
+and `1e85d6ddbdfb5158693221fa501d00afe8614a5918e965fc13ad00275433a5ab`.
 
 The exact hashes for the stronger three-turn application artifact are:
 manifest `6845bf3f488dae8d3895a2c60fc304fd9e5c35ab115f72c291693d2a01f65260`,
