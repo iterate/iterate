@@ -237,6 +237,69 @@ static void a_new_call_starts_clean(void) {
   assert(playout.ignored_other_call == 1U);
 }
 
+/*
+ * THE LATCH. Interrupting must not invent an answer number.
+ *
+ * Local interrupts fire on every press of the talk button; the sender numbers
+ * only the answers it actually speaks. A turn the customer abandons, or one
+ * the provider drops, advances the local count and not the sender's — and an
+ * implementation that expressed the interrupt as ++answer then discarded every
+ * frame that followed as stale, permanently, on a device that looked perfectly
+ * healthy. Measured in a live run: transcripts proving the model answered, and
+ * zero frames of it played.
+ */
+static void interrupting_a_turn_that_is_never_answered_does_not_deafen_us(void)
+{
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+  uint32_t press;
+
+  iterate_kit_playout_reset(&playout, 7U);
+  /* Answer 1 plays normally. */
+  frame = at(7U, 1U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+
+  /* Five turns where the person speaks and nothing is ever answered. */
+  for (press = 0U; press < 5U; ++press) {
+    iterate_kit_playout_interrupt(&playout);
+  }
+
+  /* The sender's next answer is #2, because it has only ever spoken once. */
+  frame = at(7U, 2U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(7U, 2U, 1U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+  assert(playout.appended == 1U);
+}
+
+/*
+ * An interrupt with nothing playing must not abandon the answer that is about
+ * to arrive. Pressing talk before the assistant has said anything is ordinary,
+ * and it used to poison the very next answer.
+ */
+static void interrupting_silence_abandons_nothing(void)
+{
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 7U);
+  iterate_kit_playout_interrupt(&playout);
+  frame = at(7U, 0U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(7U, 0U, 1U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+}
+
 /* A null caller must not crash a device that is already having a bad day. */
 static void tolerates_missing_arguments(void) {
   struct iterate_kit_playout playout;
@@ -263,6 +326,8 @@ int main(void) {
   ignores_speech_belonging_to_another_call();
   counts_holes_where_they_appear();
   a_new_call_starts_clean();
+  interrupting_a_turn_that_is_never_answered_does_not_deafen_us();
+  interrupting_silence_abandons_nothing();
   tolerates_missing_arguments();
   return 0;
 }

@@ -794,10 +794,23 @@ void on_control(void *, iterate_kit_voicelab_control control) {
     iterate_kit_voice_playback_clock_reprime(&runtime.playback_clock);
     ++runtime.barge_in_flushes;
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
+    /*
+     * The answer is finished, so a dry buffer from here is not a deficit — it
+     * is simply the end. Telling playback that keeps concealment meaning
+     * "audio failed to arrive in time", which is the only reading worth
+     * having.
+     *
+     * It must NOT interrupt the playout. `response.done` is one small text
+     * event and the answer is hundreds of large audio events, all sent as
+     * fast as the wire takes them, so the completion routinely arrives FIRST.
+     * Interrupting here marked the answer abandoned and every frame of it
+     * that followed was discarded as stale — measured as turns where the
+     * transcript proved the model had answered and the speaker played
+     * nothing at all. The next answer carries a higher number and supersedes
+     * this one on its own; there is nothing to prepare.
+     */
     runtime.answer_done = true;
     iterate_kit_voice_playback_clock_answer_done(&runtime.playback_clock);
-    /* Prepare identity for a sequence that restarts at the next answer. */
-    iterate_kit_playout_interrupt(&runtime.playout);
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
     log_line("info", "call accepted");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {

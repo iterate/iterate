@@ -22,6 +22,8 @@ void iterate_kit_playout_reset(
   playout->answer = 0U;
   playout->frame = 0U;
   playout->answer_started = false;
+  playout->abandoned = 0U;
+  playout->has_abandoned = false;
   playout->appended = 0U;
   playout->replaced = 0U;
   playout->ignored_other_call = 0U;
@@ -35,13 +37,26 @@ void iterate_kit_playout_interrupt(struct iterate_kit_playout *playout) {
     return;
   }
   /*
-   * Step PAST the answer being abandoned rather than merely marking it
-   * finished. The frames already in flight carry the old number, and the only
-   * test that rejects them without a second flag is "older than the one we
-   * are on". The server's next answer will be numbered higher still, which
-   * this then accepts as an ordinary REPLACE.
+   * NAME the answer being abandoned. Do not invent a new number.
+   *
+   * The obvious implementation is `++playout->answer`, and it is a latch that
+   * silences the device permanently. Local interrupts happen on every press
+   * of the talk button; the sender's numbers advance only when the model
+   * actually starts speaking. Any turn that produces no answer — the customer
+   * changed their mind, the provider dropped the turn, the model chose
+   * silence — drifts the two apart by one, and from that moment every frame
+   * that arrives is numbered BELOW the local counter and is discarded as
+   * stale. Forever. Measured: turns where the transcript proves the model
+   * answered and the device received zero frames of it.
+   *
+   * So the local side never authors a number. It records which answer it no
+   * longer wants, and the sender's next answer — whatever it is numbered —
+   * supersedes it as an ordinary newer answer.
    */
-  ++playout->answer;
+  if (playout->answer_started) {
+    playout->abandoned = playout->answer;
+    playout->has_abandoned = true;
+  }
   playout->frame = 0U;
   playout->answer_started = false;
 }
@@ -80,11 +95,20 @@ enum iterate_kit_playout_action iterate_kit_playout_classify(
     return ITERATE_KIT_PLAYOUT_IGNORE;
   }
   /*
-   * Speech from an answer that has been superseded — the person interrupted,
-   * or the server cancelled and started again. Playing it is the failure a
-   * listener describes as "it kept talking after I did".
+   * Speech from an answer that has been superseded — the sender cancelled and
+   * started again. Playing it is the failure a listener describes as "it kept
+   * talking after I did".
    */
   if (frame->answer < playout->answer) {
+    ++playout->ignored_stale_answer;
+    return ITERATE_KIT_PLAYOUT_IGNORE;
+  }
+  /*
+   * Speech from the answer the person talked over. Its frames keep arriving
+   * for a round trip after the button goes down, and resuming a sentence
+   * somebody has already cut off is the rudest thing this device does.
+   */
+  if (playout->has_abandoned && frame->answer == playout->abandoned) {
     ++playout->ignored_stale_answer;
     return ITERATE_KIT_PLAYOUT_IGNORE;
   }
@@ -104,6 +128,8 @@ enum iterate_kit_playout_action iterate_kit_playout_classify(
    */
   if (frame->answer > playout->answer || !playout->answer_started) {
     ++playout->replaced;
+    /* A newer answer settles the interruption: nothing is abandoned now. */
+    playout->has_abandoned = false;
     playout->answer = frame->answer;
     playout->frame = frame->frame;
     playout->answer_started = true;

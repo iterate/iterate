@@ -89,6 +89,17 @@ struct iterate_kit_playout {
   uint32_t frame;
   /** False until the first frame of `answer` has been accepted. */
   bool answer_started;
+  /**
+   * The answer the person talked over, if any, and whether there is one.
+   *
+   * Kept as a NAME rather than expressed by advancing `answer`, because the
+   * local side must never author a number the sender then has to catch up
+   * to: local interrupts fire on every press of the talk button while the
+   * sender numbers only the answers it actually speaks, so an invented
+   * number drifts ahead and silences the device permanently.
+   */
+  uint32_t abandoned;
+  bool has_abandoned;
   uint32_t appended;
   uint32_t replaced;
   uint32_t ignored_other_call;
