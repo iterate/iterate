@@ -219,6 +219,31 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     });
     expect(llmRequests).toEqual([]);
 
+    // ── The run's approvals read IN CONTEXT: each settled "ran code" card
+    // wears a status glyph while collapsed (✓ for the approved lane, ✗ for
+    // the rejected one), and its code step expands into Script | Approvals
+    // tabs — the Approvals tab rendering the batch through the same shared
+    // body as the Notifications expansion, decision badge and policy
+    // included.
+    const approvedCard = page
+      .getByTestId(/^activity-card-/)
+      .filter({ has: page.getByText("✓", { exact: true }) });
+    const rejectedCard = page
+      .getByTestId(/^activity-card-/)
+      .filter({ has: page.getByText("✗", { exact: true }) });
+    await spinnerWaiter.settings.run({ disabled: true }, async () => {
+      await approvedCard.waitFor({ timeout: 30_000 });
+      await rejectedCard.waitFor({ timeout: 15_000 });
+      await approvedCard.click({ timeout: 15_000 });
+      await approvedCard.getByRole("button", { name: "Approvals" }).click({ timeout: 15_000 });
+      await approvedCard.getByText("Approved", { exact: true }).waitFor({ timeout: 15_000 });
+      await approvedCard
+        .getByText("The mobile approvals spec holds these for a human")
+        .waitFor({ timeout: 15_000 });
+      // Collapse it back so the thread reads clean for the next act.
+      await approvedCard.getByText("✓", { exact: true }).click({ timeout: 15_000 });
+    });
+
     // ── The context travels to the NOTIFICATIONS view — the approvals
     // surface now that the standalone screen is retired: each batch's row
     // expands into its full history, wearing the thread's STATUS at the time
