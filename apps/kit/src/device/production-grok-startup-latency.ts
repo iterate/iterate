@@ -1,12 +1,13 @@
 /**
- * Button B to first physical-device PCM is the customer-visible call-start
- * boundary. The 2.5-second ceiling leaves room for ordinary provider/network
- * variation around the measured 1.473-second production run while still
- * making the former 4.006-second synchronous-credential path a hard failure.
- * Tighten this from a distribution of clean runs; do not raise it to absorb an
- * unexplained regression.
+ * Button B to a configured provider session is the manual-PTT call-start
+ * boundary. The device must remain silent at this point: requiring downlink
+ * PCM here would turn the deliberately removed unsolicited greeting into the
+ * harness's success oracle. The 2.5-second ceiling still rejects the measured
+ * 3.314-second synchronous-credential path while leaving margin around the
+ * current 672 ms production result. First-answer latency belongs to each PTT
+ * turn and must be measured from its release, not from opening the call.
  */
-export const productionGrokMaximumFirstAudioLatencyMs = 2_500;
+export const productionGrokMaximumProviderReadyLatencyMs = 2_500;
 
 export interface ProductionGrokStartupTiming {
   credentialReadyBeforeConversationMs?: number | null;
@@ -17,37 +18,37 @@ export interface ProductionGrokStartupTiming {
 }
 
 export interface ProductionGrokStartupLatencyAssessment {
-  maximumFirstAudioLatencyMs: number;
-  observedFirstAudioLatencyMs: number | null;
+  maximumProviderReadyLatencyMs: number;
+  observedProviderReadyLatencyMs: number | null;
   passed: boolean;
   reasons: string[];
 }
 
-/** Judges the full userspace/provider/downlink startup path, not a partial handshake. */
+/** Judges whether call infrastructure is ready without authorizing provider speech. */
 export function assessProductionGrokStartupLatency(
   timing: ProductionGrokStartupTiming,
 ): ProductionGrokStartupLatencyAssessment {
-  const observedFirstAudioLatencyMs = timing.firstDevicePcmFromConversationMs ?? null;
+  const observedProviderReadyLatencyMs = timing.providerSessionReadyFromConversationMs ?? null;
   const reasons: string[] = [];
-  if (observedFirstAudioLatencyMs === null) {
-    reasons.push("first device audio latency from conversation start was not observed");
+  if (observedProviderReadyLatencyMs === null) {
+    reasons.push("provider session readiness from conversation start was not observed");
   } else if (
-    !Number.isSafeInteger(observedFirstAudioLatencyMs) ||
-    observedFirstAudioLatencyMs < 0
+    !Number.isSafeInteger(observedProviderReadyLatencyMs) ||
+    observedProviderReadyLatencyMs < 0
   ) {
     reasons.push(
-      "first device audio latency from conversation start is not a non-negative integer",
+      "provider session readiness from conversation start is not a non-negative integer",
     );
-  } else if (observedFirstAudioLatencyMs > productionGrokMaximumFirstAudioLatencyMs) {
+  } else if (observedProviderReadyLatencyMs > productionGrokMaximumProviderReadyLatencyMs) {
     reasons.push(
-      `first device audio ${observedFirstAudioLatencyMs}ms exceeds ` +
-        `${productionGrokMaximumFirstAudioLatencyMs}ms`,
+      `provider session readiness ${observedProviderReadyLatencyMs}ms exceeds ` +
+        `${productionGrokMaximumProviderReadyLatencyMs}ms`,
     );
   }
 
   return {
-    maximumFirstAudioLatencyMs: productionGrokMaximumFirstAudioLatencyMs,
-    observedFirstAudioLatencyMs,
+    maximumProviderReadyLatencyMs: productionGrokMaximumProviderReadyLatencyMs,
+    observedProviderReadyLatencyMs,
     passed: reasons.length === 0,
     reasons,
   };

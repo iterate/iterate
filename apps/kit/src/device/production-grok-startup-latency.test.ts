@@ -1,39 +1,38 @@
 import { describe, expect, test } from "vitest";
 import {
   assessProductionGrokStartupLatency,
-  productionGrokMaximumFirstAudioLatencyMs,
+  productionGrokMaximumProviderReadyLatencyMs,
 } from "./production-grok-startup-latency.ts";
 
 describe("production Grok call-start latency", () => {
-  test("accepts the measured prewarmed path within the physical first-audio budget", () => {
+  test("accepts a prewarmed manual-PTT call that is ready and deliberately silent", () => {
     /*
-     * The customer-visible boundary starts at Button B's conversation event
-     * and ends only once PCM is sent back to the physical device. Provider
-     * connection alone is not success: generation or downstream delivery can
-     * still leave the screen saying Connecting for several more seconds.
+     * Button B starts infrastructure, not an assistant turn. This is the exact
+     * shape captured before the first remote PTT in production: provider ready
+     * in 672 ms and no device/provider PCM. Requiring first audio would reward
+     * the unsolicited "How can I help you?" behavior this product forbids.
      */
     expect(
       assessProductionGrokStartupLatency({
-        credentialReadyBeforeConversationMs: 825,
-        firstDevicePcmFromConversationMs: 1_473,
-        firstProviderPcmFromConversationMs: 1_264,
-        providerSessionReadyFromConversationMs: 629,
-        providerWebSocketOpenFromConversationMs: 430,
+        credentialReadyBeforeConversationMs: 10_526,
+        firstDevicePcmFromConversationMs: null,
+        firstProviderPcmFromConversationMs: null,
+        providerSessionReadyFromConversationMs: 672,
+        providerWebSocketOpenFromConversationMs: 480,
       }),
     ).toEqual({
-      maximumFirstAudioLatencyMs: productionGrokMaximumFirstAudioLatencyMs,
-      observedFirstAudioLatencyMs: 1_473,
+      maximumProviderReadyLatencyMs: productionGrokMaximumProviderReadyLatencyMs,
+      observedProviderReadyLatencyMs: 672,
       passed: true,
       reasons: [],
     });
   });
 
-  test("rejects the old synchronous credential path even when the turn eventually works", () => {
+  test("rejects the old synchronous credential path before any PTT is attempted", () => {
     /*
-     * Before credential prewarming, an otherwise healthy production run took
-     * 4,006 ms from conversation start to the first device PCM frame. Digital
-     * frame conservation later passed, so without this explicit UX gate that
-     * regression would once again look green.
+     * Before credential prewarming the provider session itself took 3,314 ms
+     * after Button B. Later PCM conservation cannot make that call-opening
+     * stall acceptable, even though first audio is no longer a start oracle.
      */
     const assessment = assessProductionGrokStartupLatency({
       credentialReadyBeforeConversationMs: 0,
@@ -45,31 +44,31 @@ describe("production Grok call-start latency", () => {
 
     expect(assessment.passed).toBe(false);
     expect(assessment.reasons).toEqual([
-      `first device audio 4006ms exceeds ${productionGrokMaximumFirstAudioLatencyMs}ms`,
+      `provider session readiness 3314ms exceeds ${productionGrokMaximumProviderReadyLatencyMs}ms`,
     ]);
   });
 
-  test("rejects missing first-audio timing instead of silently skipping the gate", () => {
+  test("rejects missing provider readiness instead of mistaking silence for readiness", () => {
     const assessment = assessProductionGrokStartupLatency({
       firstDevicePcmFromConversationMs: null,
     });
 
     expect(assessment.passed).toBe(false);
     expect(assessment.reasons).toEqual([
-      "first device audio latency from conversation start was not observed",
+      "provider session readiness from conversation start was not observed",
     ]);
   });
 
   test.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 1.5])(
-    "rejects malformed first-audio timing %s",
-    (firstDevicePcmFromConversationMs) => {
+    "rejects malformed provider readiness timing %s",
+    (providerSessionReadyFromConversationMs) => {
       const assessment = assessProductionGrokStartupLatency({
-        firstDevicePcmFromConversationMs,
+        providerSessionReadyFromConversationMs,
       });
 
       expect(assessment.passed).toBe(false);
       expect(assessment.reasons).toEqual([
-        "first device audio latency from conversation start is not a non-negative integer",
+        "provider session readiness from conversation start is not a non-negative integer",
       ]);
     },
   );

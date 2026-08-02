@@ -78,7 +78,14 @@ describe("userspace PCM session bridge", () => {
       onProviderFunctionCall: options.onProviderFunctionCall,
       onProviderUnavailable: options.onProviderUnavailable,
       sessionId: "prj_test",
-      turnDetection: options.turnDetection ?? "manual",
+      /*
+       * Most bridge tests inject provider-owned response media directly and
+       * therefore model server VAD. Manual PTT tests opt in explicitly and
+       * must traverse commit acknowledgement -> response.create before Grok
+       * is permitted to speak. Making that distinction visible prevents a
+       * convenient fixture from weakening the physical silent-start contract.
+       */
+      turnDetection: options.turnDetection ?? "server-vad",
     });
     bridge.setConversationActive(true);
     expect(bridge.attachProvider(provider.server)).toBe(true);
@@ -173,10 +180,6 @@ describe("userspace PCM session bridge", () => {
     device.client.send(microphoneFrame);
     await vi.waitFor(() => expect(uplink).toHaveLength(1));
     expect(uplink[0]).toEqual(microphoneFrame);
-    /* A response is playable only after the ordered media turn has ended. */
-    device.client.send(new Uint8Array(0));
-    await vi.waitFor(() => expect(bridge.metrics().uplinkEndMarkers).toBe(1));
-
     provider.client.send(microphoneFrame.slice(0, 117));
     provider.client.send(microphoneFrame.slice(117));
     provider.client.send(JSON.stringify({ type: "response.done" }));
@@ -316,9 +319,21 @@ describe("userspace PCM session bridge", () => {
   });
 
   test("interruption drops stale partial playback before cancelling the provider", async () => {
-    const { bridge, device, provider } = createBridge();
+    const { bridge, device, provider } = createBridge({ turnDetection: "manual" });
     const controls = textMessages(provider.client);
     const downlink = binaryMessages(device.client);
+    /*
+     * This response must be authorized exactly as it is on the Stick. Seeding
+     * provider PCM directly used to make the test accidentally bless speech
+     * at call-open—the bug this interruption path now has to reject.
+     */
+    expect(bridge.inputStarted()).toBe(true);
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(5));
+    expect(bridge.inputStopped()).toBe(true);
+    device.client.send(new Uint8Array(0));
+    await vi.waitFor(() => expect(controls).toEqual(['{"type":"input_audio_buffer.commit"}']));
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.committed" }));
+    await vi.waitFor(() => expect(controls).toContain('{"type":"response.create"}'));
     provider.client.send(new Uint8Array(300).fill(7));
     await vi.waitFor(() => expect(bridge.metrics()).toMatchObject({ downlinkPartialBytes: 300 }));
 
@@ -337,8 +352,12 @@ describe("userspace PCM session bridge", () => {
 
     provider.client.send(new Uint8Array(340).fill(9));
     provider.client.send(JSON.stringify({ type: "response.done" }));
-    await vi.waitFor(() => expect(downlink).toHaveLength(1));
-    expect(downlink[0]).toHaveLength(0);
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(downlink).toEqual([]);
+    expect(bridge.metrics()).toMatchObject({
+      providerUnsolicitedPcmBytes: 340,
+      providerUnsolicitedResponses: 1,
+    });
   });
 
   test("server VAD streams continuously and owns interruption without manual controls", async () => {
@@ -442,7 +461,7 @@ describe("userspace PCM session bridge", () => {
      * marker is ordered behind all accepted PCM on the media socket, so the
      * bridge must wait for it before asking Grok to commit.
      */
-    const { bridge, device, provider } = createBridge();
+    const { bridge, device, provider } = createBridge({ turnDetection: "manual" });
     const controls = textMessages(provider.client);
 
     expect(bridge.inputStarted()).toBe(true);
@@ -489,7 +508,7 @@ describe("userspace PCM session bridge", () => {
      * it catches up would make a one-frame press look empty and ask neither the
      * provider nor diagnostics to account for the speech already forwarded.
      */
-    const { bridge, device, provider } = createBridge();
+    const { bridge, device, provider } = createBridge({ turnDetection: "manual" });
     const controls = textMessages(provider.client);
     const uplink = binaryMessages(provider.client);
     const first = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(31);
@@ -545,6 +564,7 @@ describe("userspace PCM session bridge", () => {
     const providerUnavailable = vi.fn();
     const { bridge, device, diagnostics, provider } = createBridge({
       onProviderUnavailable: providerUnavailable,
+      turnDetection: "manual",
     });
     const deviceClose = vi.fn();
     device.client.addEventListener("close", deviceClose);
@@ -582,7 +602,9 @@ describe("userspace PCM session bridge", () => {
      * providers are allowed to reject that command, and doing so would turn a
      * harmless no-speech gesture into a disconnected morning conversation.
      */
-    const { bridge, device, diagnostics, provider } = createBridge();
+    const { bridge, device, diagnostics, provider } = createBridge({
+      turnDetection: "manual",
+    });
     const controls = textMessages(provider.client);
 
     expect(bridge.inputStarted()).toBe(true);
@@ -610,7 +632,7 @@ describe("userspace PCM session bridge", () => {
      * non-empty frame opens a turn and the zero-length marker closes it; this
      * test is the smallest statement of that production contract.
      */
-    const { bridge, device, provider } = createBridge();
+    const { bridge, device, provider } = createBridge({ turnDetection: "manual" });
     const controls = textMessages(provider.client);
     const uplink = binaryMessages(provider.client);
     const frame = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(9);
@@ -637,7 +659,7 @@ describe("userspace PCM session bridge", () => {
      * bounded generation failure whose counter survives in the closed report.
      */
     vi.useFakeTimers();
-    const { bridge, device, diagnostics } = createBridge();
+    const { bridge, device, diagnostics } = createBridge({ turnDetection: "manual" });
 
     expect(bridge.inputStarted()).toBe(true);
     device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(23));
@@ -836,7 +858,7 @@ describe("userspace PCM session bridge", () => {
      * acknowledgement must not resurrect the stale turn and speak over the
      * newly captured microphone audio.
      */
-    const { bridge, device, provider } = createBridge();
+    const { bridge, device, provider } = createBridge({ turnDetection: "manual" });
     const controls = textMessages(provider.client);
 
     bridge.inputStarted();
@@ -863,7 +885,7 @@ describe("userspace PCM session bridge", () => {
      * enter interrupted/capture state. A later press while provider audio is
      * active remains the actual interruption case covered above.
      */
-    const { bridge, device, provider } = createBridge();
+    const { bridge, device, provider } = createBridge({ turnDetection: "manual" });
     const controls = textMessages(provider.client);
 
     expect(bridge.inputStarted()).toBe(true);
@@ -1377,7 +1399,7 @@ describe("userspace PCM session bridge", () => {
       initialGreeting: "How can I help you?",
       maximumSocketBufferedBytes: ITERATE_KIT_PCM_FRAME_BYTES * 8,
       sessionId: "prj_test",
-      turnDetection: "manual",
+      turnDetection: "server-vad",
     });
     bridge.setConversationActive(true);
     expect(bridge.attachProvider(provider.server)).toBe(true);
@@ -1454,6 +1476,84 @@ describe("userspace PCM session bridge", () => {
         '{"type":"response.create"}',
       ]),
     );
+    const downlink = binaryMessages(device.client);
+    const answer = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(47);
+    provider.client.send(JSON.stringify({ type: "response.created" }));
+    provider.client.send(answer);
+    provider.client.send(
+      JSON.stringify({ response: { status: "completed" }, type: "response.done" }),
+    );
+    await vi.waitFor(() => expect(downlink).toEqual([answer, new Uint8Array(0)]));
+  });
+
+  test("rejects every unsolicited provider response in a manual PTT call", async () => {
+    /*
+     * Button B opens infrastructure; only Button A release creates a user
+     * turn. A provider generation that speaks after session.updated without
+     * our response.create would otherwise recreate the exact unwanted
+     * "How can I help you?" heard on the physical Stick while every local
+     * greeting counter honestly remained zero. Treat response authorization
+     * as a manual-mode protocol invariant: cancel the unsolicited response,
+     * retain its raw control events for diagnosis, and admit none of its PCM.
+     */
+    const device = socketPair();
+    const provider = socketPair();
+    sockets.push(device.client, device.server, provider.client, provider.server);
+    const providerControls = textMessages(provider.client);
+    const deviceMessages = binaryMessages(device.client);
+    const diagnostics: PcmProxyDiagnostic[] = [];
+    const bridge = new PcmSessionBridge({
+      device: device.server,
+      maximumSocketBufferedBytes: ITERATE_KIT_PCM_FRAME_BYTES * 8,
+      onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
+      sessionId: "prj_test",
+      turnDetection: "manual",
+    });
+    bridge.setConversationActive(true);
+    expect(bridge.attachProvider(provider.server)).toBe(true);
+
+    provider.client.send(JSON.stringify({ type: "session.updated" }));
+    provider.client.send(JSON.stringify({ type: "response.created" }));
+    provider.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(71));
+    provider.client.send(
+      JSON.stringify({ type: "response.done", response: { status: "cancelled" } }),
+    );
+
+    await vi.waitFor(() => expect(providerControls).toContain('{"type":"response.cancel"}'));
+    await new Promise((resolve) => setTimeout(resolve, 25));
+    expect(deviceMessages).toEqual([]);
+    expect(diagnostics).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "unsolicited-provider-response", severity: "error" }),
+      ]),
+    );
+    expect(bridge.metrics()).toMatchObject({
+      downlinkFrames: 0,
+      providerUnsolicitedPcmBytes: ITERATE_KIT_PCM_FRAME_BYTES,
+      providerUnsolicitedResponses: 1,
+      providerResponseCreateMessagesSent: 0,
+    });
+  });
+
+  test("manual PTT mode cannot be configured to greet at connection time", () => {
+    /*
+     * Keeping the old optional greeting field valid in manual mode made a
+     * future worker edit capable of silently undoing the product decision.
+     * Reject that invalid composition at construction instead of depending on
+     * every caller to remember that Button B is not an assistant turn.
+     */
+    const device = socketPair();
+    sockets.push(device.client, device.server);
+    expect(
+      () =>
+        new PcmSessionBridge({
+          device: device.server,
+          initialGreeting: "How can I help you?",
+          maximumSocketBufferedBytes: ITERATE_KIT_PCM_FRAME_BYTES * 8,
+          sessionId: "prj_test",
+          turnDetection: "manual",
+        }),
+    ).toThrow("Manual push-to-talk sessions cannot configure an initial greeting.");
   });
 
   test("keeps the device lane warm while call lifetime creates and retires providers", async () => {
@@ -1473,7 +1573,6 @@ describe("userspace PCM session bridge", () => {
     firstProvider.client.addEventListener("close", providerClosed);
     const bridge = new PcmSessionBridge({
       device: device.server,
-      initialGreeting: "How can I help you?",
       maximumSocketBufferedBytes: ITERATE_KIT_PCM_FRAME_BYTES * 8,
       sessionId: "prj_test",
       turnDetection: "manual",

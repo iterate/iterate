@@ -479,7 +479,7 @@ describe("M5StickS3 playback endurance target", () => {
       {
         playback_maximum_downlink_interarrival_ms: 40,
         playback_maximum_eof_to_successful_refill_us: 10_000,
-        playback_maximum_receive_to_dma_start_ms: 120,
+        playback_maximum_receive_to_dma_start_ms: 400,
         playback_maximum_write_call_duration_us: 5_000,
       },
     );

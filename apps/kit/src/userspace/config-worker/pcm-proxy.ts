@@ -75,6 +75,7 @@ export interface PcmProxyDiagnostic {
     | "provider-send-failed"
     | "provider-unavailable"
     | "socket-error"
+    | "unsolicited-provider-response"
     | "uplink-backpressure"
     | "uplink-end-marker-timeout"
     | "unexpected-manual-turn-control"
@@ -144,6 +145,8 @@ export interface PcmSessionMetrics {
   providerResponsesCancelled: number;
   providerResponsesCompleted: number;
   providerResponsesFailed: number;
+  providerUnsolicitedPcmBytes: number;
+  providerUnsolicitedResponses: number;
   providerSessionReadyAtMs: number | null;
   providerSendFailures: number;
   providerSpeechStarts: number;
@@ -264,12 +267,17 @@ export class PcmSessionBridge {
   #providerResponsesCancelled = 0;
   #providerResponsesCompleted = 0;
   #providerResponsesFailed = 0;
+  #providerUnsolicitedPcmBytes = 0;
+  #providerUnsolicitedResponses = 0;
   #providerSessionReadyAtMs: number | null = null;
   #providerSendFailures = 0;
   #providerSpeechStarts = 0;
   #providerSpeechStops = 0;
   #responseAfterCommitPending = false;
   #responseActive = false;
+  #manualResponseAuthorized = false;
+  #manualResponseStarted = false;
+  #unsolicitedResponseActive = false;
   #serverVadAwaitingResponse = false;
   #serverVadSpeechActive = false;
   #nextDownlinkAt = 0;
@@ -305,6 +313,9 @@ export class PcmSessionBridge {
       (initialGreetingBytes === 0 || initialGreetingBytes > 160)
     ) {
       throw new Error("The initial greeting must contain from one through 160 UTF-8 bytes.");
+    }
+    if (options.turnDetection === "manual" && options.initialGreeting !== undefined) {
+      throw new Error("Manual push-to-talk sessions cannot configure an initial greeting.");
     }
     this.#device = options.device;
     this.#initialGreeting = options.initialGreeting;
@@ -403,6 +414,8 @@ export class PcmSessionBridge {
       providerResponsesCancelled: this.#providerResponsesCancelled,
       providerResponsesCompleted: this.#providerResponsesCompleted,
       providerResponsesFailed: this.#providerResponsesFailed,
+      providerUnsolicitedPcmBytes: this.#providerUnsolicitedPcmBytes,
+      providerUnsolicitedResponses: this.#providerUnsolicitedResponses,
       providerSessionReadyAtMs: this.#providerSessionReadyAtMs,
       providerSendFailures: this.#providerSendFailures,
       providerSpeechStarts: this.#providerSpeechStarts,
@@ -456,6 +469,9 @@ export class PcmSessionBridge {
      * stable, but provider-buffer ownership is generation-scoped.
      */
     this.#uplinkFramesInTurn = 0;
+    this.#manualResponseAuthorized = false;
+    this.#manualResponseStarted = false;
+    this.#unsolicitedResponseActive = false;
     this.#abandonProviderResponse();
     provider.addEventListener("message", (event) => {
       /*
@@ -506,6 +522,9 @@ export class PcmSessionBridge {
       this.#serverVadSpeechActive = false;
       this.#uplinkFramesInTurn = 0;
       this.#uplinkTurnActive = false;
+      this.#manualResponseAuthorized = false;
+      this.#manualResponseStarted = false;
+      this.#unsolicitedResponseActive = false;
       return true;
     }
 
@@ -518,6 +537,9 @@ export class PcmSessionBridge {
     this.#serverVadSpeechActive = false;
     this.#uplinkFramesInTurn = 0;
     this.#uplinkTurnActive = false;
+    this.#manualResponseAuthorized = false;
+    this.#manualResponseStarted = false;
+    this.#unsolicitedResponseActive = false;
     this.#discardDownlinkQueue();
     this.#abandonProviderResponse();
     const provider = this.#provider;
@@ -726,6 +748,9 @@ export class PcmSessionBridge {
      * than current speech, and every discarded response byte remains counted.
      */
     this.#responseAfterCommitPending = false;
+    this.#manualResponseAuthorized = false;
+    this.#manualResponseStarted = false;
+    this.#unsolicitedResponseActive = false;
     this.#interrupted = true;
     this.#discardDownlinkQueue();
     const responseWasActive = this.#responseActive;
@@ -856,6 +881,11 @@ export class PcmSessionBridge {
       this.#fail("socket-error", "Provider sent an unsupported WebSocket message.");
       return;
     }
+    if (this.#turnDetection === "manual" && !this.#manualResponseAuthorized) {
+      this.#rejectUnsolicitedProviderResponse(bytes.byteLength);
+      return;
+    }
+    if (this.#turnDetection === "manual") this.#manualResponseStarted = true;
     if (
       this.#turnDetection === "server-vad" &&
       this.#interrupted &&
@@ -965,6 +995,11 @@ export class PcmSessionBridge {
       return;
     }
     if (event.type === "response.created") {
+      if (this.#turnDetection === "manual" && !this.#manualResponseAuthorized) {
+        this.#rejectUnsolicitedProviderResponse();
+        return;
+      }
+      if (this.#turnDetection === "manual") this.#manualResponseStarted = true;
       if (
         this.#turnDetection === "server-vad" &&
         this.#interrupted &&
@@ -980,6 +1015,26 @@ export class PcmSessionBridge {
     }
     if (event.type !== "response.done") return;
     const responseStatus = providerResponseStatus(event);
+    if (this.#turnDetection === "manual" && !this.#manualResponseAuthorized) {
+      this.#unsolicitedResponseActive = false;
+      this.#discardDownlinkQueue();
+      this.#abandonProviderResponse();
+      return;
+    }
+    if (
+      this.#turnDetection === "manual" &&
+      !(responseStatus === "cancelled" && !this.#manualResponseStarted)
+    ) {
+      /*
+       * One successful response.create authorizes exactly one response. xAI
+       * may report the prior cancelled generation immediately before the new
+       * response.created; retain authorization only for that explicitly
+       * observed no-start cancellation. Every completed/failed/started result
+       * consumes it, so a second provider response cannot ride the same PTT.
+       */
+      this.#manualResponseAuthorized = false;
+      this.#manualResponseStarted = false;
+    }
     this.#responseActive = false;
 
     if (this.#turnDetection === "server-vad" && this.#interrupted) {
@@ -1062,6 +1117,11 @@ export class PcmSessionBridge {
   }
 
   #handleProviderFunctionCall(provider: WebSocket, event: { type: string }): void {
+    if (this.#turnDetection === "manual" && !this.#manualResponseAuthorized) {
+      this.#rejectUnsolicitedProviderResponse();
+      return;
+    }
+    if (this.#turnDetection === "manual") this.#manualResponseStarted = true;
     const call = parseProviderFunctionCall(event);
     if (call === null) {
       this.#providerFunctionCallFailures += 1;
@@ -1588,8 +1648,10 @@ export class PcmSessionBridge {
     }
     /*
      * The provider acknowledgement above is the first instant at which its
-     * native PCM format, voice, tools, and manual turn policy are known to be
-     * installed. xAI's force_message is intentionally used instead of a
+     * native PCM format, voice, tools, and server-VAD policy are known to be
+     * installed. Manual PTT deliberately rejects this option at construction;
+     * this hook remains only for measured full-duplex/AEC experiments. xAI's
+     * force_message is intentionally used instead of a
      * synthetic user instruction plus response.create: the physical proof
      * showed that the latter remains in conversation context and can make
      * every later answer repeat the greeting. Marking this one scripted turn
@@ -1617,6 +1679,31 @@ export class PcmSessionBridge {
     if (!itemSent) return;
     this.#initialGreetingRequestedForConversation = true;
     this.#initialGreetingRequests += 1;
+  }
+
+  #rejectUnsolicitedProviderResponse(pcmBytes = 0): void {
+    if (pcmBytes > 0) {
+      this.#providerUnsolicitedPcmBytes += pcmBytes;
+      this.#downlinkDroppedBytes += pcmBytes;
+    }
+    if (this.#unsolicitedResponseActive) return;
+    this.#unsolicitedResponseActive = true;
+    this.#providerUnsolicitedResponses += 1;
+    /*
+     * In manual mode the only legal response edge is our own response.create
+     * after a non-empty microphone turn was committed and acknowledged. Raw
+     * provider events have already been journaled before this guard runs, so
+     * cancelling here is both fail-closed for the speaker and fully
+     * attributable. Keeping the socket alive lets the next real PTT turn
+     * recover without an unnecessary credential/TLS reconnect.
+     */
+    this.#diagnostic(
+      "unsolicited-provider-response",
+      "error",
+      "Manual PTT provider speech arrived without an authorized response.create.",
+      pcmBytes,
+    );
+    this.#sendProviderControl("response.cancel");
   }
 
   #sendProviderControl(type: string): boolean {
@@ -1651,7 +1738,14 @@ export class PcmSessionBridge {
     this.#providerControlMessagesSent += 1;
     const type = providerMessageType(message);
     if (type === "input_audio_buffer.commit") this.#providerCommitMessagesSent += 1;
-    if (type === "response.create") this.#providerResponseCreateMessagesSent += 1;
+    if (type === "response.create") {
+      this.#providerResponseCreateMessagesSent += 1;
+      if (this.#turnDetection === "manual") {
+        this.#manualResponseAuthorized = true;
+        this.#manualResponseStarted = false;
+        this.#unsolicitedResponseActive = false;
+      }
+    }
     return true;
   }
 
@@ -1698,6 +1792,9 @@ export class PcmSessionBridge {
     this.#lastSocketClose = { code, reason, source: "provider" };
     this.#clearUplinkEndMarkerWait();
     this.#responseAfterCommitPending = false;
+    this.#manualResponseAuthorized = false;
+    this.#manualResponseStarted = false;
+    this.#unsolicitedResponseActive = false;
     this.#abandonProviderResponse();
     this.#discardDownlinkQueue();
     if (diagnosticCode === "provider-closed") {

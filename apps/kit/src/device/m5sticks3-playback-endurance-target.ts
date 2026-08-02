@@ -149,11 +149,14 @@ export const m5StickS3PlaybackEnduranceAcceptancePolicy = deepFreeze({
       playback_maximum_downlink_interarrival_ms: 40,
       playback_maximum_eof_to_successful_refill_us: 10_000,
       /*
-       * Receive-to-DMA-start includes the intentional four-descriptor startup
-       * reserve. Bound it generously enough for that reserve while still
-       * rejecting a hidden stale queue that grows across a conversation.
+       * Receive-to-DMA-start includes the intentional sixteen-descriptor
+       * physical cycle: the final startup frame begins about 300 ms after all
+       * sixteen were admitted. The 400 ms age fence is the harder freshness
+       * policy, so matching it here permits that bounded hardware ownership
+       * while still rejecting any hidden queue that grows past the declared
+       * realtime epoch.
        */
-      playback_maximum_receive_to_dma_start_ms: 120,
+      playback_maximum_receive_to_dma_start_ms: 400,
       playback_maximum_write_call_duration_us: 5_000,
       playback_write_backpressure_destructive_resets: 0,
       playback_write_backpressure_frames_dropped: 0,

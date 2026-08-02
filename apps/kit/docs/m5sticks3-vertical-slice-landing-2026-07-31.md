@@ -10,6 +10,77 @@ interruption runs remain the stronger endurance evidence. Physical-button
 provenance and the deferred deployed-worker kill/remount lifecycle are not
 silently relabelled as complete.
 
+## Manual-PTT silent-start hardening (2026-08-02)
+
+This section supersedes every historical statement below that treats an
+opening Grok greeting as required. The current product contract is strict:
+top Button B opens or closes call infrastructure, front Button A owns a manual
+push-to-talk turn, and Grok must not speak until a non-empty microphone turn has
+ended and userspace has deliberately sent `response.create`. There is no AEC
+and no server-side VAD on the Stick.
+
+The person beside the physical device reported both unreliable later turns and
+that call start still said `How can I help you?`. Source metrics from an earlier
+automated run said `initialGreetingRequests=0`, which ruled out only our old
+explicit greeting hook; it did not prevent a provider-initiated response. The
+userspace bridge now makes response authorization an actual manual-mode
+protocol invariant. An explicit `response.create` authorizes exactly one
+provider response. Unauthorized `response.created`, function calls, binary
+PCM, and terminal response events are cancelled, retained in the raw provider
+journal, excluded from device egress, and counted as
+`providerUnsolicitedResponses` / `providerUnsolicitedPcmBytes`. Manual mode also
+rejects an `initialGreeting` option at construction. Tests reproduce the
+unwanted provider generation and require zero device frames; an explicitly
+committed PTT turn remains playable. The current production userspace object is
+`e49ad95bdb18550b98a6081b972e784557665c62`.
+
+The same correction exposed an obsolete harness assumption: it judged call
+startup by requiring first device PCM within 2.5 seconds, rewarding the exact
+unsolicited greeting now forbidden. The call-start gate instead measures
+conversation start to `session.updated` readiness; answer latency belongs to
+each later PTT release. In the first two fresh physical runs, provider readiness
+was 672 ms and 621 ms while both provider/device first-PCM fields correctly
+remained null until turn one.
+
+The physical image was freshly rebuilt and flashed to fixed MAC
+`70:04:1D:D5:45:88` on the production project
+`prj_bd8785e119fe4f1d8631bb95e1dea748`. It is 1,161,344 bytes in a 2,097,152-byte
+application partition. Sixteen 20 ms I2S DMA descriptors now provide a bounded
+320 ms physical ownership cycle, raised from eight after an exact 250 ms
+provider-to-device interarrival incident. This costs 10,240 extra bytes of
+internal DMA-capable RAM without introducing a software history queue; the
+independent 400 ms freshness fence still destroys stale speech.
+
+The three-turn production run at
+`apps/kit/evidence/m5sticks3-silent-start-strict-auth-16dma-valid/2026-08-02T07-32-13-697Z/iterate-kit-acoustic-qcPu4u/`
+passed its startup, acoustic, and exact digital gates. It sent 1,518 microphone
+frames and completed three real Grok responses. Worker egress, device
+acceptance, DMA submission, and DMA completion were all exactly 436 frames;
+every flush, underrun, late drop, DMA deadline miss, reset, protocol failure,
+WebSocket failure, and Wi-Fi disconnect was zero. Grok invoked
+`changeColour({colour: "green"})` through `env.ITX`; the raw stream retained 106
+provider events including all three input transcriptions and output lifecycle
+sequences. `initialGreetingRequests`, unsolicited responses, and unsolicited
+PCM bytes were all zero, while response-create and completed-response counts
+were exactly three. Minimum internal/DMA heap was 56,091 bytes, the smallest
+main-stack headroom was 2,112 bytes, audio-owner headroom was 6,652 bytes, and
+terminal sampled CPU was 278 permille.
+
+That artifact is deliberately still labelled `network-invalid`: one worker
+ICMP sample reached 249.544 ms against the 100 ms remote-worker limit. Device
+and router maxima were 40.519 ms and 8.89 ms, RSSI stayed above -72 dBm, and
+the PCM socket did not disconnect, so the exact audio result is retained but is
+not promoted to the separate clean-network acceptance proof. A later attempted
+run is retained at
+`apps/kit/evidence/m5sticks3-silent-start-strict-auth-16dma-valid/2026-08-02T07-34-51-647Z/`.
+During turn three the worker route suffered repeated 147-404 ms probes and
+timeouts; the PCM socket disconnected and the deployed generation was
+replaced. The harness stopped immediately and classified the interval
+`network-invalid` rather than blaming the audio engine or claiming the two
+completed turns as a pass. A current strict-silent-start, multi-turn artifact
+with every network gate valid remains the final evidence gate for this
+hardening checkpoint.
+
 ## Call-start latency diagnosis and fixes (through 2026-08-01 10:14 UTC)
 
 The reported five-to-eight-second `Call connecting` interval was real, but it
