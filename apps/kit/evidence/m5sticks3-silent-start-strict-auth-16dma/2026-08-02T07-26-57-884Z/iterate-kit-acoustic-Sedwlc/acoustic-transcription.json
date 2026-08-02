@@ -1,0 +1,99 @@
+{
+  "assessment": {
+    "acceptance": "independent-stt-energy-boundary-provisional",
+    "boundaryWordOverage": 0,
+    "normalizedMicrophoneTranscript": "i ll use the tool to change the color to green",
+    "normalizedProviderTranscript": "i ll use the tool to change the color to green",
+    "passed": true,
+    "reasons": [],
+    "relativeActiveWindowDeficit": 1,
+    "responseToBaselineMaximumRmsRatio": 5.191830921815411
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": ["The causal response contained 0 active 20 ms windows; expected at least 4."]
+  },
+  "microphoneStt": {
+    "durationSeconds": 4.293,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"d46bb737-d2d2-4154-a5a1-07c48107924c\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"I'll use the\",\"words\":[{\"text\":\"I'll\",\"start\":0.791,\"end\":0.993},{\"text\":\"use\",\"start\":1.155,\"end\":1.297},{\"text\":\"the\",\"start\":1.338,\"end\":1.399}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"tool to change the color to green\",\"words\":[{\"text\":\"tool\",\"start\":1.561,\"end\":1.682},{\"text\":\"to\",\"start\":1.784,\"end\":1.865},{\"text\":\"change\",\"start\":1.926,\"end\":2.25},{\"text\":\"the\",\"start\":2.27,\"end\":2.351},{\"text\":\"color\",\"start\":2.392,\"end\":2.676},{\"text\":\"to\",\"start\":2.716,\"end\":2.777},{\"text\":\"green\",\"start\":2.858,\"end\":2.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"I'll use the tool to change the color to green.\",\"words\":[{\"text\":\"I'll\",\"start\":0.863,\"end\":1.023},{\"text\":\"use\",\"start\":1.144,\"end\":1.304},{\"text\":\"the\",\"start\":1.324,\"end\":1.404},{\"text\":\"tool\",\"start\":1.465,\"end\":1.725},{\"text\":\"to\",\"start\":1.786,\"end\":1.866},{\"text\":\"change\",\"start\":1.926,\"end\":2.247},{\"text\":\"the\",\"start\":2.267,\"end\":2.347},{\"text\":\"color\",\"start\":2.387,\"end\":2.668},{\"text\":\"to\",\"start\":2.708,\"end\":2.769},{\"text\":\"green.\",\"start\":2.849,\"end\":3.17}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":4.293,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":4.293}"
+    ],
+    "text": "I'll use the tool to change the color to green.",
+    "words": [
+      {
+        "text": "I'll",
+        "start": 0.863,
+        "end": 1.023
+      },
+      {
+        "text": "use",
+        "start": 1.144,
+        "end": 1.304
+      },
+      {
+        "text": "the",
+        "start": 1.324,
+        "end": 1.404
+      },
+      {
+        "text": "tool",
+        "start": 1.465,
+        "end": 1.725
+      },
+      {
+        "text": "to",
+        "start": 1.786,
+        "end": 1.866
+      },
+      {
+        "text": "change",
+        "start": 1.926,
+        "end": 2.247
+      },
+      {
+        "text": "the",
+        "start": 2.267,
+        "end": 2.347
+      },
+      {
+        "text": "color",
+        "start": 2.387,
+        "end": 2.668
+      },
+      {
+        "text": "to",
+        "start": 2.708,
+        "end": 2.769
+      },
+      {
+        "text": "green.",
+        "start": 2.849,
+        "end": 3.17
+      }
+    ]
+  },
+  "providerOutputTranscript": "I'll use the tool to change the color to green.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 3,
+      "clippedSampleCount": 0,
+      "maximumRms": 33.63731187238362,
+      "p50Rms": 3.9586403389716187,
+      "p95Rms": 11.735451986750801,
+      "p99Rms": 18.530408567181315,
+      "sampleCount": 206080,
+      "windowCount": 215,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 16.197230022959687
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

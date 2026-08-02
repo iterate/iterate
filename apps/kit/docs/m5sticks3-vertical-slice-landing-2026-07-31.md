@@ -81,6 +81,22 @@ completed turns as a pass. A current strict-silent-start, multi-turn artifact
 with every network gate valid remains the final evidence gate for this
 hardening checkpoint.
 
+The exact hashes for the stronger three-turn application artifact are:
+manifest `6845bf3f488dae8d3895a2c60fc304fd9e5c35ab115f72c291693d2a01f65260`,
+network report `c7394eb9628488fc78c042705d5d1b9e0d3b05b75c39f0f834c4acc4d667932c`,
+raw provider journal
+`5dec22078335b809fc0ee8b700baac2e3506e783dc9bb4a01fdc316b68a3ee94`,
+and flashed firmware
+`860a21946706b8f9599d31fc298c3cee77828a875ee8a5c42f80f6220e7527cd`.
+The next attempted acceptance interval was rejected before another audio run:
+the Stick and router remained local-network healthy (20/20 replies, respective
+maximum RTTs 20.437 ms and 6.490 ms), while the production edge measured
+547.524-784.199 ms and HTTPS response starts took 2.396-3.507 seconds. An
+independent macOS `networkQuality` run at 08:47 UTC measured 1,123.330 ms base
+RTT despite 42.1 Mbps down and 17.7 Mbps up. This is the intended use of the
+preflight gate: do not manufacture another nominal audio result while the WAN
+cannot provide a valid real-time interval.
+
 ## Call-start latency diagnosis and fixes (through 2026-08-01 10:14 UTC)
 
 The reported five-to-eight-second `Call connecting` interval was real, but it

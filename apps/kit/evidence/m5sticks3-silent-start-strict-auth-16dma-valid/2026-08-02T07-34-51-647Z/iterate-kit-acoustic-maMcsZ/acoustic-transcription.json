@@ -1,0 +1,146 @@
+{
+  "assessment": {
+    "acceptance": "failed",
+    "boundaryWordOverage": -1,
+    "normalizedMicrophoneTranscript": "i asked my colleague and i m waiting the chance to change the game i m not too curious about them",
+    "normalizedProviderTranscript": "i ll use the tool to change the color to green",
+    "passed": false,
+    "reasons": [
+      "The independent microphone transcript did not match Grok's completed output transcript."
+    ],
+    "relativeActiveWindowDeficit": 0,
+    "responseToBaselineMaximumRmsRatio": 6.276330652395134
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": ["The causal response contained 0 active 20 ms windows; expected at least 4."]
+  },
+  "microphoneStt": {
+    "durationSeconds": 4.293,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"1f2a73d5-9cb3-4eb7-a05f-39562270feaf\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"My colleague and I waited there\",\"words\":[{\"text\":\"My\",\"start\":0.101,\"end\":0.142},{\"text\":\"colleague\",\"start\":0.223,\"end\":0.75},{\"text\":\"and\",\"start\":0.791,\"end\":0.892},{\"text\":\"I\",\"start\":0.912,\"end\":0.932},{\"text\":\"waited\",\"start\":0.973,\"end\":1.338},{\"text\":\"there\",\"start\":1.338,\"end\":1.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"to change the color\",\"words\":[{\"text\":\"to\",\"start\":1.764,\"end\":1.824},{\"text\":\"change\",\"start\":1.905,\"end\":2.25},{\"text\":\"the\",\"start\":2.311,\"end\":2.372},{\"text\":\"color\",\"start\":2.432,\"end\":2.959}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"I asked my colleague and I'm waiting the chance to change the game. I'm not too curious about them.\",\"words\":[{\"text\":\"I\",\"start\":0.0,\"end\":0.02},{\"text\":\"asked\",\"start\":0.02,\"end\":0.12},{\"text\":\"my\",\"start\":0.12,\"end\":0.181},{\"text\":\"colleague\",\"start\":0.221,\"end\":0.582},{\"text\":\"and\",\"start\":0.702,\"end\":0.762},{\"text\":\"I'm\",\"start\":0.802,\"end\":0.863},{\"text\":\"waiting\",\"start\":0.963,\"end\":1.284},{\"text\":\"the\",\"start\":1.324,\"end\":1.384},{\"text\":\"chance\",\"start\":1.465,\"end\":1.745},{\"text\":\"to\",\"start\":1.745,\"end\":1.826},{\"text\":\"change\",\"start\":1.906,\"end\":2.247},{\"text\":\"the\",\"start\":2.307,\"end\":2.367},{\"text\":\"game.\",\"start\":2.407,\"end\":2.588},{\"text\":\"I'm\",\"start\":2.588,\"end\":2.648},{\"text\":\"not\",\"start\":2.648,\"end\":2.708},{\"text\":\"too\",\"start\":2.749,\"end\":2.869},{\"text\":\"curious\",\"start\":2.909,\"end\":3.35},{\"text\":\"about\",\"start\":3.37,\"end\":3.591},{\"text\":\"them.\",\"start\":3.631,\"end\":3.772}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":4.293,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":4.293}"
+    ],
+    "text": "I asked my colleague and I'm waiting the chance to change the game. I'm not too curious about them.",
+    "words": [
+      {
+        "text": "I",
+        "start": 0,
+        "end": 0.02
+      },
+      {
+        "text": "asked",
+        "start": 0.02,
+        "end": 0.12
+      },
+      {
+        "text": "my",
+        "start": 0.12,
+        "end": 0.181
+      },
+      {
+        "text": "colleague",
+        "start": 0.221,
+        "end": 0.582
+      },
+      {
+        "text": "and",
+        "start": 0.702,
+        "end": 0.762
+      },
+      {
+        "text": "I'm",
+        "start": 0.802,
+        "end": 0.863
+      },
+      {
+        "text": "waiting",
+        "start": 0.963,
+        "end": 1.284
+      },
+      {
+        "text": "the",
+        "start": 1.324,
+        "end": 1.384
+      },
+      {
+        "text": "chance",
+        "start": 1.465,
+        "end": 1.745
+      },
+      {
+        "text": "to",
+        "start": 1.745,
+        "end": 1.826
+      },
+      {
+        "text": "change",
+        "start": 1.906,
+        "end": 2.247
+      },
+      {
+        "text": "the",
+        "start": 2.307,
+        "end": 2.367
+      },
+      {
+        "text": "game.",
+        "start": 2.407,
+        "end": 2.588
+      },
+      {
+        "text": "I'm",
+        "start": 2.588,
+        "end": 2.648
+      },
+      {
+        "text": "not",
+        "start": 2.648,
+        "end": 2.708
+      },
+      {
+        "text": "too",
+        "start": 2.749,
+        "end": 2.869
+      },
+      {
+        "text": "curious",
+        "start": 2.909,
+        "end": 3.35
+      },
+      {
+        "text": "about",
+        "start": 3.37,
+        "end": 3.591
+      },
+      {
+        "text": "them.",
+        "start": 3.631,
+        "end": 3.772
+      }
+    ]
+  },
+  "providerOutputTranscript": "I'll use the tool to change the color to green.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 46,
+      "clippedSampleCount": 0,
+      "maximumRms": 54.40894534296115,
+      "p50Rms": 11.553318426610886,
+      "p95Rms": 37.26312688167755,
+      "p99Rms": 45.29298142832581,
+      "sampleCount": 206080,
+      "windowCount": 215,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 21.672274915199836
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}
