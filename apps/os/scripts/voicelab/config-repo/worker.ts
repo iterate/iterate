@@ -442,6 +442,37 @@ export class VoiceBridge extends IterateDurableObject {
      * still wants, speech from an answer that has been talked over, or one
      * it has already played. See components/core/src/audio_playout.c.
      */
+    /*
+     * G.711 mu-law, PCM16 to 8 bits, halving the downlink.
+     *
+     * The uplink already does this and had to: a microcontroller could not
+     * put its microphone on the wire as PCM16 base64 without stalling its own
+     * TCP flow. The downlink is the same wire in the other direction and the
+     * device is the same microcontroller — measured receiving 9-31 frames a
+     * second against the 50 realtime needs, and concealing the shortfall.
+     * ~950 bytes per 20ms frame becomes ~520.
+     */
+    const mulawFromPcm16 = (pcm: Uint8Array): Uint8Array => {
+      const BIAS = 0x84;
+      const CLIP = 32635;
+      const samples = pcm.length >> 1;
+      const out = new Uint8Array(samples);
+      for (let index = 0; index < samples; index++) {
+        let sample = ((pcm[index * 2]! | (pcm[index * 2 + 1]! << 8)) << 16) >> 16;
+        const sign = sample < 0 ? 0x80 : 0;
+        if (sample < 0) sample = -sample;
+        if (sample > CLIP) sample = CLIP;
+        sample += BIAS;
+        let exponent = 7;
+        for (let mask = 0x4000; (sample & mask) === 0 && exponent > 0; exponent--) {
+          mask >>= 1;
+        }
+        const mantissa = (sample >> (exponent + 3)) & 0x0f;
+        out[index] = ~(sign | (exponent << 4) | mantissa) & 0xff;
+      }
+      return out;
+    };
+
     const appendSpkPcm = (bytes: Uint8Array, tGrok: number) => {
       /*
        * Re-chunked to 20ms events so a constrained consumer with a bounded
@@ -485,7 +516,8 @@ export class VoiceBridge extends IterateDurableObject {
             seq: spkSeq++,
             t: Date.now(),
             tGrok,
-            pcm: bytesToBase64(joined.subarray(offset, offset + 640)),
+            enc: "u",
+            pcm: bytesToBase64(mulawFromPcm16(joined.subarray(offset, offset + 640))),
           },
         });
       }
