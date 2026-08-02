@@ -1,0 +1,383 @@
+{
+  "acoustic": null,
+  "aec": {
+    "assessment": {
+      "passed": false,
+      "reasons": [
+        "HAVPE exposes measured raw and post-AEC XMOS taps locally, but its truthful two-tap Cap'n Web schema is not mounted yet."
+      ],
+      "status": "not-assessed"
+    },
+    "requiredForThisRun": false,
+    "samples": []
+  },
+  "device": {
+    "diagnostics": {
+      "preflight": null,
+      "baseline": null,
+      "terminal": null
+    },
+    "generalMetrics": {
+      "owner": "userspace-worker",
+      "mediaBaseline": null,
+      "terminal": {
+        "invalidSamples": 0,
+        "lastInvalidReason": null,
+        "latestSample": {
+          "metrics": {
+            "uptimeMs": 603115,
+            "freeHeapBytes": 7307304,
+            "minimumFreeHeapBytes": 7282820,
+            "freeInternalHeapBytes": 84263,
+            "minimumFreeInternalHeapBytes": 68399,
+            "freePsramBytes": 7247312,
+            "taskStackHighWaterBytes": 1868,
+            "cpuPermille": 118,
+            "audio": {
+              "capture": {
+                "sent": 15185,
+                "dropped": 118,
+                "failures": 0
+              },
+              "uplink": {
+                "sent": 15154,
+                "dropped": 149,
+                "depth": 0,
+                "highWater": 31,
+                "sendDeferrals": 33,
+                "consecutiveSendDeferrals": 0,
+                "maximumConsecutiveSendDeferrals": 9,
+                "failures": 0,
+                "restartIncidents": 0,
+                "inPlaceFreshnessRecoveries": 0,
+                "socketRestarts": 0,
+                "producerBackpressureRestarts": 0,
+                "transportDisconnectRestarts": 0,
+                "noProgressTimeoutRestarts": 0,
+                "frameSendTimeoutRestarts": 0,
+                "captureStaleRestarts": 0,
+                "lastTransportAcceptAgeMs": 0,
+                "maximumTransportAcceptAgeMs": 58,
+                "lastRestartOldestCaptureAgeMs": 0,
+                "lastRestartReason": "none",
+                "lastRestartFramesDiscarded": 0
+              },
+              "downlink": {
+                "received": 0,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 0,
+                "failures": 0
+              },
+              "protocolFailures": 0,
+              "buffers": {
+                "uplinkApplication": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 19840,
+                  "capacity": 20480
+                },
+                "websocketTransmitter": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 648,
+                  "capacity": 910
+                },
+                "lwipSend": {
+                  "evidence": "capacityOnly",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 5760
+                },
+                "tlsEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                },
+                "wifiEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                }
+              }
+            }
+          },
+          "receivedAtMs": 1785666343426
+        },
+        "samplesReceived": 304
+      }
+    }
+  },
+  "digital": {
+    "passed": false,
+    "reasons": [
+      "The run did not retain complete digital boundary evidence."
+    ]
+  },
+  "error": {
+    "message": "Network connection lost.",
+    "name": "Error",
+    "stack": "Error: Network connection lost.\n    at Evaluator.evaluateImpl (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:947:75)\n    at Evaluator.evaluateWithDepth (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:818:28)\n    at Evaluator.evaluate (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:812:17)\n    at RpcSessionImpl.readLoop (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/rpc.ts:1059:73)"
+  },
+  "evidenceAssemblyErrors": [],
+  "lifecycle": {
+    "conversationEnded": false,
+    "conversationStarted": false
+  },
+  "network": null,
+  "passed": false,
+  "provenance": null,
+  "providerEventsArtifact": null,
+  "schemaVersion": 1,
+  "turnEvidence": [],
+  "worker": {
+    "sessionOpened": null,
+    "mediaBaseline": null,
+    "terminal": {
+      "awaitingCommitAcknowledgement": false,
+      "awaitingUplinkEndMarker": false,
+      "closed": false,
+      "conversationActive": true,
+      "conversationEnds": 0,
+      "conversationStartedAtMs": 1785666040366,
+      "conversationStarts": 1,
+      "devicePcmPeakSample": 14518,
+      "devicePcmRmsSample": 206.66226109454354,
+      "devicePcmSamples": 6862080,
+      "downlinkDeviceEgressOverrunFrames": 0,
+      "downlinkDroppedBytes": 0,
+      "downlinkFrames": 0,
+      "downlinkInterruptedBytes": 0,
+      "downlinkPacingCatchUpFrames": 0,
+      "downlinkPacingCatchUpIncidents": 0,
+      "downlinkPacingMaximumLatenessMs": 0,
+      "downlinkPacingOverrunFrames": 0,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 0,
+      "emptyUplinkTurns": 0,
+      "firstDevicePcmSentAtMs": null,
+      "firstProviderPcmAtMs": null,
+      "initialGreetingRequests": 0,
+      "interrupted": false,
+      "lastProviderError": null,
+      "lastProviderEventType": "ping",
+      "lastSocketClose": null,
+      "providerAvailable": true,
+      "providerAttachedAtMs": 1785666041321,
+      "providerCommitMessagesSent": 0,
+      "providerConnections": 1,
+      "providerControlEvents": 46,
+      "providerControlMessagesSent": 43,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 0,
+      "providerFunctionCallFailures": 0,
+      "providerFunctionCalls": 0,
+      "providerFunctionCallsPending": 0,
+      "providerKeepalivePings": 43,
+      "providerKeepalivePongs": 43,
+      "playbackInterruptionFailures": 0,
+      "playbackInterruptionPending": false,
+      "playbackInterruptionsCoalesced": 0,
+      "playbackInterruptionsCompleted": 0,
+      "playbackInterruptionsRequested": 0,
+      "providerPcmPeakSample": 0,
+      "providerPcmRmsSample": 0,
+      "providerPcmSamples": 0,
+      "providerRetirements": 0,
+      "providerResponseActive": false,
+      "providerResponseCreateMessagesSent": 0,
+      "providerResponsesCancelled": 0,
+      "providerResponsesCompleted": 0,
+      "providerResponsesFailed": 0,
+      "providerUnsolicitedPcmBytes": 0,
+      "providerUnsolicitedResponses": 0,
+      "providerSessionReadyAtMs": 1785666041526,
+      "providerSendFailures": 0,
+      "providerSpeechStarts": 0,
+      "providerSpeechStops": 0,
+      "turnDetection": "server-vad",
+      "uplinkControlStarts": 0,
+      "uplinkControlStops": 0,
+      "uplinkDroppedBytes": 32000,
+      "uplinkEndMarkers": 0,
+      "uplinkEndMarkerTimeouts": 0,
+      "uplinkFrames": 21444,
+      "uplinkTurns": 0,
+      "uplinkUnavailableFrames": 50,
+      "audioMode": "full-duplex-aec",
+      "deviceEvents": {
+        "acceptedEvents": 1,
+        "lastEvent": {
+          "sequence": 1,
+          "source": "system",
+          "type": "conversation.started"
+        },
+        "physicalConversationEnds": 0,
+        "physicalConversationStarts": 0,
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteConversationEnds": 0,
+        "remoteConversationStarts": 0,
+        "remoteStarts": 0,
+        "remoteStops": 0
+      },
+      "deviceId": "home-assistant-voice-preview-edition",
+      "deviceMetrics": {
+        "invalidSamples": 0,
+        "lastInvalidReason": null,
+        "latestSample": {
+          "metrics": {
+            "uptimeMs": 603115,
+            "freeHeapBytes": 7307304,
+            "minimumFreeHeapBytes": 7282820,
+            "freeInternalHeapBytes": 84263,
+            "minimumFreeInternalHeapBytes": 68399,
+            "freePsramBytes": 7247312,
+            "taskStackHighWaterBytes": 1868,
+            "cpuPermille": 118,
+            "audio": {
+              "capture": {
+                "sent": 15185,
+                "dropped": 118,
+                "failures": 0
+              },
+              "uplink": {
+                "sent": 15154,
+                "dropped": 149,
+                "depth": 0,
+                "highWater": 31,
+                "sendDeferrals": 33,
+                "consecutiveSendDeferrals": 0,
+                "maximumConsecutiveSendDeferrals": 9,
+                "failures": 0,
+                "restartIncidents": 0,
+                "inPlaceFreshnessRecoveries": 0,
+                "socketRestarts": 0,
+                "producerBackpressureRestarts": 0,
+                "transportDisconnectRestarts": 0,
+                "noProgressTimeoutRestarts": 0,
+                "frameSendTimeoutRestarts": 0,
+                "captureStaleRestarts": 0,
+                "lastTransportAcceptAgeMs": 0,
+                "maximumTransportAcceptAgeMs": 58,
+                "lastRestartOldestCaptureAgeMs": 0,
+                "lastRestartReason": "none",
+                "lastRestartFramesDiscarded": 0
+              },
+              "downlink": {
+                "received": 0,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 0,
+                "failures": 0
+              },
+              "protocolFailures": 0,
+              "buffers": {
+                "uplinkApplication": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 19840,
+                  "capacity": 20480
+                },
+                "websocketTransmitter": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 648,
+                  "capacity": 910
+                },
+                "lwipSend": {
+                  "evidence": "capacityOnly",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 5760
+                },
+                "tlsEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                },
+                "wifiEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                }
+              }
+            }
+          },
+          "receivedAtMs": 1785666343426
+        },
+        "samplesReceived": 304
+      },
+      "deviceSubscriptions": {
+        "eventAttempts": 1,
+        "eventFailures": 0,
+        "eventReady": true,
+        "lastEventError": null,
+        "lastMetricsError": null,
+        "metricsAttempts": 1,
+        "metricsFailures": 0,
+        "metricsReady": true
+      },
+      "deviceEventSubscriptionAttempts": 1,
+      "deviceEventSubscriptionFailures": 0,
+      "endedAtMs": null,
+      "grokCredential": {
+        "attempts": 2,
+        "expiresAtEpochSeconds": 1785669641,
+        "failures": 0,
+        "lastError": null,
+        "state": "ready"
+      },
+      "lastProviderConnectError": null,
+      "previousSession": null,
+      "providerEvents": {
+        "appendFailures": 0,
+        "appendedEvents": 46,
+        "droppedEvents": 0,
+        "lastAppendError": null,
+        "lastAppendedSequence": 46,
+        "observedEvents": 46,
+        "pendingEvents": 0,
+        "pendingRawBytes": 0,
+        "pendingRawHighWaterBytes": 1736
+      },
+      "providerConnectAttempts": 1,
+      "providerConnectFailures": 0,
+      "sessionId": "prj_4f76ffe131f1495981afd65619f57914:home-assistant-voice-preview-edition:73e75ebf-f420-4b14-9c68-8effd6960e65",
+      "startup": {
+        "authenticationAndModeReadyAtMs": 1785666040302,
+        "credentialPrewarmDecodedAtMs": 1785666040890,
+        "credentialPrewarmReceivedAtMs": 1785666040890,
+        "credentialPrewarmStartedAtMs": 1785666040302,
+        "deviceLaneAcceptedAtMs": 1785666040302,
+        "providerConnectStartedAtMs": 1785666040366,
+        "providerSessionUpdateSentAtMs": 1785666041321,
+        "providerWebSocketCreatedAtMs": 1785666040890,
+        "providerWebSocketOpenedAtMs": 1785666041321,
+        "requestReceivedAtMs": 1785666040264,
+        "deviceUpgradeLatencyMs": 38,
+        "firstDevicePcmLatencyMs": null,
+        "firstDevicePcmSentAtMs": null,
+        "firstDevicePcmFromConversationMs": null,
+        "firstProviderPcmAtMs": null,
+        "firstProviderPcmLatencyMs": null,
+        "firstProviderPcmFromConversationMs": null,
+        "conversationStartedAtMs": 1785666040366,
+        "providerAttachedAtMs": 1785666041321,
+        "providerAttachedLatencyMs": 1057,
+        "providerAttachedFromConversationMs": 955,
+        "credentialPrewarmLatencyMs": 588,
+        "credentialReadyBeforeConversationMs": 0,
+        "providerWebSocketOpenFromConversationMs": 955,
+        "providerSessionReadyAtMs": 1785666041526,
+        "providerSessionReadyLatencyMs": 1262,
+        "providerSessionReadyFromConversationMs": 1160
+      }
+    }
+  }
+}

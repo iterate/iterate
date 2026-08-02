@@ -100,6 +100,7 @@ export interface PcmSessionMetrics {
   downlinkDeviceEgressOverrunFrames: number;
   downlinkDroppedBytes: number;
   downlinkFrames: number;
+  downlinkInterruptedBytes: number;
   downlinkPacingCatchUpFrames: number;
   downlinkPacingCatchUpIncidents: number;
   downlinkPacingMaximumLatenessMs: number;
@@ -134,6 +135,7 @@ export interface PcmSessionMetrics {
   providerKeepalivePongs: number;
   playbackInterruptionFailures: number;
   playbackInterruptionPending: boolean;
+  playbackInterruptionsCoalesced: number;
   playbackInterruptionsCompleted: number;
   playbackInterruptionsRequested: number;
   providerPcmPeakSample: number;
@@ -215,6 +217,7 @@ export class PcmSessionBridge {
   #downlinkDeviceEgressOverrunFrames = 0;
   #downlinkDroppedBytes = 0;
   #downlinkFrames = 0;
+  #downlinkInterruptedBytes = 0;
   #downlinkPacingCatchUpFrames = 0;
   #downlinkPacingCatchUpIncidents = 0;
   #downlinkPacingMaximumLatenessMs = 0;
@@ -249,6 +252,7 @@ export class PcmSessionBridge {
   #playbackInterruptionEpoch = 0;
   #playbackInterruptionFailures = 0;
   #playbackInterruptionPending = false;
+  #playbackInterruptionsCoalesced = 0;
   #playbackInterruptionsCompleted = 0;
   #playbackInterruptionsRequested = 0;
   #providerPcmNormalizedSquareSum = 0;
@@ -370,6 +374,7 @@ export class PcmSessionBridge {
       downlinkDeviceEgressOverrunFrames: this.#downlinkDeviceEgressOverrunFrames,
       downlinkDroppedBytes: this.#downlinkDroppedBytes,
       downlinkFrames: this.#downlinkFrames,
+      downlinkInterruptedBytes: this.#downlinkInterruptedBytes,
       downlinkPacingCatchUpFrames: this.#downlinkPacingCatchUpFrames,
       downlinkPacingCatchUpIncidents: this.#downlinkPacingCatchUpIncidents,
       downlinkPacingMaximumLatenessMs: this.#downlinkPacingMaximumLatenessMs,
@@ -400,6 +405,7 @@ export class PcmSessionBridge {
       providerKeepalivePongs: this.#providerKeepalivePongs,
       playbackInterruptionFailures: this.#playbackInterruptionFailures,
       playbackInterruptionPending: this.#playbackInterruptionPending,
+      playbackInterruptionsCoalesced: this.#playbackInterruptionsCoalesced,
       playbackInterruptionsCompleted: this.#playbackInterruptionsCompleted,
       playbackInterruptionsRequested: this.#playbackInterruptionsRequested,
       providerPcmPeakSample: this.#providerPcmPeakSample,
@@ -796,8 +802,30 @@ export class PcmSessionBridge {
     this.#providerSpeechStarts += 1;
     this.#responseAfterCommitPending = false;
     this.#interrupted = true;
+    /*
+     * These bytes are not transport loss: the new near-end utterance makes
+     * them semantically obsolete. Keep them in the total dropped-byte ledger
+     * for exact conservation, but also classify the intentional subset so an
+     * interruption proof can reject one unexplained byte without rejecting
+     * the very purge it asked the system to perform.
+     */
+    this.#downlinkInterruptedBytes += this.#downlinkQueuedBytes;
     this.#discardDownlinkQueue();
     this.#abandonProviderResponse();
+    /*
+     * A pending hardware purge is already the admission barrier for every
+     * provider byte: both downlink schedulers refuse to send while it is set,
+     * and the response-local reservoir was discarded immediately above. A
+     * second speech edge therefore has no additional sample that a second
+     * physical command could reach. Reusing the in-flight barrier is safer
+     * than forwarding concurrent Cap'n Web calls, which the one-slot audio
+     * owner correctly rejects, and it keeps the event visible as an explicit
+     * coalescing metric instead of disguising it as a successful extra purge.
+     */
+    if (this.#playbackInterruptionPending) {
+      this.#playbackInterruptionsCoalesced += 1;
+      return;
+    }
     this.#playbackInterruptionsRequested += 1;
     const interruptionEpoch = ++this.#playbackInterruptionEpoch;
     this.#playbackInterruptionPending = true;
@@ -915,6 +943,7 @@ export class PcmSessionBridge {
     }
     this.#observeProviderPcm(bytes);
     if (this.#interrupted) {
+      this.#downlinkInterruptedBytes += bytes.byteLength;
       this.#downlinkDroppedBytes += bytes.byteLength;
       return;
     }

@@ -3,6 +3,7 @@
 
 #include "iterate/kit/audio.h"
 #include "iterate/kit/capabilities/callback_budget.h"
+#include "iterate/kit/capabilities/subscription.h"
 #include "iterate/kit/device_events.h"
 #include "iterate/kit/peer.h"
 #include "iterate/kit/status.h"
@@ -53,6 +54,7 @@ struct iterate_kit_device_event_stream;
 struct iterate_kit_device_event_subscription {
   struct iterate_kit_device_event_stream *owner;
   struct capnweb_remote_capability callback;
+  struct iterate_kit_subscription_owner_key owner_key;
   int64_t next_sequence;
   uint32_t coalesced_notifications;
   bool occupied;

@@ -57,6 +57,7 @@ import {
   kitDeviceEventStreamPath,
   type ProviderEventStreamMetrics,
 } from "../src/userspace/config-worker/provider-event-stream.ts";
+import { kitDeviceCapabilityPath } from "../src/userspace/config-worker/device-id.ts";
 
 const executeFile = promisify(execFile);
 const responseTimeoutMs = 90_000;
@@ -113,14 +114,22 @@ export async function proveProductionStackChanGrok(
   deviceProvenance?: ProductionDeviceProofProvenance,
 ) {
   const options = parseProductionGrokCliOptions(args, environment);
-  if (options.deviceId !== "stackchan") {
-    throw new Error("The StackChan production proof requires --device-id stackchan.");
+  const isStackChan = options.deviceId === "stackchan";
+  const isHomeAssistantVoicePreviewEdition =
+    options.deviceId === "home-assistant-voice-preview-edition";
+  if (!isStackChan && !isHomeAssistantVoicePreviewEdition) {
+    throw new Error(
+      "The full-duplex voice-satellite proof requires StackChan or Home Assistant Voice Preview Edition.",
+    );
   }
   if (options.pttAuthority !== "remote") {
-    throw new Error("The unattended StackChan proof requires --remote-ptt.");
+    throw new Error("The unattended full-duplex voice-satellite proof requires --remote-ptt.");
   }
 
-  const devicePath = ["kit", options.deviceId] as const;
+  const deviceName = isStackChan ? "StackChan" : "Home Assistant Voice Preview Edition";
+  const logPrefix = isStackChan ? "stackchan" : "havpe";
+  const requiresLegacyAecView = isStackChan;
+  const devicePath = kitDeviceCapabilityPath(options.deviceId);
   const providerEventStreamPath = kitDeviceEventStreamPath(options.deviceId);
   const routerHost = await discoverDarwinDefaultGateway();
   const runName = new Date().toISOString().replaceAll(/[:.]/gu, "-");
@@ -175,21 +184,23 @@ export async function proveProductionStackChanGrok(
    * both views here, exhausted the device budget, and made the worker retry
    * subscribeToMetrics seven times while audio itself remained healthy.
    */
-  await invoke<void>(
-    [...devicePath, "subscribeToAecMetrics"],
-    [
-      (value: unknown) => {
-        try {
-          aecSamples.push({ receivedAtMs: Date.now(), value: parseKitAecMetrics(value) });
-          if (aecSamples.length > 720) aecSamples.shift();
-        } catch (error) {
-          callbackFailure = new Error("The StackChan AEC callback was malformed.", {
-            cause: error,
-          });
-        }
-      },
-    ],
-  );
+  if (requiresLegacyAecView) {
+    await invoke<void>(
+      [...devicePath, "subscribeToAecMetrics"],
+      [
+        (value: unknown) => {
+          try {
+            aecSamples.push({ receivedAtMs: Date.now(), value: parseKitAecMetrics(value) });
+            if (aecSamples.length > 720) aecSamples.shift();
+          } catch (error) {
+            callbackFailure = new Error(`${deviceName} AEC callback was malformed.`, {
+              cause: error,
+            });
+          }
+        },
+      ],
+    );
+  }
 
   let capture: MacOsPcm16Capture | undefined;
   let completedCapture: Awaited<ReturnType<MacOsPcm16Capture["stop"]>> | undefined;
@@ -216,14 +227,16 @@ export async function proveProductionStackChanGrok(
   let baselineAecIndex = 0;
 
   try {
-    await waitForCallbackSamples(
-      () => callbackFailure,
-      () => aecSamples.length >= 1,
-      "an initial AEC capability sample",
-    );
+    if (requiresLegacyAecView) {
+      await waitForCallbackSamples(
+        () => callbackFailure,
+        () => aecSamples.length >= 1,
+        "an initial AEC capability sample",
+      );
+    }
     const hangUpAcknowledged =
       (await invoke<boolean>([...devicePath, "conversation", "hangUp"])) === true;
-    if (!hangUpAcknowledged) throw new Error("StackChan rejected the preflight hang-up.");
+    if (!hangUpAcknowledged) throw new Error(`${deviceName} rejected the preflight hang-up.`);
     /*
      * StackChan's conversation intent owns its full-duplex socket; unlike the
      * Stick's warm PTT lane, hang-up deliberately leaves no active `/pcm`
@@ -247,8 +260,8 @@ export async function proveProductionStackChanGrok(
 
     conversationStarted =
       (await invoke<boolean>([...devicePath, "conversation", "start"])) === true;
-    if (!conversationStarted) throw new Error("StackChan rejected conversation.start().");
-    console.log("stackchan_conversation=started authority=remote");
+    if (!conversationStarted) throw new Error(`${deviceName} rejected conversation.start().`);
+    console.log(`${logPrefix}_conversation=started authority=remote`);
 
     baselineWorker = await waitForWorker(
       worker,
@@ -258,7 +271,7 @@ export async function proveProductionStackChanGrok(
         metrics.conversationActive &&
         metrics.audioMode === "full-duplex-aec" &&
         metrics.turnDetection === "server-vad",
-      "the newly connected StackChan full-duplex PCM generation",
+      `the newly connected ${deviceName} full-duplex PCM generation`,
       20_000,
     );
     baselineDiagnostics = await readDiagnostics();
@@ -271,40 +284,43 @@ export async function proveProductionStackChanGrok(
     networkMonitor.start();
     networkMeasurement = measureRemoteDnsAndTlsConnect(options.workerHost);
 
-    const greeted = await waitForWorker(
+    const mediaReady = await waitForWorker(
       worker,
       (metrics) =>
-        metrics.conversationActive &&
-        metrics.audioMode === "full-duplex-aec" &&
-        metrics.turnDetection === "server-vad" &&
-        metrics.providerAvailable &&
-        metrics.providerSessionReadyAtMs !== null &&
-        metrics.initialGreetingRequests === 1 &&
-        metrics.providerResponsesCompleted >= 1 &&
-        metrics.downlinkFrames > 0 &&
-        metrics.downlinkQueuedBytes === 0 &&
-        !metrics.providerResponseActive &&
-        !metrics.closed,
-      "the Grok greeting over one full-duplex server-VAD generation",
+        isStackChanReadyAndSilent(metrics, options.deviceId) &&
+        metrics.deviceEventSubscriptionAttempts === 1 &&
+        metrics.deviceEventSubscriptionFailures === 0 &&
+        metrics.deviceMetrics.samplesReceived > 0 &&
+        metrics.deviceMetrics.invalidSamples === 0 &&
+        metrics.providerEvents.appendFailures === 0 &&
+        metrics.providerEvents.droppedEvents === 0 &&
+        metrics.providerEvents.pendingEvents === 0,
+      `a provider-ready, observably silent ${deviceName} generation`,
       30_000,
       baselineWorker.sessionId,
     );
     console.log(
-      `stackchan_greeting=complete session_id=${greeted.sessionId} ` +
-        `startup=${JSON.stringify(greeted.startup ?? null)}`,
+      `${logPrefix}_media_ready=silent session_id=${mediaReady.sessionId} ` +
+        `startup=${JSON.stringify(mediaReady.startup ?? null)}`,
     );
-    mediaBaselineWorker = greeted;
+    mediaBaselineWorker = mediaReady;
     let providerSequenceBaseline = await latestProviderSequence(
       providerEventStream,
       providerEventStart.streamMaxOffset,
-      greeted.sessionId,
+      mediaReady.sessionId,
       options.deviceId,
     );
 
     for (let turn = 1; turn <= options.turns; turn += 1) {
-      const turnBaseline = terminalWorker ?? greeted;
-      const phrase =
-        `Reply exactly Stack Chan production turn ${turn} is clear`;
+      const turnBaseline = terminalWorker ?? mediaReady;
+      /*
+       * "StackChan" is a product identifier, not a useful acoustic oracle:
+       * independent STT repeatedly rendered the same audible compound as
+       * Stack Change/StackChamp. Use ordinary words and a slightly longer
+       * answer so exact transcript comparison measures the physical path
+       * instead of one recognizer's brand-name vocabulary.
+       */
+      const phrase = `Reply exactly production audio turn ${turn} is clear and audible`;
       const promptPath = join(runRoot, `near-end-turn-${turn}.aiff`);
       await playMacSpeech(options.sayExecutable, promptPath, phrase);
       await delay(promptTailGuardMs);
@@ -326,7 +342,7 @@ export async function proveProductionStackChanGrok(
           !metrics.closed,
         `server VAD and audible response for StackChan turn ${turn}`,
         responseTimeoutMs,
-        greeted.sessionId,
+        mediaReady.sessionId,
       );
       await delay(postPlaybackDrainMs);
       const turnResponseEnd = await capture.inspectProgress();
@@ -334,7 +350,7 @@ export async function proveProductionStackChanGrok(
       const currentEvents = await readProviderEvents(
         providerEventStream,
         providerEventStart.streamMaxOffset,
-        greeted.sessionId,
+        mediaReady.sessionId,
         options.deviceId,
       );
       const turnEvents = currentEvents.filter((event) => event.sequence > providerSequenceBaseline);
@@ -363,7 +379,9 @@ export async function proveProductionStackChanGrok(
         workerTerminal: terminal,
       });
       terminalWorker = terminal;
-      console.log(`stackchan_turn=${turn} vad=observed response=complete transcript=${transcript}`);
+      console.log(
+        `${logPrefix}_turn=${turn} vad=observed response=complete transcript=${transcript}`,
+      );
     }
 
     /*
@@ -374,7 +392,7 @@ export async function proveProductionStackChanGrok(
      * the old provider generation and synchronously acknowledge StackChan's
      * hardware playback purge before admitting the replacement reply.
      */
-    const interruptionBaseline = terminalWorker ?? greeted;
+    const interruptionBaseline = terminalWorker ?? mediaReady;
     const longPromptPath = join(runRoot, "near-end-barge-in-setup.aiff");
     await playMacSpeech(
       options.sayExecutable,
@@ -391,58 +409,60 @@ export async function proveProductionStackChanGrok(
         !metrics.closed,
       "the long Grok response to become physically active before barge-in",
       responseTimeoutMs,
-      greeted.sessionId,
+      mediaReady.sessionId,
     );
     const interruptPromptPath = join(runRoot, "near-end-barge-in.aiff");
     await playMacSpeech(
       options.sayExecutable,
       interruptPromptPath,
-      "Stop and reply exactly Stack Chan interruption worked",
+      "Stop and reply exactly interruption test complete",
     );
     const interruptedTerminal = await waitForWorker(
       worker,
       (metrics) =>
-        metrics.providerSpeechStarts > activeResponse.providerSpeechStarts &&
-        metrics.providerSpeechStops > activeResponse.providerSpeechStops &&
-        metrics.providerResponsesCancelled > interruptionBaseline.providerResponsesCancelled &&
-        metrics.playbackInterruptionsRequested > activeResponse.playbackInterruptionsRequested &&
-        metrics.playbackInterruptionsCompleted > activeResponse.playbackInterruptionsCompleted &&
-        metrics.playbackInterruptionFailures ===
-          interruptionBaseline.playbackInterruptionFailures &&
-        metrics.providerResponsesCompleted > interruptionBaseline.providerResponsesCompleted &&
-        metrics.downlinkFrames > activeResponse.downlinkFrames &&
-        metrics.downlinkQueuedBytes === 0 &&
-        !metrics.providerResponseActive &&
-        !metrics.playbackInterruptionPending &&
-        !metrics.closed,
-      "a cancelled long response and completed post-interruption reply",
+        isCompletedStackChanInterruption(interruptionBaseline, activeResponse, metrics) &&
+        metrics.providerEvents.pendingEvents === 0,
+      "a purged long response and completed post-interruption reply",
       responseTimeoutMs,
-      greeted.sessionId,
+      mediaReady.sessionId,
     );
     await delay(postPlaybackDrainMs);
     terminalWorker = interruptedTerminal;
     providerEvents = await readProviderEvents(
       providerEventStream,
       providerEventStart.streamMaxOffset,
-      greeted.sessionId,
+      mediaReady.sessionId,
       options.deviceId,
     );
     const interruptionEvents = providerEvents.filter(
       (event) => event.sequence > providerSequenceBaseline,
     );
     const interruptionTranscript = completedProviderOutputTranscript(interruptionEvents);
-    if (!interruptionEvents.some(providerResponseWasCancelled)) {
-      throw new Error("The raw Grok stream retained no cancelled response during barge-in.");
+    const responseDoneEvents = interruptionEvents.filter(
+      (event) => event.providerType === "response.done",
+    );
+    if (responseDoneEvents.length < 2) {
+      throw new Error("The raw Grok stream retained fewer than two terminal barge-in responses.");
+    }
+    if (interruptionEvents.some((event) => event.providerType === "error")) {
+      throw new Error("The raw Grok stream retained an error during barge-in.");
+    }
+    if (!interruptionTranscriptRetainsAcceptancePhrase(interruptionTranscript)) {
+      throw new Error(
+        `The replacement response did not retain the requested interruption phrase: ` +
+          `${interruptionTranscript}`,
+      );
     }
     turnEvidence.push({
       kind: "full-duplex-barge-in",
+      oldResponseCancellationObserved: interruptionEvents.some(providerResponseWasCancelled),
       outputTranscript: interruptionTranscript,
       providerEventCount: interruptionEvents.length,
       workerActiveResponse: activeResponse,
       workerBaseline: interruptionBaseline,
       workerTerminal: interruptedTerminal,
     });
-    console.log(`stackchan_barge_in=complete transcript=${interruptionTranscript}`);
+    console.log(`${logPrefix}_barge_in=complete transcript=${interruptionTranscript}`);
 
     terminalDiagnostics = await readDiagnostics();
     networkCapture = await networkMonitor.capture();
@@ -479,7 +499,7 @@ export async function proveProductionStackChanGrok(
         conversationEnded =
           (await invoke<boolean>([...devicePath, "conversation", "hangUp"])) === true;
       } catch (error) {
-        runFailure ??= new Error("Could not remotely hang up StackChan after the proof.", {
+          runFailure ??= new Error(`Could not remotely hang up ${deviceName} after the proof.`, {
           cause: error,
         });
       }
@@ -493,16 +513,26 @@ export async function proveProductionStackChanGrok(
     }
   }
 
-  if (baselineWorker && providerEvents.length === 0) {
+  if (baselineWorker) {
     try {
-      providerEvents = parseAvailableProductionGrokProviderEvents(
-        await providerEventStream.getEvents({
-          afterOffset: providerEventStart.streamMaxOffset,
-          eventTypes: [KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE],
-          limit: 500,
-        }),
-        baselineWorker.sessionId,
-        options.deviceId,
+      /*
+       * A successful first turn makes the in-memory array non-empty, but it
+       * does not make it terminal. Always refresh after teardown so a later
+       * barge-in failure retains the provider edges that actually caused it.
+       * The selector protects against an eventually consistent read returning
+       * a shorter prefix than the already observed snapshot.
+       */
+      providerEvents = selectMostCompleteProviderEventSnapshot(
+        providerEvents,
+        parseAvailableProductionGrokProviderEvents(
+          await providerEventStream.getEvents({
+            afterOffset: providerEventStart.streamMaxOffset,
+            eventTypes: [KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE],
+            limit: 500,
+          }),
+          baselineWorker.sessionId,
+          options.deviceId,
+        ),
       );
     } catch (error) {
       const evidenceError = error instanceof Error ? error : new Error(String(error));
@@ -517,7 +547,15 @@ export async function proveProductionStackChanGrok(
   }
 
   const relevantAecSamples = aecSamples.slice(baselineAecIndex).map((sample) => sample.value);
-  const aecAssessment = assessStackChanAecRun(relevantAecSamples);
+  const aecAssessment = requiresLegacyAecView
+    ? assessStackChanAecRun(relevantAecSamples)
+    : {
+        passed: false,
+        reasons: [
+          "HAVPE exposes measured raw and post-AEC XMOS taps locally, but its truthful two-tap Cap'n Web schema is not mounted yet.",
+        ],
+        status: "not-assessed" as const,
+      };
   const digitalAssessment =
     baselineWorker &&
     mediaBaselineWorker &&
@@ -535,7 +573,9 @@ export async function proveProductionStackChanGrok(
           passed: false,
           reasons: ["The run did not retain complete digital boundary evidence."],
         };
-  if (!aecAssessment.passed) runFailure ??= new Error(aecAssessment.reasons.join("; "));
+  if (requiresLegacyAecView && !aecAssessment.passed) {
+    runFailure ??= new Error(aecAssessment.reasons.join("; "));
+  }
   if (!digitalAssessment.passed) runFailure ??= new Error(digitalAssessment.reasons.join("; "));
 
   let physicalSpeechAssessment: ReturnType<typeof assessPhysicalSpeechTranscription> | undefined;
@@ -643,7 +683,7 @@ export async function proveProductionStackChanGrok(
     : undefined;
   const audioPassed =
     runFailure === undefined &&
-    aecAssessment.passed &&
+    (!requiresLegacyAecView || aecAssessment.passed) &&
     digitalAssessment.passed &&
     physicalSpeechAssessment?.passed === true;
   const networkArtifact =
@@ -678,6 +718,7 @@ export async function proveProductionStackChanGrok(
     acoustic: acousticEvidence ?? null,
     aec: {
       assessment: aecAssessment,
+      requiredForThisRun: requiresLegacyAecView,
       samples: aecSamples,
     },
     device: {
@@ -716,7 +757,7 @@ export async function proveProductionStackChanGrok(
 
   if (!passed) {
     throw new Error(
-      `${runFailure?.message ?? "StackChan production proof failed."} Evidence: ${manifestPath}`,
+      `${runFailure?.message ?? `${deviceName} production proof failed.`} Evidence: ${manifestPath}`,
     );
   }
   return {
@@ -792,6 +833,15 @@ async function latestProviderSequence(
   return events.at(-1)?.sequence ?? 0;
 }
 
+export function selectMostCompleteProviderEventSnapshot(
+  current: ProductionGrokProviderEvent[],
+  recovered: ProductionGrokProviderEvent[],
+): ProductionGrokProviderEvent[] {
+  const currentSequence = current.at(-1)?.sequence ?? 0;
+  const recoveredSequence = recovered.at(-1)?.sequence ?? 0;
+  return recoveredSequence >= currentSequence ? recovered : current;
+}
+
 function providerResponseWasCancelled(event: ProductionGrokProviderEvent) {
   if (event.providerType !== "response.done") return false;
   try {
@@ -801,6 +851,114 @@ function providerResponseWasCancelled(event: ProductionGrokProviderEvent) {
   } catch {
     return false;
   }
+}
+
+/**
+ * Identifies the only safe baseline for StackChan's first physical utterance.
+ *
+ * A ready provider is not sufficient: an old worker configured an automatic
+ * greeting, and taking a baseline while that response was queued made the
+ * harness confuse assistant speech with the user's first turn. Conversely,
+ * waiting for that greeting after the product switched to silent call-open
+ * caused a healthy device to time out while it continuously uploaded audio.
+ * This predicate therefore joins readiness and silence into one invariant.
+ * It deliberately checks counters as well as the instantaneous queue so a
+ * greeting that already drained cannot masquerade as an untouched session.
+ */
+export function isStackChanReadyAndSilent(metrics: ProductionPcmMetrics, expectedDeviceId: string) {
+  return (
+    !metrics.closed &&
+    metrics.deviceId === expectedDeviceId &&
+    metrics.conversationActive &&
+    metrics.audioMode === "full-duplex-aec" &&
+    metrics.turnDetection === "server-vad" &&
+    metrics.providerAvailable &&
+    metrics.providerSessionReadyAtMs !== null &&
+    metrics.initialGreetingRequests === 0 &&
+    metrics.providerResponseCreateMessagesSent === 0 &&
+    metrics.providerResponsesCompleted === 0 &&
+    metrics.providerResponsesCancelled === 0 &&
+    metrics.providerResponsesFailed === 0 &&
+    metrics.downlinkFrames === 0 &&
+    metrics.downlinkQueuedBytes === 0 &&
+    !metrics.providerResponseActive &&
+    !metrics.playbackInterruptionPending
+  );
+}
+
+/**
+ * Returns loss that cannot be explained by a requested semantic interruption.
+ *
+ * Both counters are monotonic byte ledgers and the interruption ledger is a
+ * strict subset of the total. Returning a negative number intentionally lets
+ * the caller reject impossible accounting rather than normalising it away.
+ */
+export function unexplainedStackChanDownlinkDroppedBytes(
+  baseline: ProductionPcmMetrics,
+  terminal: ProductionPcmMetrics,
+) {
+  const totalDropped = terminal.downlinkDroppedBytes - baseline.downlinkDroppedBytes;
+  const interruptionDropped = terminal.downlinkInterruptedBytes - baseline.downlinkInterruptedBytes;
+  return totalDropped - interruptionDropped;
+}
+
+/**
+ * Proves the outcome of barge-in without assuming provider generation speed.
+ *
+ * xAI can finish generating a long response while its PCM is still queued for
+ * realtime playback. Near-end speech must purge that obsolete audio in both
+ * cases, but `response.cancel` is meaningful only while generation remains
+ * active. Therefore the old response may end cancelled or completed; the
+ * invariant is two terminal old/replacement outcomes, at least one newly
+ * completed response, a completed physical purge, and zero unclassified loss.
+ */
+export function isCompletedStackChanInterruption(
+  baseline: ProductionPcmMetrics,
+  activeResponse: ProductionPcmMetrics,
+  terminal: ProductionPcmMetrics,
+) {
+  const completedResponses =
+    terminal.providerResponsesCompleted - baseline.providerResponsesCompleted;
+  const cancelledResponses =
+    terminal.providerResponsesCancelled - baseline.providerResponsesCancelled;
+  return (
+    terminal.sessionId === baseline.sessionId &&
+    terminal.sessionId === activeResponse.sessionId &&
+    !terminal.closed &&
+    terminal.conversationActive &&
+    terminal.providerSpeechStarts > activeResponse.providerSpeechStarts &&
+    terminal.providerSpeechStops > activeResponse.providerSpeechStops &&
+    terminal.playbackInterruptionsRequested > activeResponse.playbackInterruptionsRequested &&
+    terminal.playbackInterruptionsCompleted > activeResponse.playbackInterruptionsCompleted &&
+    terminal.playbackInterruptionFailures === baseline.playbackInterruptionFailures &&
+    !terminal.playbackInterruptionPending &&
+    terminal.downlinkInterruptedBytes > activeResponse.downlinkInterruptedBytes &&
+    unexplainedStackChanDownlinkDroppedBytes(baseline, terminal) === 0 &&
+    terminal.downlinkFrames > activeResponse.downlinkFrames &&
+    terminal.downlinkQueuedBytes === 0 &&
+    terminal.providerResponsesFailed === baseline.providerResponsesFailed &&
+    !terminal.providerResponseActive &&
+    completedResponses >= 1 &&
+    completedResponses + cancelledResponses >= 2
+  );
+}
+
+/**
+ * Recognizes the deliberately narrow spoken interruption oracle.
+ *
+ * Grok's transcript is evidence of an acoustic utterance rather than a source
+ * code identifier. Repeated physical runs rendered the product name as
+ * "Stack Chan", "Stack channel", and "Stack Shannon". A brand-free phrase
+ * removes that provider-dependent ambiguity while remaining distinctive
+ * enough to prove that the replacement response, rather than the old queued
+ * response, reached the speaker.
+ */
+export function interruptionTranscriptRetainsAcceptancePhrase(transcript: string) {
+  const normalized = transcript
+    .toLowerCase()
+    .replaceAll(/[^a-z0-9]+/gu, " ")
+    .trim();
+  return normalized.includes("interruption test complete");
 }
 
 export function assessDigitalStackChanRun(input: {
@@ -855,18 +1013,35 @@ export function assessDigitalStackChanRun(input: {
     "uplinkDroppedBytes",
     "uplinkUnavailableFrames",
     "providerSendFailures",
-    "downlinkDroppedBytes",
     "providerResponsesFailed",
     "playbackInterruptionFailures",
   ] as const) {
     /*
      * The full-duplex microphone necessarily opens before the provider's TLS
      * handshake completes. Those explicitly unavailable ambient frames are a
-     * separately bounded startup outcome below; after Grok's greeting has
-     * made the generation media-ready, any further loss is a product defect.
+     * separately bounded startup outcome below; after Grok has acknowledged
+     * the session and the silent generation is media-ready, any further loss
+     * is a product defect.
      */
     const value = input.terminalWorker[field] - input.mediaBaselineWorker[field];
     if (value !== 0) reasons.push(`Worker ${field} changed by ${value}.`);
+  }
+  const unexplainedDownlinkDroppedBytes = unexplainedStackChanDownlinkDroppedBytes(
+    input.mediaBaselineWorker,
+    input.terminalWorker,
+  );
+  if (
+    !Number.isSafeInteger(unexplainedDownlinkDroppedBytes) ||
+    unexplainedDownlinkDroppedBytes < 0
+  ) {
+    reasons.push(
+      `Worker downlink interruption accounting was inconsistent by ` +
+        `${unexplainedDownlinkDroppedBytes} bytes.`,
+    );
+  } else if (unexplainedDownlinkDroppedBytes !== 0) {
+    reasons.push(
+      `Worker unexplained downlink dropped bytes changed by ${unexplainedDownlinkDroppedBytes}.`,
+    );
   }
   if (input.terminalWorker.providerEvents.appendFailures !== 0) {
     reasons.push("The provider-event stream had append failures.");

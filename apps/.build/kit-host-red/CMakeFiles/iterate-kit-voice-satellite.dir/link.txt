@@ -1,0 +1,2 @@
+/usr/bin/ar qc libiterate-kit-voice-satellite.a "CMakeFiles/iterate-kit-voice-satellite.dir/devices/voice_satellite/voice_satellite.c.o"
+/usr/bin/ranlib libiterate-kit-voice-satellite.a

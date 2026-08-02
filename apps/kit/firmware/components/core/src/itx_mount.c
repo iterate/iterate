@@ -30,6 +30,51 @@ static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
 }
 
+static bool valid_path_segment(const char *segment) {
+  size_t index;
+  unsigned char character;
+  if (!nonempty(segment)) {
+    return false;
+  }
+
+  /*
+   * The OS capability host addresses mounts as JavaScript members and accepts
+   * exactly /^[A-Za-z_$][A-Za-z0-9_$]*$/. Product/device slugs commonly use
+   * hyphens, so treating a slug as a capability name lets the entire local
+   * protocol succeed before production rejects provideCapability. Mirror the
+   * stable wire grammar here instead of relying on that remote rejection: a
+   * configuration defect must fail before authentication bytes leave the
+   * device and must never become a reconnect loop mislabeled as networking.
+   *
+   * Explicit ASCII tests are intentional. ctype predicates are locale-aware,
+   * while the server contract is not; accepting a locale-specific letter here
+   * would recreate the same cross-peer disagreement for non-ASCII bytes.
+   */
+  character = (unsigned char)segment[0];
+  if (!((character >= (unsigned char)'A' &&
+         character <= (unsigned char)'Z') ||
+        (character >= (unsigned char)'a' &&
+         character <= (unsigned char)'z') ||
+        character == (unsigned char)'_' ||
+        character == (unsigned char)'$')) {
+    return false;
+  }
+  for (index = 1U; segment[index] != '\0'; ++index) {
+    character = (unsigned char)segment[index];
+    if (!((character >= (unsigned char)'A' &&
+           character <= (unsigned char)'Z') ||
+          (character >= (unsigned char)'a' &&
+           character <= (unsigned char)'z') ||
+          (character >= (unsigned char)'0' &&
+           character <= (unsigned char)'9') ||
+          character == (unsigned char)'_' ||
+          character == (unsigned char)'$')) {
+      return false;
+    }
+  }
+  return true;
+}
+
 static bool valid_options(
     const struct iterate_kit_itx_mount_options *options) {
   size_t index;
@@ -44,7 +89,7 @@ static bool valid_options(
     return false;
   }
   for (index = 0U; index < options->path_count; ++index) {
-    if (!nonempty(options->path[index])) {
+    if (!valid_path_segment(options->path[index])) {
       return false;
     }
   }

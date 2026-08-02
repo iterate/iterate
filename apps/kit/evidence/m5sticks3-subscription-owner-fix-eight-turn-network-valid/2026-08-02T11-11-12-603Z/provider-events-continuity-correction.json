@@ -1,0 +1,12 @@
+{
+  "schemaVersion": 1,
+  "classification": "contiguous-from-expected",
+  "reason": "The physical proof began after a quiescent warm-session journal baseline. The raw provider artifact contains exactly the current run suffix; the original manifest's artifact writer incorrectly retained its historical expected-first-sequence default of 1 even though the acceptance parser correctly used 148.",
+  "expectedFirstSequence": 148,
+  "firstObservedSequence": 148,
+  "lastObservedSequence": 407,
+  "eventCount": 260,
+  "discontinuities": [],
+  "originalManifestSha256": "b3da3dba1d983c5476ae989fa732997e24663cf57c5d61f394362d4cf9204323",
+  "rawProviderEventsSha256": "46968a65adf4d67b2b1abbb3325a93119209674a5dc6dc533503be18c2d4ca6b"
+}

@@ -10,6 +10,95 @@ interruption runs remain the stronger endurance evidence. Physical-button
 provenance and the deferred deployed-worker kill/remount lifecycle are not
 silently relabelled as complete.
 
+## Warm-session subscription and eight-turn closure (2026-08-02)
+
+The remaining “works for several turns, then dies” Stick defect was not an
+audio queue or Grok failure. A deployed `/pcm` Durable Object generation is
+disposable, but the device's Cap'n Web session intentionally remains alive.
+Every replacement generation installed fresh event and metrics callbacks on
+that same firmware session without releasing the previous generation's
+imports. The finite callback table therefore accumulated stale owners until
+the device returned `device event subscription limit reached`; from that point
+PTT no longer reached userspace even though Wi-Fi and the PCM socket could
+still look healthy.
+
+Subscriptions now accept an optional stable logical-owner key. The production
+voice worker uses `iterate-kit-voice-pcm-v1` for both its event and metrics
+callbacks, so a replacement generation atomically supersedes only the stale
+callback belonging to that bridge. Unkeyed diagnostic subscribers remain
+independent. An owner collision while a callback or release is in flight is
+rejected instead of aliasing generations. Malformed keys release their already
+imported Cap'n Web capability before returning an RPC error. Red-first native
+tests cover replacement, preservation of unrelated unkeyed observers,
+in-flight rejection, and callback-budget recovery. Two deliberately forced
+Durable Object replacements then each mounted event and metrics subscriptions
+in exactly one attempt with zero failures and both readiness flags true.
+
+The firmware containing this change was freshly built and flashed to fixed MAC
+`70:04:1D:D5:45:88` on the same production project and worker configuration
+commit `cc1d44cd9a71648b2cae0f2a8405281ce4fbe77e`. Its application image is
+1,162,176 bytes, leaving 934,976 bytes in the 2 MiB application partition. The
+native firmware suite passed all 52 tests; the Kit TypeScript suite passed 570
+tests with one explicit skip, and the Kit typecheck passed.
+
+The retained acceptance run is an unattended **eight-turn** conversation
+through production OS, the installed userspace worker, real
+`grok-voice-think-fast-2.0`, and one unchanged physical Stick PCM session. It
+started silently, reached provider readiness in 655 ms, and completed eight
+remote PTT turns. Turn one made Grok invoke
+`changeColour({colour: "green"})` through `env.ITX` and retained the successful
+device result `{colour: "green", ok: true}`. The remaining turns returned the
+requested exact sentences. This run proves remote event authority; it does not
+replace the earlier physical-button provenance boundary.
+
+Digital conservation was exact: 4,046 microphone capture, device uplink, and
+worker uplink frames; 1,188 worker downlink, device acceptance, DMA submission,
+and DMA completion frames; eight completed provider responses; and one
+successful tool call. Every audio/socket drop, failure, flush, underrun,
+restart, protocol error, WebSocket error, and Wi-Fi disconnect delta was zero,
+and every queue drained. Uplink application high water was 1,280 of 20,480
+bytes, WebSocket transmitter high water 648 of 910 bytes, downlink high water
+five frames, playback high water sixteen frames, and maximum observed
+microphone transport-accept age 37 ms. Free heap changed by only 20 bytes
+(8,355,096 to 8,355,076); minimum heap stayed 8,333,652 bytes, minimum
+internal/DMA heap stayed 51,055 bytes, PSRAM stayed 8,305,500 bytes, and main
+stack headroom moved from 2,112 to 2,064 bytes. The point-in-time CPU sample
+moved from 166 to 183 permille; it is not represented as an interval average.
+
+The automatic network verdict is `valid` over the 120.89-second audio
+interval. All 121 scheduled probes to each of the device, router, and
+production worker replied. Maximum RTTs were 87.516, 13.672, and 23.305 ms
+respectively; worker average RTT was 14.649 ms. All 122 link samples remained
+up at -50 through -47 dBm. DNS took 2.112 ms, HTTPS connection setup 42.002 ms,
+and the PCM socket ended open with zero interval disconnects, reconnects,
+lower-transport failures, or transport errors. Device-observed PCM totals were
+2,589,440 bytes uplink and 760,320 bytes downlink.
+
+The nearby Mac independently transcribed the physical first response exactly
+as `I'll use the tool to change the color to green.` The response-to-ambient
+peak ratio was 5.797 with no clipping or active-window deficit, so the existing
+explicit `independent-stt-provisional` acoustic policy passed. An immediately
+preceding otherwise exact three-turn run remains honestly rejected: macOS input
+gain was only 27%, producing a 2.314 ratio against the 2.5 bound. Raising input
+gain to 75% made the physical signal measurable; future harness evidence should
+record that host gain automatically rather than relying on this run note.
+
+Evidence lives under
+`apps/kit/evidence/m5sticks3-subscription-owner-fix-eight-turn-network-valid/2026-08-02T11-11-12-603Z/`.
+The manifest, network report, raw provider JSONL, and Mac PCM SHA-256 hashes are
+respectively
+`b3da3dba1d983c5476ae989fa732997e24663cf57c5d61f394362d4cf9204323`,
+`10a1e8dba96c93ab86a4b81e62f5cdcd23eac7cdb2a04c688d4a567f5da5c246`,
+`46968a65adf4d67b2b1abbb3325a93119209674a5dc6dc533503be18c2d4ca6b`,
+and `4714b10d537d32fb8bfa709da8ce71b18ef1ad950a7a8ef5e60441b0d2819d3c`.
+The raw journal contains exactly 260 contiguous events, sequences 148 through 407. The acceptance parser correctly used the quiescent warm-session baseline,
+but the artifact descriptor still applied its historical “must start at one”
+default and labelled that suffix discontinuous. That metadata defect was found
+while landing the run, reproduced with a red test, and fixed by passing the
+same explicit expected sequence into the artifact writer. The original
+evidence was not rewritten; its exact correction is retained alongside it in
+`provider-events-continuity-correction.json`.
+
 ## Manual-PTT silent-start hardening (2026-08-02)
 
 This section supersedes every historical statement below that treats an

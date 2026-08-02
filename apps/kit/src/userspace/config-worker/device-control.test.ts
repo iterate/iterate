@@ -20,6 +20,19 @@ describe("kit device control", () => {
       path: ["kit", "stackchan", "conversation", "interruptPlayback"],
     });
 
+    await expect(
+      interruptKitDevicePlayback(project, "home-assistant-voice-preview-edition"),
+    ).resolves.toBeUndefined();
+    expect(invokeCapability).toHaveBeenLastCalledWith({
+      args: [],
+      path: [
+        "kit",
+        "homeAssistantVoicePreviewEdition",
+        "conversation",
+        "interruptPlayback",
+      ],
+    });
+
     invokeCapability.mockResolvedValueOnce(false);
     await expect(interruptKitDevicePlayback(project, "stackchan")).rejects.toThrow(
       "did not acknowledge the playback interruption",

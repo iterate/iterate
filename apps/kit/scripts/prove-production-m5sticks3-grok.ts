@@ -202,11 +202,13 @@ export async function proveProductionM5StickS3Grok(
   const readDiagnostics = async (): Promise<KitControlDiagnostics> =>
     parseKitControlDiagnostics(await invoke([...devicePath, "getDiagnostics"]));
   const providerEventStream = project.streams.get(providerEventStreamPath);
-  const providerEventStart = await providerEventStream.getEventPage({
+  let providerEventStart = await providerEventStream.getEventPage({
     afterOffset: Number.MAX_SAFE_INTEGER,
     eventTypes: [KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE],
     limit: 1,
   });
+  let providerEventCountBaseline = 0;
+  let providerEventSequenceStart = 1;
   let baselineDiagnostics = await readDiagnostics();
   const playbackSamples: KitPlaybackMetrics[] = [];
   const playbackIncidentSamples: KitPlaybackMetrics[] = [];
@@ -338,13 +340,33 @@ export async function proveProductionM5StickS3Grok(
       (metrics) => {
         const device = latestWorkerDeviceMetrics(metrics);
         return (
-          productionPcmConversationIsIdle(metrics) && device !== undefined && queuesAreEmpty(device)
+          productionPcmConversationIsIdle(metrics) &&
+          metrics.providerEvents.pendingEvents === 0 &&
+          metrics.providerEvents.appendedEvents === metrics.providerEvents.observedEvents &&
+          device !== undefined &&
+          queuesAreEmpty(device)
         );
       },
       "a current drained device sample on the stable warm PCM lane",
       10_000,
       preflightWorker.sessionId,
     );
+    /*
+     * One device `/pcm` socket deliberately survives call hang-up, while each
+     * Grok socket is disposable. Re-baseline the durable provider journal only
+     * after the old provider is gone and all of its events are appended. The
+     * following call must then start at exactly the next sequence and account
+     * for exactly the suffix added after this stream head. Without these two
+     * baselines, the second healthy call on a warm Stick was falsely rejected
+     * for beginning at sequence 107 instead of one.
+     */
+    providerEventStart = await providerEventStream.getEventPage({
+      afterOffset: Number.MAX_SAFE_INTEGER,
+      eventTypes: [KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE],
+      limit: 1,
+    });
+    providerEventCountBaseline = preflightWorker.providerEvents.appendedEvents;
+    providerEventSequenceStart = preflightWorker.providerEvents.lastAppendedSequence + 1;
     const callStartBaselineWorker = preflightWorker;
     baselineDiagnostics = await readDiagnostics();
     baselinePlayback = await waitForStablePlayback(playbackSamples, () => playbackCallbackError);
@@ -652,6 +674,7 @@ export async function proveProductionM5StickS3Grok(
           }),
           turnTerminalWorker.sessionId,
           options.deviceId,
+          providerEventSequenceStart,
         );
         const currentTurnEvents = candidate.filter(
           (event) => event.sequence > providerSequenceBaseline,
@@ -686,7 +709,7 @@ export async function proveProductionM5StickS3Grok(
           new Error(`Timed out waiting for Grok provider evidence for turn ${turn}.`)
         );
       }
-      const exactProviderEventCount = providerEventEvidence.length;
+      const exactProviderEventCount = providerEventCountBaseline + providerEventEvidence.length;
       turnTerminalWorker = await waitForWorkerMetrics(
         worker,
         (metrics) =>
@@ -703,10 +726,14 @@ export async function proveProductionM5StickS3Grok(
         connectedWorker.sessionId,
       );
       turnTerminalDevice = requireLatestWorkerDeviceMetrics(turnTerminalWorker);
-      if (providerEventEvidence.length !== turnTerminalWorker.providerEvents.appendedEvents) {
+      if (
+        providerEventEvidence.length !==
+        turnTerminalWorker.providerEvents.appendedEvents - providerEventCountBaseline
+      ) {
         throw new Error(
           `The provider stream retained ${providerEventEvidence.length} of ` +
-            `${turnTerminalWorker.providerEvents.appendedEvents} appended raw events.`,
+            `${turnTerminalWorker.providerEvents.appendedEvents - providerEventCountBaseline} ` +
+            `raw events appended during this call.`,
         );
       }
       const requiredProviderTypes = [
@@ -906,6 +933,7 @@ export async function proveProductionM5StickS3Grok(
           artifactPath: join(runRoot, "provider-events.jsonl"),
           deviceId: options.deviceId,
           events: retainedProviderEvents,
+          expectedFirstSequence: providerEventSequenceStart,
           sensitiveValues: [options.projectApiKey, options.xaiApiKey],
         })
       : undefined;

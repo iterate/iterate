@@ -1,0 +1,23 @@
+-- Found Git: /usr/bin/git (found version "2.39.5 (Apple Git-154)")
+-- Component directory /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/devices/voice_satellite/include does not contain a CMakeLists.txt file. No component will be added
+-- The C compiler identification is GNU 14.2.0
+-- The CXX compiler identification is GNU 14.2.0
+-- The ASM compiler identification is GNU
+-- Found assembler: /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc
+-- Detecting C compiler ABI info
+-- Detecting C compiler ABI info - done
+-- Check for working C compiler: /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc - skipped
+-- Detecting C compile features
+-- Detecting C compile features - done
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-g++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- Building ESP-IDF components for target esp32s3
+NOTICE: Dependencies lock doesn't exist, solving dependencies.
+...NOTICE: Updating lock file at /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/home-assistant-voice-preview-edition/dependencies.lock
+NOTICE: Processing 2 dependencies:
+NOTICE: [1/2] espressif/led_strip (2.5.5)
+NOTICE: [2/2] idf (5.4.2)
+-- Configuring incomplete, errors occurred!

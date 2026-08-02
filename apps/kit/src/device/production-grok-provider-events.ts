@@ -102,11 +102,24 @@ export function parseProductionGrokProviderEvents(
   value: unknown,
   sessionId: string,
   deviceId = DEFAULT_KIT_DEVICE_ID,
+  expectedFirstSequence = 1,
 ): ProductionGrokProviderEvent[] {
+  if (!Number.isSafeInteger(expectedFirstSequence) || expectedFirstSequence < 1) {
+    throw new Error("The expected first Grok provider sequence must be a positive integer.");
+  }
   const selected = parseAvailableProductionGrokProviderEvents(value, sessionId, deviceId);
 
   for (const [index, event] of selected.entries()) {
-    const expectedSequence = index + 1;
+    /*
+     * A warm device `/pcm` generation can host several disposable Grok calls.
+     * The provider journal belongs to that long-lived generation, so a proof
+     * which deliberately reads only the suffix after its quiescent stream
+     * baseline must continue at the baseline's next sequence rather than
+     * pretending the second provider connection is a new PCM session. The
+     * explicit caller-supplied start keeps a lost prefix detectable; every
+     * middle event remains strictly contiguous below.
+     */
+    const expectedSequence = expectedFirstSequence + index;
     if (event.sequence !== expectedSequence) {
       throw new Error(
         `Grok provider stream sequence was ${event.sequence}; expected ${expectedSequence}.`,

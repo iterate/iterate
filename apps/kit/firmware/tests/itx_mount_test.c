@@ -299,10 +299,49 @@ static void session_end_is_reported_without_retry(void) {
   assert(fixture.mount.capnweb_status == CAPNWEB_E_CLOSED);
 }
 
+/*
+ * OS resolves capability paths as JavaScript member names. A product slug is
+ * allowed to contain hyphens, so reusing it as a mount segment looks natural
+ * and previously survived every local check, only to make production reject
+ * provideCapability after authentication. Reject that incompatible wire
+ * address before emitting any secret-bearing authentication frame: a target
+ * can then fail deterministically during bring-up instead of reconnecting to
+ * an error that neither Wi-Fi nor retries can heal.
+ */
+static void rejects_non_identifier_mount_segments_before_network_io(void) {
+  static const char *const path[] = {
+    "kit",
+    "home-assistant-voice-preview-edition",
+  };
+  struct fixture fixture;
+  const struct iterate_kit_itx_mount_options options = {
+    &fixture.session,
+    "prj_test",
+    "itxk_secret-never-log",
+    path,
+    2U,
+    {inert_dispatch, &fixture, NULL},
+    "HAVPE test device",
+    NULL,
+  };
+
+  fixture_init(&fixture);
+  assert(
+      iterate_kit_itx_mount_start(&fixture.mount, &options) ==
+      CAPNWEB_E_INVALID_ARGUMENT);
+  assert(fixture.mount.state == ITERATE_KIT_ITX_MOUNT_FAILED);
+  assert(
+      fixture.mount.failure ==
+      ITERATE_KIT_ITX_MOUNT_FAILURE_INVALID_OPTIONS);
+  assert(fixture.captured_count == 0U);
+  capnweb_session_close(&fixture.session);
+}
+
 int main(void) {
   mounts_and_retains_only_the_provision_handle();
   authentication_rejection_is_terminal_and_not_retried();
   invalid_project_result_is_classified_and_releases_session();
   session_end_is_reported_without_retry();
+  rejects_non_identifier_mount_segments_before_network_io();
   return 0;
 }

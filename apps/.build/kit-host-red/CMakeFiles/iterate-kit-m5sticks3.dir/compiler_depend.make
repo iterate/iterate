@@ -65,6 +65,7 @@ CMakeFiles/iterate-kit-m5sticks3.dir/devices/m5sticks3/m5sticks3.c.o: /Users/jon
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/push_to_talk.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/screen.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/screen_capture.h \
+  /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/subscription.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/audio.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/buffer_metrics.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/device.h \
@@ -80,6 +81,8 @@ CMakeFiles/iterate-kit-m5sticks3.dir/devices/m5sticks3/m5sticks3.c.o: /Users/jon
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/peer.h:
 
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/device.h:
+
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/subscription.h:
 
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/screen_capture.h:
 

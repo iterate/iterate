@@ -1024,38 +1024,89 @@ static enum capnweb_status subscribe_view(
     void *context,
     const struct capnweb_call *call,
     struct capnweb_reply *reply,
-    enum iterate_kit_metrics_view view) {
+  enum iterate_kit_metrics_view view) {
   struct iterate_kit_metrics *metrics = context;
-  struct capnweb_value callback_value = {0};
   struct capnweb_remote_capability callback = {0};
+  struct iterate_kit_subscription_owner_key owner_key = {0};
+  struct iterate_kit_metrics_subscription *selected = NULL;
   size_t index;
   enum capnweb_status status;
-  if (!call->has_arguments ||
-      !capnweb_value_array_at(&call->arguments, 0U, &callback_value) ||
-      !capnweb_value_get_remote_capability(&callback_value, &callback)) {
-    return capnweb_reply_set_error(
-        reply, "TypeError", "expected a metrics callback capability");
+  bool arguments_valid = false;
+  status = iterate_kit_read_subscription_arguments(
+      metrics->options.session,
+      call,
+      reply,
+      "expected a metrics callback capability and optional owner key",
+      &callback,
+      &owner_key,
+      &arguments_valid);
+  if (status != CAPNWEB_OK || !arguments_valid) {
+    return status;
   }
 
-  for (index = 0U;
-       index < metrics->options.subscription_count;
-       ++index) {
-    struct iterate_kit_metrics_subscription *subscription =
-        &metrics->options.subscriptions[index];
-    if (!subscription->occupied &&
-        !subscription->call_in_flight &&
-        !subscription->release_pending) {
-      /*
-       * Taking the remote capability transfers a protocol resource into this
-       * slot. Sampling immediately (next_sample_at_ms = 0) gives a subscriber
-       * useful state without first waiting a full interval.
-       */
-      subscription->callback = callback;
-      subscription->occupied = true;
-      subscription->view = view;
-      metrics->next_sample_at_ms = 0U;
-      return capnweb_reply_set_null(reply);
+  if (owner_key.present) {
+    for (index = 0U;
+         index < metrics->options.subscription_count;
+         ++index) {
+      struct iterate_kit_metrics_subscription *subscription =
+          &metrics->options.subscriptions[index];
+      if (!iterate_kit_subscription_owner_keys_equal(
+              &subscription->owner_key, &owner_key)) {
+        continue;
+      }
+      if (subscription->call_in_flight || subscription->release_pending) {
+        status = capnweb_session_release_remote(
+            metrics->options.session, callback);
+        if (status != CAPNWEB_OK) {
+          return status;
+        }
+        return capnweb_reply_set_error(
+            reply,
+            "Error",
+            "metrics subscription replacement is busy");
+      }
+      status = capnweb_session_release_remote(
+          metrics->options.session, subscription->callback);
+      if (status != CAPNWEB_OK) {
+        (void)capnweb_session_release_remote(
+            metrics->options.session, callback);
+        return status;
+      }
+      (void)release_callback_budget(metrics, subscription);
+      memset(subscription, 0, sizeof(*subscription));
+      subscription->owner = metrics;
+      selected = subscription;
+      break;
     }
+  }
+
+  if (selected == NULL) {
+    for (index = 0U;
+         index < metrics->options.subscription_count;
+         ++index) {
+      struct iterate_kit_metrics_subscription *subscription =
+          &metrics->options.subscriptions[index];
+      if (!subscription->occupied &&
+          !subscription->call_in_flight &&
+          !subscription->release_pending) {
+        selected = subscription;
+        break;
+      }
+    }
+  }
+
+  if (selected != NULL) {
+    /*
+     * Taking the remote capability transfers a protocol resource into this
+     * slot. Sampling immediately (next_sample_at_ms = 0) gives a subscriber
+     * useful state without first waiting a full interval.
+     */
+    selected->callback = callback;
+    selected->owner_key = owner_key;
+    selected->occupied = true;
+    selected->view = view;
+    metrics->next_sample_at_ms = 0U;
+    return capnweb_reply_set_null(reply);
   }
 
   /*

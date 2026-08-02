@@ -51,6 +51,7 @@ CMakeFiles/iterate-m5sticks3-simulator.dir/simulator/devices/m5sticks3.cpp.o: \
   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/17/include/__stddef_rsize_t.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/status.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/callback_budget.h \
+  /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/subscription.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/device_events.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/conversation.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/metrics.h \

@@ -1,0 +1,10 @@
+CMake Error at /Users/jonastemplestein/esp/esp-idf/tools/cmake/build.cmake:328 (message):
+  Failed to resolve component 'voice_satellite' required by component 'main':
+  unknown name.
+Call Stack (most recent call first):
+  /Users/jonastemplestein/esp/esp-idf/tools/cmake/build.cmake:371 (__build_resolve_and_add_req)
+  /Users/jonastemplestein/esp/esp-idf/tools/cmake/build.cmake:675 (__build_expand_requirements)
+  /Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:718 (idf_build_process)
+  CMakeLists.txt:17 (project)
+
+

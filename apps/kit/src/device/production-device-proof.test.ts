@@ -178,4 +178,37 @@ describe("unattended production device proof", () => {
     expect(plan.grokProofArgs).toContain("--turns");
     expect(plan.grokProofArgs.at(plan.grokProofArgs.indexOf("--turns") + 1)).toBe("3");
   });
+
+  test("keeps the HAVPE slug on media routes while using its identifier-safe capability mount", () => {
+    /*
+     * The PCM header and retained stream use the stable catalog slug, but OS
+     * capability members follow JavaScript identifier grammar. Treating these
+     * as the same string authenticated the physical board and then rejected
+     * its production mount, so the proof plan must preserve both spellings.
+     */
+    const options = parseProductionDeviceProofCliOptions(
+      [
+        "--device-id",
+        "home-assistant-voice-preview-edition",
+        "--port",
+        "/dev/cu.usbmodem11101",
+        "--device-host",
+        "192.168.1.159",
+        "--worker-host",
+        "kit--kit-havpe-voice-e2e-20260802.iterate.app",
+        "--project-id",
+        "prj_havpe_voice",
+      ],
+      {},
+      packageDirectory,
+    );
+
+    const plan = buildProductionDeviceProofPlan(options, configuration);
+
+    expect(plan.provenance.routes).toEqual({
+      capabilityMountPath: ["kit", "homeAssistantVoicePreviewEdition"],
+      pcmUrl: "https://kit--kit-havpe-voice-e2e-20260802.iterate.app/pcm",
+      providerEventStreamPath: "/devices/home-assistant-voice-preview-edition",
+    });
+  });
 });

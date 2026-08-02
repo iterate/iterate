@@ -397,6 +397,8 @@ describe("userspace PCM session bridge", () => {
     await vi.waitFor(() => expect(interruptPlayback).toHaveBeenCalledOnce());
     expect(controls).toEqual([]);
     expect(bridge.metrics()).toMatchObject({
+      downlinkDroppedBytes: 300,
+      downlinkInterruptedBytes: 300,
       downlinkPartialBytes: 0,
       interrupted: true,
       providerSpeechStarts: 1,
@@ -428,6 +430,57 @@ describe("userspace PCM session bridge", () => {
       providerSpeechStops: 1,
       uplinkFrames: 1,
     });
+  });
+
+  test("server VAD coalesces repeated speech starts behind one physical playback purge", async () => {
+    /*
+     * A marginal echo path can make Grok emit speech_started, speech_stopped,
+     * then another speech_started before StackChan's audio owner has
+     * acknowledged the first purge. The first purge already fences every
+     * userspace downlink byte: issuing a second Cap'n Web request cannot make
+     * the speaker cleaner, and the device deliberately rejects concurrent
+     * hardware commands. That rejection used to close the otherwise healthy
+     * PCM generation. This production ordering therefore has one public
+     * requirement: both provider edges share the existing purge barrier, and
+     * fresh audio remains blocked until its single acknowledgement arrives.
+     */
+    let acknowledgePlaybackReset: (() => void) | undefined;
+    const interruptPlayback = vi.fn(
+      () => new Promise<void>((resolve) => (acknowledgePlaybackReset = resolve)),
+    );
+    const { bridge, provider } = createBridge({
+      onPlaybackInterruption: interruptPlayback,
+      turnDetection: "server-vad",
+    });
+
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+
+    await vi.waitFor(() => expect(bridge.metrics().providerSpeechStarts).toBe(2));
+    expect(interruptPlayback).toHaveBeenCalledOnce();
+    expect(bridge.metrics()).toMatchObject({
+      closed: false,
+      playbackInterruptionFailures: 0,
+      playbackInterruptionPending: true,
+      playbackInterruptionsCoalesced: 1,
+      playbackInterruptionsCompleted: 0,
+      playbackInterruptionsRequested: 1,
+      providerSpeechStarts: 2,
+      providerSpeechStops: 1,
+    });
+
+    acknowledgePlaybackReset?.();
+    await vi.waitFor(() =>
+      expect(bridge.metrics()).toMatchObject({
+        closed: false,
+        playbackInterruptionFailures: 0,
+        playbackInterruptionPending: false,
+        playbackInterruptionsCoalesced: 1,
+        playbackInterruptionsCompleted: 1,
+        playbackInterruptionsRequested: 1,
+      }),
+    );
   });
 
   test("server VAD rejects a firmware manual end marker as a policy mismatch", async () => {

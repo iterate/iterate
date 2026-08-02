@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import type { DeviceConfiguration } from "../firmware/config-image.ts";
 import { DEFAULT_DEVICE_ID, findFirmwareDevice } from "../firmware/catalog.ts";
+import { kitDeviceCapabilitySegment } from "../userspace/config-worker/device-id.ts";
 import { kitDeviceEventStreamPath } from "../userspace/config-worker/provider-event-stream.ts";
 
 const legacyStickDefaults = {
@@ -294,7 +295,7 @@ export function buildProductionDeviceProofPlan(
         workerHost: options.workerHost,
       },
       routes: {
-        capabilityMountPath: ["kit", options.deviceId],
+        capabilityMountPath: ["kit", kitDeviceCapabilitySegment(options.deviceId)],
         pcmUrl: `${pcmOrigin}/pcm`,
         providerEventStreamPath: kitDeviceEventStreamPath(options.deviceId),
       },

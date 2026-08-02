@@ -2,6 +2,7 @@
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-capabilities.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-stackchan.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-m5sticks3.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-voice-satellite.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-simulator.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-stackchan-simulator.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-m5sticks3-simulator.dir
@@ -11,10 +12,14 @@
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-aec-signal-window-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-pcm-clock-playback-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-core-s3-capture-reserve-test.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-voice-satellite-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-device-events-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-retry-gate-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-cpu-usage-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-runtime-diagnostics-test.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-control-recovery-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-runtime-diagnostics-fixture.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-bounded-capture-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-bounded-playback-test.dir

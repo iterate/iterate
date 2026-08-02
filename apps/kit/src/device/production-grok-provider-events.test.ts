@@ -167,6 +167,44 @@ describe("production Grok provider event evidence", () => {
     expect(() => parseProductionGrokProviderEvents(events, "failed-session")).toThrow("expected 1");
   });
 
+  test("proves a contiguous suffix when a warm PCM session already journaled earlier calls", () => {
+    /*
+     * A call hang-up retires Grok but deliberately leaves the device's `/pcm`
+     * socket warm. The next Grok connection therefore keeps the PCM session id
+     * and its provider-event sequence. A proof run reads only events after its
+     * stream-head baseline, so requiring that suffix to restart at one turns a
+     * healthy second call into a harness failure. The caller must provide the
+     * first sequence implied by its quiescent baseline; continuity from that
+     * exact value remains strict, including detection of a missing middle
+     * event.
+     */
+    const event = (sequence: number) => ({
+      createdAt: `2026-08-02T11:00:${sequence}.000Z`,
+      offset: 12_800 + sequence,
+      path: "/devices/m5sticks3",
+      payload: {
+        providerType: "ping",
+        raw: `{"type":"ping","sequence":${sequence}}`,
+        receivedAtMs: 2_000 + sequence,
+        sequence,
+        sessionId: "warm-session",
+      },
+      type: KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
+    });
+
+    expect(
+      parseProductionGrokProviderEvents(
+        [event(107), event(108), event(109)],
+        "warm-session",
+        "m5sticks3",
+        107,
+      ).map((candidate) => candidate.sequence),
+    ).toEqual([107, 108, 109]);
+    expect(() =>
+      parseProductionGrokProviderEvents([event(107), event(109)], "warm-session", "m5sticks3", 107),
+    ).toThrow("expected 108");
+  });
+
   test("extracts the completed spoken transcript from the exact raw frame", () => {
     /*
      * The acoustic oracle must compare the microphone's independent STT result

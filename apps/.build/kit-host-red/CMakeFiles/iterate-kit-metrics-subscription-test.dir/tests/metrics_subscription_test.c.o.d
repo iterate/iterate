@@ -39,6 +39,7 @@ CMakeFiles/iterate-kit-metrics-subscription-test.dir/tests/metrics_subscription_
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/peer.h \
   /Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/17/include/__stddef_rsize_t.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/vendor/capnweb/include/capnweb/capnweb.h \
+  /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/subscription.h \
   /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/stdio.h \
   /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/_stdio.h \
   /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/_bounds.h \

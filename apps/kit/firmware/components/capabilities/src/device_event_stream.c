@@ -1,5 +1,7 @@
 #include "iterate/kit/capabilities/device_event_stream.h"
 
+#include "rpc_internal.h"
+
 #include <limits.h>
 #include <string.h>
 
@@ -134,33 +136,81 @@ static enum capnweb_status subscribe(
     const struct capnweb_call *call,
     struct capnweb_reply *reply) {
   struct iterate_kit_device_event_stream *stream = context;
-  struct capnweb_value callback_value = {0};
   struct capnweb_remote_capability callback = {0};
+  struct iterate_kit_subscription_owner_key owner_key = {0};
   struct iterate_kit_device_event_subscription *subscription = NULL;
   enum capnweb_status status;
+  bool arguments_valid = false;
   size_t index;
   if (stream == NULL || !stream->initialized) {
     return CAPNWEB_E_STATE;
   }
-  if (!call->has_arguments ||
-      capnweb_value_array_size(&call->arguments) != 1U ||
-      !capnweb_value_array_at(
-          &call->arguments, 0U, &callback_value) ||
-      !capnweb_value_get_remote_capability(
-          &callback_value, &callback)) {
-    return capnweb_reply_set_error(
-        reply, "TypeError", "expected a device event callback capability");
+  status = iterate_kit_read_subscription_arguments(
+      stream->options.session,
+      call,
+      reply,
+      "expected a device event callback capability and optional owner key",
+      &callback,
+      &owner_key,
+      &arguments_valid);
+  if (status != CAPNWEB_OK || !arguments_valid) {
+    return status;
   }
-  for (index = 0U;
-       index < stream->options.subscription_count;
-       ++index) {
-    struct iterate_kit_device_event_subscription *candidate =
-        &stream->options.subscriptions[index];
-    if (!candidate->occupied &&
-        !candidate->call_in_flight &&
-        !candidate->release_pending) {
+
+  if (owner_key.present) {
+    for (index = 0U;
+         index < stream->options.subscription_count;
+         ++index) {
+      struct iterate_kit_device_event_subscription *candidate =
+          &stream->options.subscriptions[index];
+      if (!iterate_kit_subscription_owner_keys_equal(
+              &candidate->owner_key, &owner_key)) {
+        continue;
+      }
+      if (candidate->call_in_flight || candidate->release_pending) {
+        status = capnweb_session_release_remote(
+            stream->options.session, callback);
+        if (status != CAPNWEB_OK) {
+          return status;
+        }
+        return capnweb_reply_set_error(
+            reply,
+            "Error",
+            "device event subscription replacement is busy");
+      }
+
+      /*
+       * The key is authority to replace only this logical observer. Releasing
+       * the old import before mutating the slot prevents an acknowledgement
+       * for the previous callback from aliasing the new generation.
+       */
+      status = capnweb_session_release_remote(
+          stream->options.session, candidate->callback);
+      if (status != CAPNWEB_OK) {
+        (void)capnweb_session_release_remote(
+            stream->options.session, callback);
+        return status;
+      }
+      (void)release_callback_budget(stream, candidate);
+      memset(candidate, 0, sizeof(*candidate));
+      candidate->owner = stream;
       subscription = candidate;
       break;
+    }
+  }
+
+  if (subscription == NULL) {
+    for (index = 0U;
+         index < stream->options.subscription_count;
+         ++index) {
+      struct iterate_kit_device_event_subscription *candidate =
+          &stream->options.subscriptions[index];
+      if (!candidate->occupied &&
+          !candidate->call_in_flight &&
+          !candidate->release_pending) {
+        subscription = candidate;
+        break;
+      }
     }
   }
   if (subscription == NULL) {
@@ -179,6 +229,7 @@ static enum capnweb_status subscribe(
   }
 
   subscription->callback = callback;
+  subscription->owner_key = owner_key;
   subscription->occupied = true;
   subscription->snapshot_pending = true;
   subscription->coalesced_notifications = 0U;

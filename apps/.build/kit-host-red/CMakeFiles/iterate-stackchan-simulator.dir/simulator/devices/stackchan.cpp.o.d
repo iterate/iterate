@@ -54,6 +54,7 @@ CMakeFiles/iterate-stackchan-simulator.dir/simulator/devices/stackchan.cpp.o: \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/device_events.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/device_event_stream.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/audio.h \
+  /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/subscription.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/leds.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include/iterate/kit/capabilities/metrics.h \
   /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include/iterate/kit/buffer_metrics.h \

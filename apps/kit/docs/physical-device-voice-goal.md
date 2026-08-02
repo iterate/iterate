@@ -1,12 +1,13 @@
 # Iterate Kit physical-device voice goal
 
 Status: active; direction recorded 2026-07-29. The M5StickS3 local and deployed
-userspace vertical slices passed on 2026-07-31: separate Cap'n Web and PCM
-sockets, mounted capability, metrics subscription, Grok-driven display colour
-tool, raw provider-event stream, exact frame accounting, and physically
-transcribed returned speech are all retained. The ordered StackChan → Home
-Assistant portability slices remain, as do physical-button provenance and the
-deferred deployed-worker kill/remount lifecycle.
+userspace vertical slices passed on 2026-07-31. The StackChan deployed
+userspace slice passed on 2026-08-02 with real Grok full-duplex audio, server
+VAD, physical interruption, measured local AEC, exact frame accounting,
+streamed metrics/provider events, independent acoustic transcription, and a
+network-valid interval. The Home Assistant Voice Preview Edition portability
+slice is now active; physical-button provenance, longer endurance, and the
+deferred deployed-worker kill/remount lifecycle remain.
 
 This is the goal document for the initial Iterate Kit devices. The first
 implementation tranche remains StackChan plus M5StickS3, but the physical
@@ -25,6 +26,43 @@ drawn from them are tracked in
 [`fable-audio-review-reconciliation-2026-07-30.md`](./fable-audio-review-reconciliation-2026-07-30.md).
 That ledger is part of the acceptance evidence: findings are not considered
 handled merely because they appeared in an agent transcript.
+
+## 2026-08-02 Stick endurance closure
+
+The deployed Stick slice now has a fresh network-valid eight-turn production
+acceptance run after fixing the callback-lifetime defect that caused later
+calls to stop receiving PTT events. Disposable `/pcm` generations replace
+their own event and metrics callbacks by stable logical-owner key on the
+long-lived device Cap'n Web session; they no longer consume another finite
+firmware subscription slot on every generation. Two forced generation
+replacements and the following two-minute conversation retained one-attempt,
+zero-failure subscriptions, exact PCM conservation, zero drops/restarts/socket
+errors, eight real Grok responses, a real `changeColour("green")` tool result,
+an exact independent acoustic transcript, negligible heap movement, and an
+automatic clean-network verdict. Exact counters, hashes, the rejected weak-host-
+microphone run, and the small provider-artifact metadata bug found and fixed
+while landing it are recorded in
+[`m5sticks3-vertical-slice-landing-2026-07-31.md`](./m5sticks3-vertical-slice-landing-2026-07-31.md).
+
+This closes the reported multi-turn Stick reset/disconnect blocker without
+weakening physical-button provenance: the final endurance authority was remote
+Cap'n Web PTT so the run could be unattended. The active device order remains
+Home Assistant Voice Preview Edition next because the StackChan production
+audio/AEC/VAD slice below is already landed; talking-head sprites remain last.
+
+## 2026-08-02 StackChan landing addendum
+
+The StackChan production portability gate is achieved in project
+`kit-stackchan-voice-e2e-20260801`. The retained manifest, exact transport,
+AEC, memory/CPU, binary-size, acoustic, provider-stream, and network numbers,
+the honestly rejected predecessor runs, and remaining hardening gates are in
+[`stackchan-vertical-slice-landing-2026-08-02.md`](./stackchan-vertical-slice-landing-2026-08-02.md).
+
+The active hardware order is therefore now Home Assistant Voice Preview
+Edition through the same shared core and deployed userspace path. Face/avatar
+work remains deferred. StackChan's 1 → 2 → 10 minute endurance ladder,
+watchdog/TLS-reserve hardening, and remaining Fable-proposed seam tests are
+explicit follow-ups, not hidden inside the green vertical-slice claim.
 
 ## 2026-07-31 deployed-slice addendum
 

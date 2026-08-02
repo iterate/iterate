@@ -1,4 +1,5 @@
 import type { ProviderFunctionCall } from "./pcm-proxy.ts";
+import { kitDeviceCapabilityPath } from "./device-id.ts";
 
 type DeviceColour = "green" | "red";
 
@@ -30,7 +31,7 @@ export async function executeKitDeviceTool(
   const colour = parseColourArguments(call.arguments);
   const acknowledged = await project.capabilityHosts.get("/").invokeCapability({
     args: [colour],
-    path: ["kit", deviceId, "changeColour"],
+    path: kitDeviceCapabilityPath(deviceId, "changeColour"),
   });
   if (acknowledged !== true) {
     throw new Error(`The ${deviceId} device did not acknowledge the display colour change.`);

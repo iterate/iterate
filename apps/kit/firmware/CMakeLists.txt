@@ -112,6 +112,24 @@ target_link_libraries(
   PUBLIC iterate-kit-capabilities
 )
 
+add_library(iterate-kit-voice-satellite STATIC
+  devices/voice_satellite/voice_satellite.c
+)
+target_include_directories(iterate-kit-voice-satellite PUBLIC
+  devices/voice_satellite/include
+)
+target_compile_features(iterate-kit-voice-satellite PUBLIC c_std_99)
+target_compile_options(iterate-kit-voice-satellite PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-voice-satellite
+  PUBLIC iterate-kit-capabilities
+)
+
 add_library(iterate-kit-simulator STATIC
   simulator/src/hardware.cpp
   simulator/src/runner.cpp
@@ -276,6 +294,64 @@ target_compile_options(iterate-kit-core-s3-capture-reserve-test PRIVATE
 add_test(
   NAME iterate-kit-core-s3-capture-reserve-test
   COMMAND iterate-kit-core-s3-capture-reserve-test)
+
+add_executable(iterate-kit-voice-pe-pcm-format-test
+  tests/voice_pe_pcm_format_test.c
+  platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c
+)
+target_include_directories(
+  iterate-kit-voice-pe-pcm-format-test PRIVATE
+  platforms/iterate_voice_pe_audio/include
+  components/core/include
+)
+target_compile_features(
+  iterate-kit-voice-pe-pcm-format-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-voice-pe-pcm-format-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+add_test(
+  NAME iterate-kit-voice-pe-pcm-format-test
+  COMMAND iterate-kit-voice-pe-pcm-format-test)
+
+add_executable(iterate-kit-voice-pe-hardware-config-test
+  tests/voice_pe_hardware_config_test.c
+  platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c
+)
+target_include_directories(
+  iterate-kit-voice-pe-hardware-config-test PRIVATE
+  platforms/iterate_voice_pe_audio/include
+  components/core/include
+)
+target_compile_features(
+  iterate-kit-voice-pe-hardware-config-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-voice-pe-hardware-config-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+add_test(
+  NAME iterate-kit-voice-pe-hardware-config-test
+  COMMAND iterate-kit-voice-pe-hardware-config-test)
+
+add_executable(iterate-kit-voice-satellite-test
+  tests/voice_satellite_test.c
+)
+target_compile_features(iterate-kit-voice-satellite-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-voice-satellite-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-voice-satellite-test PRIVATE iterate-kit-voice-satellite)
+add_test(
+  NAME iterate-kit-voice-satellite-test
+  COMMAND iterate-kit-voice-satellite-test)
 
 add_executable(iterate-kit-device-events-test
   tests/device_events_test.c

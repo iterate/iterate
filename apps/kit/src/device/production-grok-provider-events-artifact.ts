@@ -11,10 +11,10 @@ export interface ProductionGrokProviderEventsArtifact {
       expectedSequence: number;
       observedSequence: number;
     }>;
-    expectedFirstSequence: 1;
+    expectedFirstSequence: number;
     firstObservedSequence: number;
     lastObservedSequence: number;
-    verdict: "contiguous-from-one" | "discontinuous";
+    verdict: "contiguous-from-expected" | "contiguous-from-one" | "discontinuous";
   };
   eventCount: number;
   path: string;
@@ -35,15 +35,28 @@ export async function writeProductionGrokProviderEventsArtifact(input: {
   artifactPath: string;
   deviceId: string;
   events: readonly ProductionGrokProviderEvent[];
+  expectedFirstSequence?: number;
   sensitiveValues: readonly string[];
 }): Promise<ProductionGrokProviderEventsArtifact> {
   if (input.events.length === 0) {
     throw new Error("A provider-event artifact requires at least one event.");
   }
+  const expectedFirstSequence = input.expectedFirstSequence ?? 1;
+  if (!Number.isSafeInteger(expectedFirstSequence) || expectedFirstSequence < 1) {
+    throw new Error("The expected first provider-event sequence must be a positive integer.");
+  }
   const events = [...input.events].sort((left, right) => left.sequence - right.sequence);
   const sessionId = events[0]!.sessionId;
   const streamPath = kitDeviceEventStreamPath(input.deviceId);
-  let expectedSequence = 1;
+  /*
+   * A warm device PCM generation can outlive several disposable provider
+   * calls. The proof deliberately snapshots the durable stream only after the
+   * previous call has drained, so its artifact is a suffix of that generation.
+   * Starting from the caller's measured boundary preserves strict loss
+   * detection without falsely declaring every later call's first frame to be
+   * a missing 1..N prefix.
+   */
+  let expectedSequence = expectedFirstSequence;
   const discontinuities: Array<{ expectedSequence: number; observedSequence: number }> = [];
   const lines = events.map((event) => {
     if (event.sessionId !== sessionId) {
@@ -78,10 +91,15 @@ export async function writeProductionGrokProviderEventsArtifact(input: {
   return {
     continuity: {
       discontinuities,
-      expectedFirstSequence: 1,
+      expectedFirstSequence,
       firstObservedSequence: events[0]!.sequence,
       lastObservedSequence: events.at(-1)!.sequence,
-      verdict: discontinuities.length === 0 ? "contiguous-from-one" : "discontinuous",
+      verdict:
+        discontinuities.length > 0
+          ? "discontinuous"
+          : expectedFirstSequence === 1
+            ? "contiguous-from-one"
+            : "contiguous-from-expected",
     },
     eventCount: events.length,
     path: input.artifactPath,

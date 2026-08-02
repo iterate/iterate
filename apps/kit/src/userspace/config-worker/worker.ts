@@ -11,6 +11,7 @@ import {
   DeviceSubscriptionCoordinator,
   type DeviceSubscriptionMetrics,
 } from "./device-subscriptions.ts";
+import { kitDeviceCapabilityPath } from "./device-id.ts";
 import { interruptKitDevicePlayback } from "./device-control.ts";
 import { executeKitDeviceTool } from "./device-tools.ts";
 import {
@@ -45,6 +46,15 @@ import {
 const PCM_MODE_KEY = "kit-pcm-mode";
 const PCM_SOCKET_BACKLOG_LIMIT_BYTES = 16 * 640;
 const PREVIOUS_PCM_SESSION_KEY = "kit:previous-pcm-session";
+/*
+ * `/pcm` generations are disposable while the device's Cap'n Web session is
+ * deliberately long lived. A stable owner key lets a replacement generation
+ * supersede only its own stale firmware callback instead of consuming another
+ * finite observer slot. Diagnostic subscribers omit the key and remain fully
+ * independent. Keep events and metrics under the same logical owner because
+ * they are the control and evidence halves of one userspace bridge lifetime.
+ */
+const PCM_DEVICE_SUBSCRIPTION_OWNER_KEY = "iterate-kit-voice-pcm-v1";
 
 interface PcmSessionStartupTimeline {
   authenticationAndModeReadyAtMs: number | null;
@@ -581,11 +591,12 @@ export class KitVoiceWorker extends IterateDurableObject {
       {
         subscribeToEvents: async (callback) => {
           /*
-           * Every board mounts `kit.<firmware-owned-device-id>` on the project
-           * root. Address that root explicitly rather than making this app's
-           * `/kit/` scoped host fallback an accidental part of the contract.
-           * The identity arrived in the authenticated PCM handshake, so a
-           * StackChan session cannot accidentally control or journal a Stick.
+           * Every board mounts at the project root beneath the `kit` namespace.
+           * The authenticated PCM identity remains a stable kebab-case slug;
+           * kitDeviceCapabilityPath performs the one agreed translation to a
+           * JavaScript-safe ITX member. Address the root explicitly rather
+           * than making this app's `/kit/` scoped fallback accidental. The
+           * identity still ensures a StackChan session cannot control a Stick.
            */
           await project.capabilityHosts.get("/").invokeCapability({
             args: [
@@ -602,8 +613,9 @@ export class KitVoiceWorker extends IterateDurableObject {
                 });
                 callback(event);
               },
+              PCM_DEVICE_SUBSCRIPTION_OWNER_KEY,
             ],
-            path: ["kit", active.deviceId, "subscribeToEvents"],
+            path: kitDeviceCapabilityPath(active.deviceId, "subscribeToEvents"),
           });
         },
       },
@@ -657,8 +669,9 @@ export class KitVoiceWorker extends IterateDurableObject {
             wouldPostToStream: true,
           });
         },
+        PCM_DEVICE_SUBSCRIPTION_OWNER_KEY,
       ],
-      path: ["kit", active.deviceId, "subscribeToMetrics"],
+      path: kitDeviceCapabilityPath(active.deviceId, "subscribeToMetrics"),
     });
   }
 

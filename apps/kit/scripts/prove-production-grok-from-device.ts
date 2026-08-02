@@ -176,7 +176,8 @@ export async function proveProductionGrokFromDevice(
   }
 
   const result =
-    options.deviceId === "stackchan"
+    options.deviceId === "stackchan" ||
+    options.deviceId === "home-assistant-voice-preview-edition"
       ? await proveProductionStackChanGrok(plan.grokProofArgs, proofEnvironment, plan.provenance)
       : await proveProductionM5StickS3Grok(plan.grokProofArgs, proofEnvironment, plan.provenance);
   return { ...result, provenance: plan.provenance };

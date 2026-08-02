@@ -156,6 +156,43 @@ describe("production Grok provider-event artifact", () => {
     });
   });
 
+  test("describes a contiguous warm-session suffix from the proof baseline", async () => {
+    /*
+     * The Stick keeps one device PCM session alive while individual Grok calls
+     * come and go. A later proof therefore retains a strict suffix such as
+     * 148..150, not a new 1..3 stream. Labelling that exact suffix
+     * `discontinuous` makes the durable artifact contradict the gate that just
+     * proved it. The artifact must carry the same explicit baseline as the
+     * parser while still reporting any missing event after that boundary.
+     */
+    const artifactPath = await temporaryArtifactPath();
+    const event = (sequence: number): ProductionGrokProviderEvent => ({
+      createdAt: `2026-08-02T11:00:${sequence}.000Z`,
+      offset: 5_000 + sequence,
+      providerType: "ping",
+      raw: `{"type":"ping","sequence":${sequence}}`,
+      receivedAtMs: 10_000 + sequence,
+      sequence,
+      sessionId: "warm-session",
+    });
+
+    const artifact = await writeProductionGrokProviderEventsArtifact({
+      artifactPath,
+      deviceId: "m5sticks3",
+      events: [event(148), event(149), event(150)],
+      expectedFirstSequence: 148,
+      sensitiveValues: [],
+    });
+
+    expect(artifact.continuity).toEqual({
+      discontinuities: [],
+      expectedFirstSequence: 148,
+      firstObservedSequence: 148,
+      lastObservedSequence: 150,
+      verdict: "contiguous-from-expected",
+    });
+  });
+
   test("refuses to create an artifact when an untouched raw frame contains a runtime secret", async () => {
     /*
      * Redaction would violate the artifact's lossless contract. Refusing the

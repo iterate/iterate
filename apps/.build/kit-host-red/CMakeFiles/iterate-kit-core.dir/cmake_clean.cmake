@@ -9,6 +9,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o.d"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o.d"
+  "CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o"
+  "CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o.d"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o.d"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o"

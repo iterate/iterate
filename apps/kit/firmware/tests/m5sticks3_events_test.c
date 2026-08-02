@@ -528,6 +528,83 @@ static void full_subscriber_table_rejects_without_replacement(void) {
 }
 
 /*
+ * `/pcm` and Cap'n Web are intentionally independent sockets. A transient
+ * PCM reconnect must therefore not consume another permanent event observer
+ * on the still-live control session. Production reached exactly that state:
+ * the Stick stayed online with good Wi-Fi, but every replacement userspace
+ * generation failed with `device event subscription limit reached`, leaving
+ * the physical buttons unable to drive the new bridge.
+ *
+ * An optional stable owner key is the narrow lifecycle contract. It does not
+ * make ordinary diagnostic subscribers replace one another; only a caller
+ * presenting the same non-empty key may supersede its own idle callback. The
+ * old Cap'n Web import must be released before the slot is rebound, and an
+ * unrelated observer must survive untouched. This models Worker eviction and
+ * PCM generation replacement without a lease timer, heap allocation, or an
+ * event-silence watchdog (silence is normal while nobody presses a button).
+ */
+static void stable_owner_key_replaces_only_its_stale_event_callback(void) {
+  struct fixture fixture;
+  size_t captured_before_replacement;
+  fixture_init(&fixture);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToEvents\"],"
+      "[[\"export\",-1],\"iterate-kit-voice-pcm-v1\"]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 0U).status ==
+      ITERATE_KIT_POLL_OK);
+  receive(&fixture, "[\"release\",1,1]");
+  receive(&fixture, "[\"resolve\",1,null]");
+
+  /* The second slot represents an independent, unkeyed diagnostic observer. */
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToEvents\"],"
+      "[[\"export\",-2]]]]");
+  receive(&fixture, "[\"pull\",2]");
+  assert(fixture.event_subscriptions[1].callback.id == -2);
+  captured_before_replacement = fixture.captured_count;
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToEvents\"],"
+      "[[\"export\",-3],\"iterate-kit-voice-pcm-v1\"]]]");
+  receive(&fixture, "[\"pull\",3]");
+
+  assert(fixture.event_subscriptions[0].callback.id == -3);
+  assert(fixture.event_subscriptions[1].callback.id == -2);
+  assert(fixture.captured_count == captured_before_replacement + 2U);
+  assert(
+      strcmp(
+          fixture.captured[captured_before_replacement],
+          "[\"release\",-1,1]") == 0);
+  assert(
+      strcmp(
+          fixture.captured[captured_before_replacement + 1U],
+          "[\"resolve\",3,null]") == 0);
+
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 1U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 2U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(
+      strstr(
+          fixture.captured[captured_before_replacement + 4U],
+          "[\"pipeline\",-3,[]") != NULL);
+
+  capnweb_session_close(&fixture.session);
+  iterate_kit_peer_session_ended(&fixture.device.peer);
+  assert(
+      iterate_kit_m5sticks3_close(&fixture.device).status ==
+      ITERATE_KIT_POLL_OK);
+}
+
+/*
  * A button edge and a remote Cap'n Web call must mean the same thing without
  * either callback touching the microphone driver inline. Direct work in the
  * GPIO/dispatch path was rejected because driver latency or reentrancy would
@@ -750,5 +827,6 @@ int main(void) {
   flattened_host_invocation_reaches_the_static_method_table();
   independent_subscriber_cannot_disconnect_pcm_owner();
   full_subscriber_table_rejects_without_replacement();
+  stable_owner_key_replaces_only_its_stale_event_callback();
   return 0;
 }

@@ -1,0 +1,105 @@
+{
+  "assessment": {
+    "acceptance": "failed",
+    "boundaryWordOverage": 0,
+    "normalizedMicrophoneTranscript": "i ll use the tool to change the color to green",
+    "normalizedProviderTranscript": "i ll use the tool to change the color to green",
+    "passed": false,
+    "reasons": [
+      "The response maximum RMS was only 1.540575761108059x the ambient maximum; expected at least 2.5x.",
+      "The causal response contained 0 windows above the relative ambient threshold; expected at least 3 for provisional acceptance (the stricter follow-up gate remains 4)."
+    ],
+    "relativeActiveWindowDeficit": 4,
+    "responseToBaselineMaximumRmsRatio": 1.540575761108059
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": [
+      "The causal response contained 0 active 20 ms windows; expected at least 4."
+    ]
+  },
+  "microphoneStt": {
+    "durationSeconds": 4.72,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"31f4eeba-1f1d-411c-8f11-a8598db977da\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"I'll use the two\",\"words\":[{\"text\":\"I'll\",\"start\":0.791,\"end\":0.912},{\"text\":\"use\",\"start\":1.014,\"end\":1.155},{\"text\":\"the\",\"start\":1.196,\"end\":1.257},{\"text\":\"two\",\"start\":1.318,\"end\":1.459}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"to change the color to green.\",\"words\":[{\"text\":\"to\",\"start\":1.601,\"end\":1.662},{\"text\":\"change\",\"start\":1.723,\"end\":2.027},{\"text\":\"the\",\"start\":2.068,\"end\":2.149},{\"text\":\"color\",\"start\":2.189,\"end\":2.473},{\"text\":\"to\",\"start\":2.514,\"end\":2.595},{\"text\":\"green.\",\"start\":2.655,\"end\":2.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"I'll use the tool to change the color to green.\",\"words\":[{\"text\":\"I'll\",\"start\":0.783,\"end\":0.904},{\"text\":\"use\",\"start\":1.024,\"end\":1.145},{\"text\":\"the\",\"start\":1.185,\"end\":1.245},{\"text\":\"tool\",\"start\":1.306,\"end\":1.526},{\"text\":\"to\",\"start\":1.607,\"end\":1.667},{\"text\":\"change\",\"start\":1.727,\"end\":2.049},{\"text\":\"the\",\"start\":2.069,\"end\":2.149},{\"text\":\"color\",\"start\":2.189,\"end\":2.47},{\"text\":\"to\",\"start\":2.511,\"end\":2.571},{\"text\":\"green.\",\"start\":2.651,\"end\":3.033}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":4.72,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":4.72}"
+    ],
+    "text": "I'll use the tool to change the color to green.",
+    "words": [
+      {
+        "text": "I'll",
+        "start": 0.783,
+        "end": 0.904
+      },
+      {
+        "text": "use",
+        "start": 1.024,
+        "end": 1.145
+      },
+      {
+        "text": "the",
+        "start": 1.185,
+        "end": 1.245
+      },
+      {
+        "text": "tool",
+        "start": 1.306,
+        "end": 1.526
+      },
+      {
+        "text": "to",
+        "start": 1.607,
+        "end": 1.667
+      },
+      {
+        "text": "change",
+        "start": 1.727,
+        "end": 2.049
+      },
+      {
+        "text": "the",
+        "start": 2.069,
+        "end": 2.149
+      },
+      {
+        "text": "color",
+        "start": 2.189,
+        "end": 2.47
+      },
+      {
+        "text": "to",
+        "start": 2.511,
+        "end": 2.571
+      },
+      {
+        "text": "green.",
+        "start": 2.651,
+        "end": 3.033
+      }
+    ]
+  },
+  "providerOutputTranscript": "I'll use the tool to change the color to green.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 0,
+      "clippedSampleCount": 0,
+      "maximumRms": 37.41232807065963,
+      "p50Rms": 19.9462298024798,
+      "p95Rms": 26.476798018894456,
+      "p99Rms": 34.20087718173322,
+      "sampleCount": 226560,
+      "windowCount": 236,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 60.71160051835234
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

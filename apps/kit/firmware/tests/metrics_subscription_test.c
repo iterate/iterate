@@ -626,6 +626,65 @@ static void rejected_callback_is_released_before_slot_reuse(void) {
 }
 
 /*
+ * Metrics follow the same two-socket ownership rule as button events. The
+ * userspace `/pcm` generation wants the newest bounded sample, not parallel
+ * month-long callbacks from every socket incarnation. Production proved that
+ * disposing a project session is not an immediate device-side reclamation
+ * oracle: an idle imported callback can occupy the only slot until another
+ * sample finally discovers that its exporter has gone away.
+ *
+ * A stable optional owner key lets the replacement generation supersede only
+ * its own idle callback. This is deliberately tested at the wire/resource
+ * boundary: the old import must be released before the new callback receives
+ * the slot, and the fixed one-slot RAM bound must remain unchanged.
+ */
+static void stable_owner_key_replaces_its_stale_metrics_callback(void) {
+  struct fixture fixture;
+  size_t captured_before_replacement;
+  fixture_init(&fixture);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+      "[[\"export\",-1],\"iterate-kit-voice-pcm-v1\"]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      fixture.module.poll(fixture.module.context, 0U).status ==
+      ITERATE_KIT_POLL_OK);
+  receive(&fixture, "[\"release\",1,1]");
+  receive(&fixture, "[\"resolve\",1,null]");
+  captured_before_replacement = fixture.captured_count;
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+      "[[\"export\",-2],\"iterate-kit-voice-pcm-v1\"]]]");
+  receive(&fixture, "[\"pull\",2]");
+
+  assert(fixture.subscriptions[0].callback.id == -2);
+  assert(fixture.captured_count == captured_before_replacement + 2U);
+  assert(
+      strcmp(
+          fixture.captured[captured_before_replacement],
+          "[\"release\",-1,1]") == 0);
+  assert(
+      strcmp(
+          fixture.captured[captured_before_replacement + 1U],
+          "[\"resolve\",2,null]") == 0);
+
+  assert(
+      fixture.module.poll(fixture.module.context, 1U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(
+      strstr(
+          fixture.captured[captured_before_replacement + 2U],
+          "[\"pipeline\",-2,[]") != NULL);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
  * Wi-Fi reconnection creates a new Cap'n Web session while the metrics module
  * itself survives. Retaining the old import would call a capability ID whose
  * meaning belongs to the dead session. Reinitialize the same storage and prove
@@ -1357,6 +1416,7 @@ static void invalid_buffer_evidence_is_a_visible_driver_error(void) {
 
 int main(void) {
   rejected_callback_is_released_before_slot_reuse();
+  stable_owner_key_replaces_its_stale_metrics_callback();
   session_end_discards_callbacks_before_session_reuse();
   audio_metrics_fit_one_control_message();
   maximum_audio_counters_fit_one_control_message();

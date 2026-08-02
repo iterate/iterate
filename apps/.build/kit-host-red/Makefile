@@ -179,6 +179,19 @@ iterate-kit-m5sticks3/fast:
 .PHONY : iterate-kit-m5sticks3/fast
 
 #=============================================================================
+# Target rules for targets named iterate-kit-voice-satellite
+
+# Build rule for target.
+iterate-kit-voice-satellite: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-voice-satellite
+.PHONY : iterate-kit-voice-satellite
+
+# fast build rule for target.
+iterate-kit-voice-satellite/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-satellite.dir/build.make CMakeFiles/iterate-kit-voice-satellite.dir/build
+.PHONY : iterate-kit-voice-satellite/fast
+
+#=============================================================================
 # Target rules for targets named iterate-kit-simulator
 
 # Build rule for target.
@@ -296,6 +309,45 @@ iterate-kit-core-s3-capture-reserve-test/fast:
 .PHONY : iterate-kit-core-s3-capture-reserve-test/fast
 
 #=============================================================================
+# Target rules for targets named iterate-kit-voice-pe-pcm-format-test
+
+# Build rule for target.
+iterate-kit-voice-pe-pcm-format-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-voice-pe-pcm-format-test
+.PHONY : iterate-kit-voice-pe-pcm-format-test
+
+# fast build rule for target.
+iterate-kit-voice-pe-pcm-format-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/build
+.PHONY : iterate-kit-voice-pe-pcm-format-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-voice-pe-hardware-config-test
+
+# Build rule for target.
+iterate-kit-voice-pe-hardware-config-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-voice-pe-hardware-config-test
+.PHONY : iterate-kit-voice-pe-hardware-config-test
+
+# fast build rule for target.
+iterate-kit-voice-pe-hardware-config-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build
+.PHONY : iterate-kit-voice-pe-hardware-config-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-voice-satellite-test
+
+# Build rule for target.
+iterate-kit-voice-satellite-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-voice-satellite-test
+.PHONY : iterate-kit-voice-satellite-test
+
+# fast build rule for target.
+iterate-kit-voice-satellite-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-satellite-test.dir/build.make CMakeFiles/iterate-kit-voice-satellite-test.dir/build
+.PHONY : iterate-kit-voice-satellite-test/fast
+
+#=============================================================================
 # Target rules for targets named iterate-kit-device-events-test
 
 # Build rule for target.
@@ -346,6 +398,19 @@ iterate-kit-runtime-diagnostics-test: cmake_check_build_system
 iterate-kit-runtime-diagnostics-test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-runtime-diagnostics-test.dir/build.make CMakeFiles/iterate-kit-runtime-diagnostics-test.dir/build
 .PHONY : iterate-kit-runtime-diagnostics-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-control-recovery-test
+
+# Build rule for target.
+iterate-kit-control-recovery-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-control-recovery-test
+.PHONY : iterate-kit-control-recovery-test
+
+# fast build rule for target.
+iterate-kit-control-recovery-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-control-recovery-test.dir/build.make CMakeFiles/iterate-kit-control-recovery-test.dir/build
+.PHONY : iterate-kit-control-recovery-test/fast
 
 #=============================================================================
 # Target rules for targets named iterate-kit-runtime-diagnostics-fixture
@@ -1251,6 +1316,30 @@ components/core/src/configuration.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.s
 .PHONY : components/core/src/configuration.c.s
 
+components/core/src/control_recovery.o: components/core/src/control_recovery.c.o
+.PHONY : components/core/src/control_recovery.o
+
+# target to build an object file
+components/core/src/control_recovery.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o
+.PHONY : components/core/src/control_recovery.c.o
+
+components/core/src/control_recovery.i: components/core/src/control_recovery.c.i
+.PHONY : components/core/src/control_recovery.i
+
+# target to preprocess a source file
+components/core/src/control_recovery.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.i
+.PHONY : components/core/src/control_recovery.c.i
+
+components/core/src/control_recovery.s: components/core/src/control_recovery.c.s
+.PHONY : components/core/src/control_recovery.s
+
+# target to generate assembly for a file
+components/core/src/control_recovery.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.s
+.PHONY : components/core/src/control_recovery.c.s
+
 components/core/src/cpu_usage.o: components/core/src/cpu_usage.c.o
 .PHONY : components/core/src/cpu_usage.o
 
@@ -1803,6 +1892,30 @@ devices/stackchan/stackchan.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-stackchan.dir/build.make CMakeFiles/iterate-kit-stackchan.dir/devices/stackchan/stackchan.c.s
 .PHONY : devices/stackchan/stackchan.c.s
 
+devices/voice_satellite/voice_satellite.o: devices/voice_satellite/voice_satellite.c.o
+.PHONY : devices/voice_satellite/voice_satellite.o
+
+# target to build an object file
+devices/voice_satellite/voice_satellite.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-satellite.dir/build.make CMakeFiles/iterate-kit-voice-satellite.dir/devices/voice_satellite/voice_satellite.c.o
+.PHONY : devices/voice_satellite/voice_satellite.c.o
+
+devices/voice_satellite/voice_satellite.i: devices/voice_satellite/voice_satellite.c.i
+.PHONY : devices/voice_satellite/voice_satellite.i
+
+# target to preprocess a source file
+devices/voice_satellite/voice_satellite.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-satellite.dir/build.make CMakeFiles/iterate-kit-voice-satellite.dir/devices/voice_satellite/voice_satellite.c.i
+.PHONY : devices/voice_satellite/voice_satellite.c.i
+
+devices/voice_satellite/voice_satellite.s: devices/voice_satellite/voice_satellite.c.s
+.PHONY : devices/voice_satellite/voice_satellite.s
+
+# target to generate assembly for a file
+devices/voice_satellite/voice_satellite.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-satellite.dir/build.make CMakeFiles/iterate-kit-voice-satellite.dir/devices/voice_satellite/voice_satellite.c.s
+.PHONY : devices/voice_satellite/voice_satellite.c.s
+
 platforms/iterate_core_s3_audio/core_s3_capture_reserve.o: platforms/iterate_core_s3_audio/core_s3_capture_reserve.c.o
 .PHONY : platforms/iterate_core_s3_audio/core_s3_capture_reserve.o
 
@@ -1898,6 +2011,54 @@ platforms/iterate_esp_idf/pcm_transport.s: platforms/iterate_esp_idf/pcm_transpo
 platforms/iterate_esp_idf/pcm_transport.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-transport-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-transport-test.dir/platforms/iterate_esp_idf/pcm_transport.c.s
 .PHONY : platforms/iterate_esp_idf/pcm_transport.c.s
+
+platforms/iterate_voice_pe_audio/voice_pe_hardware_config.o: platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.o
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_hardware_config.o
+
+# target to build an object file
+platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.o
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.o
+
+platforms/iterate_voice_pe_audio/voice_pe_hardware_config.i: platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.i
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_hardware_config.i
+
+# target to preprocess a source file
+platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.i
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.i
+
+platforms/iterate_voice_pe_audio/voice_pe_hardware_config.s: platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.s
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_hardware_config.s
+
+# target to generate assembly for a file
+platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.s
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.s
+
+platforms/iterate_voice_pe_audio/voice_pe_pcm_format.o: platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.o
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_pcm_format.o
+
+# target to build an object file
+platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.o
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.o
+
+platforms/iterate_voice_pe_audio/voice_pe_pcm_format.i: platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.i
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_pcm_format.i
+
+# target to preprocess a source file
+platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.i
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.i
+
+platforms/iterate_voice_pe_audio/voice_pe_pcm_format.s: platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.s
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_pcm_format.s
+
+# target to generate assembly for a file
+platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.s
+.PHONY : platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.s
 
 simulator/devices/m5sticks3.o: simulator/devices/m5sticks3.cpp.o
 .PHONY : simulator/devices/m5sticks3.o
@@ -2258,6 +2419,30 @@ tests/configuration_test.s: tests/configuration_test.c.s
 tests/configuration_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-configuration-test.dir/build.make CMakeFiles/iterate-kit-configuration-test.dir/tests/configuration_test.c.s
 .PHONY : tests/configuration_test.c.s
+
+tests/control_recovery_test.o: tests/control_recovery_test.c.o
+.PHONY : tests/control_recovery_test.o
+
+# target to build an object file
+tests/control_recovery_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-control-recovery-test.dir/build.make CMakeFiles/iterate-kit-control-recovery-test.dir/tests/control_recovery_test.c.o
+.PHONY : tests/control_recovery_test.c.o
+
+tests/control_recovery_test.i: tests/control_recovery_test.c.i
+.PHONY : tests/control_recovery_test.i
+
+# target to preprocess a source file
+tests/control_recovery_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-control-recovery-test.dir/build.make CMakeFiles/iterate-kit-control-recovery-test.dir/tests/control_recovery_test.c.i
+.PHONY : tests/control_recovery_test.c.i
+
+tests/control_recovery_test.s: tests/control_recovery_test.c.s
+.PHONY : tests/control_recovery_test.s
+
+# target to generate assembly for a file
+tests/control_recovery_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-control-recovery-test.dir/build.make CMakeFiles/iterate-kit-control-recovery-test.dir/tests/control_recovery_test.c.s
+.PHONY : tests/control_recovery_test.c.s
 
 tests/core_s3_capture_reserve_test.o: tests/core_s3_capture_reserve_test.c.o
 .PHONY : tests/core_s3_capture_reserve_test.o
@@ -3078,6 +3263,78 @@ tests/stackchan_control_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-stackchan-control-test.dir/build.make CMakeFiles/iterate-kit-stackchan-control-test.dir/tests/stackchan_control_test.c.s
 .PHONY : tests/stackchan_control_test.c.s
 
+tests/voice_pe_hardware_config_test.o: tests/voice_pe_hardware_config_test.c.o
+.PHONY : tests/voice_pe_hardware_config_test.o
+
+# target to build an object file
+tests/voice_pe_hardware_config_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/tests/voice_pe_hardware_config_test.c.o
+.PHONY : tests/voice_pe_hardware_config_test.c.o
+
+tests/voice_pe_hardware_config_test.i: tests/voice_pe_hardware_config_test.c.i
+.PHONY : tests/voice_pe_hardware_config_test.i
+
+# target to preprocess a source file
+tests/voice_pe_hardware_config_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/tests/voice_pe_hardware_config_test.c.i
+.PHONY : tests/voice_pe_hardware_config_test.c.i
+
+tests/voice_pe_hardware_config_test.s: tests/voice_pe_hardware_config_test.c.s
+.PHONY : tests/voice_pe_hardware_config_test.s
+
+# target to generate assembly for a file
+tests/voice_pe_hardware_config_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/tests/voice_pe_hardware_config_test.c.s
+.PHONY : tests/voice_pe_hardware_config_test.c.s
+
+tests/voice_pe_pcm_format_test.o: tests/voice_pe_pcm_format_test.c.o
+.PHONY : tests/voice_pe_pcm_format_test.o
+
+# target to build an object file
+tests/voice_pe_pcm_format_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/tests/voice_pe_pcm_format_test.c.o
+.PHONY : tests/voice_pe_pcm_format_test.c.o
+
+tests/voice_pe_pcm_format_test.i: tests/voice_pe_pcm_format_test.c.i
+.PHONY : tests/voice_pe_pcm_format_test.i
+
+# target to preprocess a source file
+tests/voice_pe_pcm_format_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/tests/voice_pe_pcm_format_test.c.i
+.PHONY : tests/voice_pe_pcm_format_test.c.i
+
+tests/voice_pe_pcm_format_test.s: tests/voice_pe_pcm_format_test.c.s
+.PHONY : tests/voice_pe_pcm_format_test.s
+
+# target to generate assembly for a file
+tests/voice_pe_pcm_format_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/tests/voice_pe_pcm_format_test.c.s
+.PHONY : tests/voice_pe_pcm_format_test.c.s
+
+tests/voice_satellite_test.o: tests/voice_satellite_test.c.o
+.PHONY : tests/voice_satellite_test.o
+
+# target to build an object file
+tests/voice_satellite_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-satellite-test.dir/build.make CMakeFiles/iterate-kit-voice-satellite-test.dir/tests/voice_satellite_test.c.o
+.PHONY : tests/voice_satellite_test.c.o
+
+tests/voice_satellite_test.i: tests/voice_satellite_test.c.i
+.PHONY : tests/voice_satellite_test.i
+
+# target to preprocess a source file
+tests/voice_satellite_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-satellite-test.dir/build.make CMakeFiles/iterate-kit-voice-satellite-test.dir/tests/voice_satellite_test.c.i
+.PHONY : tests/voice_satellite_test.c.i
+
+tests/voice_satellite_test.s: tests/voice_satellite_test.c.s
+.PHONY : tests/voice_satellite_test.s
+
+# target to generate assembly for a file
+tests/voice_satellite_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-satellite-test.dir/build.make CMakeFiles/iterate-kit-voice-satellite-test.dir/tests/voice_satellite_test.c.s
+.PHONY : tests/voice_satellite_test.c.s
+
 tests/voicelab_stream_test.o: tests/voicelab_stream_test.c.o
 .PHONY : tests/voicelab_stream_test.o
 
@@ -3244,6 +3501,7 @@ help:
 	@echo "... iterate-kit-capnweb-oneway-call-test"
 	@echo "... iterate-kit-configuration-decoder-fixture"
 	@echo "... iterate-kit-configuration-test"
+	@echo "... iterate-kit-control-recovery-test"
 	@echo "... iterate-kit-core"
 	@echo "... iterate-kit-core-s3-capture-reserve-test"
 	@echo "... iterate-kit-cpu-usage-test"
@@ -3279,6 +3537,10 @@ help:
 	@echo "... iterate-kit-spsc-ring-test"
 	@echo "... iterate-kit-stackchan"
 	@echo "... iterate-kit-stackchan-control-test"
+	@echo "... iterate-kit-voice-pe-hardware-config-test"
+	@echo "... iterate-kit-voice-pe-pcm-format-test"
+	@echo "... iterate-kit-voice-satellite"
+	@echo "... iterate-kit-voice-satellite-test"
 	@echo "... iterate-kit-voicelab-stream-test"
 	@echo "... iterate-kit-websocket-frame-writer-test"
 	@echo "... iterate-kit-websocket-mailbox-test"
@@ -3336,6 +3598,9 @@ help:
 	@echo "... components/core/src/configuration.o"
 	@echo "... components/core/src/configuration.i"
 	@echo "... components/core/src/configuration.s"
+	@echo "... components/core/src/control_recovery.o"
+	@echo "... components/core/src/control_recovery.i"
+	@echo "... components/core/src/control_recovery.s"
 	@echo "... components/core/src/cpu_usage.o"
 	@echo "... components/core/src/cpu_usage.i"
 	@echo "... components/core/src/cpu_usage.s"
@@ -3405,6 +3670,9 @@ help:
 	@echo "... devices/stackchan/stackchan.o"
 	@echo "... devices/stackchan/stackchan.i"
 	@echo "... devices/stackchan/stackchan.s"
+	@echo "... devices/voice_satellite/voice_satellite.o"
+	@echo "... devices/voice_satellite/voice_satellite.i"
+	@echo "... devices/voice_satellite/voice_satellite.s"
 	@echo "... platforms/iterate_core_s3_audio/core_s3_capture_reserve.o"
 	@echo "... platforms/iterate_core_s3_audio/core_s3_capture_reserve.i"
 	@echo "... platforms/iterate_core_s3_audio/core_s3_capture_reserve.s"
@@ -3417,6 +3685,12 @@ help:
 	@echo "... platforms/iterate_esp_idf/pcm_transport.o"
 	@echo "... platforms/iterate_esp_idf/pcm_transport.i"
 	@echo "... platforms/iterate_esp_idf/pcm_transport.s"
+	@echo "... platforms/iterate_voice_pe_audio/voice_pe_hardware_config.o"
+	@echo "... platforms/iterate_voice_pe_audio/voice_pe_hardware_config.i"
+	@echo "... platforms/iterate_voice_pe_audio/voice_pe_hardware_config.s"
+	@echo "... platforms/iterate_voice_pe_audio/voice_pe_pcm_format.o"
+	@echo "... platforms/iterate_voice_pe_audio/voice_pe_pcm_format.i"
+	@echo "... platforms/iterate_voice_pe_audio/voice_pe_pcm_format.s"
 	@echo "... simulator/devices/m5sticks3.o"
 	@echo "... simulator/devices/m5sticks3.i"
 	@echo "... simulator/devices/m5sticks3.s"
@@ -3462,6 +3736,9 @@ help:
 	@echo "... tests/configuration_test.o"
 	@echo "... tests/configuration_test.i"
 	@echo "... tests/configuration_test.s"
+	@echo "... tests/control_recovery_test.o"
+	@echo "... tests/control_recovery_test.i"
+	@echo "... tests/control_recovery_test.s"
 	@echo "... tests/core_s3_capture_reserve_test.o"
 	@echo "... tests/core_s3_capture_reserve_test.i"
 	@echo "... tests/core_s3_capture_reserve_test.s"
@@ -3564,6 +3841,15 @@ help:
 	@echo "... tests/stackchan_control_test.o"
 	@echo "... tests/stackchan_control_test.i"
 	@echo "... tests/stackchan_control_test.s"
+	@echo "... tests/voice_pe_hardware_config_test.o"
+	@echo "... tests/voice_pe_hardware_config_test.i"
+	@echo "... tests/voice_pe_hardware_config_test.s"
+	@echo "... tests/voice_pe_pcm_format_test.o"
+	@echo "... tests/voice_pe_pcm_format_test.i"
+	@echo "... tests/voice_pe_pcm_format_test.s"
+	@echo "... tests/voice_satellite_test.o"
+	@echo "... tests/voice_satellite_test.i"
+	@echo "... tests/voice_satellite_test.s"
 	@echo "... tests/voicelab_stream_test.o"
 	@echo "... tests/voicelab_stream_test.i"
 	@echo "... tests/voicelab_stream_test.s"

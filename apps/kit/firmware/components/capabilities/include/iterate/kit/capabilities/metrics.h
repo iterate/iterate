@@ -5,6 +5,7 @@
 #include "iterate/kit/buffer_metrics.h"
 #include "iterate/kit/peer.h"
 #include "iterate/kit/status.h"
+#include "iterate/kit/capabilities/subscription.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -382,6 +383,7 @@ enum iterate_kit_metrics_view {
 struct iterate_kit_metrics_subscription {
   struct iterate_kit_metrics *owner;
   struct capnweb_remote_capability callback;
+  struct iterate_kit_subscription_owner_key owner_key;
   bool occupied;
   bool call_in_flight;
   bool callback_budget_reserved;

@@ -1,3 +1,5 @@
+import { kitDeviceCapabilityPath } from "./device-id.ts";
+
 interface KitDeviceControlProject {
   capabilityHosts: {
     get(path: string): {
@@ -22,7 +24,7 @@ export async function interruptKitDevicePlayback(
 ): Promise<void> {
   const acknowledged = await project.capabilityHosts.get("/").invokeCapability({
     args: [],
-    path: ["kit", deviceId, "conversation", "interruptPlayback"],
+    path: kitDeviceCapabilityPath(deviceId, "conversation", "interruptPlayback"),
   });
   if (acknowledged !== true) {
     throw new Error(`The ${deviceId} device did not acknowledge the playback interruption.`);
