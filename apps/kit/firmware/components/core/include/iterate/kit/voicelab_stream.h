@@ -28,7 +28,12 @@ enum {
    * holds that eight-event array; with the push envelope it must stay inside
    * one 8 KiB transport message.
    */
-  ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND = 6,
+  /*
+   * 12, at mu-law. Twice the audio per append and half the bytes per sample,
+   * so the message rate falls fourfold against PCM16 at 6 — which is what the
+   * uplink could not sustain: it stalled the TCP flow outright.
+   */
+  ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND = 4,
   /*
    * Each frame costs at most ~980 characters here: ~125 of JSON envelope
    * (type, callId, a 10-digit sequence, a 20-digit timestamp) plus 854 of
@@ -225,6 +230,8 @@ struct iterate_kit_voicelab {
    */
   char last_user_item_id[80];
   uint8_t pcm_buffer[ITERATE_KIT_VOICELAB_FRAME_BYTES];
+  /* One frame of mu-law, half the size of the PCM16 it came from. */
+  uint8_t mulaw_buffer[ITERATE_KIT_VOICELAB_FRAME_BYTES / 2U];
 };
 
 enum capnweb_status iterate_kit_voicelab_start(

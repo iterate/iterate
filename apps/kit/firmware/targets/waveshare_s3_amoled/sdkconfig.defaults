@@ -103,3 +103,20 @@ CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y
 CONFIG_ESP_TASK_WDT_TIMEOUT_S=20
 CONFIG_ESP_TASK_WDT_PANIC=y
+
+#
+# The microphone does not fit in a 5760-byte socket.
+#
+# One mic append is ~5.2 KiB of base64, so at the lwIP default a single write
+# very nearly fills the whole TCP send buffer and the NEXT one blocks with
+# EAGAIN ("No more processes" in newlib's wording) until the previous segment
+# is acknowledged — a full round trip per message. The outbox then backs up,
+# discards (measured: 48 messages), and discarding is SESSION-FATAL in this
+# peer: capnweb sees the gap, the session ends, and the turn is lost.
+#
+# That is precisely "I hold the button, speak, and nothing happens": every
+# push-to-talk turn killed the session it was speaking into. Room for six
+# messages in flight instead of one.
+#
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+CONFIG_LWIP_TCP_WND_DEFAULT=32768

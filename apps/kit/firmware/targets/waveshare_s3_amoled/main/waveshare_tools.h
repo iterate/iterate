@@ -26,6 +26,15 @@ struct iterate_kit_module waveshare_tools_module(void);
  */
 size_t waveshare_health_json(char *out, size_t capacity);
 
+/**
+ * Reboot the device, shortly. Deferred so the RPC reply reaches the caller
+ * before the chip goes down — a restart that looks like a crashed session is
+ * indistinguishable from the failures it is meant to clear.
+ *
+ * Provided by main.c. The physical equivalent is holding the upper button.
+ */
+void waveshare_request_restart(void);
+
 #ifdef __cplusplus
 }
 #endif

@@ -39,6 +39,7 @@ static const char *const talk_start_path[] = {"pushToTalk", "start"};
 static const char *const talk_stop_path[] = {"pushToTalk", "stop"};
 static const char *const take_screenshot_path[] = {"takeScreenshot"};
 static const char *const health_path[] = {"health"};
+static const char *const restart_path[] = {"restart"};
 static const char *const set_volume_path[] = {"setVolume"};
 static const char *const set_mic_gain_path[] = {"setMicGain"};
 static const char *const recording_status_path[] = {"recording", "status"};
@@ -409,9 +410,26 @@ static enum capnweb_status health(
   return capnweb_reply_set_borrowed_expression(reply, health_text, length, NULL, NULL);
 }
 
+/*
+ * A power cycle anyone can ask for. Every remedy this device has for a wedged
+ * state ends in a reboot, and until now the only way to get one was to be in
+ * the room — which meant "restart it and try again" could not be part of any
+ * test, and the very failures worth measuring are the ones that need it.
+ */
+static enum capnweb_status restart(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  (void)context;
+  (void)call;
+  waveshare_request_restart();
+  return capnweb_reply_set_boolean(reply, true);
+}
+
 struct iterate_kit_module waveshare_tools_module(void) {
   static const struct iterate_kit_method methods[] = {
     {health_path, 1U, health},
+    {restart_path, 1U, restart},
     {set_background_path, 1U, set_background},
     {start_call_path, 2U, start_call},
     {hang_up_path, 2U, hang_up},

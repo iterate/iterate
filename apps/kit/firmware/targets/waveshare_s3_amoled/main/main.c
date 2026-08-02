@@ -110,7 +110,24 @@ enum {
    * depth is cheap; 16 slots lets the sender catch up instead of losing the
    * tail of long utterances.
    */
-  CONTROL_OUTBOX_SLOTS = 16,
+  /*
+   * 64, not 16. Pushing into a FULL outbox returns CAPNWEB_E_TRANSPORT, and
+   * this peer terminalizes on that — the session ends, the turn is lost, and
+   * the screen sits on "listening". Measured: every push-to-talk turn died
+   * this way (appCapnweb=-4 at the moment the microphone opened).
+   *
+   * The microphone is bursty — three seconds of speech, then nothing — so the
+   * fix is room to absorb a burst rather than a faster drain. 64 slots is
+   * ~5 s of uplink at 8 KiB each, in PSRAM, which this board has to spare.
+   */
+  CONTROL_OUTBOX_SLOTS = 64,
+  /*
+   * How much of that the microphone may never touch. Replies to inbound
+   * calls are NOT gated on headroom — the session generates them whenever the
+   * platform delivers something — so the mic must leave them room or it
+   * starves the very lane that keeps the session alive.
+   */
+  MIC_OUTBOX_RESERVE = 40,
   FRAME_MS = 20,
   FRAME_SAMPLES = WAVESHARE_AUDIO_FRAME_SAMPLES,
   FRAME_BYTES = FRAME_SAMPLES * 2,
@@ -202,7 +219,7 @@ enum {
    * Well clear of the worst RTT ever measured here (~400 ms) and of a
    * connection recycle, so a healthy device never trips it.
    */
-  PING_TIMEOUT_MS = 15000,
+  PING_TIMEOUT_MS = 20000,
   /*
    * A call with no event from its bridge for this long is a call whose bridge
    * is gone. Pings run every 5 s and each one earns a pong, so this is three
@@ -323,6 +340,9 @@ static struct {
   uint32_t liveness_restarts;
   /* Calls abandoned because their bridge stopped proving it existed. */
   uint32_t bridge_losses;
+  /* Diagnostics for a frozen device: see the pulse in the app loop. */
+  uint32_t loop_count;
+  uint64_t last_pulse_ms;
   bool talking;
   /* Release pressed, but the capture queue is not yet on the wire. */
   bool flushing_turn;
@@ -748,11 +768,20 @@ static bool initialise_connection(void) {
  * and the health() anyone can pull. They were never allowed to disagree —
  * the state worth diagnosing is the one where the push has stopped.
  */
+/* Set by the restart capability; acted on by the app loop a moment later. */
+static volatile uint64_t restart_requested_at;
+
+void waveshare_request_restart(void) {
+  restart_requested_at = now_ms(NULL);
+}
+
 size_t waveshare_health_json(char *out, size_t capacity) {
   struct iterate_kit_esp_idf_itx_transport_metrics metrics;
+  struct iterate_kit_spsc_ring_metrics outbox_metrics;
   const uint64_t now = now_ms(NULL);
   int length;
   iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &metrics);
+  iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
   length = snprintf(
       out,
       capacity,
@@ -786,7 +815,8 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       ",\"lastAppStatus\":%" PRId32
       ",\"dmaLargest\":%" PRIu32
       ",\"spkMarginMinMs\":%" PRIu32 ",\"spkMarginP10Ms\":%" PRIu32
-      ",\"spkWrites\":%" PRIu32 "}",
+      ",\"spkWrites\":%" PRIu32
+      ",\"outboxUsed\":%u,\"outboxSlots\":%u}",
       iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
       iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
@@ -852,7 +882,9 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
       runtime.speaker_margin_min_ms,
       runtime.speaker_margin_p10_ms,
-      runtime.speaker_writes);
+      runtime.speaker_writes,
+      (unsigned int)outbox_metrics.current_slots,
+      (unsigned int)CONTROL_OUTBOX_SLOTS);
   if (length <= 0 || (size_t)length >= capacity) return 0U;
   return (size_t)length;
 }
@@ -899,7 +931,23 @@ void app_main(void) {
    * default, and what this was before) is the other extreme and was equally
    * wrong: below LVGL and the recorder both.
    */
-  vTaskPrioritySet(NULL, 4);
+  /*
+   * EQUAL to the network task (5), deliberately, so the two round-robin
+   * instead of one starving the other.
+   *
+   * At 4 — one below — the network task won every time it had work, and
+   * during an answer it ALWAYS has work: audio arrives continuously. This
+   * task is what drains the inbox, decodes that audio, answers every RPC,
+   * polls the buttons and sends the microphone, so it got whatever was left,
+   * which was not much. Measured: health() calls that took 50 SECONDS to
+   * return mid-answer, ping round trips of 28s, and a device that looks
+   * frozen with a dead talk button — because it very nearly was.
+   *
+   * Above (10) was the opposite error and is in this file's history: the app
+   * loop polls hard, so the network task starved and nothing arrived at all.
+   * Equal priority is the only setting where both make progress.
+   */
+  vTaskPrioritySet(NULL, 5);
   /*
    * Subscribe to the hardware watchdog. If this loop ever stops feeding it —
    * blocked on I2C, on FatFs, on anything — the chip reboots itself. Every
@@ -1136,6 +1184,13 @@ void app_main(void) {
         waveshare_recorder_end_call("device restart");
         esp_restart();
       }
+    }
+
+    if (restart_requested_at != 0U && now - restart_requested_at > 400U) {
+      ESP_LOGW(tag, "restart requested over itx");
+      waveshare_display_set_status("restarting…");
+      waveshare_recorder_end_call("restart requested");
+      esp_restart();
     }
 
     /*
@@ -1506,7 +1561,7 @@ void app_main(void) {
          */
         const bool behind = queued >= (size_t)(MIC_FRAMES_PER_APPEND * 2U);
         if (runtime.talking && (behind || now >= drain_window_at) &&
-            queued >= needed && outbox_free >= 3U) {
+            queued >= needed && outbox_free >= (size_t)MIC_OUTBOX_RESERVE) {
           const size_t take = queued < (size_t)MIC_FRAMES_PER_APPEND
               ? queued
               : (size_t)MIC_FRAMES_PER_APPEND;
@@ -1573,12 +1628,38 @@ void app_main(void) {
         (void)iterate_kit_voicelab_ping(&runtime.voicelab);
         next_ping_at = now + PING_INTERVAL_MS;
       }
+      /*
+       * A one-second pulse while a turn is open. When the device freezes
+       * mid-turn nothing else can be read out of it — health() is answered by
+       * this very task — so this is the only way to tell a stalled APP task
+       * from a stalled TRANSPORT: if the pulse keeps printing, the loop is
+       * running and the network is stuck; if it stops, the loop is.
+       */
+      if (runtime.talking || now - runtime.last_pulse_ms < 3000U) {
+        if (now - runtime.last_pulse_ms >= 1000U) {
+          struct iterate_kit_esp_idf_itx_transport_metrics pulse;
+          iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &pulse);
+          runtime.last_pulse_ms = now;
+          ESP_LOGI(
+              tag,
+              "pulse loops=%" PRIu32 " outbox=%u/%u inPub=%" PRIu32
+              " inCon=%" PRIu32 " sent=%" PRIu32 " frames=%" PRIu32,
+              runtime.loop_count,
+              (unsigned int)outbox_metrics.current_slots,
+              (unsigned int)CONTROL_OUTBOX_SLOTS,
+              pulse.control_inbox.messages_published,
+              pulse.control_inbox.messages_consumed,
+              pulse.control_messages_sent,
+              runtime.voicelab.frames_sent);
+        }
+      }
       if (now >= next_stats_at && outbox_free >= 3U) {
         append_stats(now);
         next_stats_at = now + STATS_INTERVAL_MS;
       }
     }
 
+    ++runtime.loop_count;
     DELAY_MS(5);
   }
 }

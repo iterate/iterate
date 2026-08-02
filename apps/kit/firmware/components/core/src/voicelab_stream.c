@@ -68,6 +68,49 @@ static bool take_result_capability(
 static const char base64_alphabet[] =
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
+/*
+ * G.711 mu-law: 16-bit PCM to 8 bits, halving the uplink.
+ *
+ * The device could not send its own microphone. A 3-second turn put ~100 KB/s
+ * of base64 PCM16 on the wire in one burst, and the TCP flow stalled dead —
+ * both directions, no errors, for twenty seconds at a time, which is exactly
+ * the "I hold the button and nothing happens" everyone was seeing.
+ *
+ * mu-law is the telephone network's answer to the same problem and is
+ * transparent for speech: half the bytes, and small enough per frame that
+ * twice as many frames fit one append, so the MESSAGE rate falls fourfold
+ * too. The bridge expands it back to PCM16 before the provider ever sees it.
+ */
+static uint8_t mulaw_encode_sample(int16_t sample) {
+  const int16_t BIAS = 0x84;
+  const int16_t CLIP = 32635;
+  int sign = (sample >> 8) & 0x80;
+  int magnitude;
+  int exponent;
+  int mantissa;
+  if (sign != 0) sample = (int16_t)-sample;
+  if (sample > CLIP) sample = CLIP;
+  magnitude = sample + BIAS;
+  exponent = 7;
+  for (int mask = 0x4000; (magnitude & mask) == 0 && exponent > 0; mask >>= 1) {
+    --exponent;
+  }
+  mantissa = (magnitude >> (exponent + 3)) & 0x0F;
+  return (uint8_t)~(sign | (exponent << 4) | mantissa);
+}
+
+/** Encode a frame of little-endian PCM16 in place into mu-law bytes. */
+static size_t mulaw_encode(const uint8_t *pcm, size_t pcm_length, uint8_t *out) {
+  size_t index;
+  const size_t samples = pcm_length / 2U;
+  for (index = 0U; index < samples; ++index) {
+    const int16_t sample =
+        (int16_t)((uint16_t)pcm[index * 2U] | ((uint16_t)pcm[index * 2U + 1U] << 8));
+    out[index] = mulaw_encode_sample(sample);
+  }
+  return samples;
+}
+
 static size_t base64_encode(
     const uint8_t *bytes,
     size_t byte_count,
@@ -1050,7 +1093,7 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
         sizeof(voicelab->args_buffer) - offset,
         "%s{\"type\":\"voicelab/mic-frame\",\"ephemeral\":true,"
         "\"payload\":{\"callId\":\"%s\",\"seq\":%" PRIu32
-        ",\"t\":%" PRIu64 ",\"pcm\":\"",
+        ",\"t\":%" PRIu64 ",\"enc\":\"u\",\"pcm\":\"",
         index == 0U ? "" : ",",
         voicelab->options.call_id,
         sequence + (uint32_t)index,
@@ -1061,11 +1104,15 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
       return CAPNWEB_E_LIMIT;
     }
     offset += (size_t)written;
-    encoded_length = base64_encode(
-        frames[index],
-        frame_length,
-        voicelab->args_buffer + offset,
-        sizeof(voicelab->args_buffer) - offset - sizeof("\"}}]"));
+    {
+      const size_t mulaw_length =
+          mulaw_encode(frames[index], frame_length, voicelab->mulaw_buffer);
+      encoded_length = base64_encode(
+          voicelab->mulaw_buffer,
+          mulaw_length,
+          voicelab->args_buffer + offset,
+          sizeof(voicelab->args_buffer) - offset - sizeof("\"}}]"));
+    }
     if (encoded_length == 0U) {
       /* The args buffer could not hold this batch — count it, or the
        * microphone goes quiet with every counter reading zero. */
