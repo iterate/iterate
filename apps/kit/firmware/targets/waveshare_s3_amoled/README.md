@@ -86,14 +86,59 @@ voicelab `worker.ts` deployed (`apps/os/scripts/voicelab/config-repo/`) and an
 From `apps/os`, with a Doppler config pointing at the deployment:
 
 ```sh
+pnpm cli voicelab device --action health     --project prj_…   # start here
+pnpm cli voicelab device --action journey    --project prj_… --out ./journey
 pnpm cli voicelab device --action status     --project prj_…
 pnpm cli voicelab device --action call       --project prj_…
 pnpm cli voicelab device --action turn       --project prj_… --seconds 3
 pnpm cli voicelab device --action pull       --project prj_… --out ./recording
 pnpm cli voicelab device --action screenshot --project prj_… --out screen.png
+pnpm cli voicelab soak   --project prj_… --minutes 60          # can it hold an hour?
+pnpm cli voicelab probe  --project prj_… --turns 2             # the bridge, without the device
 ```
 
-`pull` writes the PCM lanes as WAVs, so they open in anything.
+`pull` writes the PCM lanes as WAVs, so they open in anything. `journey`
+drives the whole thing the way a person does — press, wait for live, hold,
+release, wait for the answer — timing every step and screenshotting the
+screen at each one. Diagnosis order and the rules behind it:
+[DEBUGGING.md](DEBUGGING.md).
+
+## Belief, intent, and what proves either
+
+The device holds one piece of state that a person set: **do they want a
+call**. Everything else is derived, and derived things carry a deadline.
+
+- `wants_call` is the INTENT. A button press or an RPC sets it, and nothing
+  else may clear it — not a lost connection, not a bridge that vanished.
+- `call_active` is a BELIEF, and it expires. The bridge lives in a Durable
+  Object the device cannot see, which can be evicted or replaced without
+  appending the `call-ended` the device waits for; left to trust its own
+  flag the device sat on a call that had not existed for hours, lighting
+  "listening" and "speaking" at a listener who was not there. So the belief
+  survives only while the bridge keeps proving it exists — every
+  bridge-sourced event counts, and the pong answering the device's own ping
+  is the one that arrives when nobody is speaking.
+- Losing the proof drops the belief, never the intent, and a reconcile loop
+  opens a fresh call within a second. This is the same shape as a stream
+  processor: durable intent, reduced state, and a loop that makes reality
+  match rather than an edge that fires once and hopes.
+
+The same discipline applies to the session itself. Audio rides one-way
+appends by design, so a half-open socket looks exactly like a quiet one; the
+ping is the only pulled call on the lane, and its resolution is the device's
+single proof that the far end is still processing what it sends. Unanswered
+for 15s, the transport is replaced; no round trip at all for 180s, the chip
+restarts.
+
+## The colleague
+
+A call asks for one: `startCall({ colleague: true })` gives the voice model a
+single tool and a text agent at `/agents/colleague` behind it. Every finished
+transcript line is appended to that agent as context with
+`dont-trigger-request`, so it hears the whole conversation without ever
+being asked to respond to it — and already knows what was said when it IS
+asked. The tool returns immediately so the voice can say "I've asked" and
+keep talking; the real answer arrives later as a new conversation item.
 
 ## Board facts that cost real time
 
