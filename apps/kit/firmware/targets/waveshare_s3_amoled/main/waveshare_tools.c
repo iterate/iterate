@@ -303,7 +303,7 @@ static enum capnweb_status recording_status(
     void *context,
     const struct capnweb_call *call,
     struct capnweb_reply *reply) {
-  static char status_text[224];
+  static char status_text[288];
   size_t mic_bytes = 0U;
   size_t speaker_bytes = 0U;
   size_t log_bytes = 0U;
@@ -314,11 +314,15 @@ static enum capnweb_status recording_status(
   length = snprintf(
       status_text,
       sizeof(status_text),
-      "{\"card\":%s,\"recording\":%s,\"written\":{\"mic\":%u,"
+      "{\"card\":%s,\"recording\":%s,\"begins\":%u,\"ends\":%u,"
+      "\"written\":{\"mic\":%u,"
       "\"speaker\":%u,\"log\":%u},\"onDisk\":{\"mic\":%u,"
       "\"speaker\":%u,\"log\":%u}}",
       waveshare_recorder_available() ? "true" : "false",
       waveshare_recorder_recording() ? "true" : "false",
+      /* One begin per call is healthy; hundreds is the storm this had. */
+      (unsigned int)waveshare_recorder_begins(),
+      (unsigned int)waveshare_recorder_ends(),
       (unsigned int)mic_bytes,
       (unsigned int)speaker_bytes,
       (unsigned int)log_bytes,

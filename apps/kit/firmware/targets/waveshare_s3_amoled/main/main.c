@@ -196,6 +196,26 @@ enum {
   /* How long the transport may stay FAILED before the device reboots itself. */
   UNHEALTHY_RESTART_MS = 120000,
   PING_INTERVAL_MS = 5000,
+  /*
+   * A ping whose append never resolves within this long means the session is
+   * not carrying traffic in BOTH directions, whatever the socket believes.
+   * Well clear of the worst RTT ever measured here (~400 ms) and of a
+   * connection recycle, so a healthy device never trips it.
+   */
+  PING_TIMEOUT_MS = 15000,
+  /*
+   * A call with no event from its bridge for this long is a call whose bridge
+   * is gone. Pings run every 5 s and each one earns a pong, so this is three
+   * missed round trips — not a network hiccup.
+   */
+  BRIDGE_SILENCE_MS = 20000,
+  /*
+   * Last resort. The transport can be READY, the socket open, and nothing
+   * whatsoever moving: a half-open TCP connection looks perfectly healthy
+   * from this end. If no probe has completed for this long, no amount of
+   * in-process recovery has worked and the chip restarts.
+   */
+  NO_LIVENESS_RESTART_MS = 180000,
 };
 
 /* PSRAM-resident: 256 KiB would crowd internal RAM out of TLS headroom. */
@@ -252,7 +272,13 @@ static struct {
   struct iterate_kit_voicelab voicelab;
   uint32_t voicelab_generation;
   uint32_t frame_sequence;
-  char stats_buffer[1024];
+  /*
+   * Generous on purpose: a stats line that outgrows this is silently NOT
+   * sent (snprintf truncates and the append is skipped), so the instrument
+   * would go dark exactly when someone added the counter that explains a
+   * bug. The overflow is logged for the same reason.
+   */
+  char stats_buffer[1536];
   uint32_t stats_sequence;
   enum iterate_kit_esp_idf_itx_transport_state last_transport_state;
   enum iterate_kit_voicelab_state last_voicelab_state;
@@ -293,6 +319,10 @@ static struct {
   uint32_t speaker_writes;
   uint32_t speaker_bad_frames;
   uint32_t barge_in_flushes;
+  /* Transports torn down because a ping went unanswered. */
+  uint32_t liveness_restarts;
+  /* Calls abandoned because their bridge stopped proving it existed. */
+  uint32_t bridge_losses;
   bool talking;
   /* Release pressed, but the capture queue is not yet on the wire. */
   bool flushing_turn;
@@ -720,6 +750,9 @@ static void append_stats(uint64_t now) {
       ",\"spkDecodeFailures\":%" PRIu32 ",\"bargeIns\":%" PRIu32
       ",\"batches\":%" PRIu32 ",\"connGeneration\":%" PRIu32
       ",\"rttMs\":%" PRIu32 ",\"pings\":%" PRIu32
+      ",\"pingFailures\":%" PRIu32 ",\"livenessRestarts\":%" PRIu32
+      ",\"bridgeLosses\":%" PRIu32 ",\"bridgeAgeMs\":%" PRIu32
+      ",\"uptimeMs\":%" PRIu64 ",\"resetReason\":%d"
       ",\"heapFree\":%" PRIu32 ",\"heapMin\":%" PRIu32
       ",\"wsSent\":%" PRIu32 ",\"outboxDiscarded\":%" PRIu32
       ",\"inboxPublished\":%" PRIu32 ",\"inboxConsumed\":%" PRIu32
@@ -756,6 +789,14 @@ static void append_stats(uint64_t now) {
       runtime.voicelab.connection_generation,
       runtime.voicelab.last_rtt_ms,
       runtime.voicelab.ping_count,
+      runtime.voicelab.ping_failures,
+      runtime.liveness_restarts,
+      runtime.bridge_losses,
+      runtime.voicelab.last_bridge_ms == 0U
+          ? 0U
+          : (uint32_t)(now - runtime.voicelab.last_bridge_ms),
+      now,
+      (int)esp_reset_reason(),
       (uint32_t)esp_get_free_heap_size(),
       (uint32_t)esp_get_minimum_free_heap_size(),
       metrics.control_messages_sent,
@@ -777,6 +818,8 @@ static void append_stats(uint64_t now) {
   if (length > 0 && (size_t)length < sizeof(runtime.stats_buffer)) {
     (void)iterate_kit_voicelab_append_raw(
         &runtime.voicelab, runtime.stats_buffer, (size_t)length);
+  } else {
+    ESP_LOGE(tag, "stats line does not fit (%d bytes) — telemetry is dark", length);
   }
 }
 
@@ -1039,6 +1082,59 @@ void app_main(void) {
       }
     }
 
+    /*
+     * LIVENESS, not optimism.
+     *
+     * FAILED is the honest failure, and the block above handles it. The one
+     * that cost a whole night is the dishonest one: the socket stays open,
+     * the transport stays READY, and nothing moves in either direction — a
+     * half-open TCP connection is indistinguishable from a quiet one from
+     * this end. The device went on believing it had a session and a call,
+     * lit "listening" and "speaking" at the user, and sent every word into
+     * a void for hours.
+     *
+     * A one-way append cannot detect this, and by design never will. The
+     * ping is the only pulled call on this lane, so its resolution is the
+     * device's single proof that the far end is still processing what it
+     * sends. Two remedies, in order of violence: replace the transport, and
+     * if even that has not restored a round trip, restart the chip.
+     */
+    {
+      static uint64_t last_liveness_ms;
+      static uint32_t last_ping_count;
+      static uint64_t next_liveness_restart_at;
+      if (last_liveness_ms == 0U) last_liveness_ms = now;
+      if (runtime.voicelab.ping_count != last_ping_count) {
+        last_ping_count = runtime.voicelab.ping_count;
+        last_liveness_ms = now;
+      }
+      /* Not being connected is a different fault with its own remedy. */
+      if (runtime.transport.state != ITERATE_KIT_ESP_IDF_ITX_READY ||
+          runtime.voicelab.state != ITERATE_KIT_VOICELAB_READY) {
+        last_liveness_ms = now;
+      }
+      if (runtime.voicelab.ping_pending &&
+          now - runtime.voicelab.ping_started_ms > PING_TIMEOUT_MS &&
+          now >= next_liveness_restart_at) {
+        next_liveness_restart_at = now + PING_TIMEOUT_MS;
+        ++runtime.liveness_restarts;
+        ESP_LOGE(
+            tag,
+            "no answer to a ping in %us — replacing the transport",
+            (unsigned int)(PING_TIMEOUT_MS / 1000U));
+        waveshare_display_set_status("reconnecting");
+        iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
+      }
+      if (now - last_liveness_ms > NO_LIVENESS_RESTART_MS) {
+        ESP_LOGE(
+            tag,
+            "no round trip in %us despite a ready transport — restarting",
+            (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
+        waveshare_recorder_end_call("no liveness");
+        esp_restart();
+      }
+    }
+
     if (runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
         runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY &&
         runtime.voicelab_generation != runtime.connection.generation) {
@@ -1125,6 +1221,7 @@ void app_main(void) {
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
       static uint64_t drain_window_at;
       static uint64_t next_call_attempt_at;
+      static uint64_t next_recorder_attempt_at;
       static bool call_active_shown;
 
       /*
@@ -1136,6 +1233,38 @@ void app_main(void) {
       const bool wants_call = waveshare_display_call_requested();
       const bool wants_talk = wants_call &&
           (waveshare_buttons_talk_held() || waveshare_display_talk_held());
+
+      /*
+       * The bridge holds the call in a Durable Object this device cannot
+       * see, and it can stop — evicted, redeployed, or simply gone — without
+       * appending the call-ended that would say so. Overnight that left the
+       * device holding a call that had not existed for hours.
+       *
+       * So the call is believed only while its bridge keeps proving it is
+       * there. Every bridge-sourced event counts, and the pong answering our
+       * own ping is the one that arrives when nobody is speaking. Losing the
+       * proof drops the BELIEF, never the INTENT: wants_call is still true,
+       * so the reconcile immediately below opens a fresh call and the user's
+       * next press finds a working device.
+       */
+      if (runtime.voicelab.call_active &&
+          runtime.voicelab.last_bridge_ms != 0U &&
+          now - runtime.voicelab.last_bridge_ms > BRIDGE_SILENCE_MS) {
+        ++runtime.bridge_losses;
+        ESP_LOGE(
+            tag,
+            "no word from the bridge in %us — that call is gone",
+            (unsigned int)(BRIDGE_SILENCE_MS / 1000U));
+        waveshare_recorder_end_call("bridge silent");
+        iterate_kit_voicelab_forget_call(&runtime.voicelab);
+        runtime.talking = false;
+        runtime.flushing_turn = false;
+        waveshare_display_hold_talk(false);
+        waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
+        waveshare_display_set_status(
+            wants_call ? "call dropped — reconnecting" : "call dropped");
+        next_call_attempt_at = 0U; /* reconnect now, not on the old backoff */
+      }
 
       if (wants_call && !runtime.voicelab.call_active &&
           !runtime.voicelab.call_pending && outbox_free >= 3U &&
@@ -1157,7 +1286,16 @@ void app_main(void) {
        * be live when this device joins (the bridge outlives us), and that is
        * exactly when a recording is still wanted.
        */
-      if (runtime.voicelab.call_active && !waveshare_recorder_recording()) {
+      /*
+       * Rate-limited on purpose. This is a 5 ms poll loop reconciling against
+       * a filesystem on another task, and every disagreement between them —
+       * however it arises — used to become seven card wipes a second. A
+       * recording that starts a beat late costs nothing; a card hammered in
+       * a loop takes the audio path down with it.
+       */
+      if (runtime.voicelab.call_active && !waveshare_recorder_recording() &&
+          now >= next_recorder_attempt_at) {
+        next_recorder_attempt_at = now + 5000U;
         waveshare_recorder_begin_call(CALL_ID);
         runtime.speaker_margin_min_ms = 0U;
         runtime.speaker_writes = 0U;

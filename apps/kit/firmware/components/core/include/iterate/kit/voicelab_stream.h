@@ -173,6 +173,20 @@ struct iterate_kit_voicelab {
   uint32_t ping_count;
   uint32_t ping_failures;
   uint32_t last_rtt_ms;
+  /*
+   * When the BRIDGE was last heard from, by its own events — not by ours
+   * being accepted. A detached call lives in a Durable Object this device
+   * cannot see: it can be evicted, redeployed, or simply stop, and none of
+   * those append the call-ended this device waits for. Left to trust its own
+   * flags the device then sits on a call that no longer exists, showing
+   * "listening" and "speaking" to a listener no one is on the other end of —
+   * observed after an overnight run, and the reason this field exists.
+   *
+   * So call_active is EVIDENCE WITH A DEADLINE: the pong that answers our
+   * ping proves the whole loop (device -> platform -> bridge -> platform ->
+   * device), and any other bridge-sourced event proves it just as well.
+   */
+  uint64_t last_bridge_ms;
   /* Downlink accounting (single-owner: dispatch runs on the session task). */
   uint32_t connection_generation;
   /*
@@ -272,6 +286,15 @@ enum capnweb_status iterate_kit_voicelab_start_call(
  */
 enum capnweb_status iterate_kit_voicelab_end_call(
     struct iterate_kit_voicelab *voicelab, const char *reason);
+
+/**
+ * Forget a call this device can no longer prove exists, WITHOUT announcing
+ * an end that would be a lie — a bridge that stopped answering may well be
+ * gone already, and a call-ended carrying a stale bridge id is ignored by
+ * design. This drops the local belief only, so the owner's "the user wants a
+ * call" intent can reconcile by starting a fresh one.
+ */
+void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab);
 
 /** The two edges of one push-to-talk turn. */
 enum iterate_kit_voicelab_turn {

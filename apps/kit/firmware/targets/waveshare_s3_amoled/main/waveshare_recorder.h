@@ -3,6 +3,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -34,6 +35,15 @@ void waveshare_recorder_drain(void);
 
 /** True when a card is mounted and calls are being recorded. */
 bool waveshare_recorder_available(void);
+
+/**
+ * How many recordings have been opened and closed since boot. One begin per
+ * call is healthy; a count that climbs while nothing happens is the card
+ * being wiped and reopened in a loop, which has happened twice and is
+ * invisible without a number to look at.
+ */
+uint32_t waveshare_recorder_begins(void);
+uint32_t waveshare_recorder_ends(void);
 
 /** True while a recording is open. */
 bool waveshare_recorder_recording(void);

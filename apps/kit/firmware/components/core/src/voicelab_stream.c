@@ -448,10 +448,19 @@ static enum capnweb_status batch_dispatch(
         !capnweb_value_object_get(&event, "payload", &payload)) {
       continue;
     }
+    /*
+     * Every event here was appended BY THE BRIDGE, so any of them is proof
+     * that the far end of the call is still running. Stamping it once, here,
+     * means the owner never has to reason about which event type counts.
+     */
+    voicelab->last_bridge_ms =
+        voicelab->options.now_ms(voicelab->options.clock_context);
     if (capnweb_value_string_equals(&type_value, "voicelab/spk-frame")) {
       handle_spk_frame(voicelab, &payload);
     } else if (capnweb_value_string_equals(&type_value, "voicelab/grok-event")) {
       handle_grok_event(voicelab, &payload);
+    } else if (capnweb_value_string_equals(&type_value, "voicelab/pong")) {
+      /* Liveness only; the RTT number comes from the append's own echo. */
     } else if (capnweb_value_string_equals(
                    &type_value, "voicelab/call-accepted")) {
       /*
@@ -576,7 +585,7 @@ bool iterate_kit_voicelab_needs_recycle(
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab) {
   static const char *const open_path[] = {"openConnection"};
-  struct capnweb_expression event_type_items[4];
+  struct capnweb_expression event_type_items[5];
   struct capnweb_expression event_types;
   struct capnweb_expression connection_key;
   struct capnweb_expression max_events;
@@ -637,9 +646,18 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
     CAPNWEB_EXPRESSION_STRING,
     {.string = {"voicelab/call-accepted", sizeof("voicelab/call-accepted") - 1U}},
   };
+  /*
+   * The pong exists to be heard, not read: it is the only bridge-sourced
+   * event that arrives during a SILENT call, and silence is exactly when a
+   * dead bridge is indistinguishable from a patient one.
+   */
+  event_type_items[4] = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {"voicelab/pong", sizeof("voicelab/pong") - 1U}},
+  };
   event_types = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_ARRAY,
-    {.array = {event_type_items, 4U}},
+    {.array = {event_type_items, 5U}},
   };
   connection_key = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
@@ -1151,6 +1169,16 @@ enum capnweb_status iterate_kit_voicelab_start_call(
     voicelab->call_pending = true;
   }
   return status;
+}
+
+void iterate_kit_voicelab_forget_call(struct iterate_kit_voicelab *voicelab) {
+  if (voicelab == NULL) {
+    return;
+  }
+  voicelab->call_active = false;
+  voicelab->call_pending = false;
+  voicelab->live_bridge_id[0] = '\0';
+  voicelab->last_bridge_ms = 0U;
 }
 
 enum capnweb_status iterate_kit_voicelab_end_call(

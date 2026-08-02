@@ -42,6 +42,18 @@ enum {
 
 static struct {
   bool mounted;
+  /*
+   * Whether a call is being recorded, as a fact of its OWN — not inferred
+   * from a FILE* that half a dozen paths may close. "Is the log handle
+   * non-null" answered a different question (are the files open right now)
+   * and every disagreement became a re-request from a 5 ms poll loop: the
+   * card was wiped and reopened seven times a second, which is what the
+   * serial log shows as "recording begins" over and over.
+   */
+  bool call_open;
+  /* How many times a recording was opened and closed; hammering shows here. */
+  uint32_t begins;
+  uint32_t ends;
   FILE *mic;
   FILE *speaker;
   FILE *log;
@@ -137,6 +149,14 @@ bool waveshare_recorder_available(void) {
   return recorder.mounted;
 }
 
+uint32_t waveshare_recorder_begins(void) {
+  return recorder.begins;
+}
+
+uint32_t waveshare_recorder_ends(void) {
+  return recorder.ends;
+}
+
 bool waveshare_recorder_recording(void) {
   /*
    * A REQUESTED recording counts as recording. Opening the files is deferred
@@ -144,8 +164,12 @@ bool waveshare_recorder_recording(void) {
    * made the caller — a 5ms poll loop — re-request one every pass. Each
    * request wiped the directory and reopened every file, so the card was
    * hammered continuously and the call log was truncated over and over.
+   *
+   * And it is the INTENT that answers, not the file handles: a card that
+   * cannot be opened, or files closed by a read, must not read as "no
+   * recording in progress" and start the same storm by another route.
    */
-  return recorder.log != NULL || begin_requested;
+  return recorder.call_open || begin_requested;
 }
 
 void waveshare_recorder_counters(
@@ -206,6 +230,13 @@ static void begin_call_now(const char *call_id) {
   if (!recorder.mounted) return;
   close_files();
   wipe_directory();
+  /*
+   * Set before the opens can fail. Recording is best-effort by contract — an
+   * unwritable card disables it rather than failing the call — and the one
+   * thing it must never do is ask to be started again on the next pass.
+   */
+  recorder.call_open = true;
+  ++recorder.begins;
   recorder.call_started_ms = now_ms();
   recorder.mic_bytes = 0U;
   recorder.speaker_bytes = 0U;
@@ -231,6 +262,8 @@ static void begin_call_now(const char *call_id) {
 }
 
 static void end_call_now(const char *reason) {
+  recorder.call_open = false;
+  ++recorder.ends;
   if (recorder.log != NULL) {
     /* Written directly: the queue drain has already happened this pass. */
     (void)fprintf(recorder.log, "[%8llu] call ends: %s\n",
