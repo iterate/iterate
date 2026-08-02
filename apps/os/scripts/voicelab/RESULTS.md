@@ -277,3 +277,70 @@ Two things paid for themselves repeatedly:
 
 The device transcribes room speech accurately end to end. The streams
 abstraction was never the bottleneck.
+
+## Postscript 2: what an overnight run found
+
+The device was left running overnight and came back deaf — the screen lit
+"listening" and "speaking" at every press, and nothing reached the speaker.
+Its transport had been READY the entire time. Four defects, none of them in
+the transport either, and every one of them a variation on the same mistake:
+**something was believed rather than proved.**
+
+| symptom                                             | actual cause                                                                                                                                                                                                                                                                                                      |
+| --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| alive all night, deaf all night                     | audio rides one-way appends by design, so a half-open socket is indistinguishable from a quiet one from the device's end. Nothing on the device could ever have noticed. The ping's resolution is now the proof, and its absence replaces the transport, then the chip.                                           |
+| a call that had not existed for hours               | the bridge lives in a Durable Object that can be evicted or redeployed without running its teardown, so "no call-ended arrived" is not evidence of a live call. `call_active` is now belief with a deadline, refreshed by any bridge-sourced event — the pong being the one that arrives when nobody is speaking. |
+| answers RPCs perfectly, does nothing else           | every producer sits behind one gate, and a mount that would not start left it shut while `health`, screenshots and button presses all worked. The liveness clock explicitly excused that state as "not connected, a different fault". It was the worst state the device had.                                      |
+| `call.log` empty, RPCs timing out mid-call          | the recorder answered "am I recording?" from a `FILE*` half a dozen paths can close. Against a 5 ms poll loop, one disagreement wiped and reopened the SD card seven times a second.                                                                                                                              |
+| "very choppy" — 64 dropped frames inside one answer | the device buys ~390 ms of prefill before it plays a note and the bridge handed it another 450 ms lead. They ADD: a 900 ms ring sat at 811-898 ms, full, and overflowed on any jitter. 250 ms leaves a quarter of a second spare.                                                                                 |
+
+The instrument that found all of them is `voicelab soak`: hold a call open for
+as long as the target duration, take turns on it, and report counters over
+TIME rather than a snapshot. Two things it had to learn about itself first —
+both the same lesson again:
+
+- **Its watcher must prove its own connection.** A dead watcher does not
+  report an error, it reports a silent call. Its first run "found" four
+  unanswered turns that the bridge had in fact answered.
+- **A call is live when the BRIDGE says so.** Liveness was read from the SD
+  recorder, which is an optional diagnostic — so a soak refused to start
+  because a diagnostic was missing.
+
+`voicelab probe` complements it by removing the device from the question
+entirely: a call on a fresh stream, text turns, every provider event printed
+as it lands. "The second turn never answers" became "the bridge is fine" in
+one command.
+
+## Postscript 3: the voice is a mouth, not a mind
+
+The voice model has a couple of hundred milliseconds to think in. Anything
+that has to be RIGHT belongs to a text model with no clock on it, so the voice
+gets exactly one tool — ask a genius colleague — and a text agent at
+`/agents/colleague` behind it.
+
+Two lanes, and the split is the whole idea. Every finished transcript line is
+appended to the agent as context with `dont-trigger-request`: it hears the
+entire conversation without ever being asked to respond to it, so a customer
+who is only chatting costs nothing and the colleague already knows what was
+said when it IS asked. Asking is the other lane, and it does not block the
+voice — the tool returns "asked" immediately, and the real answer arrives
+later as a fresh conversation item, the way a colleague putting their head
+round the door interrupts you.
+
+Measured end to end, from one text turn:
+
+```
+ 5.2s  --- turn: How many hearts does an octopus have, and why? Ask your colleague.
+ 7.0s  VOICE: I've asked my colleague about the octopus's hearts and why it has that number.
+ 7.0s  TOOL CALL ask_colleague: {"question":"How many hearts does an octopus have, and why?"}
+ 9.0s  VOICE: While we wait, what made you curious about octopuses? They're fascinating creatures.
+17.4s  COLLEAGUE (10673ms): An octopus has three hearts: two pump blood to the gills, and one
+       pumps oxygen-rich blood to the rest of the body…
+20.4s  VOICE: An octopus has three hearts—two for the gills and one for the body—to meet its
+       high oxygen demands. The main heart even pauses when swimming, so they often crawl instead.
+```
+
+The one bug worth recording: `ask()` resolves on `agents/web-message-sent`,
+whose payload field is `message`. Reading `content` — the field on context
+items — returned an empty string for a perfectly good answer, and the voice
+dutifully told the customer their colleague could not help.
