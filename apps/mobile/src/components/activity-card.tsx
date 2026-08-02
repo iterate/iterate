@@ -408,6 +408,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     flexDirection: "row",
     gap: spacing.md,
+    marginBottom: spacing.sm,
   },
   tab: {
     borderBottomColor: "transparent",
