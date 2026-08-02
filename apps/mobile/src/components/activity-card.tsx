@@ -170,11 +170,13 @@ function CodeStepTabs({
   step: AgentUiCodeStep;
 }) {
   const [selected, setSelected] = useState<"script" | "approvals" | "result" | null>(null);
+  // The `as const`s are required: a conditional-spread arm infers string[]
+  // before the array annotation's contextual type reaches it.
   const tabs: ("script" | "approvals" | "result")[] = [
     "script",
-    ...(batches.length > 0 ? ["approvals"] : []),
+    ...(batches.length > 0 ? ["approvals" as const] : []),
     ...(step.status === "done" && (step.result !== undefined || step.errorMessage)
-      ? ["result"]
+      ? ["result" as const]
       : []),
   ];
   const active = selected !== null && tabs.includes(selected) ? selected : "script";
