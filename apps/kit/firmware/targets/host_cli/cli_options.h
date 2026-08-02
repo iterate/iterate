@@ -59,6 +59,17 @@ struct cli_options {
    * been the same observation.
    */
   const char *mic_record;
+  /**
+   * Run the LIVE speaker path into this file instead of this Mac's speaker.
+   *
+   * Not the same as --speaker-wav, which records the timeline the playout
+   * code produced. This is the converter itself: the same ring, the same
+   * pull, the same starvation accounting, with the frames landing in a file
+   * rather than a room. It exists so a realistic session can run with nobody
+   * at the machine and nothing audible — and so the path that was silently
+   * dropping a whole conversation is the path under test.
+   */
+  const char *pretend_speaker;
   const char *report_json;
   /** Minutes of unattended conversation; 0 means "just stay mounted". */
   double converse_minutes;

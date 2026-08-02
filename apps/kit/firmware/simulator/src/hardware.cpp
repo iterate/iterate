@@ -124,7 +124,7 @@ iterate_kit_status sampleMetrics(
    */
   sample->has_aec_detail = true;
   auto &aec = sample->aec_detail;
-  aec.schema_version = 1U;
+  aec.schema_version = 2U;
   aec.sequence = detail.sequence;
   aec.window_started_at_ms = sample->uptime_ms;
   aec.produced_at_ms = sample->uptime_ms;
@@ -148,6 +148,24 @@ iterate_kit_status sampleMetrics(
   aec.lifetime_capture_reserve_dropped_chunks = 0U;
   aec.lifetime_capture_bridge_errors = 0U;
   aec.lifetime_signal_measurement_failures = 0U;
+  /*
+   * These are serializer fixtures, not simulated acoustics. Non-zero progress
+   * plus zero incident counters prove that the shared synchronous-playback
+   * block crosses the real C capability boundary; only physical boards may
+   * use the corresponding values as AEC acceptance evidence.
+   */
+  aec.playback_health.lifetime_content_samples = 96'000U;
+  aec.playback_health.lifetime_resets = 0U;
+  aec.playback_health.lifetime_frames_discarded_by_reset = 0U;
+  aec.playback_health.lifetime_write_failures = 0U;
+  aec.playback_health.lifetime_queue_overflows = 0U;
+  aec.playback_health.lifetime_policy_errors = 0U;
+  aec.playback_health.lifetime_reset_failures = 0U;
+  aec.playback_health.lifetime_observation_failures = 0U;
+  aec.playback_health.last_write_us = 8'000U;
+  aec.playback_health.maximum_write_us = 9'000U;
+  aec.playback_health.last_receive_to_render_ms = 20U;
+  aec.playback_health.maximum_receive_to_render_ms = 30U;
   /*
    * The stdio simulator has no ESP WebSocket or Wi-Fi layers, but it still
    * implements the same one-shot schema so host code can prove capability and

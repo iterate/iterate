@@ -553,6 +553,30 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
     cli_runtime_log("error", "CoreAudio output initialization failed");
     return false;
   }
+  /*
+   * The pretend speaker is the SAME converter, pulled by this loop instead of
+   * by CoreAudio's thread. Everything downstream — the ring, the starvation
+   * count, the drops — is the code a listener depends on, which is the only
+   * reason a rehearsal is worth running.
+   */
+  if (runtime->options.pretend_speaker != NULL) {
+    if (cli_wav_sink_open(
+            &runtime->pretend_sink, runtime->options.pretend_speaker) !=
+        CLI_WAV_OK) {
+      cli_runtime_log(
+          "error", "cannot open pretend speaker: %s",
+          runtime->options.pretend_speaker);
+      return false;
+    }
+    if (cli_audio_out_open_file(&runtime->live_out, &runtime->pretend_sink) !=
+        CLI_AUDIO_OUT_OK) {
+      cli_runtime_log("error", "cannot start the pretend speaker");
+      return false;
+    }
+    cli_runtime_log(
+        "info", "pretend speaker: the live path, into %s",
+        runtime->options.pretend_speaker);
+  }
   if (!runtime->options.live_mic) return true;
   if (cli_audio_in_open(&runtime->live_in) == CLI_AUDIO_IN_OK) return true;
   cli_runtime_log("error", "CoreAudio input initialization failed");
@@ -840,6 +864,7 @@ static void cli_main_close_runtime(struct cli_runtime *runtime)
   cli_wav_source_close(&runtime->source);
   cli_wav_sink_close(&runtime->sink);
   cli_wav_sink_close(&runtime->mic_sink);
+  cli_wav_sink_close(&runtime->pretend_sink);
   cli_audio_out_close(&runtime->live_out);
   cli_audio_in_close(&runtime->live_in);
 }
@@ -1041,11 +1066,28 @@ static void cli_main_finish_answer_if_ready(
   if (turn == NULL) return;
   const bool played_out = runtime->answer_done && runtime->speaker.used == 0U &&
       turn->frames_played > 0U;
-  const bool overdue = turn->committed_ms != 0U &&
-      iterate_kit_voice_elapsed_ms(now_ms, turn->committed_ms) >
-          ITERATE_KIT_VOICE_TURN_MAX_MS;
+  /*
+   * STALLED, NOT MERELY LONG.
+   *
+   * This deadline exists to end a turn nothing is going to finish — a lost
+   * commit, a provider that stopped talking mid-answer. Measured from the
+   * commit, it also ended turns that were playing perfectly well: asked to
+   * count to one hundred the model speaks for well over thirty seconds, and
+   * the driver abandoned the turn mid-count with hundreds of frames still
+   * queued, which reads in a report as audio the speaker lost.
+   *
+   * So the clock runs from the last sign of life — a frame played — and a
+   * turn still producing audio is never overdue however long it takes. A turn
+   * that has genuinely stopped still ends on exactly the old deadline, since
+   * before any audio arrives the last sign of life IS the commit.
+   */
+  const uint64_t since =
+      runtime->turn_progress_ms != 0U ? runtime->turn_progress_ms : turn->committed_ms;
+  const bool overdue = since != 0U &&
+      iterate_kit_voice_elapsed_ms(now_ms, since) > ITERATE_KIT_VOICE_TURN_MAX_MS;
   if (!played_out && !overdue) return;
   runtime->answer_done = false;
+  runtime->turn_progress_ms = 0U;
   cli_conversation_finish_turn(runtime, now_ms);
   if (runtime->conversation.state == CLI_CONVERSATION_WAIT_ANSWER) {
     runtime->conversation.state = CLI_CONVERSATION_GAP;
@@ -1101,6 +1143,7 @@ static void cli_main_play_frame(
   if (turn == NULL) return;
   cli_report_observe_occupancy(turn, margin);
   ++turn->frames_played;
+  runtime->turn_progress_ms = now_ms;
   if (turn->first_audio_ms == 0U) turn->first_audio_ms = now_ms;
 }
 
@@ -1545,6 +1588,9 @@ static void cli_main_pulse(
   if (runtime->options.mic_record != NULL) {
     (void)cli_wav_sink_sync(&runtime->mic_sink);
   }
+  if (runtime->options.pretend_speaker != NULL) {
+    (void)cli_wav_sink_sync(&runtime->pretend_sink);
+  }
   cli_runtime_log(
       "info",
       "pulse loops=%u outbox=%u/%u sent=%u frames=%u batches=%u rx=%u "
@@ -1640,6 +1686,7 @@ static void cli_main_reexec_if_ready(
   cli_keyboard_close(&runtime->keyboard);
   cli_wav_sink_close(&runtime->sink);
   cli_wav_sink_close(&runtime->mic_sink);
+  cli_wav_sink_close(&runtime->pretend_sink);
   cli_audio_out_close(&runtime->live_out);
   cli_audio_in_close(&runtime->live_in);
   (void)iterate_kit_posix_itx_transport_stop(&runtime->transport);
@@ -1739,6 +1786,12 @@ static void cli_main_run_loop(struct cli_runtime *runtime)
     cli_main_announce_states(runtime);
     cli_main_start_voicelab(runtime);
     cli_main_poll_playback(runtime, now_ms);
+    /*
+     * The pretend speaker's converter runs on this loop rather than on
+     * CoreAudio's thread, so it only advances if somebody advances it. Placed
+     * beside the playback poll because they model the same instant.
+     */
+    cli_audio_out_pump(&runtime->live_out, cli_runtime_now_us());
     cli_main_poll_interactive(runtime, now_ms);
     cli_conversation_poll(runtime, now_ms);
     struct iterate_kit_spsc_ring_metrics outbox = {0};

@@ -76,6 +76,8 @@ struct cli_runtime {
   struct cli_wav_sink sink;
   /* What the microphone captured; opened only when --mic-record was given. */
   struct cli_wav_sink mic_sink;
+  /* Where the pretend speaker's converter lands, when there is one. */
+  struct cli_wav_sink pretend_sink;
   struct cli_audio_out live_out;
   struct cli_audio_in live_in;
   struct cli_keyboard keyboard;
@@ -105,6 +107,14 @@ struct cli_runtime {
   uint32_t flush_frames_left;
   uint64_t flush_deadline_ms;
   uint64_t turn_started_ms;
+  /**
+   * When this turn's answer last made progress — a frame played or arrived.
+   *
+   * The turn watchdog measures THIS rather than elapsed time. A turn that is
+   * still producing audio is not stuck, however long it runs, and cutting one
+   * off because it is lengthy truncates exactly the answers worth asking for.
+   */
+  uint64_t turn_progress_ms;
   uint64_t next_mic_at_ms;
   uint64_t next_playback_at_ms;
   uint64_t next_stats_at_ms;

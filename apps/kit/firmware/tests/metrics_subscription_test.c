@@ -347,7 +347,7 @@ static enum iterate_kit_status sample_metrics(
   sample->playback_detail.runtime.pcm_network_max_work_cycles =
       fixture->maximum_metrics ? UINT32_MAX : 72U;
   sample->has_aec_detail = fixture->include_aec;
-  sample->aec_detail.schema_version = 1U;
+  sample->aec_detail.schema_version = 2U;
   sample->aec_detail.sequence =
       fixture->maximum_metrics ? UINT32_MAX : 73U;
   sample->aec_detail.window_started_at_ms =
@@ -394,6 +394,31 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 86U;
   sample->aec_detail.lifetime_signal_measurement_failures =
       fixture->maximum_metrics ? UINT32_MAX : 87U;
+  sample->aec_detail.playback_health.lifetime_content_samples =
+      fixture->maximum_metrics ? UINT32_MAX : 88U;
+  sample->aec_detail.playback_health.lifetime_resets =
+      fixture->maximum_metrics ? UINT32_MAX : 89U;
+  sample->aec_detail.playback_health
+      .lifetime_frames_discarded_by_reset =
+      fixture->maximum_metrics ? UINT32_MAX : 90U;
+  sample->aec_detail.playback_health.lifetime_write_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 91U;
+  sample->aec_detail.playback_health.lifetime_queue_overflows =
+      fixture->maximum_metrics ? UINT32_MAX : 92U;
+  sample->aec_detail.playback_health.lifetime_policy_errors =
+      fixture->maximum_metrics ? UINT32_MAX : 93U;
+  sample->aec_detail.playback_health.lifetime_reset_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 94U;
+  sample->aec_detail.playback_health.lifetime_observation_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 95U;
+  sample->aec_detail.playback_health.last_write_us =
+      fixture->maximum_metrics ? UINT32_MAX : 96U;
+  sample->aec_detail.playback_health.maximum_write_us =
+      fixture->maximum_metrics ? UINT32_MAX : 97U;
+  sample->aec_detail.playback_health.last_receive_to_render_ms =
+      fixture->maximum_metrics ? UINT32_MAX : 98U;
+  sample->aec_detail.playback_health.maximum_receive_to_render_ms =
+      fixture->maximum_metrics ? UINT32_MAX : 99U;
   sample->has_avatar_detail = fixture->include_avatar;
   sample->avatar_detail.schema_version = 1U;
   sample->avatar_detail.produced_at_ms =
@@ -422,7 +447,7 @@ static enum iterate_kit_status sample_metrics(
   sample->avatar_detail.current_avatar_index = maximum_counter;
   sample->avatar_detail.framebuffer_bytes = maximum_counter;
   sample->has_raw_clean_aec_detail = fixture->include_raw_clean_aec;
-  sample->raw_clean_aec_detail.schema_version = 3U;
+  sample->raw_clean_aec_detail.schema_version = 4U;
   sample->raw_clean_aec_detail.sequence =
       fixture->maximum_metrics ? UINT32_MAX : 88U;
   sample->raw_clean_aec_detail.window_started_at_ms =
@@ -461,6 +486,8 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 96U;
   sample->raw_clean_aec_detail.maximum_capture_to_uplink_us =
       fixture->maximum_metrics ? UINT32_MAX : 97U;
+  sample->raw_clean_aec_detail.playback_health =
+      sample->aec_detail.playback_health;
   sample->has_control_diagnostics =
       fixture->include_control_diagnostics;
   sample->control_diagnostics.schema_version = 4U;
@@ -1084,7 +1111,7 @@ static void aec_metrics_are_mounted_as_a_dedicated_view(void) {
   assert(
       strstr(
           fixture.captured[1],
-          "\"schemaVersion\":1,"
+          "\"schemaVersion\":2,"
           "\"sequence\":4294967295,"
           "\"windowStartedAtMs\":9223372036854775807,"
           "\"producedAtMs\":9223372036854775807,"
@@ -1118,6 +1145,25 @@ static void aec_metrics_are_mounted_as_a_dedicated_view(void) {
           "\"lifetimeCaptureBridgeErrors\":4294967295,"
           "\"lifetimeSignalMeasurementFailures\":4294967295") !=
       NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"lifetimePlaybackContentSamples\":4294967295,"
+          "\"lifetimePlaybackResets\":4294967295,"
+          "\"lifetimePlaybackFramesDiscardedByReset\":4294967295,"
+          "\"lifetimePlaybackWriteFailures\":4294967295,"
+          "\"lifetimePlaybackQueueOverflows\":4294967295,"
+          "\"lifetimePlaybackPolicyErrors\":4294967295,"
+          "\"lifetimePlaybackResetFailures\":4294967295,"
+          "\"lifetimePlaybackObservationFailures\":4294967295") !=
+      NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"lastPlaybackWriteUs\":4294967295,"
+          "\"maximumPlaybackWriteUs\":4294967295,"
+          "\"lastReceiveToRenderMs\":4294967295,"
+          "\"maximumReceiveToRenderMs\":4294967295") != NULL);
   assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
 
   capnweb_session_close(&fixture.session);
@@ -1228,7 +1274,7 @@ static void raw_clean_aec_metrics_preserve_the_truthful_topology(void) {
   assert(
       strstr(
           fixture.captured[1],
-          "\"schemaVersion\":3,\"topology\":\"raw-clean\","
+          "\"schemaVersion\":4,\"topology\":\"raw-clean\","
           "\"sequence\":4294967295,"
           "\"windowStartedAtMs\":9223372036854775807,"
           "\"producedAtMs\":9223372036854775807") != NULL);
@@ -1251,6 +1297,25 @@ static void raw_clean_aec_metrics_preserve_the_truthful_topology(void) {
           "\"lifetimeSignalMeasurementFailures\":4294967295,"
           "\"lastCaptureToUplinkUs\":4294967295,"
           "\"maximumCaptureToUplinkUs\":4294967295") != NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"lifetimePlaybackContentSamples\":4294967295,"
+          "\"lifetimePlaybackResets\":4294967295,"
+          "\"lifetimePlaybackFramesDiscardedByReset\":4294967295,"
+          "\"lifetimePlaybackWriteFailures\":4294967295,"
+          "\"lifetimePlaybackQueueOverflows\":4294967295,"
+          "\"lifetimePlaybackPolicyErrors\":4294967295,"
+          "\"lifetimePlaybackResetFailures\":4294967295,"
+          "\"lifetimePlaybackObservationFailures\":4294967295") !=
+      NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"lastPlaybackWriteUs\":4294967295,"
+          "\"maximumPlaybackWriteUs\":4294967295,"
+          "\"lastReceiveToRenderMs\":4294967295,"
+          "\"maximumReceiveToRenderMs\":4294967295") != NULL);
   assert(strstr(fixture.captured[1], "\"referencePeak\"") == NULL);
   assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
 

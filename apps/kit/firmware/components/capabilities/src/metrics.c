@@ -146,8 +146,8 @@ _Static_assert(
 enum {
   PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT = 35,
   PLAYBACK_VIEW_RUNTIME_FIELD_COUNT = 19,
-  AEC_VIEW_FIELD_COUNT = 24,
-  RAW_CLEAN_AEC_VIEW_FIELD_COUNT = 21,
+  AEC_VIEW_FIELD_COUNT = 36,
+  RAW_CLEAN_AEC_VIEW_FIELD_COUNT = 33,
   AVATAR_VIEW_FIELD_COUNT = 24,
 };
 
@@ -1003,7 +1003,7 @@ static bool build_aec_metrics_expression(
   const struct iterate_kit_aec_metrics_sample *const detail =
       &sample->aec_detail;
   size_t count = 0U;
-  if (!sample->has_aec_detail || detail->schema_version == 0U ||
+  if (!sample->has_aec_detail || detail->schema_version != 2U ||
       detail->sample_stride == 0U ||
       detail->window_started_at_ms > detail->produced_at_ms) {
     /*
@@ -1061,6 +1061,39 @@ static bool build_aec_metrics_expression(
   SET_AEC_INTEGER(
       "lifetimeSignalMeasurementFailures",
       lifetime_signal_measurement_failures);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackContentSamples",
+      playback_health.lifetime_content_samples);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackResets", playback_health.lifetime_resets);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackFramesDiscardedByReset",
+      playback_health.lifetime_frames_discarded_by_reset);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackWriteFailures",
+      playback_health.lifetime_write_failures);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackQueueOverflows",
+      playback_health.lifetime_queue_overflows);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackPolicyErrors",
+      playback_health.lifetime_policy_errors);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackResetFailures",
+      playback_health.lifetime_reset_failures);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackObservationFailures",
+      playback_health.lifetime_observation_failures);
+  SET_AEC_INTEGER(
+      "lastPlaybackWriteUs", playback_health.last_write_us);
+  SET_AEC_INTEGER(
+      "maximumPlaybackWriteUs", playback_health.maximum_write_us);
+  SET_AEC_INTEGER(
+      "lastReceiveToRenderMs",
+      playback_health.last_receive_to_render_ms);
+  SET_AEC_INTEGER(
+      "maximumReceiveToRenderMs",
+      playback_health.maximum_receive_to_render_ms);
 #undef SET_AEC_INTEGER
 
   if (count != AEC_VIEW_FIELD_COUNT) {
@@ -1077,7 +1110,7 @@ static bool build_raw_clean_aec_metrics_expression(
       &sample->raw_clean_aec_detail;
   size_t count = 0U;
   if (!sample->has_raw_clean_aec_detail ||
-      detail->schema_version != 3U ||
+      detail->schema_version != 4U ||
       detail->sample_stride == 0U ||
       detail->window_started_at_ms > detail->produced_at_ms) {
     /*
@@ -1138,6 +1171,39 @@ static bool build_raw_clean_aec_metrics_expression(
       "lastCaptureToUplinkUs", last_capture_to_uplink_us);
   SET_RAW_CLEAN_AEC_INTEGER(
       "maximumCaptureToUplinkUs", maximum_capture_to_uplink_us);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackContentSamples",
+      playback_health.lifetime_content_samples);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackResets", playback_health.lifetime_resets);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackFramesDiscardedByReset",
+      playback_health.lifetime_frames_discarded_by_reset);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackWriteFailures",
+      playback_health.lifetime_write_failures);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackQueueOverflows",
+      playback_health.lifetime_queue_overflows);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackPolicyErrors",
+      playback_health.lifetime_policy_errors);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackResetFailures",
+      playback_health.lifetime_reset_failures);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackObservationFailures",
+      playback_health.lifetime_observation_failures);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lastPlaybackWriteUs", playback_health.last_write_us);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "maximumPlaybackWriteUs", playback_health.maximum_write_us);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lastReceiveToRenderMs",
+      playback_health.last_receive_to_render_ms);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "maximumReceiveToRenderMs",
+      playback_health.maximum_receive_to_render_ms);
 #undef SET_RAW_CLEAN_AEC_INTEGER
 
   if (count != RAW_CLEAN_AEC_VIEW_FIELD_COUNT) {

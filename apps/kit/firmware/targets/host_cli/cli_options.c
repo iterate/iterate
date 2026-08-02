@@ -41,6 +41,7 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_UTTERANCE_DIR,
   CLI_OPTIONS_FIELD_SPEAKER_WAV,
   CLI_OPTIONS_FIELD_MIC_RECORD,
+  CLI_OPTIONS_FIELD_PRETEND_SPEAKER,
   CLI_OPTIONS_FIELD_REPORT_JSON,
   CLI_OPTIONS_FIELD_CONVERSE,
   CLI_OPTIONS_FIELD_MINUTES,
@@ -210,6 +211,10 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    "  --mic-clip               Drive capture to full scale\n"},
   {"--mic-record", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_MIC_RECORD, NULL,
    "  --mic-record FILE     Record what the microphone captured\n"},
+  {"--pretend-speaker", CLI_OPTIONS_KIND_TEXT,
+   CLI_OPTIONS_FIELD_PRETEND_SPEAKER, NULL,
+   "  --pretend-speaker FILE  Run the live speaker path into FILE, not the "
+   "room\n"},
   {"--report-json", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_REPORT_JSON,
    NULL,
    "  --report-json FILE    Unattended JSON report (default "
@@ -430,6 +435,9 @@ static enum cli_options_status cli_options_apply(
     case CLI_OPTIONS_FIELD_UTTERANCE_DIR: out->utterance_dir = value; break;
     case CLI_OPTIONS_FIELD_SPEAKER_WAV: out->speaker_wav = value; break;
     case CLI_OPTIONS_FIELD_MIC_RECORD: out->mic_record = value; break;
+    case CLI_OPTIONS_FIELD_PRETEND_SPEAKER:
+      out->pretend_speaker = value;
+      break;
     case CLI_OPTIONS_FIELD_REPORT_JSON: out->report_json = value; break;
     case CLI_OPTIONS_FIELD_CONVERSE:
       return cli_options_read_minutes(value, &out->converse_minutes);
@@ -587,6 +595,12 @@ static enum cli_options_status cli_options_check(
     const struct cli_options *out, char *problem, size_t problem_bytes)
 {
   assert(out != NULL);
+  if (out->live_audio && out->pretend_speaker != NULL) {
+    cli_options_note(
+        problem, problem_bytes,
+        "--live-audio and --pretend-speaker are the same seam: pick one");
+    return CLI_OPTIONS_ERR_INCOMPATIBLE;
+  }
   if (out->name != NULL && !cli_options_name_is_mountable(out->name)) {
     cli_options_note(
         problem, problem_bytes,

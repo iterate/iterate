@@ -413,7 +413,7 @@ static enum iterate_kit_status sample_runtime_metrics(
 
   sample->has_aec_detail = false;
   sample->has_raw_clean_aec_detail = true;
-  sample->raw_clean_aec_detail.schema_version = 3U;
+  sample->raw_clean_aec_detail.schema_version = 4U;
   sample->raw_clean_aec_detail.sequence = aec_signal.sequence;
   sample->raw_clean_aec_detail.window_started_at_ms =
       aec_signal.window_started_at_us >= (uint64_t)state->booted_at_us
@@ -468,6 +468,42 @@ static enum iterate_kit_status sample_runtime_metrics(
       owner.last_capture_to_uplink_us;
   sample->raw_clean_aec_detail.maximum_capture_to_uplink_us =
       owner.maximum_capture_to_uplink_us;
+  /*
+   * HAVPE writes 10 ms I2S chunks while /pcm transports 20 ms frames, so the
+   * Stick's per-frame DMA-completion schema does not apply. Publish the
+   * synchronous owner's exact lifecycle counters beside the raw/clean signal
+   * window instead. Partial writes count as write failures because replaying a
+   * suffix would duplicate samples; the owner deliberately resets rather than
+   * retrying. There is no separate playout-observer sidecar on this target, so
+   * observation failures are structurally zero rather than an unmeasured
+   * physical-clock claim.
+   */
+  sample->raw_clean_aec_detail.playback_health
+      .lifetime_content_samples = owner.playback_content_samples;
+  sample->raw_clean_aec_detail.playback_health.lifetime_resets =
+      owner.playback_resets;
+  sample->raw_clean_aec_detail.playback_health
+      .lifetime_frames_discarded_by_reset =
+      owner.downlink_frames_discarded_by_reset;
+  sample->raw_clean_aec_detail.playback_health
+      .lifetime_write_failures = saturating_add_u32(
+      owner.playback_write_errors, owner.playback_partial_writes);
+  sample->raw_clean_aec_detail.playback_health
+      .lifetime_queue_overflows = owner.playback_queue_overflows;
+  sample->raw_clean_aec_detail.playback_health
+      .lifetime_policy_errors = owner.playback_policy_errors;
+  sample->raw_clean_aec_detail.playback_health
+      .lifetime_reset_failures = owner.playback_reset_failures;
+  sample->raw_clean_aec_detail.playback_health
+      .lifetime_observation_failures = 0U;
+  sample->raw_clean_aec_detail.playback_health.last_write_us =
+      owner.last_playback_write_us;
+  sample->raw_clean_aec_detail.playback_health.maximum_write_us =
+      owner.maximum_playback_write_us;
+  sample->raw_clean_aec_detail.playback_health
+      .last_receive_to_render_ms = owner.last_receive_to_render_ms;
+  sample->raw_clean_aec_detail.playback_health
+      .maximum_receive_to_render_ms = owner.maximum_receive_to_render_ms;
 
   sample->has_control_diagnostics = true;
   sample->control_diagnostics.schema_version = 4U;

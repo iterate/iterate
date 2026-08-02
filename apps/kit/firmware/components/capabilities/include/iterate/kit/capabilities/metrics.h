@@ -137,6 +137,37 @@ struct iterate_kit_playback_metrics_sample {
  * dedicated serialization view reuses the same sampler and subscriber slots;
  * it does not add a task, queue, sample history, or per-frame allocation.
  */
+/**
+ * Integrity evidence common to hardware-clocked synchronous codec owners.
+ *
+ * These targets cannot preserve one identity across a 20 ms WebSocket frame
+ * and every smaller codec/DMA write, so they must not claim the Stick's exact
+ * per-frame completion schema. They can still report whether fresh content
+ * reached their physical clock, whether any reset or I/O discontinuity
+ * invalidated the interval, and the measured software-boundary delay. The
+ * counters are lifetime, monotonic and saturating; a harness compares the
+ * first and last AEC callbacks from the same run.
+ *
+ * `write_failures` includes rejected and partial writes because neither may be
+ * retried without replaying samples. `observation_failures` is zero on a target
+ * with no separate physical-clock observer; this means that failure mode is
+ * structurally absent, not that an unmounted observer was sampled as healthy.
+ */
+struct iterate_kit_synchronous_playback_health_sample {
+  uint32_t lifetime_content_samples;
+  uint32_t lifetime_resets;
+  uint32_t lifetime_frames_discarded_by_reset;
+  uint32_t lifetime_write_failures;
+  uint32_t lifetime_queue_overflows;
+  uint32_t lifetime_policy_errors;
+  uint32_t lifetime_reset_failures;
+  uint32_t lifetime_observation_failures;
+  uint32_t last_write_us;
+  uint32_t maximum_write_us;
+  uint32_t last_receive_to_render_ms;
+  uint32_t maximum_receive_to_render_ms;
+};
+
 struct iterate_kit_aec_metrics_sample {
   uint32_t schema_version;
   uint32_t sequence;
@@ -162,6 +193,7 @@ struct iterate_kit_aec_metrics_sample {
   uint32_t lifetime_capture_reserve_dropped_chunks;
   uint32_t lifetime_capture_bridge_errors;
   uint32_t lifetime_signal_measurement_failures;
+  struct iterate_kit_synchronous_playback_health_sample playback_health;
 };
 
 /**
@@ -201,6 +233,7 @@ struct iterate_kit_raw_clean_aec_metrics_sample {
   uint32_t lifetime_signal_measurement_failures;
   uint32_t last_capture_to_uplink_us;
   uint32_t maximum_capture_to_uplink_us;
+  struct iterate_kit_synchronous_playback_health_sample playback_health;
 };
 
 /**

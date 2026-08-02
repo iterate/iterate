@@ -361,7 +361,7 @@ static enum iterate_kit_status sample_runtime_metrics(
   sample->has_playback_detail = false;
 
   sample->has_aec_detail = true;
-  sample->aec_detail.schema_version = 1U;
+  sample->aec_detail.schema_version = 2U;
   sample->aec_detail.sequence = aec_signal.sequence;
   sample->aec_detail.window_started_at_ms =
       aec_signal.window_started_at_us >= (uint64_t)state->booted_at_us
@@ -406,6 +406,40 @@ static enum iterate_kit_status sample_runtime_metrics(
       owner.capture_bridge_errors;
   sample->aec_detail.lifetime_signal_measurement_failures =
       owner.aec_signal_measurement_failures;
+  /*
+   * CoreS3's synchronous codec consumes 8 ms chunks, so inventing one
+   * completion per 20 ms wire frame would make conservation look more exact
+   * than the hardware can prove. These lifetime counters are the truthful
+   * alternative: the AEC harness can reject every reset, failed write, TX
+   * queue overflow, malformed playout observation, or policy fault while
+   * retaining measured receive-to-codec timing. Reset failure is structurally
+   * zero because this owner's reset is an in-memory clock operation with no
+   * fallible peripheral call.
+   */
+  sample->aec_detail.playback_health.lifetime_content_samples =
+      owner.playback_content_samples;
+  sample->aec_detail.playback_health.lifetime_resets =
+      owner.playback_resets;
+  sample->aec_detail.playback_health
+      .lifetime_frames_discarded_by_reset =
+      owner.downlink_frames_discarded_by_reset;
+  sample->aec_detail.playback_health.lifetime_write_failures =
+      owner.codec_write_errors;
+  sample->aec_detail.playback_health.lifetime_queue_overflows =
+      owner.i2s.tx_queue_overflows;
+  sample->aec_detail.playback_health.lifetime_policy_errors =
+      owner.playback_policy_errors;
+  sample->aec_detail.playback_health.lifetime_reset_failures = 0U;
+  sample->aec_detail.playback_health.lifetime_observation_failures =
+      owner.playout_observer_shape_errors;
+  sample->aec_detail.playback_health.last_write_us =
+      owner.last_codec_write_us;
+  sample->aec_detail.playback_health.maximum_write_us =
+      owner.maximum_codec_write_us;
+  sample->aec_detail.playback_health.last_receive_to_render_ms =
+      owner.last_receive_to_render_ms;
+  sample->aec_detail.playback_health.maximum_receive_to_render_ms =
+      owner.maximum_receive_to_render_ms;
 
   /*
    * The visual sidecar gets a dedicated Cap'n Web serialization view because

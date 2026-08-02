@@ -37,6 +37,8 @@
 
 #include <AudioToolbox/AudioToolbox.h>
 
+#include "cli_wav.h"
+
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
@@ -74,6 +76,27 @@ enum cli_audio_out_status {
   CLI_AUDIO_OUT_ERR_FULL,
 };
 
+/** Who is pulling audio out of the ring. */
+enum cli_audio_out_mode {
+  /** This Mac's speaker, pulled by CoreAudio's own thread. */
+  CLI_AUDIO_OUT_COREAUDIO = 0,
+  /**
+   * A file, pulled by the caller's loop at exactly the converter's rate.
+   *
+   * NOT a second implementation of playback — the ring, the drain arithmetic,
+   * the starvation count and the drop accounting are the ones above, and the
+   * only difference is which thread asks for a frame and where the frame
+   * goes. That is the point: a rehearsal that took a different path through
+   * this module would prove nothing about the path a listener hears, and this
+   * one has already hidden a defect that made a whole conversation silent.
+   *
+   * It exists so a realistic session — real pacing, real starvation, real
+   * back-pressure — can run with nobody at the machine and nothing audible,
+   * and leave a recording of exactly what the speaker would have played.
+   */
+  CLI_AUDIO_OUT_FILE,
+};
+
 /**
  * Caller-owned CoreAudio output with no allocation after open.
  *
@@ -83,6 +106,10 @@ enum cli_audio_out_status {
  * outran it, and `starved` is silence the listener actually heard.
  */
 struct cli_audio_out {
+  enum cli_audio_out_mode mode;
+  /** FILE mode only: where the pulled audio lands, and when the next pull is due. */
+  struct cli_wav_sink *file;
+  uint64_t next_pull_us;
   AudioQueueRef queue;
   AudioQueueBufferRef buffers[CLI_AUDIO_OUT_BUFFER_COUNT];
   uint8_t ring[CLI_AUDIO_OUT_RING_BYTES];
@@ -117,6 +144,23 @@ enum cli_audio_out_status cli_audio_out_open(struct cli_audio_out *out);
  */
 enum cli_audio_out_status cli_audio_out_write(
     struct cli_audio_out *out, const uint8_t *pcm, size_t length);
+
+/**
+ * Open in FILE mode: `sink` is pulled from by cli_audio_out_pump instead of
+ * by CoreAudio. The caller owns the sink and must keep it open.
+ */
+enum cli_audio_out_status cli_audio_out_open_file(
+    struct cli_audio_out *out, struct cli_wav_sink *sink);
+
+/**
+ * FILE mode only: pull every frame now due, writing silence for any the ring
+ * could not fill.
+ *
+ * Call once per loop iteration with the same clock everything else uses. A
+ * caller that forgets simply never plays anything, loudly — the ring fills
+ * and `dropped` climbs — rather than quietly playing at the wrong rate.
+ */
+void cli_audio_out_pump(struct cli_audio_out *out, uint64_t now_us);
 
 /** Bytes currently waiting in the ring, for the pulse line. */
 uint32_t cli_audio_out_queued_bytes(const struct cli_audio_out *out);
