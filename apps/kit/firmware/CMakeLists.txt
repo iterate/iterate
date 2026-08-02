@@ -5,6 +5,13 @@ project(iterate_kit_firmware LANGUAGES C CXX)
 enable_testing()
 find_package(Threads REQUIRED)
 
+if(APPLE AND EXISTS "/opt/homebrew/opt/openssl@3")
+  set(
+    OPENSSL_ROOT_DIR "/opt/homebrew/opt/openssl@3"
+    CACHE PATH "Homebrew OpenSSL 3 prefix")
+endif()
+find_package(OpenSSL 3 REQUIRED)
+
 set(BUILD_TESTING OFF CACHE BOOL "" FORCE)
 set(CAPNWEB_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(CAPNWEB_BUILD_FUZZER OFF CACHE BOOL "" FORCE)
@@ -14,12 +21,14 @@ add_library(iterate-kit-core STATIC
   components/core/src/aec_capture_bridge.c
   components/core/src/aec_signal_window.c
   components/core/src/audio_intent_reconciler.c
+  components/core/src/audio_playout.c
   components/core/src/audio.c
   components/core/src/configuration.c
   components/core/src/control_recovery.c
   components/core/src/cpu_usage.c
   components/core/src/device_events.c
   components/core/src/itx_connection.c
+  components/core/src/itx_outbox_sender.c
   components/core/src/itx_mount.c
   components/core/src/pcm_clock_playback.c
   components/core/src/pcm_capture_turn.c
@@ -35,6 +44,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/spsc_ring.c
   components/core/src/voicelab_stream.c
   components/core/src/websocket_frame_writer.c
+  components/core/src/websocket_frame_reader.c
   components/core/src/websocket_rx.c
   components/core/src/websocket_tx.c
   components/core/src/websocket_text.c
@@ -50,6 +60,26 @@ target_compile_options(iterate-kit-core PRIVATE
   -Wpedantic
 )
 target_link_libraries(iterate-kit-core PUBLIC capnweb)
+
+add_library(iterate-kit-posix STATIC
+  platforms/iterate_posix/tls_stream.c
+  platforms/iterate_posix/websocket_client.c
+  platforms/iterate_posix/posix_itx_transport.c
+)
+target_include_directories(iterate-kit-posix PUBLIC
+  platforms/iterate_posix/include
+)
+target_compile_features(iterate-kit-posix PUBLIC c_std_99)
+target_compile_options(iterate-kit-posix PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-posix
+  PUBLIC iterate-kit-core OpenSSL::SSL OpenSSL::Crypto
+)
 
 add_library(iterate-kit-capabilities STATIC
   components/capabilities/src/callback_budget.c
@@ -691,6 +721,25 @@ add_test(
   COMMAND iterate-kit-configuration-test
 )
 
+add_executable(iterate-kit-audio-playout-test
+  tests/audio_playout_test.c
+)
+target_compile_features(
+  iterate-kit-audio-playout-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-audio-playout-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-audio-playout-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-audio-playout-test
+  COMMAND iterate-kit-audio-playout-test
+)
+
 add_executable(iterate-kit-voicelab-stream-test
   tests/voicelab_stream_test.c
 )
@@ -1139,6 +1188,48 @@ add_test(
   NAME iterate-kit-esp-idf-itx-transport-test
   COMMAND iterate-kit-esp-idf-itx-transport-test
 )
+
+add_executable(iterate-kit-posix-websocket-test
+  tests/posix_websocket_test.c
+)
+target_compile_features(
+  iterate-kit-posix-websocket-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-posix-websocket-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-posix-websocket-test PRIVATE iterate-kit-posix)
+add_test(
+  NAME iterate-kit-posix-websocket-test
+  COMMAND iterate-kit-posix-websocket-test)
+
+add_executable(iterate-kit-posix-itx-transport-test
+  tests/posix_itx_transport_test.c
+  tests/fakes/fake_posix_websocket.c
+  platforms/iterate_posix/posix_itx_transport.c
+)
+target_include_directories(
+  iterate-kit-posix-itx-transport-test PRIVATE
+  tests/fakes
+  platforms/iterate_posix/include
+)
+target_compile_features(
+  iterate-kit-posix-itx-transport-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-posix-itx-transport-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-posix-itx-transport-test
+  PRIVATE iterate-kit-core OpenSSL::SSL OpenSSL::Crypto)
+add_test(
+  NAME iterate-kit-posix-itx-transport-test
+  COMMAND iterate-kit-posix-itx-transport-test)
 
 add_executable(iterate-kit-esp-idf-pcm-transport-test
   tests/esp_idf_pcm_transport_test.c

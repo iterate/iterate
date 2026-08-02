@@ -199,8 +199,10 @@ static void an_empty_text_frame_is_dropped_without_a_restart(void) {
 /*
  * Control frames are forbidden from using WebSocket continuation semantics.
  * We reject that remote defect without allocating or carrying a half-control
- * message forever. A valid PING immediately afterwards must still work, which
- * proves malformed input cannot poison the bounded parser state.
+ * message forever. The classifier must still pass a later continuation to the
+ * message-aware text layer—where a stray continuation is rejected—because
+ * suppressing every continuation would also break valid fragmented RPCs. A
+ * valid PING afterwards proves malformed input cannot poison parser state.
  */
 static void fragmented_control_is_dropped_without_poisoning_the_peer(void) {
   static const uint8_t first[] = {0x01U};
@@ -227,7 +229,8 @@ static void fragmented_control_is_dropped_without_poisoning_the_peer(void) {
   read.opcode = ITERATE_KIT_WEBSOCKET_CONTINUATION;
   read.final = true;
   CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
-      ITERATE_KIT_WEBSOCKET_RX_DROPPED);
+      ITERATE_KIT_WEBSOCKET_RX_DATA);
+  CHECK(chunk.opcode == ITERATE_KIT_WEBSOCKET_CONTINUATION);
 
   read.bytes = valid;
   read.byte_count = sizeof(valid);

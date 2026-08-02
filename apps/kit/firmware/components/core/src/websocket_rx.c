@@ -25,7 +25,8 @@ static bool control_opcode(
 static bool data_opcode(
     enum iterate_kit_websocket_opcode opcode) {
   return opcode == ITERATE_KIT_WEBSOCKET_TEXT ||
-      opcode == ITERATE_KIT_WEBSOCKET_BINARY;
+      opcode == ITERATE_KIT_WEBSOCKET_BINARY ||
+      opcode == ITERATE_KIT_WEBSOCKET_CONTINUATION;
 }
 
 static void clear_active(

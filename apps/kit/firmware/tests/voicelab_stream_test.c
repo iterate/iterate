@@ -296,8 +296,8 @@ static void downlink_flow(void) {
       "\"voicelab/call-ended\",\"voicelab/call-accepted\","
       "\"voicelab/pong\"]]") !=
         NULL);
-    assert(strstr(open_message, "\"maxDeliveryEvents\":4") != NULL);
-    assert(strstr(open_message, "\"maxDeliveryBytes\":5200") != NULL);
+    assert(strstr(open_message, "\"maxDeliveryEvents\":12") != NULL);
+    assert(strstr(open_message, "\"maxDeliveryBytes\":13000") != NULL);
     assert(strstr(open_message, "\"state\":false") != NULL);
     assert(strstr(open_message, "\"processEventBatch\":[\"export\",-1]") != NULL);
   }

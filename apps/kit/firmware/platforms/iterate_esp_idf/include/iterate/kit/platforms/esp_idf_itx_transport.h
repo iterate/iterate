@@ -12,6 +12,7 @@
 
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
+#include "iterate/kit/itx_outbox_sender.h"
 #include "iterate/kit/platforms/esp_idf_websocket_connection.h"
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/status.h"
@@ -279,9 +280,7 @@ struct iterate_kit_esp_idf_itx_transport {
    * has reached the lower transport. Retaining the acquisition prevents the
    * producer from reusing that slot while a short write still references it.
    */
-  const void *control_send_message;
-  size_t control_send_length;
-  bool control_send_acquired;
+  struct iterate_kit_itx_outbox_sender control_sender;
   /* Platform resources are created by start() and destroyed only after exit. */
   esp_netif_t *station;
   esp_event_handler_instance_t wifi_event_handler;
@@ -340,13 +339,10 @@ struct iterate_kit_esp_idf_itx_transport {
   uint32_t mount_timeouts;
   uint32_t mount_timeout_generation;
   uint32_t protocol_failures;
-  uint32_t control_messages_sent;
   uint32_t control_messages_discarded;
   uint32_t control_inbox_discarded;
   uint32_t control_inbox_deferrals;
-  uint32_t control_outbox_discarded;
   uint32_t control_receive_failures;
-  uint32_t control_send_failures;
   uint32_t network_task_stack_exhaustions;
   uint32_t network_task_work_cycles;
   uint32_t network_task_max_work_cycles;

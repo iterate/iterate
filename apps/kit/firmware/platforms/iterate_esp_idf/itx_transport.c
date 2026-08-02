@@ -247,28 +247,6 @@ static void discard_control_inbox(
   }
 }
 
-static void abandon_acquired_control_send(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
-  if (!transport->control_send_acquired) {
-    return;
-  }
-  /*
-   * The direct writer may retain an encoded suffix after a short lower write.
-   * Closing the socket resets that writer before this slot can be offered to a
-   * new generation. Release exactly once here so the producer may reuse the
-   * ring without mistaking an abandoned session message for successful egress.
-   */
-  (void)iterate_kit_spsc_ring_read_release(
-      transport->options.control_outbox);
-  transport->control_send_message = NULL;
-  transport->control_send_length = 0U;
-  transport->control_send_acquired = false;
-  atomic_saturating_increment(
-      &transport->control_messages_discarded);
-  atomic_saturating_increment(
-      &transport->control_outbox_discarded);
-}
-
 static void discard_control_outbox(
     struct iterate_kit_esp_idf_itx_transport *transport) {
   /*
@@ -277,22 +255,8 @@ static void discard_control_outbox(
    * delivery; it is corruption. Discard and let the mount/session layer issue
    * fresh traffic against the new generation.
    */
-  const void *data;
-  size_t length;
-  abandon_acquired_control_send(transport);
-  while (iterate_kit_spsc_ring_read_acquire(
-             transport->options.control_outbox,
-             &data,
-             &length) == ITERATE_KIT_OK) {
-    (void)data;
-    (void)length;
-    (void)iterate_kit_spsc_ring_read_release(
-        transport->options.control_outbox);
-    atomic_saturating_increment(
-        &transport->control_messages_discarded);
-    atomic_saturating_increment(
-        &transport->control_outbox_discarded);
-  }
+  iterate_kit_itx_outbox_sender_discard(
+      &transport->control_sender);
 }
 
 static void request_restart(
@@ -656,6 +620,16 @@ static void receive_control_messages(
   }
 }
 
+static enum iterate_kit_websocket_tx_result send_control_message(
+    void *context, const void *message, size_t length) {
+  struct iterate_kit_esp_idf_itx_transport *transport = context;
+  return iterate_kit_esp_idf_websocket_connection_send(
+      &transport->websocket,
+      ITERATE_KIT_WEBSOCKET_TEXT,
+      message,
+      length);
+}
+
 static void send_control_messages(
     struct iterate_kit_esp_idf_itx_transport *transport) {
   unsigned int work_steps;
@@ -673,36 +647,18 @@ static void send_control_messages(
   for (work_steps = 0U;
        work_steps < NETWORK_SEND_BURST;
        ++work_steps) {
-    enum iterate_kit_websocket_tx_result result;
+    enum iterate_kit_itx_outbox_poll_result result;
     if (!atomic_load_u32(&transport->socket_connected)) {
       return;
     }
-    if (!transport->control_send_acquired) {
-      if (iterate_kit_spsc_ring_read_acquire(
-              transport->options.control_outbox,
-              &transport->control_send_message,
-              &transport->control_send_length) !=
-          ITERATE_KIT_OK) {
-        return;
-      }
-      transport->control_send_acquired = true;
-    }
-    result = iterate_kit_esp_idf_websocket_connection_send(
-        &transport->websocket,
-        ITERATE_KIT_WEBSOCKET_TEXT,
-        transport->control_send_message,
-        transport->control_send_length);
-    if (result == ITERATE_KIT_WEBSOCKET_TX_SENT) {
-      (void)iterate_kit_spsc_ring_read_release(
-          transport->options.control_outbox);
-      transport->control_send_message = NULL;
-      transport->control_send_length = 0U;
-      transport->control_send_acquired = false;
-      atomic_saturating_increment(
-          &transport->control_messages_sent);
+    result = iterate_kit_itx_outbox_sender_poll(
+        &transport->control_sender,
+        send_control_message,
+        transport);
+    if (result == ITERATE_KIT_ITX_OUTBOX_SENT) {
       continue;
     }
-    if (result == ITERATE_KIT_WEBSOCKET_TX_PROGRESS) {
+    if (result == ITERATE_KIT_ITX_OUTBOX_PROGRESS) {
       /*
        * A short write is ordinary nonblocking progress. Keep both the writer
        * cursor and ring head, then spend at most the remaining work budget on
@@ -710,7 +666,8 @@ static void send_control_messages(
        */
       continue;
     }
-    if (result == ITERATE_KIT_WEBSOCKET_TX_DEFERRED) {
+    if (result == ITERATE_KIT_ITX_OUTBOX_IDLE ||
+        result == ITERATE_KIT_ITX_OUTBOX_DEFERRED) {
       return;
     }
     {
@@ -721,11 +678,8 @@ static void send_control_messages(
        * the opaque byte stream, and let the remounted session reconstruct only
        * fresh work.
        */
-      atomic_saturating_increment(
-          &transport->control_send_failures);
       remember_websocket_error(
           transport, transport->websocket.last_error);
-      abandon_acquired_control_send(transport);
       mark_socket_disconnected(transport);
       request_restart(transport);
       return;
@@ -739,7 +693,8 @@ static void stop_websocket(
   if (!*websocket_open &&
       transport->websocket.parent == NULL &&
       transport->websocket.websocket == NULL) {
-    abandon_acquired_control_send(transport);
+    iterate_kit_itx_outbox_sender_discard(
+        &transport->control_sender);
     return;
   }
   mark_socket_disconnected(transport);
@@ -752,7 +707,8 @@ static void stop_websocket(
    */
   iterate_kit_esp_idf_websocket_connection_close(
       &transport->websocket);
-  abandon_acquired_control_send(transport);
+  iterate_kit_itx_outbox_sender_discard(
+      &transport->control_sender);
   *websocket_open = false;
   atomic_store_u32(&transport->websocket_started, 0U);
 }
@@ -1004,7 +960,10 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_prepare(
           options->control_inbox) != CAPNWEB_OK ||
       iterate_kit_websocket_text_outbox_init(
           &transport->control_outbox,
-          options->control_outbox) != CAPNWEB_OK) {
+          options->control_outbox) != CAPNWEB_OK ||
+      iterate_kit_itx_outbox_sender_init(
+          &transport->control_sender,
+          options->control_outbox) != ITERATE_KIT_OK) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   websocket_options =
@@ -1649,20 +1608,30 @@ void iterate_kit_esp_idf_itx_transport_metrics(
   metrics->protocol_failure_generation =
       atomic_load_u32(
           &transport->protocol_failure_generation);
-  metrics->control_messages_sent =
-      atomic_load_u32(&transport->control_messages_sent);
-  metrics->control_messages_discarded =
-      atomic_load_u32(&transport->control_messages_discarded);
+  {
+    struct iterate_kit_itx_outbox_sender_metrics sender_metrics;
+    iterate_kit_itx_outbox_sender_metrics(
+        &transport->control_sender, &sender_metrics);
+    metrics->control_messages_sent = sender_metrics.messages_sent;
+    metrics->control_messages_discarded =
+        atomic_load_u32(&transport->control_messages_discarded);
+    if (sender_metrics.messages_discarded >
+        UINT32_MAX - metrics->control_messages_discarded) {
+      metrics->control_messages_discarded = UINT32_MAX;
+    } else {
+      metrics->control_messages_discarded +=
+          sender_metrics.messages_discarded;
+    }
+    metrics->control_outbox_discarded =
+        sender_metrics.messages_discarded;
+    metrics->control_send_failures = sender_metrics.send_failures;
+  }
   metrics->control_inbox_discarded =
       atomic_load_u32(&transport->control_inbox_discarded);
   metrics->control_inbox_deferrals =
       atomic_load_u32(&transport->control_inbox_deferrals);
-  metrics->control_outbox_discarded =
-      atomic_load_u32(&transport->control_outbox_discarded);
   metrics->control_receive_failures =
       atomic_load_u32(&transport->control_receive_failures);
-  metrics->control_send_failures =
-      atomic_load_u32(&transport->control_send_failures);
   metrics->network_task_stack_exhaustions =
       atomic_load_u32(
           &transport->network_task_stack_exhaustions);

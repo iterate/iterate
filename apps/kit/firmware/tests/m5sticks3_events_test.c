@@ -233,6 +233,7 @@ static void fixture_init(struct fixture *fixture) {
       1000U,
       true,
       false,
+      false,
       NULL,
       0U,
       NULL,

@@ -443,6 +443,7 @@ capnweb_status initialize(
       25U,
       true,
       false,
+      false,
       simulation.diagnosticsExpression,
       sizeof(simulation.diagnosticsExpression),
       nullptr,
