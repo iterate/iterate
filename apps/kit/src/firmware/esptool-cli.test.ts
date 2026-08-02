@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   buildEsptoolReadFlashArguments,
+  buildEsptoolRunApplicationArguments,
   buildEsptoolWriteFlashArguments,
   type PreparedFlashFile,
 } from "./esptool-cli.ts";
@@ -104,5 +105,49 @@ describe("buildEsptoolReadFlashArguments", () => {
       "0x1000",
       "/private/tmp/iterate-kit/config.bin",
     ]);
+  });
+});
+
+describe("buildEsptoolRunApplicationArguments", () => {
+  it("explicitly leaves the ROM loader after a nominally read-only probe", () => {
+    /*
+     * A physical Stick remained in the ROM loader even though read_flash's
+     * built-in --after hard_reset printed a success message. The proof harness
+     * must therefore issue a separate run transaction; trusting terminal text
+     * from the preceding process can strand a healthy device off Wi-Fi and
+     * misclassify that harness failure as a firmware crash.
+     */
+    expect(
+      buildEsptoolRunApplicationArguments({
+        chipFamily: "ESP32-S3",
+        port: "/dev/cu.usbmodem101",
+      }),
+    ).toEqual([
+      "-m",
+      "esptool",
+      "--chip",
+      "esp32s3",
+      "--port",
+      "/dev/cu.usbmodem101",
+      "--before",
+      "usb_reset",
+      "--after",
+      "hard_reset",
+      "run",
+    ]);
+  });
+
+  it("retains the conventional reset circuit for non-native-USB chips", () => {
+    /*
+     * The native-USB recovery is deliberately narrow. Applying it to older
+     * UART-bridge boards would trade the observed S3 failure for a different
+     * class of boards that cannot perform a 1200-baud USB reset at all.
+     */
+    expect(
+      buildEsptoolRunApplicationArguments({
+        chipFamily: "ESP32",
+        port: "/dev/cu.usbserial101",
+      }),
+    ).toContain("default_reset");
   });
 });

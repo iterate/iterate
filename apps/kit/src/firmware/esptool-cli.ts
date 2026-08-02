@@ -10,28 +10,20 @@ export interface PreparedFlashFile {
   path: string;
 }
 
-interface EsptoolWriteFlashInput {
-  baudrate: number;
-  files: readonly PreparedFlashFile[];
-  plan: FirmwareFlashPlan;
-  port: string;
-}
-
 export interface EspFlashRegion {
   offset: number;
   size: number;
 }
 
-interface EsptoolReadFlashInput {
-  baudrate: number;
-  chipFamily: EspChipFamily;
-  outputPath: string;
-  port: string;
-  region: EspFlashRegion;
-}
-
 export function esptoolChipName(chipFamily: EspChipFamily) {
   return chipFamily.toLowerCase().replaceAll("-", "");
+}
+
+interface EsptoolWriteFlashInput {
+  baudrate: number;
+  files: readonly PreparedFlashFile[];
+  plan: FirmwareFlashPlan;
+  port: string;
 }
 
 export function buildEsptoolWriteFlashArguments(input: EsptoolWriteFlashInput) {
@@ -78,6 +70,14 @@ export function buildEsptoolWriteFlashArguments(input: EsptoolWriteFlashInput) {
   ];
 }
 
+interface EsptoolReadFlashInput {
+  baudrate: number;
+  chipFamily: EspChipFamily;
+  outputPath: string;
+  port: string;
+  region: EspFlashRegion;
+}
+
 export function buildEsptoolReadFlashArguments(input: EsptoolReadFlashInput) {
   if (!Number.isSafeInteger(input.baudrate) || input.baudrate <= 0 || input.baudrate > 3_000_000) {
     throw new Error(`Invalid esptool baud rate ${input.baudrate}.`);
@@ -114,6 +114,41 @@ export function buildEsptoolReadFlashArguments(input: EsptoolReadFlashInput) {
     `0x${input.region.offset.toString(16)}`,
     `0x${input.region.size.toString(16)}`,
     input.outputPath,
+  ];
+}
+
+interface EsptoolRunApplicationInput {
+  chipFamily: EspChipFamily;
+  port: string;
+}
+
+export function buildEsptoolRunApplicationArguments(input: EsptoolRunApplicationInput) {
+  if (!input.port.trim() || input.port.includes("\0")) {
+    throw new Error("A non-empty serial port without NUL bytes is required.");
+  }
+  /*
+   * ESP32-S2/S3 native USB Serial/JTAG needs esptool's 1200-baud USB reset to
+   * leave the downloaded stub reliably. `default_reset` can report a hard
+   * reset while the physical Stick remains in the ROM loader. Older families
+   * normally sit behind the conventional RTS/DTR UART circuit, where the
+   * default strategy remains the compatible choice.
+   */
+  const before =
+    input.chipFamily === "ESP32-S2" || input.chipFamily === "ESP32-S3"
+      ? "usb_reset"
+      : "default_reset";
+  return [
+    "-m",
+    "esptool",
+    "--chip",
+    esptoolChipName(input.chipFamily),
+    "--port",
+    input.port,
+    "--before",
+    before,
+    "--after",
+    "hard_reset",
+    "run",
   ];
 }
 
@@ -182,7 +217,42 @@ export async function readFlashRegionWithEsptool(options: {
       port: options.port,
       region: options.region,
     });
-    await runProcess(options.pythonExecutable ?? "python", args);
+    let readFailure: unknown;
+    try {
+      await runProcess(options.pythonExecutable ?? "python", args);
+    } catch (error) {
+      readFailure = error;
+    }
+
+    let applicationStartFailure: unknown;
+    try {
+      /*
+       * `read_flash --after hard_reset` is not a reliable application-start
+       * boundary on native USB Serial/JTAG. A physical ESP32-S3 printed
+       * "Hard resetting" yet remained in the ROM loader until a distinct
+       * esptool `run` transaction. Always perform that transaction—even after
+       * a failed read—so a diagnostic/provisioning probe cannot silently take
+       * an otherwise healthy device off Wi-Fi.
+       */
+      await runProcess(
+        options.pythonExecutable ?? "python",
+        buildEsptoolRunApplicationArguments({
+          chipFamily: options.chipFamily,
+          port: options.port,
+        }),
+      );
+    } catch (error) {
+      applicationStartFailure = error;
+    }
+
+    if (readFailure && applicationStartFailure) {
+      throw new AggregateError(
+        [readFailure, applicationStartFailure],
+        "Flash-region reading failed and the application could not be restarted.",
+      );
+    }
+    if (readFailure) throw readFailure;
+    if (applicationStartFailure) throw applicationStartFailure;
     const bytes = await readFile(outputPath);
     if (bytes.byteLength !== options.region.size) {
       throw new Error(
