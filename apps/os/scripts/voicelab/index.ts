@@ -7,6 +7,7 @@ export { deploy } from "./deploy.ts";
 export { device } from "./device.ts";
 export { direct } from "./direct.ts";
 export { matrix } from "./matrix.ts";
+export { pressure } from "./pressure.ts";
 export { probe } from "./probe.ts";
 export { reliability } from "./reliability.ts";
 export { soak } from "./soak.ts";

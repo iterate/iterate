@@ -33,6 +33,8 @@ import {
 // pinned origin.
 
 const XAI_SECRET = "/secrets/xai";
+/** The real provider. Overridable per call with `grokBaseUrl` — see dialGrok. */
+const GROK_REALTIME_URL = "https://api.x.ai/v1/realtime";
 /**
  * A call with no mic frames and no Grok traffic for this long is over.
  * Pings deliberately do NOT count: a device pinging into an empty room is
@@ -46,6 +48,17 @@ const IDLE_TIMEOUT_MS = 600_000;
  * an hour of talking should not need that to happen at all.
  */
 const MAX_CALL_MS = 3_900_000;
+/**
+ * How long a call gets to come up at all before it is a failed call.
+ *
+ * `startCall` resolves when the provider accepts the session, so anything
+ * that stops the handshake completing blocks the CALLER — and a device whose
+ * call button does nothing has no way to tell "still connecting" from
+ * "never going to". Deliberately generous against the ~750ms a healthy dial
+ * takes, and deliberately far below the ten-minute idle timeout that used to
+ * be the only thing that ended such a call.
+ */
+const HANDSHAKE_TIMEOUT_MS = 15_000;
 /**
  * The agent that does the actual thinking. Grok is a mouth and a pair of
  * ears with a ~200ms budget; anything that needs reading a repo, calling a
@@ -69,9 +82,17 @@ const VOICE_INSTRUCTIONS = [
   "would otherwise guess at. It returns immediately — your colleague is thinking,",
   "not answering — so do NOT go quiet waiting for them. Say you have asked and are",
   "waiting, and keep the conversation going meanwhile: ask what prompted the",
-  "question, or talk about something else. Their answer arrives as a message",
-  "beginning 'Your colleague says'; when it does, tell the customer in your own",
-  "words, out loud, as if you had just been handed a note.",
+  "question, or talk about something else.",
+  "",
+  "QUESTIONS ARE NUMBERED. Asking returns 'asked as question #n'. Their answer",
+  "comes back as a message beginning 'Your colleague says, on question #n'. Your",
+  "colleague works through them one at a time and a hard question takes as long as",
+  "it takes, so answers can arrive long after you asked and not always in the order",
+  "you asked. When more than one question is outstanding, SAY WHICH ONE you are",
+  "talking about — 'on your question about the invoice…' — and if the customer asks",
+  "for something else while one is pending, tell them which number you are still",
+  "waiting on. Never read out an answer as though it belonged to a different",
+  "question: the number on the message is the only thing that says which is which.",
   "",
   "Speak plainly and briefly — one or two sentences unless asked for more. Never",
   "read out URLs, code, or long lists.",
@@ -116,20 +137,64 @@ export class VoiceBridge extends IterateDurableObject {
       return new Response("voicelab bridge: expected a websocket upgrade", { status: 426 });
     }
     const model = url.searchParams.get("model") ?? "grok-voice-think-fast-2.0";
+    /*
+     * WHICH PROVIDER. Defaults to the real one; overridable per call so a
+     * test can point this bridge at a provider it controls.
+     *
+     * The real provider mostly behaves, which is exactly why it cannot show
+     * what this code does when a provider does not — closes mid-answer,
+     * never answers a commit, sends nonsense. Those paths are most of the
+     * failure surface and none of them were reachable before this existed.
+     */
+    const grokBaseUrl = url.searchParams.get("grokBaseUrl") ?? GROK_REALTIME_URL;
 
     if (this.#endActiveCall !== null) {
       this.#endActiveCall("superseded by a new call on this stream", true);
       this.#endActiveCall = null;
     }
     const dialGrok = async () => {
-      const response = await fetch(`https://api.x.ai/v1/realtime?model=${model}`, {
-        headers: { Upgrade: "websocket", Authorization: `Bearer getSecret("${XAI_SECRET}")` },
-      });
+      const target = new URL(grokBaseUrl);
+      target.searchParams.set("model", model);
+      /*
+       * The key goes to xAI and nowhere else. `grokBaseUrl` is caller-chosen,
+       * and a bearer token that follows the URL anywhere is a credential
+       * waiting to be exfiltrated by whoever can call startCall.
+       */
+      const headers: Record<string, string> = { Upgrade: "websocket" };
+      if (target.hostname === "api.x.ai" || target.hostname.endsWith(".x.ai")) {
+        headers.Authorization = `Bearer getSecret("${XAI_SECRET}")`;
+      }
+      const response = await fetch(target.toString(), { headers });
       const socket = response.webSocket;
-      if (socket === null) return { socket: null, status: response.status };
+      if (socket === null) return { listen: null, socket: null, status: response.status };
       socket.binaryType = "arraybuffer"; // before accept(): post-2025-03-17 default is Blob
       socket.accept();
-      return { socket, status: response.status };
+      /*
+       * LISTEN FROM THE INSTANT WE ACCEPT, NOT WHEN WE GET ROUND TO IT.
+       *
+       * accept() starts delivery, and anything delivered before a listener
+       * exists is gone. Between here and attachGrok there used to be a real
+       * round trip (`env.ITX.get()`), so a provider that greets promptly had
+       * its session.created dropped — and session.created is the ONLY thing
+       * that makes this bridge send session.update, so the handshake then
+       * never completed and the call hung, silently, forever. Measured: a
+       * fake provider greeting at 0ms hung startCall indefinitely while the
+       * same greeting at 400ms brought the call up in 4s.
+       *
+       * So the real handler is installed later, but the socket is drained
+       * from the first instant into a buffer that the handler inherits.
+       */
+      const early: MessageEvent[] = [];
+      let deliver: ((event: MessageEvent) => void) | null = null;
+      socket.addEventListener("message", (event) => {
+        if (deliver === null) early.push(event);
+        else deliver(event);
+      });
+      const listen = (handler: (event: MessageEvent) => void) => {
+        deliver = handler;
+        for (const event of early.splice(0)) handler(event);
+      };
+      return { listen, socket, status: response.status };
     };
     const first = await dialGrok();
     if (first.socket === null) {
@@ -142,6 +207,23 @@ export class VoiceBridge extends IterateDurableObject {
      * underneath the conversation instead; see attachGrok below.
      */
     let upstream = first.socket;
+    /**
+     * How many messages we could not hand the provider. A socket that has
+     * closed but not yet fired its close event throws on send, and a throw
+     * out of a stream-delivery callback takes the delivery lane with it — so
+     * every send to the provider goes through here, and a failure is a
+     * counter rather than an exception thrown across a callback boundary.
+     */
+    let sendFailures = 0;
+    const sendUpstream = (message: Record<string, unknown>): boolean => {
+      try {
+        upstream.send(JSON.stringify(message));
+        return true;
+      } catch {
+        sendFailures++;
+        return false;
+      }
+    };
 
     // The anchor pair exists only for the socket-shaped modes; a detached
     // call has no client end at all.
@@ -259,7 +341,25 @@ export class VoiceBridge extends IterateDurableObject {
      * is what this design is avoiding.
      */
     const MAX_EVENTS_PER_APPEND = 20;
+    /**
+     * …and a ceiling on how much may wait, because nothing else is one.
+     *
+     * The provider decides how fast it speaks and this queue absorbs whatever
+     * it produces: a 90-second answer arrives as 4500 events in one burst,
+     * and that measurably works (all 4500 delivered, in order, in 13.8s). But
+     * "measurably works at 90 seconds" is not a bound, and the failure past
+     * one is a Durable Object running out of memory — which ends the call
+     * with no event, no reason, and no obituary.
+     *
+     * ~6 minutes of speech in hand is far past any answer a person will sit
+     * through, so this never fires in a healthy call. When it does, the
+     * OLDEST audio goes: a listener holding a queue that deep has long since
+     * stopped caring about the beginning of it, and the count rides out on
+     * call-ended so the drop is never silent.
+     */
+    const MAX_QUEUED_EVENTS = 20_000;
     const outbound: Parameters<typeof stream.append> = [];
+    let droppedSpk = 0;
     let draining = false;
     const drainOutbound = async () => {
       if (draining) return;
@@ -284,6 +384,19 @@ export class VoiceBridge extends IterateDurableObject {
     };
     const fireAppend = (...events: Parameters<typeof stream.append>) => {
       outbound.push(...events);
+      if (outbound.length > MAX_QUEUED_EVENTS) {
+        /* Drop the oldest SPEAKER frames only. Transcripts and lifecycle
+         * events are what a listener reasons with, and there are never
+         * enough of them to be the thing filling this queue. */
+        for (let index = 0; index < outbound.length && outbound.length > MAX_QUEUED_EVENTS; ) {
+          if ((outbound[index] as { type?: string })?.type === "voicelab/spk-frame") {
+            outbound.splice(index, 1);
+            droppedSpk++;
+          } else {
+            index++;
+          }
+        }
+      }
       void drainOutbound();
     };
 
@@ -399,6 +512,13 @@ export class VoiceBridge extends IterateDurableObject {
                 "Answer by SENDING A CHAT MESSAGE. That is the only channel that reaches",
                 "the customer — work in scripts all you like, but the reply itself has to",
                 "be a message, and a silent agent leaves the voice apologising for you.",
+                "",
+                "Two rules about the shape of your reply, and they matter more than they",
+                "look. Every question arrives labelled 'Question #n'. START your reply",
+                "with that exact label — '#3: An octopus has three hearts…' — and send",
+                "EXACTLY ONE message per question. The voice announces answers by number",
+                "out loud, and a second message, or a missing number, is how it ends up",
+                "telling the customer the answer to a question they did not ask.",
               ].join("\n"),
               key: "voicelab/colleague-brief",
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -439,44 +559,43 @@ export class VoiceBridge extends IterateDurableObject {
         })(),
       );
     };
-    /** Ask, and deliver the answer whenever it comes. */
-    const askColleague = (question: string) => {
-      askedCount++;
-      fireAppend({
-        payload: { asked: askedCount, callId, question },
-        type: "voicelab/colleague-asked",
-      });
-      this.ctx.waitUntil(
-        (async () => {
-          const startedAsk = Date.now();
-          let answer: string;
-          try {
-            if (!(await ensureColleague())) throw new Error("no colleague");
-            const reply = (await colleagueAgent.ask({
-              message: `The customer asked, through the voice: ${question}`,
-              timeoutMs: 120_000,
-            })) as { payload?: { message?: string; content?: string } };
-            /*
-             * `ask` resolves on agents/web-message-sent, whose payload field
-             * is `message`. Reading `content` (the field on context items)
-             * returned an empty string for a perfectly good answer, and the
-             * voice dutifully told the customer their colleague could not
-             * help.
-             */
-            answer = reply.payload?.message ?? reply.payload?.content ?? "";
-          } catch (error) {
-            answer = "";
-            console.log(`colleague failed: ${String(error)}`);
-          }
-          if (closedDown) return;
-          fireAppend({
-            payload: {
-              answer: answer.slice(0, 2000),
-              callId,
-              ms: Date.now() - startedAsk,
-            },
-            type: "voicelab/colleague-answered",
-          });
+    /*
+     * ONE QUESTION WITH THE COLLEAGUE AT A TIME, AND EVERY ANSWER NUMBERED.
+     *
+     * `agent.ask()` is `append(question)` followed by "wait for the next
+     * agents/web-message-sent after my append's offset". That is not a
+     * correlation, it is a race, and with two asks outstanding it is a race
+     * both of them LOSE: the first reply the agent sends is after BOTH
+     * appends, so BOTH asks resolve with it. The customer hears the answer to
+     * their first question read out twice — once announced as the answer to
+     * the second — and the second question's real answer is never spoken at
+     * all, because no ask is left waiting to receive it.
+     *
+     * The platform offers nothing that ties a reply to a request: the payload
+     * of web-message-sent is `{ message, files }` and there is no request id
+     * anywhere in it. So the correlation is made TRUE by keeping exactly one
+     * ask in flight — with a single outstanding question, "the agent's next
+     * message" is unambiguously the answer to it — and the queue behind it is
+     * the honest cost. The voice model is told the number it is waiting on
+     * and can say so out loud.
+     *
+     * The `#n` label the colleague is asked to echo is a CHECK, not the
+     * correlation: it catches an agent that sent two messages for one
+     * question, which would slip past the serialisation. When it disagrees,
+     * the disagreement is published rather than hidden.
+     */
+    const askQueue: { number: number; question: string }[] = [];
+    let asking = false;
+    /** Answers in hand, waiting for a gap in the conversation to be spoken. */
+    const deliverQueue: { number: number; answer: string }[] = [];
+    let delivering = false;
+
+    const pumpDelivery = async () => {
+      if (delivering) return;
+      delivering = true;
+      try {
+        while (deliverQueue.length > 0 && !closedDown) {
+          const next = deliverQueue.shift()!;
           /*
            * Wait for a gap. A colleague who answers while the assistant is
            * mid-sentence, or while the customer is still holding the talk
@@ -494,31 +613,101 @@ export class VoiceBridge extends IterateDurableObject {
            * and this has to interrupt the conversation the way a colleague
            * putting their head round the door does.
            */
-          try {
-            upstream.send(
-              JSON.stringify({
-                item: {
-                  content: [
-                    {
-                      text:
-                        answer.length > 0
-                          ? `Your colleague says: ${answer}`
-                          : "Your colleague could not answer that one — tell the customer plainly.",
-                      type: "input_text",
-                    },
-                  ],
-                  role: "user",
-                  type: "message",
+          sendUpstream({
+            item: {
+              content: [
+                {
+                  text:
+                    next.answer.length > 0
+                      ? `Your colleague says, on question #${next.number}: ${next.answer}`
+                      : `Your colleague could not answer question #${next.number} — tell the customer plainly which one it was.`,
+                  type: "input_text",
                 },
-                type: "conversation.item.create",
-              }),
-            );
-            upstream.send(JSON.stringify({ type: "response.create" }));
-          } catch {
-            /* the call ended while they were thinking */
+              ],
+              role: "user",
+              type: "message",
+            },
+            type: "conversation.item.create",
+          });
+          sendUpstream({ type: "response.create" });
+          /* Let that answer be spoken before the next one interrupts it. */
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+      } finally {
+        delivering = false;
+      }
+    };
+
+    const pumpAsks = async () => {
+      if (asking) return;
+      asking = true;
+      try {
+        while (askQueue.length > 0 && !closedDown) {
+          const next = askQueue.shift()!;
+          const startedAsk = Date.now();
+          let answer = "";
+          let labelledAs: number | null = null;
+          try {
+            if (!(await ensureColleague())) throw new Error("no colleague");
+            const reply = (await colleagueAgent.ask({
+              message: `Question #${next.number}. The customer asked, through the voice: ${next.question}`,
+              timeoutMs: 120_000,
+            })) as { payload?: { message?: string; content?: string } };
+            /*
+             * `ask` resolves on agents/web-message-sent, whose payload field
+             * is `message`. Reading `content` (the field on context items)
+             * returned an empty string for a perfectly good answer, and the
+             * voice dutifully told the customer their colleague could not
+             * help.
+             */
+            answer = reply.payload?.message ?? reply.payload?.content ?? "";
+          } catch (error) {
+            answer = "";
+            console.log(`colleague failed on question #${next.number}: ${String(error)}`);
           }
-        })(),
-      );
+          const labelled = /^\s*#(\d+)\s*[:.\-–]?\s*/.exec(answer);
+          if (labelled !== null) {
+            labelledAs = Number(labelled[1]);
+            answer = answer.slice(labelled[0].length);
+          }
+          if (closedDown) return;
+          fireAppend({
+            payload: {
+              answer: answer.slice(0, 2000),
+              callId,
+              /* Non-null and different means the serialisation was bypassed —
+               * an agent that sent two messages for one question. Published,
+               * not swallowed: this is the only place it is visible. */
+              labelledAs,
+              mislabelled: labelledAs !== null && labelledAs !== next.number,
+              ms: Date.now() - startedAsk,
+              question: next.number,
+              waiting: askQueue.length,
+            },
+            type: "voicelab/colleague-answered",
+          });
+          deliverQueue.push({ answer, number: next.number });
+          void pumpDelivery();
+        }
+      } finally {
+        asking = false;
+      }
+    };
+
+    /**
+     * Ask, and deliver the answer whenever it comes. Returns the question's
+     * number, which is what the voice model is handed so it can say which
+     * question it is waiting on — and, later, which one it is answering.
+     */
+    const askColleague = (question: string): number => {
+      const number = ++askedCount;
+      askQueue.push({ number, question });
+      fireAppend({
+        payload: { asked: number, callId, question, queuedBehind: askQueue.length - 1 },
+        type: "voicelab/colleague-asked",
+      });
+      this.ctx.waitUntil(pumpAsks());
+      return number;
     };
     /** Function calls arrive twice on some paths; answer each exactly once. */
     const answeredToolCalls = new Set<string>();
@@ -538,27 +727,26 @@ export class VoiceBridge extends IterateDurableObject {
        * anything. A voice model waiting on a function output is a voice model
        * saying nothing, and thirty seconds of nothing is a dropped call as
        * far as anyone listening can tell.
+       *
+       * The NUMBER is the point of this reply. Two questions in a call become
+       * two answers arriving minutes later in an order nobody controls, and a
+       * voice that cannot name which one it is reading is a voice that sounds
+       * like it has lost the thread. So the model is handed the number as it
+       * asks, and gets it back on the answer.
        */
-      try {
-        upstream.send(
-          JSON.stringify({
-            item: {
-              call_id: id,
-              output: JSON.stringify({
-                status: "asked",
-                tell_the_customer:
-                  "Say you have asked your colleague and are waiting, then keep talking.",
-              }),
-              type: "function_call_output",
-            },
-            type: "conversation.item.create",
+      const number = askColleague(question);
+      sendUpstream({
+        item: {
+          call_id: id,
+          output: JSON.stringify({
+            status: "asked",
+            tell_the_customer: `asked as question #${number} - colleague will get back to you ASAP. you can tell the human to wait or speak about something else`,
           }),
-        );
-        upstream.send(JSON.stringify({ type: "response.create" }));
-      } catch {
-        /* upstream closing */
-      }
-      askColleague(question);
+          type: "function_call_output",
+        },
+        type: "conversation.item.create",
+      });
+      sendUpstream({ type: "response.create" });
     };
 
     // Resolves when Grok has accepted the session — what `startCall` waits
@@ -568,12 +756,26 @@ export class VoiceBridge extends IterateDurableObject {
       markReady = resolve;
     });
     let lastActivityAt = Date.now();
+    /** True once a session has ever been fully established on this call. */
+    let everReady = false;
     let responseActive = false;
     /** True between a turn's start and its commit: the customer is speaking. */
     let micOpen = false;
-    /** Mic frames and expanded PCM bytes handed to the provider this turn. */
+    /** Mic frames and expanded PCM bytes that ARRIVED here this turn. */
     let micFrames = 0;
     let micBytes = 0;
+    /**
+     * …and what was actually handed to the provider. Not the same number.
+     *
+     * `turn-committed` exists to answer "was the provider given anything?",
+     * and it used to answer with what arrived at this bridge — so a turn
+     * where every real frame was discarded by the reassembler still reported
+     * a confident "50 frames, 32000 bytes, 1000ms". The one event whose job
+     * is to tell those two cases apart was reporting the case it could not
+     * see.
+     */
+    let micDeliveredFrames = 0;
+    let micDeliveredBytes = 0;
 
     /*
      * REASSEMBLING THE MICROPHONE, BECAUSE THE WIRE DOES NOT PROMISE ORDER.
@@ -599,14 +801,39 @@ export class VoiceBridge extends IterateDurableObject {
      * dropout, versus a turn that never commits.
      */
     const MIC_REORDER_WINDOW = 16;
+    /*
+     * …and a frame numbered further ahead than this is not a reordering, it
+     * is a frame from a DIFFERENT TURN.
+     *
+     * Every turn numbers its frames from zero, so the tail of turn 1 still in
+     * flight when turn 2 starts arrives carrying numbers hundreds above what
+     * turn 2 is sending. Those went into the reorder window, overflowed it,
+     * and dragged `micExpected` up to the straggler's number — after which
+     * every genuine frame of the new turn was "already sent, or already given
+     * up on" and dropped. Measured: the customer spoke 30 frames, the
+     * provider was handed 20 frames of the PREVIOUS utterance and none of the
+     * new one, and the turn was answered as if it had been heard.
+     *
+     * A second and a bit of lead is more reordering than any wire produces.
+     * Beyond it, the frame belongs to a turn that is over.
+     */
+    const MIC_MAX_LEAD = 64;
     let micExpected = 0;
     const micPending = new Map<number, ArrayBuffer | Uint8Array>();
     let micReordered = 0;
     let micLate = 0;
     let micLost = 0;
+    /** Frames rejected as belonging to a turn that has already finished. */
+    let micStale = 0;
 
     const sendMic = (pcm: ArrayBuffer | Uint8Array) => {
-      upstream.send(pcm as ArrayBuffer);
+      try {
+        upstream.send(pcm as ArrayBuffer);
+        micDeliveredFrames++;
+        micDeliveredBytes += pcm.byteLength;
+      } catch {
+        sendFailures++;
+      }
     };
     /** Hand over every frame that is now contiguous, in order. */
     const drainMic = () => {
@@ -623,6 +850,11 @@ export class VoiceBridge extends IterateDurableObject {
         /* Already sent, or already given up on. Playing it now would insert
          * a fragment of the past into the middle of the present. */
         micLate++;
+        return;
+      }
+      if (sequence > micExpected + MIC_MAX_LEAD) {
+        /* Not reordering — a leftover from a turn that has already ended. */
+        micStale++;
         return;
       }
       if (sequence === micExpected) {
@@ -671,74 +903,104 @@ export class VoiceBridge extends IterateDurableObject {
     let grokGeneration = 0;
     let redials = 0;
 
+    /** Provider frames we could not read, and handler throws we swallowed. */
+    let providerJunk = 0;
+    let handlerErrors = 0;
+    /**
+     * Nothing the provider says may be allowed to throw out of here.
+     *
+     * This handler runs as a WebSocket event listener inside the invocation
+     * that owns the whole call. An exception escaping it does not just lose
+     * one frame: measured, ONE truncated JSON frame ended the call outright —
+     * no more audio, no answer to the next turn the customer spoke, no
+     * redial, and no call-ended, so the listener was never told anything had
+     * happened. A provider is allowed to send rubbish; it is not allowed to
+     * hang up on the customer by doing it.
+     */
     const onGrokMessage = (event: MessageEvent) => {
+      try {
+        handleGrokMessage(event);
+      } catch (error) {
+        handlerErrors++;
+        console.log(`grok handler threw: ${String(error)}`);
+      }
+    };
+    const handleGrokMessage = (event: MessageEvent) => {
       const tGrok = Date.now();
       lastActivityAt = tGrok;
       if (typeof event.data !== "string") {
         appendSpkPcm(new Uint8Array(event.data as ArrayBuffer), tGrok);
         return;
       }
-      const grokEvent = JSON.parse(event.data) as { type: string; delta?: string };
+      let grokEvent: { type: string; delta?: string };
+      try {
+        grokEvent = JSON.parse(event.data) as { type: string; delta?: string };
+      } catch {
+        providerJunk++;
+        return;
+      }
+      if (typeof grokEvent?.type !== "string") {
+        providerJunk++;
+        return;
+      }
       if (grokEvent.type === "session.created") {
-        upstream.send(
-          JSON.stringify({
-            type: "session.update",
-            session: {
-              voice,
-              instructions,
-              /*
-               * ONE tool, on purpose. A voice model choosing between many
-               * tools is a voice model pausing, and every pause is audible;
-               * choosing whether to ask a colleague is a judgement it can
-               * make in the time it takes to say "let me check".
-               */
-              ...(colleague
-                ? {
-                    tool_choice: "auto",
-                    tools: [
-                      {
-                        description:
-                          "Ask your genius colleague — a careful expert with access to the " +
-                          "customer's systems — anything that needs real thought, knowledge, " +
-                          "or action. Returns immediately: they are thinking, not answering. " +
-                          "Keep talking to the customer while you wait; their answer will " +
-                          "arrive as a message beginning 'Your colleague says'.",
-                        name: "ask_colleague",
-                        parameters: {
-                          properties: {
-                            question: {
-                              description:
-                                "The question, in full. Your colleague can hear the " +
-                                "conversation, but write it so it stands on its own.",
-                              type: "string",
-                            },
+        sendUpstream({
+          type: "session.update",
+          session: {
+            voice,
+            instructions,
+            /*
+             * ONE tool, on purpose. A voice model choosing between many
+             * tools is a voice model pausing, and every pause is audible;
+             * choosing whether to ask a colleague is a judgement it can
+             * make in the time it takes to say "let me check".
+             */
+            ...(colleague
+              ? {
+                  tool_choice: "auto",
+                  tools: [
+                    {
+                      description:
+                        "Ask your genius colleague — a careful expert with access to the " +
+                        "customer's systems — anything that needs real thought, knowledge, " +
+                        "or action. Returns immediately: they are thinking, not answering. " +
+                        "Keep talking to the customer while you wait; their answer will " +
+                        "arrive as a message beginning 'Your colleague says'.",
+                      name: "ask_colleague",
+                      parameters: {
+                        properties: {
+                          question: {
+                            description:
+                              "The question, in full. Your colleague can hear the " +
+                              "conversation, but write it so it stands on its own.",
+                            type: "string",
                           },
-                          required: ["question"],
-                          type: "object",
                         },
-                        type: "function",
+                        required: ["question"],
+                        type: "object",
                       },
-                    ],
-                  }
-                : {}),
-              reasoning: { effort },
-              /*
-               * Manual turns mean no VAD anywhere: the device decides when a
-               * turn starts and ends (push to talk), and this bridge turns
-               * those edges into commit/response.create. Server VAD on an
-               * open microphone next to a speaker hears the answer and
-               * answers itself.
-               */
-              turn_detection: manualTurns
-                ? { type: null }
-                : { type: "server_vad", threshold: 0.5, silence_duration_ms: 500 },
-              audio: {
-                input: { format: { type: "audio/pcm", rate: 16000 }, transport: "binary" },
-                output: { format: { type: "audio/pcm", rate: 16000 }, transport: "binary" },
-              },
+                      type: "function",
+                    },
+                  ],
+                }
+              : {}),
+            reasoning: { effort },
+            /*
+             * Manual turns mean no VAD anywhere: the device decides when a
+             * turn starts and ends (push to talk), and this bridge turns
+             * those edges into commit/response.create. Server VAD on an
+             * open microphone next to a speaker hears the answer and
+             * answers itself.
+             */
+            turn_detection: manualTurns
+              ? { type: null }
+              : { type: "server_vad", threshold: 0.5, silence_duration_ms: 500 },
+            audio: {
+              input: { format: { type: "audio/pcm", rate: 16000 }, transport: "binary" },
+              output: { format: { type: "audio/pcm", rate: 16000 }, transport: "binary" },
             },
-          }),
-        );
+          },
+        });
         return;
       }
       if (grokEvent.type === "session.updated") {
@@ -750,27 +1012,25 @@ export class VoiceBridge extends IterateDurableObject {
          * transcript store.
          */
         if (history.length > 0) {
-          upstream.send(
-            JSON.stringify({
-              item: {
-                content: [
-                  {
-                    text:
-                      "This conversation is already in progress; you were briefly " +
-                      "disconnected and the customer did not notice. It so far:\n" +
-                      history
-                        .map((line) => `${line.role === "user" ? "Customer" : "You"}: ${line.text}`)
-                        .join("\n") +
-                      "\n\nCarry on. Do not greet them or mention any interruption.",
-                    type: "input_text",
-                  },
-                ],
-                role: "user",
-                type: "message",
-              },
-              type: "conversation.item.create",
-            }),
-          );
+          sendUpstream({
+            item: {
+              content: [
+                {
+                  text:
+                    "This conversation is already in progress; you were briefly " +
+                    "disconnected and the customer did not notice. It so far:\n" +
+                    history
+                      .map((line) => `${line.role === "user" ? "Customer" : "You"}: ${line.text}`)
+                      .join("\n") +
+                    "\n\nCarry on. Do not greet them or mention any interruption.",
+                  type: "input_text",
+                },
+              ],
+              role: "user",
+              type: "message",
+            },
+            type: "conversation.item.create",
+          });
         }
         fireAppend({
           type: "voicelab/call-accepted",
@@ -788,6 +1048,7 @@ export class VoiceBridge extends IterateDurableObject {
          * turns there is no VAD to sort that out, so the opening turn was
          * routinely mangled. It waits to be spoken to.
          */
+        everReady = true;
         markReady({ ok: true });
         return;
       }
@@ -887,9 +1148,12 @@ export class VoiceBridge extends IterateDurableObject {
      * happened is the session.updated handler, which replays the
      * conversation so far.
      */
-    const attachGrok = (socket: WebSocket, generation: number) => {
-      socket.addEventListener("message", onGrokMessage);
-      socket.addEventListener("close", (event) => {
+    const attachGrok = (
+      dialed: { socket: WebSocket; listen: (handler: (event: MessageEvent) => void) => void },
+      generation: number,
+    ) => {
+      dialed.listen(onGrokMessage);
+      dialed.socket.addEventListener("close", (event) => {
         // A socket that has already been replaced closes on its way out.
         if (generation !== grokGeneration || closedDown) return;
         void redialGrok(`grok closed ${event.code}`);
@@ -923,17 +1187,17 @@ export class VoiceBridge extends IterateDurableObject {
       responseActive = false;
       await new Promise((resolve) => setTimeout(resolve, Math.min(500 * redials, 5000)));
       if (closedDown) return;
-      const next = await dialGrok().catch(() => ({ socket: null, status: 0 }));
-      if (next.socket === null) {
+      const next = await dialGrok().catch(() => ({ listen: null, socket: null, status: 0 }));
+      if (next.socket === null || next.listen === null) {
         console.log(`redial failed (${next.status}); retrying`);
         return void redialGrok(`redial failed ${next.status}`);
       }
       grokGeneration++;
       upstream = next.socket;
-      attachGrok(next.socket, grokGeneration);
+      attachGrok({ listen: next.listen, socket: next.socket }, grokGeneration);
     };
 
-    attachGrok(upstream, grokGeneration);
+    attachGrok({ listen: first.listen!, socket: upstream }, grokGeneration);
 
     // Live subscription for mic frames + control. Session connections die
     // silently (push budget ~1000, DO resets), so recycle make-before-break
@@ -952,6 +1216,10 @@ export class VoiceBridge extends IterateDurableObject {
     /** A peer that pings is one whose silence means something. */
     let pingsSeen = 0;
     let lastSeenOffset = -1;
+    /** Events on this stream that belong to some other call. */
+    let strayEvents = 0;
+    /** True once the peer driving this call has used our callId. */
+    let sawOwnCallId = false;
     let reconnects = 0;
     let opening = false;
     let closedDown = false;
@@ -966,6 +1234,40 @@ export class VoiceBridge extends IterateDurableObject {
         // the subscription only names voicelab/* types.
         heardFromPeerAt = Date.now();
         const payload = (event.payload ?? {}) as Record<string, unknown>;
+        /*
+         * A CALL BELONGS TO ITS callId.
+         *
+         * `call-ended` and `call-accepted` were checked; the events that
+         * actually drive the conversation were not, so anything able to
+         * append to this stream could put words in the assistant's mouth and
+         * commit turns on somebody else's call — proven with a plain
+         * `voicelab/say` carrying a made-up callId. The realistic source is
+         * not an attacker but arithmetic: a redeploy or an eviction can leave
+         * a previous bridge running, the device opens a new call with a new
+         * callId on the SAME stream, and the old bridge — which only stands
+         * down for its OWN callId — happily consumes the new call's
+         * microphone and answers alongside. That is the "assistant replied
+         * two or three times to one turn" this lab has already heard.
+         *
+         * The rule CALIBRATES ITSELF rather than being asserted, because the
+         * peers are not all in this repository: `voicelab/say` from a script
+         * has never carried a callId, and a firmware that stamps something
+         * else would be struck deaf by a filter that simply demanded a
+         * match. So nothing is rejected until this bridge has heard its own
+         * callId at least once from the peer actually driving it. A peer that
+         * does not use callIds is never second-guessed; one that does gets
+         * everybody else's traffic filtered out from that moment on — which
+         * is exactly when a second bridge on this stream becomes audible.
+         */
+        if (payload.callId === callId) sawOwnCallId = true;
+        else if (
+          sawOwnCallId &&
+          typeof payload.callId === "string" &&
+          event.type !== "voicelab/call-accepted"
+        ) {
+          strayEvents++;
+          continue;
+        }
         switch (event.type) {
           case "voicelab/mic-frame": {
             lastActivityAt = Date.now();
@@ -998,20 +1300,18 @@ export class VoiceBridge extends IterateDurableObject {
             const text = typeof payload.text === "string" ? payload.text.trim() : "";
             if (text.length === 0 || text.length > 4096) break;
             if (responseActive) {
-              upstream.send(JSON.stringify({ type: "response.cancel" }));
+              sendUpstream({ type: "response.cancel" });
               responseActive = false;
             }
-            upstream.send(
-              JSON.stringify({
-                item: {
-                  content: [{ text, type: "input_text" }],
-                  role: "user",
-                  type: "message",
-                },
-                type: "conversation.item.create",
-              }),
-            );
-            upstream.send(JSON.stringify({ type: "response.create" }));
+            sendUpstream({
+              item: {
+                content: [{ text, type: "input_text" }],
+                role: "user",
+                type: "message",
+              },
+              type: "conversation.item.create",
+            });
+            sendUpstream({ type: "response.create" });
             break;
           }
           case "voicelab/turn": {
@@ -1020,6 +1320,8 @@ export class VoiceBridge extends IterateDurableObject {
               micOpen = true;
               micFrames = 0;
               micBytes = 0;
+              micDeliveredFrames = 0;
+              micDeliveredBytes = 0;
               /* Each turn numbers its frames from zero. */
               micExpected = 0;
               micPending.clear();
@@ -1033,7 +1335,7 @@ export class VoiceBridge extends IterateDurableObject {
                * played.
                */
               if (responseActive) {
-                upstream.send(JSON.stringify({ type: "response.cancel" }));
+                sendUpstream({ type: "response.cancel" });
                 responseActive = false;
               }
             } else if (payload.action === "commit") {
@@ -1042,13 +1344,17 @@ export class VoiceBridge extends IterateDurableObject {
                * BEFORE asking the provider to answer — a frame handed over
                * after the commit is speech the answer never heard. */
               flushMic();
-              upstream.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-              upstream.send(JSON.stringify({ type: "response.create" }));
+              sendUpstream({ type: "input_audio_buffer.commit" });
+              sendUpstream({ type: "response.create" });
               /*
                * What the provider was actually given for this turn. A device
                * that speaks and hears nothing back is either not reaching
-               * here (frames 0) or being answered badly (frames fine) — and
+               * here (arrived 0) or being answered badly (frames fine) — and
                * without this number those two look the same from the outside.
+               *
+               * `frames`/`bytes`/`ms` are what the PROVIDER got. `arrived` is
+               * what reached this bridge. When they disagree the reassembler
+               * threw speech away, and that gap is the whole diagnosis.
                */
               fireAppend({
                 type: "voicelab/turn-committed",
@@ -1056,15 +1362,19 @@ export class VoiceBridge extends IterateDurableObject {
                 payload: {
                   bridgeId,
                   callId,
-                  frames: micFrames,
-                  bytes: micBytes,
-                  ms: Math.round(micBytes / 32),
+                  frames: micDeliveredFrames,
+                  bytes: micDeliveredBytes,
+                  ms: Math.round(micDeliveredBytes / 32),
+                  arrived: micFrames,
+                  arrivedBytes: micBytes,
                   /* Out-of-order arrivals are expected and harmless; LOST
                    * frames are the number that matters, and a rising `late`
-                   * means the device is re-sending what we already used. */
+                   * means the device is re-sending what we already used.
+                   * `stale` counts frames from a turn that already ended. */
                   reordered: micReordered,
                   late: micLate,
                   lost: micLost,
+                  stale: micStale,
                 },
               });
             }
@@ -1143,6 +1453,20 @@ export class VoiceBridge extends IterateDurableObject {
       if (closedDown) return;
       const now = Date.now();
       if (now - startedAt > MAX_CALL_MS) return teardown("max call duration");
+      /*
+       * A CALL THAT NEVER CAME UP MUST FAIL FAST.
+       *
+       * `startCall` resolves on session.updated, so a provider that never
+       * finishes the handshake left the caller blocked until IDLE_TIMEOUT —
+       * ten minutes — while the redial ladder made 35 attempts underneath.
+       * Measured: startCall still had not answered after 75 seconds. A device
+       * whose call button does nothing for ten minutes is broken; a device
+       * told in fifteen seconds that the provider would not answer can say
+       * so and offer to try again.
+       */
+      if (!everReady && now - startedAt > HANDSHAKE_TIMEOUT_MS) {
+        return teardown(`the provider never completed a session handshake (${redials} dials)`);
+      }
       if (detached && now - lastActivityAt > IDLE_TIMEOUT_MS) return teardown("idle");
       if (opening) return;
       /*
@@ -1176,7 +1500,7 @@ export class VoiceBridge extends IterateDurableObject {
           payload: {
             bridgeId,
             callId,
-            reason: `worker bridge: ${reason} (appendErrors=${appendErrors}, reconnects=${reconnects})`,
+            reason: `worker bridge: ${reason} (appendErrors=${appendErrors}, reconnects=${reconnects}, redials=${redials}, providerJunk=${providerJunk}, handlerErrors=${handlerErrors}, sendFailures=${sendFailures}, droppedSpk=${droppedSpk}, stray=${strayEvents})`,
           },
         });
       }
@@ -1260,6 +1584,11 @@ export interface StartCallOptions {
   /** Caller-chosen id; the same id ends the call via a call-ended event. */
   callId?: string;
   model?: string;
+  /**
+   * Realtime provider endpoint. Defaults to xAI's. A test points this at a
+   * provider it can make misbehave; the xAI key is only ever sent to x.ai.
+   */
+  grokBaseUrl?: string;
   voice?: string;
   effort?: "none" | "high";
   instructions?: string;
@@ -1296,6 +1625,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     const callId = options.callId ?? crypto.randomUUID().slice(0, 8);
     const params = new URLSearchParams({ callId, mode: "detached", path });
     if (options.model) params.set("model", options.model);
+    if (options.grokBaseUrl) params.set("grokBaseUrl", options.grokBaseUrl);
     if (options.voice) params.set("voice", options.voice);
     if (options.effort) params.set("effort", options.effort);
     if (options.instructions) params.set("instructions", options.instructions);
