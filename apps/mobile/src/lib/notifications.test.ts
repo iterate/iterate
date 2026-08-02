@@ -16,7 +16,7 @@ test("a copied approval intent's whole lifecycle: pending → sending → sent �
       title: "Approval needed",
       body: "POST api.stripe.com is waiting for approval.",
       requestedAt: "2026-07-18T08:00:00.000Z",
-      status: { kind: "pending", label: "Waiting to send" },
+      status: { kind: "pending", label: "Waiting to send…" },
       destination: { kind: "agent-chat", path: "/agents/demo" },
     },
   ]);
@@ -26,7 +26,7 @@ test("a copied approval intent's whole lifecycle: pending → sending → sent �
       intentRequested(2, {}),
       progress(3, "events.iterate.com/device/notification-attempt-started", 2),
     ])[0],
-  ).toMatchObject({ status: { kind: "sending", label: "Sending" } });
+  ).toMatchObject({ status: { kind: "sending", label: "Sending…" } });
 
   expect(
     deriveDeviceNotifications([

@@ -11,11 +11,9 @@
 // render has nothing to append and no LLM request ever opens. Every event in
 // the thread is deterministic.
 //
-// No dead-air spinner-waiter escapes: the running-code activity spinner is
+// No spinner-waiter escapes anywhere: the running-code activity spinner is
 // honest product UI spanning command → run → parked-at-the-door → decision,
-// so every wait extends against a real spinner. The only scoped disables are
-// frame-gap guards around the batch card's mount (see waitForBatchCardButton
-// and decideBatch).
+// so every wait extends against a real spinner.
 //
 // Web-platform approximations, deliberate and dev-only: secure storage is
 // localStorage with confirm()-gated reads (apps/mobile/src/lib/secure-store.ts),
@@ -26,7 +24,6 @@
 // history wearing the thread's status at the time.
 
 import { expect, type Page } from "@playwright/test";
-import { spinnerWaiter } from "middlewright";
 import { connectItxReady } from "iterate/node";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
@@ -70,12 +67,7 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // product-latency problem worth fixing at the source, not something more
     // spinner UI can paper over.
     await page.getByText(projectSlug).click({ timeout: 60_000 });
-    // Scoped spinner-waiter disable for the same frame-gap reason as
-    // waitForBatchCardButton below: the tap → route transition renders a
-    // frame with neither spinner nor content.
-    await spinnerWaiter.settings.run({ disabled: true }, () =>
-      page.getByText("New chat").waitFor({ timeout: 30_000 }),
-    );
+    await page.getByText("New chat").waitFor({ timeout: 30_000 });
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
 
     // ── Admin-side policy, the one non-user step: a hold rule on the echo
@@ -233,39 +225,31 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     const rejectedCard = page
       .getByTestId(/^activity-card-/)
       .filter({ has: page.getByText("✗", { exact: true }) });
-    await spinnerWaiter.settings.run({ disabled: true }, async () => {
-      await approvedCard.waitFor({ timeout: 30_000 });
-      await rejectedCard.waitFor({ timeout: 15_000 });
-      await approvedCard.click({ timeout: 15_000 });
-      await approvedCard.getByRole("button", { name: "Approvals" }).click({ timeout: 15_000 });
-      await approvedCard.getByText("Approved", { exact: true }).waitFor({ timeout: 15_000 });
-      await approvedCard
-        .getByText("The mobile approvals spec holds these for a human")
-        .waitFor({ timeout: 15_000 });
-      // Collapse it back so the thread reads clean for the next act.
-      await approvedCard.getByText("✓", { exact: true }).click({ timeout: 15_000 });
-    });
+    await approvedCard.waitFor({ timeout: 5_000 });
+    await rejectedCard.waitFor({ timeout: 5_000 });
+    await approvedCard.click({ timeout: 5_000 });
+    await approvedCard.getByRole("button", { name: "Approvals" }).click({ timeout: 5_000 });
+    await approvedCard.getByText("Approved", { exact: true }).waitFor({ timeout: 5_000 });
+    await approvedCard
+      .getByText("The mobile approvals spec holds these for a human")
+      .waitFor({ timeout: 5_000 });
+    // Collapse it back so the thread reads clean for the next act.
+    await approvedCard.getByText("✓", { exact: true }).click({ timeout: 5_000 });
 
     // ── The context travels to the NOTIFICATIONS view — the approvals
     // surface now that the standalone screen is retired: each batch's row
     // expands into its full history, wearing the thread's STATUS at the time
     // of its run — thread name + the agent-maintained title/activity, shown
     // IN FULL — so "what was this run even doing?" reads without opening the
-    // thread. Scoped disables throughout: screen transitions, the row
-    // expansions, and the context line's one-shot fetch resolve between
-    // spinners, the same frame-gap reason as waitForBatchCardButton.
+    // thread.
     await page.goBack(); // chat → chat list: browser history IS the app's back stack on web
-    await spinnerWaiter.settings.run({ disabled: true }, async () => {
-      await page.getByLabel("Open project menu").click({ timeout: 30_000 });
-      await page.getByRole("button", { name: "Notifications" }).click({ timeout: 15_000 });
-    });
+    await page.getByLabel("Open project menu").click({ timeout: 5_000 });
+    await page.getByRole("button", { name: "Notifications" }).click({ timeout: 5_000 });
     // Newest first: the reject burst's row sits above the approve burst's.
     const batchRows = page.getByTestId(/^notification-row-/);
-    await spinnerWaiter.settings.run({ disabled: true }, async () => {
-      await batchRows.nth(1).waitFor({ timeout: 30_000 });
-      await batchRows.first().click({ timeout: 15_000 });
-      await batchRows.nth(1).click({ timeout: 15_000 });
-    });
+    await batchRows.nth(1).waitFor({ timeout: 15_000 });
+    await batchRows.first().click({ timeout: 5_000 });
+    await batchRows.nth(1).click({ timeout: 5_000 });
     const threadName = agentPath.replace(/^\/agents\//, "");
     // The line is a link (tap = open the thread), one per card, each unique
     // by its lane's status title. Full-text equality, not substring: a
@@ -274,10 +258,8 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     // activity-only update.
     const approveContext = page.getByRole("link", { name: /Refund sweep/ });
     const rejectContext = page.getByRole("link", { name: /Invoice chase/ });
-    await spinnerWaiter.settings.run({ disabled: true }, async () => {
-      await approveContext.waitFor({ timeout: 30_000 });
-      await rejectContext.waitFor({ timeout: 30_000 });
-    });
+    await approveContext.waitFor({ timeout: 15_000 });
+    await rejectContext.waitFor({ timeout: 15_000 });
     expect(await approveContext.textContent()).toBe(
       `${threadName} · Refund sweep — Emailing 3 customers about order refunds`,
     );
@@ -286,10 +268,8 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
     );
 
     // Tapping the line deep-links back into the thread it snapshotted.
-    await spinnerWaiter.settings.run({ disabled: true }, async () => {
-      await approveContext.click({ timeout: 15_000 });
-      await page.getByPlaceholder("Message").waitFor({ timeout: 30_000 });
-    });
+    await approveContext.click({ timeout: 5_000 });
+    await page.getByPlaceholder("Message").waitFor({ timeout: 15_000 });
     expect(decodeURIComponent(new URL(page.url()).searchParams.get("path")!)).toBe(agentPath);
   } finally {
     await echo.close();
@@ -308,19 +288,12 @@ async function sendChatMessage(page: Page, message: string) {
 
 /**
  * Wait for a batch-card button while the burst coalesces at the egress door.
- * The chat's working indicator + the live "running code…" activity DO cover
- * this wait with real spinners at the macro level — but the card mounts on a
- * live stream push, and between React commits the spinner set is momentarily
- * empty; the spinner-waiter's 100ms handoff bridge is narrower than those
- * frame gaps and its 1ms fast-fail can even dispatch-then-throw on the
- * subsequent click. Scoped disable + plain waitFor sidesteps the frame race
- * without masking any real dead air. (Candidate middlewright improvement: a
- * configurable spinner-handoff bridge.)
+ * The chat's working indicator + the live "running code…" activity cover this
+ * wait with real spinners the whole way — the card mounts while the parked
+ * script run still spins.
  */
 function waitForBatchCardButton(page: Page, name: string) {
-  return spinnerWaiter.settings.run({ disabled: true }, () =>
-    page.getByRole("button", { name }).waitFor({ timeout: 30_000 }),
-  );
+  return page.getByRole("button", { name }).waitFor({ timeout: 30_000 });
 }
 
 /**
@@ -331,15 +304,10 @@ function waitForBatchCardButton(page: Page, name: string) {
  * and a decision must not silently not-happen. `answerDialog` re-arms per
  * attempt: each press summons a fresh Face ID confirm / reason prompt.
  *
- * The whole attempt — press AND detach-wait — runs under one scoped
- * frame-gap guard: the spinner-waiter otherwise rewrites even explicit
- * timeouts to its 1ms fast-fail whenever no spinner is up, which misreads a
- * decision that IS landing as a lost press. The click's own errors are
- * swallowed (its 1ms fast-fail can dispatch-then-throw: press lands, dialog
- * fires, decision goes through, the call still raises) — departure of the
- * button is the one honest success signal. The dialog handler is removed
- * after every attempt: a stale armed handler would win the race for the
- * NEXT lane's dialog and answer it with the wrong response.
+ * The click's own errors are swallowed — departure of the button is the one
+ * honest success signal. The dialog handler is removed after every attempt:
+ * a stale armed handler would win the race for the NEXT lane's dialog and
+ * answer it with the wrong response.
  */
 async function decideBatch(
   page: Page,
@@ -352,10 +320,8 @@ async function decideBatch(
       void Promise.resolve(answerDialog(dialog)).catch(() => {});
     page.once("dialog", handler);
     try {
-      await spinnerWaiter.settings.run({ disabled: true }, async () => {
-        await button.click({ timeout: 10_000 }).catch(() => {});
-        await button.waitFor({ state: "detached", timeout: 15_000 });
-      });
+      await button.click({ timeout: 10_000 }).catch(() => {});
+      await button.waitFor({ state: "detached", timeout: 15_000 });
       return;
     } catch {
       // Press lost or decision not landed — re-arm and press again. The

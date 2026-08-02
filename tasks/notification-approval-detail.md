@@ -199,6 +199,62 @@ Removal-round log:
       (32s: live card with Script|Approvals tabs + ◷, settled cards with
       ✓/✗, Approvals tab opened)
 
+## Spinner-waiter disables: measured, then removed
+
+(Misha: "See if the flickery spinner issue is actually an issue before
+making the spinner stitch together gaps.")
+
+Verdict: the "frame gap" the scoped disables guarded against was NOT real.
+Every disable is gone from both mobile specs. What the measurements showed:
+
+- Baseline: all ~17 `spinnerWaiter.settings.run({ disabled: true })` blocks
+  removed, 5+ runs per spec, fresh dev server per run.
+- approvals.spec.ts: 6 pass / 2 fail in 8 runs. BOTH failures were the same
+  site — decideBatch's `waitFor({ state: "detached" })` — and the trace
+  proved the product was fine: the press landed, the confirm dialog fired
+  and was accepted, the decision appended, the burst ran (200s), the card
+  left the thread. The spec still failed because spinner-waiter's readiness
+  heuristic (visible && enabled) is inverted for DISAPPEARANCE waits: a
+  gone-or-renamed button reads as "target missing, no spinner" and the wait
+  gets the 1ms fast-fail rewrite — and `timeout: 1` aborts before the first
+  evaluation can report "already detached", so an ALREADY-SATISFIED wait
+  hard-fails. Middlewright bug, not a product gap.
+- notifications.spec.ts: 0 pass / 4 real runs (plus one dev-server OOM),
+  all at the same line — lane two's `getByText("Send failed").waitFor`.
+  Genuinely no spinner AND no target: the wait starts the moment the
+  elsewhere-thread's script fires, and for several seconds the pipeline
+  (script start → egress hold → 2s debounce → grace window → Expo round
+  trip) has NO on-screen counterpart on this device — like a phone idling
+  before a push arrives. Not a frame gap; a structural
+  external-event wait that belongs on the protocol.
+- Every other formerly-disabled site (route transitions, batch-card mounts,
+  row expansions, glyph/tab assertions, deep links) passed repeatedly with
+  the middleware fully on — covered by real product spinners (working row,
+  activity card, screen/detail ActivityIndicators) plus the 100ms handoff
+  bridge.
+
+Fixes (no disables anywhere):
+
+- patches/middlewright.patch extended: spinner-waiter is now goal-aware —
+  `waitFor({ state: "detached" | "hidden" })` inverts the readiness check
+  (target no longer visible = success-adjacent), so satisfied disappearance
+  waits proceed with their original timeout instead of the 1ms fast-fail.
+  Candidate upstream middlewright change.
+- Product (apps/mobile/src/lib/notifications.ts): non-terminal row statuses
+  are now honest in-flight indicators — "Waiting to send…" / "Sending…"
+  (the chat working-row's `anythinging…` convention). The push obligation
+  IS server work in flight; the row now shows it as such (and
+  spinner-waiter recognizes it, keeping the UI wait covered from row
+  appearance to settlement).
+- Spec (notifications.spec.ts lane two): the external-event window is
+  waited out on the PROTOCOL (expect.poll for the device stream's second
+  notification-settled event), then the UI assertion rides the row's own
+  in-flight status flip.
+- Timeouts tightened now that waits are honest: UI-local assertions on
+  already-present data 30s/15s → 5s; cross-server waits (screen-mount
+  fetches, expansion one-shot queries, chat mounts) → 15s; cold multi-hop
+  waits (first project open, batch coalescing) keep 30s.
+
 Review round (tabbed-cards screenshot feedback):
 
 - [x] Self-referential provenance block hidden inside activity cards

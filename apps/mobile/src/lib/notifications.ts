@@ -17,6 +17,10 @@ export const DEVICE_NOTIFICATION_EVENT_TYPES = [
   "events.iterate.com/device/notification-settled",
 ];
 
+// Non-terminal statuses ("Waiting to send…", "Sending…") carry a trailing
+// ellipsis on purpose: the push obligation is server work still in flight,
+// and the row's status line is the product's in-progress indicator for it —
+// the same `anythinging…` convention the chat's working row uses.
 export type DeviceNotificationStatus = {
   kind:
     | "pending"
@@ -82,7 +86,7 @@ export function deriveDeviceNotifications(events: readonly StreamEvent[]): Devic
         title: typeof payload.title === "string" ? payload.title : "Notification",
         body: typeof payload.body === "string" ? payload.body : "",
         requestedAt: event.createdAt,
-        status: { kind: "pending", label: "Waiting to send" },
+        status: { kind: "pending", label: "Waiting to send…" },
         destination: payload.destination || null,
         // The top-level field is the batch identity since #2371; intents
         // committed before it only carried the offset inside the approvals
@@ -105,7 +109,7 @@ export function deriveDeviceNotifications(events: readonly StreamEvent[]): Devic
     const row = rows.get(requestOffset);
     if (row === undefined) continue;
     if (event.type === "events.iterate.com/device/notification-attempt-started") {
-      row.status = { kind: "sending", label: "Sending" };
+      row.status = { kind: "sending", label: "Sending…" };
     } else if (event.type === "events.iterate.com/device/notification-ticket-observed") {
       row.status = { kind: "sent", label: "Sent" };
     } else if (event.type === "events.iterate.com/device/notification-settled") {

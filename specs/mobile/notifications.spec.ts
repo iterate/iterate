@@ -8,8 +8,8 @@
 // two — the user is on the Notifications view (pointedly NOT the thread):
 // nothing claims the batch, the grace window lapses, and the push goes out.
 //
-// Sign-up plumbing and the RN-web helpers (composer typing, batch-card frame
-// gaps) are lifted from specs/mobile/approvals.spec.ts.
+// Sign-up plumbing and the RN-web helpers (composer typing, batch-card
+// waits) are lifted from specs/mobile/approvals.spec.ts.
 //
 // Web-platform approximations, deliberate and dev-only: the web build has no
 // push channel, so the spec enrolls this browser's device identity
@@ -21,7 +21,6 @@
 // the send lane runs LAST.
 
 import { expect, type Page } from "@playwright/test";
-import { spinnerWaiter } from "middlewright";
 import { connectItxReady } from "iterate/node";
 import { localOsDevServer } from "../../apps/os/scripts/dev.ts";
 import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
@@ -62,9 +61,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await popup.getByRole("button", { name: "Continue" }).click({ timeout: 30_000 });
     await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 30_000 });
     await page.getByText(projectSlug).click({ timeout: 60_000 });
-    await spinnerWaiter.settings.run({ disabled: true }, () =>
-      page.getByText("New chat").waitFor({ timeout: 30_000 }),
-    );
+    await page.getByText("New chat").waitFor({ timeout: 30_000 });
     const projectId = new URL(page.url()).pathname.split("/")[2]!;
 
     // ── Admin-side setup: a hold rule on the echo host, and the device
@@ -129,7 +126,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // beat, the panel settles at translateX(0) at this exact viewport. Wait
     // for the item to stop moving before pressing.
     const notificationsItem = page.getByRole("button", { name: "Notifications" });
-    await notificationsItem.waitFor({ timeout: 10_000 });
+    await notificationsItem.waitFor({ timeout: 5_000 });
     await expect
       .poll(
         async () => {
@@ -142,9 +139,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
       )
       .toBe(0);
     await notificationsItem.click();
-    await spinnerWaiter.settings.run({ disabled: true }, () =>
-      page.getByText("Skipped — already on screen").waitFor({ timeout: 30_000 }),
-    );
+    await page.getByText("Skipped — already on screen").waitFor({ timeout: 15_000 });
 
     // ── Lane two: the user stays HERE while a different thread's batch
     // parks. No dialog renders, nothing claims the batch, the grace window
@@ -159,9 +154,28 @@ test("the approval push is suppressed in the watched thread and sent when you're
       payload: { title: "Sending the launch webhook", activity: "waiting on egress approval" },
     });
     void elsewhereAgent.capabilityHost.runScript(parkOneRequest("elsewhere")).catch(() => {});
-    await spinnerWaiter.settings.run({ disabled: true }, () =>
-      page.getByText("Send failed").waitFor({ timeout: 30_000 }),
-    );
+    // Until the push pipeline journals onto THIS device's stream, nothing on
+    // the device represents it — the script start, egress hold, debounce and
+    // grace window are server work with no on-screen counterpart, exactly
+    // like a real phone idling before a push arrives. So the spec waits for
+    // the terminal settlement on the PROTOCOL (lane one's suppression was
+    // the first settled event; lane two's rejection is the second). The row
+    // itself appeared on screen much earlier, wearing its in-flight
+    // "Waiting to send…" / "Sending…" statuses — honest product indicators
+    // that keep the UI wait below covered until the settle push flips the
+    // label.
+    await expect
+      .poll(
+        async () =>
+          (
+            await itx.streams.get(`/devices/${DEVICE_ID}`).getEvents({
+              eventTypes: ["events.iterate.com/device/notification-settled"],
+            })
+          ).length,
+        { timeout: 30_000 },
+      )
+      .toBe(2);
+    await page.getByText("Send failed").waitFor({ timeout: 15_000 });
     // Both lanes journaled side by side — the comparison this spec exists for.
     await page.getByText("Skipped — already on screen").waitFor({ timeout: 5_000 });
 
@@ -174,10 +188,8 @@ test("the approval push is suppressed in the watched thread and sent when you're
       .getByTestId(/^notification-row-/)
       .filter({ hasText: "Send failed" })
       .click();
-    await spinnerWaiter.settings.run({ disabled: true }, async () => {
-      await page.getByText("Awaiting decision").waitFor({ timeout: 30_000 });
-      await page.getByText("egress-echo?elsewhere=1").waitFor({ timeout: 15_000 });
-    });
+    await page.getByText("Awaiting decision").waitFor({ timeout: 15_000 });
+    await page.getByText("egress-echo?elsewhere=1").waitFor({ timeout: 5_000 });
 
     // Reject it from the expansion with a typed reason (the web build's
     // window.prompt stands in for the native reason sheet). Departure of
@@ -186,10 +198,8 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // verdict, the human's reason, and the #2372 thread-context line.
     const reason = "not while the spec is watching";
     await rejectFromExpansion(page, reason);
-    await spinnerWaiter.settings.run({ disabled: true }, async () => {
-      await page.getByText(`Rejected because: ${reason}`).waitFor({ timeout: 30_000 });
-      await page.getByText("Sending the launch webhook").waitFor({ timeout: 15_000 });
-    });
+    await page.getByText(`Rejected because: ${reason}`).waitFor({ timeout: 5_000 });
+    await page.getByText("Sending the launch webhook").waitFor({ timeout: 5_000 });
 
     // The chat deep-link lives INSIDE the expansion now — its "Open thread"
     // lands in the thread that caused the push, where tapping the real push
@@ -198,9 +208,7 @@ test("the approval push is suppressed in the watched thread and sent when you're
     // The heading, specifically: expo-router keeps the Notifications screen
     // mounted-but-hidden behind the chat, and its thread-context line also
     // says "elsewhere-thread" — a bare text locator finds that hidden copy.
-    await spinnerWaiter.settings.run({ disabled: true }, () =>
-      page.getByRole("heading", { name: "elsewhere-thread" }).waitFor({ timeout: 30_000 }),
-    );
+    await page.getByRole("heading", { name: "elsewhere-thread" }).waitFor({ timeout: 15_000 });
     expect(decodeURIComponent(page.url())).toContain("/agents/elsewhere-thread");
   } finally {
     await echo.close();
@@ -209,14 +217,11 @@ test("the approval push is suppressed in the watched thread and sent when you're
 
 /**
  * Wait for a batch-card button while the burst coalesces at the egress door —
- * same frame-gap reasoning as specs/mobile/approvals.spec.ts's helper of the
- * same name: the card mounts on a live stream push, and between React commits
- * the spinner set is momentarily empty.
+ * same as specs/mobile/approvals.spec.ts's helper of the same name: the
+ * parked script run's activity spinner covers the wait the whole way.
  */
 function waitForBatchCardButton(page: Page, name: string) {
-  return spinnerWaiter.settings.run({ disabled: true }, () =>
-    page.getByRole("button", { name }).waitFor({ timeout: 30_000 }),
-  );
+  return page.getByRole("button", { name }).waitFor({ timeout: 30_000 });
 }
 
 /**
@@ -234,10 +239,8 @@ async function rejectFromExpansion(page: Page, reason: string) {
       void Promise.resolve(dialog.accept(reason)).catch(() => {});
     page.once("dialog", handler);
     try {
-      await spinnerWaiter.settings.run({ disabled: true }, async () => {
-        await button.click({ timeout: 10_000 }).catch(() => {});
-        await button.waitFor({ state: "detached", timeout: 15_000 });
-      });
+      await button.click({ timeout: 10_000 }).catch(() => {});
+      await button.waitFor({ state: "detached", timeout: 15_000 });
       return;
     } catch {
       // Press lost or decision not landed — re-arm and press again. The
