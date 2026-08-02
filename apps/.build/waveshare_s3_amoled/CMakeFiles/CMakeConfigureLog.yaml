@@ -3945,3 +3945,858 @@ events:
 
       exitCode: 0
 ...
+---
+events:
+  - kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompiler.cmake:115 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:67 (_cmake_find_compiler_path)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    mode: "program"
+    variable: "CMAKE_C_COMPILER_WITH_PATH"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "xtensa-esp32s3-elf-gcc"
+    candidate_directories:
+      - "/Users/jonastemplestein/esp/esp-idf/components/espcoredump/"
+      - "/Users/jonastemplestein/esp/esp-idf/components/partition_table/"
+      - "/Users/jonastemplestein/esp/esp-idf/components/app_update/"
+      - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf-gdb/14.2_20240403/xtensa-esp-elf-gdb/bin/"
+      - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/"
+      - "/Users/jonastemplestein/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/bin/"
+      - "/Users/jonastemplestein/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/bin/"
+      - "/Users/jonastemplestein/.espressif/tools/openocd-esp32/v0.12.0-esp32-20250422/openocd-esp32/bin/"
+      - "/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/"
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path/"
+      - "/Users/jonastemplestein/.grok/bin/"
+      - "/Users/jonastemplestein/.opencode/bin/"
+      - "/opt/homebrew/opt/ruby/bin/"
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin/"
+      - "/Users/jonastemplestein/.codeium/windsurf/bin/"
+      - "/Users/jonastemplestein/.bun/bin/"
+      - "/Users/jonastemplestein/bin/"
+      - "/Users/jonastemplestein/.local/bin/"
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/sbin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg0HWgR7k/"
+      - "/Users/jonastemplestein/.deno/bin/"
+      - "/Users/jonastemplestein/Library/pnpm/"
+      - "/Applications/Ghostty.app/Contents/MacOS/"
+      - "/Users/jonastemplestein/.orbstack/bin/"
+      - "/Users/jonastemplestein/.claude/plugins/cache/plannotator/plannotator/0.19.27/bin/"
+    searched_directories:
+      - "/Users/jonastemplestein/esp/esp-idf/components/espcoredump/xtensa-esp32s3-elf-gcc"
+      - "/Users/jonastemplestein/esp/esp-idf/components/partition_table/xtensa-esp32s3-elf-gcc"
+      - "/Users/jonastemplestein/esp/esp-idf/components/app_update/xtensa-esp32s3-elf-gcc"
+      - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf-gdb/14.2_20240403/xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-gcc"
+    found: "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/esp/esp-idf/components/espcoredump"
+        - "/Users/jonastemplestein/esp/esp-idf/components/partition_table"
+        - "/Users/jonastemplestein/esp/esp-idf/components/app_update"
+        - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf-gdb/14.2_20240403/xtensa-esp-elf-gdb/bin"
+        - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/openocd-esp32/v0.12.0-esp32-20250422/openocd-esp32/bin"
+        - "/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin"
+        - "/Users/jonastemplestein/esp/esp-idf/tools"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg0HWgR7k"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.claude/plugins/cache/plannotator/plannotator/0.19.27/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+  - kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:462 (find_file)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:500 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCCompilerId.c.in"
+    candidate_directories:
+      - "/opt/homebrew/share/cmake/Modules/"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/third_party/"
+    found: "/opt/homebrew/share/cmake/Modules/CMakeCCompilerId.c.in"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/esp/esp-idf/components/espcoredump"
+        - "/Users/jonastemplestein/esp/esp-idf/components/partition_table"
+        - "/Users/jonastemplestein/esp/esp-idf/components/app_update"
+        - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf-gdb/14.2_20240403/xtensa-esp-elf-gdb/bin"
+        - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/openocd-esp32/v0.12.0-esp32-20250422/openocd-esp32/bin"
+        - "/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin"
+        - "/Users/jonastemplestein/esp/esp-idf/tools"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg0HWgR7k"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.claude/plugins/cache/plannotator/plannotator/0.19.27/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+  - kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    message: |
+      Compiling the C compiler identification source file "CMakeCCompilerId.c" succeeded.
+      Compiler: /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc 
+      Build flags: -mlongcalls;-fno-builtin-memcpy;-fno-builtin-memset;-fno-builtin-bzero;-fno-builtin-stpcpy;-fno-builtin-strncpy
+      Id flags:  
+
+      The output was:
+      0
+
+
+      Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "a.out"
+
+      The C compiler identification is GNU, found in:
+        /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/CMakeFiles/4.2.3/CompilerIdC/a.out
+
+  - kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompiler.cmake:115 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:71 (_cmake_find_compiler_path)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    mode: "program"
+    variable: "CMAKE_CXX_COMPILER_WITH_PATH"
+    description: "Path to a program."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "xtensa-esp32s3-elf-g++"
+    candidate_directories:
+      - "/Users/jonastemplestein/esp/esp-idf/components/espcoredump/"
+      - "/Users/jonastemplestein/esp/esp-idf/components/partition_table/"
+      - "/Users/jonastemplestein/esp/esp-idf/components/app_update/"
+      - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf-gdb/14.2_20240403/xtensa-esp-elf-gdb/bin/"
+      - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/"
+      - "/Users/jonastemplestein/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/bin/"
+      - "/Users/jonastemplestein/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/bin/"
+      - "/Users/jonastemplestein/.espressif/tools/openocd-esp32/v0.12.0-esp32-20250422/openocd-esp32/bin/"
+      - "/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/"
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path/"
+      - "/Users/jonastemplestein/.grok/bin/"
+      - "/Users/jonastemplestein/.opencode/bin/"
+      - "/opt/homebrew/opt/ruby/bin/"
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin/"
+      - "/Users/jonastemplestein/.codeium/windsurf/bin/"
+      - "/Users/jonastemplestein/.bun/bin/"
+      - "/Users/jonastemplestein/bin/"
+      - "/Users/jonastemplestein/.local/bin/"
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/sbin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg0HWgR7k/"
+      - "/Users/jonastemplestein/.deno/bin/"
+      - "/Users/jonastemplestein/Library/pnpm/"
+      - "/Applications/Ghostty.app/Contents/MacOS/"
+      - "/Users/jonastemplestein/.orbstack/bin/"
+      - "/Users/jonastemplestein/.claude/plugins/cache/plannotator/plannotator/0.19.27/bin/"
+    searched_directories:
+      - "/Users/jonastemplestein/esp/esp-idf/components/espcoredump/xtensa-esp32s3-elf-g++"
+      - "/Users/jonastemplestein/esp/esp-idf/components/partition_table/xtensa-esp32s3-elf-g++"
+      - "/Users/jonastemplestein/esp/esp-idf/components/app_update/xtensa-esp32s3-elf-g++"
+      - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf-gdb/14.2_20240403/xtensa-esp-elf-gdb/bin/xtensa-esp32s3-elf-g++"
+    found: "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-g++"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/esp/esp-idf/components/espcoredump"
+        - "/Users/jonastemplestein/esp/esp-idf/components/partition_table"
+        - "/Users/jonastemplestein/esp/esp-idf/components/app_update"
+        - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf-gdb/14.2_20240403/xtensa-esp-elf-gdb/bin"
+        - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/openocd-esp32/v0.12.0-esp32-20250422/openocd-esp32/bin"
+        - "/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin"
+        - "/Users/jonastemplestein/esp/esp-idf/tools"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg0HWgR7k"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.claude/plugins/cache/plannotator/plannotator/0.19.27/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+  - kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:462 (find_file)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:500 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:8 (CMAKE_DETERMINE_COMPILER_ID_BUILD)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    mode: "file"
+    variable: "src_in"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CMakeCXXCompilerId.cpp.in"
+    candidate_directories:
+      - "/opt/homebrew/share/cmake/Modules/"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/third_party/"
+    found: "/opt/homebrew/share/cmake/Modules/CMakeCXXCompilerId.cpp.in"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/esp/esp-idf/components/espcoredump"
+        - "/Users/jonastemplestein/esp/esp-idf/components/partition_table"
+        - "/Users/jonastemplestein/esp/esp-idf/components/app_update"
+        - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf-gdb/14.2_20240403/xtensa-esp-elf-gdb/bin"
+        - "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/riscv32-esp-elf/esp-14.2.0_20241119/riscv32-esp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/esp32ulp-elf/2.38_20240113/esp32ulp-elf/bin"
+        - "/Users/jonastemplestein/.espressif/tools/openocd-esp32/v0.12.0-esp32-20250422/openocd-esp32/bin"
+        - "/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin"
+        - "/Users/jonastemplestein/esp/esp-idf/tools"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg0HWgR7k"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.claude/plugins/cache/plannotator/plannotator/0.19.27/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+  - kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    message: |
+      Compiling the CXX compiler identification source file "CMakeCXXCompilerId.cpp" succeeded.
+      Compiler: /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-g++ 
+      Build flags: -mlongcalls;-fno-builtin-memcpy;-fno-builtin-memset;-fno-builtin-bzero;-fno-builtin-stpcpy;-fno-builtin-strncpy
+      Id flags:  
+
+      The output was:
+      0
+
+
+      Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "a.out"
+
+      The CXX compiler identification is GNU, found in:
+        /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/CMakeFiles/4.2.3/CompilerIdCXX/a.out
+
+  - kind: "try_compile-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    checks:
+      - "Detecting C compiler ABI info"
+    directories:
+      source: "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/CMakeFiles/CMakeScratch/TryCompile-1Sl8Z8"
+      binary: "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/CMakeFiles/CMakeScratch/TryCompile-1Sl8Z8"
+    cmakeVariables:
+      CMAKE_C_FLAGS: "-mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy"
+      CMAKE_C_FLAGS_DEBUG: "-g"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/Users/jonastemplestein/esp/esp-idf/tools/cmake;/Users/jonastemplestein/esp/esp-idf/tools/cmake/third_party"
+    buildResult:
+      variable: "CMAKE_C_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/CMakeFiles/CMakeScratch/TryCompile-1Sl8Z8'
+
+        Run Build Command(s): /opt/homebrew/bin/ninja -v cmTC_5bb96
+        [1/2] /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc   -mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy    -v -o CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj -c /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c
+        Using built-in specs.
+        COLLECT_GCC=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp-elf-gcc
+        Target: xtensa-esp-elf
+        Configured with: /builds/idf/crosstool-NG/.build/xtensa-esp-elf/src/gcc/configure --build=x86_64-build_pc-linux-gnu --host=aarch64-host_apple-darwin21.1 --target=xtensa-esp-elf --prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --exec_prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --with-local-prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-sysroot=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-native-system-header-dir=/include --with-newlib --enable-threads=no --disable-shared --with-pkgversion='crosstool-NG esp-14.2.0_20241119' --disable-__cxa_atexit --enable-cxx-flags=-ffunction-sections --disable-libgomp --disable-libmudflap --disable-libmpx --disable-libssp --disable-libquadmath --disable-libquadmath-support --disable-libstdcxx-verbose --with-gmp=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpfr=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpc=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-isl=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --enable-lto --enable-target-optspace --without-long-double-128 --disable-nls --enable-multiarch --enable-languages=c,c++ --disable-libstdcxx-verbose --enable-threads=posix --enable-gcov-custom-rtio --enable-libstdcxx-time=yes
+        Thread model: posix
+        Supported LTO compression algorithms: zlib
+        gcc version 14.2.0 (crosstool-NG esp-14.2.0_20241119) 
+        COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_5bb96.dir/'
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/cc1 -quiet -v -imultilib esp32s3 -iprefix /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/ -isysroot /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_5bb96.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mdynconfig=xtensa_esp32s3.so -mlongcalls -version -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy -o /var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccEU5K6O.s
+        GNU C17 (crosstool-NG esp-14.2.0_20241119) version 14.2.0 (xtensa-esp-elf)
+        	compiled by GNU C version Debian Clang 11.0.1, GMP version 6.2.1, MPFR version 4.2.1, MPC version 1.2.1, isl version isl-0.26-GMP
+
+        GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/include"
+        ignoring nonexistent directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf/include"
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed"
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include"
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/include"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include
+        End of search list.
+        Compiler executable checksum: af69fd9f9a101617223bab54c4450538
+        COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_5bb96.dir/'
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/as --traditional-format --longcalls --dynconfig=xtensa_esp32s3.so -o CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj /var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccEU5K6O.s
+        COMPILER_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/
+        LIBRARY_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib/
+        COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.'
+        [2/2] : && /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc -mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy -v CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj -o cmTC_5bb96   && :
+        Using built-in specs.
+        COLLECT_GCC=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp-elf-gcc
+        COLLECT_LTO_WRAPPER=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/lto-wrapper
+        Target: xtensa-esp-elf
+        Configured with: /builds/idf/crosstool-NG/.build/xtensa-esp-elf/src/gcc/configure --build=x86_64-build_pc-linux-gnu --host=aarch64-host_apple-darwin21.1 --target=xtensa-esp-elf --prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --exec_prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --with-local-prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-sysroot=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-native-system-header-dir=/include --with-newlib --enable-threads=no --disable-shared --with-pkgversion='crosstool-NG esp-14.2.0_20241119' --disable-__cxa_atexit --enable-cxx-flags=-ffunction-sections --disable-libgomp --disable-libmudflap --disable-libmpx --disable-libssp --disable-libquadmath --disable-libquadmath-support --disable-libstdcxx-verbose --with-gmp=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpfr=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpc=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-isl=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --enable-lto --enable-target-optspace --without-long-double-128 --disable-nls --enable-multiarch --enable-languages=c,c++ --disable-libstdcxx-verbose --enable-threads=posix --enable-gcov-custom-rtio --enable-libstdcxx-time=yes
+        Thread model: posix
+        Supported LTO compression algorithms: zlib
+        gcc version 14.2.0 (crosstool-NG esp-14.2.0_20241119) 
+        COMPILER_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/
+        LIBRARY_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib/
+        COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'cmTC_5bb96' '-dumpdir' 'cmTC_5bb96.'
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/collect2 -plugin /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/liblto_plugin.so -plugin-opt=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccthuTgy.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lnosys -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc --sysroot=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf --dynconfig=xtensa_esp32s3.so -o cmTC_5bb96 /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/crt0.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj -lgcc -lc -lnosys -lc -lgcc /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o
+        COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'cmTC_5bb96' '-dumpdir' 'cmTC_5bb96.'
+
+      exitCode: 0
+  - kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:217 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    message: |
+      Parsed C implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include]
+          add: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed]
+          add: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include]
+        end of search list found
+        collapse include dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include]
+        collapse include dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include-fixed]
+        collapse include dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include]
+        implicit include dirs: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include-fixed;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include]
+
+  - kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    message: |
+      Parsed C implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
+        ignore line: [Change Dir: '/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/CMakeFiles/CMakeScratch/TryCompile-1Sl8Z8']
+        ignore line: []
+        ignore line: [Run Build Command(s): /opt/homebrew/bin/ninja -v cmTC_5bb96]
+        ignore line: [[1/2] /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc   -mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy    -v -o CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj -c /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_GCC=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp-elf-gcc]
+        ignore line: [Target: xtensa-esp-elf]
+        ignore line: [Configured with: /builds/idf/crosstool-NG/.build/xtensa-esp-elf/src/gcc/configure --build=x86_64-build_pc-linux-gnu --host=aarch64-host_apple-darwin21.1 --target=xtensa-esp-elf --prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --exec_prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --with-local-prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-sysroot=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-native-system-header-dir=/include --with-newlib --enable-threads=no --disable-shared --with-pkgversion='crosstool-NG esp-14.2.0_20241119' --disable-__cxa_atexit --enable-cxx-flags=-ffunction-sections --disable-libgomp --disable-libmudflap --disable-libmpx --disable-libssp --disable-libquadmath --disable-libquadmath-support --disable-libstdcxx-verbose --with-gmp=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpfr=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpc=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-isl=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --enable-lto --enable-target-optspace --without-long-double-128 --disable-nls --enable-multiarch --enable-languages=c c++ --disable-libstdcxx-verbose --enable-threads=posix --enable-gcov-custom-rtio --enable-libstdcxx-time=yes]
+        ignore line: [Thread model: posix]
+        ignore line: [Supported LTO compression algorithms: zlib]
+        ignore line: [gcc version 14.2.0 (crosstool-NG esp-14.2.0_20241119) ]
+        ignore line: [COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_5bb96.dir/']
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/cc1 -quiet -v -imultilib esp32s3 -iprefix /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/ -isysroot /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf /opt/homebrew/share/cmake/Modules/CMakeCCompilerABI.c -quiet -dumpdir CMakeFiles/cmTC_5bb96.dir/ -dumpbase CMakeCCompilerABI.c.c -dumpbase-ext .c -mdynconfig=xtensa_esp32s3.so -mlongcalls -version -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy -o /var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccEU5K6O.s]
+        ignore line: [GNU C17 (crosstool-NG esp-14.2.0_20241119) version 14.2.0 (xtensa-esp-elf)]
+        ignore line: [	compiled by GNU C version Debian Clang 11.0.1  GMP version 6.2.1  MPFR version 4.2.1  MPC version 1.2.1  isl version isl-0.26-GMP]
+        ignore line: []
+        ignore line: [GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/include"]
+        ignore line: [ignoring nonexistent directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf/include"]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed"]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include"]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/include"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include]
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed]
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include]
+        ignore line: [End of search list.]
+        ignore line: [Compiler executable checksum: af69fd9f9a101617223bab54c4450538]
+        ignore line: [COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_5bb96.dir/']
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/as --traditional-format --longcalls --dynconfig=xtensa_esp32s3.so -o CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj /var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccEU5K6O.s]
+        ignore line: [COMPILER_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/]
+        ignore line: [LIBRARY_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib/]
+        ignore line: [COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.']
+        ignore line: [[2/2] : && /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-gcc -mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy -v CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj -o cmTC_5bb96   && :]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_GCC=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp-elf-gcc]
+        ignore line: [COLLECT_LTO_WRAPPER=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/lto-wrapper]
+        ignore line: [Target: xtensa-esp-elf]
+        ignore line: [Configured with: /builds/idf/crosstool-NG/.build/xtensa-esp-elf/src/gcc/configure --build=x86_64-build_pc-linux-gnu --host=aarch64-host_apple-darwin21.1 --target=xtensa-esp-elf --prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --exec_prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --with-local-prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-sysroot=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-native-system-header-dir=/include --with-newlib --enable-threads=no --disable-shared --with-pkgversion='crosstool-NG esp-14.2.0_20241119' --disable-__cxa_atexit --enable-cxx-flags=-ffunction-sections --disable-libgomp --disable-libmudflap --disable-libmpx --disable-libssp --disable-libquadmath --disable-libquadmath-support --disable-libstdcxx-verbose --with-gmp=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpfr=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpc=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-isl=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --enable-lto --enable-target-optspace --without-long-double-128 --disable-nls --enable-multiarch --enable-languages=c c++ --disable-libstdcxx-verbose --enable-threads=posix --enable-gcov-custom-rtio --enable-libstdcxx-time=yes]
+        ignore line: [Thread model: posix]
+        ignore line: [Supported LTO compression algorithms: zlib]
+        ignore line: [gcc version 14.2.0 (crosstool-NG esp-14.2.0_20241119) ]
+        ignore line: [COMPILER_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/]
+        ignore line: [LIBRARY_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib/]
+        ignore line: [COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'cmTC_5bb96' '-dumpdir' 'cmTC_5bb96.']
+        link line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/collect2 -plugin /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/liblto_plugin.so -plugin-opt=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccthuTgy.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lnosys -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc --sysroot=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf --dynconfig=xtensa_esp32s3.so -o cmTC_5bb96 /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/crt0.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj -lgcc -lc -lnosys -lc -lgcc /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o]
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/collect2] ==> ignore
+          arg [-plugin] ==> ignore
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/liblto_plugin.so] ==> ignore
+          arg [-plugin-opt=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/lto-wrapper] ==> ignore
+          arg [-plugin-opt=-fresolution=/var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccthuTgy.res] ==> ignore
+          arg [-plugin-opt=-pass-through=-lgcc] ==> ignore
+          arg [-plugin-opt=-pass-through=-lc] ==> ignore
+          arg [-plugin-opt=-pass-through=-lnosys] ==> ignore
+          arg [-plugin-opt=-pass-through=-lc] ==> ignore
+          arg [-plugin-opt=-pass-through=-lgcc] ==> ignore
+          arg [--sysroot=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf] ==> ignore
+          arg [--dynconfig=xtensa_esp32s3.so] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_5bb96] ==> ignore
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/crt0.o] ==> obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/crt0.o]
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o] ==> obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o]
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o] ==> obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib]
+          arg [CMakeFiles/cmTC_5bb96.dir/CMakeCCompilerABI.c.obj] ==> ignore
+          arg [-lgcc] ==> lib [gcc]
+          arg [-lc] ==> lib [c]
+          arg [-lnosys] ==> lib [nosys]
+          arg [-lc] ==> lib [c]
+          arg [-lgcc] ==> lib [gcc]
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o] ==> obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o]
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o] ==> obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o]
+        ignore line: [COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'cmTC_5bb96' '-dumpdir' 'cmTC_5bb96.']
+        ignore line: []
+        ignore line: []
+        collapse obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/crt0.o] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib/esp32s3/crt0.o]
+        collapse obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o]
+        collapse obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o]
+        collapse obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o]
+        collapse obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib/esp32s3]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib/esp32s3]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/usr/lib]
+        implicit libs: [gcc;c;nosys;c;gcc]
+        implicit objs: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib/esp32s3/crt0.o;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o]
+        implicit dirs: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib/esp32s3;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/usr/lib]
+        implicit fwks: []
+
+  - kind: "try_compile-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    checks:
+      - "Detecting CXX compiler ABI info"
+    directories:
+      source: "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/CMakeFiles/CMakeScratch/TryCompile-3R9iB9"
+      binary: "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/CMakeFiles/CMakeScratch/TryCompile-3R9iB9"
+    cmakeVariables:
+      CMAKE_CXX_FLAGS: "-mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy"
+      CMAKE_CXX_FLAGS_DEBUG: "-g"
+      CMAKE_CXX_SCAN_FOR_MODULES: "OFF"
+      CMAKE_EXE_LINKER_FLAGS: ""
+      CMAKE_MODULE_PATH: "/Users/jonastemplestein/esp/esp-idf/tools/cmake;/Users/jonastemplestein/esp/esp-idf/tools/cmake/third_party"
+    buildResult:
+      variable: "CMAKE_CXX_ABI_COMPILED"
+      cached: true
+      stdout: |
+        Change Dir: '/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/CMakeFiles/CMakeScratch/TryCompile-3R9iB9'
+
+        Run Build Command(s): /opt/homebrew/bin/ninja -v cmTC_973a2
+        [1/2] /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-g++   -mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy    -v -o CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj -c /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp
+        Using built-in specs.
+        COLLECT_GCC=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp-elf-g++
+        Target: xtensa-esp-elf
+        Configured with: /builds/idf/crosstool-NG/.build/xtensa-esp-elf/src/gcc/configure --build=x86_64-build_pc-linux-gnu --host=aarch64-host_apple-darwin21.1 --target=xtensa-esp-elf --prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --exec_prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --with-local-prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-sysroot=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-native-system-header-dir=/include --with-newlib --enable-threads=no --disable-shared --with-pkgversion='crosstool-NG esp-14.2.0_20241119' --disable-__cxa_atexit --enable-cxx-flags=-ffunction-sections --disable-libgomp --disable-libmudflap --disable-libmpx --disable-libssp --disable-libquadmath --disable-libquadmath-support --disable-libstdcxx-verbose --with-gmp=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpfr=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpc=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-isl=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --enable-lto --enable-target-optspace --without-long-double-128 --disable-nls --enable-multiarch --enable-languages=c,c++ --disable-libstdcxx-verbose --enable-threads=posix --enable-gcov-custom-rtio --enable-libstdcxx-time=yes
+        Thread model: posix
+        Supported LTO compression algorithms: zlib
+        gcc version 14.2.0 (crosstool-NG esp-14.2.0_20241119) 
+        COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_973a2.dir/'
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/cc1plus -quiet -v -imultilib esp32s3 -iprefix /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/ -isysroot /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_973a2.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -mdynconfig=xtensa_esp32s3.so -mlongcalls -version -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy -o /var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccQq8mNV.s
+        GNU C++17 (crosstool-NG esp-14.2.0_20241119) version 14.2.0 (xtensa-esp-elf)
+        	compiled by GNU C version Debian Clang 11.0.1, GMP version 6.2.1, MPFR version 4.2.1, MPC version 1.2.1, isl version isl-0.26-GMP
+
+        GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0"
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf/esp32s3"
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/backward"
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/include"
+        ignoring nonexistent directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf/include"
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed"
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include"
+        ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/include"
+        #include "..." search starts here:
+        #include <...> search starts here:
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf/esp32s3
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/backward
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include
+        End of search list.
+        Compiler executable checksum: f95fb27b9d6b101b60d0ece4239a97f9
+        COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_973a2.dir/'
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/as --traditional-format --longcalls --dynconfig=xtensa_esp32s3.so -o CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj /var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccQq8mNV.s
+        COMPILER_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/
+        LIBRARY_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib/
+        COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.'
+        [2/2] : && /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-g++ -mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy -v CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_973a2   && :
+        Using built-in specs.
+        COLLECT_GCC=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp-elf-g++
+        COLLECT_LTO_WRAPPER=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/lto-wrapper
+        Target: xtensa-esp-elf
+        Configured with: /builds/idf/crosstool-NG/.build/xtensa-esp-elf/src/gcc/configure --build=x86_64-build_pc-linux-gnu --host=aarch64-host_apple-darwin21.1 --target=xtensa-esp-elf --prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --exec_prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --with-local-prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-sysroot=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-native-system-header-dir=/include --with-newlib --enable-threads=no --disable-shared --with-pkgversion='crosstool-NG esp-14.2.0_20241119' --disable-__cxa_atexit --enable-cxx-flags=-ffunction-sections --disable-libgomp --disable-libmudflap --disable-libmpx --disable-libssp --disable-libquadmath --disable-libquadmath-support --disable-libstdcxx-verbose --with-gmp=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpfr=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpc=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-isl=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --enable-lto --enable-target-optspace --without-long-double-128 --disable-nls --enable-multiarch --enable-languages=c,c++ --disable-libstdcxx-verbose --enable-threads=posix --enable-gcov-custom-rtio --enable-libstdcxx-time=yes
+        Thread model: posix
+        Supported LTO compression algorithms: zlib
+        gcc version 14.2.0 (crosstool-NG esp-14.2.0_20241119) 
+        COMPILER_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/
+        LIBRARY_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib/
+        COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'cmTC_973a2' '-dumpdir' 'cmTC_973a2.'
+         /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/collect2 -plugin /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/liblto_plugin.so -plugin-opt=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//cckhDtFK.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lnosys -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc --sysroot=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf --dynconfig=xtensa_esp32s3.so -o cmTC_973a2 /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/crt0.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj -lstdc++ -lm -lgcc -lc -lnosys -lc -lgcc /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o
+        COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'cmTC_973a2' '-dumpdir' 'cmTC_973a2.'
+
+      exitCode: 0
+  - kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:217 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    message: |
+      Parsed CXX implicit include dir info: rv=done
+        found start of include info
+        found start of implicit include info
+          add: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0]
+          add: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf/esp32s3]
+          add: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/backward]
+          add: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include]
+          add: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed]
+          add: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include]
+        end of search list found
+        collapse include dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0]
+        collapse include dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf/esp32s3] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf/esp32s3]
+        collapse include dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/backward] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/backward]
+        collapse include dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include]
+        collapse include dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include-fixed]
+        collapse include dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include]
+        implicit include dirs: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf/esp32s3;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include/c++/14.2.0/backward;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/include-fixed;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/include]
+
+  - kind: "message-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
+      - "/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
+      - "/Users/jonastemplestein/esp/esp-idf/tools/cmake/project.cmake:571 (__project)"
+      - "CMakeLists.txt:18 (project)"
+    message: |
+      Parsed CXX implicit link information:
+        link line regex: [^( *|.*[/\\])(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)|CMAKE_LINK_STARTFILE-NOTFOUND|([^/\\]+-)?ld|collect2)[^/\\]*( |$)]
+        linker tool regex: [^[ 	]*(->|"|[0-9]+>[ 	-]*Build:[ 	0-9]+ ms[ 	]*)?[ 	]*(([^"]*[/\\])?(ld[0-9]*(|\\.[a-rt-z][a-z]*|\\.s[a-np-z][a-z]*|\\.so[a-z]+)))("|,| |$)]
+        ignore line: [Change Dir: '/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/CMakeFiles/CMakeScratch/TryCompile-3R9iB9']
+        ignore line: []
+        ignore line: [Run Build Command(s): /opt/homebrew/bin/ninja -v cmTC_973a2]
+        ignore line: [[1/2] /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-g++   -mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy    -v -o CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj -c /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_GCC=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp-elf-g++]
+        ignore line: [Target: xtensa-esp-elf]
+        ignore line: [Configured with: /builds/idf/crosstool-NG/.build/xtensa-esp-elf/src/gcc/configure --build=x86_64-build_pc-linux-gnu --host=aarch64-host_apple-darwin21.1 --target=xtensa-esp-elf --prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --exec_prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --with-local-prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-sysroot=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-native-system-header-dir=/include --with-newlib --enable-threads=no --disable-shared --with-pkgversion='crosstool-NG esp-14.2.0_20241119' --disable-__cxa_atexit --enable-cxx-flags=-ffunction-sections --disable-libgomp --disable-libmudflap --disable-libmpx --disable-libssp --disable-libquadmath --disable-libquadmath-support --disable-libstdcxx-verbose --with-gmp=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpfr=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpc=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-isl=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --enable-lto --enable-target-optspace --without-long-double-128 --disable-nls --enable-multiarch --enable-languages=c c++ --disable-libstdcxx-verbose --enable-threads=posix --enable-gcov-custom-rtio --enable-libstdcxx-time=yes]
+        ignore line: [Thread model: posix]
+        ignore line: [Supported LTO compression algorithms: zlib]
+        ignore line: [gcc version 14.2.0 (crosstool-NG esp-14.2.0_20241119) ]
+        ignore line: [COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_973a2.dir/']
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/cc1plus -quiet -v -imultilib esp32s3 -iprefix /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/ -isysroot /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf /opt/homebrew/share/cmake/Modules/CMakeCXXCompilerABI.cpp -quiet -dumpdir CMakeFiles/cmTC_973a2.dir/ -dumpbase CMakeCXXCompilerABI.cpp.cpp -dumpbase-ext .cpp -mdynconfig=xtensa_esp32s3.so -mlongcalls -version -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy -o /var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccQq8mNV.s]
+        ignore line: [GNU C++17 (crosstool-NG esp-14.2.0_20241119) version 14.2.0 (xtensa-esp-elf)]
+        ignore line: [	compiled by GNU C version Debian Clang 11.0.1  GMP version 6.2.1  MPFR version 4.2.1  MPC version 1.2.1  isl version isl-0.26-GMP]
+        ignore line: []
+        ignore line: [GGC heuristics: --param ggc-min-expand=100 --param ggc-min-heapsize=131072]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0"]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf/esp32s3"]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/backward"]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/include"]
+        ignore line: [ignoring nonexistent directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf/include"]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed"]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/../../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include"]
+        ignore line: [ignoring duplicate directory "/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/include"]
+        ignore line: [#include "..." search starts here:]
+        ignore line: [#include <...> search starts here:]
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0]
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/xtensa-esp-elf/esp32s3]
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include/c++/14.2.0/backward]
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include]
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/include-fixed]
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/include]
+        ignore line: [End of search list.]
+        ignore line: [Compiler executable checksum: f95fb27b9d6b101b60d0ece4239a97f9]
+        ignore line: [COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_973a2.dir/']
+        ignore line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/as --traditional-format --longcalls --dynconfig=xtensa_esp32s3.so -o CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj /var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//ccQq8mNV.s]
+        ignore line: [COMPILER_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/]
+        ignore line: [LIBRARY_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib/]
+        ignore line: [COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj' '-c' '-dumpdir' 'CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.']
+        ignore line: [[2/2] : && /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp32s3-elf-g++ -mlongcalls  -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-bzero -fno-builtin-stpcpy -fno-builtin-strncpy -v CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj -o cmTC_973a2   && :]
+        ignore line: [Using built-in specs.]
+        ignore line: [COLLECT_GCC=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/xtensa-esp-elf-g++]
+        ignore line: [COLLECT_LTO_WRAPPER=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/lto-wrapper]
+        ignore line: [Target: xtensa-esp-elf]
+        ignore line: [Configured with: /builds/idf/crosstool-NG/.build/xtensa-esp-elf/src/gcc/configure --build=x86_64-build_pc-linux-gnu --host=aarch64-host_apple-darwin21.1 --target=xtensa-esp-elf --prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --exec_prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf --with-local-prefix=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-sysroot=/builds/idf/crosstool-NG/builds/xtensa-esp-elf/xtensa-esp-elf --with-native-system-header-dir=/include --with-newlib --enable-threads=no --disable-shared --with-pkgversion='crosstool-NG esp-14.2.0_20241119' --disable-__cxa_atexit --enable-cxx-flags=-ffunction-sections --disable-libgomp --disable-libmudflap --disable-libmpx --disable-libssp --disable-libquadmath --disable-libquadmath-support --disable-libstdcxx-verbose --with-gmp=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpfr=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-mpc=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --with-isl=/builds/idf/crosstool-NG/.build/xtensa-esp-elf/buildtools/complibs-host --enable-lto --enable-target-optspace --without-long-double-128 --disable-nls --enable-multiarch --enable-languages=c c++ --disable-libstdcxx-verbose --enable-threads=posix --enable-gcov-custom-rtio --enable-libstdcxx-time=yes]
+        ignore line: [Thread model: posix]
+        ignore line: [Supported LTO compression algorithms: zlib]
+        ignore line: [gcc version 14.2.0 (crosstool-NG esp-14.2.0_20241119) ]
+        ignore line: [COMPILER_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/bin/]
+        ignore line: [LIBRARY_PATH=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/:/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib/]
+        ignore line: [COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'cmTC_973a2' '-dumpdir' 'cmTC_973a2.']
+        link line: [ /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/collect2 -plugin /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/liblto_plugin.so -plugin-opt=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/lto-wrapper -plugin-opt=-fresolution=/var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//cckhDtFK.res -plugin-opt=-pass-through=-lgcc -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lnosys -plugin-opt=-pass-through=-lc -plugin-opt=-pass-through=-lgcc --sysroot=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf --dynconfig=xtensa_esp32s3.so -o cmTC_973a2 /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/crt0.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0 -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib -L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj -lstdc++ -lm -lgcc -lc -lnosys -lc -lgcc /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o /Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o]
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/collect2] ==> ignore
+          arg [-plugin] ==> ignore
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/liblto_plugin.so] ==> ignore
+          arg [-plugin-opt=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../libexec/gcc/xtensa-esp-elf/14.2.0/lto-wrapper] ==> ignore
+          arg [-plugin-opt=-fresolution=/var/folders/p8/rkz0wfgd3tsfwzm9zk7s_v5r0000gn/T//cckhDtFK.res] ==> ignore
+          arg [-plugin-opt=-pass-through=-lgcc] ==> ignore
+          arg [-plugin-opt=-pass-through=-lc] ==> ignore
+          arg [-plugin-opt=-pass-through=-lnosys] ==> ignore
+          arg [-plugin-opt=-pass-through=-lc] ==> ignore
+          arg [-plugin-opt=-pass-through=-lgcc] ==> ignore
+          arg [--sysroot=/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf] ==> ignore
+          arg [--dynconfig=xtensa_esp32s3.so] ==> ignore
+          arg [-o] ==> ignore
+          arg [cmTC_973a2] ==> ignore
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/crt0.o] ==> obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/crt0.o]
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o] ==> obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o]
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o] ==> obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib]
+          arg [-L/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib] ==> dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib]
+          arg [CMakeFiles/cmTC_973a2.dir/CMakeCXXCompilerABI.cpp.obj] ==> ignore
+          arg [-lstdc++] ==> lib [stdc++]
+          arg [-lm] ==> lib [m]
+          arg [-lgcc] ==> lib [gcc]
+          arg [-lc] ==> lib [c]
+          arg [-lnosys] ==> lib [nosys]
+          arg [-lc] ==> lib [c]
+          arg [-lgcc] ==> lib [gcc]
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o] ==> obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o]
+          arg [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o] ==> obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o]
+        ignore line: [COLLECT_GCC_OPTIONS='-mdynconfig=xtensa_esp32s3.so' '-mlongcalls' '-fno-builtin-memcpy' '-fno-builtin-memset' '-fno-builtin-bzero' '-fno-builtin-stpcpy' '-fno-builtin-strncpy' '-v' '-o' 'cmTC_973a2' '-dumpdir' 'cmTC_973a2.']
+        ignore line: []
+        ignore line: []
+        collapse obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3/crt0.o] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib/esp32s3/crt0.o]
+        collapse obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o]
+        collapse obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o]
+        collapse obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o]
+        collapse obj [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/esp32s3] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib/esp32s3] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib/esp32s3]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib/esp32s3] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib/esp32s3]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../lib/gcc/xtensa-esp-elf/14.2.0/../../../../xtensa-esp-elf/lib] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/lib] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib]
+        collapse library dir [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/bin/../xtensa-esp-elf/usr/lib] ==> [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/usr/lib]
+        implicit libs: [stdc++;m;gcc;c;nosys;c;gcc]
+        implicit objs: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib/esp32s3/crt0.o;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crti.o;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtbegin.o;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtend.o;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3/crtn.o]
+        implicit dirs: [/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0/esp32s3;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib/esp32s3;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc/xtensa-esp-elf/14.2.0;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/lib/gcc;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/lib;/Users/jonastemplestein/.espressif/tools/xtensa-esp-elf/esp-14.2.0_20241119/xtensa-esp-elf/xtensa-esp-elf/usr/lib]
+        implicit fwks: []
+...

@@ -31,6 +31,8 @@ export interface DeterministicToneOptions {
   sampleRateHz: number;
 }
 
+export type GrokServerVadProfile = "low-level-aec" | "xmos-aec-ns";
+
 export interface GrokRealtimeVoiceOptions {
   connectTimeoutMs?: number;
   createWebSocket?: (url: string, protocols: readonly string[]) => WebSocket;
@@ -39,6 +41,7 @@ export interface GrokRealtimeVoiceOptions {
   model?: string;
   onStage?: (stage: GrokRealtimeVoiceStage) => void;
   sampleRateHz: number;
+  serverVadProfile?: GrokServerVadProfile;
   turnDetection: "manual" | "server-vad";
   voice?: string;
 }
@@ -412,7 +415,7 @@ export async function connectGrokRealtimeVoice(
               type: "function",
             },
           ],
-          turn_detection: providerTurnDetection(options.turnDetection),
+          turn_detection: providerTurnDetection(options.turnDetection, options.serverVadProfile),
           voice: options.voice ?? "eve",
         },
       }),
@@ -425,33 +428,44 @@ export async function connectGrokRealtimeVoice(
   }
 }
 
-function providerTurnDetection(mode: GrokRealtimeVoiceOptions["turnDetection"]) {
-  if (mode === "manual") return { type: null } as const;
+function providerTurnDetection(
+  mode: GrokRealtimeVoiceOptions["turnDetection"],
+  profile: GrokServerVadProfile | undefined,
+) {
+  if (mode === "manual") {
+    if (profile !== undefined) {
+      throw new Error("A manual Grok session cannot configure a server-VAD profile.");
+    }
+    return { type: null } as const;
+  }
   if (mode === "server-vad") {
     /*
-     * xAI defaults `threshold` to 0.85. A physical CoreS3 measurement showed
-     * the AEC-clean Mac prompt at roughly 2,200/32,767 peak while preserving
-     * its near-field energy, yet that default emitted no speech-start event.
-     * Lowering the provider policy is preferable to multiplying every sample
-     * in firmware: it preserves AEC headroom, avoids clipping loud nearby
-     * speech, and leaves one provider-owned tuning point for every continuous
-     * AEC device. The one-second tail favors complete conversational turns;
-     * 400 ms of prefix protects the first phoneme at this lower threshold.
+     * The one-second tail favors complete conversational turns; 400 ms of
+     * prefix protects the first phoneme. Activation is intentionally a named
+     * platform profile instead of one global number: the two current AEC
+     * sources have materially different post-DSP levels.
      */
+    if (profile !== "low-level-aec" && profile !== "xmos-aec-ns") {
+      throw new Error("A server-VAD Grok session requires a calibrated input profile.");
+    }
     return {
       prefix_padding_ms: 400,
       silence_duration_ms: 1_000,
       /*
-       * This is a measured hardware calibration, not an arbitrary departure
-       * from xAI's default. A production StackChan run at 0.5 delivered 4,930
-       * current clean-AEC frames and a 12,670 peak yet produced no VAD edge.
-       * Start at 0.2—still above xAI's documented 0.1 minimum—before considering
-     * firmware gain, which would also amplify residual echo and background.
-     * The next production run at 0.2 retained all three seconds of clean AEC
-     * speech in the device signal window, but xAI closed the VAD item after
-     * only "Reply exactly". Use the documented 0.1 floor so the provider owns
-     * that sensitivity without perturbing the shared hardware/DSP samples.
-     */
+       * StackChan's measured clean-AEC stream needs xAI's documented 0.1
+       * floor: 0.5 received 4,930 current frames with a 12,670 peak yet emitted
+       * no speech edge. HAVPE's earlier XMOS AGC tap made 0.1 produce one
+       * 95-second ambient utterance, but that was a different signal contract:
+       * its final gain amplified near-end and echo residue roughly 100x. After
+       * moving to AEC+IC+NS, the first physical run peaked at only 557/32768
+       * and 0.85 emitted no speech edge across 4,772 losslessly forwarded
+       * frames. The documented 0.1 floor is therefore the measured next
+       * calibration point. The named profiles remain distinct because their
+       * DSP provenance and future calibration remain independently reviewable.
+       * HAVPE separately uses a measured fixed ×16 userspace multiplier; the
+       * bridge retains its gained peak/RMS and zero-tolerance clipping counter
+       * so level placement cannot become an invisible transport mutation.
+       */
       threshold: 0.1,
       type: "server_vad",
     } as const;

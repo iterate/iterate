@@ -16,6 +16,7 @@ const runtimeSourceNames = [
   "provider-event-stream.ts",
   "providers.ts",
   "routes.ts",
+  "server-vad-policy.ts",
   "worker.ts",
   "workerd-globals.d.ts",
 ] as const;

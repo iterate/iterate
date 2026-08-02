@@ -145,6 +145,7 @@ describe("userspace PCM providers", () => {
         value: "server-vad-client-secret",
       },
       sampleRateHz: 16_000,
+      serverVadProfile: "low-level-aec",
       turnDetection: "server-vad",
     });
 
@@ -169,7 +170,41 @@ describe("userspace PCM providers", () => {
     expect(update.session.turn_detection).toEqual({
       prefix_padding_ms: 400,
       silence_duration_ms: 1_000,
-            threshold: 0.1,
+      threshold: 0.1,
+      type: "server_vad",
+    });
+  });
+
+  test("uses the measured VAD floor for HAVPE's low-level pre-AGC tap", async () => {
+    /*
+     * The prior HAVPE AGC tap made 0.1 turn ordinary background conversation
+     * into one 95-second utterance. Moving to NS removed that final ~100x gain;
+     * with the unchanged 0.85 threshold, a physical prompt peaked at 557 and
+     * produced no speech edge across 4,772 losslessly forwarded frames. Use
+     * xAI's documented 0.1 floor for this newly measured low-level contract.
+     */
+    const socket = new FakeProviderSocket("wss://api.x.ai/v1/realtime");
+    await connectGrokRealtimeVoice({
+      createWebSocket: () => {
+        queueMicrotask(() => socket.open());
+        return socket as unknown as WebSocket;
+      },
+      credential: {
+        expiresAtEpochSeconds: Math.ceil(Date.now() / 1_000) + 3_600,
+        value: "xmos-server-vad-client-secret",
+      },
+      sampleRateHz: 16_000,
+      serverVadProfile: "xmos-aec-ns",
+      turnDetection: "server-vad",
+    });
+
+    const update = JSON.parse(String(socket.sent[0])) as {
+      session: { turn_detection: Record<string, unknown> };
+    };
+    expect(update.session.turn_detection).toEqual({
+      prefix_padding_ms: 400,
+      silence_duration_ms: 1_000,
+      threshold: 0.1,
       type: "server_vad",
     });
   });

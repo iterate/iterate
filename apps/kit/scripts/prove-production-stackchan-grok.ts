@@ -15,7 +15,11 @@ import {
   type DeviceRuntimeMetrics,
 } from "../src/device/device-runtime-log.ts";
 import { parseKitControlDiagnostics } from "../src/device/kit-control-diagnostics.ts";
-import type { KitAecMetrics, KitControlDiagnostics } from "../src/device/kit-device-contract.ts";
+import type {
+  KitAecMetrics,
+  KitControlDiagnostics,
+  KitRawCleanAecMetrics,
+} from "../src/device/kit-device-contract.ts";
 import { MacOsPcm16Capture } from "../src/device/macos-pcm16-capture.ts";
 import {
   buildPhysicalNetworkRunArtifact,
@@ -30,6 +34,7 @@ import {
 } from "../src/device/physical-network-reachability.ts";
 import { assessPhysicalSpeechTranscription } from "../src/device/physical-speech-transcription.ts";
 import {
+  completedProviderInputTranscripts,
   completedProviderOutputTranscript,
   parseAvailableProductionGrokProviderEvents,
   parseProductionGrokProviderEvents,
@@ -43,6 +48,10 @@ import {
   assessStackChanAecRun,
   parseKitAecMetrics,
 } from "../src/device/stackchan-aec-assessment.ts";
+import {
+  assessVoicePeAecRun,
+  parseKitRawCleanAecMetrics,
+} from "../src/device/voice-pe-aec-assessment.ts";
 import { transcribePcm16WithXaiStreamingStt } from "../src/device/xai-streaming-stt.ts";
 import { kitVoiceWorkerRef } from "../src/userspace/config-worker/app-ref.ts";
 import type { DeviceEventSessionMetrics } from "../src/userspace/config-worker/device-events.ts";
@@ -58,6 +67,7 @@ import {
   type ProviderEventStreamMetrics,
 } from "../src/userspace/config-worker/provider-event-stream.ts";
 import { kitDeviceCapabilityPath } from "../src/userspace/config-worker/device-id.ts";
+import { kitDeviceServerVadPolicy } from "../src/userspace/config-worker/server-vad-policy.ts";
 
 const executeFile = promisify(execFile);
 const responseTimeoutMs = 90_000;
@@ -65,6 +75,38 @@ const macOutputVolume = 85;
 const postPlaybackDrainMs = 1_000;
 const promptTailGuardMs = 100;
 const ambientDurationMs = 1_000;
+const unexpectedProviderTurnGuardMs = 5_000;
+const minimumSettledFarEndWindows = 2;
+const minimumFarEndPlaybackContentSamples = 8_000;
+/*
+ * Digits are not stable spoken evidence: macOS says “one” for `1`, while the
+ * literal prompt retained by the harness contains `1`. These ordinary,
+ * phonetically distinct words keep exact input/output transcript checks useful
+ * for every CLI-supported turn without introducing a numeric normalization
+ * loophole.
+ */
+const productionTurnLabels = [
+  "amber",
+  "birch",
+  "cobalt",
+  "dahlia",
+  "ember",
+  "fable",
+  "garnet",
+  "harbor",
+  "indigo",
+  "juniper",
+  "kestrel",
+  "linen",
+  "marble",
+  "nectar",
+  "opal",
+  "pebble",
+  "quartz",
+  "ripple",
+  "saffron",
+  "timber",
+] as const;
 
 export interface ProductionPcmMetrics extends PcmSessionMetrics {
   audioMode: string;
@@ -75,6 +117,7 @@ export interface ProductionPcmMetrics extends PcmSessionMetrics {
   deviceEventSubscriptionFailures: number;
   providerConnectFailures: number;
   providerEvents: ProviderEventStreamMetrics;
+  serverVadProfile: string | null;
   sessionId: string;
   startup?: Record<string, number | null>;
 }
@@ -175,6 +218,7 @@ export async function proveProductionStackChanGrok(
   });
 
   const aecSamples: Array<TimedSample<KitAecMetrics>> = [];
+  const rawCleanAecSamples: Array<TimedSample<KitRawCleanAecMetrics>> = [];
   let callbackFailure: Error | undefined;
   /*
    * StackChan deliberately budgets two latest-state metric callbacks. The
@@ -192,6 +236,25 @@ export async function proveProductionStackChanGrok(
           try {
             aecSamples.push({ receivedAtMs: Date.now(), value: parseKitAecMetrics(value) });
             if (aecSamples.length > 720) aecSamples.shift();
+          } catch (error) {
+            callbackFailure = new Error(`${deviceName} AEC callback was malformed.`, {
+              cause: error,
+            });
+          }
+        },
+      ],
+    );
+  } else {
+    await invoke<void>(
+      [...devicePath, "subscribeToAecMetrics"],
+      [
+        (value: unknown) => {
+          try {
+            rawCleanAecSamples.push({
+              receivedAtMs: Date.now(),
+              value: parseKitRawCleanAecMetrics(value),
+            });
+            if (rawCleanAecSamples.length > 720) rawCleanAecSamples.shift();
           } catch (error) {
             callbackFailure = new Error(`${deviceName} AEC callback was malformed.`, {
               cause: error,
@@ -222,18 +285,18 @@ export async function proveProductionStackChanGrok(
   let runFailure: Error | undefined;
   const evidenceAssemblyErrors: Array<{ error: Record<string, unknown>; stage: string }> = [];
   const turnEvidence: Array<Record<string, unknown>> = [];
+  const voicePeNearEndEvidenceSequences = new Set<number>();
+  const voicePeFarEndEvidenceSequences = new Set<number>();
   let conversationStarted = false;
   let conversationEnded = false;
-  let baselineAecIndex = 0;
+  let acceptanceAecIndex = 0;
 
   try {
-    if (requiresLegacyAecView) {
-      await waitForCallbackSamples(
-        () => callbackFailure,
-        () => aecSamples.length >= 1,
-        "an initial AEC capability sample",
-      );
-    }
+    await waitForCallbackSamples(
+      () => callbackFailure,
+      () => (requiresLegacyAecView ? aecSamples.length : rawCleanAecSamples.length) >= 1,
+      "an initial AEC capability sample",
+    );
     const hangUpAcknowledged =
       (await invoke<boolean>([...devicePath, "conversation", "hangUp"])) === true;
     if (!hangUpAcknowledged) throw new Error(`${deviceName} rejected the preflight hang-up.`);
@@ -245,8 +308,6 @@ export async function proveProductionStackChanGrok(
      * new generation after conversation.start().
      */
     preflightDiagnostics = await readDiagnostics();
-    baselineAecIndex = Math.max(0, aecSamples.length - 1);
-
     await executeFile("/usr/bin/osascript", ["-e", `set volume output volume ${macOutputVolume}`]);
     capture = await MacOsPcm16Capture.start({
       identityFfmpegExecutable: options.ffmpegExecutable,
@@ -304,6 +365,19 @@ export async function proveProductionStackChanGrok(
         `startup=${JSON.stringify(mediaReady.startup ?? null)}`,
     );
     mediaBaselineWorker = mediaReady;
+    /*
+     * Conversation start deliberately opens capture before the provider is
+     * ready. Those bounded ambient frames are unavailable by construction and
+     * the worker's startup assessment accounts for them exactly. Starting AEC
+     * lifecycle deltas before this boundary would classify the same expected
+     * startup discard a second time as runtime capture loss. Retain the latest
+     * sample as the counter baseline, then require every subsequent frame in
+     * the actual speech/interruption acceptance interval to remain lossless.
+     */
+    acceptanceAecIndex = Math.max(
+      0,
+      (requiresLegacyAecView ? aecSamples.length : rawCleanAecSamples.length) - 1,
+    );
     let providerSequenceBaseline = await latestProviderSequence(
       providerEventStream,
       providerEventStart.streamMaxOffset,
@@ -320,10 +394,31 @@ export async function proveProductionStackChanGrok(
        * answer so exact transcript comparison measures the physical path
        * instead of one recognizer's brand-name vocabulary.
        */
-      const phrase = `Reply exactly production audio turn ${turn} is clear and audible`;
+      /*
+       * The first HAVPE fixed-gain proof was digitally exact and physically
+       * coherent, but independent STT rendered “turn” as the acoustically
+       * indistinguishable “tone.” That is a poor oracle, not permission for
+       * fuzzy matching. “Signal” keeps the transcript gate exact while testing
+       * the same DAC -> air -> Mac microphone path.
+       */
+      const turnLabel = productionTurnLabels[turn - 1];
+      if (!turnLabel) throw new Error(`No acoustic oracle label exists for turn ${turn}.`);
+      const phrase = `Reply exactly production audio signal ${turnLabel} is clear and audible`;
       const promptPath = join(runRoot, `near-end-turn-${turn}.aiff`);
+      const nearEndEvidenceIndex = rawCleanAecSamples.length;
       await playMacSpeech(options.sayExecutable, promptPath, phrase);
       await delay(promptTailGuardMs);
+      if (isHomeAssistantVoicePreviewEdition) {
+        /*
+         * The prompt finishes before server VAD can begin the response, so
+         * newly delivered windows at this boundary are known near-end-only.
+         * The assessor still requires playbackContentSamples === 0, which
+         * rejects a boundary window if a previous reply had not fully drained.
+         */
+        for (const sample of rawCleanAecSamples.slice(nearEndEvidenceIndex)) {
+          voicePeNearEndEvidenceSequences.add(sample.value.sequence);
+        }
+      }
       const turnResponseStart = await capture.inspectProgress();
       responseStart ??= turnResponseStart;
       const terminal = await waitForWorker(
@@ -340,7 +435,7 @@ export async function proveProductionStackChanGrok(
           !metrics.providerResponseActive &&
           !metrics.playbackInterruptionPending &&
           !metrics.closed,
-        `server VAD and audible response for StackChan turn ${turn}`,
+        `server VAD and audible response for ${deviceName} turn ${turn}`,
         responseTimeoutMs,
         mediaReady.sessionId,
       );
@@ -355,14 +450,38 @@ export async function proveProductionStackChanGrok(
       );
       const turnEvents = currentEvents.filter((event) => event.sequence > providerSequenceBaseline);
       const transcript = completedProviderOutputTranscript(turnEvents);
-      if (!turnEvents.some((event) => event.providerType === "input_audio_buffer.speech_started")) {
-        throw new Error(`Turn ${turn} retained no Grok server-VAD speech_started event.`);
+      const speechStarts = turnEvents.filter(
+        (event) => event.providerType === "input_audio_buffer.speech_started",
+      );
+      const speechStops = turnEvents.filter(
+        (event) => event.providerType === "input_audio_buffer.speech_stopped",
+      );
+      const responseDone = turnEvents.filter((event) => event.providerType === "response.done");
+      const inputTranscripts = completedProviderInputTranscripts(turnEvents);
+      if (speechStarts.length !== 1) {
+        throw new Error(
+          `Turn ${turn} retained ${speechStarts.length} Grok server-VAD speech_started events; ` +
+            "expected exactly one.",
+        );
       }
-      if (!turnEvents.some((event) => event.providerType === "input_audio_buffer.speech_stopped")) {
-        throw new Error(`Turn ${turn} retained no Grok server-VAD speech_stopped event.`);
+      if (speechStops.length !== 1) {
+        throw new Error(
+          `Turn ${turn} retained ${speechStops.length} Grok server-VAD speech_stopped events; ` +
+            "expected exactly one.",
+        );
       }
-      if (!turnEvents.some((event) => event.providerType === "response.done")) {
-        throw new Error(`Turn ${turn} retained no completed Grok response.`);
+      if (responseDone.length !== 1) {
+        throw new Error(
+          `Turn ${turn} retained ${responseDone.length} completed Grok responses; expected exactly one.`,
+        );
+      }
+      if (
+        inputTranscripts.length !== 1 ||
+        normalizeSpokenEvidence(inputTranscripts[0] ?? "") !== normalizeSpokenEvidence(phrase)
+      ) {
+        throw new Error(
+          `Turn ${turn} retained unexpected input transcript(s): ${JSON.stringify(inputTranscripts)}.`,
+        );
       }
       if (turnEvents.some((event) => event.providerType === "error")) {
         throw new Error(`Turn ${turn} retained a Grok error event.`);
@@ -411,6 +530,33 @@ export async function proveProductionStackChanGrok(
       responseTimeoutMs,
       mediaReady.sessionId,
     );
+    if (isHomeAssistantVoicePreviewEdition) {
+      const farEndEvidenceIndex = rawCleanAecSamples.length;
+      /*
+       * A timer delay made the selected AEC window depend on the one-second
+       * callback phase. Wait for two completed speaker-active measurements
+       * instead. Both arrive before the harness injects barge-in, so they are
+       * genuinely far-end-only; selecting them explicitly prevents deliberate
+       * double-talk from being scored as residual echo. Audio remains fully
+       * streaming while this observation-only wait runs.
+       */
+      await waitForCallbackSamples(
+        () => callbackFailure,
+        () =>
+          rawCleanAecSamples
+            .slice(farEndEvidenceIndex)
+            .filter(
+              (sample) =>
+                sample.value.playbackContentSamples >= minimumFarEndPlaybackContentSamples,
+            ).length >= minimumSettledFarEndWindows,
+        `${minimumSettledFarEndWindows} settled HAVPE far-end AEC windows`,
+      );
+      for (const sample of rawCleanAecSamples.slice(farEndEvidenceIndex)) {
+        if (sample.value.playbackContentSamples >= minimumFarEndPlaybackContentSamples) {
+          voicePeFarEndEvidenceSequences.add(sample.value.sequence);
+        }
+      }
+    }
     const interruptPromptPath = join(runRoot, "near-end-barge-in.aiff");
     await playMacSpeech(
       options.sayExecutable,
@@ -427,7 +573,19 @@ export async function proveProductionStackChanGrok(
       mediaReady.sessionId,
     );
     await delay(postPlaybackDrainMs);
-    terminalWorker = interruptedTerminal;
+    /*
+     * Echo-triggered turns in the AGC-tap failure appeared only after the
+     * requested reply had completed. A success boundary taken immediately at
+     * response.done therefore hid the defining fault. Keep the real session
+     * open for five more seconds—well beyond the one-second VAD silence
+     * timeout—then require the same exact planned-turn counters.
+     */
+    await delay(unexpectedProviderTurnGuardMs);
+    const guardedTerminal = await worker.pcmMetrics();
+    if (!guardedTerminal || guardedTerminal.sessionId !== mediaReady.sessionId) {
+      throw new Error("The PCM generation disappeared during the post-playback echo guard.");
+    }
+    terminalWorker = guardedTerminal;
     providerEvents = await readProviderEvents(
       providerEventStream,
       providerEventStart.streamMaxOffset,
@@ -438,11 +596,41 @@ export async function proveProductionStackChanGrok(
       (event) => event.sequence > providerSequenceBaseline,
     );
     const interruptionTranscript = completedProviderOutputTranscript(interruptionEvents);
+    const interruptionInputTranscripts = completedProviderInputTranscripts(interruptionEvents);
+    const interruptionSpeechStarts = interruptionEvents.filter(
+      (event) => event.providerType === "input_audio_buffer.speech_started",
+    );
+    const interruptionSpeechStops = interruptionEvents.filter(
+      (event) => event.providerType === "input_audio_buffer.speech_stopped",
+    );
     const responseDoneEvents = interruptionEvents.filter(
       (event) => event.providerType === "response.done",
     );
-    if (responseDoneEvents.length < 2) {
-      throw new Error("The raw Grok stream retained fewer than two terminal barge-in responses.");
+    if (interruptionSpeechStarts.length !== 2 || interruptionSpeechStops.length !== 2) {
+      throw new Error(
+        `The barge-in phase retained ${interruptionSpeechStarts.length} speech starts and ` +
+          `${interruptionSpeechStops.length} speech stops; expected exactly two of each.`,
+      );
+    }
+    if (responseDoneEvents.length !== 2) {
+      throw new Error(
+        `The raw Grok stream retained ${responseDoneEvents.length} terminal barge-in responses; ` +
+          "expected exactly two.",
+      );
+    }
+    if (
+      interruptionInputTranscripts.length !== 2 ||
+      normalizeSpokenEvidence(interruptionInputTranscripts[0] ?? "") !==
+        normalizeSpokenEvidence(
+          "Tell a long story about a blue robot for one minute without asking me a question",
+        ) ||
+      normalizeSpokenEvidence(interruptionInputTranscripts[1] ?? "") !==
+        normalizeSpokenEvidence("Stop and reply exactly interruption test complete")
+    ) {
+      throw new Error(
+        `The barge-in phase retained contaminated input transcript(s): ` +
+          `${JSON.stringify(interruptionInputTranscripts)}.`,
+      );
     }
     if (interruptionEvents.some((event) => event.providerType === "error")) {
       throw new Error("The raw Grok stream retained an error during barge-in.");
@@ -499,7 +687,7 @@ export async function proveProductionStackChanGrok(
         conversationEnded =
           (await invoke<boolean>([...devicePath, "conversation", "hangUp"])) === true;
       } catch (error) {
-          runFailure ??= new Error(`Could not remotely hang up ${deviceName} after the proof.`, {
+        runFailure ??= new Error(`Could not remotely hang up ${deviceName} after the proof.`, {
           cause: error,
         });
       }
@@ -546,16 +734,16 @@ export async function proveProductionStackChanGrok(
     }
   }
 
-  const relevantAecSamples = aecSamples.slice(baselineAecIndex).map((sample) => sample.value);
+  const relevantAecSamples = aecSamples.slice(acceptanceAecIndex).map((sample) => sample.value);
+  const relevantRawCleanAecSamples = rawCleanAecSamples
+    .slice(acceptanceAecIndex)
+    .map((sample) => sample.value);
   const aecAssessment = requiresLegacyAecView
     ? assessStackChanAecRun(relevantAecSamples)
-    : {
-        passed: false,
-        reasons: [
-          "HAVPE exposes measured raw and post-AEC XMOS taps locally, but its truthful two-tap Cap'n Web schema is not mounted yet.",
-        ],
-        status: "not-assessed" as const,
-      };
+    : assessVoicePeAecRun(relevantRawCleanAecSamples, {
+        farEndSequences: [...voicePeFarEndEvidenceSequences],
+        nearEndSequences: [...voicePeNearEndEvidenceSequences],
+      });
   const digitalAssessment =
     baselineWorker &&
     mediaBaselineWorker &&
@@ -564,6 +752,7 @@ export async function proveProductionStackChanGrok(
     terminalDiagnostics
       ? assessDigitalStackChanRun({
           baselineDiagnostics,
+          expectedProviderTurns: options.turns + 2,
           mediaBaselineWorker,
           sessionOpenedWorker: baselineWorker,
           terminalDiagnostics,
@@ -573,9 +762,7 @@ export async function proveProductionStackChanGrok(
           passed: false,
           reasons: ["The run did not retain complete digital boundary evidence."],
         };
-  if (requiresLegacyAecView && !aecAssessment.passed) {
-    runFailure ??= new Error(aecAssessment.reasons.join("; "));
-  }
+  if (!aecAssessment.passed) runFailure ??= new Error(aecAssessment.reasons.join("; "));
   if (!digitalAssessment.passed) runFailure ??= new Error(digitalAssessment.reasons.join("; "));
 
   let physicalSpeechAssessment: ReturnType<typeof assessPhysicalSpeechTranscription> | undefined;
@@ -683,7 +870,7 @@ export async function proveProductionStackChanGrok(
     : undefined;
   const audioPassed =
     runFailure === undefined &&
-    (!requiresLegacyAecView || aecAssessment.passed) &&
+    aecAssessment.passed &&
     digitalAssessment.passed &&
     physicalSpeechAssessment?.passed === true;
   const networkArtifact =
@@ -718,8 +905,14 @@ export async function proveProductionStackChanGrok(
     acoustic: acousticEvidence ?? null,
     aec: {
       assessment: aecAssessment,
-      requiredForThisRun: requiresLegacyAecView,
-      samples: aecSamples,
+      phaseSelection: requiresLegacyAecView
+        ? null
+        : {
+            farEndSequences: [...voicePeFarEndEvidenceSequences],
+            nearEndSequences: [...voicePeNearEndEvidenceSequences],
+          },
+      requiredForThisRun: true,
+      samples: requiresLegacyAecView ? aecSamples : rawCleanAecSamples,
     },
     device: {
       diagnostics: {
@@ -866,12 +1059,16 @@ function providerResponseWasCancelled(event: ProductionGrokProviderEvent) {
  * greeting that already drained cannot masquerade as an untouched session.
  */
 export function isStackChanReadyAndSilent(metrics: ProductionPcmMetrics, expectedDeviceId: string) {
+  const expectedServerVadPolicy = kitDeviceServerVadPolicy(expectedDeviceId);
   return (
+    expectedServerVadPolicy !== null &&
     !metrics.closed &&
     metrics.deviceId === expectedDeviceId &&
     metrics.conversationActive &&
     metrics.audioMode === "full-duplex-aec" &&
     metrics.turnDetection === "server-vad" &&
+    metrics.serverVadProfile === expectedServerVadPolicy.serverVadProfile &&
+    metrics.uplinkGainMultiplier === expectedServerVadPolicy.uplinkGainMultiplier &&
     metrics.providerAvailable &&
     metrics.providerSessionReadyAtMs !== null &&
     metrics.initialGreetingRequests === 0 &&
@@ -954,15 +1151,19 @@ export function isCompletedStackChanInterruption(
  * response, reached the speaker.
  */
 export function interruptionTranscriptRetainsAcceptancePhrase(transcript: string) {
-  const normalized = transcript
+  return normalizeSpokenEvidence(transcript).includes("interruption test complete");
+}
+
+function normalizeSpokenEvidence(transcript: string) {
+  return transcript
     .toLowerCase()
     .replaceAll(/[^a-z0-9]+/gu, " ")
     .trim();
-  return normalized.includes("interruption test complete");
 }
 
 export function assessDigitalStackChanRun(input: {
   baselineDiagnostics: KitControlDiagnostics;
+  expectedProviderTurns: number;
   mediaBaselineWorker: ProductionPcmMetrics;
   sessionOpenedWorker: ProductionPcmMetrics;
   terminalDiagnostics: KitControlDiagnostics;
@@ -978,6 +1179,28 @@ export function assessDigitalStackChanRun(input: {
   if (input.terminalWorker.turnDetection !== "server-vad") {
     reasons.push(
       `The userspace worker reported ${input.terminalWorker.turnDetection} turn detection.`,
+    );
+  }
+  const expectedServerVadPolicy = kitDeviceServerVadPolicy(input.terminalWorker.deviceId);
+  const expectedServerVadProfile = expectedServerVadPolicy?.serverVadProfile ?? null;
+  if (
+    expectedServerVadProfile === null ||
+    input.terminalWorker.serverVadProfile !== expectedServerVadProfile
+  ) {
+    reasons.push(
+      `The userspace worker reported server-VAD profile ` +
+        `${String(input.terminalWorker.serverVadProfile)} instead of ` +
+        `${String(expectedServerVadProfile)}.`,
+    );
+  }
+  if (
+    expectedServerVadPolicy === null ||
+    input.terminalWorker.uplinkGainMultiplier !== expectedServerVadPolicy.uplinkGainMultiplier
+  ) {
+    reasons.push(
+      `The userspace worker reported uplink gain ` +
+        `${input.terminalWorker.uplinkGainMultiplier} instead of ` +
+        `${String(expectedServerVadPolicy?.uplinkGainMultiplier)}.`,
     );
   }
   if (input.terminalWorker.deviceEventSubscriptionAttempts !== 1) {
@@ -1010,10 +1233,32 @@ export function assessDigitalStackChanRun(input: {
     reasons.push("No Grok PCM frames reached StackChan.");
   }
   for (const field of [
+    "providerSpeechStarts",
+    "providerSpeechStops",
+    "playbackInterruptionsRequested",
+    "playbackInterruptionsCompleted",
+  ] as const) {
+    /*
+     * Greater-than was insufficient: HAVPE's AGC echo run completed every
+     * planned turn and then opened three more from its own speaker. Each
+     * server-VAD edge must map one-for-one to a planned acoustic utterance and
+     * its physical purge, with no hidden surplus on either side.
+     */
+    const value = input.terminalWorker[field] - input.mediaBaselineWorker[field];
+    if (value !== input.expectedProviderTurns) {
+      reasons.push(
+        `Worker ${field} changed by ${value}; expected exactly ` +
+          `${input.expectedProviderTurns} planned turns.`,
+      );
+    }
+  }
+  for (const field of [
     "uplinkDroppedBytes",
     "uplinkUnavailableFrames",
+    "uplinkPcmClippedSamples",
     "providerSendFailures",
     "providerResponsesFailed",
+    "providerSpeechTimeouts",
     "playbackInterruptionFailures",
   ] as const) {
     /*
@@ -1129,6 +1374,8 @@ export function assessDigitalStackChanRun(input: {
       downlinkFrames:
         input.terminalWorker.downlinkFrames - input.mediaBaselineWorker.downlinkFrames,
       uplinkFrames: input.terminalWorker.uplinkFrames - input.mediaBaselineWorker.uplinkFrames,
+      uplinkPcmPeakSample: input.terminalWorker.uplinkPcmPeakSample,
+      uplinkPcmRmsSample: input.terminalWorker.uplinkPcmRmsSample,
     },
     startup: {
       boundedAmbientDiscard: startupBounded,

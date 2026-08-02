@@ -42,6 +42,14 @@ const PCM_FRAME_DURATION_MS = 20;
  * cannot leave a Grok input buffer open indefinitely.
  */
 const UPLINK_END_MARKER_TIMEOUT_MS = 1_500;
+/*
+ * A server-VAD start without a stop is an upstream generation that cannot
+ * produce a reply. It also streams live room audio for as long as it remains
+ * attached. Sixty seconds permits an unusually long human turn but gives the
+ * failure a finite privacy, cost, and recovery bound. Only the provider is
+ * retired; the device's realtime lane remains warm and queue-free.
+ */
+const SERVER_VAD_MAXIMUM_SPEECH_MS = 60_000;
 const MAXIMUM_FUNCTION_CALLS_PER_RESPONSE = 8;
 const MAXIMUM_FUNCTION_ARGUMENT_BYTES = 2_048;
 const pcmEndOfResponse = new Uint8Array(0);
@@ -74,6 +82,7 @@ export interface PcmProxyDiagnostic {
     | "provider-response-failed"
     | "provider-send-failed"
     | "provider-unavailable"
+    | "server-vad-speech-timeout"
     | "socket-error"
     | "unsolicited-provider-response"
     | "uplink-backpressure"
@@ -151,9 +160,17 @@ export interface PcmSessionMetrics {
   providerUnsolicitedResponses: number;
   providerSessionReadyAtMs: number | null;
   providerSendFailures: number;
+  providerSpeechActiveSinceAtMs: number | null;
+  providerSpeechMaximumDurationMs: number;
   providerSpeechStarts: number;
   providerSpeechStops: number;
+  providerSpeechTimeouts: number;
   turnDetection: PcmTurnDetection;
+  uplinkGainMultiplier: number;
+  uplinkPcmClippedSamples: number;
+  uplinkPcmPeakSample: number;
+  uplinkPcmRmsSample: number;
+  uplinkPcmSamples: number;
   uplinkDroppedBytes: number;
   uplinkControlStarts: number;
   uplinkControlStops: number;
@@ -175,6 +192,7 @@ export interface PcmSessionBridgeOptions {
   onProviderUnavailable?: () => void;
   sessionId: string;
   turnDetection: PcmTurnDetection;
+  uplinkGainMultiplier?: number;
 }
 
 /**
@@ -202,6 +220,7 @@ export class PcmSessionBridge {
   readonly #onProviderUnavailable: () => void;
   readonly #sessionId: string;
   readonly #turnDetection: PcmTurnDetection;
+  readonly #uplinkGainMultiplier: number;
   readonly #downlinkQueue = new Uint8Array(
     ITERATE_KIT_PCM_FRAME_BYTES * DOWNLINK_RESPONSE_RESERVOIR_FRAMES,
   );
@@ -275,8 +294,11 @@ export class PcmSessionBridge {
   #providerUnsolicitedResponses = 0;
   #providerSessionReadyAtMs: number | null = null;
   #providerSendFailures = 0;
+  #providerSpeechActiveSinceAtMs: number | null = null;
+  #providerSpeechMaximumDurationMs = 0;
   #providerSpeechStarts = 0;
   #providerSpeechStops = 0;
+  #providerSpeechTimeouts = 0;
   #responseAfterCommitPending = false;
   #responseActive = false;
   #manualResponseAuthorized = false;
@@ -284,6 +306,7 @@ export class PcmSessionBridge {
   #unsolicitedResponseActive = false;
   #serverVadAwaitingResponse = false;
   #serverVadSpeechActive = false;
+  #serverVadSpeechTimer: ReturnType<typeof setTimeout> | undefined;
   #nextDownlinkAt = 0;
   #uplinkControlStarts = 0;
   #uplinkControlStops = 0;
@@ -293,6 +316,10 @@ export class PcmSessionBridge {
   #uplinkEndMarkerTimer: ReturnType<typeof setTimeout> | undefined;
   #uplinkFrames = 0;
   #uplinkFramesInTurn = 0;
+  #uplinkPcmClippedSamples = 0;
+  #uplinkPcmNormalizedSquareSum = 0;
+  #uplinkPcmPeakSample = 0;
+  #uplinkPcmSamples = 0;
   #uplinkTurnActive = false;
   #uplinkTurns = 0;
   #uplinkUnavailableFrames = 0;
@@ -307,6 +334,14 @@ export class PcmSessionBridge {
     }
     if (options.turnDetection !== "manual" && options.turnDetection !== "server-vad") {
       throw new Error(`Unsupported PCM turn-detection policy: ${String(options.turnDetection)}`);
+    }
+    const uplinkGainMultiplier = options.uplinkGainMultiplier ?? 1;
+    if (
+      !Number.isSafeInteger(uplinkGainMultiplier) ||
+      uplinkGainMultiplier < 1 ||
+      uplinkGainMultiplier > 64
+    ) {
+      throw new Error("The PCM uplink gain multiplier must be an integer from 1 through 64.");
     }
     const initialGreetingBytes =
       options.initialGreeting === undefined
@@ -335,6 +370,7 @@ export class PcmSessionBridge {
     this.#onProviderUnavailable = options.onProviderUnavailable ?? (() => undefined);
     this.#sessionId = options.sessionId;
     this.#turnDetection = options.turnDetection;
+    this.#uplinkGainMultiplier = uplinkGainMultiplier;
     this.#device.binaryType = "arraybuffer";
     this.#device.addEventListener("message", (event) => {
       this.#handleDeviceMessage(event.data);
@@ -424,9 +460,20 @@ export class PcmSessionBridge {
       providerUnsolicitedResponses: this.#providerUnsolicitedResponses,
       providerSessionReadyAtMs: this.#providerSessionReadyAtMs,
       providerSendFailures: this.#providerSendFailures,
+      providerSpeechActiveSinceAtMs: this.#providerSpeechActiveSinceAtMs,
+      providerSpeechMaximumDurationMs: this.#providerSpeechMaximumDurationMs,
       providerSpeechStarts: this.#providerSpeechStarts,
       providerSpeechStops: this.#providerSpeechStops,
+      providerSpeechTimeouts: this.#providerSpeechTimeouts,
       turnDetection: this.#turnDetection,
+      uplinkGainMultiplier: this.#uplinkGainMultiplier,
+      uplinkPcmClippedSamples: this.#uplinkPcmClippedSamples,
+      uplinkPcmPeakSample: this.#uplinkPcmPeakSample,
+      uplinkPcmRmsSample:
+        this.#uplinkPcmSamples === 0
+          ? 0
+          : Math.sqrt(this.#uplinkPcmNormalizedSquareSum / this.#uplinkPcmSamples) * 32_768,
+      uplinkPcmSamples: this.#uplinkPcmSamples,
       uplinkControlStarts: this.#uplinkControlStarts,
       uplinkControlStops: this.#uplinkControlStops,
       uplinkDroppedBytes: this.#uplinkDroppedBytes,
@@ -463,6 +510,12 @@ export class PcmSessionBridge {
     if (previous && socketIsOpenOrConnecting(previous)) {
       previous.close(1000, "A fresh provider generation replaced this one.");
     }
+    /* Provider-owned VAD and hardware purge fences cannot cross generations. */
+    this.#clearServerVadSpeechWindow();
+    this.#serverVadSpeechActive = false;
+    this.#serverVadAwaitingResponse = false;
+    this.#interrupted = false;
+    this.#invalidatePlaybackInterruption();
 
     provider.binaryType = "arraybuffer";
     this.#provider = provider;
@@ -524,6 +577,7 @@ export class PcmSessionBridge {
       this.#providerSessionReadyAtMs = null;
       this.#initialGreetingRequestedForConversation = false;
       this.#interrupted = false;
+      this.#clearServerVadSpeechWindow();
       this.#serverVadAwaitingResponse = false;
       this.#serverVadSpeechActive = false;
       this.#uplinkFramesInTurn = 0;
@@ -539,6 +593,7 @@ export class PcmSessionBridge {
     this.#clearUplinkEndMarkerWait();
     this.#responseAfterCommitPending = false;
     this.#interrupted = false;
+    this.#clearServerVadSpeechWindow();
     this.#serverVadAwaitingResponse = false;
     this.#serverVadSpeechActive = false;
     this.#uplinkFramesInTurn = 0;
@@ -625,6 +680,7 @@ export class PcmSessionBridge {
     if (this.#closed) return;
     this.#closed = true;
     this.#invalidatePlaybackInterruption();
+    this.#clearServerVadSpeechWindow();
     this.#clearUplinkEndMarkerWait();
     this.#responseAfterCommitPending = false;
     this.#abandonProviderResponse();
@@ -694,6 +750,36 @@ export class PcmSessionBridge {
       );
       return;
     }
+    /*
+     * The received MessageEvent owns this 640-byte payload; neither socket nor
+     * the device can share its JavaScript memory after delivery. Mutating that
+     * private frame avoids a 32 KiB/s allocation stream and adds no queue. The
+     * provider WebSocket copies/accepts the bytes synchronously at send(), as
+     * the existing zero-retention relay already requires. Keep raw and gained
+     * aggregates in local scalars until send succeeds so a failed socket can
+     * never make diagnostics claim that Grok accepted a louder frame.
+     */
+    let devicePeakSample = 0;
+    let deviceNormalizedSquareSum = 0;
+    let uplinkClippedSamples = 0;
+    let uplinkPeakSample = 0;
+    let uplinkNormalizedSquareSum = 0;
+    for (let offset = 0; offset < bytes.byteLength; offset += 2) {
+      const unsigned = bytes[offset]! | (bytes[offset + 1]! << 8);
+      const deviceSample = unsigned >= 0x8000 ? unsigned - 0x1_0000 : unsigned;
+      devicePeakSample = Math.max(devicePeakSample, Math.abs(deviceSample));
+      const normalizedDeviceSample = deviceSample / 32_768;
+      deviceNormalizedSquareSum += normalizedDeviceSample * normalizedDeviceSample;
+
+      const amplifiedSample = deviceSample * this.#uplinkGainMultiplier;
+      const uplinkSample = Math.max(-32_768, Math.min(32_767, amplifiedSample));
+      if (uplinkSample !== amplifiedSample) uplinkClippedSamples += 1;
+      uplinkPeakSample = Math.max(uplinkPeakSample, Math.abs(uplinkSample));
+      const normalizedUplinkSample = uplinkSample / 32_768;
+      uplinkNormalizedSquareSum += normalizedUplinkSample * normalizedUplinkSample;
+      bytes[offset] = uplinkSample & 0xff;
+      bytes[offset + 1] = (uplinkSample >> 8) & 0xff;
+    }
     try {
       provider.send(bytes);
     } catch (error) {
@@ -717,7 +803,14 @@ export class PcmSessionBridge {
      * Device v1 frames are always complete little-endian int16 PCM, so this
      * path needs neither a trailing-byte state nor an audio-retention buffer.
      */
-    this.#observeDevicePcm(bytes);
+    const samples = bytes.byteLength / 2;
+    this.#devicePcmPeakSample = Math.max(this.#devicePcmPeakSample, devicePeakSample);
+    this.#devicePcmNormalizedSquareSum += deviceNormalizedSquareSum;
+    this.#devicePcmSamples += samples;
+    this.#uplinkPcmClippedSamples += uplinkClippedSamples;
+    this.#uplinkPcmPeakSample = Math.max(this.#uplinkPcmPeakSample, uplinkPeakSample);
+    this.#uplinkPcmNormalizedSquareSum += uplinkNormalizedSquareSum;
+    this.#uplinkPcmSamples += samples;
     this.#uplinkFrames += 1;
     if (this.#turnDetection === "manual") this.#uplinkFramesInTurn += 1;
   }
@@ -800,6 +893,11 @@ export class PcmSessionBridge {
     this.#serverVadSpeechActive = true;
     this.#serverVadAwaitingResponse = false;
     this.#providerSpeechStarts += 1;
+    this.#providerSpeechActiveSinceAtMs = Date.now();
+    this.#serverVadSpeechTimer = setTimeout(() => {
+      this.#serverVadSpeechTimer = undefined;
+      this.#retireProviderAfterServerVadTimeout();
+    }, SERVER_VAD_MAXIMUM_SPEECH_MS);
     this.#responseAfterCommitPending = false;
     this.#interrupted = true;
     /*
@@ -894,8 +992,45 @@ export class PcmSessionBridge {
   #handleServerVadSpeechStopped(): void {
     if (!this.#serverVadSpeechActive) return;
     this.#serverVadSpeechActive = false;
+    this.#clearServerVadSpeechWindow();
     this.#serverVadAwaitingResponse = true;
     this.#providerSpeechStops += 1;
+  }
+
+  #clearServerVadSpeechWindow(): void {
+    if (this.#providerSpeechActiveSinceAtMs !== null) {
+      this.#providerSpeechMaximumDurationMs = Math.max(
+        this.#providerSpeechMaximumDurationMs,
+        Date.now() - this.#providerSpeechActiveSinceAtMs,
+      );
+      this.#providerSpeechActiveSinceAtMs = null;
+    }
+    if (this.#serverVadSpeechTimer === undefined) return;
+    clearTimeout(this.#serverVadSpeechTimer);
+    this.#serverVadSpeechTimer = undefined;
+  }
+
+  #retireProviderAfterServerVadTimeout(): void {
+    if (this.#closed || !this.#serverVadSpeechActive) return;
+    const provider = this.#provider;
+    const reason = "Grok server VAD did not end the utterance within 60 seconds.";
+    this.#serverVadSpeechActive = false;
+    this.#serverVadAwaitingResponse = false;
+    this.#interrupted = false;
+    this.#providerSpeechTimeouts += 1;
+    this.#clearServerVadSpeechWindow();
+    this.#diagnostic("server-vad-speech-timeout", "warn", {
+      maximumSpeechMs: SERVER_VAD_MAXIMUM_SPEECH_MS,
+      recovery: "retire-provider-generation",
+    });
+
+    if (provider === undefined) {
+      this.#onProviderUnavailable();
+      return;
+    }
+    this.#providerRetirements += 1;
+    this.#detachProvider(provider, 4000, reason, "provider-closed");
+    if (socketIsOpenOrConnecting(provider)) provider.close(4000, reason);
   }
 
   #handleProviderMessage(provider: WebSocket, data: unknown): void {
@@ -1337,17 +1472,6 @@ export class PcmSessionBridge {
       this.#observeProviderPcmSample(bytes[offset]!, bytes[offset + 1]!);
     }
     if (offset < bytes.byteLength) this.#providerPcmTrailingByte = bytes[offset]!;
-  }
-
-  #observeDevicePcm(bytes: Uint8Array): void {
-    for (let offset = 0; offset < bytes.byteLength; offset += 2) {
-      const unsigned = bytes[offset]! | (bytes[offset + 1]! << 8);
-      const sample = unsigned >= 0x8000 ? unsigned - 0x1_0000 : unsigned;
-      this.#devicePcmPeakSample = Math.max(this.#devicePcmPeakSample, Math.abs(sample));
-      const normalized = sample / 32_768;
-      this.#devicePcmNormalizedSquareSum += normalized * normalized;
-      this.#devicePcmSamples += 1;
-    }
   }
 
   #observeProviderPcmSample(lowByte: number, highByte: number): void {
@@ -1819,6 +1943,11 @@ export class PcmSessionBridge {
     this.#provider = undefined;
     this.#providerDisconnects += 1;
     this.#lastSocketClose = { code, reason, source: "provider" };
+    this.#invalidatePlaybackInterruption();
+    this.#clearServerVadSpeechWindow();
+    this.#serverVadSpeechActive = false;
+    this.#serverVadAwaitingResponse = false;
+    this.#interrupted = false;
     this.#clearUplinkEndMarkerWait();
     this.#responseAfterCommitPending = false;
     this.#manualResponseAuthorized = false;

@@ -2,6 +2,7 @@ import { describe, expect, test } from "vitest";
 import { KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE } from "../userspace/config-worker/provider-event-stream.ts";
 import {
   completedProviderInputTranscript,
+  completedProviderInputTranscripts,
   completedProviderToolCall,
   completedProviderOutputTranscript,
   parseAvailableProductionGrokProviderEvents,
@@ -262,6 +263,12 @@ describe("production Grok provider event evidence", () => {
         event(2, "Tell me one short joke.", "completed"),
       ]),
     ).toBe("Tell me one short joke.");
+    expect(
+      completedProviderInputTranscripts([
+        event(1, "Tell me one short joke.", "completed"),
+        event(2, "Stop and answer now.", "completed"),
+      ]),
+    ).toEqual(["Tell me one short joke.", "Stop and answer now."]);
     expect(() => completedProviderInputTranscript([event(1, "Tell me", "in_progress")])).toThrow(
       "terminal input-audio transcript",
     );

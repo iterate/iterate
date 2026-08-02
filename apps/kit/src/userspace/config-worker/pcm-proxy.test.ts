@@ -63,6 +63,7 @@ describe("userspace PCM session bridge", () => {
       onProviderFunctionCall?: (call: ProviderFunctionCall) => Promise<unknown>;
       onProviderUnavailable?: () => void;
       turnDetection?: "manual" | "server-vad";
+      uplinkGainMultiplier?: number;
     } = {},
   ) {
     const device = socketPair();
@@ -86,6 +87,9 @@ describe("userspace PCM session bridge", () => {
        * convenient fixture from weakening the physical silent-start contract.
        */
       turnDetection: options.turnDetection ?? "server-vad",
+      ...(options.uplinkGainMultiplier === undefined
+        ? {}
+        : { uplinkGainMultiplier: options.uplinkGainMultiplier }),
     });
     bridge.setConversationActive(true);
     expect(bridge.attachProvider(provider.server)).toBe(true);
@@ -257,6 +261,52 @@ describe("userspace PCM session bridge", () => {
     });
     expect(bridge.metrics().devicePcmRmsSample).toBeCloseTo(
       Math.sqrt((1_000 ** 2 + 2_000 ** 2) / (ITERATE_KIT_PCM_FRAME_BYTES / 2)),
+      8,
+    );
+  });
+
+  test("applies calibrated uplink gain without hiding the device level or clipping", async () => {
+    /*
+     * HAVPE's XMOS noise-suppressed tap is clean enough for full-duplex use,
+     * but the physical production run measured a speech peak of only 581.
+     * Grok emitted no VAD edge even at its supported 0.1 floor. Restoring the
+     * adaptive AGC would also restore the measured speaker-echo retrigger, so
+     * the bridge instead applies one fixed, reviewable gain directly in the
+     * no-queue send path. This case protects three attribution invariants: the
+     * raw device level survives for hardware diagnosis, the exact provider-
+     * bound samples are measurable, and saturation can never masquerade as a
+     * healthy loud signal.
+     */
+    const { bridge, device, provider } = createBridge({
+      turnDetection: "server-vad",
+      uplinkGainMultiplier: 16,
+    });
+    const uplink = binaryMessages(provider.client);
+    const frame = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES);
+    const samples = new Int16Array(frame.buffer);
+    samples.set([-1_000, 2_000, 3_000]);
+
+    device.client.send(frame);
+
+    await vi.waitFor(() => expect(uplink).toHaveLength(1));
+    expect([...new Int16Array(uplink[0]!.buffer).slice(0, 4)]).toEqual([
+      -16_000, 32_000, 32_767, 0,
+    ]);
+    expect(bridge.metrics()).toMatchObject({
+      devicePcmPeakSample: 3_000,
+      devicePcmSamples: ITERATE_KIT_PCM_FRAME_BYTES / 2,
+      uplinkGainMultiplier: 16,
+      uplinkPcmClippedSamples: 1,
+      uplinkPcmPeakSample: 32_767,
+      uplinkPcmSamples: ITERATE_KIT_PCM_FRAME_BYTES / 2,
+      uplinkFrames: 1,
+    });
+    expect(bridge.metrics().devicePcmRmsSample).toBeCloseTo(
+      Math.sqrt((1_000 ** 2 + 2_000 ** 2 + 3_000 ** 2) / (ITERATE_KIT_PCM_FRAME_BYTES / 2)),
+      8,
+    );
+    expect(bridge.metrics().uplinkPcmRmsSample).toBeCloseTo(
+      Math.sqrt((16_000 ** 2 + 32_000 ** 2 + 32_767 ** 2) / (ITERATE_KIT_PCM_FRAME_BYTES / 2)),
       8,
     );
   });
@@ -481,6 +531,72 @@ describe("userspace PCM session bridge", () => {
         playbackInterruptionsRequested: 1,
       }),
     );
+  });
+
+  test("retires a provider whose server-VAD utterance never ends without closing the device lane", async () => {
+    /*
+     * The literal HAVPE failure was one speech_started edge followed by 95
+     * seconds of transcript revisions and no speech_stopped. Leaving that
+     * provider attached streams room audio indefinitely, never replies, and
+     * cannot recover when the room becomes conversational again. Bound only
+     * that disposable provider generation after one minute; keep `/pcm` warm,
+     * retain an exact counter/diagnostic, and let the owner attach a fresh
+     * provider that can recognize the next real utterance.
+     */
+    vi.useFakeTimers();
+    const providerUnavailable = vi.fn();
+    const { bridge, device, diagnostics, provider } = createBridge({
+      onProviderUnavailable: providerUnavailable,
+      turnDetection: "server-vad",
+    });
+    const deviceClosed = vi.fn();
+    device.client.addEventListener("close", deviceClosed);
+
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bridge.metrics()).toMatchObject({
+      providerSpeechActiveSinceAtMs: expect.any(Number),
+      providerSpeechStarts: 1,
+      providerSpeechTimeouts: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(59_999);
+    expect(bridge.metrics()).toMatchObject({
+      closed: false,
+      providerAvailable: true,
+      providerSpeechTimeouts: 0,
+    });
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(deviceClosed).not.toHaveBeenCalled();
+    expect(providerUnavailable).toHaveBeenCalledOnce();
+    expect(bridge.metrics()).toMatchObject({
+      closed: false,
+      conversationActive: true,
+      providerAvailable: false,
+      providerDisconnects: 1,
+      providerRetirements: 1,
+      providerSpeechActiveSinceAtMs: null,
+      providerSpeechMaximumDurationMs: 60_000,
+      providerSpeechTimeouts: 1,
+    });
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "server-vad-speech-timeout",
+        severity: "warn",
+      }),
+    );
+
+    const replacement = socketPair();
+    sockets.push(replacement.client, replacement.server);
+    expect(bridge.attachProvider(replacement.server)).toBe(true);
+    replacement.client.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bridge.metrics()).toMatchObject({
+      providerAvailable: true,
+      providerConnections: 2,
+      providerSpeechStarts: 2,
+    });
   });
 
   test("server VAD rejects a firmware manual end marker as a policy mismatch", async () => {

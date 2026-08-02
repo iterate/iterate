@@ -4,6 +4,7 @@ import {
   KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
   kitDeviceEventStreamPath,
 } from "../src/userspace/config-worker/provider-event-stream.ts";
+import { kitDeviceCapabilityPath } from "../src/userspace/config-worker/device-id.ts";
 
 const projectId = process.env.ITERATE_KIT_PROJECT_ID?.trim() ?? "";
 const projectApiKey = process.env.ITERATE_KIT_PROJECT_API_KEY?.trim() ?? "";
@@ -72,7 +73,7 @@ const [metrics, deviceDiagnostics, repoLog] = await Promise.all([
   worker.pcmMetrics(),
   capabilityRoot.invokeCapability({
     args: [],
-    path: ["kit", deviceId, "getDiagnostics"],
+    path: kitDeviceCapabilityPath(deviceId, "getDiagnostics"),
   }),
   project.repo.log({ limit: 12 }),
 ]);

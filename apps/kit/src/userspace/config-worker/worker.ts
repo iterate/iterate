@@ -33,6 +33,7 @@ import {
   GrokCredentialPrewarmer,
   mintGrokRealtimeCredential,
   type GrokRealtimeVoiceStage,
+  type GrokServerVadProfile,
 } from "./providers.ts";
 import {
   authenticateProjectBearer,
@@ -43,6 +44,7 @@ import {
   type KitAudioMode,
   type KitVoiceMode,
 } from "./routes.ts";
+import { kitDeviceServerVadPolicy } from "./server-vad-policy.ts";
 const PCM_MODE_KEY = "kit-pcm-mode";
 const PCM_SOCKET_BACKLOG_LIMIT_BYTES = 16 * 640;
 const PREVIOUS_PCM_SESSION_KEY = "kit:previous-pcm-session";
@@ -84,6 +86,7 @@ interface ActivePcmSession {
   providerConnectAttempts: number;
   providerConnectFailures: number;
   providerConnectPromise?: Promise<void>;
+  serverVadProfile: GrokServerVadProfile | null;
   server: WebSocket;
   sessionId: string;
   startup: PcmSessionStartupTimeline;
@@ -103,6 +106,7 @@ interface ClosedPcmSessionReport extends PcmSessionMetrics {
   providerEvents: ProviderEventStreamMetrics;
   providerConnectAttempts: number;
   providerConnectFailures: number;
+  serverVadProfile: GrokServerVadProfile | null;
   sessionId: string;
   startup: ReturnType<typeof pcmSessionStartupMetrics>;
 }
@@ -186,6 +190,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       providerEvents: active.providerEvents.metrics(),
       providerConnectAttempts: active.providerConnectAttempts,
       providerConnectFailures: active.providerConnectFailures,
+      serverVadProfile: active.serverVadProfile,
       sessionId: active.sessionId,
       startup: pcmSessionStartupMetrics(active.startup, bridgeMetrics),
     };
@@ -248,6 +253,20 @@ export class KitVoiceWorker extends IterateDurableObject {
     if (audioMode === null) {
       return new Response("A valid Iterate Kit audio mode is required.", { status: 400 });
     }
+    const serverVadPolicy =
+      audioMode === "full-duplex-aec" ? kitDeviceServerVadPolicy(deviceId) : null;
+    if (audioMode === "full-duplex-aec" && serverVadPolicy === null) {
+      /*
+       * Continuous audio starts flowing as soon as the upgrade succeeds. Fail
+       * before accepting the socket when this board has no measured profile;
+       * selecting a convenient fallback could make it deaf or hold a provider
+       * utterance open indefinitely while appearing transport-healthy.
+       */
+      return new Response("This full-duplex device has no calibrated server-VAD profile.", {
+        status: 400,
+      });
+    }
+    const serverVadProfile = serverVadPolicy?.serverVadProfile ?? null;
     const { mode } = await loadIngressConfiguration();
     startup.authenticationAndModeReadyAtMs = Date.now();
 
@@ -327,6 +346,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       },
       sessionId,
       turnDetection: audioMode === "full-duplex-aec" ? "server-vad" : "manual",
+      uplinkGainMultiplier: serverVadPolicy?.uplinkGainMultiplier ?? 1,
     });
     const deviceEvents = new DeviceEventSessionMetricsTracker();
     const deviceMetrics = new DeviceMetricsSessionTracker();
@@ -388,6 +408,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       providerEvents,
       providerConnectAttempts: 0,
       providerConnectFailures: 0,
+      serverVadProfile,
       server,
       sessionId,
       startup,
@@ -463,11 +484,24 @@ export class KitVoiceWorker extends IterateDurableObject {
       throw new Error("The Grok credential prewarmer is unavailable.");
     }
     const credential = await prewarmer.take();
+    if (active.audioMode === "full-duplex-aec") {
+      const serverVadProfile = active.serverVadProfile;
+      if (serverVadProfile === null) {
+        throw new Error("The active full-duplex session lost its server-VAD profile.");
+      }
+      return await connectGrokRealtimeVoice({
+        credential,
+        onStage,
+        sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
+        serverVadProfile,
+        turnDetection: "server-vad",
+      });
+    }
     return await connectGrokRealtimeVoice({
       credential,
       onStage,
       sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
-      turnDetection: active.audioMode === "full-duplex-aec" ? "server-vad" : "manual",
+      turnDetection: "manual",
     });
   }
 
@@ -736,6 +770,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       providerEvents: active.providerEvents.metrics(),
       providerConnectAttempts: active.providerConnectAttempts,
       providerConnectFailures: active.providerConnectFailures,
+      serverVadProfile: active.serverVadProfile,
       sessionId: active.sessionId,
       startup: pcmSessionStartupMetrics(active.startup, bridgeMetrics),
     };

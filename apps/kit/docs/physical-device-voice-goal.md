@@ -1,13 +1,13 @@
 # Iterate Kit physical-device voice goal
 
 Status: active; direction recorded 2026-07-29. The M5StickS3 local and deployed
-userspace vertical slices passed on 2026-07-31. The StackChan deployed
-userspace slice passed on 2026-08-02 with real Grok full-duplex audio, server
-VAD, physical interruption, measured local AEC, exact frame accounting,
-streamed metrics/provider events, independent acoustic transcription, and a
-network-valid interval. The Home Assistant Voice Preview Edition portability
-slice is now active; physical-button provenance, longer endurance, and the
-deferred deployed-worker kill/remount lifecycle remain.
+userspace vertical slices passed on 2026-07-31. The StackChan and Home
+Assistant Voice Preview Edition deployed userspace portability slices passed
+on 2026-08-02 with real Grok audio, interruption, measured local AEC, exact
+runtime frame accounting, streamed metrics/provider events, independent
+acoustic transcription, and clean network-valid intervals. Longer endurance,
+physical-button provenance, the deferred deployed-worker kill/remount
+lifecycle, and the final StackChan talking-head restoration remain.
 
 This is the goal document for the initial Iterate Kit devices. The first
 implementation tranche remains StackChan plus M5StickS3, but the physical
@@ -26,6 +26,24 @@ drawn from them are tracked in
 [`fable-audio-review-reconciliation-2026-07-30.md`](./fable-audio-review-reconciliation-2026-07-30.md).
 That ledger is part of the acceptance evidence: findings are not considered
 handled merely because they appeared in an agent transcript.
+
+## 2026-08-02 Home Assistant Voice Preview Edition landing addendum
+
+The HAVPE production portability gate is achieved in project
+`kit-havpe-voice-e2e-20260802`. The retained manifest proves the shared
+capability/userspace `/pcm` path, real Grok server VAD, audible full-duplex
+playback, deliberate interruption, 14.71 dB phase-correct local AEC
+suppression, zero runtime frame loss/restart, contiguous provider events,
+exact independent acoustic transcription, and an automatically network-valid
+interval. The exact resource numbers, two honestly rejected predecessor runs,
+scorer regression, and remaining endurance/IRAM gates are recorded in
+[`home-assistant-voice-preview-edition-vertical-slice-landing-2026-08-02.md`](./home-assistant-voice-preview-edition-vertical-slice-landing-2026-08-02.md).
+
+The audible story cutoff shortly after “once upon a time” was the harness's
+intentional barge-in boundary. It is retained explicitly so a later reader
+does not misclassify the expected interruption as an underrun. The active
+feature order can now move to the final StackChan talking-head sprite
+restoration without moving renderer work into the realtime audio path.
 
 ## 2026-08-02 Stick endurance closure
 

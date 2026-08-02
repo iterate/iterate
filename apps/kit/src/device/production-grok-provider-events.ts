@@ -163,27 +163,39 @@ export function completedProviderOutputTranscript(
   return transcript;
 }
 
+/** Reads every terminal recognizer result in provider sequence order. */
+export function completedProviderInputTranscripts(
+  events: readonly ProductionGrokProviderEvent[],
+): string[] {
+  const transcripts: string[] = [];
+  for (const event of events) {
+    if (event.providerType !== "conversation.item.input_audio_transcription.completed") {
+      continue;
+    }
+    let parsed: z.infer<typeof CompletedInputAudioTranscript>;
+    try {
+      const result = CompletedInputAudioTranscript.safeParse(JSON.parse(event.raw));
+      if (!result.success) continue;
+      parsed = result.data;
+    } catch {
+      continue;
+    }
+    const transcript = parsed.transcript.trim();
+    if (!transcript) {
+      throw new Error("A terminal input-audio event contained no non-empty transcript.");
+    }
+    transcripts.push(transcript);
+  }
+  return transcripts;
+}
+
 /** Reads the final recognizer result for one retained physical input turn. */
 export function completedProviderInputTranscript(
   events: readonly ProductionGrokProviderEvent[],
 ): string {
-  const event = events.findLast((candidate) => {
-    if (candidate.providerType !== "conversation.item.input_audio_transcription.completed") {
-      return false;
-    }
-    try {
-      return CompletedInputAudioTranscript.safeParse(JSON.parse(candidate.raw)).success;
-    } catch {
-      return false;
-    }
-  });
-  if (!event) {
-    throw new Error("The Grok stream did not retain a terminal input-audio transcript.");
-  }
-  const parsed = CompletedInputAudioTranscript.parse(JSON.parse(event.raw));
-  const transcript = parsed.transcript.trim();
+  const transcript = completedProviderInputTranscripts(events).at(-1);
   if (!transcript) {
-    throw new Error("The terminal input-audio transcript contained no non-empty text.");
+    throw new Error("The Grok stream did not retain a terminal input-audio transcript.");
   }
   return transcript;
 }

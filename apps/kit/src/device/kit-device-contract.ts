@@ -226,6 +226,44 @@ export interface KitAecMetrics {
 }
 
 /**
+ * Aligned AEC evidence from a hardware coprocessor with a private reference.
+ *
+ * HAVPE's XMOS publishes an original microphone and its selected processed
+ * AEC+IC+NS output on one I2S edge, but not the far-end reference it used
+ * internally. The two channels are simultaneous but intentionally have
+ * different gain, so consumers must calibrate the processed/raw transfer on a
+ * near-end interval before interpreting a far-end interval. The topology is
+ * explicit and reference fields are absent. `playbackContentSamples` is
+ * physical non-silence submitted during this exact signal window; it lets an
+ * acceptance harness select far-end intervals without misrepresenting
+ * intended PCM as a measured hardware tap.
+ */
+export interface KitRawCleanAecMetrics {
+  schemaVersion: 3;
+  topology: "raw-clean";
+  sequence: number;
+  windowStartedAtMs: number;
+  producedAtMs: number;
+  sampleStride: number;
+  sampledSamples: number;
+  rawPeak: number;
+  cleanPeak: number;
+  rawMeanAbsolute: number;
+  cleanMeanAbsolute: number;
+  /** Exact sampled absolute-magnitude totals; means alone lose quiet-signal precision. */
+  rawAbsoluteSum: number;
+  cleanAbsoluteSum: number;
+  playbackContentSamples: number;
+  lifetimeCaptureFrames: number;
+  lifetimeCleanUplinkFrames: number;
+  lifetimeCleanUplinkDrops: number;
+  lifetimeCaptureFailures: number;
+  lifetimeSignalMeasurementFailures: number;
+  lastCaptureToUplinkUs: number;
+  maximumCaptureToUplinkUs: number;
+}
+
+/**
  * Raw ESP WebSocket error categories. Keep the numeric SDK value on the wire
  * and map it only for display: the accompanying TLS, errno, handshake, and
  * close fields live in different domains and must not be collapsed into one

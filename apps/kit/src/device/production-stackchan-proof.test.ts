@@ -73,6 +73,7 @@ describe("StackChan production evidence assembly", () => {
         pendingRawHighWaterBytes: 0,
       },
       providerSessionReadyAtMs: 2_000,
+      serverVadProfile: "low-level-aec",
       sessionId: "stackchan-test-session",
       ...overrides,
     };
@@ -100,6 +101,7 @@ describe("StackChan production evidence assembly", () => {
 
     const assessment = assessDigitalStackChanRun({
       baselineDiagnostics: diagnostics,
+      expectedProviderTurns: 3,
       mediaBaselineWorker: baseline,
       sessionOpenedWorker: baseline,
       terminalDiagnostics: diagnostics,
@@ -142,8 +144,126 @@ describe("StackChan production evidence assembly", () => {
       ),
     ).toBe(false);
     expect(isStackChanReadyAndSilent({ ...ready, downlinkFrames: 1 }, "stackchan")).toBe(false);
+    expect(
+      isStackChanReadyAndSilent({ ...ready, serverVadProfile: "xmos-aec-ns" }, "stackchan"),
+    ).toBe(false);
     expect(isStackChanReadyAndSilent({ ...ready, providerResponseActive: true }, "stackchan")).toBe(
       false,
+    );
+  });
+
+  test("rejects a bounded server-VAD recovery inside the acceptance interval", () => {
+    /*
+     * Retiring a stuck provider is the correct availability/privacy recovery,
+     * but it is not evidence of a clean conversation. The physical proof must
+     * retain that distinction instead of declaring success merely because the
+     * replacement generation eventually answers.
+     */
+    const baseline = workerMetrics({
+      audioMode: "full-duplex-aec",
+      conversationActive: true,
+      providerSessionReadyAtMs: 2_000,
+    });
+    const terminal = workerMetrics({
+      ...baseline,
+      downlinkFrames: 1,
+      providerSpeechTimeouts: 1,
+      uplinkFrames: 1,
+    });
+    const diagnostics = {
+      control: { websocketConnections: 1 },
+      network: { pcmWebsocketConnections: 1, pcmWebsocketDisconnects: 0 },
+    } as KitControlDiagnostics;
+
+    const assessment = assessDigitalStackChanRun({
+      baselineDiagnostics: diagnostics,
+      expectedProviderTurns: 3,
+      mediaBaselineWorker: baseline,
+      sessionOpenedWorker: baseline,
+      terminalDiagnostics: diagnostics,
+      terminalWorker: terminal,
+    });
+
+    expect(assessment.passed).toBe(false);
+    expect(assessment.reasons).toContain("Worker providerSpeechTimeouts changed by 1.");
+  });
+
+  test("rejects provider-bound microphone clipping even when raw transport progresses", () => {
+    /*
+     * HAVPE needs fixed gain after its echo-suppressed XMOS tap, but a loud
+     * room or later DSP revision can exceed that calibration. Frames and VAD
+     * may continue normally while saturation destroys intelligibility and AEC
+     * evidence. The physical verdict must therefore treat even one gained
+     * clipped sample as a failed run, not merely an informational level metric.
+     */
+    const baseline = workerMetrics({
+      audioMode: "full-duplex-aec",
+      conversationActive: true,
+      providerSessionReadyAtMs: 2_000,
+    });
+    const terminal = workerMetrics({
+      ...baseline,
+      downlinkFrames: 1,
+      uplinkFrames: 1,
+      uplinkPcmClippedSamples: 2,
+    });
+    const diagnostics = {
+      control: { websocketConnections: 1 },
+      network: { pcmWebsocketConnections: 1, pcmWebsocketDisconnects: 0 },
+    } as KitControlDiagnostics;
+
+    const assessment = assessDigitalStackChanRun({
+      baselineDiagnostics: diagnostics,
+      expectedProviderTurns: 3,
+      mediaBaselineWorker: baseline,
+      sessionOpenedWorker: baseline,
+      terminalDiagnostics: diagnostics,
+      terminalWorker: terminal,
+    });
+
+    expect(assessment.reasons).toContain("Worker uplinkPcmClippedSamples changed by 2.");
+  });
+
+  test("rejects an extra VAD turn even when every expected response completed", () => {
+    /*
+     * The AGC-tap HAVPE run produced six VAD starts for three planned
+     * utterances: its own speaker audio opened extra turns and interrupted
+     * legitimate replies. Earlier waits used only greater-than comparisons,
+     * so all expected turns completing concealed the defining failure. Exact
+     * deltas make an echo-triggered fourth turn a digital acceptance failure.
+     */
+    const baseline = workerMetrics({
+      audioMode: "full-duplex-aec",
+      conversationActive: true,
+      providerSessionReadyAtMs: 2_000,
+    });
+    const terminal = workerMetrics({
+      ...baseline,
+      downlinkFrames: 1,
+      playbackInterruptionsCompleted: 4,
+      playbackInterruptionsRequested: 4,
+      providerResponsesCompleted: 4,
+      providerSpeechStarts: 4,
+      providerSpeechStops: 4,
+      uplinkFrames: 1,
+    });
+    const diagnostics = {
+      control: { websocketConnections: 1 },
+      network: { pcmWebsocketConnections: 1, pcmWebsocketDisconnects: 0 },
+    } as KitControlDiagnostics;
+
+    const assessment = assessDigitalStackChanRun({
+      baselineDiagnostics: diagnostics,
+      expectedProviderTurns: 3,
+      mediaBaselineWorker: baseline,
+      sessionOpenedWorker: baseline,
+      terminalDiagnostics: diagnostics,
+      terminalWorker: terminal,
+    });
+
+    expect(assessment.passed).toBe(false);
+    expect(assessment.reasons).toContain(
+      "Worker providerSpeechStarts changed by 4; expected exactly 3 planned turns.",
     );
   });
 
@@ -266,9 +386,9 @@ describe("StackChan production evidence assembly", () => {
      * their semantic match strict.
      */
     expect(interruptionTranscriptRetainsAcceptancePhrase("Interruption test complete.")).toBe(true);
-    expect(interruptionTranscriptRetainsAcceptancePhrase("Stack Shannon interruption worked.")).toBe(
-      false,
-    );
+    expect(
+      interruptionTranscriptRetainsAcceptancePhrase("Stack Shannon interruption worked."),
+    ).toBe(false);
     expect(interruptionTranscriptRetainsAcceptancePhrase("The interruption might work.")).toBe(
       false,
     );

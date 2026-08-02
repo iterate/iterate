@@ -11,6 +11,7 @@
 using worker = itx.workers.get(vars.workerRef);
 using root = itx.capabilityHosts.get("/");
 using stream = itx.streams.get(vars.streamPath);
+const eventLimit = Math.max(1, Math.min(500, Number(vars.eventLimit ?? 100)));
 
 const head = await stream.getEventPage({
   afterOffset: Number.MAX_SAFE_INTEGER,
@@ -18,16 +19,46 @@ const head = await stream.getEventPage({
   limit: 1,
 });
 const events = await stream.getEvents({
-  afterOffset: Math.max(0, head.streamMaxOffset - 500),
+  afterOffset: Math.max(0, head.streamMaxOffset - eventLimit),
   eventTypes: [vars.eventType],
-  limit: 500,
+  limit: eventLimit,
 });
+
+/*
+ * Raw realtime events can contain large base64 audio deltas. Incident reads
+ * need the control-plane chronology, not another copy of the PCM lane, so the
+ * compact form keeps only attribution fields and parsed transcript/VAD state.
+ * This also prevents a useful long-session query from being truncated by the
+ * operator CLI before jq can parse it.
+ */
+const returnedEvents = vars.compactEvents
+  ? events.map((event) => {
+      let decoded = {};
+      try {
+        decoded = JSON.parse(event.payload?.raw ?? "{}");
+      } catch {}
+      return {
+        audioEndMs: decoded.audio_end_ms ?? null,
+        audioStartMs: decoded.audio_start_ms ?? null,
+        createdAt: event.createdAt ?? null,
+        error: decoded.error ?? null,
+        offset: event.offset,
+        providerType: event.payload?.providerType ?? decoded.type ?? null,
+        receivedAtMs: event.payload?.receivedAtMs ?? null,
+        responseId: decoded.response?.id ?? decoded.response_id ?? null,
+        responseStatus: decoded.response?.status ?? decoded.status ?? null,
+        sequence: event.payload?.sequence ?? null,
+        sessionId: event.payload?.sessionId ?? null,
+        transcript: decoded.transcript ?? null,
+      };
+    })
+  : events;
 
 const [metrics, deviceDiagnostics, repoLog] = await Promise.all([
   worker.pcmMetrics(),
   root.invokeCapability({
     args: [],
-    path: ["kit", vars.deviceId, "getDiagnostics"],
+    path: ["kit", vars.deviceCapabilitySegment, "getDiagnostics"],
   }),
   itx.repo.log({ limit: 12 }),
 ]);
@@ -36,7 +67,7 @@ return {
   collectedAt: new Date().toISOString(),
   deviceDiagnostics,
   deviceId: vars.deviceId,
-  events,
+  events: returnedEvents,
   metrics,
   repoLog,
   streamHead: head.streamMaxOffset,
