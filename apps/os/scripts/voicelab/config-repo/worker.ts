@@ -66,37 +66,42 @@ const HANDSHAKE_TIMEOUT_MS = 15_000;
  */
 const COLLEAGUE_PATH = "/agents/colleague";
 /**
- * What the voice model is told it is. The important half is the second
- * paragraph: without an explicit instruction to keep talking, a voice model
- * handed an async tool goes silent waiting for it, which sounds exactly like
- * a dropped call.
+ * What the voice model is told it is.
+ *
+ * Two paragraphs are load-bearing. Without an explicit instruction to keep
+ * talking, a voice model handed an asynchronous tool goes silent waiting for
+ * it, which sounds exactly like a dropped call. And without being told that
+ * the back office is a colleague rather than a function — free to reply out
+ * of order, several times, or not at all — it treats the first message that
+ * arrives as the answer to whatever it asked last, and says so out loud.
  */
 const VOICE_INSTRUCTIONS = [
-  "You are the VOICE of a team. You are not the one who does the work: you have a",
-  "genius colleague — a careful, well-read expert with access to the customer's",
-  "systems — and they answer anything that needs real thought, real knowledge, or",
-  "any action in the world. Your job is to listen well, be good company, and speak",
-  "their answers out loud.",
+  "You are the FRONT OFFICE of a two-part team. You talk to the customer out loud;",
+  "you are not the one who does the work. Behind you is the BACK OFFICE — a",
+  "careful, well-read expert with access to the customer's systems — who does",
+  "anything that needs real thought, real knowledge, or action in the world. Your",
+  "job is to listen well, be good company, and be the voice of the two of you.",
   "",
-  "Call ask_colleague for ANY question worth getting right, and for anything you",
-  "would otherwise guess at. It returns immediately — your colleague is thinking,",
-  "not answering — so do NOT go quiet waiting for them. Say you have asked and are",
-  "waiting, and keep the conversation going meanwhile: ask what prompted the",
-  "question, or talk about something else.",
+  "Use message_back_office for anything worth getting right, and for anything you",
+  "would otherwise guess at. It is a MESSAGE, not a question: send it to ask, to",
+  "answer something they asked you, to pass on what the customer just said, or to",
+  "tell them a plan changed. It returns immediately — they are reading, not",
+  "replying — so do NOT go quiet waiting. Say you have sent it, and keep the",
+  "conversation going: ask what prompted the question, or talk about something",
+  "else.",
   "",
-  "QUESTIONS ARE NUMBERED. Asking returns 'asked as question #n'. Their answer",
-  "comes back as a message beginning 'Your colleague says, on question #n'. Your",
-  "colleague works through them one at a time and a hard question takes as long as",
-  "it takes, so answers can arrive long after you asked and not always in the order",
-  "you asked. When more than one question is outstanding, SAY WHICH ONE you are",
-  "talking about — 'on your question about the invoice…' — and if the customer asks",
-  "for something else while one is pending, tell them which number you are still",
-  "waiting on. Never read out an answer as though it belonged to a different",
-  "question: the number on the message is the only thing that says which is which.",
-  "Occasionally a message arrives with NO number — 'Your colleague says:' with",
-  "nothing after 'says'. That means nobody can tell which question it answers, so",
-  "pass it on WITHOUT claiming one: say your colleague sent this along, and let",
-  "the customer place it.",
+  "MESSAGES ARE NUMBERED, as a courtesy between the two of you. Sending returns",
+  "'sent as message #n'. Their replies arrive as 'The back office says', and when",
+  "one is about something you sent it will start with that number. Expect the",
+  "back office to be a colleague, not a machine: it may reply to your second",
+  "message before your first, send two or three about one thing, ask you a",
+  "question back, or volunteer something nobody asked for. Any of that is normal.",
+  "",
+  "So when a message arrives, read what it actually says before deciding what it",
+  "is. If it carries a number, tell the customer which thread it belongs to — 'on",
+  "the invoice you asked about…'. If it does not, do not invent one: pass it on",
+  "as something the back office sent along. If it asks you something, answer it",
+  "with message_back_office — you can see the customer and they cannot.",
   "",
   "Speak plainly and briefly — one or two sentences unless asked for more. Never",
   "read out URLs, code, or long lists.",
@@ -322,6 +327,11 @@ export class VoiceBridge extends IterateDurableObject {
      */
     let answerSeq = 0;
     let answerFrames = 0;
+    /*
+     * Audio left over from the previous provider chunk, waiting for enough of
+     * the next one to make a whole 20ms frame.
+     */
+    let spkRemainder = new Uint8Array(0);
     let appendErrors = 0;
 
     /*
@@ -446,8 +456,25 @@ export class VoiceBridge extends IterateDurableObject {
        * synchronised clock, so "is this late?" is a question only its own
        * buffer depth can answer.
        */
+      /*
+       * WHOLE FRAMES ONLY, so the remainder of one provider chunk joins the
+       * front of the next.
+       *
+       * The provider's chunks are not multiples of 20ms, so slicing each one
+       * at 640-byte boundaries left a SHORT final frame per chunk — and a
+       * listener that requires whole frames (which it must: a partial write
+       * shifts the 16-bit sample grid and every frame after it clicks)
+       * rejected each one. Measured at 2.4% of frames, which then showed up
+       * as a hole in the sequence and read for hours like packet loss.
+       */
+      const pending = spkRemainder.length + bytes.length;
+      const joined = new Uint8Array(pending);
+      joined.set(spkRemainder, 0);
+      joined.set(bytes, spkRemainder.length);
+      const whole = pending - (pending % 640);
+      spkRemainder = joined.subarray(whole);
       const events = [];
-      for (let offset = 0; offset < bytes.length; offset += 640) {
+      for (let offset = 0; offset < whole; offset += 640) {
         events.push({
           type: "voicelab/spk-frame",
           ephemeral: true as const,
@@ -458,7 +485,7 @@ export class VoiceBridge extends IterateDurableObject {
             seq: spkSeq++,
             t: Date.now(),
             tGrok,
-            pcm: bytesToBase64(bytes.subarray(offset, offset + 640)),
+            pcm: bytesToBase64(joined.subarray(offset, offset + 640)),
           },
         });
       }
@@ -466,11 +493,11 @@ export class VoiceBridge extends IterateDurableObject {
       fireAppend(...events);
     };
     /*
-     * THE GENIUS COLLEAGUE.
+     * THE BACK OFFICE.
      *
      * A text agent in this project that hears the whole conversation and is
-     * asked, by the voice model, whenever something needs to be right. Two
-     * lanes, and the split is the entire idea:
+     * messaged by the voice whenever something needs to be right. Two lanes,
+     * and the split is the entire idea:
      *
      *   listening  every finished transcript line is appended to the agent as
      *              context with "dont-trigger-request". It accumulates the
@@ -478,51 +505,63 @@ export class VoiceBridge extends IterateDurableObject {
      *              when it IS asked it already knows what was said — and no
      *              LLM request is spent on a customer who is only chatting.
      *
-     *   asking     ask_colleague appends the question and lets the agent take
-     *              its turn. This does NOT block the voice: the tool output
-     *              goes back to Grok immediately so it can say "I've asked",
-     *              and the real answer is pushed into the session whenever it
+     *   messaging  message_back_office appends what the voice sent and lets
+     *              the agent take its turn. This does NOT block the voice: the
+     *              tool output returns immediately so it can say "I've sent
+     *              that on", and whatever the back office sends — one message
+     *              or five, in any order — is pushed into the session as it
      *              arrives, as a new conversation item.
      *
      * Everything here is fire-and-forget against the call's lifetime. The
-     * colleague is a bonus, and a bonus must never be able to stall a voice.
+     * back office is a bonus, and a bonus must never be able to stall a voice.
      */
-    const colleague = url.searchParams.get("colleague") === "1";
-    const colleagueAgent = project.agents.get(COLLEAGUE_PATH);
-    let colleagueReady: Promise<boolean> | null = null;
-    let askedCount = 0;
-    const ensureColleague = () => {
-      colleagueReady ??= (async () => {
+    const backOffice = url.searchParams.get("colleague") === "1";
+    const backOfficeAgent = project.agents.get(COLLEAGUE_PATH);
+    let backOfficeReady: Promise<boolean> | null = null;
+    /** Messages sent to the back office, and messages heard back. */
+    let sentCount = 0;
+    let backOfficeHeard = 0;
+    /*
+     * The agent is long-lived and its stream holds every message it has ever
+     * sent, so anything stamped before this moment belongs to somebody else's
+     * conversation and must not be read out in this one.
+     */
+    const backOfficeSince = Date.now();
+    const ensureBackOffice = () => {
+      backOfficeReady ??= (async () => {
         try {
-          await colleagueAgent.create({});
+          await backOfficeAgent.create({});
         } catch {
           /* Already born: create over an existing agent is loud, not fatal. */
         }
         try {
-          await colleagueAgent.append({
+          await backOfficeAgent.append({
             payload: {
               content: [
-                "You are the expert half of a two-part assistant. A voice model is",
-                "talking to a customer out loud and can hear you through it; you never",
-                "speak to the customer directly. Everything they say and everything the",
-                "voice says arrives here as context, so you always know the conversation.",
+                "You are the BACK OFFICE of a two-part assistant. A voice model is",
+                "the FRONT OFFICE: it talks to a customer out loud, and it is the only",
+                "way anything you say reaches them. Everything the customer says and",
+                "everything the front office says arrives here as context, so you always",
+                "know the conversation without being asked about it.",
                 "",
-                "Most of it needs nothing from you. When you ARE asked a question,",
-                "answer it properly — use your tools, look things up, be specific — and",
-                "then reply with something short enough to be SPOKEN: two or three",
-                "sentences of plain language, no lists, no URLs, no code. Lead with the",
-                "answer. If you genuinely cannot answer, say so in one sentence.",
+                "This is messaging, not question-and-answer. You and the front office are",
+                "colleagues passing notes. Send a message whenever you have something",
+                "worth saying: an answer, a partial answer while you keep working, a",
+                "question back, a correction, or something nobody asked for that they",
+                "plainly need to know. Send as many as you like, in any order, at any",
+                "time. Nothing is waiting on you, so silence is always an option and a",
+                "slow careful reply is better than a fast wrong one.",
                 "",
-                "Answer by SENDING A CHAT MESSAGE. That is the only channel that reaches",
-                "the customer — work in scripts all you like, but the reply itself has to",
-                "be a message, and a silent agent leaves the voice apologising for you.",
+                "Messages arrive labelled 'Message #n'. When yours is about a particular",
+                "one, START with that label — '#3: An octopus has three hearts…' — so the",
+                "front office can tell the customer which thread it is picking up. When",
+                "it is about nothing in particular, just say it.",
                 "",
-                "Two rules about the shape of your reply, and they matter more than they",
-                "look. Every question arrives labelled 'Question #n'. START your reply",
-                "with that exact label — '#3: An octopus has three hearts…' — and send",
-                "EXACTLY ONE message per question. The voice announces answers by number",
-                "out loud, and a second message, or a missing number, is how it ends up",
-                "telling the customer the answer to a question they did not ask.",
+                "SEND A CHAT MESSAGE. That is the only channel that reaches the customer",
+                "— work in scripts all you like, but the words themselves have to be a",
+                "message. Everything you send will be read out loud, so write to be",
+                "spoken: two or three sentences of plain language, no lists, no URLs, no",
+                "code. Lead with the point.",
               ].join("\n"),
               key: "voicelab/colleague-brief",
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -536,18 +575,18 @@ export class VoiceBridge extends IterateDurableObject {
           return false;
         }
       })();
-      return colleagueReady;
+      return backOfficeReady;
     };
-    /** Give the colleague a line of the conversation, without waking it. */
+    /** Give the back office a line of the conversation, without waking it. */
     const overhear = (who: "customer" | "voice", text: string) => {
-      if (!colleague || text.trim().length === 0) return;
+      if (!backOffice || text.trim().length === 0) return;
       this.ctx.waitUntil(
         (async () => {
-          if (!(await ensureColleague())) return;
-          await colleagueAgent
+          if (!(await ensureBackOffice())) return;
+          await backOfficeAgent
             .append({
               payload: {
-                content: `${who === "customer" ? "Customer" : "The voice"} said: ${text}`,
+                content: `${who === "customer" ? "Customer" : "The front office"} said: ${text}`,
                 /*
                  * The whole point: context, not a prompt. Without this the
                  * colleague would take a turn on every sentence spoken in the
@@ -564,49 +603,30 @@ export class VoiceBridge extends IterateDurableObject {
       );
     };
     /*
-     * ONE QUESTION WITH THE COLLEAGUE AT A TIME, AND EVERY ANSWER NUMBERED.
+     * A MESSAGE BUS, NOT A QUESTION AND AN ANSWER.
      *
-     * `agent.ask()` is `append(question)` followed by "wait for the next
-     * agents/web-message-sent after my append's offset". That is not a
-     * correlation, it is a race, and with two asks outstanding it is a race
-     * both of them LOSE: the first reply the agent sends is after BOTH
-     * appends, so BOTH asks resolve with it. The customer hears the answer to
-     * their first question read out twice — once announced as the answer to
-     * the second — and the second question's real answer is never spoken at
-     * all, because no ask is left waiting to receive it.
+     * This was built as request/response — one question in flight, wait for
+     * its reply, correlate the two — and every hard problem in it came from
+     * that shape rather than from the platform.
      *
-     * The platform offers nothing that ties a reply to a request: the payload
-     * of web-message-sent is `{ message, files }` and there is no request id
-     * anywhere in it. So the correlation is made TRUE by keeping exactly one
-     * ask in flight — with a single outstanding question, "the agent's next
-     * message" is unambiguously the answer to it — and the queue behind it is
-     * the honest cost. The voice model is told the number it is waiting on
-     * and can say so out loud.
+     * The back office is another agent, not a function. It may answer in one
+     * message or five, answer the second message before the first, say
+     * nothing at all, ask a question BACK, or volunteer something nobody
+     * asked for. `agent.ask()` models none of that: it waits for the agent's
+     * next message after its own append, so with two questions outstanding
+     * both resolve with the first reply — measured at 22 questions sharing
+     * one answer, 21 real answers never spoken.
      *
-     * Serialisation is not quite the whole story, and the gap is measured:
-     * an agent that sends a SECOND message for a question it has already
-     * answered still slips through, because that message lands after the
-     * NEXT ask's append and is therefore the next ask's "next message". Driven
-     * deliberately, question #2 was answered with a stray message about
-     * question #1 — and announced, out loud, as the answer to #2.
-     *
-     * So the `#n` label the colleague is asked to echo is a CHECK on top, and
-     * it decides what is said rather than only what is logged:
-     *
-     *   label agrees        say "on question #n" — normal case
-     *   label disagrees     say the LABEL's number. The colleague knows what
-     *                       it is answering better than a queue position does,
-     *                       and `mislabelled` is published so the disagreement
-     *                       is visible.
-     *   no label at all     say NOTHING about which question it is. The check
-     *                       could not run, so the number cannot be vouched
-     *                       for, and a confidently wrong "on question #2" is
-     *                       worse than no number at all.
+     * So nothing here correlates anything. Messages go out; every message the
+     * back office sends comes in and is spoken. The NUMBERS are not a
+     * correlation mechanism — they are a courtesy between two language
+     * models, so the voice can say which message it is reading from and the
+     * back office can say which one it is replying to. Neither this code nor
+     * the platform ever has to be right about the pairing, which is the only
+     * reason the pairing stops being a source of bugs.
      */
-    const askQueue: { number: number; question: string }[] = [];
-    let asking = false;
-    /** Answers in hand, waiting for a gap in the conversation to be spoken. */
-    const deliverQueue: { number: number; answer: string; vouched: number | null }[] = [];
+    /** Back-office messages waiting for a gap in the conversation. */
+    const deliverQueue: string[] = [];
     let delivering = false;
 
     const pumpDelivery = async () => {
@@ -614,12 +634,12 @@ export class VoiceBridge extends IterateDurableObject {
       delivering = true;
       try {
         while (deliverQueue.length > 0 && !closedDown) {
-          const next = deliverQueue.shift()!;
+          const text = deliverQueue.shift()!;
           /*
-           * Wait for a gap. A colleague who answers while the assistant is
+           * Wait for a gap. A message arriving while the assistant is
            * mid-sentence, or while the customer is still holding the talk
-           * button, would have its response.create collide with the turn in
-           * flight — two answers, interleaved, which is the corruption this
+           * button, would put its response.create into a turn already in
+           * flight — two answers interleaved, which is the corruption this
            * lab has heard before from two bridges.
            */
           for (let waited = 0; (responseActive || micOpen) && waited < 60_000; waited += 250) {
@@ -627,36 +647,21 @@ export class VoiceBridge extends IterateDurableObject {
           }
           if (closedDown) return;
           /*
-           * Delivered as a plain conversation item and a fresh response,
-           * NOT as the tool's output: by now the voice has long since spoken,
-           * and this has to interrupt the conversation the way a colleague
-           * putting their head round the door does.
+           * A plain conversation item and a fresh response, NOT a tool
+           * output: by now the voice has long since spoken, so this has to
+           * interrupt the way a colleague putting their head round the door
+           * does.
            */
-          /*
-           * `vouched` is the number the colleague itself put on the answer.
-           * When it is null nobody can say which question this belongs to,
-           * so the voice is handed an answer with no number rather than a
-           * number that might be a lie.
-           */
-          const about = next.vouched === null ? "" : `, on question #${next.vouched}`;
           sendUpstream({
             item: {
-              content: [
-                {
-                  text:
-                    next.answer.length > 0
-                      ? `Your colleague says${about}: ${next.answer}`
-                      : `Your colleague could not answer question #${next.number} — tell the customer plainly which one it was.`,
-                  type: "input_text",
-                },
-              ],
+              content: [{ text: `The back office says: ${text}`, type: "input_text" }],
               role: "user",
               type: "message",
             },
             type: "conversation.item.create",
           });
           sendUpstream({ type: "response.create" });
-          /* Let that answer be spoken before the next one interrupts it. */
+          /* Let that be spoken before the next one interrupts it. */
           await new Promise((resolve) => setTimeout(resolve, 250));
         }
       } finally {
@@ -664,113 +669,108 @@ export class VoiceBridge extends IterateDurableObject {
       }
     };
 
-    const pumpAsks = async () => {
-      if (asking) return;
-      asking = true;
+    /*
+     * EVERY message the back office sends, forwarded — not the one some ask
+     * happens to be waiting for.
+     *
+     * Its own stream is where its outbound messages land, so this is an
+     * ordinary session connection on that stream. Messages from before this
+     * call began are somebody else's conversation: the agent is long-lived
+     * and its stream holds every message it has ever sent.
+     */
+    const watchBackOffice = async () => {
+      if (!backOffice) return;
       try {
-        while (askQueue.length > 0 && !closedDown) {
-          const next = askQueue.shift()!;
-          const startedAsk = Date.now();
-          let answer = "";
-          let labelledAs: number | null = null;
-          try {
-            if (!(await ensureColleague())) throw new Error("no colleague");
-            const reply = (await colleagueAgent.ask({
-              message: `Question #${next.number}. The customer asked, through the voice: ${next.question}`,
-              timeoutMs: 120_000,
-            })) as { payload?: { message?: string; content?: string } };
-            /*
-             * `ask` resolves on agents/web-message-sent, whose payload field
-             * is `message`. Reading `content` (the field on context items)
-             * returned an empty string for a perfectly good answer, and the
-             * voice dutifully told the customer their colleague could not
-             * help.
-             */
-            answer = reply.payload?.message ?? reply.payload?.content ?? "";
-          } catch (error) {
-            answer = "";
-            console.log(`colleague failed on question #${next.number}: ${String(error)}`);
-          }
-          const labelled = /^\s*#(\d+)\s*[:.\-–]?\s*/.exec(answer);
-          if (labelled !== null) {
-            labelledAs = Number(labelled[1]);
-            answer = answer.slice(labelled[0].length);
-          }
-          if (closedDown) return;
-          fireAppend({
-            payload: {
-              answer: answer.slice(0, 2000),
-              callId,
-              /* Non-null and different means the serialisation was bypassed —
-               * an agent that sent two messages for one question. Published,
-               * not swallowed: this is the only place it is visible. */
-              labelledAs,
-              mislabelled: labelledAs !== null && labelledAs !== next.number,
-              ms: Date.now() - startedAsk,
-              question: next.number,
-              /* No label means the answer cannot be attributed at all, and
-               * the voice will be told so rather than guessing. */
-              unlabelled: labelledAs === null && answer.length > 0,
-              waiting: askQueue.length,
-            },
-            type: "voicelab/colleague-answered",
-          });
-          deliverQueue.push({ answer, number: next.number, vouched: labelledAs });
-          void pumpDelivery();
-        }
-      } finally {
-        asking = false;
+        await project.streams.get(COLLEAGUE_PATH).openConnection({
+          connectionKey: `voicelab-back-office-${callId}`,
+          eventTypes: ["events.iterate.com/agents/web-message-sent"],
+          processEventBatch: (batch: { events: { createdAt: string; payload?: unknown }[] }) => {
+            for (const event of batch.events) {
+              if (Date.parse(event.createdAt) < backOfficeSince) continue;
+              const text = (event.payload as { message?: string })?.message ?? "";
+              if (text.trim().length === 0) continue;
+              backOfficeHeard++;
+              fireAppend({
+                ephemeral: true,
+                payload: { callId, direction: "in", heard: backOfficeHeard, text },
+                type: "voicelab/back-office-message",
+              });
+              deliverQueue.push(text);
+              void pumpDelivery();
+            }
+          },
+        });
+      } catch (error) {
+        console.log(`back office not watchable: ${String(error)}`);
       }
     };
 
+    if (backOffice) this.ctx.waitUntil(watchBackOffice());
+
     /**
-     * Ask, and deliver the answer whenever it comes. Returns the question's
-     * number, which is what the voice model is handed so it can say which
-     * question it is waiting on — and, later, which one it is answering.
+     * Send one message to the back office and return its number.
+     *
+     * The number is a label for the two models to talk about, nothing more.
+     * Delivery is fire-and-forget against the call's lifetime: the back
+     * office is a bonus, and a bonus must never be able to stall a voice.
      */
-    const askColleague = (question: string): number => {
-      const number = ++askedCount;
-      askQueue.push({ number, question });
+    const messageBackOffice = (text: string): number => {
+      const number = ++sentCount;
       fireAppend({
-        payload: { asked: number, callId, question, queuedBehind: askQueue.length - 1 },
-        type: "voicelab/colleague-asked",
+        ephemeral: true,
+        payload: { callId, direction: "out", number, text },
+        type: "voicelab/back-office-message",
       });
-      this.ctx.waitUntil(pumpAsks());
+      this.ctx.waitUntil(
+        (async () => {
+          if (!(await ensureBackOffice())) return;
+          await backOfficeAgent
+            .append({
+              payload: {
+                content: `Message #${number} from the front office: ${text}`,
+                role: "user",
+              },
+              type: "events.iterate.com/agents/context-added",
+            })
+            .catch((error: unknown) => {
+              console.log(`back office unreachable: ${String(error)}`);
+            });
+        })(),
+      );
       return number;
     };
+
     /** Function calls arrive twice on some paths; answer each exactly once. */
     const answeredToolCalls = new Set<string>();
     const handleToolCall = (id: string, name: string, argumentsJson: string) => {
-      if (name !== "ask_colleague" || answeredToolCalls.has(id)) return;
+      if (name !== "message_back_office" || answeredToolCalls.has(id)) return;
       answeredToolCalls.add(id);
-      let question = "";
+      let text = "";
       try {
-        question = String(
-          (JSON.parse(argumentsJson || "{}") as { question?: unknown }).question ?? "",
-        );
+        text = String((JSON.parse(argumentsJson || "{}") as { text?: unknown }).text ?? "");
       } catch {
-        question = argumentsJson;
+        text = argumentsJson;
       }
       /*
-       * Answer the TOOL immediately, before the colleague has thought about
-       * anything. A voice model waiting on a function output is a voice model
-       * saying nothing, and thirty seconds of nothing is a dropped call as
-       * far as anyone listening can tell.
+       * Answer the TOOL immediately, before the back office has read anything.
+       * A voice model waiting on a function output is a voice model saying
+       * nothing, and thirty seconds of nothing is a dropped call as far as
+       * anyone listening can tell.
        *
-       * The NUMBER is the point of this reply. Two questions in a call become
-       * two answers arriving minutes later in an order nobody controls, and a
-       * voice that cannot name which one it is reading is a voice that sounds
-       * like it has lost the thread. So the model is handed the number as it
-       * asks, and gets it back on the answer.
+       * The number is what the reply is for: replies arrive later, out of
+       * order, possibly several to one message and possibly about nothing
+       * that was sent at all, and a voice that cannot name which thread it is
+       * picking up sounds like it has lost the plot.
        */
-      const number = askColleague(question);
+      const number = messageBackOffice(text);
       sendUpstream({
         item: {
           call_id: id,
           output: JSON.stringify({
-            status: "asked",
-            tell_the_customer: `asked as question #${number} - colleague will get back to you ASAP. you can tell the human to wait or speak about something else`,
+            status: "sent",
+            tell_the_customer: `sent as message #${number} - the back office will reply when it has something. you can tell the human to wait or speak about something else`,
           }),
+
           type: "function_call_output",
         },
         type: "conversation.item.create",
@@ -984,28 +984,30 @@ export class VoiceBridge extends IterateDurableObject {
              * choosing whether to ask a colleague is a judgement it can
              * make in the time it takes to say "let me check".
              */
-            ...(colleague
+            ...(backOffice
               ? {
                   tool_choice: "auto",
                   tools: [
                     {
                       description:
-                        "Ask your genius colleague — a careful expert with access to the " +
-                        "customer's systems — anything that needs real thought, knowledge, " +
-                        "or action. Returns immediately: they are thinking, not answering. " +
-                        "Keep talking to the customer while you wait; their answer will " +
-                        "arrive as a message beginning 'Your colleague says'.",
-                      name: "ask_colleague",
+                        "Send a message to the back office — a careful expert with access " +
+                        "to the customer's systems, who does anything that needs real " +
+                        "thought, knowledge, or action. Use it to ask, to answer a " +
+                        "question they asked you, or to pass anything along. It returns " +
+                        "immediately: they are reading, not replying. Keep talking to the " +
+                        "customer meanwhile. Their messages arrive as 'The back office " +
+                        "says', whenever they have something, in any number.",
+                      name: "message_back_office",
                       parameters: {
                         properties: {
-                          question: {
+                          text: {
                             description:
-                              "The question, in full. Your colleague can hear the " +
-                              "conversation, but write it so it stands on its own.",
+                              "What to say to them. They can hear the conversation, but " +
+                              "write it so it stands on its own.",
                             type: "string",
                           },
                         },
-                        required: ["question"],
+                        required: ["text"],
                         type: "object",
                       },
                       type: "function",
@@ -1096,7 +1098,7 @@ export class VoiceBridge extends IterateDurableObject {
        * Only FINISHED lines: deltas would fill its context with fragments of
        * half-spoken sentences.
        */
-      if (colleague) {
+      if (backOffice) {
         const full = grokEvent as {
           type: string;
           transcript?: string;
@@ -1151,6 +1153,9 @@ export class VoiceBridge extends IterateDurableObject {
          */
         answerSeq++;
         answerFrames = 0;
+        /* A new answer starts on a frame boundary: carrying the remainder
+         * across would put the tail of the last one at the head of this. */
+        spkRemainder = new Uint8Array(0);
       }
       if (grokEvent.type === "response.done") responseActive = false;
       if (FORWARDED_GROK_EVENTS.has(grokEvent.type)) {
