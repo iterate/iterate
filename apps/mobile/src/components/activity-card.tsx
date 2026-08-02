@@ -241,6 +241,9 @@ function CodeStepTabs({
                 projectId={approvals.projectId}
                 projectSlug={approvals.projectSlug}
                 resolved={batch.resolved}
+                // The card lives inside the thread this batch came from — a
+                // provenance block here would point at itself.
+                showThreadInfo={false}
                 surface={`activity:${step.executionId}`}
               />
             </View>
@@ -396,17 +399,26 @@ const styles = StyleSheet.create({
   glyphOpen: { color: colors.working },
   glyphApproved: { color: colors.accent },
   glyphRejected: { color: colors.danger },
-  tabRow: { flexDirection: "row", gap: spacing.xs },
-  tab: {
-    borderColor: colors.border,
-    borderRadius: radius.full,
-    borderWidth: 1,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 3,
+  // A flat TAB bar, deliberately unlike any status badge: full-width
+  // baseline rule, the active tab marked by a neutral-foreground underline
+  // (never the accent — that is the approval badges' color), inactive
+  // labels muted.
+  tabRow: {
+    borderBottomColor: colors.border,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    flexDirection: "row",
+    gap: spacing.md,
   },
-  tabActive: { backgroundColor: colors.background, borderColor: colors.accent },
-  tabLabel: { color: colors.textMuted, fontSize: 11, fontWeight: "600" },
-  tabLabelActive: { color: colors.accent },
+  tab: {
+    borderBottomColor: "transparent",
+    borderBottomWidth: 2,
+    marginBottom: -StyleSheet.hairlineWidth,
+    paddingBottom: 4,
+    paddingTop: 2,
+  },
+  tabActive: { borderBottomColor: colors.text },
+  tabLabel: { color: colors.textFaint, fontSize: 12, fontWeight: "600" },
+  tabLabelActive: { color: colors.text },
   tabBody: { gap: spacing.xs },
   batch: { gap: 4 },
   decisionRow: { flexDirection: "row" },

@@ -198,3 +198,20 @@ Removal-round log:
 - [x] VIDEO_MODE re-record of approvals spec → activity-tabs.webm
       (32s: live card with Script|Approvals tabs + ◷, settled cards with
       ✓/✗, Approvals tab opened)
+
+Review round (tabbed-cards screenshot feedback):
+
+- [x] Self-referential provenance block hidden inside activity cards
+      _ApprovalBatchBody gains a REQUIRED `showThreadInfo` prop (explicit at
+      both callsites per repo preference): the Notifications expansion
+      passes true, the activity card false — the card lives inside the
+      thread the block would link to. The non-script "Triggered from …" /
+      "Source metadata unavailable" fallbacks are gated too (same
+      provenance concern)_
+- [x] Tab selection restyled to read as a TAB, not a pill
+      _flat tab bar: full-width hairline baseline in colors.border, active
+      tab marked by a 2px underline + label in neutral colors.text (never
+      the accent — that is the status badges' color), inactive labels
+      textFaint. No borders/pills/backgrounds, so nothing resembles the
+      Approved/Rejected badges. Spec tab presses target role+name, so the
+      restyle needed no selector changes_

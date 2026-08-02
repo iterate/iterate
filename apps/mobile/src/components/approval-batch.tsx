@@ -47,7 +47,10 @@ import { CodeBlock } from "./activity-card.tsx";
  * is null while the batch is undecided — outcome lines and verdicts appear
  * once it isn't. `surface` keys the sub-toggle cache per mount surface, so
  * e.g. expanding the members list on the approvals screen doesn't expand it
- * inside a notification row too.
+ * inside a notification row too. `showThreadInfo` gates the provenance
+ * header (Triggered by codemode · stream path · Open thread): the
+ * Notifications expansion wants it, the activity card does NOT — the card
+ * already lives inside that thread, so the block would point at itself.
  */
 export function ApprovalBatchBody({
   baseUrl,
@@ -56,6 +59,7 @@ export function ApprovalBatchBody({
   projectId,
   projectSlug,
   resolved,
+  showThreadInfo,
   surface,
 }: {
   baseUrl: string;
@@ -64,6 +68,7 @@ export function ApprovalBatchBody({
   projectId: string;
   projectSlug: string;
   resolved: ResolvedBatch | null;
+  showThreadInfo: boolean;
   surface: string;
 }) {
   const queryClient = useQueryClient();
@@ -157,29 +162,31 @@ export function ApprovalBatchBody({
 
       {streamContext?.kind === "script-execution" ? (
         <View style={styles.detailSection}>
-          <View style={styles.sourceHeader}>
-            <View style={styles.sourceCopy}>
-              <Text style={styles.detailLabel}>Triggered by codemode</Text>
-              <Text style={styles.sourceMeta} selectable>
-                {streamContext.streamPath} · script event #
-                {streamContext.scriptRunRequestedEventOffset}
-              </Text>
+          {showThreadInfo ? (
+            <View style={styles.sourceHeader}>
+              <View style={styles.sourceCopy}>
+                <Text style={styles.detailLabel}>Triggered by codemode</Text>
+                <Text style={styles.sourceMeta} selectable>
+                  {streamContext.streamPath} · script event #
+                  {streamContext.scriptRunRequestedEventOffset}
+                </Text>
+              </View>
+              {streamContext.streamPath.startsWith("/agents/") ? (
+                <Pressable
+                  accessibilityRole="link"
+                  onPress={() =>
+                    router.push({
+                      pathname: "/project/[projectId]/chat",
+                      params: { path: streamContext.streamPath, projectId, slug: projectSlug },
+                    })
+                  }
+                  style={styles.threadLink}
+                >
+                  <Text style={styles.threadLinkText}>Open thread</Text>
+                </Pressable>
+              ) : null}
             </View>
-            {streamContext.streamPath.startsWith("/agents/") ? (
-              <Pressable
-                accessibilityRole="link"
-                onPress={() =>
-                  router.push({
-                    pathname: "/project/[projectId]/chat",
-                    params: { path: streamContext.streamPath, projectId, slug: projectSlug },
-                  })
-                }
-                style={styles.threadLink}
-              >
-                <Text style={styles.threadLinkText}>Open thread</Text>
-              </Pressable>
-            ) : null}
-          </View>
+          ) : null}
           <Pressable
             accessibilityRole="button"
             onPress={() => toggle("script")}
@@ -202,11 +209,11 @@ export function ApprovalBatchBody({
             )
           ) : null}
         </View>
-      ) : streamContext ? (
+      ) : showThreadInfo && streamContext ? (
         <Text style={styles.sourceMeta}>Triggered from {streamContext.scopePath}</Text>
-      ) : (
+      ) : showThreadInfo ? (
         <Text style={styles.sourceMeta}>Source metadata unavailable for this request.</Text>
-      )}
+      ) : null}
 
       <View style={styles.policy}>
         <Text style={styles.detailLabel}>Approval policy</Text>

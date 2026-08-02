@@ -301,6 +301,7 @@ function ApprovalNotificationDetail({
         projectId={projectId}
         projectSlug={projectSlug}
         resolved={resolved}
+        showThreadInfo={true}
         surface="notification"
       />
       {resolved === null && !expired ? (
