@@ -110,11 +110,14 @@ if(APPLE)
   find_library(ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK AudioToolbox REQUIRED)
   find_library(ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
   add_executable(iterate-kit-cli
+    targets/host_cli/cli_audio_in.c
     targets/host_cli/cli_audio_out.c
     targets/host_cli/cli_capabilities.c
     targets/host_cli/cli_conversation.c
+    targets/host_cli/cli_keyboard.c
     targets/host_cli/cli_microphone.c
     targets/host_cli/cli_options.c
+    targets/host_cli/cli_paced_sink.c
     targets/host_cli/cli_report.c
     targets/host_cli/cli_speaker.c
     targets/host_cli/cli_wav.c
@@ -134,6 +137,34 @@ if(APPLE)
     iterate-kit-posix
     ${ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK}
     ${ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK}
+  )
+
+  # Inside if(APPLE) because the capture handle names CoreAudio types, even
+  # though every case in the test drives the handoff ring rather than a device.
+  add_executable(iterate-kit-cli-audio-in-test
+    targets/host_cli/cli_audio_in.c
+    tests/cli_audio_in_test.c
+  )
+  target_include_directories(
+    iterate-kit-cli-audio-in-test PRIVATE targets/host_cli)
+  target_link_libraries(
+    iterate-kit-cli-audio-in-test PRIVATE
+    iterate-kit-core
+    ${ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK}
+  )
+  target_compile_features(
+    iterate-kit-cli-audio-in-test PRIVATE c_std_11)
+  target_compile_options(iterate-kit-cli-audio-in-test PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+    -Wpedantic
+    -Wconversion
+    -Wshadow
+  )
+  add_test(
+    NAME iterate-kit-cli-audio-in-test
+    COMMAND iterate-kit-cli-audio-in-test
   )
 endif()
 
@@ -891,6 +922,51 @@ add_test(
   COMMAND iterate-kit-cli-speaker-test
 )
 
+add_executable(iterate-kit-cli-paced-sink-test
+  targets/host_cli/cli_paced_sink.c
+  targets/host_cli/cli_speaker.c
+  tests/cli_paced_sink_test.c
+)
+target_include_directories(
+  iterate-kit-cli-paced-sink-test PRIVATE targets/host_cli)
+target_link_libraries(
+  iterate-kit-cli-paced-sink-test PRIVATE iterate-kit-core)
+target_compile_features(
+  iterate-kit-cli-paced-sink-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli-paced-sink-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+)
+add_test(
+  NAME iterate-kit-cli-paced-sink-test
+  COMMAND iterate-kit-cli-paced-sink-test
+)
+
+add_executable(iterate-kit-cli-keyboard-test
+  targets/host_cli/cli_keyboard.c
+  tests/cli_keyboard_test.c
+)
+target_include_directories(
+  iterate-kit-cli-keyboard-test PRIVATE targets/host_cli)
+target_compile_features(
+  iterate-kit-cli-keyboard-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli-keyboard-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+)
+add_test(
+  NAME iterate-kit-cli-keyboard-test
+  COMMAND iterate-kit-cli-keyboard-test
+)
+
 add_executable(iterate-kit-cli-microphone-test
   targets/host_cli/cli_microphone.c
   tests/cli_microphone_test.c
@@ -969,6 +1045,30 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-voicelab-stream-test
   COMMAND iterate-kit-voicelab-stream-test
+)
+
+# Reaches the static mu-law codec by including its translation unit, so the
+# wire format keeps its private interface. Warning flags match iterate-kit-core
+# because the included source is compiled here under this target's options.
+add_executable(iterate-kit-mulaw-roundtrip-test
+  tests/mulaw_roundtrip_test.c
+)
+target_include_directories(
+  iterate-kit-mulaw-roundtrip-test PRIVATE components/core/src)
+target_compile_features(
+  iterate-kit-mulaw-roundtrip-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-mulaw-roundtrip-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-mulaw-roundtrip-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-mulaw-roundtrip-test
+  COMMAND iterate-kit-mulaw-roundtrip-test
 )
 
 add_executable(iterate-kit-capnweb-oneway-call-test

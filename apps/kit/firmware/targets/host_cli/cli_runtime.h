@@ -15,11 +15,14 @@
 #include <stdint.h>
 
 #include "capnweb/capnweb.h"
+#include "cli_audio_in.h"
 #include "cli_audio_out.h"
 #include "cli_capabilities.h"
 #include "cli_conversation.h"
+#include "cli_keyboard.h"
 #include "cli_microphone.h"
 #include "cli_options.h"
+#include "cli_paced_sink.h"
 #include "cli_speaker.h"
 #include "cli_wav.h"
 #include "iterate/kit/audio_playout.h"
@@ -69,7 +72,16 @@ struct cli_runtime {
   struct cli_wav_source source;
   struct cli_wav_sink sink;
   struct cli_audio_out live_out;
+  struct cli_audio_in live_in;
+  struct cli_keyboard keyboard;
+  /* Models the converter's clock; unpaced by default. See cli_paced_sink.h. */
+  struct cli_paced_sink paced_sink;
   struct cli_conversation conversation;
+  /** Wall-clock end of an interactive session; 0 means no limit was asked. */
+  uint64_t finish_at_ms;
+  /** A hang-up is in progress: the call is being ended before the process is. */
+  bool hanging_up;
+  uint64_t hangup_deadline_ms;
   bool wants_call;
   bool wants_talk;
   bool talking;
@@ -123,6 +135,15 @@ struct cli_runtime {
 
 /** Monotonic milliseconds used by the runtime and voicelab callbacks. */
 uint64_t cli_runtime_now_ms(void *context);
+
+/**
+ * The same monotonic clock in microseconds.
+ *
+ * The converter model's period is 20000 us, and a millisecond stamp cannot
+ * express a rate that does not divide 1000 evenly — which every rate worth
+ * sweeping does not.
+ */
+uint64_t cli_runtime_now_us(void);
 
 /** Emit one timestamped diagnostic line. The caller chooses its severity. */
 void cli_runtime_log(const char *level, const char *format, ...);

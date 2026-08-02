@@ -54,9 +54,28 @@ struct cli_options {
   const char *report_json;
   /** Minutes of unattended conversation; 0 means "just stay mounted". */
   double converse_minutes;
+  /**
+   * Wall-clock limit for an interactive session; 0 means "until told to stop".
+   *
+   * Deliberately not the same field as `converse_minutes`: one bounds a driver
+   * that takes turns by itself, the other bounds a person sitting at a
+   * terminal, and a single field would make the two indistinguishable at every
+   * site that has to ask which kind of run this is.
+   */
+  double minutes;
   /** Every Nth utterance forces a back-office consultation; 0 disables. */
   uint32_t back_office_every;
+  /**
+   * Frames per second the modelled converter consumes; 0 leaves the speaker
+   * the file it has always been. See cli_paced_sink.h for what turning it on
+   * makes reachable, and adversarial-seams.md for why it exists.
+   */
+  uint32_t speaker_pace_fps;
   bool live_audio;
+  /** Captures from this machine's default input device instead of a WAV. */
+  bool live_mic;
+  /** Hold SPACE to talk, release to send, q to hang up. */
+  bool push_to_talk;
   /** Skips TLS certificate verification. Off unless explicitly asked for. */
   bool insecure;
 };

@@ -82,15 +82,29 @@ static const char base64_alphabet[] =
  * too. The bridge expands it back to PCM16 before the provider ever sees it.
  */
 static uint8_t mulaw_encode_sample(int16_t sample) {
-  const int16_t BIAS = 0x84;
-  const int16_t CLIP = 32635;
-  int sign = (sample >> 8) & 0x80;
+  const int BIAS = 0x84;
+  const int CLIP = 32635;
+  const int sign = (sample >> 8) & 0x80;
   int magnitude;
   int exponent;
   int mantissa;
-  if (sign != 0) sample = (int16_t)-sample;
-  if (sample > CLIP) sample = CLIP;
-  magnitude = sample + BIAS;
+  /*
+   * THE MAGNITUDE IS TAKEN IN int, NOT BACK INTO int16_t.
+   *
+   * -32768 has no positive counterpart in sixteen bits. Negating it into an
+   * int16_t wrapped it straight back to -32768, so the clip below never
+   * fired, the segment search ran over a NEGATIVE magnitude, and the sample
+   * encoded as 0x7F — which expands to zero. One full-scale negative sample,
+   * which is exactly what a clipping input stage produces, became silence in
+   * the middle of loud speech: the loudest click this format can express, on
+   * the uplink, where nothing downstream could attribute it.
+   *
+   * Found by sweeping all 65536 samples through encode and expand; it was the
+   * only value in the range that did not come back.
+   */
+  int value = sign != 0 ? -(int)sample : (int)sample;
+  if (value > CLIP) value = CLIP;
+  magnitude = value + BIAS;
   exponent = 7;
   for (int mask = 0x4000; (magnitude & mask) == 0 && exponent > 0; mask >>= 1) {
     --exponent;

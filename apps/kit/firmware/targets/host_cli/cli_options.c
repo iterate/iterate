@@ -40,8 +40,12 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_SPEAKER_WAV,
   CLI_OPTIONS_FIELD_REPORT_JSON,
   CLI_OPTIONS_FIELD_CONVERSE,
+  CLI_OPTIONS_FIELD_MINUTES,
   CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY,
+  CLI_OPTIONS_FIELD_SPEAKER_PACE,
   CLI_OPTIONS_FIELD_LIVE_AUDIO,
+  CLI_OPTIONS_FIELD_LIVE_MIC,
+  CLI_OPTIONS_FIELD_PUSH_TO_TALK,
   CLI_OPTIONS_FIELD_INSECURE,
   CLI_OPTIONS_FIELD_HELP,
 };
@@ -93,6 +97,17 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    "silence (default iterate-kit-playback.wav)\n"},
   {"--live-audio", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_LIVE_AUDIO,
    NULL, "  --live-audio          Also send the true timeline to CoreAudio\n"},
+  {"--live-mic", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_LIVE_MIC,
+   NULL,
+   "  --live-mic            Capture from this Mac's default input instead of "
+   "--mic-wav\n"},
+  {"--push-to-talk", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_PUSH_TO_TALK,
+   NULL,
+   "  --push-to-talk        Hold SPACE to talk, release to send, q to hang "
+   "up\n"},
+  {"--minutes", CLI_OPTIONS_KIND_MINUTES, CLI_OPTIONS_FIELD_MINUTES,
+   NULL,
+   "  --minutes MINUTES     Wall-clock limit for an interactive session\n"},
   {"--converse", CLI_OPTIONS_KIND_MINUTES, CLI_OPTIONS_FIELD_CONVERSE,
    NULL, "  --converse MINUTES    Run the unattended conversation driver\n"},
   {"--utterance-dir", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_UTTERANCE_DIR,
@@ -103,6 +118,10 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY, NULL,
    "  --colleague-every N   Use the colleague-forcing utterance every "
    "Nth turn (0 disables)\n"},
+  {"--speaker-pace", CLI_OPTIONS_KIND_COUNT, CLI_OPTIONS_FIELD_SPEAKER_PACE,
+   NULL,
+   "  --speaker-pace FPS    Model a converter consuming FPS frames/second "
+   "(0 disables; 50 is the device)\n"},
   {"--report-json", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_REPORT_JSON,
    NULL,
    "  --report-json FILE    Unattended JSON report (default "
@@ -165,6 +184,10 @@ static void cli_options_fill_defaults(struct cli_options *out);
 
 /* Rejects an options set nothing could act on. */
 static enum cli_options_status cli_options_check(
+    const struct cli_options *out, char *problem, size_t problem_bytes);
+
+/* Rejects flag pairs that cannot both be honoured. Fails ERR_INCOMPATIBLE. */
+static enum cli_options_status cli_options_check_combinations(
     const struct cli_options *out, char *problem, size_t problem_bytes);
 
 const char *cli_options_status_name(enum cli_options_status status)
@@ -296,9 +319,15 @@ static enum cli_options_status cli_options_apply(
     case CLI_OPTIONS_FIELD_REPORT_JSON: out->report_json = value; break;
     case CLI_OPTIONS_FIELD_CONVERSE:
       return cli_options_read_minutes(value, &out->converse_minutes);
+    case CLI_OPTIONS_FIELD_MINUTES:
+      return cli_options_read_minutes(value, &out->minutes);
     case CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY:
       return cli_options_read_count(value, &out->back_office_every);
+    case CLI_OPTIONS_FIELD_SPEAKER_PACE:
+      return cli_options_read_count(value, &out->speaker_pace_fps);
     case CLI_OPTIONS_FIELD_LIVE_AUDIO: out->live_audio = true; break;
+    case CLI_OPTIONS_FIELD_LIVE_MIC: out->live_mic = true; break;
+    case CLI_OPTIONS_FIELD_PUSH_TO_TALK: out->push_to_talk = true; break;
     case CLI_OPTIONS_FIELD_INSECURE: out->insecure = true; break;
     case CLI_OPTIONS_FIELD_HELP: break;
     default: break;
@@ -419,8 +448,37 @@ static enum cli_options_status cli_options_check(
     cli_options_note(problem, problem_bytes, "--os-base-url");
     return CLI_OPTIONS_ERR_REQUIRED;
   }
+  return cli_options_check_combinations(out, problem, problem_bytes);
+}
+
+static enum cli_options_status cli_options_check_combinations(
+    const struct cli_options *out, char *problem, size_t problem_bytes)
+{
+  assert(out != NULL);
   if (out->converse_minutes > 0.0 && out->utterance_dir == NULL) {
     cli_options_note(problem, problem_bytes, "--converse needs --utterance-dir");
+    return CLI_OPTIONS_ERR_INCOMPATIBLE;
+  }
+  /*
+   * Two drivers, one talk button. --converse takes turns on a schedule and
+   * --push-to-talk takes them when a person presses a key; run together, each
+   * would end the other's turn and the report would describe a conversation
+   * neither of them had. Picking one silently is worse than refusing: the
+   * operator would spend the session wondering why their key does nothing.
+   */
+  if (out->push_to_talk && out->converse_minutes > 0.0) {
+    cli_options_note(
+        problem, problem_bytes, "--push-to-talk cannot run with --converse");
+    return CLI_OPTIONS_ERR_INCOMPATIBLE;
+  }
+  /*
+   * A live microphone and a recorded one are both "the microphone", and there
+   * is no useful reading of both. Preferring one would make the other flag a
+   * no-op that looks like it worked.
+   */
+  if (out->live_mic && out->mic_wav != NULL) {
+    cli_options_note(
+        problem, problem_bytes, "--live-mic cannot run with --mic-wav");
     return CLI_OPTIONS_ERR_INCOMPATIBLE;
   }
   return CLI_OPTIONS_OK;
