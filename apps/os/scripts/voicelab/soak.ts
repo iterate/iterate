@@ -128,6 +128,7 @@ export async function soak(options: SoakOptions) {
   let lastDelivery = Date.now();
   let watchGeneration = 0;
   let watchReopens = 0;
+  let redials = 0;
   const openWatch = () =>
     stream.openConnection({
       connectionKey: `soak-${startedAt}-g${++watchGeneration}`,
@@ -136,6 +137,7 @@ export async function soak(options: SoakOptions) {
         "voicelab/grok-event",
         "voicelab/call-accepted",
         "voicelab/call-ended",
+        "voicelab/bridge-redialling",
       ],
       /*
        * Speaker frames are deliberately NOT subscribed. They are the bulk of
@@ -158,6 +160,17 @@ export async function soak(options: SoakOptions) {
           }
           if (event.type === "voicelab/call-ended") {
             note(`CALL ENDED: ${String(payload.reason)}`);
+            continue;
+          }
+          if (event.type === "voicelab/bridge-redialling") {
+            /*
+             * Not a failure: the provider closes its socket on its own
+             * schedule and the bridge replaces it underneath the
+             * conversation. Worth counting — a redial per turn would mean
+             * something else is wrong — but the turns are the verdict.
+             */
+            redials++;
+            note(`bridge redialling (${String(payload.reason)})`);
             continue;
           }
           const inner = (payload as { event?: { type?: string; delta?: string } }).event;
@@ -320,6 +333,8 @@ export async function soak(options: SoakOptions) {
     unanswered,
     /* Not a device fault: this is how often the WATCHER had to be replaced. */
     watchReopens,
+    /* How often the bridge replaced its provider socket under the call. */
+    bridgeRedials: redials,
   };
   const verdict =
     unanswered === 0 && Object.keys(moved).length === 0 && summary.reboots === 0 ? "PASS" : "FAIL";

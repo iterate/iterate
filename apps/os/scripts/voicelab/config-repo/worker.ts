@@ -112,15 +112,27 @@ export class VoiceBridge extends IterateDurableObject {
       this.#endActiveCall("superseded by a new call on this stream", true);
       this.#endActiveCall = null;
     }
-    const upstreamResponse = await fetch(`https://api.x.ai/v1/realtime?model=${model}`, {
-      headers: { Upgrade: "websocket", Authorization: `Bearer getSecret("${XAI_SECRET}")` },
-    });
-    const upstream = upstreamResponse.webSocket;
-    if (upstream === null) {
-      return new Response(`xai upgrade failed: ${upstreamResponse.status}`, { status: 502 });
+    const dialGrok = async () => {
+      const response = await fetch(`https://api.x.ai/v1/realtime?model=${model}`, {
+        headers: { Upgrade: "websocket", Authorization: `Bearer getSecret("${XAI_SECRET}")` },
+      });
+      const socket = response.webSocket;
+      if (socket === null) return { socket: null, status: response.status };
+      socket.binaryType = "arraybuffer"; // before accept(): post-2025-03-17 default is Blob
+      socket.accept();
+      return { socket, status: response.status };
+    };
+    const first = await dialGrok();
+    if (first.socket === null) {
+      return new Response(`xai upgrade failed: ${first.status}`, { status: 502 });
     }
-    upstream.binaryType = "arraybuffer"; // before accept(): post-2025-03-17 compat default is Blob
-    upstream.accept();
+    /*
+     * MUTABLE. The provider closes this socket on its own schedule — measured
+     * at 296s into an hour-long soak, 18s after the last audio — and a call
+     * that dies with it is a call that cannot last an hour. It is redialled
+     * underneath the conversation instead; see attachGrok below.
+     */
+    let upstream = first.socket;
 
     // The anchor pair exists only for the socket-shaped modes; a detached
     // call has no client end at all.
@@ -596,7 +608,21 @@ export class VoiceBridge extends IterateDurableObject {
     /** True between a turn's start and its commit: the customer is speaking. */
     let micOpen = false;
 
-    upstream.addEventListener("message", (event) => {
+    /*
+     * What has been said, so a redialled session does not start amnesiac.
+     * Bounded: this is context for continuity, not a transcript store, and
+     * an hour of talking must not grow an unbounded array in a DO.
+     */
+    const history: { role: "assistant" | "user"; text: string }[] = [];
+    const remember = (role: "assistant" | "user", text: string) => {
+      if (text.trim().length === 0) return;
+      history.push({ role, text });
+      if (history.length > 24) history.splice(0, history.length - 24);
+    };
+    let grokGeneration = 0;
+    let redials = 0;
+
+    const onGrokMessage = (event: MessageEvent) => {
       const tGrok = Date.now();
       lastActivityAt = tGrok;
       if (typeof event.data !== "string") {
@@ -667,6 +693,36 @@ export class VoiceBridge extends IterateDurableObject {
         return;
       }
       if (grokEvent.type === "session.updated") {
+        /*
+         * On a redial, hand the new session what was already said. Without
+         * this the model wakes with no memory mid-conversation, and the
+         * customer — who noticed nothing — is talking to someone who just
+         * walked in. Bounded to the recent turns; this is continuity, not a
+         * transcript store.
+         */
+        if (history.length > 0) {
+          upstream.send(
+            JSON.stringify({
+              item: {
+                content: [
+                  {
+                    text:
+                      "This conversation is already in progress; you were briefly " +
+                      "disconnected and the customer did not notice. It so far:\n" +
+                      history
+                        .map((line) => `${line.role === "user" ? "Customer" : "You"}: ${line.text}`)
+                        .join("\n") +
+                      "\n\nCarry on. Do not greet them or mention any interruption.",
+                    type: "input_text",
+                  },
+                ],
+                role: "user",
+                type: "message",
+              },
+              type: "conversation.item.create",
+            }),
+          );
+        }
         fireAppend({
           type: "voicelab/call-accepted",
           payload: {
@@ -674,6 +730,7 @@ export class VoiceBridge extends IterateDurableObject {
             bridgeId,
             callId,
             model,
+            redials,
           },
         });
         /*
@@ -688,6 +745,12 @@ export class VoiceBridge extends IterateDurableObject {
       if (grokEvent.type === "response.output_audio.delta" && grokEvent.delta !== undefined) {
         appendSpkPcm(new Uint8Array(base64ToBytes(grokEvent.delta)), tGrok);
         return;
+      }
+      if (grokEvent.type === "response.output_audio_transcript.done") {
+        remember("assistant", (grokEvent as { transcript?: string }).transcript ?? "");
+      }
+      if (grokEvent.type === "conversation.item.input_audio_transcription.completed") {
+        remember("user", (grokEvent as { transcript?: string }).transcript ?? "");
       }
       /*
        * The colleague listens through the same transcript the screen shows.
@@ -774,7 +837,65 @@ export class VoiceBridge extends IterateDurableObject {
           fireAppend(event);
         }
       }
-    });
+    };
+
+    /*
+     * Wire a Grok socket into this call. Called for the first one and for
+     * every redial, so a replacement is indistinguishable from the original
+     * everywhere else in this file — the only thing that knows a redial
+     * happened is the session.updated handler, which replays the
+     * conversation so far.
+     */
+    const attachGrok = (socket: WebSocket, generation: number) => {
+      socket.addEventListener("message", onGrokMessage);
+      socket.addEventListener("close", (event) => {
+        // A socket that has already been replaced closes on its way out.
+        if (generation !== grokGeneration || closedDown) return;
+        void redialGrok(`grok closed ${event.code}`);
+      });
+    };
+
+    /*
+     * The provider hangs up; the CALL does not.
+     *
+     * Measured: the socket closed 296s into an hour-long soak, 18s after the
+     * last audio, and everything downstream treated it as the end of the
+     * conversation — the bridge tore down, the device cleared its intent, and
+     * 55 minutes of soak ran against nothing. A call that cannot outlive its
+     * provider's socket cannot last an hour.
+     *
+     * So the socket is replaced under the conversation. session.update is
+     * re-sent by the ordinary session.created path, and what was said so far
+     * is replayed as conversation items, so the model picks the thread back
+     * up rather than greeting a stranger.
+     */
+    const redialGrok = async (reason: string) => {
+      if (closedDown) return;
+      redials++;
+      /* Bounded: a provider refusing us forever must end the call, not spin. */
+      if (redials > 40) return teardown(`${reason}; redialled ${redials} times`);
+      fireAppend({
+        ephemeral: true,
+        payload: { bridgeId, callId, reason, redials },
+        type: "voicelab/bridge-redialling",
+      });
+      responseActive = false;
+      paceQueue.length = 0;
+      paceStartedAt = 0;
+      pacedFrames = 0;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(500 * redials, 5000)));
+      if (closedDown) return;
+      const next = await dialGrok().catch(() => ({ socket: null, status: 0 }));
+      if (next.socket === null) {
+        console.log(`redial failed (${next.status}); retrying`);
+        return void redialGrok(`redial failed ${next.status}`);
+      }
+      grokGeneration++;
+      upstream = next.socket;
+      attachGrok(next.socket, grokGeneration);
+    };
+
+    attachGrok(upstream, grokGeneration);
 
     // Live subscription for mic frames + control. Session connections die
     // silently (push budget ~1000, DO resets), so recycle make-before-break
@@ -985,7 +1106,7 @@ export class VoiceBridge extends IterateDurableObject {
       resolveFinished();
     };
     this.#endActiveCall = teardown;
-    upstream.addEventListener("close", (event) => teardown(`grok closed ${event.code}`));
+    /* Grok's close is handled by attachGrok: it redials rather than ending. */
     server?.addEventListener("close", () => teardown("anchor socket closed"));
     server?.addEventListener("message", () => {
       /* anchor keepalive pings — content ignored */
