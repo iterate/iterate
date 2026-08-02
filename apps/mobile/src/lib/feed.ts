@@ -116,9 +116,7 @@ export function summarizeActivity(activity: AgentUiActivity): string {
  * produces round 2, 3, … A round opens at every llm step (or at a code step
  * with no llm before it — replays can drop the llm half).
  */
-export function groupActivityRounds(
-  steps: readonly AgentUiStepInternal[],
-): {
+export function groupActivityRounds(steps: readonly AgentUiStepInternal[]): {
   llm: Extract<AgentUiStepInternal, { kind: "llm" }> | null;
   code: Extract<AgentUiStepInternal, { kind: "code" }> | null;
 }[] {
