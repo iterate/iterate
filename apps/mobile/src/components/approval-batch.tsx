@@ -256,7 +256,7 @@ export function ApprovalBatchActions({
   });
   const enrolledKey = key.data?.kind === "enrolled" ? key.data.key : null;
   const respond = useMutation({
-    mutationFn: async (decision: "approve" | "reject") => {
+    mutationFn: async (decision: "approve" | "reject"): Promise<"decided" | "cancelled"> => {
       const project = await getProjectItx(baseUrl, projectId);
       const stream = project.streams.get("/");
       const verdicts = payload.requests.map(
@@ -264,7 +264,7 @@ export function ApprovalBatchActions({
       );
       if (decision === "reject") {
         const reason = await promptForRejectReason(payload.requests.length);
-        if (reason === null) return; // cancelled — leave the batch held
+        if (reason === null) return "cancelled"; // leave the batch held
         await decide({
           stream,
           projectId,
@@ -274,7 +274,7 @@ export function ApprovalBatchActions({
           reason: reason || undefined,
           sign: null,
         });
-        return;
+        return "decided";
       }
       if (!enrolledKey) throw new Error("Enroll this device before approving.");
       await decide({
@@ -285,9 +285,17 @@ export function ApprovalBatchActions({
         verdicts,
         sign: (message) => signWithApproverKey(projectId, message),
       });
+      return "decided";
     },
-    onSuccess: onDecided,
+    onSuccess: (outcome) => {
+      if (outcome === "decided") onDecided();
+    },
   });
+  // Keeps the buttons down between the decide landing and the invalidated
+  // batch query refetching the record — otherwise they'd briefly re-enable
+  // and could solicit a second Face ID. A cancelled reject prompt does NOT
+  // count: the batch is still held and still actionable.
+  const decided = respond.data === "decided";
   const single = payload.requests.length === 1;
   return (
     <>
@@ -296,7 +304,7 @@ export function ApprovalBatchActions({
         <Pressable
           accessibilityRole="button"
           style={[styles.button, styles.reject]}
-          disabled={respond.isPending}
+          disabled={respond.isPending || decided}
           onPress={() => respond.mutate("reject")}
         >
           <Text style={styles.rejectText}>{single ? "Reject" : "Reject all"}</Text>
@@ -304,17 +312,19 @@ export function ApprovalBatchActions({
         <Pressable
           accessibilityRole="button"
           style={[styles.button, styles.approve, enrolledKey === null && styles.buttonDisabled]}
-          disabled={respond.isPending || enrolledKey === null}
+          disabled={respond.isPending || decided || enrolledKey === null}
           onPress={() => respond.mutate("approve")}
         >
           <Text style={styles.approveText}>
             {respond.isPending
               ? "Signing…"
-              : enrolledKey === null
-                ? "Enroll to approve"
-                : single
-                  ? "Approve (Face ID)"
-                  : `Approve all ${payload.requests.length} (Face ID)`}
+              : decided
+                ? "Decided"
+                : enrolledKey === null
+                  ? "Enroll to approve"
+                  : single
+                    ? "Approve (Face ID)"
+                    : `Approve all ${payload.requests.length} (Face ID)`}
           </Text>
         </Pressable>
       </View>
