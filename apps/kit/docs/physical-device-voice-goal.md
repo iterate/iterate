@@ -149,6 +149,13 @@ cleanup project:
       `origin/backup/c-capabilities-stick-eight-turn-20260802` was independently
       verified at that exact hash on 2026-08-02. This is a recovery checkpoint,
       not a merge or a claim that the Home Assistant slice is finished.
+- [x] Make a fourth complete checkpoint after the network-valid HAVPE
+      production slice. Every tracked modification and untracked build/evidence
+      file was committed as `acd57a0c0a8762c1821c2a844489fa089f947ed5`;
+      the remote ref
+      `origin/backup/c-capabilities-havpe-production-20260802` was independently
+      verified at that exact hash on 2026-08-02. This is a recovery checkpoint,
+      not a merge or a claim that the remaining avatar/endurance work is done.
 - [ ] Continue the existing proof autonomously: turn every new physical defect
       into a red test, retain exact acoustic/resource evidence, apply only bounded
       simplifications supported by that evidence, and do not merge.
