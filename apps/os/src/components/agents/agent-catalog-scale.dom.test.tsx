@@ -320,6 +320,46 @@ test("table subagent aggregates exclude self and use singular folder labels", as
   await act(async () => root.unmount());
 });
 
+test("table keeps an expanded parent's waiting status consistent with its subtitle", async () => {
+  const parent = {
+    ...record(0),
+    path: "/agents/release",
+  };
+  const child = {
+    ...record(1),
+    path: "/agents/release/approval",
+    summary: { pinned: false, waitingFor: "user_input" as const },
+  };
+  const container = document.createElement("div");
+  Object.assign(container.style, { height: "800px", width: "1000px" });
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () =>
+    root.render(
+      <AgentCatalog
+        agents={{ [parent.path]: parent, [child.path]: child }}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+        projectId="prj_table_waiting"
+        projectSlug="table-waiting"
+        view="table"
+      />,
+    ),
+  );
+
+  const parentStatus = container
+    .querySelector('[data-agent-path="/agents/release"]')
+    ?.querySelectorAll("td")[1]?.textContent;
+  const childStatus = container
+    .querySelector('[data-agent-path="/agents/release/approval"]')
+    ?.querySelectorAll("td")[1]?.textContent;
+  expect(parentStatus).toBe("IdleNo active work");
+  expect(childStatus).toBe("Needs inputNeeds input");
+
+  await act(async () => root.unmount());
+});
+
 test("the 5,000-agent table mounts bounded rows", async () => {
   const agents = Object.fromEntries(
     Array.from({ length: 5_000 }, (_, index) => {

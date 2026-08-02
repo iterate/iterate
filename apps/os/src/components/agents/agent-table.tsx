@@ -16,14 +16,16 @@ import { useLiveState } from "iterate/sdk/itx/react";
 import { BindingLink, PinButton, StateDot } from "./agent.tsx";
 import { AGENT_DISPLAY_STATE_PRESENTATION } from "./agent-presentation.ts";
 import {
-  agentPathNodeDisplayState,
   agentPathNodeRuntime,
   agentPathNodeWaitingFor,
   type AgentPathTreeNode,
 } from "./agent-path-tree.ts";
 import { agentTitle } from "./agent-tree.ts";
 import type { AgentRuntimeTransition } from "~/domains/agents/agent-processor-contract.ts";
-import { deriveAgentRuntimeDisplayState } from "~/domains/agents/agent-presence.ts";
+import {
+  deriveAgentDisplayState,
+  deriveAgentRuntimeDisplayState,
+} from "~/domains/agents/agent-presence.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 
 const TABLE_GRID =
@@ -176,19 +178,12 @@ function AgentTableRow({
   const node = row.original;
   const agent = node.agent;
   const runtime = agentPathNodeRuntime(node, runtimeTransition?.runtime);
-  const runtimeState = deriveAgentRuntimeDisplayState(runtime);
-  const displayState =
-    runtimeState === "idle"
-      ? agentPathNodeDisplayState({
-          aggregateRuntime: runtime,
-          aggregateWaiting: node.aggregateWaiting,
-        })
-      : runtimeState;
-  const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
   const waitingFor =
     agent !== undefined && row.getIsExpanded()
       ? agent.summary.waitingFor
       : agentPathNodeWaitingFor(node);
+  const displayState = deriveAgentDisplayState(runtime, waitingFor);
+  const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
   const runtimeCounts = runtimeCountLabels(runtime);
   const descendantCount = node.aggregateAgentCount - (agent === undefined ? 0 : 1);
   const activeCount =
