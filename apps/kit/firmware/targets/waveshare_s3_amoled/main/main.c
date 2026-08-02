@@ -729,14 +729,23 @@ static bool initialise_connection(void) {
              &runtime.transport, &transport_options) == ITERATE_KIT_OK;
 }
 
-static void append_stats(uint64_t now) {
+/*
+ * ONE description of how the device is, used by both the telemetry it pushes
+ * and the health() anyone can pull. They were never allowed to disagree —
+ * the state worth diagnosing is the one where the push has stopped.
+ */
+size_t waveshare_health_json(char *out, size_t capacity) {
   struct iterate_kit_esp_idf_itx_transport_metrics metrics;
+  const uint64_t now = now_ms(NULL);
   int length;
   iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &metrics);
   length = snprintf(
-      runtime.stats_buffer,
-      sizeof(runtime.stats_buffer),
-      "[{\"type\":\"voicelab/dev-stats\",\"ephemeral\":true,\"payload\":{"
+      out,
+      capacity,
+      "{"
+      "\"transport\":\"%s\",\"voicelab\":\"%s\",\"voicelabFailure\":\"%s\","
+      "\"connectionState\":%d,\"callActive\":%s,\"callPending\":%s,"
+      "\"wantsCall\":%s,\"talking\":%s,\"gateOpen\":%s,"
       "\"seq\":%" PRIu32 ",\"t\":%" PRIu64
       ",\"framesSent\":%" PRIu32 ",\"frameFailures\":%" PRIu32
       ",\"micCaptured\":%" PRIu32 ",\"micDropped\":%" PRIu32
@@ -763,7 +772,22 @@ static void append_stats(uint64_t now) {
       ",\"lastAppStatus\":%" PRId32
       ",\"dmaLargest\":%" PRIu32
       ",\"spkMarginMinMs\":%" PRIu32 ",\"spkMarginP10Ms\":%" PRIu32
-      ",\"spkWrites\":%" PRIu32 "}}]",
+      ",\"spkWrites\":%" PRIu32 "}",
+      iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
+      iterate_kit_voicelab_state_name(runtime.voicelab.state),
+      iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
+      (int)runtime.connection.state,
+      runtime.voicelab.call_active ? "true" : "false",
+      runtime.voicelab.call_pending ? "true" : "false",
+      waveshare_display_call_requested() ? "true" : "false",
+      runtime.talking ? "true" : "false",
+      /* The gate every producer sits behind. Closed, the device answers RPCs
+       * and does nothing else — which is exactly what it looks like broken. */
+      (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
+       runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+       runtime.voicelab_generation == runtime.connection.generation)
+          ? "true"
+          : "false",
       runtime.stats_sequence++,
       now,
       runtime.voicelab.frames_sent,
@@ -815,12 +839,30 @@ static void append_stats(uint64_t now) {
       runtime.speaker_margin_min_ms,
       runtime.speaker_margin_p10_ms,
       runtime.speaker_writes);
-  if (length > 0 && (size_t)length < sizeof(runtime.stats_buffer)) {
-    (void)iterate_kit_voicelab_append_raw(
-        &runtime.voicelab, runtime.stats_buffer, (size_t)length);
-  } else {
-    ESP_LOGE(tag, "stats line does not fit (%d bytes) — telemetry is dark", length);
+  if (length <= 0 || (size_t)length >= capacity) return 0U;
+  return (size_t)length;
+}
+
+static void append_stats(uint64_t now) {
+  static const char prefix[] =
+      "[{\"type\":\"voicelab/dev-stats\",\"ephemeral\":true,\"payload\":";
+  const size_t prefix_length = sizeof(prefix) - 1U;
+  size_t body;
+  (void)now;
+  memcpy(runtime.stats_buffer, prefix, prefix_length);
+  body = waveshare_health_json(
+      runtime.stats_buffer + prefix_length,
+      sizeof(runtime.stats_buffer) - prefix_length - 3U);
+  if (body == 0U) {
+    ESP_LOGE(tag, "stats line does not fit — telemetry is dark");
+    return;
   }
+  runtime.stats_buffer[prefix_length + body] = '}';
+  runtime.stats_buffer[prefix_length + body + 1U] = ']';
+  (void)iterate_kit_voicelab_append_raw(
+      &runtime.voicelab, runtime.stats_buffer, prefix_length + body + 2U);
+  /* prefix is `[{...,"payload":`, body closes its own object, so one `}`
+   * closes the event and `]` closes the array. */
 }
 
 void app_main(void) {
@@ -1108,9 +1150,16 @@ void app_main(void) {
         last_ping_count = runtime.voicelab.ping_count;
         last_liveness_ms = now;
       }
-      /* Not being connected is a different fault with its own remedy. */
-      if (runtime.transport.state != ITERATE_KIT_ESP_IDF_ITX_READY ||
-          runtime.voicelab.state != ITERATE_KIT_VOICELAB_READY) {
+      /*
+       * Not being CONNECTED is a different fault, and the block above owns
+       * it. But a transport that is READY while the voicelab mount is not is
+       * nobody's fault by that reckoning — and it is the worst state the
+       * device has: every producer sits behind one gate, so the device goes
+       * on answering RPCs perfectly while starting no calls, sending no
+       * audio, and pushing no telemetry. That is not a quiet device, it is a
+       * broken one, and it must be on this clock.
+       */
+      if (runtime.transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
         last_liveness_ms = now;
       }
       if (runtime.voicelab.ping_pending &&
@@ -1151,8 +1200,22 @@ void app_main(void) {
         on_transcript,
         NULL,
       };
-      if (iterate_kit_voicelab_start(&runtime.voicelab, &options) ==
-          CAPNWEB_OK) {
+      const enum capnweb_status started =
+          iterate_kit_voicelab_start(&runtime.voicelab, &options);
+      if (started != CAPNWEB_OK) {
+        /*
+         * Rate-limited, but never silent. This retries every 5 ms, and a
+         * start that keeps failing leaves the device answering RPCs while
+         * doing nothing else — the single most confusing state it has, and
+         * previously the only one it never said a word about.
+         */
+        static uint64_t next_complaint_at;
+        if (now >= next_complaint_at) {
+          next_complaint_at = now + 5000U;
+          ESP_LOGE(tag, "voicelab mount will not start (status %d)", (int)started);
+        }
+      }
+      if (started == CAPNWEB_OK) {
         runtime.voicelab_generation = runtime.connection.generation;
         runtime.frame_sequence = 0U;
         (void)xQueueReset(runtime.mic_queue); /* drop pre-session stale audio */

@@ -38,6 +38,7 @@ static const char *const hang_up_path[] = {"conversation", "hangUp"};
 static const char *const talk_start_path[] = {"pushToTalk", "start"};
 static const char *const talk_stop_path[] = {"pushToTalk", "stop"};
 static const char *const take_screenshot_path[] = {"takeScreenshot"};
+static const char *const health_path[] = {"health"};
 static const char *const set_volume_path[] = {"setVolume"};
 static const char *const set_mic_gain_path[] = {"setMicGain"};
 static const char *const recording_status_path[] = {"recording", "status"};
@@ -381,8 +382,36 @@ static enum capnweb_status recording_read(
   return capnweb_reply_set_bytes(reply, recording_chunk, read_bytes, NULL, NULL);
 }
 
+/*
+ * The one call that works when nothing else does.
+ *
+ * dev-stats is appended only from inside the "everything is READY" gate, so
+ * the exact state worth diagnosing — connected enough to answer RPCs, wedged
+ * enough to do nothing else — is the state that appends no telemetry at all.
+ * A device that can be asked how it is does not need a serial cable, and on
+ * this board attaching one reboots the evidence away.
+ */
+static enum capnweb_status health(
+    void *context,
+    const struct capnweb_call *call,
+    struct capnweb_reply *reply) {
+  /* The same object dev-stats carries, so it is sized like the stats line
+   * and not like a guess — a health call that overflows is a health call
+   * that is useless exactly when it is needed. */
+  static char health_text[1280];
+  size_t length;
+  (void)context;
+  (void)call;
+  length = waveshare_health_json(health_text, sizeof(health_text));
+  if (length == 0U) {
+    return capnweb_reply_set_error(reply, "Error", "health overflow");
+  }
+  return capnweb_reply_set_borrowed_expression(reply, health_text, length, NULL, NULL);
+}
+
 struct iterate_kit_module waveshare_tools_module(void) {
   static const struct iterate_kit_method methods[] = {
+    {health_path, 1U, health},
     {set_background_path, 1U, set_background},
     {start_call_path, 2U, start_call},
     {hang_up_path, 2U, hang_up},
