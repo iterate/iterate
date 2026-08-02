@@ -1,13 +1,8 @@
 import handler, { createServerEntry } from "@tanstack/react-start/server-entry";
 import { env as workerEnv } from "cloudflare:workers";
 import { newWorkersWebSocketRpcResponse } from "capnweb";
-import { getServerByName } from "partyserver";
 import type { AppEnv } from "./env.ts";
 import { TasksApiRoot } from "./rpc-api.ts";
-import { isCheckoutId, normalizeRepoPath } from "./lib/checkout-shared.ts";
-
-export { TasksCheckoutDurableObject } from "./checkout-do.ts";
-export { TasksCheckoutIndexDurableObject } from "./checkout-index-do.ts";
 
 // wrangler.jsonc declares exactly these; the app is small enough that a
 // hand-written env type beats generated worker configuration types.
@@ -168,30 +163,10 @@ export default createServerEntry({
       return newWorkersWebSocketRpcResponse(request, new TasksApiRoot(env, request));
     }
 
-    const projectId = request.headers.get(PROJECT_ID_HEADER);
-
     // No project header → this is a direct hit on the vessel host, not
     // proxied project traffic. Serve only the static landing page.
-    if (!projectId) {
+    if (!request.headers.get(PROJECT_ID_HEADER)) {
       return landingPage();
-    }
-
-    // The Yjs lane: y-protocols sync + awareness for one checkout, kept off
-    // /api because it's binary y-websocket wire, not capnweb. One DO per
-    // (project, repo, checkout id) — the repo rides as ?repoPath= and is
-    // bound into the DO name.
-    const yjs = /^\/yjs\/([^/]+)$/.exec(url.pathname);
-    if (yjs) {
-      const checkoutId = decodeURIComponent(yjs[1]!);
-      const repoPath = normalizeRepoPath(url.searchParams.get("repoPath"));
-      if (!isCheckoutId(checkoutId) || repoPath === null) {
-        return new Response("bad checkout id or repo path", { status: 400 });
-      }
-      const stub = await getServerByName(
-        env.CHECKOUT as unknown as Parameters<typeof getServerByName>[0],
-        `${projectId}:${repoPath}:${checkoutId}`,
-      );
-      return stub.fetch(request);
     }
 
     // TanStack SSR pages must never be cached: a stale HTML shell references

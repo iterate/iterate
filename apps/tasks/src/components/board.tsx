@@ -18,7 +18,6 @@ import type { TaskChangeStatus } from "../state.ts";
 import { taskColumnState } from "../tasks-model.ts";
 import { stateLabel, type BoardTask, type PresenceUser, type RowField } from "../lib/board-model.ts";
 import type { BoardProjection } from "../lib/board-engine.ts";
-import { agoText, type RecentTouch } from "../lib/recency.ts";
 
 /**
  * The board proper, in the apps/os repo-ide dialect: rows are folder
@@ -30,7 +29,6 @@ export function Board({
   projection,
   taskChangeByPath,
   presenceByPath,
-  recentByPath,
   onMove,
   onAdd,
   onOpen,
@@ -38,7 +36,6 @@ export function Board({
   projection: BoardProjection;
   taskChangeByPath: Map<string, TaskChangeStatus>;
   presenceByPath: Map<string, PresenceUser[]>;
-  recentByPath: Map<string, RecentTouch>;
   onMove: (task: BoardTask, state: string, folder: string, labels?: string[]) => void;
   onAdd: (state: string, folder: string | null, label?: string) => void;
   onOpen: (path: string) => void;
@@ -154,7 +151,6 @@ export function Board({
                     tasks={cell.tasks}
                     taskChangeByPath={taskChangeByPath}
                     presenceByPath={presenceByPath}
-                    recentByPath={recentByPath}
                     onAdd={onAdd}
                     onOpen={onOpen}
                   />
@@ -181,7 +177,6 @@ function BoardCell({
   tasks,
   taskChangeByPath,
   presenceByPath,
-  recentByPath,
   onAdd,
   onOpen,
 }: {
@@ -194,7 +189,6 @@ function BoardCell({
   tasks: BoardTask[];
   taskChangeByPath: Map<string, TaskChangeStatus>;
   presenceByPath: Map<string, PresenceUser[]>;
-  recentByPath: Map<string, RecentTouch>;
   onAdd: (state: string, folder: string | null, label?: string) => void;
   onOpen: (path: string) => void;
 }) {
@@ -225,7 +219,6 @@ function BoardCell({
               showFolder={showFolder}
               changeStatus={taskChangeByPath.get(task.path)}
               presence={presenceByPath.get(task.path) ?? []}
-              touch={recentByPath.get(task.path)}
               onOpen={onOpen}
             />
           ))}
@@ -270,7 +263,6 @@ function BoardCard({
   showFolder,
   changeStatus,
   presence,
-  touch,
   onOpen,
 }: {
   task: BoardTask;
@@ -279,7 +271,6 @@ function BoardCard({
   showFolder: boolean;
   changeStatus: TaskChangeStatus | undefined;
   presence: PresenceUser[];
-  touch: RecentTouch | undefined;
   onOpen: (path: string) => void;
 }) {
   const { ref, isDragging } = useDraggable({
@@ -288,20 +279,12 @@ function BoardCard({
   });
   const changeWord =
     changeStatus === "added" ? "New" : changeStatus === "modified" ? "Edited" : undefined;
-  const hoverLines = [
-    changeWord,
-    touch ? `${touch.author.name} ${touch.action} this · ${agoText(touch.at)}` : undefined,
-  ].filter((line): line is string => line !== undefined);
+  const hoverLines = [changeWord].filter((line): line is string => line !== undefined);
   const card = (
     <button
       type="button"
       ref={ref}
       onClick={() => onOpen(task.path)}
-      style={
-        touch
-          ? { boxShadow: `0 0 0 1px ${touch.author.color}, 0 0 8px 0 ${touch.author.color}40` }
-          : undefined
-      }
       className={cn(
         "relative w-full cursor-grab rounded-md border border-border/70 bg-card p-2.5 text-left transition-[background-color,border-color,box-shadow,opacity] hover:bg-accent/40 active:cursor-grabbing",
         changeStatus === "added" &&

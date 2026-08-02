@@ -1,154 +1,16 @@
 /**
- * The collaborative checkout's shared vocabulary — used by the Durable Object
- * (checkout-do.ts) and the browser client (use-checkout.ts). A checkout is an
- * in-DO working copy of the repo's task files: one Y.Doc holding a "files"
- * map of path → Y.Text plus a "meta" map with the base commit it was seeded
- * from. Everyone edits the same doc (the WebSocket wire is stock
- * y-protocols, served by y-partyserver); commits flush the doc's diff
- * against base back to git via plain HTTP POSTs.
+ * Board workspace naming, shared by the vessel (rpc-api.ts) and the browser
+ * (routes/use-workspace-board). A board id ("checkout id" historically) has
+ * exactly one job left: minting a fresh board workspace path under the tasks
+ * app's own /workspaces/tasks/ namespace — the workspace mechanism holds all
+ * actual state.
  */
-import * as Y from "yjs";
-import type { RepoFileChange, TaskChangeSummary } from "../state.ts";
-import { isTaskFilePath, parseTaskCard } from "../tasks-model.ts";
 
-export function checkoutFilesMap(doc: Y.Doc): Y.Map<Y.Text> {
-  return doc.getMap<Y.Text>("files");
-}
-
-/**
- * Durable attribution: every Yjs item already carries its author's
- * clientID; this map gives those ids a face. Clients register themselves on
- * join (verified identity when available), the checkout DO registers as
- * "agent" — so recency glows and hover attribution keep working even after
- * the author disconnects.
- */
-export type CollaboratorInfo = {
-  name: string;
-  color: string;
-  userId?: string;
-  email?: string;
-  agent?: boolean;
-};
-
-/** All API-lane writes share the DO's doc client, so agents wear one identity. */
-export const AGENT_COLLABORATOR: CollaboratorInfo = {
-  agent: true,
-  color: "#8b5cf6",
-  name: "agent",
-};
-
-function checkoutCollaboratorsMap(doc: Y.Doc): Y.Map<CollaboratorInfo> {
-  return doc.getMap<CollaboratorInfo>("collaborators");
-}
-
-export function registerCollaborator(doc: Y.Doc, info: CollaboratorInfo): void {
-  const map = checkoutCollaboratorsMap(doc);
-  const key = String(doc.clientID);
-  const current = map.get(key);
-  if (current === undefined || JSON.stringify(current) !== JSON.stringify(info)) {
-    map.set(key, info);
-  }
-}
-
-export function collaboratorFor(doc: Y.Doc, clientId: number): CollaboratorInfo | null {
-  return checkoutCollaboratorsMap(doc).get(String(clientId)) ?? null;
-}
-
-export function checkoutMetaMap(doc: Y.Doc): Y.Map<unknown> {
-  return doc.getMap("meta");
-}
-
-export function checkoutBaseCommit(doc: Y.Doc): string | undefined {
-  const value = checkoutMetaMap(doc).get("baseCommit");
-  return typeof value === "string" ? value : undefined;
-}
-
-export function checkoutBaseContents(doc: Y.Doc): Record<string, string> {
-  const value = checkoutMetaMap(doc).get("base");
-  return typeof value === "object" && value !== null ? (value as Record<string, string>) : {};
-}
-
-/** Plain-string view of the collaborative files map. */
-export function checkoutFileContents(doc: Y.Doc): Record<string, string> {
-  const contents: Record<string, string> = {};
-  checkoutFilesMap(doc).forEach((text, path) => {
-    contents[path] = text.toString();
-  });
-  return contents;
-}
-
-/**
- * The checkout's uncommitted changes: its files versus the base snapshot.
- * Same A/M/D vocabulary the commit UI already speaks; titles prefer live
- * content, base content for pure deletions.
- */
-export function checkoutTaskChanges(
-  files: Readonly<Record<string, string>>,
-  base: Readonly<Record<string, string>>,
-): TaskChangeSummary[] {
-  const changes: TaskChangeSummary[] = [];
-  for (const [path, content] of Object.entries(files)) {
-    if (!isTaskFilePath(path)) continue;
-    const baseContent = base[path];
-    if (baseContent === content) continue;
-    changes.push({
-      path,
-      status: baseContent === undefined ? "added" : "modified",
-      title: parseTaskCard(path, content).title,
-    });
-  }
-  for (const [path, content] of Object.entries(base)) {
-    if (!isTaskFilePath(path) || path in files) continue;
-    changes.push({ path, status: "deleted", title: parseTaskCard(path, content).title });
-  }
-  return changes.sort((left, right) => left.path.localeCompare(right.path));
-}
-
-/** The `commitFiles` batch for a checkout's diff against base. */
-export function checkoutRepoChanges(
-  files: Readonly<Record<string, string>>,
-  base: Readonly<Record<string, string>>,
-): RepoFileChange[] {
-  const changes: RepoFileChange[] = [];
-  for (const [path, content] of Object.entries(files)) {
-    if (base[path] !== content) changes.push({ path, content });
-  }
-  for (const path of Object.keys(base)) {
-    if (!(path in files)) changes.push({ path, delete: true });
-  }
-  return changes;
-}
-
-/**
- * Rewrite a Y.Text to `next` as one minimal splice (common prefix/suffix
- * preserved) so concurrent edits elsewhere in the file survive the merge —
- * a whole-text replace would stomp every other collaborator's characters.
- */
-export function applyTextEdit(text: Y.Text, next: string): void {
-  const current = text.toString();
-  if (current === next) return;
-  let start = 0;
-  const shortest = Math.min(current.length, next.length);
-  while (start < shortest && current[start] === next[start]) start++;
-  let currentEnd = current.length;
-  let nextEnd = next.length;
-  while (currentEnd > start && nextEnd > start && current[currentEnd - 1] === next[nextEnd - 1]) {
-    currentEnd--;
-    nextEnd--;
-  }
-  const transact = () => {
-    if (currentEnd > start) text.delete(start, currentEnd - start);
-    if (nextEnd > start) text.insert(start, next.slice(start, nextEnd));
-  };
-  if (text.doc) text.doc.transact(transact);
-  else transact();
-}
-
-/** The repo a checkout edits when none is picked. */
+/** The repo a board edits when none is picked. */
 export const DEFAULT_REPO_PATH = "/repos/config";
 
 /**
- * A checkout's repo path must be a clean `/repos/...` path — it becomes part
+ * A board's repo path must be a clean `/repos/...` path — it becomes part
  * of a Durable Object name and a git-API target, so reject anything with
  * empty, dotted, or exotic segments. Returns null when invalid.
  */
@@ -164,8 +26,8 @@ export function normalizeRepoPath(value: string | null | undefined): string | nu
 }
 
 /**
- * The checkout's platform workspace stream path — the workspace identity
- * ENCODES the repo, so the same checkout id against a different repository
+ * The board's platform workspace stream path — the workspace identity
+ * ENCODES the repo, so the same board id against a different repository
  * can never bind to the first repository's workspace. The human-readable
  * slug alone is NOT injective ("/repos/a/b" and "/repos/a--b" both slug to
  * "repos--a--b"); a short repoPath hash disambiguates. FNV-1a, not SHA-256:
@@ -177,6 +39,58 @@ export function checkoutWorkspacePath(checkoutId: string, repoPath: string): str
   return `/workspaces/tasks/${checkoutId}~${slug}-${fnv1a32Hex(repoPath)}`;
 }
 
+/**
+ * Which board address a workspace path carries, resolved EXACTLY: the slug
+ * alone is not injective ("--" is both the path separator and a legal repo
+ * name substring), so instead of guessing readings we re-mint the path for
+ * each repo the project actually has and keep the one that matches. Returns
+ * null for anything that is not one of this app's board workspaces.
+ */
+export function boardAddressFor(
+  path: string,
+  repoPaths: readonly string[],
+): { checkoutId: string; repoPath: string } | null {
+  const checkoutId = boardCheckoutId(path);
+  if (checkoutId === null) return null;
+  const repoPath = repoPaths.find(
+    (candidate) => checkoutWorkspacePath(checkoutId, candidate) === path,
+  );
+  return repoPath === undefined ? null : { checkoutId, repoPath };
+}
+
+/** The board id a /workspaces/tasks/ path carries, if it is shaped like one. */
+function boardCheckoutId(path: string): string | null {
+  const match = /^\/workspaces\/tasks\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})~/.exec(path);
+  return match?.[1] ?? null;
+}
+
+/**
+ * How a board addresses its workspace. `checkoutId` is set when the board
+ * uses the tasks app's own naming (the workspace is lazily created on first
+ * use); null when the board is a lens on an existing workspace addressed
+ * purely by path (plain get). `workspacePath` is always resolved.
+ */
+export type BoardAddress = {
+  checkoutId: string | null;
+  workspacePath: string;
+  /** The /repos/** mount whose task files this board shows. */
+  repoPath: string;
+};
+
+/**
+ * Publishing is the workspace OWNER's act. The tasks app owns only the board
+ * workspaces it mints itself, and a board workspace ENCODES its one repo —
+ * so ownership is proven by RE-MINTING the path from (board id, this lens's
+ * repo) and requiring an exact match. Anything else — an agent's workspace
+ * mid-thought, a foreign name under the tasks namespace, a board opened
+ * against a different mount — is a guest: read, comment, edit, but never
+ * Commit or Discard-all.
+ */
+export function isGuestWorkspacePath(workspacePath: string, repoPath: string): boolean {
+  const checkoutId = boardCheckoutId(workspacePath);
+  return checkoutId === null || checkoutWorkspacePath(checkoutId, repoPath) !== workspacePath;
+}
+
 /** 32-bit FNV-1a as 8 lowercase hex chars. */
 function fnv1a32Hex(value: string): string {
   let hash = 0x811c9dc5;
@@ -186,7 +100,7 @@ function fnv1a32Hex(value: string): string {
   return (hash >>> 0).toString(16).padStart(8, "0");
 }
 
-/** Shareable checkout id: date-time prefix for humans, random tail for uniqueness. */
+/** Shareable board id: date-time prefix for humans, random tail for uniqueness. */
 export function newCheckoutId(now: Date = new Date()): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;

@@ -2,13 +2,13 @@ import { useCallback, useEffect, useEffectEvent, useRef, useState } from "react"
 import type { TaskChangeSummary } from "../state.ts";
 import { fallbackCommitMessage } from "../tasks-model.ts";
 
-/** The slice of the server api this hook needs — board sessions and checkout clients both fit. */
-export type CommitMessageApi = {
-  generateCommitMessage(input: { changes: TaskChangeSummary[] }): Promise<string>;
-};
-
 /** Board auto-commit delay once any task change is pending. */
 const TASK_AUTO_SAVE_MS = 60_000;
+
+/** The slice of the server api this hook needs. */
+type CommitMessageApi = {
+  generateCommitMessage(input: { changes: TaskChangeSummary[] }): Promise<string>;
+};
 
 /**
  * Commit UX for the board, ported from the apps/os tasks view: a Commit

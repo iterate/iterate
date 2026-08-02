@@ -56,5 +56,10 @@ test("the published package contains only the config bridge", async () => {
     ["-xOzf", archive, "package/dist-package/config-bridge.js"],
     { encoding: "utf8" },
   );
-  expect(javascript).not.toMatch(/\b(?:import|require)\b/);
+  expect(javascript).not.toContain("require(");
+  // The one runtime import is provided by the config worker's environment
+  // (RpcTarget for the itx.worker.tasks capability), same as the docs bridge.
+  expect(javascript.match(/^import .*$/gm)).toEqual([
+    'import { RpcTarget } from "cloudflare:workers";',
+  ]);
 });

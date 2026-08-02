@@ -1,5 +1,5 @@
 ---
-state: todo
+state: in-progress
 priority: high
 size: large
 tags: [os, workspaces, tasks-app, docs-app, repo-ide, architecture]
@@ -51,36 +51,39 @@ identity, collab), parameterized by the workspace fs surface
    plain-`get` posture), route accepts `?workspace=`, and a
    `tasks.link({ workspace, repo, task? })` config-bridge RPC + template
    getter + one agent-prompt line so agents can mint board links the way
-   they mint Docs review links. (Assessed 2026-07-31: ~4 edits;
-   `apps/tasks/src/rpc-api.ts:395` is the single line that binds a board to
-   a workspace path.)
+   they mint Docs review links.
+   **DONE 2026-07-31**: `workspaceAt` door + `/w?workspace=` route (`/w/$id`
+   stays for the app's own boards), `TasksAppRpcTarget.link` in the tasks
+   config bridge, `get tasks()` in the config-repo template, one prompt line
+   (budget ceiling 4100 → 4150, argued in the PR).
 2. **Guest mode for foreign workspaces.** A lens on a workspace you don't
    own gets read/comment/edit — never Commit or Discard-all (the board's
    commit publishes the mount's ENTIRE dirty set; discard wipes the agent's
    uncommitted work mid-thought). Publishing stays the workspace owner's
    act: you tell the agent to ship.
+   **DONE 2026-07-31**: ownership = path shape (nothing durable records an
+   owner; the platform's `workspace/created` payload is empty). The app owns
+   only its own `/workspaces/tasks/` naming; every other workspace is a
+   guest lens — Commit/Discard-all/Assign-agent hidden in the UI AND refused
+   at the vessel door.
 3. **Extract the repo-IDE components** into the shared package and re-point
    the repo IDE itself at the workspace surface (a repo view is then just a
-   lens on any workspace, scoped to that repo's mount).
+   lens on any workspace, scoped to that repo's mount). Scoped by the
+   2026-07-31 /goal below: the tree + diff viewer are the pieces to extract
+   first, into the combined app's shell.
 4. **Retire "checkout".** Delete the dead Y.Doc lane
    (`TasksCheckoutApi`, `checkout-do.ts`, `/c/$checkoutId`,
    `/collab/$checkoutId`; port `assignAgent` to the workspace lane first),
    then replace the checkout index DO with the platform's enumerable
-   workspace list — the sidebar becomes "workspaces containing task files
-   under this repo", which surfaces agent workspaces in the picker for free.
-5. **Branch-targeted commits (separate platform follow-up, tracked here
-   until split out).** Today every mount is commit-to-main. The missing
-   verb: with several repos mounted and local modifications spread across
-   them, commit a chosen subset of one mount's changes to a chosen BRANCH
-   of that repo (e.g. `git.commit({ scope, branch, paths? })`), so a jam
-   session can end in "these task files → main, that refactor → a draft-PR
-   branch". The workspace README already sketches the branch-mode policy
-   (draft-PR synthesis on GitHub-linked repos via the Git Database API);
-   this extends it from a per-mount policy to a per-commit choice. Also the
-   honest answer for "create tasks in the iterate/iterate repo": a commit
-   to `/repos/iterate` lands on the project's clone, so the real
-   materialization is a branch + PR through the GitHub lane, never
-   clone-main.
+   workspace list.
+   **DONE 2026-07-31**: `assignAgent` ported to `TasksWorkspaceApi` (owner
+   act), Y.Doc lane + `/yjs` upgrade + both DOs deleted (tombstoned in
+   wrangler.jsonc), sidebar/home list workspaces via `streams.list()`
+   filtered to `/workspaces/**` (board paths parse back via the embedded
+   repo hash; agent workspaces appear as guest lenses).
+5. **Branch-targeted commits** — split out to
+   [workspace-branch-targeted-commits](workspace-branch-targeted-commits.md)
+   (separate platform follow-up; not part of the lens work).
 
 ## Decisions already taken (2026-07-31, Jonas)
 
@@ -89,3 +92,35 @@ identity, collab), parameterized by the workspace fs surface
   guests through lenses (no neutral "session workspace" noun).
 - Per-commit branch targeting is wanted, as a separate follow-up from the
   lens consolidation.
+
+## Direction update (2026-07-31, Jonas via /goal)
+
+Docs and Tasks should ultimately combine into ONE app whose top-level noun
+is the workspace:
+
+- At the highest level you select a workspace path (or make a new one).
+- In a workspace you see all the repos (main branch, via the derived
+  mounts) plus the workspace's own non-repo files; unsaved changes can span
+  multiple repos; committing a repo commits that mount's changes to main.
+- A pierre-style tree viewer explores all files (reuse the apps/os repo-IDE
+  tree and diff viewer — the item-3 extraction feeds this).
+- The doc editor and the kanban tasks view are just VIEWS on that data.
+- The viewer can be constrained to a root folder (e.g. `/repos/config`) to
+  mimic today's tasks app.
+
+The item-1/2/4 work above is the substrate (workspace addressing, guest
+posture, workspace enumeration, no app-owned storage); the combined app
+grows from apps/tasks. Remaining: the workspace-level tree + file views
+(item 3's extraction), folding the Docs single-document view in, and then
+retiring apps/docs behind a link redirect.
+
+## Platform follow-up: a real `workspaces.list()`
+
+The picker currently enumerates via `streams.list()` filtered to
+`/workspaces/**`, pruning entries that are strict path-prefixes of others
+(ancestor-announcement phantoms — verified on prd 2026-07-31: a nested
+agent workspace drags 3 never-created ancestor streams into the catalog).
+The honest fix is the sandbox pattern: teach the project reducer
+`workspace/created` (via `recordDomainObject`, like repos/secrets/devices)
+and add `itx.workspaces.list()`; then the vessel filter and the prefix
+heuristic both delete.

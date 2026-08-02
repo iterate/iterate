@@ -1,14 +1,6 @@
-import { useContext, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
-import {
-  CheckIcon,
-  FolderTreeIcon,
-  LinkIcon,
-  ListFilterIcon,
-  MoreHorizontalIcon,
-  TagIcon,
-  XIcon,
-} from "lucide-react";
+import { CheckIcon, LinkIcon, ListFilterIcon, MoreHorizontalIcon, XIcon } from "lucide-react";
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -28,35 +20,49 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
-import { ProjectLabelContext } from "../lib/project-label.ts";
 import type { RowField } from "../lib/board-model.ts";
 
-/** project › repo › checkout — the header's orientation line. */
+/**
+ * The header's orientation line, in HIERARCHY order: which WORKSPACE this
+ * lens renders › which view (tasks) › the base path the view is scoped to
+ * (the repo mount). Repos are mounted inside every workspace, so the
+ * workspace always comes first; the project is never a crumb (the app's
+ * host already says which project this is).
+ */
 export function CheckoutBreadcrumbs({
-  repoPath,
-  checkoutId,
+  workspace,
+  rootPath,
 }: {
-  repoPath?: string;
-  checkoutId?: string;
+  /** The workspace path this lens renders (first level of the hierarchy). */
+  workspace?: string;
+  /** The base path the view is scoped to (e.g. "/repos/config"), if any. */
+  rootPath?: string;
 }) {
-  const projectLabel = useContext(ProjectLabelContext);
   return (
     <Breadcrumb className="min-w-0">
       <BreadcrumbList className="flex-nowrap text-xs">
-        <BreadcrumbItem>
-          <BreadcrumbLink render={<Link to="/" />}>{projectLabel}</BreadcrumbLink>
-        </BreadcrumbItem>
-        {repoPath === undefined ? null : (
+        {/* No project crumb: the whole app is one project (its host says
+            which), so the hierarchy starts at the workspace. */}
+        {workspace === undefined ? (
+          <BreadcrumbItem>
+            <BreadcrumbLink render={<Link to="/" />}>workspaces</BreadcrumbLink>
+          </BreadcrumbItem>
+        ) : (
           <>
+            <BreadcrumbItem>
+              <BreadcrumbLink render={<Link to="/" />} className="truncate font-mono">
+                {workspace}
+              </BreadcrumbLink>
+            </BreadcrumbItem>
             <BreadcrumbSeparator />
-            <BreadcrumbItem className="font-mono">{repoPath}</BreadcrumbItem>
+            <BreadcrumbItem>tasks</BreadcrumbItem>
           </>
         )}
-        {checkoutId === undefined ? null : (
+        {rootPath === undefined ? null : (
           <>
             <BreadcrumbSeparator />
             <BreadcrumbItem>
-              <BreadcrumbPage className="truncate font-mono">{checkoutId}</BreadcrumbPage>
+              <BreadcrumbPage className="truncate font-mono">{rootPath}</BreadcrumbPage>
             </BreadcrumbItem>
           </>
         )}
@@ -163,61 +169,6 @@ export function FilterControl({
         </div>
       </PopoverContent>
     </Popover>
-  );
-}
-
-const GROUP_LABELS: Record<string, string> = {
-  folder: "Grouped by folder",
-  label: "Grouped by tag",
-  none: "No grouping",
-};
-
-/** Grouping as an icon dropdown: folder rows, tag rows, or flat. */
-export function GroupControl({
-  value,
-  onChange,
-}: {
-  value: RowField;
-  onChange: (value: RowField) => void;
-}) {
-  return (
-    <DropdownMenu>
-      <WithTooltip label={GROUP_LABELS[value ?? "none"]!}>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant={value === null ? "outline" : "secondary"}
-              size="sm"
-              className={ICON_BUTTON}
-              aria-label="Board grouping"
-            />
-          }
-        >
-          {value === "label" ? (
-            <TagIcon aria-hidden className="size-3.5" />
-          ) : (
-            <FolderTreeIcon aria-hidden className="size-3.5" />
-          )}
-        </DropdownMenuTrigger>
-      </WithTooltip>
-      <DropdownMenuContent align="end">
-        <DropdownMenuCheckboxItem checked={value === null} onCheckedChange={() => onChange(null)}>
-          No grouping
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={value === "folder"}
-          onCheckedChange={() => onChange("folder")}
-        >
-          Group by folder
-        </DropdownMenuCheckboxItem>
-        <DropdownMenuCheckboxItem
-          checked={value === "label"}
-          onCheckedChange={() => onChange("label")}
-        >
-          Group by tag
-        </DropdownMenuCheckboxItem>
-      </DropdownMenuContent>
-    </DropdownMenu>
   );
 }
 

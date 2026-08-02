@@ -8,6 +8,9 @@ export default defineConfig({
     // Same `~` → apps/os alias the app config wires (shared collab fold).
     alias: {
       "~": fileURLToPath(new URL("../os/src", import.meta.url)),
+      "cloudflare:workers": fileURLToPath(
+        new URL("./src/test/cloudflare-workers-shim.ts", import.meta.url),
+      ),
     },
   },
   test: {
