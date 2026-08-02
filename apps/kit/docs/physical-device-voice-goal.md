@@ -124,6 +124,13 @@ cleanup project:
       `origin/backup/c-capabilities-stick-production-20260731` was verified on
       2026-08-01. This remains a recovery checkpoint, not a merge or a claim
       that the StackChan/Home Assistant slices are finished.
+- [x] Make a third complete checkpoint after closing the Stick's callback-
+      lifetime defect with a network-valid eight-turn production run. Every
+      tracked modification and untracked build/evidence file was committed as
+      `4d7c67c3b1ed8228eca95741c3c176a099006c91`; the remote ref
+      `origin/backup/c-capabilities-stick-eight-turn-20260802` was independently
+      verified at that exact hash on 2026-08-02. This is a recovery checkpoint,
+      not a merge or a claim that the Home Assistant slice is finished.
 - [ ] Continue the existing proof autonomously: turn every new physical defect
       into a red test, retain exact acoustic/resource evidence, apply only bounded
       simplifications supported by that evidence, and do not merge.
