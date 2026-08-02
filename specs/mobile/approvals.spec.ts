@@ -115,8 +115,10 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       notificationsStatus: "granted",
       platform: "ios",
     });
-    // Outwait the egress gate's ~5s rules cache before the first burst.
-    await new Promise((resolve) => setTimeout(resolve, 6_000));
+    // Outwait the egress gate's ~5s rules cache before the first burst —
+    // marked dead air so the rendered video skips the on-screen idle.
+    const outwaitRulesCache = () => new Promise((resolve) => setTimeout(resolve, 6_000));
+    await (page.videoMode ? page.videoMode.deadAir(outwaitRulesCache) : outwaitRulesCache());
 
     // ── Into the conversation: everything below happens in ONE chat thread.
     await page.getByText("New chat").click();
