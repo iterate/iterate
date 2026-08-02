@@ -123,43 +123,77 @@ export async function soak(options: SoakOptions) {
    * healthy call, because it cannot see the part that went wrong.
    */
   let answering: { resolve: (text: string) => void; text: string } | null = null;
-  const connection = await stream.openConnection({
-    connectionKey: `soak-${startedAt}`,
-    eventTypes: [
-      "voicelab/dev-stats",
-      "voicelab/grok-event",
-      "voicelab/call-accepted",
-      "voicelab/call-ended",
-    ],
-    /*
-     * Speaker frames are deliberately NOT subscribed. They are the bulk of
-     * the traffic, this watcher does not play them, and every one delivered
-     * here spends the connection's push budget — a measuring instrument that
-     * exhausts the thing it measures is worse than none.
-     */
-    processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
-      for (const event of batch.events) {
-        const payload = (event.payload ?? {}) as Record<string, unknown>;
-        if (event.type === "voicelab/dev-stats") {
-          samples.push(payload as unknown as DeviceStats);
-          continue;
+  /* When the bridge last announced it had this call. */
+  let callLiveAt = 0;
+  let lastDelivery = Date.now();
+  let watchGeneration = 0;
+  let watchReopens = 0;
+  const openWatch = () =>
+    stream.openConnection({
+      connectionKey: `soak-${startedAt}-g${++watchGeneration}`,
+      eventTypes: [
+        "voicelab/dev-stats",
+        "voicelab/grok-event",
+        "voicelab/call-accepted",
+        "voicelab/call-ended",
+      ],
+      /*
+       * Speaker frames are deliberately NOT subscribed. They are the bulk of
+       * the traffic, this watcher does not play them, and every one delivered
+       * here spends the connection's push budget — a measuring instrument
+       * that exhausts the thing it measures is worse than none.
+       */
+      processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
+        lastDelivery = Date.now();
+        for (const event of batch.events) {
+          const payload = (event.payload ?? {}) as Record<string, unknown>;
+          if (event.type === "voicelab/dev-stats") {
+            samples.push(payload as unknown as DeviceStats);
+            continue;
+          }
+          if (event.type === "voicelab/call-accepted") {
+            callLiveAt = Date.now();
+            note(`call-accepted by bridge ${String(payload.bridgeId)}`);
+            continue;
+          }
+          if (event.type === "voicelab/call-ended") {
+            note(`CALL ENDED: ${String(payload.reason)}`);
+            continue;
+          }
+          const inner = (payload as { event?: { type?: string; delta?: string } }).event;
+          if (inner?.type === "response.output_audio_transcript.delta" && answering) {
+            answering.text += inner.delta ?? "";
+          }
+          if (inner?.type === "response.done" && answering) answering.resolve(answering.text);
         }
-        if (event.type === "voicelab/call-accepted") {
-          note(`call-accepted by bridge ${String(payload.bridgeId)}`);
-          continue;
-        }
-        if (event.type === "voicelab/call-ended") {
-          note(`CALL ENDED: ${String(payload.reason)}`);
-          continue;
-        }
-        const inner = (payload as { event?: { type?: string; delta?: string } }).event;
-        if (inner?.type === "response.output_audio_transcript.delta" && answering) {
-          answering.text += inner.delta ?? "";
-        }
-        if (inner?.type === "response.done" && answering) answering.resolve(answering.text);
-      }
-    },
-  });
+      },
+    });
+  let connection = await openWatch();
+  /*
+   * The watcher has to prove its own connection, exactly as the device does.
+   * A session connection dies quietly — the push budget runs out, the Durable
+   * Object resets — and a dead watcher does not report an error, it reports a
+   * silent call. The first run of this soak "found" four unanswered turns in
+   * a row that the bridge had in fact answered: what had actually stopped was
+   * the watching.
+   *
+   * The device appends dev-stats every 5s, so a 15s gap is evidence, and
+   * make-before-break means nothing is missed across the swap.
+   */
+  const watchdog = setInterval(() => {
+    if (Date.now() - lastDelivery < 15_000) return;
+    lastDelivery = Date.now();
+    watchReopens++;
+    note("watch went quiet — reopening (the watcher, not the call)");
+    void openWatch().then(
+      (next) => {
+        const previous = connection;
+        connection = next;
+        previous.close();
+      },
+      () => {},
+    );
+  }, 5000);
 
   const waitForAnswer = async (timeoutMs: number) => {
     const started = Date.now();
@@ -179,16 +213,29 @@ export async function soak(options: SoakOptions) {
   note(`soak begins: ${minutes} minutes, a turn every ${everyMs / 1000}s, on ${streamPath}`);
   await capability.conversation.hangUp().catch(() => {});
   await new Promise((resolve) => setTimeout(resolve, 3000));
+  /*
+   * Stamped BEFORE the press: the call can be accepted while the press RPC is
+   * still resolving, and a liveness test that misses its own evidence is the
+   * kind of flake that gets blamed on the device.
+   */
+  const pressedAt = Date.now();
   await capability.conversation.start();
   {
-    const deadline = Date.now() + 60_000;
-    let live = false;
-    while (Date.now() < deadline && !live) {
-      live = (await capability.recording.status().catch(() => ({}))).recording === true;
-      if (!live) await new Promise((resolve) => setTimeout(resolve, 1000));
+    /*
+     * Live means THE BRIDGE SAID SO — a call-accepted on this stream. It used
+     * to mean "the device says it is recording", which is a proxy for a
+     * proxy: the SD card is optional, its state lags by a task hop, and a
+     * soak that will not start because a diagnostic is unavailable is a soak
+     * that tests the wrong thing.
+     */
+    const deadline = pressedAt + 60_000;
+    while (Date.now() < deadline && callLiveAt < pressedAt) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
     }
+    const live = callLiveAt >= pressedAt;
     note(live ? "call is live" : "CALL NEVER WENT LIVE");
     if (!live) {
+      clearInterval(watchdog);
       connection.close();
       throw new Error("the call never went live; nothing to soak");
     }
@@ -230,6 +277,7 @@ export async function soak(options: SoakOptions) {
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
   }
 
+  clearInterval(watchdog);
   connection.close();
   await capability.conversation.hangUp().catch(() => {});
 
@@ -270,6 +318,8 @@ export async function soak(options: SoakOptions) {
     statsSamples: samples.length,
     turns: turns.length,
     unanswered,
+    /* Not a device fault: this is how often the WATCHER had to be replaced. */
+    watchReopens,
   };
   const verdict =
     unanswered === 0 && Object.keys(moved).length === 0 && summary.reboots === 0 ? "PASS" : "FAIL";

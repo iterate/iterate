@@ -14,7 +14,7 @@ import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 
 /** Options for `pnpm cli voicelab device`. */
 export interface DeviceOptions extends VoicelabConnectOptions {
-  /** journey | screenshot | pull | turn | tone | call | hangup | status. */
+  /** journey | health | screenshot | pull | turn | tone | call | hangup | status. */
   action?: string;
   /** Capability the device mounts itself under (itx.kit.<name>). */
   name?: string;
@@ -31,6 +31,7 @@ interface DeviceCapability {
   conversation: { start(): Promise<boolean>; hangUp(): Promise<boolean> };
   pushToTalk: { start(): Promise<boolean>; stop(): Promise<boolean> };
   setBackground(colour: string): Promise<boolean>;
+  health(): Promise<Record<string, unknown>>;
   takeScreenshot(): Promise<{
     width: number;
     height: number;
@@ -56,6 +57,18 @@ export async function device(options: DeviceOptions) {
 
   if (action === "status") {
     console.log(JSON.stringify(await capability.recording.status(), null, 2));
+    return;
+  }
+
+  if (action === "health") {
+    /*
+     * The first thing to run when the device "isn't working". Every producer
+     * on the device sits behind one gate, and when that gate is shut it goes
+     * on answering calls like this one while starting no calls, sending no
+     * audio and pushing no telemetry — so gateOpen is usually the whole
+     * answer, and dev-stats cannot tell you because dev-stats is behind it.
+     */
+    console.log(JSON.stringify(await capability.health(), null, 2));
     return;
   }
 

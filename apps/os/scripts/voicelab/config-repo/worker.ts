@@ -46,7 +46,38 @@ const IDLE_TIMEOUT_MS = 600_000;
  * an hour of talking should not need that to happen at all.
  */
 const MAX_CALL_MS = 3_900_000;
+/**
+ * The agent that does the actual thinking. Grok is a mouth and a pair of
+ * ears with a ~200ms budget; anything that needs reading a repo, calling a
+ * tool, or being RIGHT belongs to a text model with no clock on it.
+ */
+const COLLEAGUE_PATH = "/agents/colleague";
+/**
+ * What the voice model is told it is. The important half is the second
+ * paragraph: without an explicit instruction to keep talking, a voice model
+ * handed an async tool goes silent waiting for it, which sounds exactly like
+ * a dropped call.
+ */
+const VOICE_INSTRUCTIONS = [
+  "You are the VOICE of a team. You are not the one who does the work: you have a",
+  "genius colleague — a careful, well-read expert with access to the customer's",
+  "systems — and they answer anything that needs real thought, real knowledge, or",
+  "any action in the world. Your job is to listen well, be good company, and speak",
+  "their answers out loud.",
+  "",
+  "Call ask_colleague for ANY question worth getting right, and for anything you",
+  "would otherwise guess at. It returns immediately — your colleague is thinking,",
+  "not answering — so do NOT go quiet waiting for them. Say you have asked and are",
+  "waiting, and keep the conversation going meanwhile: ask what prompted the",
+  "question, or talk about something else. Their answer arrives as a message",
+  "beginning 'Your colleague says'; when it does, tell the customer in your own",
+  "words, out loud, as if you had just been handed a note.",
+  "",
+  "Speak plainly and briefly — one or two sentences unless asked for more. Never",
+  "read out URLs, code, or long lists.",
+].join(" ");
 const FORWARDED_GROK_EVENTS = new Set([
+  "response.function_call_arguments.done",
   "input_audio_buffer.speech_started",
   "input_audio_buffer.speech_stopped",
   "conversation.item.input_audio_transcription.updated",
@@ -153,7 +184,9 @@ export class VoiceBridge extends IterateDurableObject {
     const voice = url.searchParams.get("voice") ?? "eve";
     const instructions =
       url.searchParams.get("instructions") ??
-      "You are a concise voice assistant. Answer in one short sentence unless asked for detail.";
+      (url.searchParams.get("colleague") === "1"
+        ? VOICE_INSTRUCTIONS
+        : "You are a concise voice assistant. Answer in one short sentence unless asked for detail.");
     const greeting = url.searchParams.get("greet");
     const manualTurns = url.searchParams.get("turns") === "manual";
 
@@ -248,7 +281,23 @@ export class VoiceBridge extends IterateDurableObject {
      * cushion of that size, once per response, which absorbs jitter without
      * accumulating over the answer the way a rate multiplier does.
      */
-    const BURST_MS = 450;
+    /*
+     * 250ms, not 450 — because this lead is NOT the whole cushion.
+     *
+     * The device buys its own before it starts playing: it waits for ~390ms
+     * of prefill so the first frame does not play with an empty ring. That
+     * prefill and this lead STACK, and measured against the device's 900ms
+     * internal ring the steady-state margin sat at 811-898ms — a ring
+     * essentially full, with tens of milliseconds of headroom for jitter.
+     *
+     * A 5-minute soak overflowed it 64 times in one answer: a second and a
+     * quarter of speech thrown away on arrival, and then five underruns as
+     * the hole came round. This is what "very choppy" has been.
+     *
+     * 250 + 390 is ~640ms of cushion in a 900ms ring: still far more than the
+     * worst RTT ever measured here, with a quarter of a second spare.
+     */
+    const BURST_MS = 250;
     /** Barge-in discards pending audio; everything else keeps its place. */
     const dropQueuedAudio = () => {
       for (let index = paceQueue.length - 1; index >= 0; index--) {
@@ -323,6 +372,197 @@ export class VoiceBridge extends IterateDurableObject {
       paceQueue.push(...events);
       pacePump();
     };
+    /*
+     * THE GENIUS COLLEAGUE.
+     *
+     * A text agent in this project that hears the whole conversation and is
+     * asked, by the voice model, whenever something needs to be right. Two
+     * lanes, and the split is the entire idea:
+     *
+     *   listening  every finished transcript line is appended to the agent as
+     *              context with "dont-trigger-request". It accumulates the
+     *              conversation without ever being asked to respond to it, so
+     *              when it IS asked it already knows what was said — and no
+     *              LLM request is spent on a customer who is only chatting.
+     *
+     *   asking     ask_colleague appends the question and lets the agent take
+     *              its turn. This does NOT block the voice: the tool output
+     *              goes back to Grok immediately so it can say "I've asked",
+     *              and the real answer is pushed into the session whenever it
+     *              arrives, as a new conversation item.
+     *
+     * Everything here is fire-and-forget against the call's lifetime. The
+     * colleague is a bonus, and a bonus must never be able to stall a voice.
+     */
+    const colleague = url.searchParams.get("colleague") === "1";
+    const colleagueAgent = project.agents.get(COLLEAGUE_PATH);
+    let colleagueReady: Promise<boolean> | null = null;
+    let askedCount = 0;
+    const ensureColleague = () => {
+      colleagueReady ??= (async () => {
+        try {
+          await colleagueAgent.create({});
+        } catch {
+          /* Already born: create over an existing agent is loud, not fatal. */
+        }
+        try {
+          await colleagueAgent.append({
+            payload: {
+              content: [
+                "You are the expert half of a two-part assistant. A voice model is",
+                "talking to a customer out loud and can hear you through it; you never",
+                "speak to the customer directly. Everything they say and everything the",
+                "voice says arrives here as context, so you always know the conversation.",
+                "",
+                "Most of it needs nothing from you. When you ARE asked a question,",
+                "answer it properly — use your tools, look things up, be specific — and",
+                "then reply with something short enough to be SPOKEN: two or three",
+                "sentences of plain language, no lists, no URLs, no code. Lead with the",
+                "answer. If you genuinely cannot answer, say so in one sentence.",
+              ].join("\n"),
+              key: "voicelab/colleague-brief",
+              llmRequestPolicy: { behaviour: "dont-trigger-request" },
+              role: "system",
+            },
+            type: "events.iterate.com/agents/context-added",
+          });
+          return true;
+        } catch (error) {
+          console.log(`colleague unavailable: ${String(error)}`);
+          return false;
+        }
+      })();
+      return colleagueReady;
+    };
+    /** Give the colleague a line of the conversation, without waking it. */
+    const overhear = (who: "customer" | "voice", text: string) => {
+      if (!colleague || text.trim().length === 0) return;
+      this.ctx.waitUntil(
+        (async () => {
+          if (!(await ensureColleague())) return;
+          await colleagueAgent
+            .append({
+              payload: {
+                content: `${who === "customer" ? "Customer" : "The voice"} said: ${text}`,
+                /*
+                 * The whole point: context, not a prompt. Without this the
+                 * colleague would take a turn on every sentence spoken in the
+                 * room — an LLM request per utterance, and an assistant
+                 * talking over itself.
+                 */
+                llmRequestPolicy: { behaviour: "dont-trigger-request" },
+                role: "developer",
+              },
+              type: "events.iterate.com/agents/context-added",
+            })
+            .catch(() => {});
+        })(),
+      );
+    };
+    /** Ask, and deliver the answer whenever it comes. */
+    const askColleague = (question: string) => {
+      askedCount++;
+      fireAppend({
+        payload: { asked: askedCount, callId, question },
+        type: "voicelab/colleague-asked",
+      });
+      this.ctx.waitUntil(
+        (async () => {
+          const startedAsk = Date.now();
+          let answer: string;
+          try {
+            if (!(await ensureColleague())) throw new Error("no colleague");
+            const reply = (await colleagueAgent.ask({
+              message: `The customer asked, through the voice: ${question}`,
+              timeoutMs: 120_000,
+            })) as { payload?: { content?: string } };
+            answer = reply.payload?.content ?? "";
+          } catch (error) {
+            answer = "";
+            console.log(`colleague failed: ${String(error)}`);
+          }
+          if (closedDown) return;
+          fireAppend({
+            payload: {
+              answer: answer.slice(0, 2000),
+              callId,
+              ms: Date.now() - startedAsk,
+            },
+            type: "voicelab/colleague-answered",
+          });
+          /*
+           * Delivered as a plain conversation item and a fresh response,
+           * NOT as the tool's output: by now the voice has long since spoken,
+           * and this has to interrupt the conversation the way a colleague
+           * putting their head round the door does.
+           */
+          try {
+            upstream.send(
+              JSON.stringify({
+                item: {
+                  content: [
+                    {
+                      text:
+                        answer.length > 0
+                          ? `Your colleague says: ${answer}`
+                          : "Your colleague could not answer that one — tell the customer plainly.",
+                      type: "input_text",
+                    },
+                  ],
+                  role: "user",
+                  type: "message",
+                },
+                type: "conversation.item.create",
+              }),
+            );
+            upstream.send(JSON.stringify({ type: "response.create" }));
+          } catch {
+            /* the call ended while they were thinking */
+          }
+        })(),
+      );
+    };
+    /** Function calls arrive twice on some paths; answer each exactly once. */
+    const answeredToolCalls = new Set<string>();
+    const handleToolCall = (id: string, name: string, argumentsJson: string) => {
+      if (name !== "ask_colleague" || answeredToolCalls.has(id)) return;
+      answeredToolCalls.add(id);
+      let question = "";
+      try {
+        question = String(
+          (JSON.parse(argumentsJson || "{}") as { question?: unknown }).question ?? "",
+        );
+      } catch {
+        question = argumentsJson;
+      }
+      /*
+       * Answer the TOOL immediately, before the colleague has thought about
+       * anything. A voice model waiting on a function output is a voice model
+       * saying nothing, and thirty seconds of nothing is a dropped call as
+       * far as anyone listening can tell.
+       */
+      try {
+        upstream.send(
+          JSON.stringify({
+            item: {
+              call_id: id,
+              output: JSON.stringify({
+                status: "asked",
+                tell_the_customer:
+                  "Say you have asked your colleague and are waiting, then keep talking.",
+              }),
+              type: "function_call_output",
+            },
+            type: "conversation.item.create",
+          }),
+        );
+        upstream.send(JSON.stringify({ type: "response.create" }));
+      } catch {
+        /* upstream closing */
+      }
+      askColleague(question);
+    };
+
     // Resolves when Grok has accepted the session — what `startCall` waits
     // for, so a caller that gets an answer knows the call is really live.
     let markReady: (ready: { ok: true } | { ok: false; reason: string }) => void = () => {};
@@ -347,6 +587,41 @@ export class VoiceBridge extends IterateDurableObject {
             session: {
               voice,
               instructions,
+              /*
+               * ONE tool, on purpose. A voice model choosing between many
+               * tools is a voice model pausing, and every pause is audible;
+               * choosing whether to ask a colleague is a judgement it can
+               * make in the time it takes to say "let me check".
+               */
+              ...(colleague
+                ? {
+                    tool_choice: "auto",
+                    tools: [
+                      {
+                        description:
+                          "Ask your genius colleague — a careful expert with access to the " +
+                          "customer's systems — anything that needs real thought, knowledge, " +
+                          "or action. Returns immediately: they are thinking, not answering. " +
+                          "Keep talking to the customer while you wait; their answer will " +
+                          "arrive as a message beginning 'Your colleague says'.",
+                        name: "ask_colleague",
+                        parameters: {
+                          properties: {
+                            question: {
+                              description:
+                                "The question, in full. Your colleague can hear the " +
+                                "conversation, but write it so it stands on its own.",
+                              type: "string",
+                            },
+                          },
+                          required: ["question"],
+                          type: "object",
+                        },
+                        type: "function",
+                      },
+                    ],
+                  }
+                : {}),
               reasoning: { effort },
               /*
                * Manual turns mean no VAD anywhere: the device decides when a
@@ -389,6 +664,55 @@ export class VoiceBridge extends IterateDurableObject {
       if (grokEvent.type === "response.output_audio.delta" && grokEvent.delta !== undefined) {
         appendSpkPcm(new Uint8Array(base64ToBytes(grokEvent.delta)), tGrok);
         return;
+      }
+      /*
+       * The colleague listens through the same transcript the screen shows.
+       * Only FINISHED lines: deltas would fill its context with fragments of
+       * half-spoken sentences.
+       */
+      if (colleague) {
+        const full = grokEvent as {
+          type: string;
+          transcript?: string;
+          item?: { content?: { transcript?: string; text?: string }[] };
+          call_id?: string;
+          name?: string;
+          arguments?: string;
+        };
+        if (full.type === "response.output_audio_transcript.done") {
+          overhear("voice", full.transcript ?? "");
+        }
+        if (full.type === "conversation.item.input_audio_transcription.completed") {
+          overhear("customer", full.transcript ?? "");
+        }
+        if (full.type === "response.function_call_arguments.done") {
+          handleToolCall(full.call_id ?? "", full.name ?? "", full.arguments ?? "{}");
+        }
+        /*
+         * Belt and braces: some realtime implementations only surface the
+         * finished call in the response, and a tool that silently never fires
+         * is indistinguishable from a model that chose not to use it.
+         */
+        if (full.type === "response.done") {
+          const output = (grokEvent as unknown as { response?: { output?: unknown[] } }).response
+            ?.output;
+          for (const item of Array.isArray(output) ? output : []) {
+            const call = item as {
+              type?: string;
+              name?: string;
+              call_id?: string;
+              id?: string;
+              arguments?: string;
+            };
+            if (call.type === "function_call") {
+              handleToolCall(
+                call.call_id ?? call.id ?? "",
+                call.name ?? "",
+                call.arguments ?? "{}",
+              );
+            }
+          }
+        }
       }
       if (grokEvent.type === "response.created") {
         responseActive = true;
@@ -696,6 +1020,13 @@ export interface StartCallOptions {
    * is what a push-to-talk device wants. Anything else keeps server VAD.
    */
   turns?: "manual" | "vad";
+  /**
+   * Give the voice a genius colleague: a text agent at /agents/colleague
+   * that overhears the whole conversation as non-triggering context and is
+   * asked, through one tool, whenever something has to be right. Off by
+   * default — a plain voice call should not create an agent.
+   */
+  colleague?: boolean;
 }
 
 export default class ProjectWorker extends IterateWorkerEntrypoint {
@@ -721,6 +1052,7 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (options.greet) params.set("greet", options.greet);
     if (options.pace) params.set("pace", "1");
     if (options.turns === "manual") params.set("turns", "manual");
+    if (options.colleague) params.set("colleague", "1");
 
     const startedAt = Date.now();
     const response = await this.fetchDynamicWorker(
