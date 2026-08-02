@@ -9,7 +9,12 @@ import { readDevServerInfo } from "../lib/dev-server-info.ts";
 
 /** Options accepted by every voicelab command that talks to OS. */
 export interface VoicelabConnectOptions {
-  /** Project id (prj_…) to connect into. */
+  /**
+   * Project slug or `prj_` id to connect into.
+   *
+   * `projects.get` resolves either, so nothing here has to know which it was
+   * given — and a slug is what a person actually remembers.
+   */
   project: string;
   /** OS base URL. Defaults to APP_CONFIG_BASE_URL or the local dev server. */
   baseUrl?: string;

@@ -291,6 +291,20 @@ export class VoiceBridge extends IterateDurableObject {
    * which is heard as the assistant replying two or three times to one turn.
    */
   #endActiveCall: ((reason: string, superseded?: boolean) => void) | null = null;
+  /**
+   * The callId the live call belongs to.
+   *
+   * Kept because "a second startCall on this stream" and "the SAME call asked
+   * for again" are different things and used not to be. A client that has not
+   * seen its acceptance yet re-requests — the host CLI does so every few
+   * seconds, and it must, since a request can be lost. Superseding on that
+   * re-request made the bridge kill its own call mid-build, the client then
+   * asked again, and the conversation never started: the stream showed
+   * `call-failed "superseded by a new call"` followed by an acceptance that
+   * was itself superseded, over and over. A cold bridge takes longer to build
+   * than the client waits, so this was reachable on any first call.
+   */
+  #activeCallId: string | null = null;
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -311,9 +325,36 @@ export class VoiceBridge extends IterateDurableObject {
      */
     const grokBaseUrl = url.searchParams.get("grokBaseUrl") ?? GROK_REALTIME_URL;
 
+    /*
+     * SUPERSEDE A DIFFERENT CALL, NEVER THE SAME ONE AGAIN.
+     *
+     * A client that has not yet seen its acceptance re-requests, and it is
+     * right to: a request can be lost, so asking again is the only way to
+     * make starting a call reliable. The host CLI re-asks every few seconds
+     * while a call is pending.
+     *
+     * Treating that re-ask as a NEW call meant a cold bridge — a dynamic
+     * worker build plus a provider handshake, comfortably longer than the
+     * client waits — tore down the call it was in the middle of building,
+     * whereupon the client asked again and it happened again. The stream
+     * recorded it exactly: call-requested, call-failed "superseded by a new
+     * call", an acceptance, then "superseded by a newer bridge", and no
+     * conversation at either end.
+     *
+     * So the same callId arriving twice is the SAME call, and the build in
+     * flight is left alone to finish.
+     */
+    const requestedCallId = url.searchParams.get("callId");
+    if (this.#endActiveCall !== null && this.#activeCallId === requestedCallId) {
+      return new Response(
+        JSON.stringify({ callId: requestedCallId, ok: true, reason: "already building" }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }
     if (this.#endActiveCall !== null) {
       this.#endActiveCall("superseded by a new call on this stream", true);
       this.#endActiveCall = null;
+      this.#activeCallId = null;
     }
     const dialGrok = async () => {
       const target = new URL(grokBaseUrl);
@@ -1725,11 +1766,17 @@ export class VoiceBridge extends IterateDurableObject {
       try {
         server?.close();
       } catch {}
-      if (this.#endActiveCall === teardown) this.#endActiveCall = null;
+      if (this.#endActiveCall === teardown) {
+        this.#endActiveCall = null;
+        this.#activeCallId = null;
+      }
       markReady({ ok: false, reason });
       resolveFinished();
     };
     this.#endActiveCall = teardown;
+    // Paired with the teardown, so a re-request of THIS call is recognised as
+    // the same one for exactly as long as the call is alive.
+    this.#activeCallId = callId;
     /* Grok's close is handled by attachGrok: it redials rather than ending. */
     server?.addEventListener("close", () => teardown("anchor socket closed"));
     server?.addEventListener("message", () => {
@@ -2182,6 +2229,40 @@ export class VoiceAgentProcessorHost extends IterateDurableObject {
 }
 
 export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
+  /**
+   * Prove this guest is BUILT, RUNNING, and able to reach its own project.
+   *
+   * A dynamic worker is built lazily on the first call into it, so that first
+   * call carries a cold build — and if the build fails, it fails there, in
+   * whatever the caller happened to be doing. Committing the file says
+   * nothing about whether it compiles.
+   *
+   * Having a call whose only job is to be the first one means a caller can
+   * wait for the worker deliberately, retry a cold start without retrying
+   * anything that has side effects, and report a build failure as a build
+   * failure rather than as "the conversation would not start".
+   *
+   * It touches `this.itx` on purpose: a worker that loads but cannot reach
+   * its project is not healthy, and answering from a field would prove only
+   * that the isolate booted.
+   */
+  async health(): Promise<{ ok: true; projectId: string; xaiSecretReady: boolean }> {
+    const project = await this.itx;
+    const projectId = await project.projectId;
+    const secret = await project.secrets.get(XAI_SECRET).__describe();
+    /*
+     * Reported rather than thrown. Whether a credential exists is the
+     * caller's decision to act on, and a health check that fails on policy
+     * cannot distinguish "this worker is broken" from "you have not finished
+     * setting up" — which are different problems with different fixes.
+     */
+    return {
+      ok: true,
+      projectId,
+      xaiSecretReady: secret.created === true && secret.hasMaterial === true,
+    };
+  }
+
   async setupVoiceAgent(options: SetupVoiceAgentOptions = {}): Promise<SetupVoiceAgentResult> {
     const streamPath = options.streamPath ?? `/agents/voice/${crypto.randomUUID()}`;
     if (!streamPath.startsWith("/")) {

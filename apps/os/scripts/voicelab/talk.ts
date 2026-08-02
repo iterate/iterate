@@ -29,6 +29,16 @@ import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
 
 const DEFAULT_PROJECT = "prj_698c23da57f84d92a9ba5dc959efebec";
 const DEFAULT_MINUTES = 30;
+const XAI_SECRET = "/secrets/xai";
+/**
+ * The provider key in the Doppler config this command already runs inside.
+ *
+ * Named exactly as Doppler has it so nobody has to map one name to another;
+ * see docs/devops-cloudflare-doppler.md for where env config comes from.
+ */
+const XAI_ENV = "APP_CONFIG_X_AI_API_KEY";
+/** Where the key may be sent. A secret pinned nowhere can be sent anywhere. */
+const XAI_EGRESS = ["https://api.x.ai"];
 
 /** Options for `pnpm cli voicelab talk`. */
 export interface TalkOptions extends Partial<VoicelabConnectOptions> {
@@ -38,9 +48,21 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   // passing it does not read as an unknown flag.
   /** Doppler environment, for example preview_3. Prompted on a TTY. */
   environment?: string;
-  /** Project id (prj_…). Prompted with a default on a TTY. */
+  /**
+   * Project slug or `prj_` id. Prompted with a default on a TTY.
+   *
+   * Both work because `projects.get` resolves either — slugs are immutable,
+   * so a slug handle cannot silently repoint at a different project.
+   */
   project?: string;
-  /** Conversation stream. Defaults to a fresh /agents/voice/* path. */
+  /**
+   * The stream this conversation lives on, and where its agent is mounted.
+   *
+   * Prompted with a fresh timestamped default on a TTY, so each run can be a
+   * new conversation or can rejoin an existing one by name. A path you can
+   * type and remember matters more than uniqueness here: the whole reason to
+   * choose it is to go back and look at what happened.
+   */
   streamPath?: string;
   /** Wall-clock limit for the session. */
   minutes?: number;
@@ -63,6 +85,7 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
 }
 
 interface VoiceAgentSetup {
+  health(): Promise<{ ok: true; projectId: string; xaiSecretReady: boolean }>;
   setupVoiceAgent(options?: { streamPath?: string }): Promise<{
     streamPath: string;
     created: string[];
@@ -70,10 +93,25 @@ interface VoiceAgentSetup {
   }>;
 }
 
+/**
+ * How long to keep waiting for the guest worker to build.
+ *
+ * A cold dynamic-worker build is the slowest thing in this command, and a
+ * compile error in the committed file surfaces only here. Fifteen seconds:
+ * long enough for a cold build, short enough that a broken build is on the
+ * screen while you are still looking at it. Waiting a minute to be told the
+ * file does not compile is a minute nobody gets back.
+ */
+const HEALTH_TIMEOUT_MS = 15_000;
+const HEALTH_RETRY_MS = 1_000;
+
 export async function talk(options: TalkOptions = {}) {
   const project =
     options.project ??
-    (await promptWithDefault("Project", process.env.ITERATE_PROJECT?.trim() || DEFAULT_PROJECT));
+    (await promptWithDefault(
+      "Project (slug or id)",
+      process.env.ITERATE_PROJECT?.trim() || DEFAULT_PROJECT,
+    ));
   const minutes = options.minutes ?? DEFAULT_MINUTES;
   if (!Number.isFinite(minutes) || minutes <= 0) {
     throw new Error(`--minutes must be greater than zero; received ${JSON.stringify(minutes)}`);
@@ -100,14 +138,27 @@ export async function talk(options: TalkOptions = {}) {
       : `voice-agent.ts already current (${install.commitOid.slice(0, 8)})`,
   );
 
+  console.log(`xai secret ${await ensureXaiSecret(itx)}`);
+
   // The generated Cap'n Web client cannot carry a userspace worker's methods;
   // this is the RPC contract exported by the exact source ref above.
   using voiceAgent = itx.workers.get(
     voiceAgentEntrypointRef,
   ) as unknown as DynamicWorkerCapability<VoiceAgentSetup>;
-  const setup = await voiceAgent.setupVoiceAgent(
-    options.streamPath === undefined ? {} : { streamPath: options.streamPath },
-  );
+  // Wait for the guest to actually build before anything with consequences.
+  const health = await waitForVoiceAgent(voiceAgent);
+  console.log(`voice-agent healthy for ${health.projectId}`);
+
+  /*
+   * Asked for, not invented. A generated UUID makes every run a conversation
+   * nobody can find again; a name you chose is one you can point setup, the
+   * agent and a later look at the stream all at.
+   */
+  const streamPath = options.streamPath ?? (await promptWithDefault("Stream", defaultStreamPath()));
+  if (!streamPath.startsWith("/")) {
+    throw new Error(`stream path must be absolute; received ${JSON.stringify(streamPath)}`);
+  }
+  const setup = await voiceAgent.setupVoiceAgent({ streamPath });
 
   console.log(`stream ${setup.streamPath}`);
   for (const item of setup.created) console.log(`  created       ${item}`);
@@ -176,6 +227,88 @@ export async function talk(options: TalkOptions = {}) {
 }
 
 /**
+ * Wait until the guest worker answers, retrying a cold build.
+ *
+ * The first call into a dynamic worker builds it, so it is both the slowest
+ * and the only one that can fail for reasons that have nothing to do with
+ * what was asked. Doing that here means a build failure is reported as a
+ * build failure, and that the calls after it — which append events and start
+ * conversations — are never the ones absorbing a cold start.
+ *
+ * The last error is re-thrown verbatim on timeout. A summary would hide the
+ * compile error that is almost always the actual answer.
+ */
+async function waitForVoiceAgent(
+  voiceAgent: DynamicWorkerCapability<VoiceAgentSetup>,
+): Promise<{ ok: true; projectId: string; xaiSecretReady: boolean }> {
+  const deadline = Date.now() + HEALTH_TIMEOUT_MS;
+  let attempts = 0;
+  let lastError: unknown;
+  for (;;) {
+    attempts++;
+    try {
+      return await voiceAgent.health();
+    } catch (error) {
+      lastError = error;
+      if (Date.now() >= deadline) break;
+      if (attempts === 1) console.log("waiting for the voice-agent worker to build…");
+      await new Promise((resolve) => setTimeout(resolve, HEALTH_RETRY_MS));
+    }
+  }
+  throw new Error(
+    `voice-agent did not become healthy within ${String(HEALTH_TIMEOUT_MS / 1000)}s ` +
+      `after ${String(attempts)} attempts. This is usually a compile error in the ` +
+      `committed voice-agent.ts. The last error was:\n${String(lastError)}`,
+  );
+}
+
+/** The subset of the secret capability this command uses. */
+interface XaiSecret {
+  __describe(): Promise<{ created?: boolean; hasMaterial?: boolean }>;
+  create(input: { egress: { urls: string[] }; material: string }): Promise<unknown>;
+  update(input: { material: string }): Promise<unknown>;
+}
+
+/**
+ * Make sure the project can reach the provider, using the key from the
+ * Doppler config this command is already running inside.
+ *
+ * The config-repo worker deliberately never creates a credential — it only
+ * checks and refuses, because a setup routine that mints secrets into a
+ * production project on its own initiative is not something you can take
+ * back. This is the other side of that line: an operator's own shell, an
+ * environment they chose by naming a Doppler config, and an explicit
+ * command. The key still never travels through the worker.
+ *
+ * Existing material is LEFT ALONE. Material is write-only and not
+ * comparable, so a "create" over a live secret cannot check whether it
+ * matches; silently rotating the provider key of a running project because
+ * somebody ran a voice command would be a genuinely bad surprise.
+ */
+async function ensureXaiSecret(itx: unknown): Promise<string> {
+  const secret = (itx as { secrets: { get(path: string): XaiSecret } }).secrets.get(XAI_SECRET);
+  const described = await secret.__describe();
+  if (described.created === true && described.hasMaterial === true) return "already set";
+
+  const material = process.env[XAI_ENV]?.trim();
+  if (!material) {
+    throw new Error(
+      `${XAI_SECRET} has no material and ${XAI_ENV} is not in this environment. ` +
+        `Either run inside a Doppler config that has it, or create the secret once by hand:\n` +
+        `  await itx.secrets.get("${XAI_SECRET}").create({ egress: { urls: ${JSON.stringify(XAI_EGRESS)} }, material: "<xAI API key>" })`,
+    );
+  }
+  // A secret born without material takes it through update; create would
+  // keep the empty material it already has rather than replace it.
+  if (described.created === true) {
+    await secret.update({ material });
+    return `material set from ${XAI_ENV}`;
+  }
+  await secret.create({ egress: { urls: XAI_EGRESS }, material });
+  return `created from ${XAI_ENV}, pinned to ${XAI_EGRESS.join(", ")}`;
+}
+
+/**
  * Find the C.
  *
  * `apps/kit` belongs to this monorepo but not necessarily to this worktree —
@@ -240,6 +373,17 @@ function buildIfAbsent(kitDir: string): string {
   runInherited("cmake", ["-S", firmware, "-B", build]);
   runInherited("cmake", ["--build", build, "--target", "iterate-kit-cli", "-j8"]);
   return binary;
+}
+
+/**
+ * A fresh conversation, named for when it happened.
+ *
+ * Minutes, not milliseconds: this is offered for a person to accept or edit,
+ * and the point of the default is that it is short enough to retype.
+ */
+function defaultStreamPath(): string {
+  const stamp = new Date().toISOString().replace(/\D/g, "").slice(2, 12);
+  return `/agents/voice/${stamp}`;
 }
 
 async function promptWithDefault(label: string, defaultValue: string): Promise<string> {
