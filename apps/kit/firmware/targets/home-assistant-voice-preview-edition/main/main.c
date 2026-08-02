@@ -233,6 +233,7 @@ static enum iterate_kit_status sample_runtime_metrics(
   struct iterate_kit_esp_idf_itx_transport_metrics control;
   struct iterate_kit_esp_idf_pcm_transport_metrics pcm;
   struct iterate_kit_voice_pe_audio_owner_metrics owner;
+  struct iterate_kit_voice_pe_aec_signal_metrics aec_signal;
   const int64_t now_us = esp_timer_get_time();
   int64_t cpu_permille = -1;
   uint32_t stack_headroom;
@@ -259,12 +260,22 @@ static enum iterate_kit_status sample_runtime_metrics(
   memset(&control, 0, sizeof(control));
   memset(&pcm, 0, sizeof(pcm));
   memset(&owner, 0, sizeof(owner));
+  memset(&aec_signal, 0, sizeof(aec_signal));
   memset(&access_point, 0, sizeof(access_point));
   iterate_kit_esp_idf_itx_transport_metrics(
       &state->control_transport, &control);
   iterate_kit_esp_idf_pcm_transport_metrics(
       &state->pcm_transport, &pcm);
   iterate_kit_voice_pe_audio_owner_metrics_snapshot(&owner);
+  if (iterate_kit_voice_pe_audio_owner_aec_signal_metrics_snapshot(
+          &aec_signal) != ITERATE_KIT_OK) {
+    /*
+     * A malformed aligned window is not equivalent to a quiet clean channel.
+     * Fail the complete sample so the callback cannot silently manufacture an
+     * impressive AEC result from zero-initialized amplitudes.
+     */
+    return ITERATE_KIT_STATE_ERROR;
+  }
 
   sample->uptime_ms = (now_us - state->booted_at_us) / 1000;
   sample->free_heap_bytes = esp_get_free_heap_size();
@@ -359,6 +370,48 @@ static enum iterate_kit_status sample_runtime_metrics(
   sample->has_playback_detail = false;
 
   sample->has_aec_detail = false;
+  sample->has_raw_clean_aec_detail = true;
+  sample->raw_clean_aec_detail.schema_version = 2U;
+  sample->raw_clean_aec_detail.sequence = aec_signal.sequence;
+  sample->raw_clean_aec_detail.window_started_at_ms =
+      aec_signal.window_started_at_us >= (uint64_t)state->booted_at_us
+      ? (int64_t)((aec_signal.window_started_at_us -
+                   (uint64_t)state->booted_at_us) /
+                  1000U)
+      : 0;
+  sample->raw_clean_aec_detail.produced_at_ms =
+      aec_signal.produced_at_us >= (uint64_t)state->booted_at_us
+      ? (int64_t)((aec_signal.produced_at_us -
+                   (uint64_t)state->booted_at_us) /
+                  1000U)
+      : sample->uptime_ms;
+  sample->raw_clean_aec_detail.sample_stride =
+      aec_signal.signal.sample_stride;
+  sample->raw_clean_aec_detail.sampled_samples =
+      aec_signal.signal.sampled_samples;
+  sample->raw_clean_aec_detail.raw_peak = aec_signal.signal.raw_peak;
+  sample->raw_clean_aec_detail.clean_peak =
+      aec_signal.signal.clean_peak;
+  sample->raw_clean_aec_detail.raw_mean_absolute =
+      aec_signal.signal.raw_mean_absolute;
+  sample->raw_clean_aec_detail.clean_mean_absolute =
+      aec_signal.signal.clean_mean_absolute;
+  sample->raw_clean_aec_detail.playback_content_samples =
+      aec_signal.signal.playback_content_samples;
+  sample->raw_clean_aec_detail.lifetime_capture_frames =
+      owner.capture_frames;
+  sample->raw_clean_aec_detail.lifetime_clean_uplink_frames =
+      owner.clean_uplink_frames;
+  sample->raw_clean_aec_detail.lifetime_clean_uplink_drops =
+      owner.clean_uplink_drops;
+  sample->raw_clean_aec_detail.lifetime_capture_failures =
+      owner.capture_failures;
+  sample->raw_clean_aec_detail.lifetime_signal_measurement_failures =
+      owner.aec_signal_measurement_failures;
+  sample->raw_clean_aec_detail.last_capture_to_uplink_us =
+      owner.last_capture_to_uplink_us;
+  sample->raw_clean_aec_detail.maximum_capture_to_uplink_us =
+      owner.maximum_capture_to_uplink_us;
 
   sample->has_control_diagnostics = true;
   sample->control_diagnostics.schema_version = 4U;
@@ -651,13 +704,14 @@ static bool initialise_device(struct havpe_runtime *state) {
   device_options.metrics.subscription_count =
       HAVPE_METRICS_SUBSCRIPTION_CAPACITY;
   device_options.metrics.interval_ms = 1000U;
+  device_options.metrics.enable_aec_view = false;
   /*
    * XMOS exposes exact same-time raw and post-AEC microphones, but not its
-   * reference channel. Keep the legacy three-channel AEC method absent until
-   * the schema can explicitly represent that topology; general metrics still
-   * publish every capture/queue/failure counter without fabricating zeros.
+   * private reference. Mount the shared method with the discriminated two-tap
+   * schema: callers receive real amplitudes plus same-window physical playback
+   * activity, never a zero or intended-PCM value disguised as the reference.
    */
-  device_options.metrics.enable_aec_view = false;
+  device_options.metrics.enable_raw_clean_aec_view = true;
   device_options.metrics.diagnostics_expression_buffer =
       state->diagnostics_expression;
   device_options.metrics.diagnostics_expression_capacity =

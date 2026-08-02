@@ -30,15 +30,21 @@ static const struct iterate_kit_voice_pe_register_write initial_writes[] = {
 };
 
 /*
- * +24 dB digital volume (0x30) is ESPHome's 100% endpoint. The user asked
- * that physical portability proofs remain clearly audible to the nearby Mac;
- * clipping and acoustic/AEC evidence must still be measured explicitly.
+ * Keep the DAC at 0 dB even though ESPHome's theoretical 100% endpoint is
+ * +24 dB. A production full-duplex run at that endpoint made Grok transcribe
+ * its own speaker output almost verbatim on XMOS's processed channel: the
+ * positive digital gain exhausted acoustic/AEC headroom before the DSP could
+ * provide useful cancellation. PCM reaches this boundary unscaled, so 0 dB is
+ * the loudest setting that cannot electrically clip a full-scale provider
+ * sample. If the nearby-Mac oracle later proves it too quiet, volume may move
+ * only behind a measured unclipped/AEC gate; intelligibility is not permission
+ * to reintroduce self-triggering server VAD.
  */
 static const struct iterate_kit_voice_pe_register_write power_up_writes[] = {
   {0x00, 0x00},
   {0x3f, 0xd4},
-  {0x41, 0x30},
-  {0x42, 0x30},
+  {0x41, 0x00},
+  {0x42, 0x00},
   {0x40, 0x00},
 };
 

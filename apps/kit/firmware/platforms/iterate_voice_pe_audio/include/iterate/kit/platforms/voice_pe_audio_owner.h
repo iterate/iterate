@@ -56,6 +56,8 @@ struct iterate_kit_voice_pe_aec_signal_summary {
   uint32_t clean_peak;
   uint32_t raw_mean_absolute;
   uint32_t clean_mean_absolute;
+  /* Non-silence physically submitted while this capture window was open. */
+  uint32_t playback_content_samples;
 };
 
 struct iterate_kit_voice_pe_aec_signal_metrics {

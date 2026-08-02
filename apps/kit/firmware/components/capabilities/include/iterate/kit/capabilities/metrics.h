@@ -165,6 +165,39 @@ struct iterate_kit_aec_metrics_sample {
 };
 
 /**
+ * One aligned raw/post-AEC window for hardware whose AEC reference is private.
+ *
+ * Some audio coprocessors expose the original microphone and their processed
+ * output on the same I2S capture edge, but do not expose the internal far-end
+ * reference. This is not a degraded three-tap sample: it is a different,
+ * truthful topology. `playback_content_samples` counts physically submitted
+ * non-silence in the same monotonic window, which lets a harness identify a
+ * speaker-only interval without labelling intended playback as a measured AEC
+ * reference. The dedicated schema also prevents zero-filled DSP timings from
+ * masquerading as measurements the coprocessor cannot report.
+ */
+struct iterate_kit_raw_clean_aec_metrics_sample {
+  uint32_t schema_version;
+  uint32_t sequence;
+  int64_t window_started_at_ms;
+  int64_t produced_at_ms;
+  uint32_t sample_stride;
+  uint32_t sampled_samples;
+  uint32_t raw_peak;
+  uint32_t clean_peak;
+  uint32_t raw_mean_absolute;
+  uint32_t clean_mean_absolute;
+  uint32_t playback_content_samples;
+  uint32_t lifetime_capture_frames;
+  uint32_t lifetime_clean_uplink_frames;
+  uint32_t lifetime_clean_uplink_drops;
+  uint32_t lifetime_capture_failures;
+  uint32_t lifetime_signal_measurement_failures;
+  uint32_t last_capture_to_uplink_us;
+  uint32_t maximum_capture_to_uplink_us;
+};
+
+/**
  * Latest classified control-transport incident retained across reconnect.
  *
  * A metrics callback belongs to the Cap'n Web session that carried it, so the
@@ -349,6 +382,9 @@ struct iterate_kit_metrics_sample {
   struct iterate_kit_aec_metrics_sample aec_detail;
   bool has_control_diagnostics;
   struct iterate_kit_control_diagnostics_sample control_diagnostics;
+  bool has_raw_clean_aec_detail;
+  struct iterate_kit_raw_clean_aec_metrics_sample
+      raw_clean_aec_detail;
 };
 
 struct iterate_kit_metrics_driver {
@@ -368,6 +404,7 @@ enum iterate_kit_metrics_view {
   ITERATE_KIT_METRICS_GENERAL = 0,
   ITERATE_KIT_METRICS_PLAYBACK,
   ITERATE_KIT_METRICS_AEC,
+  ITERATE_KIT_METRICS_RAW_CLEAN_AEC,
 };
 
 /**
@@ -411,6 +448,12 @@ struct iterate_kit_metrics_options {
    */
   bool enable_playback_view;
   bool enable_aec_view;
+  /*
+   * Uses the same public subscribeToAecMetrics method as the three-tap view,
+   * but emits its discriminated raw-clean schema. Enabling both would make one
+   * method name ambiguous and is rejected during initialization.
+   */
+  bool enable_raw_clean_aec_view;
   /*
    * getDiagnostics() returns a dynamic object through Cap'n Web's borrowed
    * expression reply. The protocol may retain that reply until a later pull,

@@ -137,6 +137,7 @@ enum {
   PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT = 35,
   PLAYBACK_VIEW_RUNTIME_FIELD_COUNT = 19,
   AEC_VIEW_FIELD_COUNT = 24,
+  RAW_CLEAN_AEC_VIEW_FIELD_COUNT = 19,
 };
 
 struct playback_metrics_expression_workspace {
@@ -175,6 +176,18 @@ struct aec_metrics_expression_workspace {
   struct capnweb_expression root_object;
 };
 
+struct raw_clean_aec_metrics_expression_workspace {
+  /*
+   * This view deliberately has its own workspace rather than forcing absent
+   * reference/DSP fields through the three-tap serializer. The topology is
+   * part of the wire value, while the union below means supporting it costs no
+   * permanent RAM and does not increase the metrics task's worst-case stack.
+   */
+  struct capnweb_expression values[RAW_CLEAN_AEC_VIEW_FIELD_COUNT];
+  struct capnweb_object_field fields[RAW_CLEAN_AEC_VIEW_FIELD_COUNT];
+  struct capnweb_expression root_object;
+};
+
 union any_metrics_expression_workspace {
   /*
    * Only one callback expression exists at a time. Cap'n Web serializes it
@@ -185,6 +198,7 @@ union any_metrics_expression_workspace {
   struct metrics_expression_workspace general;
   struct playback_metrics_expression_workspace playback;
   struct aec_metrics_expression_workspace aec;
+  struct raw_clean_aec_metrics_expression_workspace raw_clean_aec;
 };
 
 _Static_assert(
@@ -1020,6 +1034,81 @@ static bool build_aec_metrics_expression(
   return true;
 }
 
+static bool build_raw_clean_aec_metrics_expression(
+    const struct iterate_kit_metrics_sample *sample,
+    struct raw_clean_aec_metrics_expression_workspace *workspace) {
+  const struct iterate_kit_raw_clean_aec_metrics_sample *const detail =
+      &sample->raw_clean_aec_detail;
+  size_t count = 0U;
+  if (!sample->has_raw_clean_aec_detail ||
+      detail->schema_version != 2U ||
+      detail->sample_stride == 0U ||
+      detail->window_started_at_ms > detail->produced_at_ms) {
+    /*
+     * A zero sample would look like perfect echo removal. Reject incomplete
+     * evidence before opening a callback message so instrumentation failure is
+     * visible rather than silently improving the reported AEC result.
+     */
+    return false;
+  }
+
+#define SET_RAW_CLEAN_AEC_INTEGER(public_name, member)                    \
+  do {                                                                    \
+    if (count >= RAW_CLEAN_AEC_VIEW_FIELD_COUNT) {                        \
+      return false;                                                       \
+    }                                                                     \
+    set_integer_field(                                                    \
+        &workspace->values[count],                                        \
+        &workspace->fields[count],                                        \
+        public_name,                                                      \
+        sizeof(public_name) - 1U,                                         \
+        detail->member);                                                  \
+    ++count;                                                              \
+  } while (0)
+
+  SET_RAW_CLEAN_AEC_INTEGER("schemaVersion", schema_version);
+  set_string_field(
+      &workspace->values[count],
+      &workspace->fields[count],
+      "topology",
+      sizeof("topology") - 1U,
+      "raw-clean");
+  ++count;
+  SET_RAW_CLEAN_AEC_INTEGER("sequence", sequence);
+  SET_RAW_CLEAN_AEC_INTEGER("windowStartedAtMs", window_started_at_ms);
+  SET_RAW_CLEAN_AEC_INTEGER("producedAtMs", produced_at_ms);
+  SET_RAW_CLEAN_AEC_INTEGER("sampleStride", sample_stride);
+  SET_RAW_CLEAN_AEC_INTEGER("sampledSamples", sampled_samples);
+  SET_RAW_CLEAN_AEC_INTEGER("rawPeak", raw_peak);
+  SET_RAW_CLEAN_AEC_INTEGER("cleanPeak", clean_peak);
+  SET_RAW_CLEAN_AEC_INTEGER("rawMeanAbsolute", raw_mean_absolute);
+  SET_RAW_CLEAN_AEC_INTEGER("cleanMeanAbsolute", clean_mean_absolute);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "playbackContentSamples", playback_content_samples);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimeCaptureFrames", lifetime_capture_frames);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimeCleanUplinkFrames", lifetime_clean_uplink_frames);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimeCleanUplinkDrops", lifetime_clean_uplink_drops);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimeCaptureFailures", lifetime_capture_failures);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimeSignalMeasurementFailures",
+      lifetime_signal_measurement_failures);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lastCaptureToUplinkUs", last_capture_to_uplink_us);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "maximumCaptureToUplinkUs", maximum_capture_to_uplink_us);
+#undef SET_RAW_CLEAN_AEC_INTEGER
+
+  if (count != RAW_CLEAN_AEC_VIEW_FIELD_COUNT) {
+    return false;
+  }
+  set_object(&workspace->root_object, workspace->fields, count);
+  return true;
+}
+
 static enum capnweb_status subscribe_view(
     void *context,
     const struct capnweb_call *call,
@@ -1142,8 +1231,14 @@ static enum capnweb_status subscribe_aec(
     void *context,
     const struct capnweb_call *call,
     struct capnweb_reply *reply) {
+  const struct iterate_kit_metrics *const metrics = context;
   return subscribe_view(
-      context, call, reply, ITERATE_KIT_METRICS_AEC);
+      context,
+      call,
+      reply,
+      metrics != NULL && metrics->options.enable_raw_clean_aec_view
+          ? ITERATE_KIT_METRICS_RAW_CLEAN_AEC
+          : ITERATE_KIT_METRICS_AEC);
 }
 
 static void diagnostics_reply_released(void *context) {
@@ -1551,6 +1646,18 @@ static struct iterate_kit_poll_result poll(
         return result;
       }
       root = &workspace.aec.root_object;
+    } else if (
+        subscription->view == ITERATE_KIT_METRICS_RAW_CLEAN_AEC) {
+      if (!build_raw_clean_aec_metrics_expression(
+              &sample, &workspace.raw_clean_aec)) {
+        (void)release_callback_budget(metrics, subscription);
+        const struct iterate_kit_poll_result result = {
+          ITERATE_KIT_POLL_DRIVER_ERROR,
+          CAPNWEB_OK,
+        };
+        return result;
+      }
+      root = &workspace.raw_clean_aec.root_object;
     } else {
       /*
        * A corrupt view selector is owner-state corruption, not a request for
@@ -1672,6 +1779,8 @@ enum iterate_kit_status iterate_kit_metrics_init(
       options->subscriptions == NULL ||
       options->subscription_count == 0U ||
       options->interval_ms == 0U ||
+      (options->enable_aec_view &&
+       options->enable_raw_clean_aec_view) ||
       ((options->diagnostics_expression_buffer == NULL) !=
        (options->diagnostics_expression_capacity == 0U)) ||
       (options->diagnostics_expression_buffer != NULL &&
@@ -1718,16 +1827,18 @@ struct iterate_kit_module iterate_kit_metrics_module(
   const bool playback =
       metrics != NULL && metrics->options.enable_playback_view;
   const bool aec = metrics != NULL && metrics->options.enable_aec_view;
+  const bool raw_clean_aec =
+      metrics != NULL && metrics->options.enable_raw_clean_aec_view;
   const struct iterate_kit_method *methods;
   size_t method_count;
-  if (playback && aec) {
+  if (playback && (aec || raw_clean_aec)) {
     methods = all_methods;
     method_count = sizeof(all_methods) / sizeof(all_methods[0]);
   } else if (playback) {
     methods = playback_methods;
     method_count = sizeof(playback_methods) /
         sizeof(playback_methods[0]);
-  } else if (aec) {
+  } else if (aec || raw_clean_aec) {
     methods = aec_methods;
     method_count = sizeof(aec_methods) / sizeof(aec_methods[0]);
   } else {

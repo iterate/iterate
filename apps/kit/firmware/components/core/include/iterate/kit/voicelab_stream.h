@@ -192,6 +192,29 @@ struct iterate_kit_voicelab {
    * device), and any other bridge-sourced event proves it just as well.
    */
   uint64_t last_bridge_ms;
+  /*
+   * When a BATCH last arrived on this connection — any batch, empty or not,
+   * stamped before anything in it is looked at.
+   *
+   * The uplink proves itself: a ping is an append whose resolution comes
+   * back, so a dead send path is noticed in seconds. The downlink had NO
+   * such proof, and it is a separate lane: the platform holds the callback
+   * capability in the stream's Durable Object, and that registration can be
+   * lost — eviction, redeploy, a connection closed at the far end — without
+   * the socket closing, without an error, and without this device being told
+   * anything at all.
+   *
+   * Measured: 68 seconds in which the bridge appended eight call-accepted
+   * events and eleven pongs, every one of them visible to another
+   * subscriber, while this device's batch counter sat frozen at 77 and it
+   * cheerfully started a ninth call. That is the "stuck on starting call"
+   * and the answer that stops after half a sentence: not a stall, a lane
+   * that has quietly stopped existing.
+   *
+   * So the downlink gets a deadline too, and its recovery is the recycle
+   * that already exists.
+   */
+  uint64_t last_batch_ms;
   /* Downlink accounting (single-owner: dispatch runs on the session task). */
   uint32_t connection_generation;
   /*

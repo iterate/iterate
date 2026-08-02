@@ -10,8 +10,11 @@
  * voice_kit implementations, not derived from the production table under
  * test. A swapped register or invented pipeline tap can still produce audio,
  * but it invalidates volume/AEC evidence in ways an acoustic smoke test cannot
- * localise. Keeping the hardware contract host-testable gives such changes a
- * precise failure before a board is flashed.
+ * localise. A physical full-duplex run at +24 dB reproduced the assistant's
+ * own speech almost verbatim on the supposedly clean microphone and repeatedly
+ * triggered server VAD. The 0 dB register values below therefore protect an
+ * unclipped electrical reference and acoustic path; loudness must be raised
+ * only after measured AEC headroom, never by silently changing this vector.
  */
 static void preserves_the_first_party_codec_sequence(void) {
   static const struct iterate_kit_voice_pe_register_write expected_initial[] = {
@@ -24,7 +27,7 @@ static void preserves_the_first_party_codec_sequence(void) {
     {0x11, 0x3e}, {0x12, 0x00}, {0x13, 0x00}, {0x09, 0x3c},
   };
   static const struct iterate_kit_voice_pe_register_write expected_power_up[] = {
-    {0x00, 0x00}, {0x3f, 0xd4}, {0x41, 0x30}, {0x42, 0x30},
+    {0x00, 0x00}, {0x3f, 0xd4}, {0x41, 0x00}, {0x42, 0x00},
     {0x40, 0x00},
   };
   size_t count = 0U;

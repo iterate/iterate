@@ -458,6 +458,14 @@ static enum capnweb_status batch_dispatch(
   size_t event_count;
   size_t index;
   ++voicelab->batches_on_connection;
+  /*
+   * Stamped for the BATCH, before its contents are inspected and regardless
+   * of what it holds: this is the proof that the delivery lane still exists,
+   * which is a different question from whether anything interesting was on
+   * it. An empty batch proves the lane; a dropped duplicate proves it too.
+   */
+  voicelab->last_batch_ms =
+      voicelab->options.now_ms(voicelab->options.clock_context);
   if (!call->has_arguments ||
       !capnweb_value_array_at(&call->arguments, 0U, &batch)) {
     return capnweb_reply_set_null(reply);
@@ -594,6 +602,9 @@ static void connection_opened(
   voicelab->has_connection_capability = true;
   voicelab->batches_on_connection = 0U;
   voicelab->recycle_pending = false;
+  /* A fresh lane starts its deadline now, not from whenever it last spoke. */
+  voicelab->last_batch_ms =
+      voicelab->options.now_ms(voicelab->options.clock_context);
   status = release_remote(
       voicelab,
       &voicelab->previous_connection_capability,
@@ -707,19 +718,26 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
     {.string = {key_text, (size_t)key_length}},
   };
   /*
-   * Four events per batch, not two. The inbound MESSAGE count is what the
-   * bounded inbox spends, and overflowing it is session-fatal: a long answer
-   * at 100 speaker events/s arrived as 50 batches/s and overran the ring
-   * (measured inboxDiscarded=8 mid-story, which killed the session). Same
-   * audio in half the messages.
+   * TWELVE events per batch — 240 ms of audio — because delivery is one
+   * batch at a time and the batch is therefore the unit of BANDWIDTH, not
+   * just of memory.
+   *
+   * Measured: 5.7 batches a second, so four events per batch carried 80 ms
+   * of speech every 175 ms. Under half realtime. The device played 94 of the
+   * 200 frames in one answer and concealed 122 — heard as speech that breaks
+   * up and then stops. Twelve carries 1.37x realtime at the same rate, which
+   * both keeps up and rebuilds the cushion after a hiccup.
+   *
+   * The floor on this is the inbox slot (16 KiB); the ceiling is politeness
+   * to the platform's own read budget.
    */
   max_events = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_INT64,
-    {.integer = 4},
+    {.integer = 12},
   };
   max_bytes = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_INT64,
-    {.integer = 5200},
+    {.integer = 13000},
   };
   no_state = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_BOOLEAN,

@@ -87,11 +87,21 @@ enum {
   TOKEN_CAPACITY = 1024,
   OUTPUT_CAPACITY = 128,
   /*
-   * Inbox slots take one whole delivery batch each (the connection is opened
-   * with maxDeliveryBytes 5200 + envelope) and outbox slots an eight-frame
-   * mic append, about 7 KiB. 8 KiB serves both.
+   * An inbox slot takes one whole delivery batch, so this is the ceiling on
+   * how much audio one batch may carry — and batch SIZE is what decides
+   * whether the speaker keeps up.
+   *
+   * Delivery is one batch at a time: the platform hands over a batch and the
+   * next one waits on this device's reply. Measured at 5.7 batches a second
+   * (~175 ms a round trip), so a 4-event cap was 80 ms of audio per 175 ms —
+   * 0.46x realtime. The device played 94 of the 200 frames in one answer and
+   * concealed 122. That is the choppiness, and no amount of buffering fixes
+   * a lane that delivers at half speed.
+   *
+   * 16 KiB holds a 12-event batch (240 ms of audio) with room for the
+   * envelope, which is 1.37x realtime at the same round trip.
    */
-  CONTROL_INBOX_SLOT_CAPACITY = 8192,
+  CONTROL_INBOX_SLOT_CAPACITY = 16384,
   CONTROL_OUTBOX_SLOT_CAPACITY = 8192,
   /*
    * The inbox rides PSRAM (512 KiB), and overflowing it is SESSION-FATAL, so
@@ -101,7 +111,7 @@ enum {
    * during ordinary use — close enough to the edge that the session died
    * under a recording pull concurrent with a call. 128 leaves real headroom.
    */
-  CONTROL_INBOX_SLOTS = 128,
+  CONTROL_INBOX_SLOTS = 64,
   /*
    * The uplink sends 6 frames per 120 ms, which is exactly the capture rate —
    * so it has no margin, and any iteration blocked on outbox headroom puts
@@ -164,7 +174,18 @@ enum {
    * by the length of the answer. (A 32s buffer WAS wrong, but only because
    * pacing was then 2x realtime and accumulated for the whole answer.)
    */
-  SPEAKER_BUFFER_BYTES = 28800,
+  /*
+   * 1500 ms, not 900. The cushion a listener actually hears is the bridge's
+   * opening lead PLUS this device's prefill, and they stack: 390 ms of
+   * prefill against a 900 ms ring left only ~500 ms for the lead, so the
+   * lead was cut to 250 ms to stop the ring overflowing — and then the ring
+   * sat at a measured 384 ms maximum margin with MORE frames concealed than
+   * played. Choppy in one direction was traded for choppy in the other.
+   *
+   * The ring is the cheap side of that trade: 19 KiB more internal RAM buys
+   * a 600 ms lead with 500 ms of headroom still spare.
+   */
+  SPEAKER_BUFFER_BYTES = 48000,
   /*
    * Playback will not start, or resume after starving, until this much audio
    * is queued. Without it the first frame starts the speaker with zero margin
@@ -194,8 +215,13 @@ enum {
    * priming rather than concealing an empty stream indefinitely.
    */
   SPEAKER_CONCEAL_LIMIT_MS = 400,
-  /* Backlog beyond which a frame is skipped to catch up. */
-  SPEAKER_HIGH_WATER_MS = 650,
+  /*
+   * Backlog beyond which a frame is skipped to catch up. It must sit ABOVE
+   * the standing cushion (600 ms lead + 390 ms prefill), or the device
+   * spends every answer deliberately throwing away the margin the bridge
+   * just sent it — audible as a tick roughly once a second.
+   */
+  SPEAKER_HIGH_WATER_MS = 1200,
   /* At most one skipped frame per this many played (1 per second of audio). */
   SPEAKER_CATCHUP_EVERY = 50,
   /*
@@ -226,6 +252,14 @@ enum {
    * missed round trips — not a network hiccup.
    */
   BRIDGE_SILENCE_MS = 20000,
+  /*
+   * With a call wanted there is always a bridge pinging back, so this long
+   * without ANY batch on the delivery lane means the lane itself is gone.
+   * Deliberately shorter than BRIDGE_SILENCE_MS: recycling the connection is
+   * one round trip and keeps the call, whereas giving up on the call throws
+   * away a live Grok session.
+   */
+  DOWNLINK_SILENCE_MS = 10000,
   /*
    * Last resort. The transport can be READY, the socket open, and nothing
    * whatsoever moving: a half-open TCP connection looks perfectly healthy
@@ -340,6 +374,10 @@ static struct {
   uint32_t liveness_restarts;
   /* Calls abandoned because their bridge stopped proving it existed. */
   uint32_t bridge_losses;
+  /* Connections replaced because nothing was being delivered on them. */
+  uint32_t downlink_recycles;
+  /* How many of those in a row have not yet produced a batch. */
+  uint32_t downlink_recycles_running;
   /* Diagnostics for a frozen device: see the pulse in the app loop. */
   uint32_t loop_count;
   uint64_t last_pulse_ms;
@@ -804,6 +842,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       ",\"rttMs\":%" PRIu32 ",\"pings\":%" PRIu32
       ",\"pingFailures\":%" PRIu32 ",\"livenessRestarts\":%" PRIu32
       ",\"bridgeLosses\":%" PRIu32 ",\"bridgeAgeMs\":%" PRIu32
+      ",\"downlinkRecycles\":%" PRIu32 ",\"batchAgeMs\":%" PRIu32
       ",\"uptimeMs\":%" PRIu64 ",\"resetReason\":%d"
       ",\"heapFree\":%" PRIu32 ",\"heapMin\":%" PRIu32
       ",\"wsSent\":%" PRIu32 ",\"outboxDiscarded\":%" PRIu32
@@ -863,6 +902,10 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       runtime.voicelab.last_bridge_ms == 0U
           ? 0U
           : (uint32_t)(now - runtime.voicelab.last_bridge_ms),
+      runtime.downlink_recycles,
+      runtime.voicelab.last_batch_ms == 0U
+          ? 0U
+          : (uint32_t)(now - runtime.voicelab.last_batch_ms),
       now,
       (int)esp_reset_reason(),
       (uint32_t)esp_get_free_heap_size(),
@@ -997,8 +1040,16 @@ void app_main(void) {
       (unsigned int)esp_get_free_heap_size());
   runtime.mic_queue =
       xQueueCreate(MIC_QUEUE_DEPTH, sizeof(struct mic_frame));
+  /*
+   * PSRAM, not internal. Growing this ring in internal RAM took 19 KiB out
+   * of the headroom the TLS handshake needs and the device could not connect
+   * at all: mbedtls_ssl_setup returned MBEDTLS_ERR_SSL_ALLOC_FAILED on every
+   * attempt. Internal RAM here is TLS's working set, and this buffer has no
+   * claim on it — it is read by a task, never by an ISR, and the I2S driver
+   * copies into its own DMA ring on the way out.
+   */
   runtime.speaker_buffer = xStreamBufferCreateWithCaps(
-      SPEAKER_BUFFER_BYTES, 1U, MALLOC_CAP_INTERNAL);
+      SPEAKER_BUFFER_BYTES, 1U, MALLOC_CAP_SPIRAM);
   if (runtime.mic_queue == NULL || runtime.speaker_buffer == NULL) {
     ESP_LOGE(tag, "audio buffer allocation failed");
     return;
@@ -1397,6 +1448,62 @@ void app_main(void) {
         waveshare_display_set_status(
             wants_call ? "call dropped — reconnecting" : "call dropped");
         next_call_attempt_at = 0U; /* reconnect now, not on the old backoff */
+      }
+
+      /*
+       * THE DOWNLINK NEEDS ITS OWN PROOF.
+       *
+       * Everything above trusts that if the bridge appends something, this
+       * device hears it. That is one lane, held by the platform as a
+       * callback registration inside the stream's Durable Object, and it can
+       * be lost on its own: measured here, a device pinging happily every
+       * five seconds (uplink resolving, RTT 130ms) while eight call-accepted
+       * events and eleven pongs were appended by live bridges and NOT ONE of
+       * them arrived. Its batch counter did not move for 68 seconds. The UI
+       * said "starting call" the whole time, which is exactly what a person
+       * sees, and nothing in the device was ever going to notice: the socket
+       * was fine, the session was fine, the appends were fine.
+       *
+       * Silence is only evidence when traffic is expected. It is expected
+       * whenever a call is wanted: a live bridge pongs every ping, so ten
+       * seconds without a single batch means the lane is dead, not quiet.
+       * The cure is the recycle that already exists — make-before-break, one
+       * round trip — and if three of those change nothing then it is not the
+       * connection that is broken, it is the session under it.
+       */
+      if (wants_call && runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
+          runtime.voicelab.has_connection_capability &&
+          !runtime.voicelab.recycle_pending && outbox_free >= 4U &&
+          runtime.voicelab.last_batch_ms != 0U &&
+          now - runtime.voicelab.last_batch_ms > DOWNLINK_SILENCE_MS) {
+        ++runtime.downlink_recycles;
+        if (runtime.downlink_recycles_running >= 3U) {
+          ESP_LOGE(
+              tag,
+              "downlink still dead after 3 recycles — replacing the session");
+          runtime.downlink_recycles_running = 0U;
+          iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
+        } else {
+          ++runtime.downlink_recycles_running;
+          ESP_LOGW(
+              tag,
+              "nothing delivered for %us with a call wanted — recycling the "
+              "connection (%u)",
+              (unsigned int)(DOWNLINK_SILENCE_MS / 1000U),
+              (unsigned int)runtime.downlink_recycles_running);
+          /*
+           * Stamp the deadline forward NOW. The recycle is asynchronous and
+           * this poll runs 200 times a second; without it every iteration
+           * until the successor resolves would open another connection.
+           */
+          runtime.voicelab.last_batch_ms = now;
+          (void)iterate_kit_voicelab_recycle_connection(&runtime.voicelab);
+        }
+      }
+      /* Any delivery at all means the lane recovered; forget the escalation. */
+      if (runtime.downlink_recycles_running > 0U &&
+          runtime.voicelab.batches_on_connection > 0U) {
+        runtime.downlink_recycles_running = 0U;
       }
 
       /*

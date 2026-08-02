@@ -72,6 +72,7 @@ struct voice_pe_signal_window {
   uint64_t clean_absolute_sum;
   uint32_t raw_peak;
   uint32_t clean_peak;
+  uint32_t playback_content_samples;
 };
 
 struct voice_pe_atomic_metrics {
@@ -159,6 +160,13 @@ struct voice_pe_audio_owner {
   volatile uint32_t playback_failed;
   volatile uint32_t capture_failed;
   volatile uint32_t playback_reset_requested;
+  /*
+   * The playback task adds only non-silence submitted to I2S. The capture task
+   * atomically exchanges this once at each signal-window boundary, so the
+   * resulting count describes the same monotonic interval as raw/clean audio
+   * without retaining PCM or exposing XMOS's unavailable private reference.
+   */
+  volatile uint32_t signal_window_playback_content_samples;
 };
 
 /*
@@ -309,11 +317,21 @@ static void merge_signal_observation(
   portENTER_CRITICAL(&signal_window_mux);
   if (owner.current_signal_started_at_us == 0U) {
     owner.current_signal_started_at_us = observed_at_us;
+    /* Pre-window playback cannot be attributed to the first partial window. */
+    (void)__atomic_exchange_n(
+        &owner.signal_window_playback_content_samples,
+        0U,
+        __ATOMIC_ACQ_REL);
   }
   if (observed_at_us >= owner.current_signal_started_at_us &&
       observed_at_us - owner.current_signal_started_at_us >=
           VOICE_PE_AEC_SIGNAL_WINDOW_US &&
       owner.current_signal_window.sampled_samples != 0U) {
+    owner.current_signal_window.playback_content_samples =
+        __atomic_exchange_n(
+            &owner.signal_window_playback_content_samples,
+            0U,
+            __ATOMIC_ACQ_REL);
     owner.latest_signal_window = owner.current_signal_window;
     memset(
         &owner.current_signal_window,
@@ -898,6 +916,9 @@ static void playback_task_main(void *context) {
           &owner.metrics.playback_content_samples,
           result.content_samples);
       atomic_saturating_add(
+          &owner.signal_window_playback_content_samples,
+          result.content_samples);
+      atomic_saturating_add(
           &owner.metrics.playback_silence_samples,
           result.silence_samples);
       continue;
@@ -1385,6 +1406,8 @@ iterate_kit_voice_pe_audio_owner_aec_signal_metrics_snapshot(
   portENTER_CRITICAL(&signal_window_mux);
   if (owner.latest_signal_sequence == 0U) {
     window = owner.current_signal_window;
+    window.playback_content_samples = atomic_load(
+        &owner.signal_window_playback_content_samples);
     snapshot->sequence = 0U;
     snapshot->window_started_at_us =
         owner.current_signal_started_at_us;
@@ -1414,6 +1437,7 @@ iterate_kit_voice_pe_audio_owner_aec_signal_metrics_snapshot(
         window.raw_absolute_sum, window.sampled_samples),
     .clean_mean_absolute = bounded_mean(
         window.clean_absolute_sum, window.sampled_samples),
+    .playback_content_samples = window.playback_content_samples,
   };
   return ITERATE_KIT_OK;
 }

@@ -52,6 +52,7 @@ struct fixture {
   bool maximum_metrics;
   bool include_playback;
   bool include_aec;
+  bool include_raw_clean_aec;
   bool include_buffers;
   bool include_control_diagnostics;
   bool invalid_buffer_evidence;
@@ -181,6 +182,8 @@ static enum iterate_kit_status sample_metrics(
       {0},
       false,
     },
+    false,
+    {0},
     false,
     {0},
     false,
@@ -387,6 +390,42 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 86U;
   sample->aec_detail.lifetime_signal_measurement_failures =
       fixture->maximum_metrics ? UINT32_MAX : 87U;
+  sample->has_raw_clean_aec_detail = fixture->include_raw_clean_aec;
+  sample->raw_clean_aec_detail.schema_version = 2U;
+  sample->raw_clean_aec_detail.sequence =
+      fixture->maximum_metrics ? UINT32_MAX : 88U;
+  sample->raw_clean_aec_detail.window_started_at_ms =
+      fixture->maximum_metrics ? INT64_MAX : 89;
+  sample->raw_clean_aec_detail.produced_at_ms =
+      fixture->maximum_metrics ? INT64_MAX : 90;
+  sample->raw_clean_aec_detail.sample_stride =
+      fixture->maximum_metrics ? UINT32_MAX : 8U;
+  sample->raw_clean_aec_detail.sampled_samples =
+      fixture->maximum_metrics ? UINT32_MAX : 2000U;
+  sample->raw_clean_aec_detail.raw_peak =
+      fixture->maximum_metrics ? UINT32_MAX : 12000U;
+  sample->raw_clean_aec_detail.clean_peak =
+      fixture->maximum_metrics ? UINT32_MAX : 5000U;
+  sample->raw_clean_aec_detail.raw_mean_absolute =
+      fixture->maximum_metrics ? UINT32_MAX : 1100U;
+  sample->raw_clean_aec_detail.clean_mean_absolute =
+      fixture->maximum_metrics ? UINT32_MAX : 250U;
+  sample->raw_clean_aec_detail.playback_content_samples =
+      fixture->maximum_metrics ? UINT32_MAX : 48000U;
+  sample->raw_clean_aec_detail.lifetime_capture_frames =
+      fixture->maximum_metrics ? UINT32_MAX : 91U;
+  sample->raw_clean_aec_detail.lifetime_clean_uplink_frames =
+      fixture->maximum_metrics ? UINT32_MAX : 92U;
+  sample->raw_clean_aec_detail.lifetime_clean_uplink_drops =
+      fixture->maximum_metrics ? UINT32_MAX : 93U;
+  sample->raw_clean_aec_detail.lifetime_capture_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 94U;
+  sample->raw_clean_aec_detail.lifetime_signal_measurement_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 95U;
+  sample->raw_clean_aec_detail.last_capture_to_uplink_us =
+      fixture->maximum_metrics ? UINT32_MAX : 96U;
+  sample->raw_clean_aec_detail.maximum_capture_to_uplink_us =
+      fixture->maximum_metrics ? UINT32_MAX : 97U;
   sample->has_control_diagnostics =
       fixture->include_control_diagnostics;
   sample->control_diagnostics.schema_version = 4U;
@@ -508,8 +547,10 @@ static enum capnweb_status dispatch(
       fixture->module.context, call, reply);
 }
 
-static void fixture_init_with_subscription_count(
-    struct fixture *fixture, size_t subscription_count) {
+static void fixture_init_with_aec_topology(
+    struct fixture *fixture,
+    size_t subscription_count,
+    bool raw_clean_aec) {
   struct iterate_kit_metrics_options metrics_options;
   struct capnweb_session_options session_options;
   memset(fixture, 0, sizeof(*fixture));
@@ -528,7 +569,8 @@ static void fixture_init_with_subscription_count(
     .subscription_count = subscription_count,
     .interval_ms = 1000U,
     .enable_playback_view = true,
-    .enable_aec_view = true,
+    .enable_aec_view = !raw_clean_aec,
+    .enable_raw_clean_aec_view = raw_clean_aec,
     .diagnostics_expression_buffer = fixture->diagnostics_expression,
     .diagnostics_expression_capacity =
         sizeof(fixture->diagnostics_expression),
@@ -561,8 +603,18 @@ static void fixture_init_with_subscription_count(
       CAPNWEB_OK);
 }
 
+static void fixture_init_with_subscription_count(
+    struct fixture *fixture, size_t subscription_count) {
+  fixture_init_with_aec_topology(
+      fixture, subscription_count, false);
+}
+
 static void fixture_init(struct fixture *fixture) {
   fixture_init_with_subscription_count(fixture, 1U);
+}
+
+static void fixture_init_raw_clean_aec(struct fixture *fixture) {
+  fixture_init_with_aec_topology(fixture, 1U, true);
 }
 
 static void receive(struct fixture *fixture, const char *message) {
@@ -1023,6 +1075,69 @@ static void aec_metrics_are_mounted_as_a_dedicated_view(void) {
 }
 
 /*
+ * HAVPE's XMOS bus exposes two simultaneous capture taps: raw microphone and
+ * the post-AEC clean channel. It does not expose the private far-end reference
+ * used inside XMOS. Serialising a zero reference would turn missing evidence
+ * into a false AEC measurement, while inventing a second endpoint would force
+ * every generic voice-satellite harness to branch on method names. The shared
+ * subscribeToAecMetrics method therefore carries a discriminated two-tap
+ * schema for this topology. Playback content is counted in the same monotonic
+ * signal window so a speaker-only interval is attributable without pretending
+ * intended PCM is the hidden hardware reference.
+ */
+static void raw_clean_aec_metrics_preserve_the_truthful_topology(void) {
+  struct fixture fixture;
+  fixture_init_raw_clean_aec(&fixture);
+  fixture.maximum_metrics = true;
+  fixture.include_raw_clean_aec = true;
+  fixture.dispatch_method_index = 2U;
+
+  assert(fixture.module.method_count == 4U);
+  assert(
+      strcmp(
+          fixture.module.methods[2].path[0],
+          "subscribeToAecMetrics") == 0);
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToAecMetrics\"],"
+      "[[\"export\",-9223372036854775807]]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(
+      fixture.module.poll(fixture.module.context, 0U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.captured_count == 3U);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"schemaVersion\":2,\"topology\":\"raw-clean\","
+          "\"sequence\":4294967295,"
+          "\"windowStartedAtMs\":9223372036854775807,"
+          "\"producedAtMs\":9223372036854775807") != NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"rawPeak\":4294967295,\"cleanPeak\":4294967295,"
+          "\"rawMeanAbsolute\":4294967295,"
+          "\"cleanMeanAbsolute\":4294967295,"
+          "\"playbackContentSamples\":4294967295") != NULL);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"lifetimeCaptureFrames\":4294967295,"
+          "\"lifetimeCleanUplinkFrames\":4294967295,"
+          "\"lifetimeCleanUplinkDrops\":4294967295,"
+          "\"lifetimeCaptureFailures\":4294967295,"
+          "\"lifetimeSignalMeasurementFailures\":4294967295,"
+          "\"lastCaptureToUplinkUs\":4294967295,"
+          "\"maximumCaptureToUplinkUs\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1], "\"referencePeak\"") == NULL);
+  assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
+
+  capnweb_session_close(&fixture.session);
+  fixture.module.session_ended(fixture.module.context);
+}
+
+/*
  * The M5StickS3 owner loop polls metrics before consuming at most four inbound
  * Cap'n Web messages. Two ready subscriptions each serialize one push and one
  * pull, so that first phase can publish four messages. Four already-dispatched
@@ -1422,6 +1537,7 @@ int main(void) {
   maximum_audio_counters_fit_one_control_message();
   playback_metrics_use_a_bounded_dedicated_view();
   aec_metrics_are_mounted_as_a_dedicated_view();
+  raw_clean_aec_metrics_preserve_the_truthful_topology();
   metrics_fanout_and_inbound_resolutions_fit_one_owner_burst();
   control_diagnostics_are_available_as_a_one_shot_snapshot();
   network_diagnostics_omit_unobserved_wifi_rssi();
