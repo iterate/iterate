@@ -40,6 +40,41 @@ Two counters in the same JSON with different lifetimes and no way to tell
 them apart is a trap. Either give them the same reset point or say so at
 each name.
 
+## Measured: two defects, not one
+
+Per-second pulse through one answer (realtime needs 50 frames/s):
+
+```
+rx+23  played+0  conceal+0  ringMs=340
+rx+12  played+0  conceal+0  ringMs=340
+rx+27  played+0  conceal+0  ringMs=340
+rx+9   played+0  conceal+0  ringMs=340
+rx+31  played+0  conceal+0  ringMs=340
+rx+1   played+0  conceal+0  ringMs=0
+```
+
+**1. The downlink delivers 9-31 frames/s against the 50 realtime needs.**
+The ring can never fill, so the device conceals the difference. The obvious
+lever is the one the uplink already pulled: mu-law halves the bytes, and the
+downlink still ships PCM16 base64 at ~950 bytes per 20 ms frame. That is a
+two-sided change - `appendSpkPcm` in the userspace worker emits `enc:"u"`,
+`handle_spk_frame` expands it - and the uplink's `mulaw_encode` is the model
+to follow.
+
+**2. The reader stalls with audio in hand.** `ringMs=340` with `played+0`
+sustained for six seconds is not starvation: 340 ms of audio is sitting
+there and nothing plays it, then the ring empties without a single frame
+played. That is inside the speaker task's own loop and it is the one exit
+still uninstrumented. It is also what the reliability harness reports as
+"the model answered but the speaker played nothing".
+
+Neither of these is what the day was spent on. The mechanisms removed -
+undersized ring, concealment debt deleting words, `response.done` abandoning
+answers, short-frame rejection - were all real and all measure zero now, and
+none of them was what kept the device from working. The CLI never showed
+either, because a Mac socket delivers 50 f/s without trying and its "reader"
+is a file write.
+
 ## What to measure next
 
 Frames arriving per second against the 50/s that realtime needs, over one
