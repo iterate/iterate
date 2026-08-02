@@ -245,6 +245,7 @@ function CodeStepTabs({
                 resolved={batch.resolved}
                 // The card lives inside the thread this batch came from — a
                 // provenance block here would point at itself.
+                showScriptSource={false}
                 showThreadInfo={false}
                 surface={`activity:${step.executionId}`}
               />

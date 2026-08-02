@@ -48,9 +48,10 @@ import { CodeBlock } from "./activity-card.tsx";
  * once it isn't. `surface` keys the sub-toggle cache per mount surface, so
  * e.g. expanding the members list on the approvals screen doesn't expand it
  * inside a notification row too. `showThreadInfo` gates the provenance
- * header (Triggered by codemode · stream path · Open thread): the
- * Notifications expansion wants it, the activity card does NOT — the card
- * already lives inside that thread, so the block would point at itself.
+ * header (Triggered by codemode · stream path · Open thread) and
+ * `showScriptSource` the Script sub-expander: the Notifications expansion
+ * wants both, the activity card wants NEITHER — it already lives inside
+ * that thread and its Script tab already shows the code.
  */
 export function ApprovalBatchBody({
   baseUrl,
@@ -59,6 +60,7 @@ export function ApprovalBatchBody({
   projectId,
   projectSlug,
   resolved,
+  showScriptSource,
   showThreadInfo,
   surface,
 }: {
@@ -68,6 +70,7 @@ export function ApprovalBatchBody({
   projectId: string;
   projectSlug: string;
   resolved: ResolvedBatch | null;
+  showScriptSource: boolean;
   showThreadInfo: boolean;
   surface: string;
 }) {
@@ -103,7 +106,7 @@ export function ApprovalBatchBody({
       });
       return scriptCodeForApproval(payload, event);
     },
-    enabled: details.data.script && streamContext?.kind === "script-execution",
+    enabled: showScriptSource && details.data.script && streamContext?.kind === "script-execution",
     staleTime: Infinity,
   });
   const toggle = (section: "members" | "script") => {
@@ -187,26 +190,30 @@ export function ApprovalBatchBody({
               ) : null}
             </View>
           ) : null}
-          <Pressable
-            accessibilityRole="button"
-            onPress={() => toggle("script")}
-            style={styles.detailHeader}
-          >
-            <Text style={styles.chevron}>{details.data.script ? "▾" : "▸"}</Text>
-            <Text style={styles.detailTitle}>Script</Text>
-          </Pressable>
-          {details.data.script ? (
-            script.isPending ? (
-              <ActivityIndicator
-                accessibilityLabel="Loading"
-                color={colors.textMuted}
-                size="small"
-              />
-            ) : script.isError ? (
-              <Text style={styles.error}>{script.error.message}</Text>
-            ) : (
-              <CodeBlock language="typescript" muted={false} text={script.data} />
-            )
+          {showScriptSource ? (
+            <>
+              <Pressable
+                accessibilityRole="button"
+                onPress={() => toggle("script")}
+                style={styles.detailHeader}
+              >
+                <Text style={styles.chevron}>{details.data.script ? "▾" : "▸"}</Text>
+                <Text style={styles.detailTitle}>Script</Text>
+              </Pressable>
+              {details.data.script ? (
+                script.isPending ? (
+                  <ActivityIndicator
+                    accessibilityLabel="Loading"
+                    color={colors.textMuted}
+                    size="small"
+                  />
+                ) : script.isError ? (
+                  <Text style={styles.error}>{script.error.message}</Text>
+                ) : (
+                  <CodeBlock language="typescript" muted={false} text={script.data} />
+                )
+              ) : null}
+            </>
           ) : null}
         </View>
       ) : showThreadInfo && streamContext ? (

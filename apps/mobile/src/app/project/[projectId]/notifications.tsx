@@ -301,6 +301,7 @@ function ApprovalNotificationDetail({
         projectId={projectId}
         projectSlug={projectSlug}
         resolved={resolved}
+        showScriptSource={true}
         showThreadInfo={true}
         surface="notification"
       />
