@@ -34,6 +34,34 @@ or an observation about the device in one command.
 
 ## The rules that cost the most
 
+### `/dev/cu.usbmodemNNNNN` IS NOT A BOARD
+
+Four ESP32s sit on this desk and macOS renumbers the ports when any of them
+is replugged. `usbmodem11301` was the Waveshare in the morning and a
+different board by the evening.
+
+Four flashes went to the wrong chip before anyone noticed, and every signal
+that should have caught it was explained away instead:
+
+- esptool reported `Hash of data verified` — it had, on the wrong board;
+- `uptimeMs` never reset after a flash — read as a flaky reset pin;
+- a counter kept climbing through code that had been DELETED — read as a
+  stale build.
+
+Any one of those is proof the running image is not the one just written.
+Together they are conclusive, and they were still not enough, because each
+had a plausible individual excuse. **Resolve the board by SERIAL NUMBER
+before every flash**, and confirm afterwards that `uptimeMs` went backwards:
+
+```sh
+system_profiler SPUSBDataType | grep -B 8 "Serial Number: 1C:DB:D4:7A:16:C8"
+# Location ID 0x0112.... -> /dev/cu.usbmodem112xx
+```
+
+A capability call is the honest reset — `restart()` over itx reboots the
+board that is actually serving `kit.<name>`, which is by definition the one
+under test.
+
 ### Attaching serial REBOOTS this board
 
 Every time, regardless of DTR/RTS — it is the USB-Serial-JTAG bridge. Worse
