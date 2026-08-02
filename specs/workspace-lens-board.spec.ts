@@ -10,17 +10,21 @@ import { test } from "./test-support/test.ts";
  *      /repos/config, and send a task-board link.
  *   4. See the tasks on the board — a GUEST lens on the agent's workspace.
  *
- * Run with VIDEO_MODE=1 for the rendered walkthrough. Environment-pinned on
- * purpose (the lens-demo-live project exists on preview-9 with the tasks
- * vessel knob set); skipped everywhere else. Agent turns are real LLM turns,
- * so waits are generous — video mode speeds the dead air away.
+ * Opt-in only — `DEMO_RECORDING=1 VIDEO_MODE=1 pnpm spec -g "workspace lens
+ * board demo"` against preview-9 (the lens-demo-live project, with its tasks
+ * vessel knob pointed at a developer tunnel). Skipped everywhere else,
+ * including the preview lane. Agent turns are real LLM turns, so waits are
+ * generous — video mode speeds the dead air away.
  */
 const OS_PROJECT_URL = "https://os.iterate-preview-9.com/projects/lens-demo-live";
 
 test("workspace lens board demo", async ({ page }) => {
+  // NEVER in CI: this is a demo RECORDING, not a test. It drives a standing
+  // preview-9 project whose tasks vessel is a developer's tunnel, so the
+  // preview lane must not pick it up just because it holds slot 9.
   test.skip(
-    !(process.env.APP_CONFIG_BASE_URL ?? "").includes("preview-9"),
-    "demo spec for the preview-9 lens-demo-live project only",
+    process.env.DEMO_RECORDING !== "1",
+    "demo recording — run locally with DEMO_RECORDING=1",
   );
   test.setTimeout(900_000);
 
