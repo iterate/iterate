@@ -30,6 +30,16 @@ export const EVENT = {
   presented: "events.iterate.com/project/approval-presented",
 } as const;
 
+/**
+ * The root-stream subscription vocabulary for live approval state — what
+ * deriveOpenBatches folds. A module-level constant on purpose: useLiveEvents
+ * folds eventTypes into its connection-hook deps, so an inline literal (fresh
+ * identity every render) would tear down and reopen the stream connection in
+ * a render loop. Shared by the chat screen's in-thread dialogs and the
+ * Notifications screen's needs-approval rows — same query key, same cache.
+ */
+export const APPROVAL_STREAM_EVENT_TYPES = [EVENT.requested, EVENT.decided, EVENT.settled];
+
 export type RequestedPayload = HumanApprovalRequestedPayload;
 export type { HeldRequest };
 export type Verdict = "approve" | "reject";

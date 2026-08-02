@@ -57,16 +57,11 @@ import {
   type MobileFeedItem,
 } from "../../../lib/feed.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
-import { deriveOpenBatches, EVENT as APPROVAL_EVENT } from "../../../lib/approvals.ts";
-
-// Module-level constant on purpose: useLiveEvents folds eventTypes into its
-// connection-hook deps, so an inline literal (fresh identity every render)
-// would tear down and reopen the stream connection in a render loop.
-const APPROVAL_EVENT_TYPES = [
-  APPROVAL_EVENT.requested,
-  APPROVAL_EVENT.decided,
-  APPROVAL_EVENT.settled,
-];
+// APPROVAL_STREAM_EVENT_TYPES is module-level (identity-stable) on purpose:
+// useLiveEvents folds eventTypes into its connection-hook deps, so an inline
+// literal (fresh identity every render) would tear down and reopen the
+// stream connection in a render loop.
+import { APPROVAL_STREAM_EVENT_TYPES, deriveOpenBatches } from "../../../lib/approvals.ts";
 import { approverKeyStatus } from "../../../lib/approver.ts";
 import { InThreadApprovalCard } from "../../../components/in-thread-approval.tsx";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
@@ -117,10 +112,10 @@ export default function ChatScreen() {
     queryKey: ["approval-events", baseUrl || "pending", projectId],
     read: async () => {
       const project = await getProjectItx(baseUrl!, projectId);
-      return await project.streams.get("/").getEvents({ eventTypes: APPROVAL_EVENT_TYPES });
+      return await project.streams.get("/").getEvents({ eventTypes: APPROVAL_STREAM_EVENT_TYPES });
     },
     enabled: baseUrl !== undefined,
-    eventTypes: APPROVAL_EVENT_TYPES,
+    eventTypes: APPROVAL_STREAM_EVENT_TYPES,
     projectId,
     streamPath: "/",
   });

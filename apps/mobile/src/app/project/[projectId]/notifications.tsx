@@ -27,13 +27,14 @@ import {
   ThreadContextLine,
 } from "../../../components/approval-batch.tsx";
 import { ApproverKeyBanner } from "../../../components/approver-key-banner.tsx";
-import { deriveBatchDetail, EVENT } from "../../../lib/approvals.ts";
+import { APPROVAL_STREAM_EVENT_TYPES, deriveBatchDetail, EVENT } from "../../../lib/approvals.ts";
 import { getMobileDeviceId } from "../../../lib/device-identity.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import {
   deriveDeviceNotifications,
+  deriveNotificationListRows,
   DEVICE_NOTIFICATION_EVENT_TYPES,
-  type DeviceNotificationRow,
+  type NotificationListRow,
 } from "../../../lib/notifications.ts";
 import { pushNotificationRoute } from "../../../lib/notification-routing.ts";
 import { DEFAULT_SERVER } from "../../../lib/servers.ts";
@@ -80,27 +81,59 @@ export default function NotificationsScreen() {
     projectId,
     streamPath: deviceStreamPath || "/devices/pending",
   });
-  const rows = deriveDeviceNotifications(events.data || []);
+  // The device stream alone leaves a hole: an open batch that never
+  // journaled here (parked before enrollment, notifications denied, any
+  // delivery gap) would have NO decision surface anywhere — so the screen
+  // also watches the project root stream's approval events (the chat
+  // screen's exact subscription, same query key, shared cache) and unions
+  // open batches in as synthetic needs-approval rows.
+  const approvalEvents = useLiveEvents({
+    queryKey: ["approval-events", baseUrl || "pending", projectId],
+    read: async () => {
+      const project = await getProjectItx(baseUrl!, projectId);
+      return await project.streams.get("/").getEvents({ eventTypes: APPROVAL_STREAM_EVENT_TYPES });
+    },
+    enabled: baseUrl !== undefined,
+    eventTypes: APPROVAL_STREAM_EVENT_TYPES,
+    projectId,
+    streamPath: "/",
+  });
+  const rows = deriveNotificationListRows(
+    deriveDeviceNotifications(events.data || []),
+    approvalEvents.data || [],
+  );
 
   return (
     <View style={styles.screen}>
       <Stack.Screen options={{ title: slug ? `${slug} notifications` : "Notifications" }} />
       {baseUrl === undefined ? null : <ApproverKeyBanner baseUrl={baseUrl} projectId={projectId} />}
-      {events.isPending || device.isPending ? (
+      {events.isPending || device.isPending || approvalEvents.isPending ? (
         <View style={styles.center}>
           <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} />
         </View>
-      ) : events.isError ? (
+      ) : events.isError || approvalEvents.isError ? (
         <View style={styles.center}>
-          <Text style={styles.error}>{String(events.error.message)}</Text>
-          <Pressable onPress={() => events.refetch()} style={styles.retry}>
+          <Text style={styles.error}>
+            {String(events.isError ? events.error.message : approvalEvents.error.message)}
+          </Text>
+          <Pressable
+            onPress={() => {
+              void events.refetch();
+              void approvalEvents.refetch();
+            }}
+            style={styles.retry}
+          >
             <Text style={styles.retryText}>Retry</Text>
           </Pressable>
         </View>
       ) : (
         <FlatList
           data={rows}
-          keyExtractor={(row) => String(row.requestOffset)}
+          keyExtractor={(row) =>
+            row.kind === "device"
+              ? `device-${row.requestOffset}`
+              : `batch-${row.approvalRequestEventOffset}`
+          }
           contentContainerStyle={{ padding: spacing.md, gap: spacing.sm }}
           ListEmptyComponent={
             <Text style={styles.empty}>
@@ -108,8 +141,11 @@ export default function NotificationsScreen() {
               this phone — they land here with what happened to each one.
             </Text>
           }
-          refreshing={events.isRefetching}
-          onRefresh={() => events.refetch()}
+          refreshing={events.isRefetching || approvalEvents.isRefetching}
+          onRefresh={() => {
+            void events.refetch();
+            void approvalEvents.refetch();
+          }}
           renderItem={({ item: row }) => (
             <NotificationRow
               baseUrl={baseUrl!}
@@ -129,7 +165,9 @@ export default function NotificationsScreen() {
 }
 
 /**
- * One notification. Approval rows (they carry the batch identity) toggle an
+ * One list row — a journaled device notification, or a synthetic
+ * needs-approval row for an open batch that never journaled on this device.
+ * Approval rows of either kind (they carry the batch identity) toggle an
  * inline detail expansion — ActivityCard's useState toggle precedent, the
  * chevron marking the affordance; the deep link lives INSIDE the expansion.
  * Everything else keeps the push's tap-to-navigate behavior.
@@ -144,7 +182,7 @@ function NotificationRow({
   baseUrl: string;
   projectId: string;
   projectSlug: string;
-  row: DeviceNotificationRow;
+  row: NotificationListRow;
   targeted: boolean;
 }) {
   // ActivityCard's toggle pattern: an untouched toggle falls back to the
@@ -153,6 +191,9 @@ function NotificationRow({
   const expanded = toggled ?? targeted;
   const expandable = row.approvalRequestEventOffset !== null;
   const openDestination = () => {
+    // Synthetic rows are always expandable, so this only fires for a device
+    // row without a batch identity — the push's own tap behavior.
+    if (row.kind !== "device") return;
     const route = pushNotificationRoute({
       destination: row.destination || undefined,
       projectId,
@@ -161,7 +202,14 @@ function NotificationRow({
     if (route !== null) router.push(route);
   };
   return (
-    <View style={styles.row} testID={`notification-row-${row.requestOffset}`}>
+    <View
+      style={styles.row}
+      testID={
+        row.kind === "device"
+          ? `notification-row-${row.requestOffset}`
+          : `needs-approval-row-${row.approvalRequestEventOffset}`
+      }
+    >
       <Pressable
         accessibilityRole="button"
         accessibilityState={expandable ? { expanded } : undefined}
@@ -179,7 +227,13 @@ function NotificationRow({
             {row.body}
           </Text>
         )}
-        <Text style={[styles.status, row.status.kind === "suppressed" && styles.suppressed]}>
+        <Text
+          style={[
+            styles.status,
+            row.status.kind === "suppressed" && styles.suppressed,
+            row.status.kind === "needs-approval" && styles.needsApproval,
+          ]}
+        >
           {row.status.label}
         </Text>
       </Pressable>
@@ -381,6 +435,7 @@ const styles = StyleSheet.create({
   body: { color: colors.textMuted, fontSize: 13, lineHeight: 18 },
   status: { color: colors.textMuted, fontSize: 12, fontStyle: "italic" },
   suppressed: { color: colors.accent },
+  needsApproval: { color: colors.working },
   empty: { color: colors.textMuted, fontSize: 14, lineHeight: 20 },
   error: { color: colors.danger, fontSize: 14, textAlign: "center" },
   retry: {

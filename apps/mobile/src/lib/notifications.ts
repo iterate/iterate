@@ -7,6 +7,12 @@
 // chat.ts/approvals.ts: the screen derives rows from its live query data.
 
 import type { StreamEvent } from "iterate/sdk/itx/react";
+import {
+  deriveOpenBatches,
+  EVENT as APPROVAL_EVENT,
+  hostBreakdown,
+  safeHost,
+} from "./approvals.ts";
 import type { PushNotificationData } from "./notification-routing.ts";
 
 export const DEVICE_NOTIFICATION_EVENT_TYPES = [
@@ -121,6 +127,88 @@ export function deriveDeviceNotifications(events: readonly StreamEvent[]): Devic
     }
   }
   return [...rows.values()].sort((left, right) => right.requestOffset - left.requestOffset);
+}
+
+/**
+ * What the Notifications screen's FlatList actually renders: this device's
+ * journaled rows, PLUS a synthetic "needs approval" row for every open batch
+ * that never journaled here. The device list alone has a hole: rows derive
+ * from the DEVICE stream, and its intent subscription starts at enrollment
+ * ("start: now") — so a batch parked before enrollment, with notifications
+ * denied, or under any other delivery gap has no row on this device. Those
+ * batches still need a decision surface (this screen IS the approvals
+ * surface), so they come from the project ROOT stream instead.
+ */
+export type NotificationListRow =
+  | ({ kind: "device" } & DeviceNotificationRow)
+  | {
+      kind: "needs-approval";
+      /** The batch's requested-event offset on the project root stream. */
+      approvalRequestEventOffset: number;
+      title: string;
+      body: string;
+      /** ISO createdAt of the batch's requested event. */
+      requestedAt: string;
+      status: { kind: "needs-approval"; label: string };
+    };
+
+/**
+ * Union the device's own rows with the root stream's open approval batches.
+ * Device rows stay authoritative: a batch any device row points at (by
+ * `approvalRequestEventOffset`) renders only as that row. The rest — open
+ * batches with no notification journaled here — become synthetic
+ * needs-approval rows ABOVE the device rows (they want action, and root vs
+ * device offsets aren't comparable anyway), newest batch first.
+ *
+ * A batch leaves the synthetic list exactly when deriveOpenBatches closes
+ * it: immediately on an all-reject decision, or once every approved index
+ * settles (until then it stays visible as "Decided — awaiting release", the
+ * retired Approvals screen's `submitted` treatment). Decided history then
+ * lives only on real device rows, where they exist — same as the retired
+ * screen's Recent list, which also showed nothing device-independent
+ * forever.
+ */
+export function deriveNotificationListRows(
+  deviceRows: readonly DeviceNotificationRow[],
+  rootApprovalEvents: readonly StreamEvent[],
+): NotificationListRow[] {
+  const journaled = new Set(
+    deviceRows.flatMap((row) =>
+      row.approvalRequestEventOffset === null ? [] : [row.approvalRequestEventOffset],
+    ),
+  );
+  const requestedAtByOffset = new Map(
+    rootApprovalEvents
+      .filter((event) => event.type === APPROVAL_EVENT.requested)
+      .map((event) => [event.offset, event.createdAt]),
+  );
+  const synthetic = deriveOpenBatches(rootApprovalEvents)
+    .filter((batch) => !journaled.has(batch.offset))
+    .sort((left, right) => right.offset - left.offset)
+    .map((batch): NotificationListRow => {
+      return {
+        kind: "needs-approval",
+        approvalRequestEventOffset: batch.offset,
+        // Mirrors the server's push copy (notification-processor-implementation
+        // .ts's approvalPushBody) so a synthetic row reads like the row the
+        // push WOULD have made.
+        title: batch.payload.requests.length === 1 ? "Approval needed" : "Approvals needed",
+        body:
+          batch.payload.requests.length === 1
+            ? `${batch.payload.requests[0]!.method} ${safeHost(batch.payload.requests[0]!.url)} is waiting for approval.`
+            : `Script run waiting: ${batch.payload.requests.length} requests (${hostBreakdown(batch.payload.requests)})`,
+        // deriveOpenBatches only yields batches whose requested event is in
+        // the input, so the lookup cannot miss.
+        requestedAt: requestedAtByOffset.get(batch.offset)!,
+        status: {
+          kind: "needs-approval",
+          label: batch.submitted
+            ? "Decided — awaiting release"
+            : "Needs approval — no notification reached this device",
+        },
+      };
+    });
+  return [...synthetic, ...deviceRows.map((row) => ({ kind: "device" as const, ...row }))];
 }
 
 /** The human account of a terminal settlement. An unrecognized outcome kind

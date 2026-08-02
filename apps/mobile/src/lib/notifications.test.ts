@@ -1,6 +1,7 @@
 import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
-import { deriveDeviceNotifications } from "./notifications.ts";
+import { EVENT as APPROVAL_EVENT, type RequestedPayload } from "./approvals.ts";
+import { deriveDeviceNotifications, deriveNotificationListRows } from "./notifications.ts";
 
 test("a copied approval intent's whole lifecycle: pending → sending → sent → delivered", () => {
   const rows = deriveDeviceNotifications([
@@ -149,8 +150,146 @@ test("rows carry the approval batch identity: top-level field, legacy destinatio
 });
 
 // -----------------------------------------------------------------------------
+// The display list: device rows unioned with open batches the device never
+// heard about (deriveNotificationListRows).
+// -----------------------------------------------------------------------------
+
+test("an open batch with no device row becomes a needs-approval row above the device rows", () => {
+  const deviceRows = deriveDeviceNotifications([intentRequested(2, {})]); // points at batch 17
+  const list = deriveNotificationListRows(deviceRows, [
+    approvalRequested(17),
+    approvalRequested(40), // nothing on this device points at batch 40
+  ]);
+  expect(list).toMatchObject([
+    {
+      kind: "needs-approval",
+      approvalRequestEventOffset: 40,
+      title: "Approval needed",
+      body: "POST api.stripe.com is waiting for approval.",
+      requestedAt: "2026-07-18T09:00:40.000Z",
+      status: {
+        kind: "needs-approval",
+        label: "Needs approval — no notification reached this device",
+      },
+    },
+    { kind: "device", requestOffset: 2, approvalRequestEventOffset: 17 },
+  ]);
+});
+
+test("a batch any device row points at is the device row's business — no synthetic duplicate", () => {
+  const deviceRows = deriveDeviceNotifications([intentRequested(2, {})]); // batch 17
+  const list = deriveNotificationListRows(deviceRows, [approvalRequested(17)]);
+  expect(list).toMatchObject([{ kind: "device", approvalRequestEventOffset: 17 }]);
+});
+
+test("a decided orphan batch mirrors the retired screen: rejected disappears, approved lingers until settled", () => {
+  const events = [approvalRequested(40), approvalDecided(41, 40, ["reject"])];
+  expect(deriveNotificationListRows([], events)).toEqual([]);
+
+  const approvedEvents = [approvalRequested(40), approvalDecided(41, 40, ["approve"])];
+  expect(deriveNotificationListRows([], approvedEvents)).toMatchObject([
+    {
+      kind: "needs-approval",
+      approvalRequestEventOffset: 40,
+      status: { kind: "needs-approval", label: "Decided — awaiting release" },
+    },
+  ]);
+  expect(
+    deriveNotificationListRows([], [...approvedEvents, approvalSettled(42, 40, 0, 200)]),
+  ).toEqual([]);
+});
+
+test("an expired undecided batch never surfaces as a needs-approval row", () => {
+  const list = deriveNotificationListRows(
+    [],
+    [approvalRequested(40, { expiresAt: "2020-01-01T00:00:00Z" })],
+  );
+  expect(list).toEqual([]);
+});
+
+test("orphan batches sort newest first and a burst reads like the server's push copy", () => {
+  const list = deriveNotificationListRows(
+    [],
+    [
+      approvalRequested(40),
+      approvalRequested(50, {
+        requests: Array.from({ length: 3 }, () => ({
+          method: "POST",
+          url: "https://gmail.googleapis.com/gmail/v1/users/me/messages/send",
+          headers: {},
+          body: null,
+          secretPaths: [],
+        })),
+      }),
+    ],
+  );
+  expect(list).toMatchObject([
+    {
+      approvalRequestEventOffset: 50,
+      title: "Approvals needed",
+      body: "Script run waiting: 3 requests (3x gmail.googleapis.com)",
+    },
+    { approvalRequestEventOffset: 40, title: "Approval needed" },
+  ]);
+});
+
+// -----------------------------------------------------------------------------
 // Event literal builders.
 // -----------------------------------------------------------------------------
+
+/** A `human-approval-requested` batch event on the project ROOT stream. */
+function approvalRequested(offset: number, overrides: Partial<RequestedPayload> = {}): StreamEvent {
+  return {
+    type: APPROVAL_EVENT.requested,
+    offset,
+    createdAt: `2026-07-18T09:00:${String(offset).padStart(2, "0")}.000Z`,
+    path: "/",
+    payload: {
+      requests: [
+        {
+          method: "POST",
+          url: "https://api.stripe.com/v1/transfers",
+          headers: {},
+          body: null,
+          secretPaths: [],
+        },
+      ],
+      ruleKey: "spec-needs-a-human",
+      ruleDescription: "",
+      expiresAt: "2099-01-01T00:00:00Z",
+      ...overrides,
+    },
+  } as StreamEvent;
+}
+
+function approvalDecided(
+  offset: number,
+  approvalRequestEventOffset: number,
+  verdicts: ("approve" | "reject")[],
+): StreamEvent {
+  return {
+    type: APPROVAL_EVENT.decided,
+    offset,
+    createdAt: "2026-07-18T09:01:00.000Z",
+    path: "/",
+    payload: { approvalRequestEventOffset, verdicts, decidedBy: "human" },
+  } as StreamEvent;
+}
+
+function approvalSettled(
+  offset: number,
+  approvalRequestEventOffset: number,
+  index: number,
+  status: number,
+): StreamEvent {
+  return {
+    type: APPROVAL_EVENT.settled,
+    offset,
+    createdAt: "2026-07-18T09:02:00.000Z",
+    path: "/",
+    payload: { approvalRequestEventOffset, index, status },
+  } as StreamEvent;
+}
 
 function intentRequested(
   offset: number,
