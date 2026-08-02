@@ -1026,6 +1026,7 @@ void app_main(void) {
             &runtime.device,
             now_us < 0 ? 0U : (uint64_t)now_us / 1000U);
     enum iterate_kit_status intent_status;
+    enum iterate_kit_status media_readiness_status;
     enum iterate_kit_status control_status;
 
     if (device_poll.status != ITERATE_KIT_POLL_OK) {
@@ -1036,6 +1037,27 @@ void app_main(void) {
           (int)device_poll.capnweb_status);
     }
 
+    /*
+     * Cap'n Web call state and `/pcm` readiness are independent timelines.
+     * Publishing AEC output before the latter is READY either drops the first
+     * frame or tempts a queue to retain stale speech. The shared reconciler
+     * therefore sees the exact conjunction and closes publication again on a
+     * reconnect, while the always-running codec/AEC owner keeps its reference
+     * alignment off the network path.
+     */
+    media_readiness_status =
+        iterate_kit_audio_intent_reconciler_set_media_ready(
+            &runtime.audio_intent,
+            iterate_kit_stackchan_is_conversation_active(
+                &runtime.device) &&
+            runtime.pcm_transport.state ==
+                ITERATE_KIT_ESP_IDF_PCM_READY);
+    if (media_readiness_status != ITERATE_KIT_OK) {
+      ESP_LOGE(
+          TAG,
+          "media readiness reconcile failed: status=%d",
+          (int)media_readiness_status);
+    }
     intent_status =
         iterate_kit_audio_intent_reconciler_poll(&runtime.audio_intent);
     if (intent_status != ITERATE_KIT_OK &&

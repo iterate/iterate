@@ -30,11 +30,14 @@ struct iterate_kit_audio_intent_ops {
 
 struct iterate_kit_audio_intent_metrics {
   uint32_t intent_edges;
+  uint32_t media_readiness_edges;
   uint32_t commands_accepted;
   uint32_t command_backpressure;
   uint32_t command_failures;
   uint32_t playback_resets;
   bool desired_uplink_active;
+  bool media_ready;
+  bool publication_active;
   bool command_pending;
   bool failed;
 };
@@ -43,15 +46,16 @@ struct iterate_kit_audio_intent_reconciler {
   struct iterate_kit_audio_intent_ops ops;
   enum iterate_kit_audio_mode mode;
   uint32_t intent_edges;
+  uint32_t media_readiness_edges;
   uint32_t commands_accepted;
   uint32_t command_backpressure;
   uint32_t command_failures;
   uint32_t playback_resets;
   enum iterate_kit_status failure;
   bool desired_uplink_active;
+  bool media_ready;
   bool applied_uplink_active;
   bool command_pending;
-  bool has_applied_state;
   bool initialized;
 };
 
@@ -72,6 +76,23 @@ enum iterate_kit_status iterate_kit_audio_intent_reconciler_init(
  */
 enum iterate_kit_status iterate_kit_audio_intent_reconciler_handle(
     void *context, const struct iterate_kit_device_event *event);
+
+/**
+ * Supplies current `/pcm` transport readiness to the audio policy owner.
+ *
+ * User intent and media readiness are deliberately separate. A conversation
+ * can be logically active while DNS/TCP/TLS/WebSocket setup is incomplete;
+ * publishing during that interval would either queue stale speech or count a
+ * predictable startup frame as loss. The effective lower-owner request is
+ * `desired_uplink_active && media_ready`. A false edge also closes an already
+ * active publication gate, so reconnect never retains microphone backlog.
+ *
+ * This function retains no PCM and calls no board code. The cooperative main
+ * loop calls it before poll() using the transport's current state.
+ */
+enum iterate_kit_status iterate_kit_audio_intent_reconciler_set_media_ready(
+    struct iterate_kit_audio_intent_reconciler *reconciler,
+    bool ready);
 
 /** Makes at most one nonblocking lower-owner request. */
 enum iterate_kit_status iterate_kit_audio_intent_reconciler_poll(

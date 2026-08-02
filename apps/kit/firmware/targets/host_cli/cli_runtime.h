@@ -24,6 +24,7 @@
 #include "cli_options.h"
 #include "cli_paced_sink.h"
 #include "cli_speaker.h"
+#include "cli_delivery_fault.h"
 #include "cli_device_profile.h"
 #include "cli_fault_schedule.h"
 #include "cli_virtual_clock.h"
@@ -71,6 +72,8 @@ struct cli_runtime {
   struct cli_microphone microphone;
   struct cli_speaker speaker;
   struct iterate_kit_playout playout;
+  /* Loses, repeats and delays arriving frames per the schedule. */
+  struct cli_delivery_fault delivery_fault;
   struct iterate_kit_voice_playback_clock playback_clock;
   struct cli_wav_source source;
   struct cli_wav_sink sink;

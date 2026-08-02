@@ -1337,6 +1337,7 @@ void app_main(void) {
         iterate_kit_voice_satellite_poll(
             &runtime.device, now_ms);
     enum iterate_kit_status intent_status;
+    enum iterate_kit_status media_readiness_status;
     enum iterate_kit_status control_status;
 
     if (device_poll.status != ITERATE_KIT_POLL_OK) {
@@ -1347,6 +1348,27 @@ void app_main(void) {
           (int)device_poll.capnweb_status);
     }
 
+    /*
+     * The control event makes the conversation logically active before the
+     * independent media WebSocket is ready. Gate clean publication on the
+     * conjunction here: opening early previously lost one 20 ms frame on
+     * every call, while retaining frames would create exactly the latency
+     * backlog this firmware forbids. Conversation inactivity also closes the
+     * gate before the transport owner begins its bounded stop.
+     */
+    media_readiness_status =
+        iterate_kit_audio_intent_reconciler_set_media_ready(
+            &runtime.audio_intent,
+            iterate_kit_voice_satellite_is_conversation_active(
+                &runtime.device) &&
+            runtime.pcm_transport.state ==
+                ITERATE_KIT_ESP_IDF_PCM_READY);
+    if (media_readiness_status != ITERATE_KIT_OK) {
+      ESP_LOGE(
+          TAG,
+          "media readiness reconcile failed: status=%d",
+          (int)media_readiness_status);
+    }
     intent_status =
         iterate_kit_audio_intent_reconciler_poll(&runtime.audio_intent);
     if (intent_status != ITERATE_KIT_OK &&

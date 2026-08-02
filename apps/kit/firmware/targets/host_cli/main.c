@@ -103,6 +103,13 @@ static void cli_main_close_runtime(struct cli_runtime *runtime);
 static void cli_main_start_voicelab(struct cli_runtime *runtime);
 
 /* Receives one decoded speaker frame from voicelab. */
+/* Runs one surviving frame from arrival to the speaker buffer. */
+static void cli_main_accept_speaker_frame(
+    struct cli_runtime *runtime,
+    const uint8_t *pcm,
+    size_t length,
+    const struct iterate_kit_playout_frame *identity);
+
 static void cli_main_on_speaker(
     void *context,
     const uint8_t *pcm,
@@ -686,6 +693,9 @@ static bool cli_main_init_harness(struct cli_runtime *runtime)
         runtime->schedule.seed, runtime->schedule.episode_count,
         runtime->schedule.session_ms);
   }
+  cli_delivery_fault_configure(
+      &runtime->delivery_fault,
+      runtime->schedule.empty ? NULL : &runtime->schedule);
   return cli_main_arm_clock(runtime);
 }
 
@@ -902,18 +912,21 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime)
       "info", "voicelab mount generation=%u", runtime->connection.generation);
 }
 
-static void cli_main_on_speaker(
-    void *context,
+/**
+ * One frame that has survived the injector, from arrival to the speaker.
+ *
+ * Split from the callback so the schedule's lost, repeated and reordered
+ * frames take EXACTLY this path — the classifier, the barge-in clear, the
+ * overflow accounting. An injector that fed a shortcut would be testing a
+ * pipeline nobody ships.
+ */
+static void cli_main_accept_speaker_frame(
+    struct cli_runtime *runtime,
     const uint8_t *pcm,
     size_t length,
     const struct iterate_kit_playout_frame *identity)
 {
-  struct cli_runtime *runtime = context;
-  if (runtime == NULL || pcm == NULL || identity == NULL ||
-      (length & 1U) != 0U || length != ITERATE_KIT_VOICE_FRAME_BYTES) {
-    if (runtime != NULL) ++runtime->speaker_bad_frames;
-    return;
-  }
+  assert(runtime != NULL && pcm != NULL && identity != NULL);
   const enum iterate_kit_playout_action action = iterate_kit_playout_classify(
       &runtime->playout, identity);
   if (action == ITERATE_KIT_PLAYOUT_IGNORE) return;
@@ -941,6 +954,38 @@ static void cli_main_on_speaker(
   }
 }
 
+static void cli_main_on_speaker(
+    void *context,
+    const uint8_t *pcm,
+    size_t length,
+    const struct iterate_kit_playout_frame *identity)
+{
+  struct cli_runtime *runtime = context;
+  struct cli_delivery_fault_out out;
+  size_t slot;
+  if (runtime == NULL || pcm == NULL || identity == NULL ||
+      (length & 1U) != 0U || length != ITERATE_KIT_VOICE_FRAME_BYTES) {
+    if (runtime != NULL) ++runtime->speaker_bad_frames;
+    return;
+  }
+  /*
+   * The schedule gets to lose, repeat or delay this frame before anything
+   * downstream sees it. With no schedule this delivers exactly once, so the
+   * unharnessed path is the path that has always run.
+   */
+  if (cli_delivery_fault_offer(
+          &runtime->delivery_fault, identity, pcm, length, &out) !=
+      CLI_DELIVERY_FAULT_OK) {
+    ++runtime->speaker_bad_frames;
+    return;
+  }
+  for (slot = 0U; slot < out.count; slot++) {
+    cli_main_accept_speaker_frame(
+        runtime, out.frames[slot].pcm, out.frames[slot].bytes,
+        &out.frames[slot].identity);
+  }
+}
+
 static void cli_main_on_control(
     void *context, enum iterate_kit_voicelab_control control)
 {
@@ -962,6 +1007,19 @@ static void cli_main_on_control(
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
     cli_runtime_log("info", "call accepted");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
+    struct cli_delivery_fault_out tail;
+    size_t slot;
+    /*
+     * Give back anything the injector was holding. Frames held when a call
+     * ends would otherwise be audio that vanished with no counter to say so,
+     * and the next call would start with the previous one's speech in hand.
+     */
+    cli_delivery_fault_flush(&runtime->delivery_fault, &tail);
+    for (slot = 0U; slot < tail.count; slot++) {
+      cli_main_accept_speaker_frame(
+          runtime, tail.frames[slot].pcm, tail.frames[slot].bytes,
+          &tail.frames[slot].identity);
+    }
     cli_runtime_log("warn", "call ended by the bridge");
     ++runtime->calls_lost;
     runtime->talking = false;

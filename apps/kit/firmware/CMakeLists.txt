@@ -115,6 +115,7 @@ if(APPLE)
     targets/host_cli/cli_audio_out.c
     targets/host_cli/cli_capabilities.c
     targets/host_cli/cli_conversation.c
+    targets/host_cli/cli_delivery_fault.c
     targets/host_cli/cli_device_profile.c
     targets/host_cli/cli_fault_schedule.c
     targets/host_cli/cli_virtual_clock.c
@@ -1034,6 +1035,30 @@ target_compile_options(iterate-kit-cli-virtual-clock-test PRIVATE
 add_test(
   NAME iterate-kit-cli-virtual-clock-test
   COMMAND iterate-kit-cli-virtual-clock-test
+)
+
+add_executable(iterate-kit-cli-delivery-fault-test
+  targets/host_cli/cli_delivery_fault.c
+  targets/host_cli/cli_fault_schedule.c
+  tests/cli_delivery_fault_test.c
+)
+target_include_directories(
+  iterate-kit-cli-delivery-fault-test PRIVATE targets/host_cli)
+target_link_libraries(
+  iterate-kit-cli-delivery-fault-test PRIVATE iterate-kit-core)
+target_compile_features(
+  iterate-kit-cli-delivery-fault-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli-delivery-fault-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+)
+add_test(
+  NAME iterate-kit-cli-delivery-fault-test
+  COMMAND iterate-kit-cli-delivery-fault-test
 )
 
 add_executable(iterate-kit-cli-device-profile-test

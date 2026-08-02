@@ -9,6 +9,19 @@ static void increment(uint32_t *value) {
   }
 }
 
+static bool effective_uplink_active(
+    const struct iterate_kit_audio_intent_reconciler *reconciler) {
+  return reconciler->desired_uplink_active &&
+      reconciler->media_ready;
+}
+
+static void refresh_command_pending(
+    struct iterate_kit_audio_intent_reconciler *reconciler) {
+  reconciler->command_pending =
+      reconciler->applied_uplink_active !=
+      effective_uplink_active(reconciler);
+}
+
 enum iterate_kit_status iterate_kit_audio_intent_reconciler_init(
     struct iterate_kit_audio_intent_reconciler *reconciler,
     enum iterate_kit_audio_mode mode,
@@ -24,6 +37,11 @@ enum iterate_kit_status iterate_kit_audio_intent_reconciler_init(
   reconciler->ops = *ops;
   reconciler->mode = mode;
   reconciler->failure = ITERATE_KIT_OK;
+  /*
+   * Both capture-turn owners are zero-initialized inactive. Recording that
+   * known physical baseline avoids sending a redundant false command when a
+   * start and stop collapse before media becomes ready.
+   */
   reconciler->initialized = true;
   return ITERATE_KIT_OK;
 }
@@ -91,9 +109,7 @@ enum iterate_kit_status iterate_kit_audio_intent_reconciler_handle(
   }
   if (requests_uplink) {
     reconciler->desired_uplink_active = uplink_active;
-    reconciler->command_pending =
-        !reconciler->has_applied_state ||
-        reconciler->applied_uplink_active != uplink_active;
+    refresh_command_pending(reconciler);
   }
 
   /*
@@ -104,6 +120,22 @@ enum iterate_kit_status iterate_kit_audio_intent_reconciler_handle(
   if (reconciler->failure != ITERATE_KIT_OK && uplink_active) {
     return reconciler->failure;
   }
+  return ITERATE_KIT_OK;
+}
+
+enum iterate_kit_status iterate_kit_audio_intent_reconciler_set_media_ready(
+    struct iterate_kit_audio_intent_reconciler *reconciler,
+    bool ready) {
+  if (reconciler == NULL || !reconciler->initialized) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  if (reconciler->media_ready == ready) {
+    return ITERATE_KIT_OK;
+  }
+
+  reconciler->media_ready = ready;
+  increment(&reconciler->media_readiness_edges);
+  refresh_command_pending(reconciler);
   return ITERATE_KIT_OK;
 }
 
@@ -123,9 +155,10 @@ enum iterate_kit_status iterate_kit_audio_intent_reconciler_poll(
     return ITERATE_KIT_OK;
   }
 
+  const bool requested_active = effective_uplink_active(reconciler);
   status = reconciler->ops.request_uplink_active(
       reconciler->ops.context,
-      reconciler->desired_uplink_active);
+      requested_active);
   if (status == ITERATE_KIT_BACKPRESSURE) {
     /*
      * Do not add a retry queue. The newest boolean is a complete desired-state
@@ -141,8 +174,7 @@ enum iterate_kit_status iterate_kit_audio_intent_reconciler_poll(
   }
   increment(&reconciler->commands_accepted);
   reconciler->applied_uplink_active =
-      reconciler->desired_uplink_active;
-  reconciler->has_applied_state = true;
+      requested_active;
   reconciler->command_pending = false;
   return ITERATE_KIT_OK;
 }
@@ -158,11 +190,16 @@ void iterate_kit_audio_intent_reconciler_metrics(
     return;
   }
   metrics->intent_edges = reconciler->intent_edges;
+  metrics->media_readiness_edges =
+      reconciler->media_readiness_edges;
   metrics->commands_accepted = reconciler->commands_accepted;
   metrics->command_backpressure = reconciler->command_backpressure;
   metrics->command_failures = reconciler->command_failures;
   metrics->playback_resets = reconciler->playback_resets;
   metrics->desired_uplink_active = reconciler->desired_uplink_active;
+  metrics->media_ready = reconciler->media_ready;
+  metrics->publication_active =
+      reconciler->applied_uplink_active;
   metrics->command_pending = reconciler->command_pending;
   metrics->failed = reconciler->failure != ITERATE_KIT_OK;
 }

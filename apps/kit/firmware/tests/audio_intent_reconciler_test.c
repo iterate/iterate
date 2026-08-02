@@ -47,7 +47,8 @@ static void reset_playback(void *context) {
 static void initialize(
     struct iterate_kit_audio_intent_reconciler *reconciler,
     struct fake_owner *owner,
-    enum iterate_kit_audio_mode mode) {
+    enum iterate_kit_audio_mode mode,
+    bool media_ready) {
   const struct iterate_kit_audio_intent_ops ops = {
     owner,
     request_uplink,
@@ -57,6 +58,9 @@ static void initialize(
   assert(
       iterate_kit_audio_intent_reconciler_init(reconciler, mode, &ops) ==
       ITERATE_KIT_OK);
+  assert(
+      iterate_kit_audio_intent_reconciler_set_media_ready(
+          reconciler, media_ready) == ITERATE_KIT_OK);
 }
 
 static void handle(
@@ -80,15 +84,14 @@ static void a_short_turn_coalesces_to_the_safe_final_state(void) {
   struct iterate_kit_audio_intent_reconciler reconciler;
   struct fake_owner owner;
   initialize(
-      &reconciler, &owner, ITERATE_KIT_AUDIO_PUSH_TO_TALK);
+      &reconciler, &owner, ITERATE_KIT_AUDIO_PUSH_TO_TALK, true);
 
   handle(&reconciler, ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED);
   handle(&reconciler, ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED);
   assert(owner.reset_count == 1U);
   assert(owner.request_count == 0U);
   assert(iterate_kit_audio_intent_reconciler_poll(&reconciler) == ITERATE_KIT_OK);
-  assert(owner.request_count == 1U);
-  assert(!owner.requested[0]);
+  assert(owner.request_count == 0U);
 }
 
 /*
@@ -101,7 +104,7 @@ static void a_backpressured_stop_is_retried_until_accepted(void) {
   struct iterate_kit_audio_intent_metrics metrics;
   struct fake_owner owner;
   initialize(
-      &reconciler, &owner, ITERATE_KIT_AUDIO_PUSH_TO_TALK);
+      &reconciler, &owner, ITERATE_KIT_AUDIO_PUSH_TO_TALK, true);
   owner.results[0] = ITERATE_KIT_OK;
   owner.results[1] = ITERATE_KIT_BACKPRESSURE;
   owner.results[2] = ITERATE_KIT_OK;
@@ -141,7 +144,7 @@ static void terminal_owner_failure_is_not_an_unbounded_retry_loop(void) {
     (uint8_t)ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE,
   };
   initialize(
-      &reconciler, &owner, ITERATE_KIT_AUDIO_PUSH_TO_TALK);
+      &reconciler, &owner, ITERATE_KIT_AUDIO_PUSH_TO_TALK, true);
   owner.results[0] = ITERATE_KIT_IO_ERROR;
   owner.result_count = 1U;
 
@@ -176,7 +179,7 @@ static void full_duplex_conversation_controls_one_continuous_publication(void) {
     (uint8_t)ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE,
   };
   initialize(
-      &reconciler, &owner, ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC);
+      &reconciler, &owner, ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC, true);
 
   handle(&reconciler, ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED);
   assert(owner.reset_count == 0U);
@@ -204,10 +207,63 @@ static void full_duplex_conversation_controls_one_continuous_publication(void) {
   assert(!metrics.desired_uplink_active);
 }
 
+/*
+ * A conversation event arrives over Cap'n Web before the independent `/pcm`
+ * WebSocket has completed DNS/TCP/TLS/upgrade. Publishing clean mic frames in
+ * that gap caused the first frame of every physical HAVPE run to enter a lane
+ * with no consumer and be reported as an uplink drop. Treating that as a
+ * harmless baseline adjustment would hide a real ordering defect.
+ *
+ * The reconciler must instead drive the lower owner from the conjunction of
+ * user intent and current media readiness. Losing readiness closes the gate
+ * immediately; restoring it reopens at current audio, with no retained PCM or
+ * synthetic turn boundary. This test is shared by StackChan and HAVPE because
+ * the policy is independent of their codecs and AEC implementations.
+ */
+static void full_duplex_publication_tracks_media_readiness(void) {
+  struct iterate_kit_audio_intent_reconciler reconciler;
+  struct iterate_kit_audio_intent_metrics metrics;
+  struct fake_owner owner;
+  initialize(
+      &reconciler, &owner, ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC, false);
+
+  handle(&reconciler, ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED);
+  assert(iterate_kit_audio_intent_reconciler_poll(&reconciler) == ITERATE_KIT_OK);
+  assert(owner.request_count == 0U);
+
+  assert(
+      iterate_kit_audio_intent_reconciler_set_media_ready(
+          &reconciler, true) == ITERATE_KIT_OK);
+  assert(iterate_kit_audio_intent_reconciler_poll(&reconciler) == ITERATE_KIT_OK);
+  assert(owner.request_count == 1U);
+  assert(owner.requested[0]);
+
+  assert(
+      iterate_kit_audio_intent_reconciler_set_media_ready(
+          &reconciler, false) == ITERATE_KIT_OK);
+  assert(iterate_kit_audio_intent_reconciler_poll(&reconciler) == ITERATE_KIT_OK);
+  assert(owner.request_count == 2U);
+  assert(!owner.requested[1]);
+
+  assert(
+      iterate_kit_audio_intent_reconciler_set_media_ready(
+          &reconciler, true) == ITERATE_KIT_OK);
+  assert(iterate_kit_audio_intent_reconciler_poll(&reconciler) == ITERATE_KIT_OK);
+  assert(owner.request_count == 3U);
+  assert(owner.requested[2]);
+
+  iterate_kit_audio_intent_reconciler_metrics(&reconciler, &metrics);
+  assert(metrics.media_ready);
+  assert(metrics.media_readiness_edges == 3U);
+  assert(metrics.commands_accepted == 3U);
+  assert(metrics.desired_uplink_active);
+}
+
 int main(void) {
   a_short_turn_coalesces_to_the_safe_final_state();
   a_backpressured_stop_is_retried_until_accepted();
   terminal_owner_failure_is_not_an_unbounded_retry_loop();
   full_duplex_conversation_controls_one_continuous_publication();
+  full_duplex_publication_tracks_media_readiness();
   return 0;
 }
