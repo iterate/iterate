@@ -136,7 +136,7 @@ function Home() {
                       <FolderGit2Icon aria-hidden className="size-5 text-muted-foreground" />
                       <div className="min-w-0">
                         <h2 className="truncate font-mono text-sm font-semibold">
-                          {repoPath.replace(/^\/repos\//, "")}
+                          {repoPath}
                         </h2>
                         <p className="text-xs text-muted-foreground">
                           {entries.length === 0

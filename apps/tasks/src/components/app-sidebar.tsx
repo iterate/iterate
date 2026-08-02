@@ -179,7 +179,7 @@ export function AppSidebar() {
                         <span className="truncate font-mono text-xs">{entry.label}</span>
                         {entry.board !== null ? (
                           <span className="ml-auto shrink-0 font-mono text-[10px] text-sidebar-foreground/50">
-                            {entry.board.repoPath.replace(/^\/repos\//, "")}
+                            {entry.board.repoPath}
                           </span>
                         ) : entry.createdAt !== "" ? (
                           <span className="ml-auto shrink-0 text-[10px] tabular-nums text-sidebar-foreground/50">
