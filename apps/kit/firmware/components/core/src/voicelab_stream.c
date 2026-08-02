@@ -204,6 +204,42 @@ static bool base64_decode(
 
 /* --- inbound delivery batches (the exported callback capability) ---------- */
 
+/*
+ * G.711 mu-law expansion, the mirror of mulaw_encode_sample above.
+ *
+ * The downlink carries mu-law for the same reason the uplink does: this
+ * device receives 9-31 frames a second of PCM16 base64 against the 50
+ * realtime needs, and conceals the shortfall. Half the bytes is the only
+ * lever that does not require the far end to guess at this network.
+ */
+static int16_t mulaw_decode_sample(uint8_t encoded) {
+  static const int16_t exponent_base[8] = {
+    0, 132, 396, 924, 1980, 4092, 8316, 16764,
+  };
+  const uint8_t value = (uint8_t)~encoded;
+  const uint8_t exponent = (uint8_t)((value >> 4) & 0x07U);
+  const uint8_t mantissa = (uint8_t)(value & 0x0FU);
+  const int32_t magnitude =
+      exponent_base[exponent] + (int32_t)((uint32_t)mantissa << (exponent + 3U));
+  return (value & 0x80U) != 0U ? (int16_t)(-magnitude) : (int16_t)magnitude;
+}
+
+/** Expands `length` mu-law bytes into 2*length bytes of little-endian PCM16. */
+static size_t mulaw_expand(uint8_t *buffer, size_t length, size_t capacity) {
+  size_t index = length;
+  if (length * 2U > capacity) {
+    return 0U;
+  }
+  /* Backwards, in place: the last byte expands to the last two bytes. */
+  while (index > 0U) {
+    const int16_t sample = mulaw_decode_sample(buffer[index - 1U]);
+    buffer[(index - 1U) * 2U] = (uint8_t)((uint16_t)sample & 0xFFU);
+    buffer[(index - 1U) * 2U + 1U] = (uint8_t)(((uint16_t)sample >> 8) & 0xFFU);
+    --index;
+  }
+  return length * 2U;
+}
+
 static void handle_spk_frame(
     struct iterate_kit_voicelab *voicelab,
     const struct capnweb_value *payload) {
@@ -255,6 +291,24 @@ static void handle_spk_frame(
   }
   if (sequence > voicelab->last_spk_sequence) {
     voicelab->last_spk_sequence = sequence;
+  }
+  {
+    /* `enc:"u"` means the payload is mu-law and doubles when expanded. */
+    struct capnweb_value encoding;
+    char encoding_text[4] = {0};
+    size_t encoding_length = 0U;
+    if (capnweb_value_object_get(payload, "enc", &encoding) &&
+        capnweb_value_copy_string(
+            &encoding, encoding_text, sizeof(encoding_text),
+            &encoding_length) == CAPNWEB_OK &&
+        encoding_text[0] == 'u') {
+      pcm_length = mulaw_expand(
+          voicelab->pcm_buffer, pcm_length, sizeof(voicelab->pcm_buffer));
+      if (pcm_length == 0U) {
+        ++voicelab->spk_decode_failures;
+        return;
+      }
+    }
   }
   ++voicelab->spk_frames_received;
   if (voicelab->options.on_speaker != NULL) {
