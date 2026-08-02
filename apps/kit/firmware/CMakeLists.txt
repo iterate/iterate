@@ -110,14 +110,25 @@ if(APPLE)
   find_library(ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK AudioToolbox REQUIRED)
   find_library(ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
   add_executable(iterate-kit-cli
-    targets/host_cli/main.cpp
+    targets/host_cli/cli_audio_out.c
+    targets/host_cli/cli_capabilities.c
+    targets/host_cli/cli_conversation.c
+    targets/host_cli/cli_microphone.c
+    targets/host_cli/cli_options.c
+    targets/host_cli/cli_report.c
+    targets/host_cli/cli_speaker.c
+    targets/host_cli/cli_wav.c
+    targets/host_cli/main.c
   )
-  target_compile_features(iterate-kit-cli PRIVATE cxx_std_17)
+  target_include_directories(iterate-kit-cli PRIVATE targets/host_cli)
+  target_compile_features(iterate-kit-cli PRIVATE c_std_11)
   target_compile_options(iterate-kit-cli PRIVATE
     -Wall
     -Wextra
     -Werror
     -Wpedantic
+    -Wconversion
+    -Wshadow
   )
   target_link_libraries(iterate-kit-cli PRIVATE
     iterate-kit-posix
@@ -855,6 +866,52 @@ target_compile_options(iterate-kit-cli-wav-test PRIVATE
 add_test(
   NAME iterate-kit-cli-wav-test
   COMMAND iterate-kit-cli-wav-test
+)
+
+add_executable(iterate-kit-cli-speaker-test
+  targets/host_cli/cli_speaker.c
+  tests/cli_speaker_test.c
+)
+target_include_directories(
+  iterate-kit-cli-speaker-test PRIVATE targets/host_cli)
+target_link_libraries(
+  iterate-kit-cli-speaker-test PRIVATE iterate-kit-core)
+target_compile_features(
+  iterate-kit-cli-speaker-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli-speaker-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+)
+add_test(
+  NAME iterate-kit-cli-speaker-test
+  COMMAND iterate-kit-cli-speaker-test
+)
+
+add_executable(iterate-kit-cli-microphone-test
+  targets/host_cli/cli_microphone.c
+  tests/cli_microphone_test.c
+)
+target_include_directories(
+  iterate-kit-cli-microphone-test PRIVATE targets/host_cli)
+target_link_libraries(
+  iterate-kit-cli-microphone-test PRIVATE iterate-kit-core)
+target_compile_features(
+  iterate-kit-cli-microphone-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli-microphone-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+)
+add_test(
+  NAME iterate-kit-cli-microphone-test
+  COMMAND iterate-kit-cli-microphone-test
 )
 
 add_executable(iterate-kit-audio-playout-test

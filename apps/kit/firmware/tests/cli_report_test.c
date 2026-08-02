@@ -117,9 +117,10 @@ static void one_bad_turn_survives_into_the_summary(void)
   body[length] = '\0';
   (void)fclose(file);
   assert(strstr(body, "\"failedTurns\":1") != NULL);
-  assert(strstr(body, "\"turnsDropped\":0") != NULL);
-  assert(strstr(body, "\"backOfficeSent\":13") != NULL);
+  assert(strstr(body, "\"colleague\":") != NULL);
+  assert(strstr(body, "\"colleagueQuestionsAsked\":13") != NULL);
   assert(strstr(body, "\"framesPlayed\":") != NULL);
+  assert(strstr(body, "\"ringOccupancyP10Ms\":") != NULL);
   /* The minimum across turns is the failed one: a spread cannot hide it. */
   assert(strstr(body, "\"framesPlayed\":{\"min\":0") != NULL);
   (void)remove(path);

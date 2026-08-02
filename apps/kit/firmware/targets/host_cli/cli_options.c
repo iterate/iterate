@@ -60,39 +60,59 @@ struct cli_options_flag {
   enum cli_options_kind kind;
   enum cli_options_field field;
   const char *environment;
-  const char *help;
+  /** Complete legacy help line; the CLI's output is an external contract. */
+  const char *help_line;
 };
 
 static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
   {"--project-id", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_PROJECT_ID,
-   "ITERATE_PROJECT_ID", "Project id (required)"},
+   "ITERATE_PROJECT_ID",
+   "  --project-id ID       Project id (ITERATE_PROJECT_ID)\n"},
   {"--api-key", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_API_KEY,
-   "ITERATE_PROJECT_API_KEY", "Project API key (required)"},
+   "ITERATE_PROJECT_API_KEY",
+   "  --api-key KEY         Project API key (ITERATE_PROJECT_API_KEY)\n"},
   {"--os-base-url", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_OS_BASE_URL,
-   "ITERATE_OS_BASE_URL", "OS origin, e.g. https://os.iterate.com (required)"},
+   "ITERATE_OS_BASE_URL",
+   "  --os-base-url URL     OS origin, e.g. https://os.iterate.com "
+   "(ITERATE_OS_BASE_URL)\n"},
   {"--stream-path", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_STREAM_PATH,
-   "ITERATE_KIT_STREAM_PATH", "Stream the call rides on"},
+   "ITERATE_KIT_STREAM_PATH",
+   "  --stream-path PATH    Stream path (ITERATE_KIT_STREAM_PATH; "
+   "default /voicelab/device)\n"},
   {"--name", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_NAME,
-   "ITERATE_KIT_CAPABILITY_NAME", "Mount as kit.NAME"},
+   "ITERATE_KIT_CAPABILITY_NAME",
+   "  --name NAME           Mount capability as kit.NAME "
+   "(ITERATE_KIT_CAPABILITY_NAME; default host)\n"},
   {"--mic-wav", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_MIC_WAV,
-   "ITERATE_KIT_MIC_WAV", "PCM16 mono 16 kHz microphone source"},
-  {"--utterance-dir", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_UTTERANCE_DIR,
-   NULL, "Directory of WAVs for --converse"},
+   "ITERATE_KIT_MIC_WAV",
+   "  --mic-wav FILE        PCM16 mono 16 kHz source for remote PTT "
+   "(ITERATE_KIT_MIC_WAV)\n"},
   {"--speaker-wav", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_SPEAKER_WAV,
-   NULL, "True played timeline, including concealed silence"},
-  {"--report-json", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_REPORT_JSON,
-   NULL, "Unattended run report"},
+   NULL,
+   "  --speaker-wav FILE    True played timeline, including concealed "
+   "silence (default iterate-kit-playback.wav)\n"},
+  {"--live-audio", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_LIVE_AUDIO,
+   NULL, "  --live-audio          Also send the true timeline to CoreAudio\n"},
   {"--converse", CLI_OPTIONS_KIND_MINUTES, CLI_OPTIONS_FIELD_CONVERSE,
-   NULL, "Run the unattended conversation driver for MINUTES"},
+   NULL, "  --converse MINUTES    Run the unattended conversation driver\n"},
+  {"--utterance-dir", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_UTTERANCE_DIR,
+   NULL,
+   "  --utterance-dir DIR   Directory of PCM16 mono 16 kHz WAVs for "
+   "--converse\n"},
   {"--colleague-every", CLI_OPTIONS_KIND_COUNT,
    CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY, NULL,
-   "Consult the back office on every Nth turn (0 disables)"},
-  {"--live-audio", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_LIVE_AUDIO,
-   NULL, "Also send the played timeline to CoreAudio"},
+   "  --colleague-every N   Use the colleague-forcing utterance every "
+   "Nth turn (0 disables)\n"},
+  {"--report-json", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_REPORT_JSON,
+   NULL,
+   "  --report-json FILE    Unattended JSON report (default "
+   "iterate-kit-report.json)\n"},
   {"--insecure", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_INSECURE,
-   NULL, "Disable TLS certificate verification; local testing only"},
+   NULL,
+   "  --insecure            Disable TLS certificate verification; local "
+   "testing only\n"},
   {"--help", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_HELP,
-   NULL, "Show this help"},
+   NULL, "  --help                Show this help\n"},
 };
 
 enum {
@@ -112,6 +132,14 @@ static enum cli_options_status cli_options_apply(
     const struct cli_options_flag *flag,
     const char *value);
 
+/* Applies every argv flag after the public boundary validated storage. */
+static enum cli_options_status cli_options_parse_flags(
+    struct cli_options *out,
+    int argc,
+    char **argv,
+    char *problem,
+    size_t problem_bytes);
+
 /* Parses a positive count of minutes. Fails with ERR_NOT_A_NUMBER. */
 static enum cli_options_status cli_options_read_minutes(
     const char *text, double *out_minutes);
@@ -122,6 +150,18 @@ static enum cli_options_status cli_options_read_count(
 
 /* Fills anything still unset from the environment, then from defaults. */
 static void cli_options_fill(struct cli_options *out);
+
+/* Fills unset text fields from their declared environment variables. */
+static void cli_options_fill_environment(struct cli_options *out);
+
+/* Assigns one environment-backed text field only when no flag supplied it. */
+static void cli_options_fill_text(
+    struct cli_options *out,
+    enum cli_options_field field,
+    const char *value);
+
+/* Applies defaults only after both flags and environment had their chance. */
+static void cli_options_fill_defaults(struct cli_options *out);
 
 /* Rejects an options set nothing could act on. */
 static enum cli_options_status cli_options_check(
@@ -148,15 +188,11 @@ void cli_options_print_help(FILE *out)
   (void)fprintf(out, "Usage: iterate-kit-cli [options]\n\n");
   (void)fprintf(
       out,
-      "Runs the Waveshare voice runtime on macOS with the same bounded\n"
+      "Runs the Waveshare voicelab runtime on macOS with the same bounded "
       "resource profile. Flags override their environment variables.\n\n");
   for (int index = 0; index < CLI_OPTIONS_FLAG_COUNT; ++index) {
     const struct cli_options_flag *flag = &CLI_OPTIONS_FLAGS[index];
-    (void)fprintf(out, "  %-20s %s", flag->name, flag->help);
-    if (flag->environment != NULL) {
-      (void)fprintf(out, " (%s)", flag->environment);
-    }
-    (void)fprintf(out, "\n");
+    (void)fputs(flag->help_line, out);
   }
 }
 
@@ -172,7 +208,21 @@ enum cli_options_status cli_options_parse(
   }
   memset(out, 0, sizeof(*out));
   cli_options_note(problem, problem_bytes, "");
+  const enum cli_options_status status = cli_options_parse_flags(
+      out, argc, argv, problem, problem_bytes);
+  if (status != CLI_OPTIONS_OK) return status;
+  cli_options_fill(out);
+  return cli_options_check(out, problem, problem_bytes);
+}
 
+static enum cli_options_status cli_options_parse_flags(
+    struct cli_options *out,
+    int argc,
+    char **argv,
+    char *problem,
+    size_t problem_bytes)
+{
+  assert(out != NULL && argv != NULL && problem != NULL && problem_bytes > 0U);
   for (int index = 1; index < argc; ++index) {
     const struct cli_options_flag *flag = cli_options_find(argv[index]);
     if (flag == NULL) {
@@ -202,8 +252,7 @@ enum cli_options_status cli_options_parse(
       return status;
     }
   }
-  cli_options_fill(out);
-  return cli_options_check(out, problem, problem_bytes);
+  return CLI_OPTIONS_OK;
 }
 
 static void cli_options_note(char *problem, size_t bytes, const char *text)
@@ -288,35 +337,56 @@ static enum cli_options_status cli_options_read_count(
 static void cli_options_fill(struct cli_options *out)
 {
   assert(out != NULL);
+  cli_options_fill_environment(out);
+  cli_options_fill_defaults(out);
+}
+
+static void cli_options_fill_environment(struct cli_options *out)
+{
+  assert(out != NULL);
   for (int index = 0; index < CLI_OPTIONS_FLAG_COUNT; ++index) {
     const struct cli_options_flag *flag = &CLI_OPTIONS_FLAGS[index];
     if (flag->environment == NULL) continue;
     if (flag->kind != CLI_OPTIONS_KIND_TEXT) continue;
     const char *value = getenv(flag->environment);
     if (value == NULL || value[0] == '\0') continue;
-    switch (flag->field) {
-      case CLI_OPTIONS_FIELD_PROJECT_ID:
-        if (out->project_id == NULL) out->project_id = value;
-        break;
-      case CLI_OPTIONS_FIELD_API_KEY:
-        if (out->project_api_key == NULL) out->project_api_key = value;
-        break;
-      case CLI_OPTIONS_FIELD_OS_BASE_URL:
-        if (out->os_base_url == NULL) out->os_base_url = value;
-        break;
-      case CLI_OPTIONS_FIELD_STREAM_PATH:
-        if (out->stream_path == NULL) out->stream_path = value;
-        break;
-      case CLI_OPTIONS_FIELD_NAME:
-        if (out->name == NULL) out->name = value;
-        break;
-      case CLI_OPTIONS_FIELD_MIC_WAV:
-        if (out->mic_wav == NULL) out->mic_wav = value;
-        break;
-      default:
-        break;
-    }
+    cli_options_fill_text(out, flag->field, value);
   }
+}
+
+static void cli_options_fill_text(
+    struct cli_options *out,
+    enum cli_options_field field,
+    const char *value)
+{
+  assert(out != NULL && value != NULL);
+  switch (field) {
+    case CLI_OPTIONS_FIELD_PROJECT_ID:
+      if (out->project_id == NULL) out->project_id = value;
+      break;
+    case CLI_OPTIONS_FIELD_API_KEY:
+      if (out->project_api_key == NULL) out->project_api_key = value;
+      break;
+    case CLI_OPTIONS_FIELD_OS_BASE_URL:
+      if (out->os_base_url == NULL) out->os_base_url = value;
+      break;
+    case CLI_OPTIONS_FIELD_STREAM_PATH:
+      if (out->stream_path == NULL) out->stream_path = value;
+      break;
+    case CLI_OPTIONS_FIELD_NAME:
+      if (out->name == NULL) out->name = value;
+      break;
+    case CLI_OPTIONS_FIELD_MIC_WAV:
+      if (out->mic_wav == NULL) out->mic_wav = value;
+      break;
+    default:
+      break;
+  }
+}
+
+static void cli_options_fill_defaults(struct cli_options *out)
+{
+  assert(out != NULL);
   if (out->stream_path == NULL) {
     out->stream_path = CLI_OPTIONS_DEFAULT_STREAM_PATH;
   }

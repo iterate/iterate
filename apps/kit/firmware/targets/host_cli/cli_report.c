@@ -29,6 +29,8 @@ static uint64_t cli_report_metric_gaps(const struct cli_report_turn *t);
 static uint64_t cli_report_metric_underruns(const struct cli_report_turn *t);
 static uint64_t cli_report_metric_occupancy_min(
     const struct cli_report_turn *t);
+static uint64_t cli_report_metric_occupancy_p10(
+    const struct cli_report_turn *t);
 static uint64_t cli_report_metric_occupancy_max(
     const struct cli_report_turn *t);
 
@@ -52,6 +54,7 @@ static const struct {
   {"sequenceGaps", cli_report_metric_gaps},
   {"underruns", cli_report_metric_underruns},
   {"ringOccupancyMinMs", cli_report_metric_occupancy_min},
+  {"ringOccupancyP10Ms", cli_report_metric_occupancy_p10},
   {"ringOccupancyMaxMs", cli_report_metric_occupancy_max},
 };
 
@@ -73,6 +76,19 @@ static enum cli_report_status cli_report_write_distribution(
     FILE *file,
     const struct cli_report *report,
     cli_report_metric_fn read);
+
+/* Writes every report section after the public boundary opened the file. */
+static enum cli_report_status cli_report_write_body(
+    FILE *file,
+    const struct cli_report *report,
+    const struct cli_report_summary *summary);
+
+/* Writes the named metric table without letting one failure corrupt its tail. */
+static enum cli_report_status cli_report_write_distributions(
+    FILE *file, const struct cli_report *report);
+
+/* Counts failed turns for the summary without coupling it to JSON emission. */
+static size_t cli_report_failure_count(const struct cli_report *report);
 
 /* The `percentile`-th value of `read` across every turn. */
 static uint64_t cli_report_percentile(
@@ -194,43 +210,68 @@ enum cli_report_status cli_report_write(
   }
   FILE *file = fopen(path, "w");
   if (file == NULL) return CLI_REPORT_ERR_OPEN;
-
-  enum cli_report_status status = CLI_REPORT_OK;
-  size_t failures = 0U;
-  (void)fprintf(file, "{\n  \"turns\":[\n");
-  for (size_t index = 0U; index < report->count && status == CLI_REPORT_OK;
-       ++index) {
-    if (report->turns[index].failed) ++failures;
-    status = cli_report_write_turn(
-        file, &report->turns[index], index, index + 1U == report->count);
-  }
-  if (status == CLI_REPORT_OK) {
-    (void)fprintf(file, "  ],\n  \"distributions\":{");
-    for (int metric = 0; metric < CLI_REPORT_METRIC_COUNT; ++metric) {
-      (void)fprintf(file, "%s\"%s\":", metric == 0 ? "" : ",",
-                    CLI_REPORT_METRICS[metric].name);
-      status = cli_report_write_distribution(
-          file, report, CLI_REPORT_METRICS[metric].read);
-      if (status != CLI_REPORT_OK) break;
-    }
-  }
-  if (status == CLI_REPORT_OK) {
-    (void)fprintf(
-        file,
-        "},\n  \"summary\":{\"turns\":%zu,\"failedTurns\":%zu,"
-        "\"turnsDropped\":%zu,\"sessionRestarts\":%u,\"transportRestarts\":%u,"
-        "\"connectionRecycles\":%u,\"callsLost\":%u,\"backOfficeSent\":%u,"
-        "\"backOfficeHeard\":%u}\n}\n",
-        report->count, failures, report->dropped, summary->session_restarts,
-        summary->transport_restarts, summary->connection_recycles,
-        summary->calls_lost, summary->back_office_sent,
-        summary->back_office_heard);
-  }
+  enum cli_report_status status =
+      cli_report_write_body(file, report, summary);
   if (ferror(file) != 0) status = CLI_REPORT_ERR_IO;
   if (fclose(file) != 0 && status == CLI_REPORT_OK) {
     status = CLI_REPORT_ERR_IO;
   }
   return status;
+}
+
+static enum cli_report_status cli_report_write_body(
+    FILE *file,
+    const struct cli_report *report,
+    const struct cli_report_summary *summary)
+{
+  assert(file != NULL && report != NULL && summary != NULL);
+  enum cli_report_status status = CLI_REPORT_OK;
+  (void)fprintf(file, "{\n  \"turns\":[\n");
+  for (size_t index = 0U; index < report->count && status == CLI_REPORT_OK;
+       ++index) {
+    status = cli_report_write_turn(
+        file, &report->turns[index], index, index + 1U == report->count);
+  }
+  if (status != CLI_REPORT_OK) return status;
+  status = cli_report_write_distributions(file, report);
+  if (status != CLI_REPORT_OK) return status;
+  (void)fprintf(
+      file,
+      "},\n  \"summary\":{\"turns\":%zu,\"failedTurns\":%zu,"
+      "\"sessionRestarts\":%u,\"transportRestarts\":%u,"
+      "\"connectionRecycles\":%u,\"callsLost\":%u,"
+      "\"colleagueQuestionsAsked\":%u,"
+      "\"colleagueQuestionsAnswered\":%u}\n}\n",
+      report->count, cli_report_failure_count(report),
+      summary->session_restarts, summary->transport_restarts,
+      summary->connection_recycles, summary->calls_lost,
+      summary->back_office_sent, summary->back_office_heard);
+  return CLI_REPORT_OK;
+}
+
+static enum cli_report_status cli_report_write_distributions(
+    FILE *file, const struct cli_report *report)
+{
+  assert(file != NULL && report != NULL);
+  (void)fprintf(file, "  ],\n  \"distributions\":{");
+  for (int metric = 0; metric < CLI_REPORT_METRIC_COUNT; ++metric) {
+    (void)fprintf(file, "%s\"%s\":", metric == 0 ? "" : ",",
+                  CLI_REPORT_METRICS[metric].name);
+    const enum cli_report_status status = cli_report_write_distribution(
+        file, report, CLI_REPORT_METRICS[metric].read);
+    if (status != CLI_REPORT_OK) return status;
+  }
+  return CLI_REPORT_OK;
+}
+
+static size_t cli_report_failure_count(const struct cli_report *report)
+{
+  assert(report != NULL);
+  size_t failures = 0U;
+  for (size_t index = 0U; index < report->count; ++index) {
+    if (report->turns[index].failed) ++failures;
+  }
+  return failures;
 }
 
 static enum cli_report_status cli_report_write_string(
@@ -263,7 +304,7 @@ static enum cli_report_status cli_report_write_turn(
   if (status != CLI_REPORT_OK) return status;
   (void)fprintf(
       file,
-      ",\"backOffice\":%s,\"failure\":%s,\"timeToFirstAudioMs\":%" PRIu64
+      ",\"colleague\":%s,\"failure\":%s,\"timeToFirstAudioMs\":%" PRIu64
       ",\"timeToAnswerCompleteMs\":%" PRIu64
       ",\"framesSent\":%u,\"framesReceived\":%u,\"framesPlayed\":%u,"
       "\"framesConcealed\":%u,\"sequenceGaps\":%u,\"underruns\":%u,"
@@ -377,4 +418,9 @@ static uint64_t cli_report_metric_occupancy_min(const struct cli_report_turn *t)
 static uint64_t cli_report_metric_occupancy_max(const struct cli_report_turn *t)
 {
   return t->occupancy_max_ms;
+}
+
+static uint64_t cli_report_metric_occupancy_p10(const struct cli_report_turn *t)
+{
+  return cli_report_occupancy_percentile(t, CLI_REPORT_P10);
 }
