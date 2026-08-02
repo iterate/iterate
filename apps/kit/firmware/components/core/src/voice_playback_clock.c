@@ -82,7 +82,26 @@ iterate_kit_voice_playback_clock_empty(
     clock->priming = true;
     return ITERATE_KIT_VOICE_PLAYBACK_WAIT;
   }
-  ++clock->drop_debt_frames;
+  /*
+   * NO DEBT IS INCURRED. Concealing does not put this device behind anything.
+   *
+   * Repaying concealment by dropping a later real frame made sense against a
+   * sender that PACED audio to a schedule: 20ms of inserted silence put
+   * playback 20ms late, and dropping one frame put it back on the clock. That
+   * sender is gone. The whole answer now arrives at once and this device owns
+   * the playout clock, so there is no schedule to be late for — and the debt
+   * became a machine for deleting words.
+   *
+   * Measured on the device, one answer: 298 frames arrived with no loss, no
+   * overflow and no bad frames; 107 of them were dropped to repay 107
+   * concealed frames, and 191 were played. A third of the answer thrown away
+   * to pay for silence nobody asked for. That is exactly the "words clipped
+   * out of the first sentence" a listener reports.
+   *
+   * The honest response to a dry buffer is to play what arrives when it
+   * arrives. The answer finishes a few hundred milliseconds later than it
+   * might have, which nobody notices; a missing word is all anybody notices.
+   */
   clock->starve_at_ms = now_ms;
   return ITERATE_KIT_VOICE_PLAYBACK_CONCEAL;
 }

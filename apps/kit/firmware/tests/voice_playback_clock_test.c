@@ -18,22 +18,40 @@ static void opening_prefill_is_exact(void) {
 }
 
 /*
- * A dry tick must keep the sink clock moving with silence, then discard one
- * late frame.  Without the matching debt payment each concealed 20 ms would
- * permanently increase lag and an hour-long answer would ratchet to overflow.
+ * CONCEALING COSTS NOTHING. A dry tick keeps the sink moving with silence and
+ * every real frame that follows is still played.
+ *
+ * This asserted the opposite until the device proved it wrong. Repaying
+ * concealment by dropping a later frame was correct against a sender that
+ * PACED audio to a schedule — 20 ms of silence put playback 20 ms late, and
+ * dropping one frame put it back on the clock. That sender is gone: the whole
+ * answer arrives at once and this device owns the clock, so there is no
+ * schedule to be late for and the debt is a machine for deleting words.
+ *
+ * Measured on the device, one answer: 298 frames arrived with no loss, no
+ * overflow and no bad frames; 107 were dropped to repay 107 concealed, and
+ * 191 were played. A third of the answer thrown away to pay for silence
+ * nobody asked for — heard, and reported, as words clipped out of the first
+ * sentence.
  */
-static void concealment_creates_equal_drop_debt(void) {
+static void concealment_never_costs_a_real_frame(void) {
   struct iterate_kit_voice_playback_clock clock;
+  uint32_t index;
   iterate_kit_voice_playback_clock_init(&clock);
   assert(iterate_kit_voice_playback_clock_ready(
       &clock, ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES));
-  assert(iterate_kit_voice_playback_clock_empty(&clock, 1000U) ==
-      ITERATE_KIT_VOICE_PLAYBACK_CONCEAL);
-  assert(iterate_kit_voice_playback_clock_audio_arrived(&clock, 1010U));
-  assert(iterate_kit_voice_playback_clock_frame(&clock, 0U, 0U, 1010U) ==
-      ITERATE_KIT_VOICE_PLAYBACK_DROP_DEBT);
-  assert(iterate_kit_voice_playback_clock_frame(&clock, 0U, 0U, 1030U) ==
-      ITERATE_KIT_VOICE_PLAYBACK_PLAY);
+  /* Ten dry ticks: ten frames of inserted silence. */
+  for (index = 0U; index < 10U; ++index) {
+    assert(iterate_kit_voice_playback_clock_empty(&clock, 1000U + index * 20U) ==
+        ITERATE_KIT_VOICE_PLAYBACK_CONCEAL);
+  }
+  assert(iterate_kit_voice_playback_clock_audio_arrived(&clock, 1200U));
+  /* Every frame that arrives after them is PLAYED. None pays for anything. */
+  for (index = 0U; index < 10U; ++index) {
+    assert(iterate_kit_voice_playback_clock_frame(
+               &clock, 0U, index, 1200U + index * 20U) ==
+        ITERATE_KIT_VOICE_PLAYBACK_PLAY);
+  }
 }
 
 /*
@@ -73,7 +91,7 @@ static void completed_answer_returns_to_priming_without_silence(void) {
 
 int main(void) {
   opening_prefill_is_exact();
-  concealment_creates_equal_drop_debt();
+  concealment_never_costs_a_real_frame();
   catchup_is_rate_limited();
   completed_answer_returns_to_priming_without_silence();
   return 0;
