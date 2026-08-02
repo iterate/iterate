@@ -1,0 +1,268 @@
+#include "iterate/kit/audio_playout.h"
+
+#include <assert.h>
+#include <stdint.h>
+#include <string.h>
+
+#ifdef NDEBUG
+#error "firmware tests must execute assertions"
+#endif
+
+/*
+ * Every scenario here is one the device has actually been observed to get
+ * wrong in a room, and each has been indistinguishable from the others in the
+ * only report a listener can give: "it went funny". Sequence and answer
+ * numbers make them separable, and separable is the whole point of the
+ * module — a decision that needs a network, a codec and a flash cycle to
+ * exercise is a decision nobody exercises.
+ */
+
+static struct iterate_kit_playout_frame at(
+    uint32_t call, uint32_t answer, uint32_t frame) {
+  struct iterate_kit_playout_frame reference;
+  reference.call = call;
+  reference.answer = answer;
+  reference.frame = frame;
+  return reference;
+}
+
+/*
+ * The ordinary case, and the one a naive implementation gets right by
+ * accident: consecutive frames of one answer are simply queued in order.
+ */
+static void plays_one_answer_in_order(void) {
+  struct iterate_kit_playout playout;
+  uint32_t index;
+
+  iterate_kit_playout_reset(&playout, 7U);
+  for (index = 0U; index < 50U; ++index) {
+    const struct iterate_kit_playout_frame frame = at(7U, 1U, index);
+    const enum iterate_kit_playout_action action =
+        iterate_kit_playout_classify(&playout, &frame);
+    /* The first frame of an answer is a REPLACE: nothing else may precede it. */
+    assert(action == (index == 0U ? ITERATE_KIT_PLAYOUT_REPLACE
+                                  : ITERATE_KIT_PLAYOUT_APPEND));
+  }
+  assert(playout.appended == 49U);
+  assert(playout.replaced == 1U);
+  assert(playout.gaps == 0U);
+}
+
+/*
+ * A connection recycle overlaps two deliveries ON PURPOSE — the successor is
+ * opened before the incumbent is released, so no frame falls between them —
+ * which means the same frames legitimately arrive twice. Played twice they
+ * stutter the sentence, and the stutter lands mid-word where it sounds like a
+ * network fault rather than like the device repeating itself.
+ */
+static void ignores_frames_redelivered_by_a_recycle(void) {
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 7U);
+  frame = at(7U, 1U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(7U, 1U, 1U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+
+  /* The overlap re-sends both. */
+  frame = at(7U, 1U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  frame = at(7U, 1U, 1U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  assert(playout.ignored_duplicate == 2U);
+  /* A duplicate must never be mistaken for a hole. */
+  assert(playout.gaps == 0U);
+}
+
+/*
+ * Barge-in. The person starts talking while the assistant is mid-sentence, so
+ * everything queued must go immediately — waiting for the server to confirm
+ * the cancellation means the assistant talks over the person for a whole
+ * round trip, which is the single rudest thing this device does.
+ *
+ * The frames already in flight for the abandoned answer keep arriving after
+ * the interrupt, and playing them would resume a sentence the person has
+ * already cut off.
+ */
+static void an_interrupt_silences_the_answer_being_talked_over(void) {
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 7U);
+  frame = at(7U, 1U, 0U);
+  (void)iterate_kit_playout_classify(&playout, &frame);
+  frame = at(7U, 1U, 1U);
+  (void)iterate_kit_playout_classify(&playout, &frame);
+
+  iterate_kit_playout_interrupt(&playout);
+
+  /* Still in flight when the button went down. */
+  frame = at(7U, 1U, 2U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  frame = at(7U, 1U, 3U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  assert(playout.ignored_stale_answer == 2U);
+
+  /*
+   * The reply to what the person just said. It is a REPLACE even though the
+   * queue was already emptied locally, because the caller must not be
+   * required to remember that it was.
+   */
+  frame = at(7U, 2U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(7U, 2U, 1U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+}
+
+/*
+ * A new answer arriving without any local interrupt — the server cancelled
+ * and started again on its own, which happens when the model is handed a tool
+ * result. The tail of the old answer must not be heard in front of the new
+ * one; that is the "it answered the previous question" complaint.
+ */
+static void a_newer_answer_replaces_whatever_is_queued(void) {
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 7U);
+  frame = at(7U, 4U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(7U, 4U, 1U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+  frame = at(7U, 5U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  /* The straggler from answer 4 must not be appended after answer 5 began. */
+  frame = at(7U, 4U, 2U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  assert(playout.replaced == 2U);
+  assert(playout.ignored_stale_answer == 1U);
+}
+
+/*
+ * Two bridges can serve one stream for a moment while one is being replaced,
+ * and the loser's last frames carry its own call id. Played, they splice a
+ * fragment of a different conversation into this one.
+ */
+static void ignores_speech_belonging_to_another_call(void) {
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 7U);
+  frame = at(8U, 1U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  assert(playout.ignored_other_call == 1U);
+  assert(playout.appended == 0U);
+  assert(playout.replaced == 0U);
+}
+
+/*
+ * A genuine hole. Counted where it appears, and NOT by subtracting played
+ * frames from a total — subtraction cannot tell a frame that was lost from
+ * one that was never sent, and every count taken that way has read as a
+ * network fault when the sender simply stopped.
+ */
+static void counts_holes_where_they_appear(void) {
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 7U);
+  frame = at(7U, 1U, 0U);
+  (void)iterate_kit_playout_classify(&playout, &frame);
+  frame = at(7U, 1U, 5U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+  assert(playout.gaps == 4U);
+
+  /*
+   * Late arrivals of the missing frames are still refused: the audio after
+   * them has already been queued, so inserting them now would play the
+   * sentence out of order.
+   */
+  frame = at(7U, 1U, 2U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  assert(playout.gaps == 4U);
+}
+
+/*
+ * Hanging up and calling again. Speech left over from the previous call must
+ * never open the next one, and the counters must start clean or the next
+ * call's diagnosis inherits the last call's faults.
+ */
+static void a_new_call_starts_clean(void) {
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 7U);
+  frame = at(7U, 3U, 9U);
+  (void)iterate_kit_playout_classify(&playout, &frame);
+  assert(playout.replaced == 1U);
+
+  iterate_kit_playout_reset(&playout, 8U);
+  assert(playout.replaced == 0U);
+  assert(playout.appended == 0U);
+  frame = at(7U, 3U, 10U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  assert(playout.ignored_other_call == 1U);
+}
+
+/* A null caller must not crash a device that is already having a bad day. */
+static void tolerates_missing_arguments(void) {
+  struct iterate_kit_playout playout;
+  const struct iterate_kit_playout_frame frame = at(1U, 1U, 1U);
+
+  iterate_kit_playout_reset(&playout, 1U);
+  assert(
+      iterate_kit_playout_classify(NULL, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  assert(
+      iterate_kit_playout_classify(&playout, NULL) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  iterate_kit_playout_reset(NULL, 1U);
+  iterate_kit_playout_interrupt(NULL);
+  assert(strcmp(iterate_kit_playout_action_name(
+                    ITERATE_KIT_PLAYOUT_REPLACE), "replace") == 0);
+}
+
+int main(void) {
+  plays_one_answer_in_order();
+  ignores_frames_redelivered_by_a_recycle();
+  an_interrupt_silences_the_answer_being_talked_over();
+  a_newer_answer_replaces_whatever_is_queued();
+  ignores_speech_belonging_to_another_call();
+  counts_holes_where_they_appear();
+  a_new_call_starts_clean();
+  tolerates_missing_arguments();
+  return 0;
+}
