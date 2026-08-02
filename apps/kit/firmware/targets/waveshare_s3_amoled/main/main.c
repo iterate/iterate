@@ -350,6 +350,16 @@ static struct {
   uint32_t speaker_frames_played;
   uint32_t speaker_overflow_drops;
   /*
+   * Audio removed by the barge-in discard.
+   *
+   * This was the ONLY path that could delete queued speech without
+   * incrementing anything, and that is exactly what it did: 758 frames
+   * arrived, 150 played, the ring empty, and every other counter zero. A
+   * silent drop path turns a five-minute measurement into an afternoon of
+   * theories - two of which were wrong - so it counts now.
+   */
+  uint32_t speaker_discarded_frames;
+  /*
    * A starve is only a DEFECT if the stream had more to say. The buffer
    * legitimately empties at the end of every answer, and counting that as an
    * underrun made the metric read one per answer no matter how healthy the
@@ -670,6 +680,8 @@ static void playback_task(void *argument) {
       const uint32_t discard = runtime.speaker_discard_bytes;
       const size_t skipped = discard < received ? (size_t)discard : received;
       runtime.speaker_discard_bytes = (uint32_t)(discard - skipped);
+      runtime.speaker_discarded_frames +=
+          (uint32_t)(skipped / (FRAME_SAMPLES * sizeof(int16_t)));
       if (skipped == received) continue;
       memmove(chunk, (const uint8_t *)chunk + skipped, received - skipped);
       received -= skipped;
@@ -875,6 +887,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       ",\"batches\":%" PRIu32 ",\"connGeneration\":%" PRIu32
       ",\"rttMs\":%" PRIu32 ",\"pings\":%" PRIu32
       ",\"pingFailures\":%" PRIu32 ",\"livenessRestarts\":%" PRIu32
+      ",\"spkDiscarded\":%" PRIu32
       ",\"bridgeLosses\":%" PRIu32 ",\"bridgeAgeMs\":%" PRIu32
       ",\"downlinkRecycles\":%" PRIu32 ",\"batchAgeMs\":%" PRIu32
       ",\"uptimeMs\":%" PRIu64 ",\"resetReason\":%d"
@@ -931,6 +944,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       runtime.voicelab.last_rtt_ms,
       runtime.voicelab.ping_count,
       runtime.voicelab.ping_failures,
+      runtime.speaker_discarded_frames,
       runtime.liveness_restarts,
       runtime.bridge_losses,
       runtime.voicelab.last_bridge_ms == 0U
