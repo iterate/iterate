@@ -97,6 +97,27 @@ RTT despite 42.1 Mbps down and 17.7 Mbps up. This is the intended use of the
 preflight gate: do not manufacture another nominal audio result while the WAN
 cannot provide a valid real-time interval.
 
+Production observability independently corroborates the failed third-turn
+boundary. OS trace `9b1e77673af0fb8a82a4c424999f7c54` (service `os-prd`,
+script version `7e2eca90-858d-4145-9e12-f230643b43d0`) records the outer
+`ItxEntrypoint` GET ending `responseStreamDisconnected` after 72 ms and the
+stateful `/pcm` generation ending `canceled` after 61,061 ms. Its replacement
+attempt is trace `05576c6bca91aa3664cc4e27579699e4`; that outer GET also ended
+`responseStreamDisconnected`. Both are untruncated. A separate query from the
+fresh deployment at 07:26 UTC onward found zero error-level events for this
+project and zero `unsolicited-provider-response` diagnostics, so there is no
+evidence of a second userspace exception or a suppressed opening greeting.
+
+The later read-only live snapshot explains why calls attempted during the bad
+WAN interval could not work reliably even though the bridge recovered. The
+32-slot microphone queue reached 31, recorded seven bounded freshness recovery
+incidents, and discarded stale capture instead of retaining conversational
+history. At inspection time every queue depth and WebSocket buffered amount
+was back at zero, the call was inactive, Wi-Fi remained associated at -54 dBm,
+and manual-mode greeting/unsolicited counters were still zero. These are
+correct bounded-recovery semantics, but the dropped frames make that physical
+interval a failed conversation rather than a successful degraded one.
+
 ## Call-start latency diagnosis and fixes (through 2026-08-01 10:14 UTC)
 
 The reported five-to-eight-second `Call connecting` interval was real, but it
