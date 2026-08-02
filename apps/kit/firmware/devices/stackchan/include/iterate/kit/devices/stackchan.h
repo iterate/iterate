@@ -22,16 +22,19 @@ enum {
    * These are profile budgets, not incidental implementation sizes. Human
    * control edges are sparse, but a reconnect and remote/physical burst can
    * overlap; eight entries retain that burst while four events per poll keep
-   * actuator/control work from monopolizing the owner loop. The one event
-   * callback plus metrics fanout share two in-flight Cap'n Web admissions,
-   * keeping the same explicit bound as the shared voice-control design rather
-   * than allowing each module to consume its independent maximum. Each target
-   * still has to prove that its transport storage fits this profile budget.
+   * actuator/control work from monopolizing the owner loop. Two independent
+   * event observers and metrics fanout share two in-flight Cap'n Web
+   * admissions, keeping one profile-wide bound rather than letting every
+   * module consume its independent maximum. A slow diagnostic observer can
+   * therefore wait without evicting the PCM owner or inflating wire bursts.
+   * Each target still has to prove that its transport storage fits this
+   * profile budget.
    */
   ITERATE_KIT_STACKCHAN_MODULE_COUNT = 7,
   ITERATE_KIT_STACKCHAN_EVENTS_PER_POLL = 4,
   ITERATE_KIT_STACKCHAN_EVENT_CAPACITY = 8,
   ITERATE_KIT_STACKCHAN_EVENT_NOTIFICATION_CAPACITY = 8,
+  ITERATE_KIT_STACKCHAN_EVENT_SUBSCRIPTION_CAPACITY = 2,
   ITERATE_KIT_STACKCHAN_MAXIMUM_IN_FLIGHT_CALLBACKS = 2,
 };
 
@@ -87,6 +90,8 @@ struct iterate_kit_stackchan {
       event_storage[ITERATE_KIT_STACKCHAN_EVENT_CAPACITY];
   struct iterate_kit_device_event_notification event_notifications
       [ITERATE_KIT_STACKCHAN_EVENT_NOTIFICATION_CAPACITY];
+  struct iterate_kit_device_event_subscription event_subscriptions
+      [ITERATE_KIT_STACKCHAN_EVENT_SUBSCRIPTION_CAPACITY];
   struct iterate_kit_callback_budget callback_budget;
   struct iterate_kit_device_event_queue events;
   struct iterate_kit_device_event_stream event_stream;

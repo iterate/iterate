@@ -1,0 +1,647 @@
+{
+  "assessment": {
+    "acceptance": "independent-stt-provisional",
+    "boundaryWordOverage": 0,
+    "normalizedMicrophoneTranscript": "once upon a time in a quiet village a curious fox named finn discovered a glowing lantern hidden in the woods every night it whispered secrets of faraway lands finn followed its light through twisting paths until he reached a sparkling river there the lantern revealed a bridge made of stars crossing it he found a hidden meadow where animals danced under moonlight but dawn approached and the lantern dimmed finn hurried back carrying its fading glow in his heart from then on he shared tales of the star bridge with his village friends inspiring them to dream beyond the trees and though the lantern vanished its magic lived on in every storyteller s voice",
+    "normalizedProviderTranscript": "once upon a time in a quiet village a curious fox named finn discovered a glowing lantern hidden in the woods every night it whispered secrets of faraway lands finn followed its light through twisting paths until he reached a sparkling river there the lantern revealed a bridge made of stars crossing it he found a hidden meadow where animals danced under moonlight but dawn approached and the lantern dimmed finn hurried back carrying its fading glow in his heart from then on he shared tales of the star bridge with his village friends inspiring them to dream beyond the trees and though the lantern vanished its magic lived on in every storyteller s voice",
+    "passed": true,
+    "reasons": [],
+    "relativeActiveWindowDeficit": 0,
+    "responseToBaselineMaximumRmsRatio": 7.976897678539761
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": ["The causal response contained 0 active 20 ms windows; expected at least 4."]
+  },
+  "microphoneStt": {
+    "durationSeconds": 45.509,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"b1f98919-f363-4b5a-a4b2-9d82f0b993ef\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Once upon a time\",\"words\":[{\"text\":\"Once\",\"start\":0.831,\"end\":1.054},{\"text\":\"upon\",\"start\":1.074,\"end\":1.297},{\"text\":\"a\",\"start\":1.338,\"end\":1.358},{\"text\":\"time\",\"start\":1.419,\"end\":1.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\", in a quiet village\",\"words\":[{\"text\":\",\",\"start\":1.5,\"end\":1.905},{\"text\":\"in\",\"start\":1.905,\"end\":1.966},{\"text\":\"a\",\"start\":1.986,\"end\":2.007},{\"text\":\"quiet\",\"start\":2.088,\"end\":2.514},{\"text\":\"village\",\"start\":2.595,\"end\":2.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\", a curious fox named\",\"words\":[{\"text\":\",\",\"start\":3.0,\"end\":3.324},{\"text\":\"a\",\"start\":3.324,\"end\":3.345},{\"text\":\"curious\",\"start\":3.426,\"end\":3.912},{\"text\":\"fox\",\"start\":4.054,\"end\":4.297},{\"text\":\"named\",\"start\":4.399,\"end\":4.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Finn discovered a\",\"words\":[{\"text\":\"Finn\",\"start\":4.824,\"end\":5.108},{\"text\":\"discovered\",\"start\":5.432,\"end\":5.878},{\"text\":\"a\",\"start\":5.899,\"end\":5.919}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":6.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"glowing lantern hidden in the bushes.\",\"words\":[{\"text\":\"glowing\",\"start\":6.02,\"end\":6.385},{\"text\":\"lantern\",\"start\":6.466,\"end\":6.872},{\"text\":\"hidden\",\"start\":6.892,\"end\":7.054},{\"text\":\"in\",\"start\":7.054,\"end\":7.095},{\"text\":\"the\",\"start\":7.095,\"end\":7.176},{\"text\":\"bushes.\",\"start\":7.236,\"end\":7.48}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":7.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Every night\",\"words\":[{\"text\":\"Every\",\"start\":8.595,\"end\":8.838},{\"text\":\"night\",\"start\":8.838,\"end\":8.959}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":9.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\", it whispered secrets\",\"words\":[{\"text\":\",\",\"start\":9.0,\"end\":9.081},{\"text\":\"it\",\"start\":9.081,\"end\":9.182},{\"text\":\"whispered\",\"start\":9.446,\"end\":9.831},{\"text\":\"secrets\",\"start\":9.932,\"end\":10.399}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":10.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"of faraway lands.\",\"words\":[{\"text\":\"of\",\"start\":10.662,\"end\":10.703},{\"text\":\"faraway\",\"start\":10.723,\"end\":11.189},{\"text\":\"lands.\",\"start\":11.27,\"end\":11.736}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":12.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Finn followed its light\",\"words\":[{\"text\":\"Finn\",\"start\":12.284,\"end\":12.466},{\"text\":\"followed\",\"start\":12.649,\"end\":12.973},{\"text\":\"its\",\"start\":12.993,\"end\":13.115},{\"text\":\"light\",\"start\":13.216,\"end\":13.48}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":13.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"through twisting paths\",\"words\":[{\"text\":\"through\",\"start\":13.601,\"end\":13.743},{\"text\":\"twisting\",\"start\":13.824,\"end\":14.27},{\"text\":\"paths\",\"start\":14.351,\"end\":14.757}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":15.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"until he reached a sparkling pond\",\"words\":[{\"text\":\"until\",\"start\":15.061,\"end\":15.324},{\"text\":\"he\",\"start\":15.365,\"end\":15.426},{\"text\":\"reached\",\"start\":15.527,\"end\":15.811},{\"text\":\"a\",\"start\":15.872,\"end\":15.892},{\"text\":\"sparkling\",\"start\":16.014,\"end\":16.358},{\"text\":\"pond\",\"start\":16.358,\"end\":16.439}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":16.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\". There\",\"words\":[{\"text\":\".\",\"start\":16.5,\"end\":17.453},{\"text\":\"There\",\"start\":17.453,\"end\":17.757}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":18.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\", the lantern revealed a bridge\",\"words\":[{\"text\":\",\",\"start\":18.0,\"end\":18.041},{\"text\":\"the\",\"start\":18.041,\"end\":18.122},{\"text\":\"lantern\",\"start\":18.182,\"end\":18.568},{\"text\":\"revealed\",\"start\":18.669,\"end\":19.074},{\"text\":\"a\",\"start\":19.135,\"end\":19.155},{\"text\":\"bridge\",\"start\":19.236,\"end\":19.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":19.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"made of stars.\",\"words\":[{\"text\":\"made\",\"start\":19.682,\"end\":19.905},{\"text\":\"of\",\"start\":19.926,\"end\":19.986},{\"text\":\"stars.\",\"start\":20.088,\"end\":20.615}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":21.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Crossing it, he found a hidden\",\"words\":[{\"text\":\"Crossing\",\"start\":21.02,\"end\":21.365},{\"text\":\"it,\",\"start\":21.426,\"end\":21.527},{\"text\":\"he\",\"start\":21.811,\"end\":21.872},{\"text\":\"found\",\"start\":21.953,\"end\":22.176},{\"text\":\"a\",\"start\":22.196,\"end\":22.216},{\"text\":\"hidden\",\"start\":22.297,\"end\":22.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":22.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"meadow where animals danced.\",\"words\":[{\"text\":\"meadow\",\"start\":22.682,\"end\":22.946},{\"text\":\"where\",\"start\":23.209,\"end\":23.372},{\"text\":\"animals\",\"start\":23.473,\"end\":23.878},{\"text\":\"danced.\",\"start\":23.878,\"end\":24.0}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":24.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":25.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"But dawn approached and the\",\"words\":[{\"text\":\"But\",\"start\":25.662,\"end\":25.784},{\"text\":\"dawn\",\"start\":25.885,\"end\":26.128},{\"text\":\"approached\",\"start\":26.189,\"end\":26.696},{\"text\":\"and\",\"start\":26.716,\"end\":26.797},{\"text\":\"the\",\"start\":26.818,\"end\":26.878}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":27.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"lantern dimmed.\",\"words\":[{\"text\":\"lantern\",\"start\":27.081,\"end\":27.486},{\"text\":\"dimmed.\",\"start\":27.608,\"end\":28.014}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":28.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Finn hurried back, carrying the light\",\"words\":[{\"text\":\"Finn\",\"start\":28.52,\"end\":28.662},{\"text\":\"hurried\",\"start\":28.764,\"end\":29.088},{\"text\":\"back,\",\"start\":29.149,\"end\":29.412},{\"text\":\"carrying\",\"start\":29.534,\"end\":29.736},{\"text\":\"the\",\"start\":29.736,\"end\":29.818},{\"text\":\"light\",\"start\":29.838,\"end\":30.0}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":30.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"in his paw.\",\"words\":[{\"text\":\"in\",\"start\":30.041,\"end\":30.081},{\"text\":\"his\",\"start\":30.122,\"end\":30.264},{\"text\":\"paw.\",\"start\":30.345,\"end\":31.054}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":31.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"From then on,\",\"words\":[{\"text\":\"From\",\"start\":32.209,\"end\":32.351},{\"text\":\"then\",\"start\":32.412,\"end\":32.574},{\"text\":\"on,\",\"start\":32.655,\"end\":32.777}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":33.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"he shared tales of the star\",\"words\":[{\"text\":\"he\",\"start\":33.081,\"end\":33.122},{\"text\":\"shared\",\"start\":33.223,\"end\":33.507},{\"text\":\"tales\",\"start\":33.547,\"end\":33.953},{\"text\":\"of\",\"start\":33.993,\"end\":34.074},{\"text\":\"the\",\"start\":34.095,\"end\":34.155},{\"text\":\"star\",\"start\":34.236,\"end\":34.48}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":34.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"bridge with his village friends.\",\"words\":[{\"text\":\"bridge\",\"start\":34.581,\"end\":34.824},{\"text\":\"with\",\"start\":34.885,\"end\":35.007},{\"text\":\"his\",\"start\":35.027,\"end\":35.149},{\"text\":\"village\",\"start\":35.209,\"end\":35.534},{\"text\":\"friends.\",\"start\":35.595,\"end\":35.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":36.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":37.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Inspiring them to dream beyond the trees.\",\"words\":[{\"text\":\"Inspiring\",\"start\":37.5,\"end\":37.682},{\"text\":\"them\",\"start\":37.682,\"end\":37.764},{\"text\":\"to\",\"start\":37.784,\"end\":37.824},{\"text\":\"dream\",\"start\":37.824,\"end\":38.027},{\"text\":\"beyond\",\"start\":38.047,\"end\":38.169},{\"text\":\"the\",\"start\":38.169,\"end\":38.23},{\"text\":\"trees.\",\"start\":38.291,\"end\":38.736}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":39.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"And though the lantern vanished\",\"words\":[{\"text\":\"And\",\"start\":39.223,\"end\":39.324},{\"text\":\"though\",\"start\":39.345,\"end\":39.507},{\"text\":\"the\",\"start\":39.527,\"end\":39.608},{\"text\":\"lantern\",\"start\":39.669,\"end\":40.014},{\"text\":\"vanished\",\"start\":40.115,\"end\":40.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":40.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\", its magic lived on.\",\"words\":[{\"text\":\",\",\"start\":40.5,\"end\":40.865},{\"text\":\"its\",\"start\":40.865,\"end\":40.986},{\"text\":\"magic\",\"start\":41.088,\"end\":41.453},{\"text\":\"lived\",\"start\":41.595,\"end\":41.818},{\"text\":\"on.\",\"start\":41.899,\"end\":41.959}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":42.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":43.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"In every storyteller's voice.\",\"words\":[{\"text\":\"In\",\"start\":43.52,\"end\":43.561},{\"text\":\"every\",\"start\":43.561,\"end\":43.784},{\"text\":\"storyteller's\",\"start\":43.926,\"end\":44.716},{\"text\":\"voice.\",\"start\":44.757,\"end\":44.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":45.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Once upon a time in a quiet village, a curious fox named Finn discovered a glowing lantern hidden in the woods. Every night it whispered secrets of faraway lands. Finn followed its light through twisting paths until he reached a sparkling river. There, the lantern revealed a bridge made of stars. Crossing it, he found a hidden meadow where animals danced under moonlight. But dawn approached and the lantern dimmed. Finn hurried back carrying its fading glow in his heart. From then on, he shared tales of the star bridge with his village friends, inspiring them to dream beyond the trees. And though the lantern vanished, its magic lived on in every storyteller's voice.\",\"words\":[{\"text\":\"Once\",\"start\":0.84,\"end\":1.04},{\"text\":\"upon\",\"start\":1.06,\"end\":1.28},{\"text\":\"a\",\"start\":1.32,\"end\":1.34},{\"text\":\"time\",\"start\":1.4,\"end\":1.78},{\"text\":\"in\",\"start\":1.9,\"end\":1.96},{\"text\":\"a\",\"start\":1.98,\"end\":2.0},{\"text\":\"quiet\",\"start\":2.08,\"end\":2.501},{\"text\":\"village,\",\"start\":2.581,\"end\":2.981},{\"text\":\"a\",\"start\":3.321,\"end\":3.341},{\"text\":\"curious\",\"start\":3.421,\"end\":3.921},{\"text\":\"fox\",\"start\":4.041,\"end\":4.301},{\"text\":\"named\",\"start\":4.441,\"end\":4.701},{\"text\":\"Finn\",\"start\":4.821,\"end\":5.061},{\"text\":\"discovered\",\"start\":5.421,\"end\":5.881},{\"text\":\"a\",\"start\":5.901,\"end\":5.921},{\"text\":\"glowing\",\"start\":6.001,\"end\":6.381},{\"text\":\"lantern\",\"start\":6.461,\"end\":6.921},{\"text\":\"hidden\",\"start\":7.061,\"end\":7.321},{\"text\":\"in\",\"start\":7.422,\"end\":7.482},{\"text\":\"the\",\"start\":7.522,\"end\":7.622},{\"text\":\"woods.\",\"start\":7.682,\"end\":8.022},{\"text\":\"Every\",\"start\":8.582,\"end\":8.822},{\"text\":\"night\",\"start\":8.902,\"end\":9.162},{\"text\":\"it\",\"start\":9.262,\"end\":9.342},{\"text\":\"whispered\",\"start\":9.442,\"end\":9.822},{\"text\":\"secrets\",\"start\":9.942,\"end\":10.402},{\"text\":\"of\",\"start\":10.482,\"end\":10.562},{\"text\":\"faraway\",\"start\":10.682,\"end\":11.182},{\"text\":\"lands.\",\"start\":11.282,\"end\":11.762},{\"text\":\"Finn\",\"start\":12.283,\"end\":12.463},{\"text\":\"followed\",\"start\":12.643,\"end\":12.963},{\"text\":\"its\",\"start\":13.003,\"end\":13.103},{\"text\":\"light\",\"start\":13.203,\"end\":13.463},{\"text\":\"through\",\"start\":13.583,\"end\":13.783},{\"text\":\"twisting\",\"start\":13.823,\"end\":14.283},{\"text\":\"paths\",\"start\":14.343,\"end\":14.763},{\"text\":\"until\",\"start\":15.043,\"end\":15.303},{\"text\":\"he\",\"start\":15.343,\"end\":15.403},{\"text\":\"reached\",\"start\":15.523,\"end\":15.823},{\"text\":\"a\",\"start\":15.863,\"end\":15.883},{\"text\":\"sparkling\",\"start\":16.003,\"end\":16.563},{\"text\":\"river.\",\"start\":16.643,\"end\":16.903},{\"text\":\"There,\",\"start\":17.464,\"end\":17.744},{\"text\":\"the\",\"start\":18.044,\"end\":18.124},{\"text\":\"lantern\",\"start\":18.184,\"end\":18.564},{\"text\":\"revealed\",\"start\":18.644,\"end\":19.064},{\"text\":\"a\",\"start\":19.124,\"end\":19.144},{\"text\":\"bridge\",\"start\":19.224,\"end\":19.604},{\"text\":\"made\",\"start\":19.684,\"end\":19.904},{\"text\":\"of\",\"start\":19.924,\"end\":19.984},{\"text\":\"stars.\",\"start\":20.084,\"end\":20.604},{\"text\":\"Crossing\",\"start\":20.984,\"end\":21.364},{\"text\":\"it,\",\"start\":21.424,\"end\":21.544},{\"text\":\"he\",\"start\":21.804,\"end\":21.864},{\"text\":\"found\",\"start\":21.944,\"end\":22.165},{\"text\":\"a\",\"start\":22.205,\"end\":22.225},{\"text\":\"hidden\",\"start\":22.305,\"end\":22.585},{\"text\":\"meadow\",\"start\":22.665,\"end\":22.945},{\"text\":\"where\",\"start\":23.185,\"end\":23.345},{\"text\":\"animals\",\"start\":23.465,\"end\":23.865},{\"text\":\"danced\",\"start\":23.965,\"end\":24.365},{\"text\":\"under\",\"start\":24.465,\"end\":24.665},{\"text\":\"moonlight.\",\"start\":24.725,\"end\":25.245},{\"text\":\"But\",\"start\":25.665,\"end\":25.785},{\"text\":\"dawn\",\"start\":25.885,\"end\":26.145},{\"text\":\"approached\",\"start\":26.185,\"end\":26.685},{\"text\":\"and\",\"start\":26.845,\"end\":26.946},{\"text\":\"the\",\"start\":26.946,\"end\":27.026},{\"text\":\"lantern\",\"start\":27.086,\"end\":27.466},{\"text\":\"dimmed.\",\"start\":27.626,\"end\":28.006},{\"text\":\"Finn\",\"start\":28.466,\"end\":28.666},{\"text\":\"hurried\",\"start\":28.766,\"end\":29.106},{\"text\":\"back\",\"start\":29.146,\"end\":29.386},{\"text\":\"carrying\",\"start\":29.706,\"end\":30.106},{\"text\":\"its\",\"start\":30.166,\"end\":30.266},{\"text\":\"fading\",\"start\":30.366,\"end\":30.726},{\"text\":\"glow\",\"start\":30.786,\"end\":31.026},{\"text\":\"in\",\"start\":31.186,\"end\":31.246},{\"text\":\"his\",\"start\":31.286,\"end\":31.426},{\"text\":\"heart.\",\"start\":31.486,\"end\":31.787},{\"text\":\"From\",\"start\":32.207,\"end\":32.347},{\"text\":\"then\",\"start\":32.407,\"end\":32.567},{\"text\":\"on,\",\"start\":32.627,\"end\":32.727},{\"text\":\"he\",\"start\":33.047,\"end\":33.127},{\"text\":\"shared\",\"start\":33.207,\"end\":33.507},{\"text\":\"tales\",\"start\":33.567,\"end\":33.947},{\"text\":\"of\",\"start\":33.987,\"end\":34.047},{\"text\":\"the\",\"start\":34.087,\"end\":34.147},{\"text\":\"star\",\"start\":34.227,\"end\":34.487},{\"text\":\"bridge\",\"start\":34.547,\"end\":34.847},{\"text\":\"with\",\"start\":34.887,\"end\":35.007},{\"text\":\"his\",\"start\":35.027,\"end\":35.147},{\"text\":\"village\",\"start\":35.207,\"end\":35.527},{\"text\":\"friends,\",\"start\":35.587,\"end\":36.007},{\"text\":\"inspiring\",\"start\":36.347,\"end\":36.968},{\"text\":\"them\",\"start\":36.988,\"end\":37.128},{\"text\":\"to\",\"start\":37.208,\"end\":37.288},{\"text\":\"dream\",\"start\":37.348,\"end\":37.668},{\"text\":\"beyond\",\"start\":37.748,\"end\":38.088},{\"text\":\"the\",\"start\":38.168,\"end\":38.248},{\"text\":\"trees.\",\"start\":38.288,\"end\":38.748},{\"text\":\"And\",\"start\":39.228,\"end\":39.308},{\"text\":\"though\",\"start\":39.348,\"end\":39.528},{\"text\":\"the\",\"start\":39.548,\"end\":39.608},{\"text\":\"lantern\",\"start\":39.668,\"end\":40.008},{\"text\":\"vanished,\",\"start\":40.108,\"end\":40.588},{\"text\":\"its\",\"start\":40.888,\"end\":40.988},{\"text\":\"magic\",\"start\":41.088,\"end\":41.448},{\"text\":\"lived\",\"start\":41.589,\"end\":41.809},{\"text\":\"on\",\"start\":41.929,\"end\":42.049},{\"text\":\"in\",\"start\":42.189,\"end\":42.249},{\"text\":\"every\",\"start\":42.429,\"end\":42.689},{\"text\":\"storyteller's\",\"start\":42.789,\"end\":43.509},{\"text\":\"voice.\",\"start\":43.589,\"end\":43.989}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":45.509,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":45.509}"
+    ],
+    "text": "Once upon a time in a quiet village, a curious fox named Finn discovered a glowing lantern hidden in the woods. Every night it whispered secrets of faraway lands. Finn followed its light through twisting paths until he reached a sparkling river. There, the lantern revealed a bridge made of stars. Crossing it, he found a hidden meadow where animals danced under moonlight. But dawn approached and the lantern dimmed. Finn hurried back carrying its fading glow in his heart. From then on, he shared tales of the star bridge with his village friends, inspiring them to dream beyond the trees. And though the lantern vanished, its magic lived on in every storyteller's voice.",
+    "words": [
+      {
+        "text": "Once",
+        "start": 0.84,
+        "end": 1.04
+      },
+      {
+        "text": "upon",
+        "start": 1.06,
+        "end": 1.28
+      },
+      {
+        "text": "a",
+        "start": 1.32,
+        "end": 1.34
+      },
+      {
+        "text": "time",
+        "start": 1.4,
+        "end": 1.78
+      },
+      {
+        "text": "in",
+        "start": 1.9,
+        "end": 1.96
+      },
+      {
+        "text": "a",
+        "start": 1.98,
+        "end": 2
+      },
+      {
+        "text": "quiet",
+        "start": 2.08,
+        "end": 2.501
+      },
+      {
+        "text": "village,",
+        "start": 2.581,
+        "end": 2.981
+      },
+      {
+        "text": "a",
+        "start": 3.321,
+        "end": 3.341
+      },
+      {
+        "text": "curious",
+        "start": 3.421,
+        "end": 3.921
+      },
+      {
+        "text": "fox",
+        "start": 4.041,
+        "end": 4.301
+      },
+      {
+        "text": "named",
+        "start": 4.441,
+        "end": 4.701
+      },
+      {
+        "text": "Finn",
+        "start": 4.821,
+        "end": 5.061
+      },
+      {
+        "text": "discovered",
+        "start": 5.421,
+        "end": 5.881
+      },
+      {
+        "text": "a",
+        "start": 5.901,
+        "end": 5.921
+      },
+      {
+        "text": "glowing",
+        "start": 6.001,
+        "end": 6.381
+      },
+      {
+        "text": "lantern",
+        "start": 6.461,
+        "end": 6.921
+      },
+      {
+        "text": "hidden",
+        "start": 7.061,
+        "end": 7.321
+      },
+      {
+        "text": "in",
+        "start": 7.422,
+        "end": 7.482
+      },
+      {
+        "text": "the",
+        "start": 7.522,
+        "end": 7.622
+      },
+      {
+        "text": "woods.",
+        "start": 7.682,
+        "end": 8.022
+      },
+      {
+        "text": "Every",
+        "start": 8.582,
+        "end": 8.822
+      },
+      {
+        "text": "night",
+        "start": 8.902,
+        "end": 9.162
+      },
+      {
+        "text": "it",
+        "start": 9.262,
+        "end": 9.342
+      },
+      {
+        "text": "whispered",
+        "start": 9.442,
+        "end": 9.822
+      },
+      {
+        "text": "secrets",
+        "start": 9.942,
+        "end": 10.402
+      },
+      {
+        "text": "of",
+        "start": 10.482,
+        "end": 10.562
+      },
+      {
+        "text": "faraway",
+        "start": 10.682,
+        "end": 11.182
+      },
+      {
+        "text": "lands.",
+        "start": 11.282,
+        "end": 11.762
+      },
+      {
+        "text": "Finn",
+        "start": 12.283,
+        "end": 12.463
+      },
+      {
+        "text": "followed",
+        "start": 12.643,
+        "end": 12.963
+      },
+      {
+        "text": "its",
+        "start": 13.003,
+        "end": 13.103
+      },
+      {
+        "text": "light",
+        "start": 13.203,
+        "end": 13.463
+      },
+      {
+        "text": "through",
+        "start": 13.583,
+        "end": 13.783
+      },
+      {
+        "text": "twisting",
+        "start": 13.823,
+        "end": 14.283
+      },
+      {
+        "text": "paths",
+        "start": 14.343,
+        "end": 14.763
+      },
+      {
+        "text": "until",
+        "start": 15.043,
+        "end": 15.303
+      },
+      {
+        "text": "he",
+        "start": 15.343,
+        "end": 15.403
+      },
+      {
+        "text": "reached",
+        "start": 15.523,
+        "end": 15.823
+      },
+      {
+        "text": "a",
+        "start": 15.863,
+        "end": 15.883
+      },
+      {
+        "text": "sparkling",
+        "start": 16.003,
+        "end": 16.563
+      },
+      {
+        "text": "river.",
+        "start": 16.643,
+        "end": 16.903
+      },
+      {
+        "text": "There,",
+        "start": 17.464,
+        "end": 17.744
+      },
+      {
+        "text": "the",
+        "start": 18.044,
+        "end": 18.124
+      },
+      {
+        "text": "lantern",
+        "start": 18.184,
+        "end": 18.564
+      },
+      {
+        "text": "revealed",
+        "start": 18.644,
+        "end": 19.064
+      },
+      {
+        "text": "a",
+        "start": 19.124,
+        "end": 19.144
+      },
+      {
+        "text": "bridge",
+        "start": 19.224,
+        "end": 19.604
+      },
+      {
+        "text": "made",
+        "start": 19.684,
+        "end": 19.904
+      },
+      {
+        "text": "of",
+        "start": 19.924,
+        "end": 19.984
+      },
+      {
+        "text": "stars.",
+        "start": 20.084,
+        "end": 20.604
+      },
+      {
+        "text": "Crossing",
+        "start": 20.984,
+        "end": 21.364
+      },
+      {
+        "text": "it,",
+        "start": 21.424,
+        "end": 21.544
+      },
+      {
+        "text": "he",
+        "start": 21.804,
+        "end": 21.864
+      },
+      {
+        "text": "found",
+        "start": 21.944,
+        "end": 22.165
+      },
+      {
+        "text": "a",
+        "start": 22.205,
+        "end": 22.225
+      },
+      {
+        "text": "hidden",
+        "start": 22.305,
+        "end": 22.585
+      },
+      {
+        "text": "meadow",
+        "start": 22.665,
+        "end": 22.945
+      },
+      {
+        "text": "where",
+        "start": 23.185,
+        "end": 23.345
+      },
+      {
+        "text": "animals",
+        "start": 23.465,
+        "end": 23.865
+      },
+      {
+        "text": "danced",
+        "start": 23.965,
+        "end": 24.365
+      },
+      {
+        "text": "under",
+        "start": 24.465,
+        "end": 24.665
+      },
+      {
+        "text": "moonlight.",
+        "start": 24.725,
+        "end": 25.245
+      },
+      {
+        "text": "But",
+        "start": 25.665,
+        "end": 25.785
+      },
+      {
+        "text": "dawn",
+        "start": 25.885,
+        "end": 26.145
+      },
+      {
+        "text": "approached",
+        "start": 26.185,
+        "end": 26.685
+      },
+      {
+        "text": "and",
+        "start": 26.845,
+        "end": 26.946
+      },
+      {
+        "text": "the",
+        "start": 26.946,
+        "end": 27.026
+      },
+      {
+        "text": "lantern",
+        "start": 27.086,
+        "end": 27.466
+      },
+      {
+        "text": "dimmed.",
+        "start": 27.626,
+        "end": 28.006
+      },
+      {
+        "text": "Finn",
+        "start": 28.466,
+        "end": 28.666
+      },
+      {
+        "text": "hurried",
+        "start": 28.766,
+        "end": 29.106
+      },
+      {
+        "text": "back",
+        "start": 29.146,
+        "end": 29.386
+      },
+      {
+        "text": "carrying",
+        "start": 29.706,
+        "end": 30.106
+      },
+      {
+        "text": "its",
+        "start": 30.166,
+        "end": 30.266
+      },
+      {
+        "text": "fading",
+        "start": 30.366,
+        "end": 30.726
+      },
+      {
+        "text": "glow",
+        "start": 30.786,
+        "end": 31.026
+      },
+      {
+        "text": "in",
+        "start": 31.186,
+        "end": 31.246
+      },
+      {
+        "text": "his",
+        "start": 31.286,
+        "end": 31.426
+      },
+      {
+        "text": "heart.",
+        "start": 31.486,
+        "end": 31.787
+      },
+      {
+        "text": "From",
+        "start": 32.207,
+        "end": 32.347
+      },
+      {
+        "text": "then",
+        "start": 32.407,
+        "end": 32.567
+      },
+      {
+        "text": "on,",
+        "start": 32.627,
+        "end": 32.727
+      },
+      {
+        "text": "he",
+        "start": 33.047,
+        "end": 33.127
+      },
+      {
+        "text": "shared",
+        "start": 33.207,
+        "end": 33.507
+      },
+      {
+        "text": "tales",
+        "start": 33.567,
+        "end": 33.947
+      },
+      {
+        "text": "of",
+        "start": 33.987,
+        "end": 34.047
+      },
+      {
+        "text": "the",
+        "start": 34.087,
+        "end": 34.147
+      },
+      {
+        "text": "star",
+        "start": 34.227,
+        "end": 34.487
+      },
+      {
+        "text": "bridge",
+        "start": 34.547,
+        "end": 34.847
+      },
+      {
+        "text": "with",
+        "start": 34.887,
+        "end": 35.007
+      },
+      {
+        "text": "his",
+        "start": 35.027,
+        "end": 35.147
+      },
+      {
+        "text": "village",
+        "start": 35.207,
+        "end": 35.527
+      },
+      {
+        "text": "friends,",
+        "start": 35.587,
+        "end": 36.007
+      },
+      {
+        "text": "inspiring",
+        "start": 36.347,
+        "end": 36.968
+      },
+      {
+        "text": "them",
+        "start": 36.988,
+        "end": 37.128
+      },
+      {
+        "text": "to",
+        "start": 37.208,
+        "end": 37.288
+      },
+      {
+        "text": "dream",
+        "start": 37.348,
+        "end": 37.668
+      },
+      {
+        "text": "beyond",
+        "start": 37.748,
+        "end": 38.088
+      },
+      {
+        "text": "the",
+        "start": 38.168,
+        "end": 38.248
+      },
+      {
+        "text": "trees.",
+        "start": 38.288,
+        "end": 38.748
+      },
+      {
+        "text": "And",
+        "start": 39.228,
+        "end": 39.308
+      },
+      {
+        "text": "though",
+        "start": 39.348,
+        "end": 39.528
+      },
+      {
+        "text": "the",
+        "start": 39.548,
+        "end": 39.608
+      },
+      {
+        "text": "lantern",
+        "start": 39.668,
+        "end": 40.008
+      },
+      {
+        "text": "vanished,",
+        "start": 40.108,
+        "end": 40.588
+      },
+      {
+        "text": "its",
+        "start": 40.888,
+        "end": 40.988
+      },
+      {
+        "text": "magic",
+        "start": 41.088,
+        "end": 41.448
+      },
+      {
+        "text": "lived",
+        "start": 41.589,
+        "end": 41.809
+      },
+      {
+        "text": "on",
+        "start": 41.929,
+        "end": 42.049
+      },
+      {
+        "text": "in",
+        "start": 42.189,
+        "end": 42.249
+      },
+      {
+        "text": "every",
+        "start": 42.429,
+        "end": 42.689
+      },
+      {
+        "text": "storyteller's",
+        "start": 42.789,
+        "end": 43.509
+      },
+      {
+        "text": "voice.",
+        "start": 43.589,
+        "end": 43.989
+      }
+    ]
+  },
+  "providerOutputTranscript": "Once upon a time in a quiet village, a curious fox named Finn discovered a glowing lantern hidden in the woods. Every night it whispered secrets of faraway lands. Finn followed its light through twisting paths until he reached a sparkling river. There, the lantern revealed a bridge made of stars. Crossing it, he found a hidden meadow where animals danced under moonlight. But dawn approached, and the lantern dimmed. Finn hurried back, carrying its fading glow in his heart. From then on, he shared tales of the star bridge with his village friends, inspiring them to dream beyond the trees. And though the lantern vanished, its magic lived on in every storyteller's voice.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 90,
+      "clippedSampleCount": 0,
+      "maximumRms": 70.34742651061705,
+      "p50Rms": 7.804112163895818,
+      "p95Rms": 20.78378274039642,
+      "p99Rms": 30.7623450829094,
+      "sampleCount": 2184448,
+      "windowCount": 2276,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 22.047238583701734
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

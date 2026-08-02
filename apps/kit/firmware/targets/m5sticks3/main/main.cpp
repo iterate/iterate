@@ -116,6 +116,13 @@ constexpr std::size_t eventCapacity = 8U;
  */
 constexpr std::size_t eventNotificationCapacity = 8U;
 /*
+ * The deployed PCM owner and one independent diagnostic runner may observe
+ * button/call state concurrently. These slots share the eight-entry history;
+ * the second observer costs only a cursor/callback record and cannot replace
+ * the production callback.
+ */
+constexpr std::size_t eventSubscriptionCapacity = 2U;
+/*
  * Control traffic is asymmetric in ownership, but both directions need one
  * measured burst of reserve. The outbox needs eight because the shared
  * admission budget permits two callback calls, each emitting push plus pull,
@@ -305,6 +312,8 @@ struct Runtime {
   iterate_kit_device_event eventStorage[eventCapacity]{};
   iterate_kit_device_event_notification
       eventNotifications[eventNotificationCapacity]{};
+  iterate_kit_device_event_subscription
+      eventSubscriptions[eventSubscriptionCapacity]{};
   /*
    * Control rings cross application, ESP callback, and network task boundaries
    * with one producer/consumer each. Fixed length arrays remain inline, while
@@ -1225,6 +1234,8 @@ bool initialiseDevice(Runtime &state) {
       &state.connection.session,
       state.eventNotifications,
       eventNotificationCapacity,
+      state.eventSubscriptions,
+      eventSubscriptionCapacity,
       nullptr,
       ITERATE_KIT_AUDIO_PUSH_TO_TALK,
     },

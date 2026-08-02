@@ -54,6 +54,7 @@ constexpr std::size_t subscription_capacity = 2U;
 constexpr std::size_t screen_url_capacity = 64U;
 constexpr std::size_t m5sticks3_event_capacity = 8U;
 constexpr std::size_t m5sticks3_event_notification_capacity = 8U;
+constexpr std::size_t m5sticks3_event_subscription_capacity = 2U;
 
 /*
  * These empty seams deliberately model only portable template-owned metadata.
@@ -470,7 +471,9 @@ int main() {
       m5sticks3_platform_bytes +
       m5sticks3_event_capacity * sizeof(iterate_kit_device_event) +
       m5sticks3_event_notification_capacity *
-          sizeof(iterate_kit_device_event_notification);
+          sizeof(iterate_kit_device_event_notification) +
+      m5sticks3_event_subscription_capacity *
+          sizeof(iterate_kit_device_event_subscription);
 
   constexpr std::size_t m5sticks3_direct_backend_host_abi_bytes =
       sizeof(ProfileDirectBackend);
@@ -586,6 +589,9 @@ int main() {
       << ",\"m5sticks3EventNotificationStorageBytes\":"
       << m5sticks3_event_notification_capacity *
              sizeof(iterate_kit_device_event_notification)
+      << ",\"m5sticks3EventSubscriptionStorageBytes\":"
+      << m5sticks3_event_subscription_capacity *
+             sizeof(iterate_kit_device_event_subscription)
       << ",\"m5sticks3CallbackBudgetBytes\":"
       << sizeof(iterate_kit_callback_budget)
       << ",\"metricSubscriptionBytes\":" << sizeof(subscriptions[0])

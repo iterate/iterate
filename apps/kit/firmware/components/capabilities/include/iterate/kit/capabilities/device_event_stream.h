@@ -37,6 +37,32 @@ struct iterate_kit_device_event_notification {
   bool snapshot;
 };
 
+struct iterate_kit_device_event_stream;
+
+/**
+ * One caller-owned observer of the shared ordered event history.
+ *
+ * The payload ring is shared because a button edge has one truth regardless
+ * of how many observers consume it. Each subscriber needs only a cursor and
+ * callback lifecycle state. This avoids copying eight event objects per
+ * diagnostic observer while ensuring that a test harness can never evict the
+ * production `/pcm` owner. A slow observer resynchronizes from a snapshot
+ * after the shared history overtakes its cursor; it cannot hold back another
+ * observer or accumulate an unbounded private backlog.
+ */
+struct iterate_kit_device_event_subscription {
+  struct iterate_kit_device_event_stream *owner;
+  struct capnweb_remote_capability callback;
+  int64_t next_sequence;
+  uint32_t coalesced_notifications;
+  bool occupied;
+  bool call_in_flight;
+  bool callback_budget_reserved;
+  bool release_pending;
+  bool snapshot_pending;
+  bool sequence_limit_delivered;
+};
+
 struct iterate_kit_device_event_stream_options {
   /*
    * The stream and storage are owned by the same cooperative task as the
@@ -47,6 +73,14 @@ struct iterate_kit_device_event_stream_options {
   struct capnweb_session *session;
   struct iterate_kit_device_event_notification *storage;
   size_t capacity;
+  /*
+   * Subscriber slots are explicit profile RAM. Two slots are sufficient for
+   * the production userspace owner plus one independent diagnostic harness;
+   * a board may choose another finite count and receives a visible RPC error
+   * when it is exhausted.
+   */
+  struct iterate_kit_device_event_subscription *subscriptions;
+  size_t subscription_count;
   struct iterate_kit_callback_budget *callback_budget;
   /*
    * Selects the state represented by the first subscription snapshot. A PTT
@@ -57,34 +91,26 @@ struct iterate_kit_device_event_stream_options {
 };
 
 /**
- * A single-owner bounded `subscribeToEvents(callback)` capability.
+ * A bounded multi-observer `subscribeToEvents(callback)` capability.
  *
- * One subscriber is intentional for the MVP: the userspace worker is the
- * device's sole lifecycle owner and can fan events out to streams elsewhere.
- * A second on-device fanout would consume Cap'n Web calls and control-ring RAM
- * on the audio-critical board. A new callback replaces an idle callback on the
- * same control session because `/pcm` Worker generations can turn over without
- * reconnecting that session; an in-flight callback cannot be replaced until
- * its completion makes ownership unambiguous. Every accepted owner gets a
- * current-state snapshot. Deliveries never overlap. If the callback is slow,
- * accepted state changes occupy caller-provided storage; when it is exhausted,
- * the newest state replaces the newest queued notification and its
- * sequence/counter make that loss explicit to userspace.
+ * Subscribers share one fixed recent-event ring but advance independently.
+ * Every accepted observer first receives a current-state snapshot. Deliveries
+ * never overlap for one callback, and poll emits at most one callback across
+ * the whole module so diagnostic fanout cannot create an unreviewed control
+ * burst. If a slow observer falls behind the shared ring, only that observer
+ * receives a new snapshot with an incremented coalescing counter. Fast
+ * observers retain exact ordering and are never disconnected or delayed by
+ * the slow one.
  */
 struct iterate_kit_device_event_stream {
   struct iterate_kit_device_event_stream_options options;
-  struct capnweb_remote_capability callback;
   struct iterate_kit_poll_result pending_result;
   int64_t sequence;
-  uint32_t coalesced_notifications;
   size_t queue_head;
   size_t queue_count;
+  size_t next_poll_index;
   bool conversation_active;
   bool current_active;
-  bool occupied;
-  bool call_in_flight;
-  bool callback_budget_reserved;
-  bool release_pending;
   bool initialized;
 };
 

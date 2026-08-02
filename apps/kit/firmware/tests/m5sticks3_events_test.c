@@ -27,6 +27,7 @@ enum {
   CALL_CAPACITY = 8,
   OUTPUT_CAPACITY = 64,
   EVENT_CAPACITY = 4,
+  EVENT_SUBSCRIPTION_CAPACITY = 2,
   OBSERVED_CAPACITY = 8,
   CAPTURE_CAPACITY = 32,
   MESSAGE_CAPACITY = 1024,
@@ -48,6 +49,8 @@ struct fixture {
   struct iterate_kit_device_event event_storage[EVENT_CAPACITY];
   struct iterate_kit_device_event_notification
       event_notifications[EVENT_CAPACITY];
+  struct iterate_kit_device_event_subscription
+      event_subscriptions[EVENT_SUBSCRIPTION_CAPACITY];
   struct iterate_kit_device_event observed[OBSERVED_CAPACITY];
   enum iterate_kit_status observed_results[OBSERVED_CAPACITY];
   size_t observed_count;
@@ -260,6 +263,8 @@ static void fixture_init(struct fixture *fixture) {
       .session = &fixture->session,
       .storage = fixture->event_notifications,
       .capacity = EVENT_CAPACITY,
+      .subscriptions = fixture->event_subscriptions,
+      .subscription_count = EVENT_SUBSCRIPTION_CAPACITY,
       .callback_budget = NULL,
       .audio_mode = ITERATE_KIT_AUDIO_PUSH_TO_TALK,
     },
@@ -340,21 +345,19 @@ static void changes_only_the_two_public_screen_colours(void) {
 }
 
 /*
- * A userspace `/pcm` generation owns the device-event callback that gives
- * microphone frames their push-to-talk meaning. The prior Worker generation
- * can disappear without closing the separate long-lived device control
- * socket, so waiting only for Cap'n Web session teardown leaves its idle
- * callback in the one-subscriber slot. Production then rejected every
- * reconnect with HTTP 503 while the physical button was already held.
+ * `subscribeToEvents` is a public device capability, so a diagnostic harness
+ * and the production `/pcm` owner can legitimately observe it at the same
+ * time. Replacing the first callback merely because the second subscriber
+ * arrived is not a harmless ownership handoff: a short-lived CLI inspection
+ * then leaves the deployed Worker claiming `eventReady=true` while every
+ * subsequent top/front-button edge is delivered to nobody.
  *
- * A fresh subscription is therefore replacement of the one logical userspace
- * owner, not fanout. This test deliberately leaves the first callback idle,
- * replaces it on the same control session, and proves the old import is
- * released before only the new callback receives a current-state snapshot.
- * Replacing an in-flight callback remains forbidden because its completion
- * still points at this stream and could otherwise mutate the new owner.
+ * Keep this at the native protocol seam. A TypeScript fake with two callback
+ * arrays cannot expose a C peer that emits `["release",-1,1]` behind the
+ * Worker's back. Both imports must survive and receive independent snapshots;
+ * later tests exercise bounded exhaustion and callback completion.
  */
-static void fresh_subscription_replaces_idle_pcm_generation(void) {
+static void independent_subscriber_cannot_disconnect_pcm_owner(void) {
   struct fixture fixture;
   size_t captured_before_delivery;
   fixture_init(&fixture);
@@ -374,8 +377,8 @@ static void fresh_subscription_replaces_idle_pcm_generation(void) {
       "[\"push\",[\"pipeline\",0,[\"subscribeToEvents\"],"
       "[[\"export\",-1]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(fixture.device.event_stream.occupied);
-  assert(fixture.device.event_stream.callback.id == -1);
+  assert(fixture.event_subscriptions[0].occupied);
+  assert(fixture.event_subscriptions[0].callback.id == -1);
   assert(fixture.device.event_stream.queue_count == 1U);
 
   receive(
@@ -384,12 +387,9 @@ static void fresh_subscription_replaces_idle_pcm_generation(void) {
       "[[\"export\",-2]]]]");
   receive(&fixture, "[\"pull\",2]");
 
-  assert(fixture.device.event_stream.occupied);
-  assert(fixture.device.event_stream.callback.id == -2);
-  assert(fixture.device.event_stream.queue_count == 1U);
-  assert(fixture.captured_count == 3U);
-  assert(strcmp(fixture.captured[1], "[\"release\",-1,1]") == 0);
-  assert(strcmp(fixture.captured[2], "[\"resolve\",2,null]") == 0);
+  assert(fixture.captured_count == 2U);
+  assert(strcmp(fixture.captured[0], "[\"resolve\",1,null]") == 0);
+  assert(strcmp(fixture.captured[1], "[\"resolve\",2,null]") == 0);
 
   captured_before_delivery = fixture.captured_count;
   assert(
@@ -399,7 +399,7 @@ static void fresh_subscription_replaces_idle_pcm_generation(void) {
   assert(
       strstr(
           fixture.captured[captured_before_delivery],
-          "[\"pipeline\",-2,[]") != NULL);
+          "[\"pipeline\",-1,[]") != NULL);
   assert(
       strstr(
           fixture.captured[captured_before_delivery],
@@ -417,9 +417,49 @@ static void fresh_subscription_replaces_idle_pcm_generation(void) {
           fixture.captured[captured_before_delivery],
           "\"conversationActive\":true") != NULL);
   assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 2U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.captured_count == captured_before_delivery + 4U);
+  assert(
+      strstr(
+          fixture.captured[captured_before_delivery + 2U],
+          "[\"pipeline\",-2,[]") != NULL);
+
+  receive(&fixture, "[\"release\",1,1]");
+  receive(&fixture, "[\"resolve\",1,null]");
+  receive(&fixture, "[\"release\",2,1]");
+  receive(&fixture, "[\"resolve\",2,null]");
+  captured_before_delivery = fixture.captured_count;
+
+  assert(
+      iterate_kit_m5sticks3_publish_push_to_talk(
+          &fixture.device,
+          true,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL) ==
+      ITERATE_KIT_OK);
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 3U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(
+      iterate_kit_m5sticks3_poll(&fixture.device, 4U).status ==
+      ITERATE_KIT_POLL_OK);
+  assert(fixture.captured_count == captured_before_delivery + 4U);
+  assert(
       strstr(
           fixture.captured[captured_before_delivery],
-          "[\"pipeline\",-1,[]") == NULL);
+          "[\"pipeline\",-1,[]") != NULL);
+  assert(
+      strstr(
+          fixture.captured[captured_before_delivery],
+          "\"type\":\"pushToTalk.started\"") != NULL);
+  assert(
+      strstr(
+          fixture.captured[captured_before_delivery + 2U],
+          "[\"pipeline\",-2,[]") != NULL);
+  assert(
+      strstr(
+          fixture.captured[captured_before_delivery + 2U],
+          "\"type\":\"pushToTalk.started\"") != NULL);
 
   capnweb_session_close(&fixture.session);
   iterate_kit_peer_session_ended(&fixture.device.peer);
@@ -429,16 +469,15 @@ static void fresh_subscription_replaces_idle_pcm_generation(void) {
 }
 
 /*
- * An event callback remains borrowed by Cap'n Web until its resolution
- * arrives. A reconnect racing that window must receive bounded backpressure,
- * not steal the slot: the old completion stores only a stream pointer and
- * would otherwise clear the replacement callback when it resolves. This
- * synthetic race protects the ownership half of the replacement policy while
- * the idle-replacement test above protects recovery.
+ * Fanout remains a finite device resource. Once the production and diagnostic
+ * slots are occupied, a third callback must be released and rejected without
+ * mutating either existing slot—even when one delivery is in flight. This is
+ * the bounded counterpart to the non-replacement test above: concurrency is
+ * useful only if exhaustion remains explicit and leak-free.
  */
-static void in_flight_event_callback_cannot_be_replaced(void) {
+static void full_subscriber_table_rejects_without_replacement(void) {
   struct fixture fixture;
-  size_t captured_before_replacement;
+  size_t captured_before_exhaustion;
   fixture_init(&fixture);
 
   receive(
@@ -449,26 +488,36 @@ static void in_flight_event_callback_cannot_be_replaced(void) {
   assert(
       iterate_kit_m5sticks3_poll(&fixture.device, 0U).status ==
       ITERATE_KIT_POLL_OK);
-  assert(fixture.device.event_stream.call_in_flight);
-  captured_before_replacement = fixture.captured_count;
+  assert(fixture.event_subscriptions[0].call_in_flight);
 
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",0,[\"subscribeToEvents\"],"
       "[[\"export\",-2]]]]");
   receive(&fixture, "[\"pull\",2]");
+  assert(fixture.event_subscriptions[1].occupied);
+  assert(fixture.event_subscriptions[1].callback.id == -2);
+  captured_before_exhaustion = fixture.captured_count;
 
-  assert(fixture.device.event_stream.occupied);
-  assert(fixture.device.event_stream.call_in_flight);
-  assert(fixture.device.event_stream.callback.id == -1);
-  assert(fixture.captured_count == captured_before_replacement + 2U);
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"subscribeToEvents\"],"
+      "[[\"export\",-3]]]]");
+  receive(&fixture, "[\"pull\",3]");
+
+  assert(fixture.event_subscriptions[0].occupied);
+  assert(fixture.event_subscriptions[0].call_in_flight);
+  assert(fixture.event_subscriptions[0].callback.id == -1);
+  assert(fixture.event_subscriptions[1].occupied);
+  assert(fixture.event_subscriptions[1].callback.id == -2);
+  assert(fixture.captured_count == captured_before_exhaustion + 2U);
   assert(
       strcmp(
-          fixture.captured[captured_before_replacement],
-          "[\"release\",-2,1]") == 0);
+          fixture.captured[captured_before_exhaustion],
+          "[\"release\",-3,1]") == 0);
   assert(
       strstr(
-          fixture.captured[captured_before_replacement + 1U],
+          fixture.captured[captured_before_exhaustion + 1U],
           "device event subscription limit reached") != NULL);
 
   capnweb_session_close(&fixture.session);
@@ -699,7 +748,7 @@ int main(void) {
   conversation_lifetime_contains_manual_push_to_talk_turns();
   remote_and_physical_conversation_controls_share_one_event_path();
   flattened_host_invocation_reaches_the_static_method_table();
-  fresh_subscription_replaces_idle_pcm_generation();
-  in_flight_event_callback_cannot_be_replaced();
+  independent_subscriber_cannot_disconnect_pcm_owner();
+  full_subscriber_table_rejects_without_replacement();
   return 0;
 }

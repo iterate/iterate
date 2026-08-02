@@ -1,0 +1,97 @@
+{
+  "assessment": {
+    "acceptance": "failed",
+    "boundaryWordOverage": 0,
+    "normalizedMicrophoneTranscript": "the screen is green and the zebra is awake",
+    "normalizedProviderTranscript": "the screen is green and the zebra is awake",
+    "passed": false,
+    "reasons": [
+      "The causal response contained 1 windows above the relative ambient threshold; expected at least 3 for provisional acceptance (the stricter follow-up gate remains 4)."
+    ],
+    "relativeActiveWindowDeficit": 3,
+    "responseToBaselineMaximumRmsRatio": 3.250038805401496
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": ["The causal response contained 0 active 20 ms windows; expected at least 4."]
+  },
+  "microphoneStt": {
+    "durationSeconds": 5.147,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"ff90c341-32b5-4d84-b0e2-4354c1222c57\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The screen\",\"words\":[{\"text\":\"The\",\"start\":1.196,\"end\":1.257},{\"text\":\"screen\",\"start\":1.338,\"end\":1.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"is green and the zebra\",\"words\":[{\"text\":\"is\",\"start\":1.784,\"end\":1.885},{\"text\":\"green\",\"start\":1.966,\"end\":2.331},{\"text\":\"and\",\"start\":2.514,\"end\":2.574},{\"text\":\"the\",\"start\":2.615,\"end\":2.676},{\"text\":\"zebra\",\"start\":2.757,\"end\":3.0}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"is awake.\",\"words\":[{\"text\":\"is\",\"start\":3.203,\"end\":3.284},{\"text\":\"awake.\",\"start\":3.345,\"end\":3.791}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The screen is green and the zebra is awake.\",\"words\":[{\"text\":\"The\",\"start\":1.202,\"end\":1.282},{\"text\":\"screen\",\"start\":1.342,\"end\":1.702},{\"text\":\"is\",\"start\":1.802,\"end\":1.882},{\"text\":\"green\",\"start\":1.963,\"end\":2.323},{\"text\":\"and\",\"start\":2.503,\"end\":2.583},{\"text\":\"the\",\"start\":2.603,\"end\":2.683},{\"text\":\"zebra\",\"start\":2.744,\"end\":3.084},{\"text\":\"is\",\"start\":3.204,\"end\":3.284},{\"text\":\"awake.\",\"start\":3.344,\"end\":3.785}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":5.147,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":5.147}"
+    ],
+    "text": "The screen is green and the zebra is awake.",
+    "words": [
+      {
+        "text": "The",
+        "start": 1.202,
+        "end": 1.282
+      },
+      {
+        "text": "screen",
+        "start": 1.342,
+        "end": 1.702
+      },
+      {
+        "text": "is",
+        "start": 1.802,
+        "end": 1.882
+      },
+      {
+        "text": "green",
+        "start": 1.963,
+        "end": 2.323
+      },
+      {
+        "text": "and",
+        "start": 2.503,
+        "end": 2.583
+      },
+      {
+        "text": "the",
+        "start": 2.603,
+        "end": 2.683
+      },
+      {
+        "text": "zebra",
+        "start": 2.744,
+        "end": 3.084
+      },
+      {
+        "text": "is",
+        "start": 3.204,
+        "end": 3.284
+      },
+      {
+        "text": "awake.",
+        "start": 3.344,
+        "end": 3.785
+      }
+    ]
+  },
+  "providerOutputTranscript": "The screen is green and the zebra is awake.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 1,
+      "clippedSampleCount": 0,
+      "maximumRms": 27.923630972111535,
+      "p50Rms": 6.698569499029873,
+      "p95Rms": 14.189711648467938,
+      "p99Rms": 17.112830225691287,
+      "sampleCount": 247040,
+      "windowCount": 258,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 21.479459664991577
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

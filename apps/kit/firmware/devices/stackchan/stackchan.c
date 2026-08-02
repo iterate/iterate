@@ -160,6 +160,9 @@ enum capnweb_status iterate_kit_stackchan_init(
         .session = options->metrics.session,
         .storage = device->event_notifications,
         .capacity = ITERATE_KIT_STACKCHAN_EVENT_NOTIFICATION_CAPACITY,
+        .subscriptions = device->event_subscriptions,
+        .subscription_count =
+            ITERATE_KIT_STACKCHAN_EVENT_SUBSCRIPTION_CAPACITY,
         .callback_budget = &device->callback_budget,
         .audio_mode = iterate_kit_stackchan_manifest.audio_mode,
       };

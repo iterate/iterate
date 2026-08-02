@@ -33,6 +33,7 @@ constexpr std::size_t subscriptionCapacity = 2U;
 constexpr std::size_t screenUrlCapacity = 513U;
 constexpr std::size_t eventCapacity = 8U;
 constexpr std::size_t eventNotificationCapacity = 8U;
+constexpr std::size_t eventSubscriptionCapacity = 2U;
 
 struct Simulation {
   iterate::kit::simulator::CommonHardware common;
@@ -46,6 +47,8 @@ struct Simulation {
   iterate_kit_device_event eventStorage[eventCapacity]{};
   iterate_kit_device_event_notification
       eventNotifications[eventNotificationCapacity]{};
+  iterate_kit_device_event_subscription
+      eventSubscriptions[eventSubscriptionCapacity]{};
   iterate_kit_m5sticks3 m5sticks3{};
   iterate_kit_device profile{};
 
@@ -470,6 +473,8 @@ capnweb_status initialize(
       session,
       simulation.eventNotifications,
       eventNotificationCapacity,
+      simulation.eventSubscriptions,
+      eventSubscriptionCapacity,
       nullptr,
       ITERATE_KIT_AUDIO_PUSH_TO_TALK,
     },

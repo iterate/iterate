@@ -1000,6 +1000,84 @@ The complete structured recovery summary, exact transcripts, counters,
 classification, and caveats are retained at
 `apps/kit/evidence/m5sticks3-production-grok-from-device/2026-08-02T02-49-05Z-subscription-recovery/summary.json`.
 
+## Conversation-reset repair and long-reply proof (2026-08-02 03:47 UTC)
+
+The subsequent report that ordinary multi-turn calls still eventually stopped
+working exposed two more independent faults. Neither was accepted as random
+provider or network variability:
+
+1. The firmware event stream had only one callback slot. A second diagnostic
+   `subscribeToEvents()` call could silently release and replace the deployed
+   worker's callback, leaving the worker's subscription status looking ready
+   while it could no longer receive PTT edges. The stream now has two bounded,
+   independent observer slots over one fixed eight-event history. A slow
+   observer snapshot-resynchronizes instead of blocking or replacing the
+   realtime observer; a third observer is rejected without mutating either
+   live subscription.
+2. Playback recovery could retain an arbitrarily large amount of historical
+   silence debt after a sufficiently long scheduling stall. A newly arrived
+   reply could then be consumed as debt from a past DMA epoch instead of being
+   played. Recovery is now bounded to two complete DMA cycles. Beyond that
+   bound, the owner starts a new local DMA epoch and prebuffers the current
+   audio; stale timing debt cannot grow across later replies.
+
+The native regressions explain why each policy exists: two subscribers must
+both receive a later physical PTT event, slot exhaustion must be explicit, and
+a fresh frame after prolonged recovery debt must be rebuffered rather than
+discarded. All 48 host tests passed under ASAN and UBSAN. The freshly linked
+image is 1,160,022 bytes and reports 205,995 / 341,760 bytes of static DIRAM;
+the post-link realtime placement audit passes. The ESP-IDF summary still shows
+16,383 / 16,384 bytes in its small IRAM accounting window, so that measurement
+is retained rather than described as comfortable headroom.
+
+The corrected image was freshly flashed, without replacing provisioning, to
+the Stick with ROM MAC `70:04:1D:D5:45:88` on the then-current port
+`/dev/cu.usbmodem11201`. After boot, Wi-Fi was -43 to -44 dBm and both the
+deployed worker event subscription and metrics subscription remained ready at
+one attempt and zero failures. A simultaneous second production Cap'n Web
+event observer saw snapshot sequence 9 plus conversation start/end sequences
+10 and 11, while the worker accepted those same events and retained its
+original subscription generation. This is the live proof that diagnostics can
+no longer steal PTT control from the worker.
+
+A three-turn deployed-production proof then conserved all 1,494 microphone
+frames from device capture through worker uplink and all 440 returned frames
+through worker egress, device admission, DMA submission, and completion. It
+recorded zero drops, underruns, flushes, resets, reconnects, protocol failures,
+or heap drift, and its interval was network-valid. The nearby Mac microphone
+independently transcribed `The screen is green and the zebra is awake.` exactly
+as Grok emitted it. The immutable manifest retained its stricter fixed-level
+acoustic miss rather than being relabelled; the evidence is under
+`apps/kit/evidence/m5sticks3-production-grok-from-device/2026-08-02T03-40-19-133Z/`.
+
+Finally, the exact user-reported long-story shape passed through the same
+deployed worker. One held PTT turn sent 396 microphone frames and Grok returned
+2,172 frames (43.436 seconds of output audio); all 2,172 were accepted,
+submitted, and completed. There were zero drops, underruns, DMA deadline
+misses, freshness resets, playback flushes, WebSocket/Wi-Fi disconnects, or
+provider failures. Uplink high water was one frame, playback high water was
+four frames, PSRAM was unchanged, and free heap changed by 112 bytes across
+the 54.5-second measured interval. All 56 expected link samples were present
+at -45 to -42 dBm. The Stick, router, and production worker each returned all
+55 probes, with worst RTTs of 12.175, 5.685, and 22.039 ms respectively; DNS
+was 2.176 ms and connect/TLS was 38.574 ms. The automatic network verdict was
+`valid` with no reasons.
+
+The Mac capture independently recovered the complete story text. Its
+response-to-baseline maximum-RMS ratio was 7.977, while the deliberately
+stricter fixed 120-RMS follow-up gate still recorded zero qualifying windows.
+The agreed independent-STT plus causal-energy policy passed, and the immutable
+overall manifest is `passed: true`; the stricter loudness gate remains open and
+no transport, reset, frame-conservation, or network requirement was relaxed.
+The evidence is under
+`apps/kit/evidence/m5sticks3-production-grok-from-device/2026-08-02T03-43-45-125Z/`.
+Its manifest, network artifact, provider-event log, and raw Mac capture hashes
+are respectively
+`c0a97f1865a21bc15c33291fe02e72e33b3f042ac678c46a3f92a66ef4878fb6`,
+`e174230c3fdf54cb2100bd0adfb1ac3ca3a209f780beed2a6e75eeb9f6e71869`,
+`d9ec701f473fa52bdbb32a958389f84123c872ba42c0bfecc983b8efc604db0b`,
+and `0c1ad7ec4d9418bb6528a32324301de54bad60f46a46bb00cc48b8d20323e317`.
+
 ## Dedicated recovery key and deferred conversation-policy correction
 
 The 2026-08-01 Stick build leaves the two programmable controls dedicated to

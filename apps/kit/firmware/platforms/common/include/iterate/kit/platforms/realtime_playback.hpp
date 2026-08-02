@@ -462,6 +462,12 @@ class RealtimePlayback {
       (static_cast<std::uint64_t>(SampleCount) *
        1'000'000ULL) /
       SampleRate;
+  static_assert(
+      DmaFrameCount <=
+          std::numeric_limits<std::uint32_t>::max() / 2U);
+  static constexpr std::uint32_t
+      maximumInPlaceRecoverySilenceFrames =
+          static_cast<std::uint32_t>(DmaFrameCount * 2U);
 
   static void increment(std::uint32_t &value) {
     if (value != std::numeric_limits<std::uint32_t>::max()) {
@@ -1248,6 +1254,19 @@ class RealtimePlayback {
      * have been discarded.
      */
     while (refillCredits_ >= DmaFrameCount - 1U) {
+      if (recoveryDropDebt_ >=
+          maximumInPlaceRecoverySilenceFrames) {
+        /*
+         * Silence substitution is a small jitter bridge, not a mode in which
+         * the device may run forever. After two complete DMA cycles, no
+         * original descriptor content remains and an upstream pacer may have
+         * discarded the matching late frames entirely. Continuing to create
+         * one new debt item per empty slot would make every future current
+         * frame pay an unbounded historical debt, so tear down this local DMA
+         * epoch and rebuffer the same socket generation from fresh audio.
+         */
+        return resetAfterUnderrun(lane, driver);
+      }
       if (recoveryDropDebt_ ==
               std::numeric_limits<std::uint32_t>::max() ||
           outstandingRecoverySilenceFrames_ ==
