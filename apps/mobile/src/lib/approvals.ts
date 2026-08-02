@@ -293,7 +293,7 @@ export function deriveBatchDetail(
     (event) => event.offset === offset && event.type === EVENT.requested,
   );
   if (requested === undefined) return null;
-  return { payload: requested.payload as RequestedPayload, resolved: null, complete: false };
+  return { payload: requestedPayload(requested), resolved: null, complete: false };
 }
 
 /**
@@ -309,7 +309,7 @@ export function deriveBatchesForExecution(
   return [...events]
     .filter((event) => {
       if (event.type !== EVENT.requested) return false;
-      const streamContext = (event.payload as RequestedPayload).streamContext;
+      const streamContext = requestedPayload(event).streamContext;
       return (
         streamContext?.kind === "script-execution" && streamContext.executionId === executionId
       );
@@ -319,7 +319,7 @@ export function deriveBatchesForExecution(
       const detail = deriveBatchDetail(events, event.offset);
       return {
         offset: event.offset,
-        payload: detail?.payload || (event.payload as RequestedPayload),
+        payload: detail?.payload || requestedPayload(event),
         resolved: detail?.resolved || null,
       };
     });
@@ -444,6 +444,15 @@ export async function awaitSettlement(
   }
 }
 
+/** A requested event's payload, cast in ONE place: `StreamEvent.payload` is
+ * over-the-wire JSON that TypeScript cannot narrow from the `type`
+ * discriminator, and the project processor schema-validates
+ * `human-approval-requested` payloads before commit — the event type IS the
+ * shape guarantee, so the cast is safe and unavoidable at this boundary. */
+function requestedPayload(event: StreamEvent): RequestedPayload {
+  return event.payload as RequestedPayload;
+}
+
 /** One shared pass over the approval vocabulary: batches, first decisions,
  * and per-index settles, keyed by the batch's requested event offset. */
 function indexApprovalEvents(events: readonly StreamEvent[]) {
@@ -461,7 +470,7 @@ function indexApprovalEvents(events: readonly StreamEvent[]) {
   const settledIndexes = new Map<number, Set<number>>();
   for (const event of [...events].sort((left, right) => left.offset - right.offset)) {
     if (event.type === EVENT.requested) {
-      requests.set(event.offset, event.payload as RequestedPayload);
+      requests.set(event.offset, requestedPayload(event));
       continue;
     }
     const payload = event.payload as {
