@@ -1199,10 +1199,41 @@ export class VoiceBridge extends IterateDurableObject {
          * still speaking. Nothing is queued here any more, so the ordering
          * problem that required it is gone with it.
          */
+        /*
+         * FORWARD THE EVENT, NOT THE PROVIDER'S WHOLE RESPONSE OBJECT.
+         *
+         * `response.done` carries the complete response - every output item,
+         * its content, usage accounting - and is by a wide margin the largest
+         * thing this device is ever sent. The device parses JSON into a fixed
+         * token pool and takes each batch into a fixed inbox slot, so one
+         * oversized event does not truncate: it fails the whole BATCH, and
+         * every event travelling with it is lost.
+         *
+         * That is a listener whose speaker works perfectly and whose screen
+         * never leaves "thinking", because the completion it is waiting for
+         * is the one event too big to arrive. Nothing downstream reads the
+         * response body; the type, the item and the transcript are the whole
+         * contract.
+         */
+        const slim = grokEvent as Record<string, unknown>;
         fireAppend({
           type: "voicelab/grok-event" as const,
           ephemeral: true as const,
-          payload: { callId, answer: answerSeq, t: Date.now(), event: grokEvent },
+          payload: {
+            callId,
+            answer: answerSeq,
+            t: Date.now(),
+            event: {
+              type: slim.type,
+              ...(slim.delta === undefined ? {} : { delta: slim.delta }),
+              ...(slim.transcript === undefined ? {} : { transcript: slim.transcript }),
+              ...(slim.item_id === undefined ? {} : { item_id: slim.item_id }),
+              ...(slim.name === undefined ? {} : { name: slim.name }),
+              ...(slim.call_id === undefined ? {} : { call_id: slim.call_id }),
+              ...(slim.arguments === undefined ? {} : { arguments: slim.arguments }),
+              ...(slim.item === undefined ? {} : { item: slim.item }),
+            },
+          },
         });
       }
     };
