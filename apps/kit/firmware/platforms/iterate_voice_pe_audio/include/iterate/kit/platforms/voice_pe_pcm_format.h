@@ -57,8 +57,10 @@ enum iterate_kit_status iterate_kit_voice_pe_expand_playback(
  * Channel zero is configured through AGC, which includes every preceding XMOS
  * stage including AEC. Channel one is deliberately configured as NONE: the
  * XMOS source defines that as its original microphone tap, before AEC or any
- * later DSP stage. This same-time raw observation is what makes local AEC
- * measurement honest. Only channel zero is eligible for `/pcm`; channel one
+ * later DSP stage. This same-time raw observation lets the acceptance harness
+ * calibrate channel-zero's intentional AGC on near-end speech before comparing
+ * a far-end interval; directly dividing the unequal-gain channels would not be
+ * an honest AEC metric. Only channel zero is eligible for `/pcm`; channel one
  * is diagnostic data and must remain local.
  * Both source words are Q31-aligned little-endian signed samples supplied by
  * ESP-IDF's 32-bit stereo I2S read.

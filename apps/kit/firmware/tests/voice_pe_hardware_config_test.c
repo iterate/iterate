@@ -42,18 +42,32 @@ static void preserves_the_first_party_codec_sequence(void) {
   assert(ITERATE_KIT_VOICE_PE_AIC3204_SETTLE_MS == 2500U);
 }
 
-static void selects_a_truthful_raw_and_fully_processed_xmos_pair(void) {
+/*
+ * The first production server-VAD run at the AGC tap transported audio
+ * perfectly but then transcribed the device's own reply as a fresh user turn.
+ * Its simultaneous NONE/AGC windows showed roughly 100x gain on both near-end
+ * speech and far-end residue. That makes the final AGC stage actively harmful
+ * to an upstream VAD even though it is useful for the stock wake-word path.
+ *
+ * Keep this selection in the pure hardware-policy module rather than burying
+ * an enum literal in the owner: a physical regression then changes one
+ * testable contract, and the generic command encoder remains mechanism only.
+ */
+static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
   uint8_t command[4] = {0xffU, 0xffU, 0xffU, 0xffU};
+  assert(
+      iterate_kit_voice_pe_xmos_uplink_stage() ==
+      ITERATE_KIT_VOICE_PE_XMOS_STAGE_NS);
   assert(
       iterate_kit_voice_pe_xmos_pipeline_command(
           0U,
-          ITERATE_KIT_VOICE_PE_XMOS_STAGE_AGC,
+          iterate_kit_voice_pe_xmos_uplink_stage(),
           command,
           sizeof(command)) == ITERATE_KIT_OK);
   assert(command[0] == 241U);
   assert(command[1] == 0x30U);
   assert(command[2] == 1U);
-  assert(command[3] == 4U);
+  assert(command[3] == 3U);
 
   assert(
       iterate_kit_voice_pe_xmos_pipeline_command(
@@ -138,7 +152,7 @@ static void verifies_xmos_firmware_and_pipeline_readback(void) {
 
 int main(void) {
   preserves_the_first_party_codec_sequence();
-  selects_a_truthful_raw_and_fully_processed_xmos_pair();
+  selects_a_truthful_raw_and_server_vad_xmos_pair();
   verifies_xmos_firmware_and_pipeline_readback();
   return 0;
 }

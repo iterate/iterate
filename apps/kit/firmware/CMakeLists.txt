@@ -43,6 +43,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/runtime_diagnostics.c
   components/core/src/spsc_ring.c
   components/core/src/voicelab_stream.c
+  components/core/src/voice_playback_clock.c
   components/core/src/websocket_frame_writer.c
   components/core/src/websocket_frame_reader.c
   components/core/src/websocket_rx.c
@@ -80,6 +81,26 @@ target_link_libraries(
   iterate-kit-posix
   PUBLIC iterate-kit-core OpenSSL::SSL OpenSSL::Crypto
 )
+
+if(APPLE)
+  find_library(ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK AudioToolbox REQUIRED)
+  find_library(ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+  add_executable(iterate-kit-cli
+    targets/host_cli/main.cpp
+  )
+  target_compile_features(iterate-kit-cli PRIVATE cxx_std_17)
+  target_compile_options(iterate-kit-cli PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+    -Wpedantic
+  )
+  target_link_libraries(iterate-kit-cli PRIVATE
+    iterate-kit-posix
+    ${ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK}
+    ${ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK}
+  )
+endif()
 
 add_library(iterate-kit-capabilities STATIC
   components/capabilities/src/callback_budget.c
@@ -721,6 +742,27 @@ add_test(
   COMMAND iterate-kit-configuration-test
 )
 
+add_executable(iterate-kit-cli-wav-test
+  targets/host_cli/cli_wav.c
+  tests/cli_wav_test.c
+)
+target_include_directories(
+  iterate-kit-cli-wav-test PRIVATE targets/host_cli)
+target_compile_features(
+  iterate-kit-cli-wav-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli-wav-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+)
+add_test(
+  NAME iterate-kit-cli-wav-test
+  COMMAND iterate-kit-cli-wav-test
+)
+
 add_executable(iterate-kit-audio-playout-test
   tests/audio_playout_test.c
 )
@@ -738,6 +780,25 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-audio-playout-test
   COMMAND iterate-kit-audio-playout-test
+)
+
+add_executable(iterate-kit-voice-playback-clock-test
+  tests/voice_playback_clock_test.c
+)
+target_compile_features(
+  iterate-kit-voice-playback-clock-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-voice-playback-clock-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-voice-playback-clock-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-voice-playback-clock-test
+  COMMAND iterate-kit-voice-playback-clock-test
 )
 
 add_executable(iterate-kit-voicelab-stream-test

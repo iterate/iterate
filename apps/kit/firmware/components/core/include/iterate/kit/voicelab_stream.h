@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "capnweb/capnweb.h"
+#include "iterate/kit/voice_device_profile.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -33,7 +34,8 @@ enum {
    * so the message rate falls fourfold against PCM16 at 6 — which is what the
    * uplink could not sustain: it stalled the TCP flow outright.
    */
-  ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND = 4,
+  ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND =
+      ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
   /*
    * Each frame costs at most ~980 characters here: ~125 of JSON envelope
    * (type, callId, a 10-digit sequence, a 20-digit timestamp) plus 854 of

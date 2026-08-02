@@ -108,10 +108,12 @@ static void preserves_interpolation_across_lane_edges(void) {
 
 /*
  * XMOS emits two interleaved 32-bit channels: channel zero is the complete
- * AEC/IC/NS/AGC pipeline used for speech, while channel one deliberately stops
- * at NS and lets diagnostics quantify what AEC removed.  Keeping both at this
- * boundary makes the shipped uplink unambiguously channel zero and preserves a
- * simultaneous comparison signal without putting it on the network.
+ * AEC/IC/NS/AGC pipeline used for speech, while channel one is the original
+ * microphone before those stages. Keeping both at this boundary makes the
+ * shipped uplink unambiguously channel zero and preserves a simultaneous
+ * comparison signal without putting it on the network. Their gain differs by
+ * design; this format test pins channel ownership, while the production
+ * assessor calibrates that gain before interpreting far-end attenuation.
  */
 static void extracts_processed_and_non_aec_capture_channels(void) {
   const int32_t input[] = {

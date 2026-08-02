@@ -49,6 +49,7 @@
 #include "freertos/task.h"
 
 #include "capnweb/capnweb.h"
+#include "iterate/kit/audio_playout.h"
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/peer.h"
@@ -56,6 +57,8 @@
 #include "iterate/kit/platforms/esp_idf_itx_transport.h"
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/voicelab_stream.h"
+#include "iterate/kit/voice_device_profile.h"
+#include "iterate/kit/voice_playback_clock.h"
 #include "waveshare_audio.h"
 #include "waveshare_buttons.h"
 #include "waveshare_display.h"
@@ -72,9 +75,9 @@ enum {
    * one per chunk. Exhausting this aborts the SESSION, so it is sized for
    * the burst, not the average.
    */
-  PENDING_CALL_CAPACITY = 16,
-  EXPORT_CAPACITY = 4,
-  IMPORT_CAPACITY = 16,
+  PENDING_CALL_CAPACITY = ITERATE_KIT_VOICE_PENDING_CALL_CAPACITY,
+  EXPORT_CAPACITY = ITERATE_KIT_VOICE_EXPORT_CAPACITY,
+  IMPORT_CAPACITY = ITERATE_KIT_VOICE_IMPORT_CAPACITY,
   /*
    * Replies to pulled calls and inbound delivery batches both parse inside
    * this budget, one token per JSON key, value, object and array —
@@ -84,8 +87,8 @@ enum {
    * never re-checked when the cap doubled; 1024 costs 12 KiB of otherwise
    * idle PSRAM-eligible RAM and takes this off the table.
    */
-  TOKEN_CAPACITY = 1024,
-  OUTPUT_CAPACITY = 128,
+  TOKEN_CAPACITY = ITERATE_KIT_VOICE_TOKEN_CAPACITY,
+  OUTPUT_CAPACITY = ITERATE_KIT_VOICE_OUTPUT_CAPACITY,
   /*
    * An inbox slot takes one whole delivery batch, so this is the ceiling on
    * how much audio one batch may carry — and batch SIZE is what decides
@@ -101,8 +104,10 @@ enum {
    * 16 KiB holds a 12-event batch (240 ms of audio) with room for the
    * envelope, which is 1.37x realtime at the same round trip.
    */
-  CONTROL_INBOX_SLOT_CAPACITY = 16384,
-  CONTROL_OUTBOX_SLOT_CAPACITY = 8192,
+  CONTROL_INBOX_SLOT_CAPACITY =
+      ITERATE_KIT_VOICE_CONTROL_INBOX_SLOT_CAPACITY,
+  CONTROL_OUTBOX_SLOT_CAPACITY =
+      ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOT_CAPACITY,
   /*
    * The inbox rides PSRAM (512 KiB), and overflowing it is SESSION-FATAL, so
    * it is sized for the worst legitimate burst rather than the average: a
@@ -111,7 +116,7 @@ enum {
    * during ordinary use — close enough to the edge that the session died
    * under a recording pull concurrent with a call. 128 leaves real headroom.
    */
-  CONTROL_INBOX_SLOTS = 64,
+  CONTROL_INBOX_SLOTS = ITERATE_KIT_VOICE_CONTROL_INBOX_SLOTS,
   /*
    * The uplink sends 6 frames per 120 ms, which is exactly the capture rate —
    * so it has no margin, and any iteration blocked on outbox headroom puts
@@ -130,19 +135,19 @@ enum {
    * fix is room to absorb a burst rather than a faster drain. 64 slots is
    * ~5 s of uplink at 8 KiB each, in PSRAM, which this board has to spare.
    */
-  CONTROL_OUTBOX_SLOTS = 64,
+  CONTROL_OUTBOX_SLOTS = ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS,
   /*
    * How much of that the microphone may never touch. Replies to inbound
    * calls are NOT gated on headroom — the session generates them whenever the
    * platform delivers something — so the mic must leave them room or it
    * starves the very lane that keeps the session alive.
    */
-  MIC_OUTBOX_RESERVE = 40,
-  FRAME_MS = 20,
-  FRAME_SAMPLES = WAVESHARE_AUDIO_FRAME_SAMPLES,
-  FRAME_BYTES = FRAME_SAMPLES * 2,
-  MIC_QUEUE_DEPTH = 32,
-  MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICELAB_MAX_FRAMES_PER_APPEND,
+  MIC_OUTBOX_RESERVE = ITERATE_KIT_VOICE_MIC_OUTBOX_RESERVE,
+  FRAME_MS = ITERATE_KIT_VOICE_FRAME_MS,
+  FRAME_SAMPLES = ITERATE_KIT_VOICE_FRAME_SAMPLES,
+  FRAME_BYTES = ITERATE_KIT_VOICE_FRAME_BYTES,
+  MIC_QUEUE_DEPTH = ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH,
+  MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
   /*
    * The speaker buffer holds JITTER, never an answer. A 1 MiB (32 s) buffer
    * was the single worst defect here: the bridge paced above realtime, so
@@ -185,7 +190,7 @@ enum {
    * The ring is the cheap side of that trade: 19 KiB more internal RAM buys
    * a 600 ms lead with 500 ms of headroom still spare.
    */
-  SPEAKER_BUFFER_BYTES = 48000,
+  SPEAKER_BUFFER_BYTES = ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES,
   /*
    * Playback will not start, or resume after starving, until this much audio
    * is queued. Without it the first frame starts the speaker with zero margin
@@ -202,7 +207,7 @@ enum {
    * hardware, not into jitter cushion, so the old "300ms" was really 210.
    * 300ms of true cushion plus one ring.
    */
-  SPEAKER_PREFILL_BYTES = 300 * 32 + 2880,
+  SPEAKER_PREFILL_BYTES = ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES,
   /*
    * Recovering from a starve does NOT re-buy the full opening prefill. It
    * used to, so a single late frame cost 160 ms of inserted silence —
@@ -214,44 +219,44 @@ enum {
    * Beyond this much silence the answer is simply over: settle back to
    * priming rather than concealing an empty stream indefinitely.
    */
-  SPEAKER_CONCEAL_LIMIT_MS = 400,
+  SPEAKER_CONCEAL_LIMIT_MS = ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS,
   /*
    * Backlog beyond which a frame is skipped to catch up. It must sit ABOVE
    * the standing cushion (600 ms lead + 390 ms prefill), or the device
    * spends every answer deliberately throwing away the margin the bridge
    * just sent it — audible as a tick roughly once a second.
    */
-  SPEAKER_HIGH_WATER_MS = 1200,
+  SPEAKER_HIGH_WATER_MS = ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS,
   /* At most one skipped frame per this many played (1 per second of audio). */
-  SPEAKER_CATCHUP_EVERY = 50,
+  SPEAKER_CATCHUP_EVERY = ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY,
   /*
    * How long the speaker must stay dry before the amplifier is powered down.
    * Long enough that a network hiccup mid-answer never power-cycles it.
    */
-  SPEAKER_IDLE_POWERDOWN_MS = 1500,
+  SPEAKER_IDLE_POWERDOWN_MS = ITERATE_KIT_VOICE_SPEAKER_IDLE_POWERDOWN_MS,
   /* Longest a released turn waits for the uplink before committing anyway. */
-  TURN_FLUSH_TIMEOUT_MS = 1500,
+  TURN_FLUSH_TIMEOUT_MS = ITERATE_KIT_VOICE_TURN_FLUSH_TIMEOUT_MS,
   /* Longest a single spoken turn may run before it is closed regardless. */
-  TURN_MAX_MS = 30000,
+  TURN_MAX_MS = ITERATE_KIT_VOICE_TURN_MAX_MS,
   /* Button scan cadence; each scan costs an I2C transaction. */
-  BUTTON_POLL_MS = 25,
-  STATS_INTERVAL_MS = 5000,
+  BUTTON_POLL_MS = ITERATE_KIT_VOICE_CONTROL_POLL_MS,
+  STATS_INTERVAL_MS = ITERATE_KIT_VOICE_STATS_INTERVAL_MS,
   /* How long the transport may stay FAILED before the device reboots itself. */
-  UNHEALTHY_RESTART_MS = 120000,
-  PING_INTERVAL_MS = 5000,
+  UNHEALTHY_RESTART_MS = ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS,
+  PING_INTERVAL_MS = ITERATE_KIT_VOICE_PING_INTERVAL_MS,
   /*
    * A ping whose append never resolves within this long means the session is
    * not carrying traffic in BOTH directions, whatever the socket believes.
    * Well clear of the worst RTT ever measured here (~400 ms) and of a
    * connection recycle, so a healthy device never trips it.
    */
-  PING_TIMEOUT_MS = 20000,
+  PING_TIMEOUT_MS = ITERATE_KIT_VOICE_PING_TIMEOUT_MS,
   /*
    * A call with no event from its bridge for this long is a call whose bridge
    * is gone. Pings run every 5 s and each one earns a pong, so this is three
    * missed round trips — not a network hiccup.
    */
-  BRIDGE_SILENCE_MS = 20000,
+  BRIDGE_SILENCE_MS = ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS,
   /*
    * With a call wanted there is always a bridge pinging back, so this long
    * without ANY batch on the delivery lane means the lane itself is gone.
@@ -259,14 +264,14 @@ enum {
    * one round trip and keeps the call, whereas giving up on the call throws
    * away a live Grok session.
    */
-  DOWNLINK_SILENCE_MS = 10000,
+  DOWNLINK_SILENCE_MS = ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS,
   /*
    * Last resort. The transport can be READY, the socket open, and nothing
    * whatsoever moving: a half-open TCP connection looks perfectly healthy
    * from this end. If no probe has completed for this long, no amount of
    * in-process recovery has worked and the chip restarts.
    */
-  NO_LIVENESS_RESTART_MS = 180000,
+  NO_LIVENESS_RESTART_MS = ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS,
 };
 
 /* PSRAM-resident: 256 KiB would crowd internal RAM out of TLS headroom. */
@@ -321,6 +326,7 @@ static struct {
   struct iterate_kit_peer peer;
   struct iterate_kit_module modules[1];
   struct iterate_kit_voicelab voicelab;
+  struct iterate_kit_playout playout;
   uint32_t voicelab_generation;
   uint32_t frame_sequence;
   /*
@@ -446,17 +452,35 @@ static uint64_t now_ms(void *context) {
 
 static void on_speaker_pcm(
     void *context, const uint8_t *pcm, size_t pcm_length, int64_t sequence) {
+  struct iterate_kit_playout_frame frame;
+  enum iterate_kit_playout_action action;
   (void)context;
-  (void)sequence;
   /*
    * A frame goes in whole or not at all. A partial write splices the head of
    * one frame onto the next at an arbitrary phase, which is a click — and at
    * a full buffer that happens to EVERY frame. An odd length would shift the
    * 16-bit sample grid permanently, so it is refused outright.
    */
-  if ((pcm_length & 1U) != 0U) {
+  if ((pcm_length & 1U) != 0U || sequence < 0 || sequence > UINT32_MAX) {
     ++runtime.speaker_bad_frames;
     return;
+  }
+  frame = (struct iterate_kit_playout_frame){
+    .call = 1U,
+    .answer = runtime.playout.answer,
+    .frame = (uint32_t)sequence,
+  };
+  action = iterate_kit_playout_classify(&runtime.playout, &frame);
+  if (action == ITERATE_KIT_PLAYOUT_IGNORE) return;
+  if (action == ITERATE_KIT_PLAYOUT_REPLACE) {
+    /*
+     * StreamBuffer has one reader, so the callback cannot reset it safely.
+     * Snapshot exactly the stale prefix and have playback skip that many
+     * bytes; the replacement frame appended below is therefore retained.
+     */
+    runtime.speaker_discard_bytes =
+        (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
+    runtime.speaker_reprime = true;
   }
   if (xStreamBufferSpacesAvailable(runtime.speaker_buffer) < pcm_length) {
     ++runtime.speaker_overflow_drops;
@@ -498,6 +522,7 @@ static void on_control(
     runtime.speaker_discard_bytes =
         (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
     runtime.speaker_reprime = true;
+    iterate_kit_playout_interrupt(&runtime.playout);
     ++runtime.barge_in_flushes;
     waveshare_display_set_state(WAVESHARE_UI_LISTENING);
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_RESPONSE_DONE) {
@@ -509,6 +534,8 @@ static void on_control(
      * concealed frames and the metric could never reach zero.
      */
     runtime.speaker_answer_done = true;
+    /* Speaker sequences restart with the next answer. */
+    iterate_kit_playout_interrupt(&runtime.playout);
     waveshare_recorder_log("answer complete");
     /* The answer is complete: back to waiting for the next turn. */
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
@@ -584,10 +611,9 @@ static void playback_task(void *argument) {
    * playing: concealment therefore costs no accumulated latency, which is
    * the invariant the M5StickS3's engine is built around.
    */
-  bool priming = true;
-  uint32_t drop_debt = 0U;
-  uint32_t next_catchup_at = 0U;
+  struct iterate_kit_voice_playback_clock playout_clock;
   uint64_t last_write_ms = 0U;
+  iterate_kit_voice_playback_clock_init(&playout_clock);
   (void)argument;
   for (;;) {
     size_t received;
@@ -595,21 +621,22 @@ static void playback_task(void *argument) {
     if (runtime.speaker_reprime) {
       runtime.speaker_reprime = false;
       runtime.speaker_answer_done = false;
-      priming = true;
-      drop_debt = 0U; /* a new answer owes nothing for the last one */
+      iterate_kit_voice_playback_clock_reprime(&playout_clock);
     }
-    if (priming) {
-      if (xStreamBufferBytesAvailable(runtime.speaker_buffer) <
-          (size_t)SPEAKER_PREFILL_BYTES) {
-        /* Idle, not starving: nothing is playing, so write nothing. */
-        if (last_write_ms != 0U &&
-            now_ms(NULL) - last_write_ms > SPEAKER_IDLE_POWERDOWN_MS) {
-          waveshare_audio_amplifier(false);
-        }
-        DELAY_MS(5);
-        continue;
+    if (runtime.speaker_answer_done) {
+      runtime.speaker_answer_done = false;
+      iterate_kit_voice_playback_clock_answer_done(&playout_clock);
+    }
+    if (!iterate_kit_voice_playback_clock_ready(
+            &playout_clock,
+            (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer))) {
+      /* Idle, not starving: nothing is playing, so write nothing. */
+      if (last_write_ms != 0U &&
+          now_ms(NULL) - last_write_ms > SPEAKER_IDLE_POWERDOWN_MS) {
+        waveshare_audio_amplifier(false);
       }
-      priming = false;
+      DELAY_MS(5);
+      continue;
     }
 
     received = xStreamBufferReceive(
@@ -621,16 +648,11 @@ static void playback_task(void *argument) {
        * stream is genuinely still speaking, so the end of an answer settles
        * back to idle instead of concealing forever.
        */
-      if (runtime.speaker_answer_done ||
-          (last_write_ms != 0U &&
-           now_ms(NULL) - last_write_ms > SPEAKER_CONCEAL_LIMIT_MS)) {
-        runtime.speaker_answer_done = false;
-        priming = true;
-        continue;
-      }
-      if (waveshare_audio_write(silence, FRAME_SAMPLES)) {
+      if (iterate_kit_voice_playback_clock_empty(
+              &playout_clock, now_ms(NULL)) ==
+              ITERATE_KIT_VOICE_PLAYBACK_CONCEAL &&
+          waveshare_audio_write(silence, FRAME_SAMPLES)) {
         ++runtime.speaker_conceal_frames;
-        ++drop_debt;
         runtime.starve_at_ms = now_ms(NULL);
       }
       continue;
@@ -659,9 +681,14 @@ static void playback_task(void *argument) {
      * This is the symmetric counterpart to concealment: conceal when
      * starved, skip when flooded, and count both honestly.
      */
-    if ((uint32_t)(xStreamBufferBytesAvailable(runtime.speaker_buffer) / 32U) >
-        (uint32_t)SPEAKER_HIGH_WATER_MS &&
-        runtime.speaker_frames_played >= next_catchup_at) {
+    {
+      const enum iterate_kit_voice_playback_action action =
+          iterate_kit_voice_playback_clock_frame(
+              &playout_clock,
+              (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer),
+              runtime.speaker_frames_played,
+              now_ms(NULL));
+      if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
       /*
        * RATE LIMITED, and that limit is the whole safety of this mechanism.
        * Skipping freely drains the entire backlog in a few milliseconds —
@@ -670,20 +697,19 @@ static void playback_task(void *argument) {
        * clock drift (well under 2%) while never removing enough at once to
        * be heard.
        */
-      next_catchup_at = runtime.speaker_frames_played + SPEAKER_CATCHUP_EVERY;
-      ++runtime.speaker_catchup_frames;
-      continue;
-    }
+        ++runtime.speaker_catchup_frames;
+        continue;
+      }
 
     /*
      * Pay the debt: one frame concealed, one late frame dropped. Without
      * this, every concealment would permanently add its own duration to
      * playout lag and the buffer would ratchet toward full.
      */
-    if (drop_debt > 0U) {
-      --drop_debt;
-      ++runtime.speaker_debt_paid;
-      continue;
+      if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_DEBT) {
+        ++runtime.speaker_debt_paid;
+        continue;
+      }
     }
 
     if (waveshare_audio_write(chunk, received / 2U)) {
@@ -889,7 +915,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       waveshare_buttons_talk_read_failures(),
       runtime.speaker_margin_max_ms,
       runtime.speaker_bad_frames,
-      runtime.voicelab.spk_seq_gaps,
+      runtime.playout.gaps,
       runtime.voicelab.spk_decode_failures,
       runtime.barge_in_flushes,
       runtime.voicelab.batches_on_connection,
@@ -1058,6 +1084,7 @@ void app_main(void) {
     ESP_LOGE(tag, "bounded runtime initialization failed");
     return;
   }
+  iterate_kit_playout_reset(&runtime.playout, 1U);
   if (iterate_kit_esp_idf_itx_transport_start(&runtime.transport) !=
       ITERATE_KIT_OK) {
     ESP_LOGE(
@@ -1608,6 +1635,7 @@ void app_main(void) {
          * playback task to re-buy its cushion.
          */
         runtime.speaker_reprime = true;
+        iterate_kit_playout_interrupt(&runtime.playout);
         (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
         runtime.frame_sequence = 0U;
         (void)iterate_kit_voicelab_mark_turn(
