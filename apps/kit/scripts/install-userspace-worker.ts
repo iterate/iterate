@@ -36,7 +36,7 @@ Output:
 
 Required secret environment:
   ITERATE_KIT_PROJECT_API_KEY
-  XAI_API_KEY                    only with --mode grok --apply
+  XAI_API_KEY                    only when creating or rotating the Grok secret
 
 The project credential and xAI key have no command-line flags, keeping them
 out of shell history and process listings. Authentication is project-scoped;
@@ -138,10 +138,6 @@ export function parseInstallerCliOptions(
   const projectApiKey = environment.ITERATE_KIT_PROJECT_API_KEY?.trim() ?? "";
   if (!projectApiKey) throw new Error("ITERATE_KIT_PROJECT_API_KEY is required.");
   const xaiApiKey = environment.XAI_API_KEY?.trim();
-  if (apply && mode === "grok" && !xaiApiKey) {
-    throw new Error("XAI_API_KEY is required for --mode grok --apply.");
-  }
-
   const parsedBaseUrl = new URL(baseUrl);
   if (!["http:", "https:"].includes(parsedBaseUrl.protocol)) {
     throw new Error("--base-url must use http or https.");
