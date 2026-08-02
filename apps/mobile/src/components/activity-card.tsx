@@ -172,9 +172,9 @@ function CodeStepTabs({
   const [selected, setSelected] = useState<"script" | "approvals" | "result" | null>(null);
   const tabs: ("script" | "approvals" | "result")[] = [
     "script",
-    ...(batches.length > 0 ? ["approvals" as const] : []),
+    ...(batches.length > 0 ? ["approvals"] : []),
     ...(step.status === "done" && (step.result !== undefined || step.errorMessage)
-      ? ["result" as const]
+      ? ["result"]
       : []),
   ];
   const active = selected !== null && tabs.includes(selected) ? selected : "script";
