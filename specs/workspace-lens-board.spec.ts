@@ -1,4 +1,3 @@
-import { expect } from "@playwright/test";
 import { test } from "./test-support/test.ts";
 
 /**
@@ -33,24 +32,28 @@ test("workspace lens board demo", async ({ page }) => {
   await page.getByTestId("email-submit-button").click();
   await page.getByTestId("email-otp-input").fill("424242");
   await page.getByTestId("email-verify-button").click({ timeout: 15_000 });
-  // The OAuth hop lands back on OS; let it settle before navigating on, or
-  // the in-flight redirect aborts the next goto.
-  await page.waitForURL(/os\.iterate-preview-9\.com\/projects\//, { timeout: 90_000 });
+  // The OAuth hop lands back on OS; wait for the signed-in shell before
+  // navigating on, or the in-flight redirect aborts the next goto.
+  await page.getByRole("button", { name: "Toggle Sidebar" }).waitFor({ timeout: 90_000 });
   await page.goto(OS_PROJECT_URL);
 
   // 1. Ask a fresh agent for five jokes and a review link.
   const composer = page.getByRole("textbox", { name: "Message a new agent" });
   await composer.waitFor({ timeout: 60_000 });
-  await composer.fill("write 5 jokes in a markdown file and send me a link for feedback");
+  // "your own workspace" on purpose: agents sometimes echo a workspace path
+  // from earlier context instead of the one in their own boot context.
+  await composer.fill(
+    "write 5 jokes into a markdown file in YOUR OWN workspace (the workspace path from your context) and send me a docs link for feedback",
+  );
   await page.getByRole("button", { name: "Send message" }).click();
   const docsLink = page.locator('a[href*="docs--lens-demo-live"]').first();
   await docsLink.waitFor({ timeout: 300_000 });
   const threadUrl = page.url();
   const docsHref = await docsLink.getAttribute("href");
-  expect(docsHref).toBeTruthy();
+  if (docsHref === null) throw new Error("the agent's reply carried no docs link");
 
   // 2. Open the review link and leave feedback in the document editor.
-  await page.goto(docsHref!);
+  await page.goto(docsHref);
   await passProjectGate(page);
   const comment = page.getByRole("textbox", { name: /Comment on the entire document/ });
   await comment.waitFor({ timeout: 60_000 });
@@ -58,30 +61,34 @@ test("workspace lens board demo", async ({ page }) => {
   // they refuse until the collab session has attached ("the editor is still
   // connecting"). Wait for live, then retry the submit until it lands.
   await page.getByText(/^live · v/).waitFor({ timeout: 60_000 });
-  await expect(async () => {
+  const commentCount = page.getByRole("button", { name: /Comments \(\d+\)/ });
+  for (let attempt = 0; attempt < 10 && !(await commentCount.isVisible()); attempt++) {
     await comment.fill(
       "Joke 3 is too niche — swap it for something broader. The rest are keepers!",
     );
     await page.getByRole("button", { name: "Add document comment" }).click();
-    await page.getByRole("button", { name: /Comments \(\d+\)/ }).waitFor({ timeout: 5_000 });
-  }).toPass({ timeout: 90_000 });
+    await commentCount.or(page.getByText(/still connecting/)).waitFor({ timeout: 10_000 });
+  }
+  await commentCount.waitFor({ timeout: 30_000 });
 
   // 3. Tell the agent to incorporate the feedback and stage tasks.
   await page.goto(threadUrl);
   const reply = page.getByRole("textbox", { name: "Message this agent" });
   await reply.waitFor({ timeout: 60_000 });
   await reply.fill(
-    "thanks — incorporate my feedback in jokes.md, then create 5 task files under tasks/ in /repos/config in your workspace (one per joke, do NOT commit) and send me a task board link to review them",
+    'thanks — incorporate my feedback in jokes.md, then create 5 task files under tasks/ in /repos/config in your workspace (one per joke, do NOT commit). Then send me a board link minted with itx.worker.tasks.link({ workspace: <your workspace>, repo: "/repos/config" }) so I can review them.',
   );
   await page.getByRole("button", { name: "Send message" }).click();
-  const boardLink = page.locator('a[href*="tasks--lens-demo-live"]').first();
+  // A real board deep link, not the bare app URL: the agent occasionally
+  // pastes the app root, which lands on the workspace picker.
+  const boardLink = page.locator('a[href*="tasks--lens-demo-live"][href*="workspace="]').first();
   await boardLink.waitFor({ timeout: 420_000 });
   const boardHref = await boardLink.getAttribute("href");
-  expect(boardHref).toBeTruthy();
+  if (boardHref === null) throw new Error("the agent's reply carried no board link");
 
   // 4. The board: a GUEST lens on the agent's workspace — hierarchy
   // breadcrumbs, the agent's uncommitted joke tasks, no Commit control.
-  await page.goto(boardHref!);
+  await page.goto(boardHref);
   await passProjectGate(page);
   await page.getByText("GUEST").waitFor({ timeout: 60_000 });
   await page.getByText("/repos/config").first().waitFor();
