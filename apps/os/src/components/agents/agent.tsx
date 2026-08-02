@@ -32,6 +32,9 @@ import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 const LIVE_RUNTIME_TICK_MS = 100;
 
+export const AGENT_COMMAND_GRID =
+  "grid-cols-[minmax(0,1fr)_6rem_1.75rem] sm:grid-cols-[minmax(12rem,2fr)_8rem_minmax(10rem,2fr)_1.75rem] lg:grid-cols-[minmax(12rem,2fr)_8rem_minmax(10rem,2fr)_6rem_1.75rem]";
+
 const WAITING_FOR_LABEL = {
   user_input: "Needs input",
   external_event: "Waiting for external event",
@@ -396,10 +399,12 @@ export function AgentDetailCard({
  * marked for the owning option to interpret without nesting buttons, links,
  * or another listbox option. */
 export function AgentCommandPresentation({
+  depth = 0,
   expanded,
   node,
   nowMs,
 }: {
+  depth?: number;
   expanded: boolean;
   node: AgentTreeNode;
   nowMs: number;
@@ -412,56 +417,61 @@ export function AgentCommandPresentation({
   const hasChildren = node.children.length > 0;
   return (
     <>
-      <span className="flex w-4 shrink-0 justify-end pt-0.5" aria-hidden>
-        {hasChildren ? (
-          <span
-            data-agent-disclosure
-            className="-m-1 flex size-4 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted"
-            title={expanded ? "Collapse child agents" : "Expand child agents"}
-          >
-            <ChevronRight
-              className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
-            />
-          </span>
-        ) : null}
-      </span>
-      <StateDot state={state} className="mt-1.5" />
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-baseline gap-2">
-          <span className="truncate text-sm font-medium">{agentTitle(agent)}</span>
-          {agent.summary.pinned ? (
-            <Star
-              className="size-3 shrink-0 self-center fill-amber-400 text-amber-500"
-              aria-hidden
-            />
-          ) : null}
-          <time
-            dateTime={node.aggregateLastWorkAt}
-            title={node.aggregateLastWorkAt}
-            className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground"
-          >
-            {formatTimeAgo(node.aggregateLastWorkAt, nowMs)}
-          </time>
-        </span>
-        <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          {activity !== undefined ? (
-            <span className="min-w-0 truncate">{activity}</span>
-          ) : (
-            <span className="min-w-0 truncate font-mono text-[11px]">{agent.path}</span>
-          )}
-          {descendantCount > 0 ? (
-            <span className="shrink-0">
-              · {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
+      <span
+        className="flex min-w-0 items-start gap-2"
+        style={{ paddingLeft: `${Math.min(depth, 6) * 16}px` }}
+      >
+        <span className="flex size-4 shrink-0 justify-end pt-0.5" aria-hidden>
+          {hasChildren ? (
+            <span
+              data-agent-disclosure
+              className="-m-1 flex size-4 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted"
+              title={expanded ? "Collapse child agents" : "Expand child agents"}
+            >
+              <ChevronRight
+                className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
+              />
             </span>
           ) : null}
-          <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-            {agent.binding !== undefined ? (
-              <span className="max-w-36 truncate">{bindingLabel(agent.binding)}</span>
+        </span>
+        <StateDot state={state} className="mt-1.5" />
+        <span className="min-w-0">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-sm font-medium">{agentTitle(agent)}</span>
+            {agent.summary.pinned ? (
+              <Star className="size-3 shrink-0 fill-amber-400 text-amber-500" aria-hidden />
             ) : null}
-            <span className="shrink-0">{state.label}</span>
+          </span>
+          <span className="block truncate font-mono text-[11px] text-muted-foreground">
+            {agent.path}
           </span>
         </span>
       </span>
+      <span className="min-w-0 text-xs">
+        <span className="block truncate">{state.label}</span>
+        <span className="block truncate text-muted-foreground">
+          {agent.binding === undefined
+            ? descendantCount > 0
+              ? `${descendantCount} subagent${descendantCount === 1 ? "" : "s"}`
+              : "—"
+            : bindingLabel(agent.binding)}
+        </span>
+      </span>
+      <span className="hidden min-w-0 sm:block">
+        <span className="block truncate text-xs">{activity ?? "—"}</span>
+        {agent.summary.description === undefined ? null : (
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {agent.summary.description}
+          </span>
+        )}
+      </span>
+      <time
+        dateTime={node.aggregateLastWorkAt}
+        title={node.aggregateLastWorkAt}
+        className="hidden text-xs tabular-nums text-muted-foreground lg:block"
+      >
+        {formatTimeAgo(node.aggregateLastWorkAt, nowMs)}
+      </time>
       <span
         data-agent-pin
         className="-m-1 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -474,7 +484,7 @@ export function AgentCommandPresentation({
   );
 }
 
-function StateDot({
+export function StateDot({
   state,
   className,
 }: {
@@ -494,7 +504,7 @@ function StateDot({
   );
 }
 
-function PinButton({
+export function PinButton({
   pinned,
   onToggle,
   size = "icon-xs",
@@ -588,7 +598,7 @@ function pluralCount(count: number, noun: string): string {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function BindingLink({
+export function BindingLink({
   binding,
   className,
 }: {

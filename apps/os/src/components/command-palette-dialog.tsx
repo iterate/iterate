@@ -36,13 +36,10 @@ import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 import { updateAgentSummary } from "~/components/agents/agent-summary.ts";
-import {
-  buildAgentForest,
-  flattenVisibleAgentRows,
-  type AgentTreeNode,
-} from "~/components/agents/agent-tree.ts";
+import { type AgentTreeNode } from "~/components/agents/agent-tree.ts";
+import { useAgentTreeTable } from "~/components/agents/agent-tree-table.ts";
 import { agentCommandAccessibleLabel } from "~/components/agents/agent-presentation.ts";
-import { AgentCommandPresentation } from "~/components/agents/agent.tsx";
+import { AGENT_COMMAND_GRID, AgentCommandPresentation } from "~/components/agents/agent.tsx";
 import { AdminRemoteStreamTree } from "~/components/admin-remote-stream-tree.tsx";
 
 const CLOCK_TICK_MS = 5_000;
@@ -304,12 +301,8 @@ function AgentResults({
   onToggleExpanded: (path: string) => void;
   onTogglePinned: (agent: AgentRecord) => void | Promise<void>;
 }) {
-  const forest = useMemo(() => buildAgentForest(agents), [agents]);
-  const rows = useMemo(
-    () => flattenVisibleAgentRows(forest, expandedPaths, query),
-    [expandedPaths, forest, query],
-  );
-  const visibleRows = rows.slice(0, MAX_AGENT_RESULTS);
+  const table = useAgentTreeTable({ agents, expandedPaths, query });
+  const visibleRows = table.getRowModel().rows.slice(0, MAX_AGENT_RESULTS);
 
   if (visibleRows.length === 0) {
     return (
@@ -324,12 +317,25 @@ function AgentResults({
   }
   return (
     <CommandGroup className="p-0">
-      {visibleRows.map(({ node, depth, expanded }) => (
+      <div
+        className={cn(
+          "sticky top-0 z-10 grid gap-2 border-b bg-background px-3 py-2 text-xs font-medium text-muted-foreground",
+          AGENT_COMMAND_GRID,
+        )}
+        aria-hidden
+      >
+        <span>Agent</span>
+        <span>Status</span>
+        <span className="hidden sm:block">Activity</span>
+        <span className="hidden lg:block">Last work</span>
+        <span />
+      </div>
+      {visibleRows.map((row) => (
         <AgentCommandItem
-          key={node.agent.path}
-          node={node}
-          depth={depth}
-          expanded={expanded}
+          key={row.id}
+          node={row.original}
+          depth={row.depth}
+          expanded={row.getIsExpanded()}
           nowMs={nowMs}
           onOpen={onOpen}
           onToggleExpanded={onToggleExpanded}
@@ -362,8 +368,10 @@ function AgentCommandItem({
     <CommandItem
       value={agentCommandValue(node.agent.path)}
       onSelect={() => onOpen(node.agent.path)}
-      className="items-start gap-2 border-b border-border/60 py-2.5 last:border-b-0"
-      style={{ paddingLeft: `${12 + Math.min(depth, 6) * 16}px` }}
+      className={cn(
+        "grid items-start gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0",
+        AGENT_COMMAND_GRID,
+      )}
       aria-label={agentCommandAccessibleLabel(node, expanded)}
       aria-expanded={hasChildren ? expanded : undefined}
       aria-keyshortcuts="Shift+P"
@@ -380,7 +388,7 @@ function AgentCommandItem({
         }
       }}
     >
-      <AgentCommandPresentation expanded={expanded} node={node} nowMs={nowMs} />
+      <AgentCommandPresentation depth={depth} expanded={expanded} node={node} nowMs={nowMs} />
     </CommandItem>
   );
 }

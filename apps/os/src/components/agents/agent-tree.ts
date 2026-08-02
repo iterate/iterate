@@ -83,6 +83,23 @@ const AGENT_TREE_SHAPE = {
   matches: (node: AgentTreeNode, query: string) => agentSearchText(node.agent).includes(query),
 };
 
+/** Normalized text projected into TanStack Table's hidden search column. */
+export function agentSearchText(agent: AgentRecord): string {
+  const binding = agent.binding === undefined ? [] : Object.values(agent.binding);
+  return [
+    agentTitle(agent),
+    agent.summary.activity,
+    agent.summary.description,
+    agent.path,
+    ...binding,
+  ]
+    .filter(
+      (value): value is string | number => typeof value === "string" || typeof value === "number",
+    )
+    .join(" ")
+    .toLowerCase();
+}
+
 export function flattenVisibleAgentRows(
   forest: readonly AgentTreeNode[],
   expandedPaths: ReadonlySet<string>,
@@ -127,22 +144,6 @@ function agentBindingTitle(binding: AgentRecord["binding"]): string | undefined 
     case "github_check_run":
       return `${binding.owner}/${binding.repo} check #${binding.number}`;
   }
-}
-
-function agentSearchText(agent: AgentRecord): string {
-  const binding = agent.binding === undefined ? [] : Object.values(agent.binding);
-  return [
-    agentTitle(agent),
-    agent.summary.activity,
-    agent.summary.description,
-    agent.path,
-    ...binding,
-  ]
-    .filter(
-      (value): value is string | number => typeof value === "string" || typeof value === "number",
-    )
-    .join(" ")
-    .toLowerCase();
 }
 
 export function agentNodeDisplayState(

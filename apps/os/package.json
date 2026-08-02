@@ -67,6 +67,7 @@
     "@tanstack/react-router-devtools": "1.167.0",
     "@tanstack/react-router-ssr-query": "^1.167.1",
     "@tanstack/react-start": "1.168.25",
+    "@tanstack/react-table": "^8.21.3",
     "@tanstack/react-virtual": "^3.14.5",
     "@typescript/vfs": "^1.6.4",
     "@valtown/codemirror-ts": "2.3.1",

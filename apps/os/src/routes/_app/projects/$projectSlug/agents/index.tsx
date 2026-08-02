@@ -8,14 +8,14 @@ import {
   streamBreadcrumb,
   streamPageStaticData,
 } from "~/lib/route-breadcrumbs.ts";
+import { AgentCatalogSearch, type AgentCatalogView } from "~/lib/agent-catalog-search.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
-import { StreamViewSearch } from "~/lib/stream-view-search.ts";
 
 const AGENTS_ROOT = "/agents";
 
 export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
   staticData: streamPageStaticData(),
-  validateSearch: StreamViewSearch,
+  validateSearch: AgentCatalogSearch,
   ssr: false,
   loader: ({ context }) =>
     breadcrumbLoaderData({
@@ -27,6 +27,7 @@ export const Route = createFileRoute("/_app/projects/$projectSlug/agents/")({
 
 function ProjectAgentsIndexContent() {
   const params = Route.useParams();
+  const search = Route.useSearch();
   const { project } = Route.useLoaderData();
   const navigate = useNavigate();
   const agents = useLiveState(
@@ -34,6 +35,15 @@ function ProjectAgentsIndexContent() {
     (state) => state.agents,
     [],
   ).value;
+
+  function setView(view: AgentCatalogView) {
+    void navigate({
+      to: "/projects/$projectSlug/agents",
+      params,
+      search: (previous) => ({ ...previous, view }),
+      replace: true,
+    });
+  }
 
   return (
     <ProjectStreamView
@@ -43,6 +53,8 @@ function ProjectAgentsIndexContent() {
           agents={agents}
           projectId={project.id}
           projectSlug={params.projectSlug}
+          view={search.view ?? "list"}
+          onViewChange={setView}
           onOpen={(path) => void navigate(linkOptionsForStreamPath(params.projectSlug, path))}
           onTogglePinned={(agent) =>
             updateAgentSummary(project.id, agent.path, { pinned: !agent.summary.pinned })

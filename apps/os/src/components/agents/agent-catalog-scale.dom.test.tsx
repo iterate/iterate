@@ -56,6 +56,7 @@ beforeEach(() => {
   });
   HTMLElement.prototype.getBoundingClientRect = function getBoundingClientRect() {
     if (this.matches("li[data-index]")) return rect(142);
+    if (this.matches("[data-agent-table-row]")) return rect(65);
     return rect(800);
   };
   globalThis.ResizeObserver = class ResizeObserver {
@@ -228,6 +229,79 @@ test("search reveals matching descendants without changing the collapsed tree", 
 
   expect(container.textContent).not.toContain("Bath cattle survey");
   expect(container.querySelector('button[aria-label="Expand child agents"]')).not.toBeNull();
+
+  await act(async () => root.unmount());
+});
+
+test("the 5,000-agent table mounts bounded rows", async () => {
+  const agents = Object.fromEntries(
+    Array.from({ length: 5_000 }, (_, index) => {
+      const agent = record(index);
+      return [agent.path, agent];
+    }),
+  );
+  const container = document.createElement("div");
+  Object.assign(container.style, { height: "800px", width: "1000px" });
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () =>
+    root.render(
+      <AgentCatalog
+        agents={agents}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+        projectId="prj_table_scale"
+        projectSlug="table-scale"
+        view="table"
+      />,
+    ),
+  );
+
+  const mountedRows = container.querySelectorAll("[data-agent-table-row]");
+  expect(mountedRows.length).toBeGreaterThan(5);
+  expect(mountedRows.length).toBeLessThanOrEqual(40);
+  expect(container.querySelector('table[aria-label="Agents table"]')).not.toBeNull();
+  expect(container.textContent).toContain("Load agent 0");
+  expect(container.textContent).toContain("5000 agents");
+
+  await act(async () => root.unmount());
+});
+
+test("table disclosures collapse the derived path hierarchy", async () => {
+  const parent = { ...record(0), path: "/agents/research" };
+  const child = {
+    ...record(1),
+    path: "/agents/research/bath",
+    summary: { pinned: false, title: "Bath cattle survey" },
+  };
+  const container = document.createElement("div");
+  Object.assign(container.style, { height: "800px", width: "1000px" });
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () =>
+    root.render(
+      <AgentCatalog
+        agents={{ [parent.path]: parent, [child.path]: child }}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+        projectId="prj_table_tree"
+        projectSlug="table-tree"
+        view="table"
+      />,
+    ),
+  );
+
+  expect(container.textContent).toContain("Bath cattle survey");
+  const parentRow = container.querySelector('[data-agent-path="/agents/research"]');
+  const disclosure = parentRow?.querySelector('button[aria-label="Collapse child agents"]');
+  if (!(disclosure instanceof HTMLButtonElement)) throw new Error("missing table disclosure");
+
+  await act(async () => disclosure.click());
+
+  expect(container.textContent).not.toContain("Bath cattle survey");
+  expect(parentRow?.querySelector('button[aria-label="Expand child agents"]')).not.toBeNull();
 
   await act(async () => root.unmount());
 });
