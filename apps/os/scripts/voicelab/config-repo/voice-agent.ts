@@ -1472,6 +1472,20 @@ export class VoiceBridge extends IterateDurableObject {
     let heardFromPeerAt = Date.now();
     /** A peer that pings is one whose silence means something. */
     let pingsSeen = 0;
+    /**
+     * Recycles since a peer was last heard.
+     *
+     * A recycle replaces a delivery lane believed dead. If replacing it does
+     * not bring the peer back, the peer is gone and no further lane will
+     * help — but nothing said so, so a bridge whose client had exited simply
+     * reopened its connection every second until the ten-minute idle
+     * timeout. Measured on one stream: 196 connection-opened events and a
+     * generation counter at g193, all after the client process had ended.
+     * Worse than the churn, that bridge still holds the call, so the NEXT
+     * call on the stream is superseded on arrival and the operator sees a
+     * conversation that will not start for reasons nothing reports.
+     */
+    let recyclesWithoutPeer = 0;
     let lastSeenOffset = -1;
     /** Events on this stream that belong to some other call. */
     let strayEvents = 0;
@@ -1489,6 +1503,7 @@ export class VoiceBridge extends IterateDurableObject {
         // Everything delivered here was appended by a peer, by definition:
         // the subscription only names voicelab/* types.
         heardFromPeerAt = Date.now();
+        recyclesWithoutPeer = 0;
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         /*
          * A CALL BELONGS TO ITS callId.
@@ -1737,7 +1752,22 @@ export class VoiceBridge extends IterateDurableObject {
        * pings means the delivery lane is dead and worth replacing. A peer
        * that never pings (a script, a test) is never second-guessed.
        */
-      if (pingsSeen > 0 && now - heardFromPeerAt > 16_000) void reopen();
+      if (pingsSeen > 0 && now - heardFromPeerAt > 16_000) {
+        /*
+         * Three lanes is enough to tell a broken connection from an absent
+         * peer: a device that is still there answers on the first or second,
+         * and one that has gone answers on none of them. Tearing down frees
+         * the stream for the next call, which is the difference between a
+         * lab you can use twice and one that needs a new stream every run.
+         */
+        if (recyclesWithoutPeer >= 3) {
+          return teardown(
+            `the peer stopped answering across ${recyclesWithoutPeer} delivery lanes`,
+          );
+        }
+        recyclesWithoutPeer++;
+        void reopen();
+      }
     }, 500);
 
     const teardown = (reason: string, superseded = false) => {
