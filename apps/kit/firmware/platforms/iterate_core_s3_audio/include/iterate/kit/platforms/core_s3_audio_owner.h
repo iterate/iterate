@@ -25,6 +25,24 @@ extern "C" {
 #define ITERATE_KIT_CORE_S3_AUDIO_SAMPLE_RATE_HZ 16000U
 #define ITERATE_KIT_CORE_S3_AEC_FRAME_SAMPLES 512U
 
+/**
+ * Optional observer of PCM which has physically completed speaker DMA.
+ *
+ * This is deliberately not a generic audio callback. It runs in I2S interrupt
+ * context after one 128-sample descriptor leaves the hardware queue, so it is
+ * the only honest clock for lip sync and acoustic diagnostics. An observer
+ * must live entirely in IRAM/internal DRAM, allocate nothing, never block or
+ * log, and return true only if it woke a higher-priority task. Copy into a
+ * bounded latest-state handoff; retaining a FIFO here would let visual work
+ * recreate the accumulating audio delay that the PCM lane rejects.
+ */
+typedef bool (*iterate_kit_core_s3_playout_observer_fn)(
+    uint32_t sequence,
+    uint64_t completed_at_us,
+    const int16_t *samples,
+    size_t sample_count,
+    void *context);
+
 struct iterate_kit_core_s3_audio_owner_options {
   struct iterate_kit_pcm_lane *lane;
   /*
@@ -46,6 +64,10 @@ struct iterate_kit_core_s3_audio_owner_options {
    */
   iterate_kit_pcm_capture_turn_notify_fn notify_uplink;
   void *notify_uplink_context;
+
+  /* Optional physical-playout observer; see the ISR contract above. */
+  iterate_kit_core_s3_playout_observer_fn observe_playout;
+  void *observe_playout_context;
 };
 
 /**
@@ -90,6 +112,8 @@ struct iterate_kit_core_s3_audio_owner_metrics {
   uint32_t maximum_codec_read_us;
   uint32_t last_receive_to_render_ms;
   uint32_t maximum_receive_to_render_ms;
+  uint32_t playout_observer_frames;
+  uint32_t playout_observer_shape_errors;
 
   uint32_t capture_chunks_deinterleaved;
   uint32_t tdm_slot_peak[ITERATE_KIT_CORE_S3_TDM_SLOT_COUNT];

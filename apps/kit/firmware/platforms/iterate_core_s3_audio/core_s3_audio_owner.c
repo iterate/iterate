@@ -71,6 +71,8 @@ struct core_s3_atomic_metrics {
   volatile uint32_t maximum_codec_read_us;
   volatile uint32_t last_receive_to_render_ms;
   volatile uint32_t maximum_receive_to_render_ms;
+  volatile uint32_t playout_observer_frames;
+  volatile uint32_t playout_observer_shape_errors;
 
   volatile uint32_t capture_chunks_deinterleaved;
   volatile uint32_t tdm_slot_peak[ITERATE_KIT_CORE_S3_TDM_SLOT_COUNT];
@@ -103,6 +105,8 @@ struct core_s3_audio_owner {
   struct iterate_kit_pcm_generation_fence generation_fence;
   struct iterate_kit_pcm_playback_interruption playback_interruption;
   struct iterate_kit_aec_capture_bridge capture_bridge;
+  iterate_kit_core_s3_playout_observer_fn observe_playout;
+  void *observe_playout_context;
 
   int16_t retained_downlink[ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME]
       __attribute__((aligned(16)));
@@ -244,6 +248,18 @@ static void atomic_note_maximum(
 
 static uint32_t atomic_load(const volatile uint32_t *value) {
   return __atomic_load_n(value, __ATOMIC_RELAXED);
+}
+
+/*
+ * These two counters have exactly one I2S-ISR writer. A compare/exchange loop
+ * would add an unbounded retry shape to the most timing-sensitive callback for
+ * no ownership benefit; diagnostics only performs atomic loads.
+ */
+static void IRAM_ATTR isr_saturating_increment(
+    volatile uint32_t *value) {
+  if (*value != UINT32_MAX) {
+    ++*value;
+  }
 }
 
 static void merge_aec_signal_observation(
@@ -641,7 +657,29 @@ static bool IRAM_ATTR i2s_tap(
     size_t bytes,
     void *user_data) {
   struct core_s3_audio_owner *const state = user_data;
-  if (state == NULL || transmit ||
+  if (state == NULL) {
+    return false;
+  }
+  if (transmit) {
+    if (state->observe_playout == NULL) {
+      return false;
+    }
+    if (pcm == NULL ||
+        bytes != ITERATE_KIT_CORE_S3_DMA_FRAME_SAMPLES * sizeof(int16_t)) {
+      isr_saturating_increment(
+          &state->metrics.playout_observer_shape_errors);
+      return false;
+    }
+    isr_saturating_increment(
+        &state->metrics.playout_observer_frames);
+    return state->observe_playout(
+        sequence,
+        completed_at_us,
+        pcm,
+        ITERATE_KIT_CORE_S3_DMA_FRAME_SAMPLES,
+        state->observe_playout_context);
+  }
+  if (
       __atomic_load_n(
           &state->capture_tap_enabled, __ATOMIC_ACQUIRE) == 0U) {
     return false;
@@ -1004,6 +1042,8 @@ esp_err_t iterate_kit_core_s3_audio_owner_start(
   }
 
   owner.lane = options->lane;
+  owner.observe_playout = options->observe_playout;
+  owner.observe_playout_context = options->observe_playout_context;
   owner.speaker_volume_percent = options->speaker_volume_percent;
   owner.microphone_gain_db = options->microphone_gain_db;
   if (iterate_kit_core_s3_capture_reserve_init(
@@ -1281,6 +1321,8 @@ void iterate_kit_core_s3_audio_owner_metrics_snapshot(
   COPY_ATOMIC_METRIC(maximum_codec_read_us);
   COPY_ATOMIC_METRIC(last_receive_to_render_ms);
   COPY_ATOMIC_METRIC(maximum_receive_to_render_ms);
+  COPY_ATOMIC_METRIC(playout_observer_frames);
+  COPY_ATOMIC_METRIC(playout_observer_shape_errors);
   COPY_ATOMIC_METRIC(capture_chunks_deinterleaved);
   COPY_ATOMIC_METRIC(capture_bridge_errors);
   COPY_ATOMIC_METRIC(aec_frames);

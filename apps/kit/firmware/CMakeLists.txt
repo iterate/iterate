@@ -62,6 +62,30 @@ target_compile_options(iterate-kit-core PRIVATE
 )
 target_link_libraries(iterate-kit-core PUBLIC capnweb)
 
+add_library(iterate-kit-avatar STATIC
+  components/avatar/src/face_animator.c
+  components/avatar/src/face_avatar_registry.c
+  components/avatar/src/face_driver.c
+  components/avatar/src/face_keyframe.c
+  components/avatar/src/face_performance.c
+  components/avatar/src/face_sprite_sheet.c
+  components/avatar/src/face_stage.c
+  components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c
+  components/avatar/src/fspp_gameboy_bot_cores3_fine_atlas.c
+  components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c
+  components/avatar/src/fspp_starbyte_cores3_fine_atlas.c
+)
+target_include_directories(iterate-kit-avatar PUBLIC
+  components/avatar/include
+)
+target_compile_features(iterate-kit-avatar PUBLIC c_std_99)
+target_compile_options(iterate-kit-avatar PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+
 add_library(iterate-kit-posix STATIC
   platforms/iterate_posix/tls_stream.c
   platforms/iterate_posix/websocket_client.c
@@ -256,6 +280,34 @@ target_link_libraries(
 # The host profile uses MinSizeRel to measure optimized code, whose default
 # NDEBUG would otherwise compile every assert-based native test out.
 add_compile_options(-UNDEBUG)
+
+foreach(ITERATE_KIT_AVATAR_TEST
+    face-animator
+    face-avatar-registry
+    face-keyframe
+    face-performance
+    face-sprite-sheet
+    face-stage)
+  string(REPLACE "-" "_" ITERATE_KIT_AVATAR_TEST_SOURCE
+    "${ITERATE_KIT_AVATAR_TEST}")
+  set(ITERATE_KIT_AVATAR_TEST_TARGET
+    "iterate-kit-${ITERATE_KIT_AVATAR_TEST}-test")
+  add_executable(${ITERATE_KIT_AVATAR_TEST_TARGET}
+    "components/avatar/tests/${ITERATE_KIT_AVATAR_TEST_SOURCE}_test.c")
+  target_compile_features(
+    ${ITERATE_KIT_AVATAR_TEST_TARGET} PRIVATE c_std_99)
+  target_compile_options(${ITERATE_KIT_AVATAR_TEST_TARGET} PRIVATE
+    -Wall
+    -Wextra
+    -Werror
+    -Wpedantic
+  )
+  target_link_libraries(
+    ${ITERATE_KIT_AVATAR_TEST_TARGET} PRIVATE iterate-kit-avatar)
+  add_test(
+    NAME ${ITERATE_KIT_AVATAR_TEST_TARGET}
+    COMMAND ${ITERATE_KIT_AVATAR_TEST_TARGET})
+endforeach()
 
 add_executable(iterate-kit-audio-test
   tests/audio_controller_test.c

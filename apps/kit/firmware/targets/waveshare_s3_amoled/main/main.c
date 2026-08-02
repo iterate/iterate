@@ -499,7 +499,7 @@ static void on_speaker_pcm(
    */
   if (runtime.starve_at_ms != 0U) {
     const uint64_t now = now_ms(NULL);
-    if (now - runtime.starve_at_ms < 1000U) {
+    if (iterate_kit_voice_elapsed_ms(now, runtime.starve_at_ms) < 1000U) {
       ++runtime.speaker_underruns;
     }
     runtime.starve_at_ms = 0U;
@@ -629,7 +629,7 @@ static void playback_task(void *argument) {
             (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer))) {
       /* Idle, not starving: nothing is playing, so write nothing. */
       if (last_write_ms != 0U &&
-          now_ms(NULL) - last_write_ms > SPEAKER_IDLE_POWERDOWN_MS) {
+          iterate_kit_voice_elapsed_ms(now_ms(NULL), last_write_ms) > SPEAKER_IDLE_POWERDOWN_MS) {
         waveshare_audio_amplifier(false);
       }
       DELAY_MS(5);
@@ -1307,7 +1307,7 @@ void app_main(void) {
         last_liveness_ms = now;
       }
       if (runtime.voicelab.ping_pending &&
-          now - runtime.voicelab.ping_started_ms > PING_TIMEOUT_MS &&
+          iterate_kit_voice_elapsed_ms(now, runtime.voicelab.ping_started_ms) > PING_TIMEOUT_MS &&
           now >= next_liveness_restart_at) {
         next_liveness_restart_at = now + PING_TIMEOUT_MS;
         ++runtime.liveness_restarts;
@@ -1318,7 +1318,7 @@ void app_main(void) {
         waveshare_display_set_status("reconnecting");
         iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
       }
-      if (now - last_liveness_ms > NO_LIVENESS_RESTART_MS) {
+      if (iterate_kit_voice_elapsed_ms(now, last_liveness_ms) > NO_LIVENESS_RESTART_MS) {
         ESP_LOGE(
             tag,
             "no round trip in %us despite a ready transport — restarting",
@@ -1609,7 +1609,7 @@ void app_main(void) {
        * one because nothing is ever sent for an answer.
        */
       if (runtime.talking && !runtime.flushing_turn &&
-          now - runtime.turn_started_ms > TURN_MAX_MS) {
+          iterate_kit_voice_elapsed_ms(now, runtime.turn_started_ms) > TURN_MAX_MS) {
         ESP_LOGW(tag, "turn exceeded %ums — ending it", (unsigned)TURN_MAX_MS);
         waveshare_display_hold_talk(false);
         runtime.flushing_turn = true;
@@ -1707,7 +1707,7 @@ void app_main(void) {
           size_t index;
           drain_window_at =
               (drain_window_at == 0U ||
-               now - drain_window_at > MIC_FRAMES_PER_APPEND * FRAME_MS * 4U)
+               iterate_kit_voice_elapsed_ms(now, drain_window_at) > MIC_FRAMES_PER_APPEND * FRAME_MS * 4U)
               ? now + (uint64_t)take * FRAME_MS
               : drain_window_at + (uint64_t)take * FRAME_MS;
           for (index = 0U; index < take; ++index) {

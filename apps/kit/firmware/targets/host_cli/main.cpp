@@ -679,7 +679,28 @@ void playback_poll(uint64_t now) {
     /* Host scheduler stalls are visible, but never replayed as a burst. */
     runtime.next_playback_at_ms = now + ITERATE_KIT_VOICE_FRAME_MS;
   }
-  if (runtime.answer_done && runtime.speaker_ring.used == 0U) {
+  /*
+   * A TURN ENDS WHEN ITS OWN ANSWER ENDS.
+   *
+   * `answer_done` is set by any response completing, and the back office
+   * produces responses of its own — every message it sends is spoken as a
+   * fresh response. So a turn asked immediately after one of those found the
+   * flag already set, was declared finished 576ms after committing with zero
+   * frames received, and reported as a failure. The customer had heard
+   * nothing wrong; the report was measuring the wrong answer.
+   *
+   * A turn is finished only once it has actually PLAYED something and the
+   * queue has drained. A turn that never gets audio is finished by the
+   * deadline instead, which is the honest way to record silence.
+   */
+  const bool answer_played_out = runtime.answer_done &&
+      runtime.speaker_ring.used == 0U && runtime.current_turn != nullptr &&
+      runtime.current_turn->frames_played > 0U;
+  const bool answer_overdue = runtime.current_turn != nullptr &&
+      runtime.current_turn->committed_ms != 0U &&
+      iterate_kit_voice_elapsed_ms(now, runtime.current_turn->committed_ms) >
+          ITERATE_KIT_VOICE_TURN_MAX_MS;
+  if (answer_played_out || answer_overdue) {
     runtime.answer_done = false;
     finish_current_turn(now);
     if (runtime.driver == DriverState::kWaitAnswer) {
@@ -775,9 +796,22 @@ void finish_current_turn(uint64_t now) {
       " gaps=%u underruns=%u",
       runtime.turn_count,
       runtime.current_turn->failed ? "failure" : "ok",
-      runtime.current_turn->first_audio_ms == 0U ? 0U :
-          runtime.current_turn->first_audio_ms - runtime.current_turn->committed_ms,
-      now - runtime.current_turn->committed_ms,
+      /*
+       * Both durations are measured FROM THE COMMIT, so a turn that never
+       * committed has no duration to report — and must say 0 rather than the
+       * clock's raw reading. "answerMs=14088564" on a turn that lasted eight
+       * seconds is a report inventing a fact, and it appeared on exactly the
+       * failed turns whose diagnosis mattered most.
+       */
+      runtime.current_turn->first_audio_ms == 0U ||
+              runtime.current_turn->committed_ms == 0U
+          ? 0U
+          : iterate_kit_voice_elapsed_ms(runtime.current_turn->first_audio_ms,
+                                         runtime.current_turn->committed_ms),
+      runtime.current_turn->committed_ms == 0U
+          ? 0U
+          : iterate_kit_voice_elapsed_ms(now,
+                                         runtime.current_turn->committed_ms),
       runtime.current_turn->frames_sent,
       runtime.current_turn->frames_received,
       runtime.current_turn->frames_played,
@@ -903,7 +937,7 @@ size_t health_json(char *out, size_t capacity) {
       runtime.downlink_recycles,
       runtime.voicelab.last_batch_ms == 0U ? 0U :
           static_cast<uint32_t>(iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_batch_ms)),
-      now - runtime.started_ms, metrics.control_messages_sent,
+      iterate_kit_voice_elapsed_ms(now, runtime.started_ms), metrics.control_messages_sent,
       metrics.control_outbox_discarded, metrics.control_inbox.messages_published,
       metrics.control_inbox.messages_consumed, metrics.control_inbox_discarded,
       metrics.control_inbox.high_water_slots, runtime.connection.generation,
@@ -1095,6 +1129,8 @@ void conversation_driver(uint64_t now) {
         break;
       }
       begin_turn_report(*path, colleague, now);
+      /* Whatever finished before this turn belongs to the turn before it. */
+      runtime.answer_done = false;
       runtime.source_finished = false;
       runtime.wants_talk = true;
       runtime.driver = DriverState::kSending;
@@ -1184,7 +1220,7 @@ void reconcile_turn(uint64_t now, size_t outbox_free) {
     runtime.flushing_turn = false;
   }
   if (runtime.talking && !runtime.flushing_turn &&
-      now - runtime.turn_started_ms > ITERATE_KIT_VOICE_TURN_MAX_MS) {
+      iterate_kit_voice_elapsed_ms(now, runtime.turn_started_ms) > ITERATE_KIT_VOICE_TURN_MAX_MS) {
     runtime.wants_talk = false;
   }
   if (wants_talk && !runtime.talking && runtime.voicelab.call_active &&
@@ -1495,7 +1531,7 @@ void start_voicelab_if_ready() {
 void supervise(uint64_t now, size_t outbox_free) {
   if (runtime.transport.state == ITERATE_KIT_POSIX_ITX_FAILED) {
     if (runtime.unhealthy_since_ms == 0U) runtime.unhealthy_since_ms = now;
-    if (now - runtime.unhealthy_since_ms >
+    if (iterate_kit_voice_elapsed_ms(now, runtime.unhealthy_since_ms) >
         ITERATE_KIT_VOICE_UNHEALTHY_RESTART_MS) {
       log_line("error", "transport unrecoverable; re-exec requested");
       request_process_restart(now);
@@ -1512,7 +1548,7 @@ void supervise(uint64_t now, size_t outbox_free) {
     runtime.last_liveness_ms = now;
   }
   if (runtime.voicelab.ping_pending &&
-      now - runtime.voicelab.ping_started_ms >
+      iterate_kit_voice_elapsed_ms(now, runtime.voicelab.ping_started_ms) >
           ITERATE_KIT_VOICE_PING_TIMEOUT_MS &&
       now >= runtime.next_liveness_restart_at_ms) {
     runtime.next_liveness_restart_at_ms =

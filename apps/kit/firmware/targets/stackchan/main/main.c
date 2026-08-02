@@ -8,6 +8,7 @@
 #include "iterate/kit/platforms/esp_idf_itx_transport.h"
 #include "iterate/kit/platforms/esp_idf_pcm_transport.h"
 #include "iterate/kit/platforms/esp_idf_websocket_policy.h"
+#include "iterate/kit/platforms/stackchan_avatar.h"
 #include "iterate/kit/platforms/stackchan_hardware.h"
 #include "iterate/kit/spsc_ring.h"
 #include "stackchan_realtime_policy.h"
@@ -217,6 +218,7 @@ static enum iterate_kit_status sample_runtime_metrics(
   struct iterate_kit_esp_idf_pcm_transport_metrics pcm;
   struct iterate_kit_core_s3_audio_owner_metrics owner;
   struct iterate_kit_core_s3_aec_signal_metrics aec_signal;
+  struct iterate_kit_stackchan_avatar_metrics avatar;
   const int64_t now_us = esp_timer_get_time();
   int64_t cpu_permille = -1;
   uint32_t stack_headroom;
@@ -244,12 +246,14 @@ static enum iterate_kit_status sample_runtime_metrics(
   memset(&pcm, 0, sizeof(pcm));
   memset(&owner, 0, sizeof(owner));
   memset(&aec_signal, 0, sizeof(aec_signal));
+  memset(&avatar, 0, sizeof(avatar));
   memset(&access_point, 0, sizeof(access_point));
   iterate_kit_esp_idf_itx_transport_metrics(
       &state->control_transport, &control);
   iterate_kit_esp_idf_pcm_transport_metrics(
       &state->pcm_transport, &pcm);
   iterate_kit_core_s3_audio_owner_metrics_snapshot(&owner);
+  iterate_kit_stackchan_avatar_metrics_snapshot(&avatar);
   if (iterate_kit_core_s3_audio_owner_aec_signal_metrics_snapshot(
           &aec_signal) != ITERATE_KIT_OK) {
     /*
@@ -280,6 +284,8 @@ static enum iterate_kit_status sample_runtime_metrics(
       stack_headroom, owner.io_stack_minimum_free_bytes);
   stack_headroom = minimum_nonzero(
       stack_headroom, owner.aec_stack_minimum_free_bytes);
+  stack_headroom = minimum_nonzero(
+      stack_headroom, avatar.analyzer_stack_minimum_free_bytes);
   sample->task_stack_high_water_bytes = stack_headroom;
 
   sample->has_audio = true;
@@ -879,6 +885,16 @@ void app_main(void) {
   }
 
   memset(&audio_options, 0, sizeof(audio_options));
+  if (iterate_kit_stackchan_avatar_start() != ESP_OK) {
+    /*
+     * The avatar is part of this target, not a best-effort decoration. A
+     * silent fallback would let a display/LVGL regression ship behind a green
+     * voice test. Fail before installing the audio ISR observer so the target
+     * never calls into a partially initialized visual owner.
+     */
+    ESP_LOGE(TAG, "StackChan avatar owner failed to start");
+    return;
+  }
   audio_options.lane = &runtime.pcm_lane;
   audio_options.audio_mode = ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC;
   audio_options.maximum_downlink_frame_age_ms =
@@ -888,6 +904,9 @@ void app_main(void) {
   audio_options.microphone_gain_db = 24;
   audio_options.notify_uplink = notify_uplink;
   audio_options.notify_uplink_context = &runtime;
+  audio_options.observe_playout =
+      iterate_kit_stackchan_avatar_observe_playout;
+  audio_options.observe_playout_context = NULL;
   if (iterate_kit_core_s3_audio_owner_start(&audio_options) != ESP_OK) {
     ESP_LOGE(TAG, "CoreS3 audio owner failed to start");
     return;
@@ -901,10 +920,14 @@ void app_main(void) {
     return;
   }
 
+  struct iterate_kit_stackchan_avatar_metrics avatar_metrics;
+  memset(&avatar_metrics, 0, sizeof(avatar_metrics));
+  iterate_kit_stackchan_avatar_metrics_snapshot(&avatar_metrics);
   ESP_LOGI(
       TAG,
       "runtime ready: static_bytes=%u control_bytes=%u pcm_ring_bytes=%u "
-      "device_bytes=%u control_transport_bytes=%u pcm_transport_bytes=%u",
+      "device_bytes=%u control_transport_bytes=%u pcm_transport_bytes=%u "
+      "avatar_static_bytes=%lu avatar_framebuffer_bytes=%lu",
       (unsigned)sizeof(runtime),
       (unsigned)(sizeof(control_inbox_storage) +
                  sizeof(control_outbox_storage)),
@@ -912,7 +935,9 @@ void app_main(void) {
                  sizeof(runtime.pcm_downlink_storage)),
       (unsigned)sizeof(runtime.device),
       (unsigned)sizeof(runtime.control_transport),
-      (unsigned)sizeof(runtime.pcm_transport));
+      (unsigned)sizeof(runtime.pcm_transport),
+      (unsigned long)avatar_metrics.static_bytes,
+      (unsigned long)avatar_metrics.framebuffer_bytes);
 
   for (;;) {
     const int64_t now_us = esp_timer_get_time();
