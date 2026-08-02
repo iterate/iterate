@@ -42,13 +42,27 @@ export function CheckoutBreadcrumbs({
   return (
     <Breadcrumb className="min-w-0">
       <BreadcrumbList className="flex-nowrap text-xs">
-        <BreadcrumbItem>
-          <BreadcrumbLink render={<Link to="/" />}>{projectLabel}</BreadcrumbLink>
-        </BreadcrumbItem>
-        {workspace === undefined ? null : (
+        {/* The project only when the host names one — never the app's own
+            name, which would read as a view crumb ABOVE the workspace. */}
+        {projectLabel === "" ? null : (
           <>
+            <BreadcrumbItem>
+              <BreadcrumbLink render={<Link to="/" />}>{projectLabel}</BreadcrumbLink>
+            </BreadcrumbItem>
             <BreadcrumbSeparator />
-            <BreadcrumbItem className="truncate font-mono">{workspace}</BreadcrumbItem>
+          </>
+        )}
+        {workspace === undefined ? (
+          <BreadcrumbItem>
+            <BreadcrumbLink render={<Link to="/" />}>workspaces</BreadcrumbLink>
+          </BreadcrumbItem>
+        ) : (
+          <>
+            <BreadcrumbItem>
+              <BreadcrumbLink render={<Link to="/" />} className="truncate font-mono">
+                {workspace}
+              </BreadcrumbLink>
+            </BreadcrumbItem>
             <BreadcrumbSeparator />
             <BreadcrumbItem>tasks</BreadcrumbItem>
           </>

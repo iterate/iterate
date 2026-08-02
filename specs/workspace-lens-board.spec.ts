@@ -47,7 +47,7 @@ test("workspace lens board demo", async ({ page }) => {
   );
   await page.getByRole("button", { name: "Send message" }).click();
   const docsLink = page.locator('a[href*="docs--lens-demo-live"]').first();
-  await docsLink.waitFor({ timeout: 300_000 });
+  await waitForAgentReply(docsLink, "a docs review link");
   const threadUrl = page.url();
   const docsHref = await docsLink.getAttribute("href");
   if (docsHref === null) throw new Error("the agent's reply carried no docs link");
@@ -82,7 +82,7 @@ test("workspace lens board demo", async ({ page }) => {
   // A real board deep link, not the bare app URL: the agent occasionally
   // pastes the app root, which lands on the workspace picker.
   const boardLink = page.locator('a[href*="tasks--lens-demo-live"][href*="workspace="]').first();
-  await boardLink.waitFor({ timeout: 420_000 });
+  await waitForAgentReply(boardLink, "a task board link");
   const boardHref = await boardLink.getAttribute("href");
   if (boardHref === null) throw new Error("the agent's reply carried no board link");
 
@@ -95,6 +95,27 @@ test("workspace lens board demo", async ({ page }) => {
   await page.getByRole("button", { name: /joke/i }).first().click();
   await page.getByRole("combobox", { name: "Task state" }).waitFor({ timeout: 30_000 });
 });
+
+/**
+ * An agent turn is a real LLM turn — minutes, not seconds. Wait in bounded
+ * slices rather than one oversized inline timeout: the e2e budget ladder
+ * caps any single inline `timeout:` at the heavy-test ceiling, since that
+ * value becomes the preview lane's worst-case tail.
+ */
+async function waitForAgentReply(
+  locator: import("@playwright/test").Locator,
+  what: string,
+): Promise<void> {
+  for (let slice = 0; slice < 4; slice++) {
+    try {
+      await locator.waitFor({ timeout: 120_000 });
+      return;
+    } catch {
+      // keep waiting — the turn is still running
+    }
+  }
+  throw new Error(`the agent never replied with ${what}`);
+}
 
 /** The project-member gate interstitial appears only when the project host
  * has no session cookie yet — click through when it does. */

@@ -8,5 +8,6 @@ export function projectSlug(): string {
 }
 
 /** Server-derived project label (root loader) — SSR and client agree, so the
- * breadcrumb never flashes a placeholder. */
-export const ProjectLabelContext = createContext("tasks");
+ * breadcrumb never flashes a placeholder. Empty when the host does not name
+ * a project; the breadcrumb then starts at the workspace. */
+export const ProjectLabelContext = createContext("");
