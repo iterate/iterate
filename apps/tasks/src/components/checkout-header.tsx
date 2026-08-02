@@ -1,4 +1,4 @@
-import { useContext, useRef, useState, type ReactNode } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import { Link } from "@tanstack/react-router";
 import { CheckIcon, LinkIcon, ListFilterIcon, MoreHorizontalIcon, XIcon } from "lucide-react";
 import {
@@ -20,14 +20,14 @@ import {
 import { Input } from "@iterate-com/ui/components/input";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
-import { ProjectLabelContext } from "../lib/project-label.ts";
 import type { RowField } from "../lib/board-model.ts";
 
 /**
- * The header's orientation line, in HIERARCHY order: project › which
- * WORKSPACE this lens renders › which view (tasks) › the base path the view
- * is scoped to (the repo mount). Repos are mounted inside every workspace,
- * so the workspace always comes first.
+ * The header's orientation line, in HIERARCHY order: which WORKSPACE this
+ * lens renders › which view (tasks) › the base path the view is scoped to
+ * (the repo mount). Repos are mounted inside every workspace, so the
+ * workspace always comes first; the project is never a crumb (the app's
+ * host already says which project this is).
  */
 export function CheckoutBreadcrumbs({
   workspace,
@@ -38,20 +38,11 @@ export function CheckoutBreadcrumbs({
   /** The base path the view is scoped to (e.g. "/repos/config"), if any. */
   rootPath?: string;
 }) {
-  const projectLabel = useContext(ProjectLabelContext);
   return (
     <Breadcrumb className="min-w-0">
       <BreadcrumbList className="flex-nowrap text-xs">
-        {/* The project only when the host names one — never the app's own
-            name, which would read as a view crumb ABOVE the workspace. */}
-        {projectLabel === "" ? null : (
-          <>
-            <BreadcrumbItem>
-              <BreadcrumbLink render={<Link to="/" />}>{projectLabel}</BreadcrumbLink>
-            </BreadcrumbItem>
-            <BreadcrumbSeparator />
-          </>
-        )}
+        {/* No project crumb: the whole app is one project (its host says
+            which), so the hierarchy starts at the workspace. */}
         {workspace === undefined ? (
           <BreadcrumbItem>
             <BreadcrumbLink render={<Link to="/" />}>workspaces</BreadcrumbLink>

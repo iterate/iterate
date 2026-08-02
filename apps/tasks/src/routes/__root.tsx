@@ -4,13 +4,12 @@ import { SidebarInset, SidebarProvider } from "@iterate-com/ui/components/sideba
 import { TooltipProvider } from "@iterate-com/ui/components/tooltip";
 import appCss from "../styles.css?url";
 import { getAppShellContext } from "../lib/sidebar-state.ts";
-import { ProjectLabelContext } from "../lib/project-label.ts";
 import { AppSidebar } from "../components/app-sidebar.tsx";
 
 export const Route = createRootRoute({
   loader: async () => {
     const shell = await getAppShellContext();
-    return { sidebarDefaultOpen: shell.defaultOpen, projectLabel: shell.projectLabel };
+    return { sidebarDefaultOpen: shell.defaultOpen };
   },
   head: () => ({
     meta: [
@@ -32,10 +31,9 @@ export const Route = createRootRoute({
  * its own top strip (the board's filter bar).
  */
 function RootComponent() {
-  const { sidebarDefaultOpen, projectLabel } = Route.useLoaderData();
+  const { sidebarDefaultOpen } = Route.useLoaderData();
   return (
     <RootDocument>
-      <ProjectLabelContext.Provider value={projectLabel}>
         <TooltipProvider delay={0}>
           <SidebarProvider defaultOpen={sidebarDefaultOpen} className="h-svh">
             <AppSidebar />
@@ -44,7 +42,6 @@ function RootComponent() {
             </SidebarInset>
           </SidebarProvider>
         </TooltipProvider>
-      </ProjectLabelContext.Provider>
     </RootDocument>
   );
 }
