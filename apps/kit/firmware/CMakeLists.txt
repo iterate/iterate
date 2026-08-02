@@ -794,6 +794,27 @@ add_test(
   COMMAND iterate-kit-configuration-test
 )
 
+add_executable(iterate-kit-cli-report-test
+  targets/host_cli/cli_report.c
+  tests/cli_report_test.c
+)
+target_include_directories(
+  iterate-kit-cli-report-test PRIVATE targets/host_cli)
+target_compile_features(
+  iterate-kit-cli-report-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli-report-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+)
+add_test(
+  NAME iterate-kit-cli-report-test
+  COMMAND iterate-kit-cli-report-test
+)
+
 add_executable(iterate-kit-cli-options-test
   targets/host_cli/cli_options.c
   tests/cli_options_test.c
