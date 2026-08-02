@@ -57,10 +57,49 @@ enum {
    * at most 400 ms, and sheds one frame per 50 above 1200 ms so catch-up is
    * audible only as bounded latency recovery rather than pitch distortion.
    */
-  ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES = 48000,
-  ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 300 * 32 + 2880,
+  /*
+   * THIRTY SECONDS, because the sender no longer paces.
+   *
+   * This was a jitter cushion when the server dripped frames to arrive just
+   * in time. That server is gone: a whole answer now leaves as fast as the
+   * wire takes it, so the ring is not a cushion any more — it IS the answer,
+   * and it has to hold the longest one anybody will ask for.
+   *
+   * Sized at 1.5 s it did not. Measured over two minutes of ordinary
+   * conversation: 2080 frames — forty-one seconds of speech — discarded at
+   * the door for want of room, while the loss counters stayed small and
+   * innocent because a frame refused on arrival was never a frame that went
+   * missing. 30 s of 16 kHz mono PCM16 is 960 KiB of PSRAM this board has
+   * spare, and overflowing THAT is a real fault worth shouting about.
+   */
+  ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES = 960000,
+  /*
+   * 1000 ms of true cushion, plus one hardware ring.
+   *
+   * 390 ms was sized for a sender that PACED frames to arrive just in time.
+   * That sender is gone: the whole answer now leaves as fast as the wire
+   * takes it, and it arrives in clumps — measured at 139 frames (2.8 s of
+   * speech) inside one second, then nothing for the next. Starting playback
+   * on 390 ms and then running dry between clumps is where the remaining
+   * holes come from: the device concealed, and one second later held 1.4
+   * seconds of audio it could have been playing.
+   *
+   * Waiting for a second of it costs almost nothing in latency, because at
+   * those arrival rates a second of audio lands in well under a second — and
+   * an answer too short to reach the mark is played the moment the sender
+   * says it is finished, which is what makes raising this safe at all.
+   */
+  ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 1000 * 32 + 2880,
   ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS = 400,
-  ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS = 1200,
+  /*
+   * Backlog beyond which a frame is skipped to catch up — now effectively
+   * never. Catching up made sense when a deep buffer meant the sender was
+   * running ahead of realtime. With a whole answer arriving at once a deep
+   * buffer is the NORMAL state, and skipping then is deleting speech from
+   * the middle of a sentence at a steady rate. Just under the ring, so it
+   * can only fire if something has gone truly wrong.
+   */
+  ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS = 29000,
   ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY = 50,
   ITERATE_KIT_VOICE_SPEAKER_IDLE_POWERDOWN_MS = 1500,
 

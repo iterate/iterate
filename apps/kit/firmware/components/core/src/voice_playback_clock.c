@@ -46,6 +46,22 @@ bool iterate_kit_voice_playback_clock_ready(
     struct iterate_kit_voice_playback_clock *clock,
     uint32_t queued_bytes) {
   if (clock == NULL) return false;
+  /*
+   * A FINISHED ANSWER IS ALWAYS READY, however little of it there is.
+   *
+   * Prefill answers "will more arrive in time?", and once the sender has
+   * said the answer is complete the question is settled: nothing more is
+   * coming, so waiting for a threshold that can never be reached is waiting
+   * forever. Without this, every answer SHORTER than the prefill was never
+   * played at all — "Yes, I can hear you clearly" is under a second, and the
+   * larger the prefill the more of the conversation disappears. That failure
+   * is silent at both ends: the model believes it spoke, and the listener
+   * hears nothing.
+   */
+  if (clock->answer_done) {
+    clock->priming = false;
+    return true;
+  }
   if (clock->priming &&
       queued_bytes < ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES) {
     return false;
