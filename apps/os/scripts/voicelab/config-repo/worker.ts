@@ -224,6 +224,18 @@ export class VoiceBridge extends IterateDurableObject {
     const stream = project.streams.get(streamPath);
 
     let spkSeq = 0;
+    /*
+     * Which answer the model is currently speaking, and how far into it.
+     *
+     * `answerSeq` counts up and never repeats within a call, which is what
+     * makes a barge-in expressible as a comparison rather than as a message:
+     * a listener holding speech from answer 3 rejects everything numbered 3
+     * the moment it sees a 4, with no cancellation event to wait for and
+     * nothing to acknowledge. `answerFrames` restarts at zero for each
+     * answer so a gap is visible where it occurs.
+     */
+    let answerSeq = 0;
+    let answerFrames = 0;
     let appendErrors = 0;
 
     /*
@@ -276,105 +288,47 @@ export class VoiceBridge extends IterateDurableObject {
     };
 
     /*
-     * ?pace=1: drip speaker events instead of relaying Grok's burst instantly.
-     * A constrained consumer takes each delivery into a bounded inbox and
-     * cannot absorb hundreds of messages in one TCP clump.
+     * THE SERVER DOES NOT PACE. THE LISTENER OWNS THE CLOCK.
      *
-     * The rate must be realtime, and it must not DRIFT. Anything faster than
-     * the device plays accumulates for the whole answer: at 2x a 60s answer
-     * left 30s queued, which overran the device buffer and shredded the
-     * waveform; even a 5% lead accumulated 3s and overflowed a 1s buffer.
+     * This is where a drip-feed used to be, and it is worth recording why it
+     * is gone rather than tuned. Pacing here is a server guessing at a
+     * network it cannot see, and every version of the guess was audible:
      *
-     * So the schedule is absolute, not an interval: frame N is due at
-     * start + N*20ms. A late tick catches up instead of compounding, and the
-     * device's buffer holds jitter rather than a growing backlog.
+     *   2x realtime      a 60s answer left 30s queued, which overran the
+     *                    device's buffer and shredded the waveform;
+     *   +5% drift        3s accumulated over an answer, same result;
+     *   exact realtime   the buffer hovered at the prefill mark and any
+     *                    jitter emptied it — 45 starves in 3099 frames, each
+     *                    inserting 160ms of silence, ~7s of stutter a minute;
+     *   realtime + lead  every value of the lead was wrong for some network,
+     *                    and picking one traded overflow for starvation.
      *
-     * But exactly-realtime with no head start gives the device NO cushion:
-     * its buffer hovers at the prefill mark and any jitter empties it, which
-     * costs a re-prime. Measured that way: 45 underruns in 3099 frames, each
-     * inserting 160 ms of silence — about 7 s of stutter per minute, which is
-     * precisely the "choppy audio" being reported.
+     * Only the listener knows how much audio it is holding. So frames leave
+     * as fast as the wire takes them, and the device buffers a whole answer
+     * and plays it on its own clock. That deletes the entire class of defect
+     * above, and it makes barge-in instant: discarding queued speech becomes
+     * a local act needing no round trip.
      *
-     * So the first BURST_MS of a response goes out as fast as the wire takes
-     * it, and the realtime schedule starts after it. It is sized against the
-     * device's internal-RAM ring (900 ms) with room for jitter on top —
-     * bursting more than the consumer can hold just drops frames on arrival. That buys a standing
-     * cushion of that size, once per response, which absorbs jitter without
-     * accumulating over the answer the way a rate multiplier does.
+     * What replaces pacing is IDENTITY. Every frame says which call, which
+     * answer, and which frame within that answer, so a listener can decide —
+     * with no clock and no server cooperation — whether a frame is speech it
+     * still wants, speech from an answer that has been talked over, or one
+     * it has already played. See components/core/src/audio_playout.c.
      */
-    /*
-     * 600ms. This lead and the device's own ~390ms prefill STACK, so the
-     * ceiling is the device's ring — and cutting the lead to fit a 900ms
-     * ring was the wrong half of that trade: it stopped the overflow and
-     * produced a device whose margin never exceeded 384ms and which
-     * concealed more frames than it played. Silence inserted to cover a dry
-     * buffer sounds exactly like speech thrown away on a full one.
-     *
-     * The ring is now 1500ms, so there is room for far more than this — but
-     * the DELIVERY LANE, not the ring, is what caps the opening. One batch
-     * carries 240ms of audio and the next waits on the device's reply, so a
-     * burst bigger than a batch is a burst partly dropped on the floor: at
-     * 600ms, 46 of 225 frames never arrived and were concealed instead.
-     *
-     * One batch of lead, then realtime. The device's own 390ms prefill sits
-     * on top of it, and the lane's 1.37x headroom repays any hiccup.
-     */
-    const BURST_MS = 240;
-    /** Barge-in discards pending audio; everything else keeps its place. */
-    const dropQueuedAudio = () => {
-      for (let index = paceQueue.length - 1; index >= 0; index--) {
-        if (paceQueue[index]?.type === "voicelab/spk-frame") {
-          paceQueue.splice(index, 1);
-        }
-      }
-      paceStartedAt = 0;
-      pacedFrames = 0;
-    };
-    const pacing = url.searchParams.get("pace") === "1";
-    const paceQueue: Parameters<typeof stream.append>[0][] = [];
-    let paceTimer: ReturnType<typeof setTimeout> | null = null;
-    let paceStartedAt = 0;
-    let pacedFrames = 0;
-    const pacePump = () => {
-      if (paceTimer !== null) return;
-      if (paceQueue.length === 0) return;
-      if (paceStartedAt === 0) {
-        // First frames of a RESPONSE go immediately: that is the device's
-        // prefill, and delaying it is pure added latency. Anchored once per
-        // response, not once per drain — see tick().
-        paceStartedAt = Date.now();
-        pacedFrames = 0;
-      }
-      const tick = () => {
-        paceTimer = null;
-        const slice = paceQueue.splice(0, 5);
-        if (slice.length === 0) {
-          /*
-           * Queue momentarily dry — Grok generates in chunks, so this happens
-           * repeatedly WITHIN one answer. The schedule must NOT reset here:
-           * doing so handed every chunk a fresh opening burst, so a long
-           * answer was delivered far faster than realtime and overran the
-           * device's buffer (measured: 127 dropped frames in one answer,
-           * heard as choppiness). The anchor belongs to the response, and is
-           * cleared by response.created / response.done.
-           */
-          return;
-        }
-        fireAppend(...slice);
-        pacedFrames += slice.length;
-        // Absolute deadline, with the opening burst delivered immediately:
-        // frame N is due at start + max(0, N - burstFrames) * 20ms.
-        const burstFrames = BURST_MS / 20;
-        const due = paceStartedAt + Math.max(0, pacedFrames - burstFrames) * 20;
-        paceTimer = setTimeout(tick, Math.max(0, due - Date.now()));
-      };
-      tick();
-    };
-
     const appendSpkPcm = (bytes: Uint8Array, tGrok: number) => {
-      // Re-chunk to 20ms events (640B PCM) so constrained consumers with
-      // per-batch delivery caps can take them; one atomic append per Grok
-      // frame keeps commits low.
+      /*
+       * Re-chunked to 20ms events so a constrained consumer with a bounded
+       * inbox can take them a few at a time. `answer` and `frame` are the
+       * whole contract: `answer` counts up every time the model starts
+       * speaking, so a listener rejects a superseded answer by comparing two
+       * integers, and `frame` restarts at zero within each answer, so a hole
+       * is visible where it happens rather than inferred from a total.
+       *
+       * `t` and `tGrok` are for measuring the network. They are deliberately
+       * NOT what the playback decision is made from: the device has no
+       * synchronised clock, so "is this late?" is a question only its own
+       * buffer depth can answer.
+       */
       const events = [];
       for (let offset = 0; offset < bytes.length; offset += 640) {
         events.push({
@@ -382,6 +336,8 @@ export class VoiceBridge extends IterateDurableObject {
           ephemeral: true as const,
           payload: {
             callId,
+            answer: answerSeq,
+            frame: answerFrames++,
             seq: spkSeq++,
             t: Date.now(),
             tGrok,
@@ -390,9 +346,7 @@ export class VoiceBridge extends IterateDurableObject {
         });
       }
       if (events.length === 0) return;
-      if (!pacing) return fireAppend(...events);
-      paceQueue.push(...events);
-      pacePump();
+      fireAppend(...events);
     };
     /*
      * THE GENIUS COLLEAGUE.
@@ -622,6 +576,88 @@ export class VoiceBridge extends IterateDurableObject {
     let micBytes = 0;
 
     /*
+     * REASSEMBLING THE MICROPHONE, BECAUSE THE WIRE DOES NOT PROMISE ORDER.
+     *
+     * A device holding the talk button appends frames as fast as it can and
+     * does not wait for one to land before sending the next — that is the
+     * only way to keep 50 frames a second moving over a link with a 90ms
+     * round trip. But every append is an INDEPENDENT Durable Object call, so
+     * two issued back to back can commit in either order. (Measured on this
+     * very stream: transcript deltas arrived transposed.) A device could
+     * serialise its appends instead, and would then be limited to one frame
+     * per round trip: about 11 frames a second where it needs 50.
+     *
+     * So order is carried in the payload rather than demanded of the wire.
+     * Frames arriving early wait here until the gap in front of them is
+     * filled; the provider's audio buffer is append-only and a transposed
+     * pair is a transposed 40ms of speech, which is a stutter in the middle
+     * of a word.
+     *
+     * The window is deliberately small. A hole that never fills must not
+     * hold up a whole turn, so once this many frames are waiting the oldest
+     * missing one is declared lost and the queue drains past it — a 20ms
+     * dropout, versus a turn that never commits.
+     */
+    const MIC_REORDER_WINDOW = 16;
+    let micExpected = 0;
+    const micPending = new Map<number, ArrayBuffer | Uint8Array>();
+    let micReordered = 0;
+    let micLate = 0;
+    let micLost = 0;
+
+    const sendMic = (pcm: ArrayBuffer | Uint8Array) => {
+      upstream.send(pcm as ArrayBuffer);
+    };
+    /** Hand over every frame that is now contiguous, in order. */
+    const drainMic = () => {
+      for (;;) {
+        const next = micPending.get(micExpected);
+        if (next === undefined) return;
+        micPending.delete(micExpected);
+        micExpected++;
+        sendMic(next);
+      }
+    };
+    const offerMic = (sequence: number, pcm: ArrayBuffer | Uint8Array) => {
+      if (sequence < micExpected) {
+        /* Already sent, or already given up on. Playing it now would insert
+         * a fragment of the past into the middle of the present. */
+        micLate++;
+        return;
+      }
+      if (sequence === micExpected) {
+        micExpected++;
+        sendMic(pcm);
+        drainMic();
+        return;
+      }
+      micReordered++;
+      micPending.set(sequence, pcm);
+      while (micPending.size > MIC_REORDER_WINDOW) {
+        /* Give up on the frame at the front and take the next one we have. */
+        const lowest = Math.min(...micPending.keys());
+        micLost += lowest - micExpected;
+        micExpected = lowest;
+        drainMic();
+      }
+    };
+    /**
+     * The turn is over, so nothing more is coming to fill the gaps. Anything
+     * still waiting is sent in order — late speech is better than missing
+     * speech, and the provider has not been asked to answer yet.
+     */
+    const flushMic = () => {
+      const waiting = [...micPending.keys()].sort((left, right) => left - right);
+      for (const sequence of waiting) {
+        const pcm = micPending.get(sequence);
+        micPending.delete(sequence);
+        if (pcm !== undefined) sendMic(pcm);
+      }
+      micExpected = 0;
+      micPending.clear();
+    };
+
+    /*
      * What has been said, so a redialled session does not start amnesiac.
      * Bounded: this is context for continuity, not a transcript store, and
      * an hour of talking must not grow an unbounded array in a DO.
@@ -816,39 +852,31 @@ export class VoiceBridge extends IterateDurableObject {
       }
       if (grokEvent.type === "response.created") {
         responseActive = true;
-        // New response: a fresh burst allowance and a fresh realtime anchor.
-        paceStartedAt = 0;
-        pacedFrames = 0;
+        /*
+         * A NEW ANSWER. Everything the listener is still holding belongs to
+         * the previous one, and this number is the whole instruction to drop
+         * it — no cancellation event to deliver, nothing to acknowledge, and
+         * no way for the instruction to arrive out of order relative to the
+         * speech it governs, because it IS the speech's own label.
+         */
+        answerSeq++;
+        answerFrames = 0;
       }
       if (grokEvent.type === "response.done") responseActive = false;
-      if (grokEvent.type === "input_audio_buffer.speech_started") {
-        // Barge-in: everything still queued is answer the user talked over.
-        paceQueue.length = 0;
-      }
       if (FORWARDED_GROK_EVENTS.has(grokEvent.type)) {
-        const event = {
+        /*
+         * Transcripts and lifecycle events go out immediately, like the audio
+         * they describe. When the audio was paced these had to be queued
+         * behind it or `response.done` overtook the answer still waiting to
+         * be sent — the device showed "ready, hold to talk" while it was
+         * still speaking. Nothing is queued here any more, so the ordering
+         * problem that required it is gone with it.
+         */
+        fireAppend({
           type: "voicelab/grok-event" as const,
           ephemeral: true as const,
-          payload: { callId, t: Date.now(), event: grokEvent },
-        };
-        /*
-         * Transcript and response-lifecycle events ride the SAME paced queue
-         * as the audio they describe, so they keep their position relative
-         * to it. Sending them immediately let response.done overtake the
-         * answer still queued behind it — the device then showed "ready,
-         * hold to talk" while it was still speaking, and the transcript ran
-         * ahead of the voice.
-         *
-         * Barge-in is the deliberate exception: speech_started must reach
-         * the device as fast as the wire allows, because its whole job is to
-         * stop playback. Pacing it would defeat it.
-         */
-        if (pacing && grokEvent.type !== "input_audio_buffer.speech_started") {
-          paceQueue.push(event);
-          pacePump();
-        } else {
-          fireAppend(event);
-        }
+          payload: { callId, answer: answerSeq, t: Date.now(), event: grokEvent },
+        });
       }
     };
 
@@ -893,9 +921,6 @@ export class VoiceBridge extends IterateDurableObject {
         type: "voicelab/bridge-redialling",
       });
       responseActive = false;
-      paceQueue.length = 0;
-      paceStartedAt = 0;
-      pacedFrames = 0;
       await new Promise((resolve) => setTimeout(resolve, Math.min(500 * redials, 5000)));
       if (closedDown) return;
       const next = await dialGrok().catch(() => ({ socket: null, status: 0 }));
@@ -956,7 +981,7 @@ export class VoiceBridge extends IterateDurableObject {
               const bytes = base64ToBytes(payload.pcm as string);
               const pcm = payload.enc === "u" ? mulawToPcm16(bytes) : bytes;
               micBytes += pcm.byteLength;
-              upstream.send(pcm);
+              offerMic(typeof payload.seq === "number" ? payload.seq : micExpected, pcm);
             } catch {
               /* upstream closing; teardown follows via close event */
             }
@@ -972,7 +997,6 @@ export class VoiceBridge extends IterateDurableObject {
             lastActivityAt = Date.now();
             const text = typeof payload.text === "string" ? payload.text.trim() : "";
             if (text.length === 0 || text.length > 4096) break;
-            dropQueuedAudio();
             if (responseActive) {
               upstream.send(JSON.stringify({ type: "response.cancel" }));
               responseActive = false;
@@ -996,14 +1020,28 @@ export class VoiceBridge extends IterateDurableObject {
               micOpen = true;
               micFrames = 0;
               micBytes = 0;
-              // Everything queued is answer the user just talked over.
-              dropQueuedAudio();
+              /* Each turn numbers its frames from zero. */
+              micExpected = 0;
+              micPending.clear();
+              /*
+               * The person has started speaking over the answer. There is
+               * nothing queued here to discard any more — the listener
+               * already dropped its own queue the instant the button went
+               * down, without waiting to be told. Cancelling upstream stops
+               * the model generating more; the answer number it has already
+               * spent is what keeps the frames still in flight from being
+               * played.
+               */
               if (responseActive) {
                 upstream.send(JSON.stringify({ type: "response.cancel" }));
                 responseActive = false;
               }
             } else if (payload.action === "commit") {
               micOpen = false;
+              /* Nothing more is coming to fill the gaps, so send what waited
+               * BEFORE asking the provider to answer — a frame handed over
+               * after the commit is speech the answer never heard. */
+              flushMic();
               upstream.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
               upstream.send(JSON.stringify({ type: "response.create" }));
               /*
@@ -1021,6 +1059,12 @@ export class VoiceBridge extends IterateDurableObject {
                   frames: micFrames,
                   bytes: micBytes,
                   ms: Math.round(micBytes / 32),
+                  /* Out-of-order arrivals are expected and harmless; LOST
+                   * frames are the number that matters, and a rising `late`
+                   * means the device is re-sending what we already used. */
+                  reordered: micReordered,
+                  late: micLate,
+                  lost: micLost,
                 },
               });
             }
@@ -1121,7 +1165,6 @@ export class VoiceBridge extends IterateDurableObject {
       if (closedDown) return;
       closedDown = true;
       clearInterval(watchdog);
-      if (paceTimer !== null) clearTimeout(paceTimer);
       /*
        * A superseded call must NOT announce call-ended: the successor is
        * taking over the same callId, and the device would read its
@@ -1222,8 +1265,6 @@ export interface StartCallOptions {
   instructions?: string;
   /** Optional line the assistant speaks first, so the caller hears liveness. */
   greet?: string;
-  /** Drip speaker frames at ~2x realtime — set this from a microcontroller. */
-  pace?: boolean;
   /**
    * "manual": no VAD; the caller marks turns with voicelab/turn events. This
    * is what a push-to-talk device wants. Anything else keeps server VAD.
@@ -1259,7 +1300,6 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
     if (options.effort) params.set("effort", options.effort);
     if (options.instructions) params.set("instructions", options.instructions);
     if (options.greet) params.set("greet", options.greet);
-    if (options.pace) params.set("pace", "1");
     if (options.turns === "manual") params.set("turns", "manual");
     if (options.colleague) params.set("colleague", "1");
 
