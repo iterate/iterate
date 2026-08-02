@@ -1146,7 +1146,13 @@ enum capnweb_status iterate_kit_voicelab_start_call(
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"path\":\"%s\",\"callId\":\"%s\",\"pace\":true,"
+      /*
+       * `colleague` gives the voice its one tool and a text agent behind it.
+       * The voice model is a mouth with a couple of hundred milliseconds to
+       * think in; anything that has to be RIGHT is asked of a colleague with
+       * no clock on it, and the voice says so and keeps talking meanwhile.
+       */
+      "[{\"path\":\"%s\",\"callId\":\"%s\",\"pace\":true,\"colleague\":true,"
       "\"turns\":\"manual\"%s%s%s}]",
       voicelab->options.stream_path,
       voicelab->options.call_id,
