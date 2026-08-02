@@ -1415,6 +1415,47 @@ describe("userspace PCM session bridge", () => {
     expect(bridge.metrics().initialGreetingRequests).toBe(1);
   });
 
+  test("keeps a manual call silent until one complete PTT turn", async () => {
+    /*
+     * Opening Button B's call establishes infrastructure; it is not a user
+     * turn. The production Stick briefly configured `initialGreeting`, which
+     * made Grok speak before Button A and also created an avoidable response
+     * to interrupt. With no explicit greeting, even session.updated must be
+     * silent. Only the ordered mic frame/end marker/commit acknowledgement may
+     * request the first response.
+     */
+    const device = socketPair();
+    const provider = socketPair();
+    sockets.push(device.client, device.server, provider.client, provider.server);
+    const controls = textMessages(provider.client);
+    const bridge = new PcmSessionBridge({
+      device: device.server,
+      maximumSocketBufferedBytes: ITERATE_KIT_PCM_FRAME_BYTES * 8,
+      sessionId: "prj_test",
+      turnDetection: "manual",
+    });
+    bridge.setConversationActive(true);
+    expect(bridge.attachProvider(provider.server)).toBe(true);
+
+    provider.client.send(JSON.stringify({ type: "session.updated" }));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(controls).toEqual([]);
+    expect(bridge.metrics().initialGreetingRequests).toBe(0);
+
+    expect(bridge.inputStarted()).toBe(true);
+    device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(23));
+    expect(bridge.inputStopped()).toBe(true);
+    device.client.send(new Uint8Array(0));
+    await vi.waitFor(() => expect(controls).toEqual(['{"type":"input_audio_buffer.commit"}']));
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.committed" }));
+    await vi.waitFor(() =>
+      expect(controls).toEqual([
+        '{"type":"input_audio_buffer.commit"}',
+        '{"type":"response.create"}',
+      ]),
+    );
+  });
+
   test("keeps the device lane warm while call lifetime creates and retires providers", async () => {
     /*
      * The physical latency incident came from giving Button B ownership of

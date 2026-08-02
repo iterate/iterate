@@ -315,7 +315,6 @@ export class KitVoiceWorker extends IterateDurableObject {
           this.#ensureProvider(active, "provider-unavailable");
         }
       },
-      ...(mode === "grok" ? { initialGreeting: "How can I help you?" } : {}),
       sessionId,
       turnDetection: audioMode === "full-duplex-aec" ? "server-vad" : "manual",
     });
@@ -329,11 +328,7 @@ export class KitVoiceWorker extends IterateDurableObject {
         );
       },
       onDiagnostic: (diagnostic) => {
-        const severity = diagnostic.code.endsWith("-subscribed")
-          ? "info"
-          : diagnostic.code.endsWith("-exhausted")
-            ? "error"
-            : "warn";
+        const severity = diagnostic.code.endsWith("-subscribed") ? "info" : "warn";
         this.#log(diagnostic.code, severity, {
           attempt: diagnostic.attempt,
           message: diagnostic.message,
@@ -428,8 +423,8 @@ export class KitVoiceWorker extends IterateDurableObject {
      * The two device sockets reconnect independently. In a cold boot `/pcm`
      * can arrive a few seconds before Cap'n Web has mounted the PTT target.
      * That ordering is ordinary convergence, not a reason to destroy a healthy
-     * audio lane. Retry a finite, explicit window and retain the successful
-     * project session for exactly the device socket lifetime.
+     * audio lane. Climb a finite backoff ladder, then retain one capped retry
+     * cadence and project session for exactly the device socket lifetime.
      */
     const subscription = deviceSubscriptions.establish();
     this.ctx.waitUntil(subscription);

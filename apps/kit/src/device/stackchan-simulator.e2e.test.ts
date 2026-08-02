@@ -6,11 +6,7 @@ import { fileURLToPath } from "node:url";
 import { RpcSession, type RpcStub, type RpcTransport } from "@iterate-com/capnweb";
 import { beforeAll, expect, test } from "vitest";
 import { encodeDeviceConfiguration, type DeviceConfiguration } from "../firmware/config-image.ts";
-import type {
-  KitAecMetrics,
-  KitDeviceEvent,
-  KitPlaybackMetrics,
-} from "./kit-device-contract.ts";
+import type { KitAecMetrics, KitDeviceEvent, KitPlaybackMetrics } from "./kit-device-contract.ts";
 import type { M5StickS3 } from "./m5sticks3-contract.ts";
 import type { StackChan, StackChanMetrics } from "./stackchan-contract.ts";
 
@@ -792,6 +788,7 @@ test("reports static working memory and host CPU cost", () => {
   expect(profile.m5sticks3PcmLanePayloadBytes).toBeTypeOf("number");
   expect(profile.m5sticks3AudioTaskStackBytes).toBeTypeOf("number");
   expect(profile.m5sticks3EventNotificationStorageBytes).toBeTypeOf("number");
+  expect(profile.m5sticks3EventSubscriptionStorageBytes).toBeTypeOf("number");
   expect(profile.m5sticks3CallbackBudgetBytes).toBeTypeOf("number");
   expect(profile.m5sticks3EventStorageBytes).toBeTypeOf("number");
   expect(profile.metricSubscriptionBytes).toBeTypeOf("number");
@@ -831,7 +828,11 @@ test("reports static working memory and host CPU cost", () => {
       (profile.m5sticks3ProfileBytes as number) +
       (profile.m5sticks3PlatformBytes as number) +
       (profile.m5sticks3EventStorageBytes as number) +
-      (profile.m5sticks3EventNotificationStorageBytes as number),
+      (profile.m5sticks3EventNotificationStorageBytes as number) +
+      // Subscription cursors are retained control state too. Omitting them
+      // made the assertion pass only against a stale pre-subscription binary;
+      // a clean host rebuild correctly exposed the missing 80-byte term.
+      (profile.m5sticks3EventSubscriptionStorageBytes as number),
   );
   expect(profile.stackchanProfileWorkingSetBytes).toBeLessThanOrEqual(6_000);
   // This ceiling covers only the explicitly summed control plane plus capture.

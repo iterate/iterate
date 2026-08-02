@@ -302,7 +302,22 @@ static void request_restart(
 }
 
 static void latch_fatal_failure(
-    struct iterate_kit_esp_idf_itx_transport *transport) {
+    struct iterate_kit_esp_idf_itx_transport *transport,
+    enum iterate_kit_esp_idf_itx_fatal_failure_reason reason) {
+  uint32_t expected =
+      (uint32_t)ITERATE_KIT_ESP_IDF_ITX_FATAL_NONE;
+  /*
+   * Several owners can observe fallout from one broken generation. Retain the
+   * first local invariant, not whichever cleanup path happens to run last;
+   * that first cause is what an unattended post-reboot diagnostic must report.
+   */
+  (void)__atomic_compare_exchange_n(
+      &transport->fatal_failure_reason,
+      &expected,
+      (uint32_t)reason,
+      false,
+      __ATOMIC_ACQ_REL,
+      __ATOMIC_ACQUIRE);
   atomic_store_u32(&transport->fatal_failure_latched, 1U);
   request_restart(transport);
 }
@@ -316,7 +331,9 @@ static void record_protocol_failure(
      * zero as retryable would manufacture a recovery epoch for an impossible
      * local/platform ordering and hide the ownership defect.
      */
-    latch_fatal_failure(transport);
+    latch_fatal_failure(
+        transport,
+        ITERATE_KIT_ESP_IDF_ITX_FATAL_PROTOCOL_WITHOUT_GENERATION);
     return;
   }
   if (atomic_publish_newer_generation(
@@ -462,7 +479,9 @@ static void fail_receive_fatal(
       &transport->last_control_receive_status,
       status,
       __ATOMIC_RELEASE);
-  latch_fatal_failure(transport);
+  latch_fatal_failure(
+      transport,
+      ITERATE_KIT_ESP_IDF_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED);
 }
 
 static bool mark_socket_connected(
@@ -863,7 +882,9 @@ static void network_task(void *context) {
         atomic_saturating_increment(
             &transport->network_task_stack_exhaustions);
         remember_platform_error(transport, ESP_ERR_NO_MEM);
-        latch_fatal_failure(transport);
+        latch_fatal_failure(
+            transport,
+            ITERATE_KIT_ESP_IDF_ITX_FATAL_NETWORK_STACK_HEADROOM);
         continue;
       }
       atomic_saturating_increment(
@@ -886,7 +907,9 @@ static void network_task(void *context) {
         if (status == ITERATE_KIT_OK) {
           remember_platform_error(
               transport, ESP_ERR_INVALID_STATE);
-          latch_fatal_failure(transport);
+          latch_fatal_failure(
+              transport,
+              ITERATE_KIT_ESP_IDF_ITX_FATAL_WEBSOCKET_OPEN_INVARIANT);
         } else {
           remember_websocket_error(
               transport, transport->websocket.last_error);
@@ -1220,6 +1243,8 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
       &transport->protocol_failure_generation);
   if (atomic_load_u32(
           &transport->fatal_failure_latched)) {
+    transport->mount_deadline_us = 0;
+    transport->mount_deadline_generation = 0U;
     iterate_kit_itx_connection_lost(
         transport->options.connection);
     discard_control_inbox(transport);
@@ -1234,6 +1259,8 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
   }
   if (protocol_failure_generation != 0U &&
       socket_generation <= protocol_failure_generation) {
+    transport->mount_deadline_us = 0;
+    transport->mount_deadline_generation = 0U;
     /*
      * Mark the protocol object disconnected even when the rejection already
      * closed its session. Gating this on session_open strands mount rejection
@@ -1254,6 +1281,8 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
     return ITERATE_KIT_STATE_ERROR;
   }
   if (!socket_connected) {
+    transport->mount_deadline_us = 0;
+    transport->mount_deadline_generation = 0U;
     iterate_kit_itx_connection_lost(
         transport->options.connection);
     discard_control_inbox(transport);
@@ -1307,7 +1336,9 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
        * was violated. A peer reconnect cannot release a slot held by the wrong
        * local task, so retrying would hide corruption behind a reconnect loop.
        */
-      latch_fatal_failure(transport);
+      latch_fatal_failure(
+          transport,
+          ITERATE_KIT_ESP_IDF_ITX_FATAL_CONTROL_RING_RESET);
       return ITERATE_KIT_STATE_ERROR;
     }
     atomic_store_u32(
@@ -1331,9 +1362,21 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
        * storage. Failure here is a local profile/ownership invariant, not bad
        * bytes from this peer, so repeated socket handshakes cannot repair it.
        */
-      latch_fatal_failure(transport);
+      latch_fatal_failure(
+          transport,
+          ITERATE_KIT_ESP_IDF_ITX_FATAL_CONNECTION_OPEN);
       return ITERATE_KIT_STATE_ERROR;
     }
+    /*
+     * Start the deadline only after open() has emitted this generation's
+     * authentication/mount request. Starting at TCP connect would charge TLS
+     * or an outbox handoff to the peer; starting on first reply would permit a
+     * silent peer to strand MOUNTING forever.
+     */
+    transport->mount_deadline_generation = socket_generation;
+    transport->mount_deadline_us =
+        esp_timer_get_time() +
+        (int64_t)ITERATE_KIT_ESP_IDF_ITX_MOUNT_TIMEOUT_MS * 1000;
     transport->handled_socket_generation =
         socket_generation;
     transport->last_capnweb_status = CAPNWEB_OK;
@@ -1383,6 +1426,33 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
   switch (iterate_kit_itx_connection_refresh(
       transport->options.connection)) {
     case ITERATE_KIT_ITX_CONNECTION_MOUNTING:
+      if (transport->mount_deadline_generation ==
+              transport->handled_socket_generation &&
+          transport->handled_socket_generation == socket_generation &&
+          transport->mount_deadline_us > 0 &&
+          esp_timer_get_time() >= transport->mount_deadline_us) {
+        const uint32_t timed_out_generation =
+            transport->handled_socket_generation;
+        /*
+         * Clear before requesting replacement so a second application poll
+         * cannot count the same generation twice. The monotonic generation
+         * publication also makes a stale deadline harmless if ownership code
+         * is later rearranged around this branch.
+         */
+        transport->mount_deadline_us = 0;
+        transport->mount_deadline_generation = 0U;
+        if (atomic_publish_newer_generation(
+                &transport->mount_timeout_generation,
+                timed_out_generation)) {
+          atomic_saturating_increment(
+              &transport->mount_timeouts);
+        }
+        remember_platform_error(transport, ESP_ERR_TIMEOUT);
+        transport->state = ITERATE_KIT_ESP_IDF_ITX_FAILED;
+        record_protocol_failure(
+            transport, timed_out_generation);
+        return ITERATE_KIT_STATE_ERROR;
+      }
       transport->state =
           ITERATE_KIT_ESP_IDF_ITX_MOUNTING;
       return ITERATE_KIT_OK;
@@ -1402,12 +1472,16 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
             ITERATE_KIT_ESP_IDF_ITX_WEBSOCKET_CONNECTING;
         return ITERATE_KIT_OK;
       }
+      transport->mount_deadline_us = 0;
+      transport->mount_deadline_generation = 0U;
       atomic_store_u32(
           &transport->ready_socket_generation,
           socket_generation);
       transport->state = ITERATE_KIT_ESP_IDF_ITX_READY;
       return ITERATE_KIT_OK;
     case ITERATE_KIT_ITX_CONNECTION_FAILED:
+      transport->mount_deadline_us = 0;
+      transport->mount_deadline_generation = 0U;
       transport->last_capnweb_status =
           transport->options.connection->capnweb_status;
       remember_application_capnweb_failure(
@@ -1422,6 +1496,8 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
       return ITERATE_KIT_STATE_ERROR;
     case ITERATE_KIT_ITX_CONNECTION_DISCONNECTED:
     case ITERATE_KIT_ITX_CONNECTION_CLOSED:
+      transport->mount_deadline_us = 0;
+      transport->mount_deadline_generation = 0U;
       transport->state =
           ITERATE_KIT_ESP_IDF_ITX_WEBSOCKET_CONNECTING;
       return ITERATE_KIT_STATE_ERROR;
@@ -1437,7 +1513,9 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_poll(
       transport->handled_socket_generation,
       transport->last_capnweb_status);
   transport->state = ITERATE_KIT_ESP_IDF_ITX_FAILED;
-  latch_fatal_failure(transport);
+  latch_fatal_failure(
+      transport,
+      ITERATE_KIT_ESP_IDF_ITX_FATAL_CONNECTION_STATE);
   return ITERATE_KIT_STATE_ERROR;
 }
 
@@ -1551,6 +1629,21 @@ void iterate_kit_esp_idf_itx_transport_metrics(
       atomic_load_u32(&transport->websocket_disconnects);
   metrics->websocket_errors =
       atomic_load_u32(&transport->websocket_errors);
+  metrics->fatal_failure_latched =
+      atomic_load_u32(
+          &transport->fatal_failure_latched) != 0U;
+  metrics->fatal_failure_reason =
+      (enum iterate_kit_esp_idf_itx_fatal_failure_reason)
+          atomic_load_u32(
+              &transport->fatal_failure_reason);
+  metrics->ready_socket_generation =
+      atomic_load_u32(
+          &transport->ready_socket_generation);
+  metrics->mount_timeouts =
+      atomic_load_u32(&transport->mount_timeouts);
+  metrics->mount_timeout_generation =
+      atomic_load_u32(
+          &transport->mount_timeout_generation);
   metrics->protocol_failures =
       atomic_load_u32(&transport->protocol_failures);
   metrics->protocol_failure_generation =
@@ -1636,6 +1729,28 @@ void iterate_kit_esp_idf_itx_transport_metrics(
   iterate_kit_spsc_ring_metrics(
       transport->options.control_outbox,
       &metrics->control_outbox);
+}
+
+void iterate_kit_esp_idf_itx_transport_lifecycle(
+    const struct iterate_kit_esp_idf_itx_transport *transport,
+    struct iterate_kit_esp_idf_itx_transport_lifecycle *lifecycle) {
+  if (lifecycle == NULL) {
+    return;
+  }
+  memset(lifecycle, 0, sizeof(*lifecycle));
+  if (transport == NULL || !transport->initialized) {
+    return;
+  }
+  lifecycle->fatal_failure_latched =
+      atomic_load_u32(
+          &transport->fatal_failure_latched) != 0U;
+  lifecycle->fatal_failure_reason =
+      (enum iterate_kit_esp_idf_itx_fatal_failure_reason)
+          atomic_load_u32(
+              &transport->fatal_failure_reason);
+  lifecycle->ready_socket_generation =
+      atomic_load_u32(
+          &transport->ready_socket_generation);
 }
 
 const char *iterate_kit_esp_idf_itx_transport_state_name(

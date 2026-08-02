@@ -1,3 +1,4 @@
+#include "iterate/kit/control_recovery.h"
 #include "iterate/kit/devices/m5sticks3.h"
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/pcm_websocket.h"
@@ -9,6 +10,7 @@
 #include "iterate/kit/platforms/m5unified.hpp"
 #include "iterate/kit/spsc_ring.h"
 
+#include <cinttypes>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
@@ -16,6 +18,7 @@
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_system.h"
 #include "esp_timer.h"
 /*
  * ESP-IDF's public Wi-Fi header deliberately contains C flexible/zero-length
@@ -88,6 +91,14 @@ constexpr std::size_t subscriptionCapacity = 2U;
 constexpr std::size_t callbackConcurrency = 2U;
 constexpr std::size_t diagnosticsExpressionCapacity =
     ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY;
+/*
+ * `fatal_failure_latched` means the control transport has already proved that
+ * no fresh socket can repair this boot. Five seconds leaves one stable window
+ * for serial/onscreen transition evidence without making an unattended user
+ * stare at a permanently half-alive PCM connection. Ordinary FAILED socket
+ * generations never enter this timer and retain their bounded retry policy.
+ */
+constexpr std::uint64_t controlFatalRestartAfterMs = 5'000U;
 /*
  * One NUL beyond this target's 512-byte URL limit lets the screen capability
  * copy and validate without heap allocation or truncation.
@@ -345,6 +356,7 @@ struct Runtime {
    */
   iterate_kit_esp_idf_itx_transport transport{};
   iterate_kit_esp_idf_pcm_transport pcmTransport{};
+  iterate_kit_control_recovery controlRecovery{};
   iterate::kit::platforms::M5StickS3DirectAudioOwner
       audioOwner;
   iterate::kit::platforms::M5UnifiedHalfDuplex
@@ -1362,6 +1374,8 @@ extern "C" void app_main(void) {
     runtime.platform.showStatus("Initialization failed", 0U, 0U);
     return;
   }
+  iterate_kit_control_recovery_init(
+      &runtime.controlRecovery);
   /*
    * Start control networking only after every callback target and queue exists.
    * Reversing this order would let ESP-IDF publish a connection event into
@@ -1491,6 +1505,56 @@ extern "C" void app_main(void) {
           iterate_kit_esp_idf_itx_transport_state_name(
               runtime.transport.state));
       runtime.lastTransportState = runtime.transport.state;
+    }
+
+    {
+      struct iterate_kit_esp_idf_itx_transport_lifecycle
+          controlLifecycle{};
+      iterate_kit_esp_idf_itx_transport_lifecycle(
+          &runtime.transport, &controlLifecycle);
+      struct iterate_kit_control_recovery_observation
+          recoveryObservation{};
+      recoveryObservation.now_ms =
+          static_cast<std::uint64_t>(nowMicroseconds / 1000);
+      recoveryObservation.fatal_restart_after_ms =
+          controlFatalRestartAfterMs;
+      recoveryObservation.ready_generation =
+          controlLifecycle.ready_socket_generation;
+      recoveryObservation.fatal_latched =
+          controlLifecycle.fatal_failure_latched;
+      recoveryObservation.pcm_started =
+          runtime.pcmTransportStarted;
+      const auto recoveryAction =
+          iterate_kit_control_recovery_poll(
+              &runtime.controlRecovery,
+              &recoveryObservation);
+      if (recoveryAction ==
+          ITERATE_KIT_CONTROL_RECOVERY_RESTART_PCM) {
+        /*
+         * Callback exports belong to one Cap'n Web generation. A remount can
+         * therefore leave the independent /pcm socket healthy but unable to
+         * observe PTT. Replacing /pcm makes userspace create one fresh callback
+         * coordinator; retaining the old PCM conversation was rejected because
+         * it has no reliable callback-liveness signal.
+         */
+        ESP_LOGW(
+            tag,
+            "control generation %" PRIu32
+            " remounted; replacing PCM session",
+            controlLifecycle.ready_socket_generation);
+        iterate_kit_esp_idf_pcm_transport_request_restart(
+            &runtime.pcmTransport);
+      } else if (recoveryAction ==
+                 ITERATE_KIT_CONTROL_RECOVERY_RESTART_PROCESS) {
+        ESP_LOGE(
+            tag,
+            "control recovery permanently latched: reason=%u "
+            "readyGeneration=%" PRIu32 "; restarting",
+            static_cast<unsigned int>(
+                controlLifecycle.fatal_failure_reason),
+            controlLifecycle.ready_socket_generation);
+        esp_restart();
+      }
     }
 
     if (!runtime.pcmTransportStarted &&

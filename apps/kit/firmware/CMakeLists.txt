@@ -16,6 +16,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/audio_intent_reconciler.c
   components/core/src/audio.c
   components/core/src/configuration.c
+  components/core/src/control_recovery.c
   components/core/src/cpu_usage.c
   components/core/src/device_events.c
   components/core/src/itx_connection.c
@@ -351,6 +352,26 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-runtime-diagnostics-test
   COMMAND iterate-kit-runtime-diagnostics-test
+)
+
+add_executable(iterate-kit-control-recovery-test
+  tests/control_recovery_test.c
+)
+target_compile_features(
+  iterate-kit-control-recovery-test PRIVATE c_std_99)
+target_compile_options(
+  iterate-kit-control-recovery-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-control-recovery-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-control-recovery-test
+  COMMAND iterate-kit-control-recovery-test
 )
 
 add_executable(iterate-kit-runtime-diagnostics-fixture

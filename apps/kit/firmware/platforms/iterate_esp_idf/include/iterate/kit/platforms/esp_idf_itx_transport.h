@@ -71,6 +71,14 @@ enum {
    * base64 PCM frames, about 7 KiB.
    */
   ITERATE_KIT_ESP_IDF_CONTROL_MESSAGE_CAPACITY = 8192,
+  /*
+   * A live WebSocket is not a mounted capability. Authentication or mount can
+   * disappear into a healthy-looking peer without ever closing TCP, so each
+   * accepted generation gets a deadline. Ten seconds is deliberately longer
+   * than ordinary production mounting while still making an unattended outage
+   * bounded; the replacement generation follows the normal reconnect policy.
+   */
+  ITERATE_KIT_ESP_IDF_ITX_MOUNT_TIMEOUT_MS = 10000,
 };
 
 /**
@@ -90,6 +98,25 @@ enum iterate_kit_esp_idf_itx_transport_state {
   ITERATE_KIT_ESP_IDF_ITX_READY,
   ITERATE_KIT_ESP_IDF_ITX_FAILED,
   ITERATE_KIT_ESP_IDF_ITX_STOPPED,
+};
+
+/**
+ * First local invariant that permanently disabled control reconnects.
+ *
+ * Ordinary peer, Wi-Fi, TLS, parser-limit, and mount failures replace only the
+ * current socket generation and never appear here. A nonzero value means this
+ * boot cannot recover the capability transport in place; a target supervisor
+ * may therefore restart the process after preserving this exact reason.
+ */
+enum iterate_kit_esp_idf_itx_fatal_failure_reason {
+  ITERATE_KIT_ESP_IDF_ITX_FATAL_NONE = 0,
+  ITERATE_KIT_ESP_IDF_ITX_FATAL_PROTOCOL_WITHOUT_GENERATION,
+  ITERATE_KIT_ESP_IDF_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED,
+  ITERATE_KIT_ESP_IDF_ITX_FATAL_NETWORK_STACK_HEADROOM,
+  ITERATE_KIT_ESP_IDF_ITX_FATAL_WEBSOCKET_OPEN_INVARIANT,
+  ITERATE_KIT_ESP_IDF_ITX_FATAL_CONTROL_RING_RESET,
+  ITERATE_KIT_ESP_IDF_ITX_FATAL_CONNECTION_OPEN,
+  ITERATE_KIT_ESP_IDF_ITX_FATAL_CONNECTION_STATE,
 };
 
 /**
@@ -134,6 +161,15 @@ struct iterate_kit_esp_idf_itx_transport_metrics {
   uint32_t websocket_start_attempts;
   uint32_t websocket_disconnects;
   uint32_t websocket_errors;
+  /** True only when this boot has no in-place control recovery path. */
+  bool fatal_failure_latched;
+  enum iterate_kit_esp_idf_itx_fatal_failure_reason fatal_failure_reason;
+  /** Newest socket generation that completed authentication and mounting. */
+  uint32_t ready_socket_generation;
+  /** Generations replaced because authentication/mount never completed. */
+  uint32_t mount_timeouts;
+  /** Newest socket generation counted by mount_timeouts. */
+  uint32_t mount_timeout_generation;
   uint32_t protocol_failures;
   uint32_t protocol_failure_generation;
   uint32_t control_messages_sent;
@@ -178,6 +214,20 @@ struct iterate_kit_esp_idf_itx_transport_metrics {
   uint32_t control_outbox_capacity_slots;
   struct iterate_kit_spsc_ring_metrics control_inbox;
   struct iterate_kit_spsc_ring_metrics control_outbox;
+};
+
+/**
+ * Three-word lifecycle sample for a high-frequency target supervisor.
+ *
+ * The full metrics snapshot also scans FreeRTOS stack high-water state and all
+ * ring counters. Polling that at a 10 ms application cadence would spend CPU
+ * on diagnostics while audio is live. This narrow snapshot performs only the
+ * atomics needed to realign PCM after a remount or escalate a permanent latch.
+ */
+struct iterate_kit_esp_idf_itx_transport_lifecycle {
+  bool fatal_failure_latched;
+  enum iterate_kit_esp_idf_itx_fatal_failure_reason fatal_failure_reason;
+  uint32_t ready_socket_generation;
 };
 
 /**
@@ -256,6 +306,13 @@ struct iterate_kit_esp_idf_itx_transport {
   uint32_t last_application_capnweb_generation;
   int32_t last_application_capnweb_status;
   /*
+   * Application-owner deadline for the generation currently authenticating.
+   * The generation tag is as important as the timestamp: a delayed poll from
+   * an abandoned mount must never condemn its healthy replacement.
+   */
+  int64_t mount_deadline_us;
+  uint32_t mount_deadline_generation;
+  /*
    * Cross-task state. Acquire/release ordering publishes lifecycle flags; the
    * diagnostic counters need atomicity but do not publish other memory.
    */
@@ -270,6 +327,7 @@ struct iterate_kit_esp_idf_itx_transport {
   uint32_t restart_requested;
   uint32_t protocol_failure_generation;
   uint32_t fatal_failure_latched;
+  uint32_t fatal_failure_reason;
   uint32_t network_task_running;
   uint32_t network_task_exited;
   uint32_t websocket_started;
@@ -279,6 +337,8 @@ struct iterate_kit_esp_idf_itx_transport {
   uint32_t websocket_start_attempts;
   uint32_t websocket_disconnects;
   uint32_t websocket_errors;
+  uint32_t mount_timeouts;
+  uint32_t mount_timeout_generation;
   uint32_t protocol_failures;
   uint32_t control_messages_sent;
   uint32_t control_messages_discarded;
@@ -394,6 +454,10 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_stop(
 void iterate_kit_esp_idf_itx_transport_metrics(
     const struct iterate_kit_esp_idf_itx_transport *transport,
     struct iterate_kit_esp_idf_itx_transport_metrics *metrics);
+
+void iterate_kit_esp_idf_itx_transport_lifecycle(
+    const struct iterate_kit_esp_idf_itx_transport *transport,
+    struct iterate_kit_esp_idf_itx_transport_lifecycle *lifecycle);
 
 const char *iterate_kit_esp_idf_itx_transport_state_name(
     enum iterate_kit_esp_idf_itx_transport_state state);

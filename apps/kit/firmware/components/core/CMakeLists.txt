@@ -5,6 +5,7 @@ idf_component_register(
     "src/audio_intent_reconciler.c"
     "src/audio.c"
     "src/configuration.c"
+    "src/control_recovery.c"
     "src/cpu_usage.c"
     "src/device_events.c"
     "src/itx_connection.c"

@@ -13,10 +13,8 @@ export type DeviceSubscriptionLifecycleDiagnostic = {
   attempt: number;
   code:
     | "device-event-subscribed"
-    | "device-event-subscribe-exhausted"
     | "device-event-subscribe-retrying"
     | "device-metrics-subscribed"
-    | "device-metrics-subscribe-exhausted"
     | "device-metrics-subscribe-retrying";
   message: string | null;
   nextDelayMs: number | null;
@@ -64,8 +62,14 @@ export class DeviceSubscriptionCoordinator<Project> {
   };
 
   constructor(options: DeviceSubscriptionCoordinatorOptions<Project>) {
-    if (options.retryDelaysMs.length === 0 || options.retryDelaysMs[0] !== 0) {
-      throw new Error("Device subscription retries must begin immediately.");
+    if (
+      options.retryDelaysMs.length < 2 ||
+      options.retryDelaysMs[0] !== 0 ||
+      (options.retryDelaysMs.at(-1) ?? 0) <= 0
+    ) {
+      throw new Error(
+        "Device subscription retries must begin immediately and end at a positive bounded cadence.",
+      );
     }
     this.#options = options;
   }
@@ -80,15 +84,19 @@ export class DeviceSubscriptionCoordinator<Project> {
 
     /*
      * This deliberately sits outside the event subscription's try/catch.
-     * Metrics exhaustion is allowed to leave metricsReady=false, but the
-     * retained project—and therefore the already-live PTT callback—survives.
+     * Metrics degradation is allowed to leave metricsReady=false while it
+     * retries, but the retained project—and therefore the already-live PTT
+     * callback—survives.
      */
     await this.#establishMetricsSubscription(project);
   }
 
   async #establishEventSubscription(): Promise<Project | undefined> {
     const { retryDelaysMs } = this.#options;
-    for (const [index, delayMs] of retryDelaysMs.entries()) {
+    const maximumRetryIndex = retryDelaysMs.length - 1;
+    for (let retryIndex = 0; ; retryIndex += 1) {
+      const delayIndex = Math.min(retryIndex, maximumRetryIndex);
+      const delayMs = retryDelaysMs[delayIndex];
       if (delayMs > 0) await this.#options.wait(delayMs);
       if (!this.#options.isCurrent()) return undefined;
 
@@ -101,6 +109,15 @@ export class DeviceSubscriptionCoordinator<Project> {
           return undefined;
         }
         await this.#options.subscribeToEvents(project);
+        if (!this.#options.isCurrent()) {
+          /*
+           * A replacement /pcm generation may win while the remote subscribe
+           * call is in flight. Releasing this exact retained generation keeps
+           * a late success from becoming an unowned callback export.
+           */
+          this.#options.releaseProject(project);
+          return undefined;
+        }
         this.#status.eventReady = true;
         this.#status.lastEventError = null;
         this.#options.onDiagnostic({
@@ -114,30 +131,47 @@ export class DeviceSubscriptionCoordinator<Project> {
         if (project !== undefined) this.#options.releaseProject(project);
         this.#status.eventFailures += 1;
         this.#status.lastEventError = error instanceof Error ? error.message : String(error);
-        const nextDelayMs = retryDelaysMs[index + 1] ?? null;
-        this.#options.onDiagnostic({
-          attempt: this.#status.eventAttempts,
-          code:
-            nextDelayMs === null
-              ? "device-event-subscribe-exhausted"
-              : "device-event-subscribe-retrying",
-          message: this.#status.lastEventError,
-          nextDelayMs,
-        });
+        if (!this.#options.isCurrent()) return undefined;
+        const nextDelayMs = retryDelaysMs[Math.min(retryIndex + 1, maximumRetryIndex)];
+        /*
+         * The critical callback follows the PCM generation's lifetime, not a
+         * finite attempt budget. A Stick can remount minutes after an outage;
+         * declaring it permanently exhausted while /pcm remains open creates
+         * the observed half-alive state. Repeat only the final bounded delay,
+         * so recovery has constant memory and one outstanding timer.
+         *
+         * The counter remains exact on every attempt, but logs become sparse
+         * once the backoff plateaus. Emitting a warning every eight seconds
+         * forever would turn an already-classified outage into error spam and
+         * compete with the evidence needed to diagnose it.
+         */
+        const plateauAttempt = retryIndex - maximumRetryIndex;
+        const shouldReport = retryIndex <= maximumRetryIndex || plateauAttempt % 32 === 0;
+        if (shouldReport) {
+          this.#options.onDiagnostic({
+            attempt: this.#status.eventAttempts,
+            code: "device-event-subscribe-retrying",
+            message: this.#status.lastEventError,
+            nextDelayMs,
+          });
+        }
       }
     }
-    return undefined;
   }
 
   async #establishMetricsSubscription(project: Project): Promise<void> {
     const { retryDelaysMs } = this.#options;
-    for (const [index, delayMs] of retryDelaysMs.entries()) {
+    const maximumRetryIndex = retryDelaysMs.length - 1;
+    for (let retryIndex = 0; ; retryIndex += 1) {
+      const delayIndex = Math.min(retryIndex, maximumRetryIndex);
+      const delayMs = retryDelaysMs[delayIndex];
       if (delayMs > 0) await this.#options.wait(delayMs);
       if (!this.#options.isCurrent()) return;
 
       this.#status.metricsAttempts += 1;
       try {
         await this.#options.subscribeToMetrics(project);
+        if (!this.#options.isCurrent()) return;
         this.#status.metricsReady = true;
         this.#status.lastMetricsError = null;
         this.#options.onDiagnostic({
@@ -150,16 +184,18 @@ export class DeviceSubscriptionCoordinator<Project> {
       } catch (error) {
         this.#status.metricsFailures += 1;
         this.#status.lastMetricsError = error instanceof Error ? error.message : String(error);
-        const nextDelayMs = retryDelaysMs[index + 1] ?? null;
-        this.#options.onDiagnostic({
-          attempt: this.#status.metricsAttempts,
-          code:
-            nextDelayMs === null
-              ? "device-metrics-subscribe-exhausted"
-              : "device-metrics-subscribe-retrying",
-          message: this.#status.lastMetricsError,
-          nextDelayMs,
-        });
+        if (!this.#options.isCurrent()) return;
+        const nextDelayMs = retryDelaysMs[Math.min(retryIndex + 1, maximumRetryIndex)];
+        const plateauAttempt = retryIndex - maximumRetryIndex;
+        const shouldReport = retryIndex <= maximumRetryIndex || plateauAttempt % 32 === 0;
+        if (shouldReport) {
+          this.#options.onDiagnostic({
+            attempt: this.#status.metricsAttempts,
+            code: "device-metrics-subscribe-retrying",
+            message: this.#status.lastMetricsError,
+            nextDelayMs,
+          });
+        }
       }
     }
   }

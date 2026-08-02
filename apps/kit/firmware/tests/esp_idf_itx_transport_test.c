@@ -821,6 +821,52 @@ static void mount_rejection_recovers_on_a_fresh_generation(void) {
   fixture_finish(&fixture);
 }
 
+/*
+ * TCP/WebSocket keepalive cannot prove that the peer completed Cap'n Web
+ * authentication and mounting. A connected generation that remains MOUNTING
+ * forever strands the capability just as completely as a closed socket, while
+ * looking healthy to the lower transport. Advance the real production policy
+ * clock to prove one timed-out generation is rejected once, a replacement can
+ * become READY, and the retired deadline cannot later kill that replacement.
+ */
+static void mount_timeout_replaces_only_its_own_generation(void) {
+  struct iterate_kit_esp_idf_itx_transport_metrics metrics;
+  struct fixture fixture;
+  fixture_init(&fixture);
+
+  assert(wait_for_socket_generation(&fixture, 1U));
+  assert(
+      fixture.transport.state ==
+      ITERATE_KIT_ESP_IDF_ITX_MOUNTING);
+  iterate_kit_fake_monotonic_clock_advance_ms(
+      ITERATE_KIT_ESP_IDF_ITX_MOUNT_TIMEOUT_MS + 1U);
+  assert(
+      iterate_kit_esp_idf_itx_transport_poll(
+          &fixture.transport,
+          RING_SLOT_COUNT) == ITERATE_KIT_STATE_ERROR);
+  iterate_kit_esp_idf_itx_transport_metrics(
+      &fixture.transport, &metrics);
+  assert(metrics.mount_timeouts == 1U);
+  assert(metrics.mount_timeout_generation == 1U);
+
+  assert(wait_for_socket_generation(&fixture, 2U));
+  resolve_mount(&fixture, 20);
+  iterate_kit_fake_monotonic_clock_advance_ms(
+      ITERATE_KIT_ESP_IDF_ITX_MOUNT_TIMEOUT_MS + 1U);
+  assert(
+      iterate_kit_esp_idf_itx_transport_poll(
+          &fixture.transport,
+          RING_SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(
+      fixture.transport.state ==
+      ITERATE_KIT_ESP_IDF_ITX_READY);
+  iterate_kit_esp_idf_itx_transport_metrics(
+      &fixture.transport, &metrics);
+  assert(metrics.mount_timeouts == 1U);
+  assert(metrics.mount_timeout_generation == 1U);
+  fixture_finish(&fixture);
+}
+
 static size_t build_token_overflow_message(
     char *message, size_t capacity) {
   size_t length;
@@ -937,6 +983,18 @@ static void socket_generation_exhaustion_is_fatal_and_bounded(void) {
   assert(before_wait.websocket_connections == 1U);
   assert(before_wait.protocol_failures == 0U);
   assert(before_wait.control_receive_failures == 1U);
+  /*
+   * FAILED alone cannot tell a target whether the transport is replacing an
+   * ordinary bad generation or has entered the permanent local latch that
+   * production hit while /pcm remained healthy. Targets need this exact pair
+   * to apply their bounded process-restart policy and to preserve the causal
+   * reason across that restart instead of reporting an unexplained reboot.
+   */
+  assert(before_wait.fatal_failure_latched);
+  assert(
+      before_wait.fatal_failure_reason ==
+      ITERATE_KIT_ESP_IDF_ITX_FATAL_SOCKET_GENERATION_EXHAUSTED);
+  assert(before_wait.ready_socket_generation == 1U);
 
   /*
    * Wait beyond two initial retry intervals. Exact equality proves the fatal
@@ -976,6 +1034,7 @@ int main(void) {
   short_control_send_resumes_without_remount();
   explicit_restart_closes_and_remounts();
   mount_rejection_recovers_on_a_fresh_generation();
+  mount_timeout_replaces_only_its_own_generation();
   token_budget_overflow_recovers_on_a_fresh_generation();
   socket_generation_exhaustion_is_fatal_and_bounded();
   return 0;
