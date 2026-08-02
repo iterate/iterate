@@ -67,18 +67,6 @@ export function agentPathNodeWaitingFor(
   return undefined;
 }
 
-export function agentPathNodeDisplayState(
-  node: Pick<AgentPathTreeNode, "aggregateRuntime" | "aggregateWaiting">,
-) {
-  const aggregateState = deriveAgentDisplayState(node.aggregateRuntime);
-  if (aggregateState !== "idle") return aggregateState;
-  const waitingFor = agentPathNodeWaitingFor(node);
-  if (waitingFor === "user_input") return "waiting_for_user_input";
-  if (waitingFor === "external_event") return "waiting_for_external_event";
-  if (waitingFor === "timer") return "waiting_for_timer";
-  return "idle";
-}
-
 /** Replace a materialized agent's catalog runtime with its live runtime while
  * preserving the aggregate runtime of every descendant. */
 export function agentPathNodeRuntime(
