@@ -8,6 +8,7 @@ idf_component_register(
     "src/configuration.c"
     "src/control_recovery.c"
     "src/cpu_usage.c"
+    "src/debounced_button.c"
     "src/device_events.c"
     "src/itx_connection.c"
     "src/itx_outbox_sender.c"

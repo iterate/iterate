@@ -1,5 +1,6 @@
 #include "iterate/kit/audio_intent_reconciler.h"
 #include "iterate/kit/cpu_usage.h"
+#include "iterate/kit/debounced_button.h"
 #include "iterate/kit/devices/voice_satellite.h"
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/pcm_websocket.h"
@@ -10,8 +11,10 @@
 #include "iterate/kit/platforms/esp_idf_websocket_policy.h"
 #include "iterate/kit/spsc_ring.h"
 
+#include "havpe_ui.h"
 #include "led_strip.h"
 
+#include "driver/gpio.h"
 #include "esp_err.h"
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
@@ -69,6 +72,14 @@
 #define HAVPE_MAXIMUM_LANE_ITEMS_PER_PLAYBACK_EDGE 4U
 #define HAVPE_LED_COUNT 12U
 #define HAVPE_LED_GPIO 21
+#define HAVPE_LED_POWER_GPIO GPIO_NUM_45
+#define HAVPE_LED_POWER_ENABLE_MS 20U
+#define HAVPE_CENTER_BUTTON_GPIO GPIO_NUM_0
+#define HAVPE_CENTER_BUTTON_DEBOUNCE_MS 30U
+#define HAVPE_CENTER_BUTTON_RESTART_HOLD_MS 3000U
+#define HAVPE_RING_REFRESH_MS 50U
+#define HAVPE_RING_NETWORK_SAMPLE_MS 1000U
+#define HAVPE_RING_MANUAL_OVERRIDE_MS 3000U
 
 /*
  * One callback consumes push+pull and may return resolve+release. Eight slots
@@ -118,6 +129,9 @@ static const struct iterate_kit_device_manifest DEVICE_MANIFEST = {
 _Static_assert(
     HAVPE_PCM_FRAME_DURATION_MS == 20U,
     "HAVPE must use the exact PCM-v1 frame duration");
+_Static_assert(
+    HAVPE_LED_COUNT == HAVPE_UI_RING_LED_COUNT,
+    "the physical strip and host-tested HAVPE UI must describe one ring");
 _Static_assert(
     HAVPE_PCM_RESERVE_MS % HAVPE_PCM_FRAME_DURATION_MS == 0U,
     "PCM reserve must contain complete protocol frames");
@@ -190,11 +204,22 @@ struct havpe_runtime {
   struct iterate_kit_voice_satellite device;
   struct iterate_kit_audio_intent_reconciler audio_intent;
   struct iterate_kit_cpu_usage_meter cpu_usage;
+  struct iterate_kit_debounced_button center_button;
+  struct havpe_center_button_gesture center_button_gesture;
+  struct havpe_ui_rgb ring_frame[HAVPE_UI_RING_LED_COUNT];
 
   int64_t booted_at_us;
+  uint64_t next_ring_refresh_ms;
+  uint64_t next_ring_network_sample_ms;
+  uint64_t ring_manual_override_until_ms;
   enum iterate_kit_esp_idf_itx_transport_state last_control_state;
   enum iterate_kit_esp_idf_pcm_transport_state last_pcm_state;
   enum iterate_kit_status last_audio_intent_status;
+  int32_t wifi_rssi_dbm;
+  bool wifi_observed;
+  bool ring_power_enabled;
+  bool ring_frame_valid;
+  bool ring_write_failure_latched;
   bool pcm_started;
   bool pcm_start_attempted_for_conversation;
 };
@@ -618,7 +643,8 @@ static enum iterate_kit_status set_led(
     uint8_t green,
     uint8_t blue) {
   struct havpe_runtime *state = context;
-  if (state == NULL || state->leds == NULL || index >= HAVPE_LED_COUNT) {
+  if (state == NULL || !state->ring_power_enabled ||
+      state->leds == NULL || index >= HAVPE_LED_COUNT) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   /*
@@ -630,6 +656,18 @@ static enum iterate_kit_status set_led(
       led_strip_refresh(state->leds) != ESP_OK) {
     return ITERATE_KIT_IO_ERROR;
   }
+  const int64_t now_us = esp_timer_get_time();
+  if (now_us >= 0) {
+    /*
+     * A remote capability call must remain visible long enough to prove it,
+     * but it cannot permanently erase safety/status feedback. The renderer
+     * retakes ownership after this bounded window; invalidating its cache is
+     * what makes it redraw even if its semantic state did not change.
+     */
+    state->ring_manual_override_until_ms =
+        (uint64_t)now_us / 1000U + HAVPE_RING_MANUAL_OVERRIDE_MS;
+    state->ring_frame_valid = false;
+  }
   return ITERATE_KIT_OK;
 }
 
@@ -639,7 +677,8 @@ static enum iterate_kit_status fill_leds(
     uint8_t green,
     uint8_t blue) {
   struct havpe_runtime *state = context;
-  if (state == NULL || state->leds == NULL) {
+  if (state == NULL || !state->ring_power_enabled ||
+      state->leds == NULL) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   /*
@@ -653,12 +692,127 @@ static enum iterate_kit_status fill_leds(
       return ITERATE_KIT_IO_ERROR;
     }
   }
-  return led_strip_refresh(state->leds) == ESP_OK
-      ? ITERATE_KIT_OK
-      : ITERATE_KIT_IO_ERROR;
+  if (led_strip_refresh(state->leds) != ESP_OK) {
+    return ITERATE_KIT_IO_ERROR;
+  }
+  const int64_t now_us = esp_timer_get_time();
+  if (now_us >= 0) {
+    state->ring_manual_override_until_ms =
+        (uint64_t)now_us / 1000U + HAVPE_RING_MANUAL_OVERRIDE_MS;
+    state->ring_frame_valid = false;
+  }
+  return ITERATE_KIT_OK;
+}
+
+static bool write_status_ring(
+    struct havpe_runtime *state,
+    const struct havpe_ui_rgb pixels[HAVPE_UI_RING_LED_COUNT]) {
+  if (state == NULL || !state->ring_power_enabled ||
+      state->leds == NULL || pixels == NULL) {
+    return false;
+  }
+  if (state->ring_frame_valid &&
+      memcmp(state->ring_frame, pixels, sizeof(state->ring_frame)) == 0) {
+    return true;
+  }
+  /*
+   * Twelve pixels are staged and committed with one RMT refresh. At the 20 Hz
+   * UI ceiling this is under one percent wire duty and, critically, happens
+   * only in the cooperative owner—not in either codec-clocked audio task.
+   */
+  for (uint8_t index = 0U; index < HAVPE_LED_COUNT; ++index) {
+    if (led_strip_set_pixel(
+            state->leds,
+            index,
+            pixels[index].red,
+            pixels[index].green,
+            pixels[index].blue) != ESP_OK) {
+      state->ring_frame_valid = false;
+      return false;
+    }
+  }
+  if (led_strip_refresh(state->leds) != ESP_OK) {
+    state->ring_frame_valid = false;
+    return false;
+  }
+  memcpy(state->ring_frame, pixels, sizeof(state->ring_frame));
+  state->ring_frame_valid = true;
+  return true;
+}
+
+static void update_status_ring(
+    struct havpe_runtime *state, uint64_t now_ms) {
+  struct iterate_kit_voice_pe_audio_activity activity = {0U, 0U};
+  struct havpe_ring_ui_input input;
+  struct havpe_ui_rgb pixels[HAVPE_UI_RING_LED_COUNT];
+  wifi_ap_record_t access_point;
+
+  if (state == NULL || now_ms < state->next_ring_refresh_ms) return;
+  state->next_ring_refresh_ms = now_ms + HAVPE_RING_REFRESH_MS;
+
+  /*
+   * Taking the peak-hold mailboxes on every UI interval is as important as
+   * drawing them: a temporary manual LED override must discard old peaks, not
+   * reveal a several-second-old voice burst when status rendering resumes.
+   */
+  iterate_kit_voice_pe_audio_owner_take_activity(&activity);
+
+  if (now_ms >= state->next_ring_network_sample_ms) {
+    memset(&access_point, 0, sizeof(access_point));
+    state->wifi_observed =
+        esp_wifi_sta_get_ap_info(&access_point) == ESP_OK;
+    if (state->wifi_observed) state->wifi_rssi_dbm = access_point.rssi;
+    state->next_ring_network_sample_ms =
+        now_ms + HAVPE_RING_NETWORK_SAMPLE_MS;
+  }
+
+  memset(&input, 0, sizeof(input));
+  if (!state->wifi_observed) {
+    input.network = HAVPE_UI_NETWORK_DISCONNECTED;
+  } else if (
+      state->control_transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
+    input.network = HAVPE_UI_NETWORK_CONNECTED;
+  } else {
+    input.network = HAVPE_UI_NETWORK_CONNECTING;
+  }
+  input.has_wifi_rssi = state->wifi_observed;
+  input.wifi_rssi_dbm = state->wifi_rssi_dbm;
+  input.conversation_active =
+      iterate_kit_voice_satellite_is_conversation_active(&state->device);
+  input.pcm_ready = state->pcm_started &&
+      state->pcm_transport.state == ITERATE_KIT_ESP_IDF_PCM_READY;
+  input.pcm_failed = state->pcm_started &&
+      state->pcm_transport.state == ITERATE_KIT_ESP_IDF_PCM_FAILED;
+  input.microphone_peak = activity.microphone_peak;
+  input.speaker_peak = activity.speaker_peak;
+  input.restart_armed = state->center_button_gesture.restart_armed;
+
+  if (!input.restart_armed &&
+      now_ms < state->ring_manual_override_until_ms) {
+    return;
+  }
+  havpe_ring_ui_render(&input, pixels);
+  if (!write_status_ring(state, pixels)) {
+    if (!state->ring_write_failure_latched) {
+      ESP_LOGE(TAG, "status ring write failed");
+      state->ring_write_failure_latched = true;
+    }
+    return;
+  }
+  if (state->ring_write_failure_latched) {
+    ESP_LOGI(TAG, "status ring write recovered");
+    state->ring_write_failure_latched = false;
+  }
 }
 
 static bool initialise_leds(struct havpe_runtime *state) {
+  const gpio_config_t power = {
+    .pin_bit_mask = UINT64_C(1) << HAVPE_LED_POWER_GPIO,
+    .mode = GPIO_MODE_OUTPUT,
+    .pull_up_en = GPIO_PULLUP_DISABLE,
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE,
+  };
   const led_strip_config_t strip = {
     .strip_gpio_num = HAVPE_LED_GPIO,
     .max_leds = HAVPE_LED_COUNT,
@@ -672,11 +826,131 @@ static bool initialise_leds(struct havpe_runtime *state) {
     .mem_block_symbols = 64U,
     .flags = {.with_dma = false},
   };
-  if (state == NULL ||
-      led_strip_new_rmt_device(&strip, &rmt, &state->leds) != ESP_OK) {
+  if (state == NULL || gpio_config(&power) != ESP_OK ||
+      gpio_set_level(HAVPE_LED_POWER_GPIO, 1) != ESP_OK) {
     return false;
   }
-  return led_strip_clear(state->leds) == ESP_OK;
+  /*
+   * GPIO21 is only the WS2812 data line. The official HAVPE hardware gates
+   * the ring's supply on GPIO45; RMT happily reports successful writes while
+   * that rail is off, which is exactly how the first implementation mounted
+   * a healthy capability yet looked physically dead. Keep the rail on for
+   * this status UI and honour ESPHome's first-party 20 ms enable time before
+   * the first wire transaction. This bounded boot-only delay never executes
+   * in an audio task or while a call is active.
+   */
+  state->ring_power_enabled = true;
+  vTaskDelay(pdMS_TO_TICKS(HAVPE_LED_POWER_ENABLE_MS));
+  if (led_strip_new_rmt_device(&strip, &rmt, &state->leds) != ESP_OK) {
+    state->ring_power_enabled = false;
+    (void)gpio_set_level(HAVPE_LED_POWER_GPIO, 0);
+    return false;
+  }
+  if (led_strip_clear(state->leds) != ESP_OK) {
+    state->ring_power_enabled = false;
+    (void)gpio_set_level(HAVPE_LED_POWER_GPIO, 0);
+    return false;
+  }
+  ESP_LOGI(
+      TAG,
+      "status ring power enabled: gpio=%d settle_ms=%u",
+      (int)HAVPE_LED_POWER_GPIO,
+      (unsigned)HAVPE_LED_POWER_ENABLE_MS);
+  return true;
+}
+
+static bool initialise_center_button(struct havpe_runtime *state) {
+  const gpio_config_t input = {
+    .pin_bit_mask = UINT64_C(1) << HAVPE_CENTER_BUTTON_GPIO,
+    .mode = GPIO_MODE_INPUT,
+    .pull_up_en = GPIO_PULLUP_ENABLE,
+    .pull_down_en = GPIO_PULLDOWN_DISABLE,
+    .intr_type = GPIO_INTR_DISABLE,
+  };
+  const int64_t now_us = esp_timer_get_time();
+  bool initially_pressed;
+
+  if (state == NULL || now_us < 0 || gpio_config(&input) != ESP_OK) {
+    return false;
+  }
+  /*
+   * First-party HAVPE hardware declares GPIO0 active-low. Sampling after the
+   * pull-up is configured makes a button held across boot the baseline rather
+   * than an unsolicited conversation start. Later presses publish through the
+   * same portable event queue as `conversation.start()` / `hangUp()`.
+   */
+  initially_pressed = gpio_get_level(HAVPE_CENTER_BUTTON_GPIO) == 0;
+  const uint64_t now_ms = (uint64_t)now_us / 1000U;
+  if (iterate_kit_debounced_button_init(
+          &state->center_button,
+          initially_pressed,
+          HAVPE_CENTER_BUTTON_DEBOUNCE_MS,
+          now_ms) != ITERATE_KIT_OK) {
+    return false;
+  }
+  havpe_center_button_gesture_init(
+      &state->center_button_gesture, initially_pressed, now_ms);
+  return true;
+}
+
+static void poll_center_button(
+    struct havpe_runtime *state, uint64_t now_ms) {
+  bool pressed_edge = false;
+  bool released_edge = false;
+  enum havpe_center_button_action action;
+  enum iterate_kit_status status;
+
+  if (state == NULL) return;
+  status = iterate_kit_debounced_button_update(
+      &state->center_button,
+      gpio_get_level(HAVPE_CENTER_BUTTON_GPIO) == 0,
+      now_ms,
+      &pressed_edge,
+      &released_edge);
+  if (status != ITERATE_KIT_OK) {
+    ESP_LOGE(TAG, "center button poll failed: status=%d", (int)status);
+    return;
+  }
+  action = havpe_center_button_gesture_update(
+      &state->center_button_gesture,
+      pressed_edge,
+      released_edge,
+      now_ms,
+      HAVPE_CENTER_BUTTON_RESTART_HOLD_MS);
+  if (action == HAVPE_CENTER_BUTTON_ACTION_RESTART_ARMED) {
+    /* The magenta whole-ring state remains visible until the finger lifts. */
+    state->ring_frame_valid = false;
+    ESP_LOGW(TAG, "center button restart armed; release to restart");
+    return;
+  }
+  if (action == HAVPE_CENTER_BUTTON_ACTION_RESTART) {
+    /*
+     * GPIO0 has now been stably high for the debounce interval. Restarting on
+     * the earlier hold threshold could instead enter the ROM bootloader.
+     */
+    ESP_LOGW(TAG, "center button released; restarting");
+    esp_restart();
+    return;
+  }
+  if (action != HAVPE_CENTER_BUTTON_ACTION_TOGGLE_CONVERSATION) return;
+
+  /*
+   * HAVPE is a full-duplex server-VAD device: one short center-button gesture
+   * opens a continuous AEC-clean microphone conversation and the next closes
+   * it. Publishing intent (instead of opening /pcm here) preserves one state
+   * machine for physical input, RPC tests, and transport recovery. The toggle
+   * occurs on release so a long hold cannot first open a call and then reboot.
+   */
+  status = iterate_kit_voice_satellite_publish_conversation(
+      &state->device,
+      !iterate_kit_voice_satellite_is_conversation_active(&state->device),
+      ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
+  if (status != ITERATE_KIT_OK) {
+    ESP_LOGE(
+        TAG,
+        "physical conversation publish failed: status=%d",
+        (int)status);
+  }
 }
 
 static bool initialise_device(struct havpe_runtime *state) {
@@ -927,6 +1201,7 @@ static void reconcile_pcm_conversation(struct havpe_runtime *state) {
       state->last_pcm_state = state->pcm_transport.state;
     }
   }
+
 }
 
 void app_main(void) {
@@ -960,6 +1235,7 @@ void app_main(void) {
           &ignored_cpu) != ITERATE_KIT_OK ||
       !initialise_rings(&runtime) ||
       !initialise_device(&runtime) ||
+      !initialise_center_button(&runtime) ||
       !initialise_connections(&runtime)) {
     ESP_LOGE(TAG, "bounded target initialization failed");
     return;
@@ -1001,10 +1277,12 @@ void app_main(void) {
 
   for (;;) {
     const int64_t now_us = esp_timer_get_time();
+    const uint64_t now_ms = now_us < 0 ? 0U : (uint64_t)now_us / 1000U;
+    /* Admit a human edge before the bounded device/event owner runs. */
+    poll_center_button(&runtime, now_ms);
     struct iterate_kit_poll_result device_poll =
         iterate_kit_voice_satellite_poll(
-            &runtime.device,
-            now_us < 0 ? 0U : (uint64_t)now_us / 1000U);
+            &runtime.device, now_ms);
     enum iterate_kit_status intent_status;
     enum iterate_kit_status control_status;
 
@@ -1051,6 +1329,7 @@ void app_main(void) {
     }
 
     reconcile_pcm_conversation(&runtime);
+    update_status_ring(&runtime, now_ms);
     /*
      * Audio owners are already blocked on physical codec/DMA clocks at higher
      * priority. This sleep only bounds cooperative Cap'n Web/control latency

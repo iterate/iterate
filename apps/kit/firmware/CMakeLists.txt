@@ -26,6 +26,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/configuration.c
   components/core/src/control_recovery.c
   components/core/src/cpu_usage.c
+  components/core/src/debounced_button.c
   components/core/src/device_events.c
   components/core/src/itx_connection.c
   components/core/src/itx_outbox_sender.c
@@ -114,6 +115,9 @@ if(APPLE)
     targets/host_cli/cli_audio_out.c
     targets/host_cli/cli_capabilities.c
     targets/host_cli/cli_conversation.c
+    targets/host_cli/cli_device_profile.c
+    targets/host_cli/cli_fault_schedule.c
+    targets/host_cli/cli_virtual_clock.c
     targets/host_cli/cli_keyboard.c
     targets/host_cli/cli_microphone.c
     targets/host_cli/cli_options.c
@@ -515,6 +519,45 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-device-events-test
   COMMAND iterate-kit-device-events-test
+)
+
+add_executable(iterate-kit-debounced-button-test
+  tests/debounced_button_test.c
+)
+target_compile_features(
+  iterate-kit-debounced-button-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-debounced-button-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-debounced-button-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-debounced-button-test
+  COMMAND iterate-kit-debounced-button-test
+)
+
+add_executable(iterate-kit-havpe-ui-test
+  tests/havpe_ui_test.c
+  targets/home-assistant-voice-preview-edition/main/havpe_ui.c
+)
+target_include_directories(
+  iterate-kit-havpe-ui-test PRIVATE
+  targets/home-assistant-voice-preview-edition/main
+)
+target_compile_features(iterate-kit-havpe-ui-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-havpe-ui-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+add_test(
+  NAME iterate-kit-havpe-ui-test
+  COMMAND iterate-kit-havpe-ui-test
 )
 
 add_executable(iterate-kit-retry-gate-test
@@ -944,6 +987,76 @@ target_compile_options(iterate-kit-cli-paced-sink-test PRIVATE
 add_test(
   NAME iterate-kit-cli-paced-sink-test
   COMMAND iterate-kit-cli-paced-sink-test
+)
+
+add_executable(iterate-kit-cli-fault-schedule-test
+  targets/host_cli/cli_fault_schedule.c
+  tests/cli_fault_schedule_test.c
+)
+target_include_directories(
+  iterate-kit-cli-fault-schedule-test PRIVATE targets/host_cli)
+target_link_libraries(
+  iterate-kit-cli-fault-schedule-test PRIVATE iterate-kit-core)
+target_compile_features(
+  iterate-kit-cli-fault-schedule-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli-fault-schedule-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+)
+add_test(
+  NAME iterate-kit-cli-fault-schedule-test
+  COMMAND iterate-kit-cli-fault-schedule-test
+)
+
+add_executable(iterate-kit-cli-virtual-clock-test
+  targets/host_cli/cli_fault_schedule.c
+  targets/host_cli/cli_virtual_clock.c
+  tests/cli_virtual_clock_test.c
+)
+target_include_directories(
+  iterate-kit-cli-virtual-clock-test PRIVATE targets/host_cli)
+target_link_libraries(
+  iterate-kit-cli-virtual-clock-test PRIVATE iterate-kit-core)
+target_compile_features(
+  iterate-kit-cli-virtual-clock-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli-virtual-clock-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+)
+add_test(
+  NAME iterate-kit-cli-virtual-clock-test
+  COMMAND iterate-kit-cli-virtual-clock-test
+)
+
+add_executable(iterate-kit-cli-device-profile-test
+  targets/host_cli/cli_device_profile.c
+  tests/cli_device_profile_test.c
+)
+target_include_directories(
+  iterate-kit-cli-device-profile-test PRIVATE targets/host_cli)
+target_link_libraries(
+  iterate-kit-cli-device-profile-test PRIVATE iterate-kit-core)
+target_compile_features(
+  iterate-kit-cli-device-profile-test PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli-device-profile-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow
+)
+add_test(
+  NAME iterate-kit-cli-device-profile-test
+  COMMAND iterate-kit-cli-device-profile-test
 )
 
 add_executable(iterate-kit-cli-keyboard-test

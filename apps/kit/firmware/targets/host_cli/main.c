@@ -251,21 +251,45 @@ static void cli_main_sleep(void);
 /* Runs the intentionally nonterminating cooperative event pump until stopped. */
 static void cli_main_run_loop(struct cli_runtime *runtime);
 
+/*
+ * The process's one clock.
+ *
+ * A file-scope object rather than a runtime field because the existing seam —
+ * `cli_runtime_now_ms(void *context)` — is called with a NULL context from
+ * nine places, and threading a clock through every one of them would be a
+ * large diff whose only effect is to say what this comment says: there is
+ * exactly one clock, and every stamp in the process comes from it.
+ *
+ * Anchored to the host and undistorted until something configures otherwise,
+ * so a rig with no schedule behaves exactly as it did before this existed.
+ *
+ * INITIALISED HERE, NOT IN main(). Logging takes a stamp while the command
+ * line is still being parsed, so this must be usable before any setup code
+ * runs; a zero-filled clock would have a rate of zero and trip an assertion
+ * in the first line anybody logged. Anchoring at host zero makes session time
+ * equal the host's own monotonic reading, which is byte-for-byte what this
+ * function returned before the seam existed.
+ */
+static struct cli_virtual_clock cli_main_clock = {
+    .mode = CLI_VIRTUAL_CLOCK_ANCHORED,
+    .rate = CLI_VIRTUAL_CLOCK_RATE_UNIT,
+    .skew_armed = true,
+};
+
+struct cli_virtual_clock *cli_runtime_clock(void)
+{
+  return &cli_main_clock;
+}
+
 uint64_t cli_runtime_now_ms(void *context)
 {
   (void)context;
-  struct timespec now = {0};
-  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0U;
-  return (uint64_t)now.tv_sec * CLI_MAIN_MS_PER_SECOND +
-      (uint64_t)(now.tv_nsec / CLI_MAIN_NS_PER_MS);
+  return cli_virtual_clock_now_ms(&cli_main_clock);
 }
 
 uint64_t cli_runtime_now_us(void)
 {
-  struct timespec now = {0};
-  if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) return 0U;
-  return (uint64_t)now.tv_sec * CLI_MAIN_US_PER_SECOND +
-      (uint64_t)(now.tv_nsec / CLI_MAIN_NS_PER_US);
+  return cli_virtual_clock_now_us(&cli_main_clock);
 }
 
 void cli_runtime_log(const char *level, const char *format, ...)

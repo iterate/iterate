@@ -1,5 +1,7 @@
 idf_component_register(
-  SRCS "main.c"
+  SRCS
+    "havpe_ui.c"
+    "main.c"
   INCLUDE_DIRS "."
   REQUIRES
     capabilities
@@ -22,4 +24,3 @@ target_compile_options(${COMPONENT_LIB} PRIVATE
   # ESP-IDF public headers intentionally expose GCC extensions.
   -Wno-pedantic
 )
-

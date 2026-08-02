@@ -314,11 +314,11 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
     size_t length);
 
 /**
- * Ask the project's own userspace worker to open the Grok call for this
- * stream — `itx.worker.startCall({path, callId, pace, greet})`, over the one
- * session this device already has. Nothing outside the platform holds the
- * call open afterwards: no laptop bridge, no second socket. One start in
- * flight at a time; `call_active` turns true when the worker answers.
+ * Append a durable voicelab/call-requested event to this stream. The installed
+ * voice-agent guest processor opens the Grok call; the project worker is not
+ * involved. Nothing outside the platform holds the call open afterwards: no
+ * laptop bridge, no second socket. One start in flight at a time;
+ * `call_active` turns true when call-accepted arrives on the stream.
  * `greeting` may be NULL and must not contain characters needing JSON
  * escaping.
  */

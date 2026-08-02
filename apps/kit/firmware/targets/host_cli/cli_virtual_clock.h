@@ -103,6 +103,18 @@ struct cli_virtual_clock {
   uint32_t skew_stamps;
   /** Skew episodes fire ONCE each; this is how many have been spent. */
   uint32_t skews_spent;
+  /**
+   * Whether the skew episode now running has yet to fire.
+   *
+   * A skew is a single backwards STEP, not an interval: an NTP correction or
+   * a counter wrap happens once, and what matters is the first subtraction
+   * afterwards. The episode still needs a window, because a consumer only
+   * discovers a step when it next samples — so the window says "somewhere in
+   * here", and this says "not yet spent". Cleared on entering an episode,
+   * set again once it has passed, which is what makes a recipe asking for
+   * several skews get several rather than one.
+   */
+  bool skew_armed;
 };
 
 /** Human-readable status name, for logs and test failure messages. */

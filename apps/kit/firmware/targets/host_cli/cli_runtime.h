@@ -24,6 +24,7 @@
 #include "cli_options.h"
 #include "cli_paced_sink.h"
 #include "cli_speaker.h"
+#include "cli_virtual_clock.h"
 #include "cli_wav.h"
 #include "iterate/kit/audio_playout.h"
 #include "iterate/kit/configuration.h"
@@ -132,6 +133,12 @@ struct cli_runtime {
   uint32_t calls_lost;
   bool mounted_once;
 };
+
+/**
+ * The process's one clock, for the few sites that must configure it rather
+ * than merely read it. Reading is what cli_runtime_now_ms is for.
+ */
+struct cli_virtual_clock *cli_runtime_clock(void);
 
 /** Monotonic milliseconds used by the runtime and voicelab callbacks. */
 uint64_t cli_runtime_now_ms(void *context);

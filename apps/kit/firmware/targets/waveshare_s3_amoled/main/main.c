@@ -360,6 +360,18 @@ static struct {
    */
   uint32_t speaker_discarded_frames;
   /*
+   * The two ways the reader can decline to play WITHOUT touching any other
+   * counter, and therefore the only remaining blind spots in this loop.
+   *
+   * `speaker_waits_priming` is ready() saying no: the ring is below the
+   * prefill mark. `speaker_waits_dry` is the ring being empty and the clock
+   * choosing WAIT over CONCEAL. A stall in either is invisible today - the
+   * failing runs show frames arriving with played AND conceal both frozen,
+   * which is exactly what these two look like from outside.
+   */
+  uint32_t speaker_waits_priming;
+  uint32_t speaker_waits_dry;
+  /*
    * A starve is only a DEFECT if the stream had more to say. The buffer
    * legitimately empties at the end of every answer, and counting that as an
    * underrun made the metric read one per answer no matter how healthy the
@@ -648,6 +660,7 @@ static void playback_task(void *argument) {
     if (!iterate_kit_voice_playback_clock_ready(
             &playout_clock,
             (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer))) {
+      ++runtime.speaker_waits_priming;
       /* Idle, not starving: nothing is playing, so write nothing. */
       if (last_write_ms != 0U &&
           iterate_kit_voice_elapsed_ms(now_ms(NULL), last_write_ms) > SPEAKER_IDLE_POWERDOWN_MS) {
@@ -672,6 +685,9 @@ static void playback_task(void *argument) {
           waveshare_audio_write(silence, FRAME_SAMPLES)) {
         ++runtime.speaker_conceal_frames;
         runtime.starve_at_ms = now_ms(NULL);
+      } else {
+        /* WAIT, or a write that failed: nothing played, nothing concealed. */
+        ++runtime.speaker_waits_dry;
       }
       continue;
     }
@@ -890,6 +906,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       ",\"spkDiscarded\":%" PRIu32
       ",\"spkIgnoredCall\":%" PRIu32 ",\"spkIgnoredStale\":%" PRIu32
       ",\"spkIgnoredDup\":%" PRIu32 ",\"spkReplaced\":%" PRIu32
+      ",\"spkWaitPriming\":%" PRIu32 ",\"spkWaitDry\":%" PRIu32
       ",\"bridgeLosses\":%" PRIu32 ",\"bridgeAgeMs\":%" PRIu32
       ",\"downlinkRecycles\":%" PRIu32 ",\"batchAgeMs\":%" PRIu32
       ",\"uptimeMs\":%" PRIu64 ",\"resetReason\":%d"
@@ -964,6 +981,8 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       runtime.playout.ignored_stale_answer,
       runtime.playout.ignored_duplicate,
       runtime.playout.replaced,
+      runtime.speaker_waits_priming,
+      runtime.speaker_waits_dry,
       runtime.liveness_restarts,
       runtime.bridge_losses,
       runtime.voicelab.last_bridge_ms == 0U

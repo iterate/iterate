@@ -190,7 +190,7 @@ static void start_and_mount(struct fixture *fixture) {
   receive(fixture, "[\"resolve\",3,[\"export\",-12]]");
   assert(fixture->voicelab.state == ITERATE_KIT_VOICELAB_READY);
   assert(fixture->voicelab.has_stream_capability);
-  /* Kept for the session's life: worker.startCall is dialled on it. */
+  /* Kept until the common close path releases the session's imported stubs. */
   assert(fixture->voicelab.has_project_capability);
   assert(!fixture->voicelab.has_session_capability);
 }
@@ -523,8 +523,8 @@ int main(void) {
         fixture.captured_lengths[before] < MESSAGE_CAPACITY);
   }
 
-  /* Call control: startCall is a pulled call onto the project's OWN worker,
-   * hangup is a durable one-way append the bridge is subscribed to. */
+  /* Call control is entirely stream-owned: a pulled append requests setup,
+   * and hangup is a durable one-way append the bridge is subscribed to. */
   {
     const char *start_message = NULL;
     const char *end_message = NULL;
@@ -535,15 +535,16 @@ int main(void) {
         CAPNWEB_OK);
     assert(fixture.voicelab.call_pending);
     for (index = before; index < fixture.captured_count; ++index) {
-      if (strstr(fixture.captured[index], "startCall") != NULL) {
+      if (strstr(fixture.captured[index], "call-requested") != NULL) {
         start_message = fixture.captured[index];
       }
     }
     assert(start_message != NULL);
-    assert(strstr(start_message, "[\"worker\",\"startCall\"]") != NULL);
-    assert(strstr(start_message, "\"path\":\"/voicelab/dev-test\"") != NULL);
+    assert(strstr(start_message, "[\"append\"]") != NULL);
+    assert(strstr(start_message, "\"type\":\"voicelab/call-requested\"") != NULL);
     assert(strstr(start_message, "\"callId\":\"wsdev\"") != NULL);
-    assert(strstr(start_message, "\"pace\":true") != NULL);
+    assert(strstr(start_message, "\"colleague\":true") != NULL);
+    assert(strstr(start_message, "\"turns\":\"manual\"") != NULL);
     assert(strstr(start_message, "\"greet\":\"Ready.\"") != NULL);
     /* One start in flight at a time. */
     assert(

@@ -63,6 +63,8 @@
 
 #define VOICE_PE_AEC_SIGNAL_SAMPLE_STRIDE 8U
 #define VOICE_PE_AEC_SIGNAL_WINDOW_US UINT64_C(1000000)
+/* A three-pixel UI meter does not justify a second full PCM sample walk. */
+#define VOICE_PE_UI_PLAYBACK_SAMPLE_STRIDE 8U
 
 static const char *const TAG = "iterate-voice-pe-audio";
 
@@ -167,6 +169,14 @@ struct voice_pe_audio_owner {
    * without retaining PCM or exposing XMOS's unavailable private reference.
    */
   volatile uint32_t signal_window_playback_content_samples;
+  /*
+   * These are peak-hold mailboxes, not audio queues. Producers only raise a
+   * scalar and the cooperative UI periodically exchanges it to zero. Thus LED
+   * work cannot block codec clocks and pausing the UI cannot retain PCM or
+   * create delayed playback.
+   */
+  volatile uint32_t pending_microphone_peak;
+  volatile uint32_t pending_speaker_peak;
 };
 
 /*
@@ -282,6 +292,17 @@ static void atomic_note_maximum(
 static uint32_t sample_magnitude(int16_t sample) {
   const int32_t widened = sample;
   return widened < 0 ? (uint32_t)-widened : (uint32_t)widened;
+}
+
+static uint32_t sparse_pcm_peak(
+    const int16_t *samples, size_t sample_count, size_t stride) {
+  uint32_t peak = 0U;
+  if (samples == NULL || stride == 0U) return 0U;
+  for (size_t index = 0U; index < sample_count; index += stride) {
+    const uint32_t magnitude = sample_magnitude(samples[index]);
+    if (magnitude > peak) peak = magnitude;
+  }
+  return peak;
 }
 
 static uint64_t saturating_add_u64(uint64_t left, uint64_t right) {
@@ -876,6 +897,19 @@ static void playback_task_main(void *context) {
           clock_metrics->maximum_receive_to_render_ms);
     }
 
+    /*
+     * Inspect the native 16 kHz frame, not the expanded 48 kHz I2S words. One
+     * in eight samples is 2,000 comparisons/second—enough for three visual
+     * bands while keeping resampling and the physical write ahead of display
+     * fidelity. The peak is published only if the complete edge reaches I2S.
+     */
+    const uint32_t playback_peak = result.content_samples == 0U
+        ? 0U
+        : sparse_pcm_peak(
+              owner.playback_pcm,
+              ITERATE_KIT_VOICE_PE_PLAYBACK_EDGE_SAMPLES,
+              VOICE_PE_UI_PLAYBACK_SAMPLE_STRIDE);
+
     size_t hardware_words = 0U;
     const enum iterate_kit_status format_status =
         iterate_kit_voice_pe_expand_playback(
@@ -921,6 +955,8 @@ static void playback_task_main(void *context) {
       atomic_saturating_add(
           &owner.metrics.playback_silence_samples,
           result.silence_samples);
+      atomic_note_maximum(
+          &owner.pending_speaker_peak, playback_peak);
       continue;
     }
 
@@ -1056,6 +1092,9 @@ static void capture_task_main(void *context) {
         owner.capture_clean,
         ITERATE_KIT_VOICE_PE_CAPTURE_FRAME_SAMPLES,
         &observation);
+    /* Reuse the AEC observation; a UI must never add another mic sample walk. */
+    atomic_note_maximum(
+        &owner.pending_microphone_peak, observation.clean_peak);
     if (observation.sampled_samples == 0U || captured_at_us < 0) {
       atomic_saturating_increment(
           &owner.metrics.aec_signal_measurement_failures);
@@ -1388,6 +1427,20 @@ void iterate_kit_voice_pe_audio_owner_metrics_snapshot(
   snapshot->psram_heap_largest_block_bytes =
       (uint32_t)heap_caps_get_largest_free_block(
           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+}
+
+void iterate_kit_voice_pe_audio_owner_take_activity(
+    struct iterate_kit_voice_pe_audio_activity *activity) {
+  if (activity == NULL) return;
+  /*
+   * Each exchange is a complete ownership transfer of a scalar maximum. A
+   * producer racing after the exchange contributes to the next UI interval;
+   * no sample history, lock, or retry is needed for this observational meter.
+   */
+  activity->microphone_peak = __atomic_exchange_n(
+      &owner.pending_microphone_peak, 0U, __ATOMIC_ACQ_REL);
+  activity->speaker_peak = __atomic_exchange_n(
+      &owner.pending_speaker_peak, 0U, __ATOMIC_ACQ_REL);
 }
 
 static uint32_t bounded_mean(uint64_t sum, uint64_t count) {

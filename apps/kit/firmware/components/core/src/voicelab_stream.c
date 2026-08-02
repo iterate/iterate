@@ -11,8 +11,6 @@ static const char *const authenticate_path[] = {"authenticate"};
 static const char *const streams_get_path[] = {"streams", "get"};
 static const char *const project_path[] = {"projects", "get"};
 static const char *const append_path[] = {"append"};
-/* The project's own worker.ts — dotted paths flatten into one RPC. */
-static const char *const start_call_path[] = {"worker", "startCall"};
 
 static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
@@ -909,12 +907,9 @@ static void stream_completed(
     return;
   }
   voicelab->has_stream_capability = true;
-  /*
-   * The project capability is deliberately KEPT for the session's life: it is
-   * what `worker.startCall` is dialled on, so the device can open its own
-   * call. One import slot is a cheap price for not needing a second
-   * projects.get round trip per call.
-   */
+  /* The project capability remains until close because the common session
+   * teardown releases imported stubs in reverse acquisition order. Call
+   * control itself now rides this stream capability. */
   if (voicelab->options.on_speaker == NULL) {
     voicelab->state = ITERATE_KIT_VOICELAB_READY;
     voicelab->failure = ITERATE_KIT_VOICELAB_FAILURE_NONE;
@@ -1292,14 +1287,9 @@ enum capnweb_status iterate_kit_voicelab_start_call(
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY ||
-      voicelab->call_pending || !voicelab->has_project_capability) {
+      voicelab->call_pending || !voicelab->has_stream_capability) {
     return CAPNWEB_E_STATE;
   }
-  /*
-   * `pace` asks the worker to drip speaker frames at ~2x realtime: this
-   * inbox is bounded and cannot absorb a whole answer arriving in one TCP
-   * clump.
-   */
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
@@ -1309,9 +1299,8 @@ enum capnweb_status iterate_kit_voicelab_start_call(
        * think in; anything that has to be RIGHT is asked of a colleague with
        * no clock on it, and the voice says so and keeps talking meanwhile.
        */
-      "[{\"path\":\"%s\",\"callId\":\"%s\",\"pace\":true,\"colleague\":true,"
-      "\"turns\":\"manual\"%s%s%s}]",
-      voicelab->options.stream_path,
+      "[{\"type\":\"voicelab/call-requested\",\"payload\":{"
+      "\"callId\":\"%s\",\"colleague\":true,\"turns\":\"manual\"%s%s%s}}]",
       voicelab->options.call_id,
       greeting != NULL ? ",\"greet\":\"" : "",
       greeting != NULL ? greeting : "",
@@ -1321,9 +1310,9 @@ enum capnweb_status iterate_kit_voicelab_start_call(
   }
   status = capnweb_session_call_path(
       voicelab->options.session,
-      voicelab->project_capability,
-      start_call_path,
-      sizeof(start_call_path) / sizeof(start_call_path[0]),
+      voicelab->stream_capability,
+      append_path,
+      sizeof(append_path) / sizeof(append_path[0]),
       voicelab->args_buffer,
       (size_t)length,
       start_call_completed,

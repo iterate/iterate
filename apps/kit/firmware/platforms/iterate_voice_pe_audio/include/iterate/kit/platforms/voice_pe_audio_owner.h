@@ -137,6 +137,21 @@ struct iterate_kit_voice_pe_audio_owner_metrics {
 };
 
 /**
+ * Peak-hold activity accumulated since the previous take.
+ *
+ * This is intentionally a destructive, single-consumer observation for a
+ * low-rate physical UI—not a second metrics stream. Each realtime owner only
+ * raises one atomic integer; it never queues samples, wakes the UI, touches
+ * LEDs, logs, or allocates. The UI owner exchanges both values back to zero,
+ * so stopped audio becomes visibly quiet on its next refresh rather than
+ * decaying from retained history.
+ */
+struct iterate_kit_voice_pe_audio_activity {
+  uint32_t microphone_peak;
+  uint32_t speaker_peak;
+};
+
+/**
  * Starts the singleton Voice Preview Edition audio owner for this boot.
  *
  * The XMOS and AIC3204 are singleton peripherals with independent 16 kHz RX
@@ -168,6 +183,8 @@ iterate_kit_voice_pe_audio_owner_request_uplink_active(bool active);
 
 void iterate_kit_voice_pe_audio_owner_metrics_snapshot(
     struct iterate_kit_voice_pe_audio_owner_metrics *snapshot);
+void iterate_kit_voice_pe_audio_owner_take_activity(
+    struct iterate_kit_voice_pe_audio_activity *activity);
 enum iterate_kit_status
 iterate_kit_voice_pe_audio_owner_aec_signal_metrics_snapshot(
     struct iterate_kit_voice_pe_aec_signal_metrics *snapshot);
