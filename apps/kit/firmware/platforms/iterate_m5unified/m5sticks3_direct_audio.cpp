@@ -78,11 +78,14 @@ M5StickS3DirectI2sOps::createAndConfigure(
   }
 
   /*
-   * Four 320-stereo-frame descriptors are exactly 80 ms of physical reserve.
-   * `auto_clear_before_cb` is the safety valve: a missed refill plays silence
-   * on the next wrap instead of replaying old speech. Clearing after callback
-   * would race the Core-1 owner that receives descriptor ownership from that
-   * callback, so it is explicitly forbidden.
+   * Eight 320-stereo-frame descriptors are exactly 160 ms of physical reserve.
+   * That value comes from a production 90 ms interarrival gap which exhausted
+   * the old 80 ms cycle; it is not an arbitrary latency budget. ESP-IDF's own
+   * guidance sizes dma_desc_num from the maximum measured service interval.
+   * `auto_clear_before_cb` remains the safety valve: a missed refill plays
+   * silence on the next wrap instead of replaying old speech. Clearing after
+   * callback would race the Core-1 owner that receives descriptor ownership
+   * from that callback, so it is explicitly forbidden.
    *
    * `allow_pd=false` avoids IDF's extra register backup allocation and clock
    * restoration latency. This voice target tears the channel down for

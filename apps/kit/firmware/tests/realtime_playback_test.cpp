@@ -103,7 +103,8 @@ struct LaneFixture {
   }
 };
 
-struct FakeDirectOutput {
+template<std::size_t DescriptorCount>
+struct FakeDirectOutputFor {
   using FrameMetadata =
       iterate::kit::platforms::
           RealtimePlaybackFrameMetadata;
@@ -143,7 +144,7 @@ struct FakeDirectOutput {
   bool useReportedPendingOverride = false;
   bool rejectPollWhileStopped = false;
   bool overflowDuringNextPoll = false;
-  bool enforceThreeEntryDriverQueue = false;
+  bool enforceBoundedDriverQueue = false;
   iterate_kit_spsc_ring *invalidateRingDuringNextPreload =
       nullptr;
   iterate_kit_spsc_ring *invalidateRingDuringNextWrite =
@@ -183,7 +184,7 @@ struct FakeDirectOutput {
       nextPreloadStatus = ITERATE_KIT_OK;
       return status;
     }
-    if (currentDma.size() >= 4U) {
+    if (currentDma.size() >= DescriptorCount) {
       return ITERATE_KIT_BACKPRESSURE;
     }
     currentDma.push_back(samples[0]);
@@ -200,7 +201,7 @@ struct FakeDirectOutput {
 
   iterate_kit_status preloadSilence() {
     TEST_ASSERT(!running);
-    if (currentDma.size() >= 4U) {
+    if (currentDma.size() >= DescriptorCount) {
       return ITERATE_KIT_BACKPRESSURE;
     }
     /*
@@ -215,7 +216,7 @@ struct FakeDirectOutput {
   }
 
   iterate_kit_status start() {
-    TEST_ASSERT(currentDma.size() == 4U);
+    TEST_ASSERT(currentDma.size() == DescriptorCount);
     TEST_ASSERT(!running);
     startCount += 1U;
     running = true;
@@ -398,8 +399,8 @@ struct FakeDirectOutput {
        * contract under test, rather than making unrelated deadline tests
        * inherit a second failure mechanism.
        */
-      if (enforceThreeEntryDriverQueue &&
-          writeCredits >= 3U) {
+      if (enforceBoundedDriverQueue &&
+          writeCredits >= DescriptorCount - 1U) {
         ++queueOverflowsSinceTake;
       } else {
         ++writeCredits;
@@ -420,6 +421,14 @@ struct FakeDirectOutput {
   }
 };
 
+using FakeDirectOutput = FakeDirectOutputFor<4U>;
+
+constexpr std::size_t m5StickS3ProductionDescriptorCount =
+    iterate::kit::platforms::M5StickS3RealtimeAudioPolicy::
+        descriptorCount;
+using M5StickS3ProductionFakeDirectOutput =
+    FakeDirectOutputFor<m5StickS3ProductionDescriptorCount>;
+
 using Playback =
     iterate::kit::platforms::RealtimePlayback<
         sampleCount,
@@ -433,7 +442,7 @@ using M5StickS3ProductionPlayback =
     iterate::kit::platforms::RealtimePlayback<
         sampleCount,
         sampleRate,
-        4U,
+        m5StickS3ProductionDescriptorCount,
         iterate::kit::platforms::M5StickS3RealtimeAudioPolicy::
             maximumFrameAgeMs,
         iterate::kit::platforms::M5StickS3RealtimeAudioPolicy::
@@ -1180,10 +1189,13 @@ void staleDownlinkIsPurgedInsteadOfPlayedLate() {
  */
 void productionStartupJitterDoesNotClipAnOrderedResponse() {
   LaneFixture fixture;
-  FakeDirectOutput output;
+  M5StickS3ProductionFakeDirectOutput output;
   M5StickS3ProductionPlayback playback;
   TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
-  for (std::int16_t value = 1; value <= 4; ++value) {
+  for (std::int16_t value = 1;
+       value <= static_cast<std::int16_t>(
+                    m5StickS3ProductionDescriptorCount);
+       ++value) {
     fixture.publish(value, 100U);
   }
 
@@ -1192,9 +1204,70 @@ void productionStartupJitterDoesNotClipAnOrderedResponse() {
   TEST_ASSERT(result.playbackStarted);
   TEST_ASSERT(
       output.submittedHistory ==
-      std::vector<std::int16_t>({1, 2, 3, 4}));
+      std::vector<std::int16_t>(
+          {1, 2, 3, 4, 5, 6, 7, 8}));
   TEST_ASSERT(playback.metrics().freshnessIncidents == 0U);
   TEST_ASSERT(playback.metrics().freshnessFramesDropped == 0U);
+}
+
+/*
+ * The August 2 production Stick trace observed a 90 ms provider-to-device
+ * interarrival gap. Four 20 ms descriptors could not span that interval: two
+ * physical slots were replaced by silence and the matching ordered frames had
+ * to be discarded, producing the same clipped reply the user heard. This is
+ * ordinary bounded delivery jitter, not permission to accumulate a software
+ * FIFO. ESP-IDF sizes dma_desc_num from the worst measured service interval,
+ * so the production hardware cycle itself must absorb five elapsed 20 ms
+ * slots and then refill them in place without silence, drops, or a reset.
+ */
+void productionReserveAbsorbsMeasuredNinetyMillisecondGap() {
+  constexpr std::size_t descriptorCount =
+      m5StickS3ProductionDescriptorCount;
+  static_assert(descriptorCount >= 8U);
+  LaneFixture fixture;
+  FakeDirectOutputFor<descriptorCount> output;
+  M5StickS3ProductionPlayback playback;
+  TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
+  for (std::int16_t value = 1;
+       value <= static_cast<std::int16_t>(descriptorCount);
+       ++value) {
+    fixture.publish(value, 0U);
+  }
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 0U).
+          playbackStarted);
+
+  /* Five EOFs are possible across a phase-aligned 90 ms delivery gap. */
+  output.complete(5U);
+  output.oldestEofToOwnerUs = 80'000U;
+  output.nextEofLeadUs = 60'000U;
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 90U).status ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(playback.metrics().underrunIncidents == 0U);
+  TEST_ASSERT(output.runningSilenceWrites == 0U);
+
+  for (std::int16_t value =
+           static_cast<std::int16_t>(descriptorCount + 1U);
+       value <= static_cast<std::int16_t>(descriptorCount + 5U);
+       ++value) {
+    fixture.publish(value, 90U);
+  }
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 90U).status ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(playback.metrics().underrunLateFramesDropped == 0U);
+  TEST_ASSERT(playback.metrics().underrunSilenceFramesSubmitted == 0U);
+  TEST_ASSERT(output.stopCount == 0U);
+  TEST_ASSERT(
+      output.submittedHistory.size() == descriptorCount + 5U);
+  for (std::size_t index = 0U;
+       index < output.submittedHistory.size();
+       ++index) {
+    TEST_ASSERT(
+        output.submittedHistory[index] ==
+        static_cast<std::int16_t>(index + 1U));
+  }
 }
 
 /*
@@ -1773,7 +1846,7 @@ void steadyStreamingResponseDrainsItsExactTailAtEndOfStream() {
    * merely waiting for the final content EOF loses descriptor identity on the
    * fourth callback and truncates otherwise healthy speech.
    */
-  output.enforceThreeEntryDriverQueue = true;
+  output.enforceBoundedDriverQueue = true;
   Playback playback;
   TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
   for (std::int16_t value = 1; value <= 4; ++value) {
@@ -2100,6 +2173,7 @@ int main() {
   initialGenerationBarrierDoesNotPollStoppedDma();
   staleDownlinkIsPurgedInsteadOfPlayedLate();
   productionStartupJitterDoesNotClipAnOrderedResponse();
+  productionReserveAbsorbsMeasuredNinetyMillisecondGap();
   productionSpeechPastTheBoundIsStillPurged();
   partialPrebufferTimesOutAsOneClassifiedDiscard();
   finiteResponsesFromOneThroughFiveFramesEndCleanly();

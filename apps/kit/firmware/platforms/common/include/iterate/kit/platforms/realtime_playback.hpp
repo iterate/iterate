@@ -188,11 +188,12 @@ struct RealtimePlaybackMetrics {
  * and processes at most DmaFrameCount lane frames, so a network burst cannot
  * monopolize the realtime core. The lane remains the only software audio FIFO.
  *
- * Four 20 ms descriptors intentionally spend 80 ms of DMA RAM/initial latency
- * to absorb ordinary scheduler and Wi-Fi jitter. Starting with fewer leaves
- * cyclic descriptors stale; adding a second private FIFO would turn outage
- * history into delayed speech. MaximumFrameAgeMs independently bounds semantic
- * latency even if a larger outer ring is configured for burst absorption.
+ * DmaFrameCount physical descriptors intentionally spend a target-selected
+ * amount of DMA RAM/initial latency to absorb measured scheduler and Wi-Fi
+ * jitter. Starting before the whole cycle is initialized leaves cyclic
+ * descriptors stale; adding a second private FIFO would turn outage history
+ * into delayed speech. MaximumFrameAgeMs independently bounds semantic latency
+ * even if a larger outer ring is configured for burst absorption.
  */
 template<
     std::size_t SampleCount,
@@ -1125,12 +1126,12 @@ class RealtimePlayback {
         refillCredits_ >= DmaFrameCount - 1U) {
       /*
        * EOF transfers ownership to this task, but it does not make the
-       * descriptor acoustically late. With four DMA descriptors the oldest
-       * completed slot has up to 60 ms before reuse. Retaining one or two
-       * exact pointers lets an ordinary post-EOF network arrival refill them
-       * on its producer notification. At three pending pointers the next EOF
-       * would overflow ESP-IDF's private queue, so consume exactly the oldest
-       * slot with classified silence and preserve the remaining reserve.
+       * descriptor acoustically late. The oldest completed slot has
+       * (DmaFrameCount - 1) frame durations before reuse. Retaining fewer than
+       * DmaFrameCount - 1 exact pointers lets an ordinary post-EOF network
+       * arrival refill them on its producer notification. At that queue bound
+       * the next EOF would overflow ESP-IDF's private queue, so consume exactly
+       * the oldest slot with classified silence and preserve the remainder.
        *
        * The backend recomputes the oldest descriptor's reuse lead on every
        * poll, including polls with no new EOF. The deadline check above still

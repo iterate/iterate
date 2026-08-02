@@ -283,11 +283,18 @@ static void downlink_flow(void) {
     }
     assert(open_message != NULL);
     assert(strstr(open_message, "\"connectionKey\":\"wsdev-cb-g1\"") != NULL);
+    /*
+     * A quiet call still needs one positive liveness observation. The bridge's
+     * durable pong event is therefore part of the same bounded subscription as
+     * audio and lifecycle events; omitting it here previously let the wire
+     * contract change while the native suite stayed stale.
+     */
     assert(
         strstr(
             open_message,
             "\"eventTypes\":[[\"voicelab/spk-frame\",\"voicelab/grok-event\","
-      "\"voicelab/call-ended\",\"voicelab/call-accepted\"]]") !=
+      "\"voicelab/call-ended\",\"voicelab/call-accepted\","
+      "\"voicelab/pong\"]]") !=
         NULL);
     assert(strstr(open_message, "\"maxDeliveryEvents\":4") != NULL);
     assert(strstr(open_message, "\"maxDeliveryBytes\":5200") != NULL);

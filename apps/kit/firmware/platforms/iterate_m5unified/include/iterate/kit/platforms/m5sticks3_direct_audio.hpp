@@ -31,7 +31,8 @@ namespace iterate::kit::platforms {
  */
 class M5StickS3DirectI2sOps {
  public:
-  static constexpr std::size_t descriptorCount = 4U;
+  static constexpr std::size_t descriptorCount =
+      M5StickS3RealtimeAudioPolicy::descriptorCount;
   static constexpr std::size_t monoSampleCount = 320U;
   static constexpr std::size_t stereoFrameBytes =
       monoSampleCount * 2U * sizeof(std::int16_t);
@@ -119,8 +120,8 @@ using M5StickS3RealtimePlayback =
  * identity, and the lane's consumer cursor never need locks.
  *
  * This object contains no PCM FIFO. Its only application PCM storage is the
- * output adapter's one mono-to-stereo scratch frame. The four physical DMA
- * frames are allocated by ESP-IDF when a channel is created and are explicitly
+ * output adapter's one mono-to-stereo scratch frame. The bounded physical DMA
+ * cycle is allocated by ESP-IDF when a channel is created and is explicitly
  * reported as a separate runtime-driver budget.
  */
 class M5StickS3DirectAudioOwner {
