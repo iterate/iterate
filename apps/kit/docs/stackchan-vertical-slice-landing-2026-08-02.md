@@ -227,8 +227,10 @@ is unchanged. A generated-source regression first failed on the old build and
 now verifies the patched ESP-IDF translation unit itself, so an upstream-source
 refresh cannot silently remove the affinity.
 
-The freshly built/flashed binary is 1,257,296 bytes (`0x132f50`), SHA-256
-`c9d2ed3edf2c18b4d8288155541272f7845a3a29472a635aeb4eebbbd22a26e9`,
+The reproducibility rebuild from backup source commit
+`16aa773be97ea6e791d593e950891989b12fa8ba` was flashed after exact-MAC
+resolution. Its binary is 1,257,296 bytes (`0x132f50`), SHA-256
+`0d8249f4eec3fd95ca83bdd82ec71703f2d987ef30e654ac4eaa6f44c299e722`,
 leaving 76% of the five-megabyte application partition free. The realtime ISR
 ELF audit and patched-BSP source audit passed. The complete native host suite
 passed 67/67 tests, including all six avatar-engine tests and the regression
