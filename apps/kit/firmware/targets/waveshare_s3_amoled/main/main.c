@@ -888,6 +888,8 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       ",\"rttMs\":%" PRIu32 ",\"pings\":%" PRIu32
       ",\"pingFailures\":%" PRIu32 ",\"livenessRestarts\":%" PRIu32
       ",\"spkDiscarded\":%" PRIu32
+      ",\"spkIgnoredCall\":%" PRIu32 ",\"spkIgnoredStale\":%" PRIu32
+      ",\"spkIgnoredDup\":%" PRIu32 ",\"spkReplaced\":%" PRIu32
       ",\"bridgeLosses\":%" PRIu32 ",\"bridgeAgeMs\":%" PRIu32
       ",\"downlinkRecycles\":%" PRIu32 ",\"batchAgeMs\":%" PRIu32
       ",\"uptimeMs\":%" PRIu64 ",\"resetReason\":%d"
@@ -945,6 +947,23 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       runtime.voicelab.ping_count,
       runtime.voicelab.ping_failures,
       runtime.speaker_discarded_frames,
+      /*
+       * THE DECISION THAT HAD NO COUNTER.
+       *
+       * Every other way a frame can fail to reach the speaker is counted:
+       * lost, malformed, overflowed, discarded, concealed, dropped for debt
+       * or catch-up. The one that was not is the playout REFUSING it - and
+       * a refused frame leaves no trace anywhere, because sequence gaps are
+       * only counted on frames that were accepted.
+       *
+       * Measured with everything else at zero: 2 seconds of audio arriving
+       * while the ring sat unchanged at 340ms. Frames were arriving and not
+       * being written, and nothing in the device could say so.
+       */
+      runtime.playout.ignored_other_call,
+      runtime.playout.ignored_stale_answer,
+      runtime.playout.ignored_duplicate,
+      runtime.playout.replaced,
       runtime.liveness_restarts,
       runtime.bridge_losses,
       runtime.voicelab.last_bridge_ms == 0U
