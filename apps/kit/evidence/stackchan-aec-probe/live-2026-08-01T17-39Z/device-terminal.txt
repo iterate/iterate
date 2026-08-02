@@ -1,0 +1,68 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0363ecd53eda492e972b07debd56eb46 -e 'return {diagnostics: await itx.kit.stackchan.getDiagnostics(), ended: await itx.kit.stackchan.conversation.hangUp()}'
+
+{
+  "diagnostics": {
+    "schemaVersion": 4,
+    "producedAtMs": 425689,
+    "control": {
+      "websocketStartAttempts": 1,
+      "websocketConnections": 1,
+      "websocketDisconnects": 0,
+      "websocketErrors": 0,
+      "wifiDisconnects": 0,
+      "protocolFailures": 0,
+      "receiveFailures": 0,
+      "sendFailures": 0,
+      "lastWifiDisconnectReason": 0,
+      "lastErrorGeneration": 0,
+      "lastErrorType": 0,
+      "lastTlsError": 0,
+      "lastTlsStackError": 0,
+      "lastTransportErrno": 0,
+      "lastHandshakeStatusCode": 0,
+      "lastCloseStatusCode": 0,
+      "protocolFailureGeneration": 0,
+      "lastApplicationCapnwebGeneration": 0,
+      "lastApplicationCapnwebStatus": 0,
+      "lastControlReceiveStatus": 0,
+      "messagesSent": 446,
+      "messagesDiscarded": 0,
+      "inboxDiscarded": 0,
+      "outboxDiscarded": 0,
+      "inbox": {
+        "capacitySlots": 8,
+        "messagesPublished": 203,
+        "messagesConsumed": 201,
+        "producerBackpressure": 0,
+        "highWaterSlots": 4,
+        "currentSlots": 2
+      },
+      "outbox": {
+        "capacitySlots": 8,
+        "messagesPublished": 446,
+        "messagesConsumed": 446,
+        "producerBackpressure": 0,
+        "highWaterSlots": 2,
+        "currentSlots": 0
+      }
+    },
+    "network": {
+      "wifiConnected": true,
+      "wifiRssiDbm": -67,
+      "pcmWebsocketConnections": 2,
+      "pcmWebsocketDisconnects": 1,
+      "pcmWebsocketErrors": 1,
+      "pcmWebsocketRawWriteFailures": 0,
+      "pcmTransportFailureIncidents": 1,
+      "pcmLastFailureOperation": 2,
+      "pcmLastRawResult": -1,
+      "pcmLastSocketErrno": 0,
+      "pcmLastEspTlsError": 32776,
+      "pcmLastTlsStackError": 0,
+      "pcmLastTlsCertFlags": 0
+    }
+  },
+  "ended": true
+}

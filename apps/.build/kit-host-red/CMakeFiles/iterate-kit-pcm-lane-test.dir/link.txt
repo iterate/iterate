@@ -1,1 +1,1 @@
-/usr/bin/cc -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-pcm-lane-test.dir/tests/pcm_lane_test.c.o" -o iterate-kit-pcm-lane-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a
+/usr/bin/cc -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-pcm-lane-test.dir/tests/pcm_lane_test.c.o" -o iterate-kit-pcm-lane-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a

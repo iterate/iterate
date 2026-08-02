@@ -1,0 +1,37 @@
+{
+  "capturedAt": "2026-08-01T20:34:33.858Z",
+  "device": {
+    "id": "m5sticks3",
+    "stableUsbSerial": "70:04:1D:D5:45:88",
+    "observedPortAtFlash": "/dev/cu.usbmodem11201"
+  },
+  "firmware": {
+    "appBinaryBytes": 1159840,
+    "provisioningPartitionPreserved": true
+  },
+  "production": {
+    "projectId": "prj_bd8785e119fe4f1d8631bb95e1dea748",
+    "controlMounted": true,
+    "diagnostics": {
+      "producedAtMs": 32895,
+      "wifiConnected": true,
+      "wifiRssiDbm": -61,
+      "controlWebsocketConnections": 1,
+      "controlWebsocketDisconnects": 0,
+      "controlWebsocketErrors": 0
+    }
+  },
+  "screenCapability": {
+    "path": ["kit", "m5sticks3", "captureScreen"],
+    "png": "screen.png",
+    "pngBytes": 1018,
+    "sha256": "3882a295634af257ba823fa27ad2dd3f9d650e79533fac46309596a25b3c589c",
+    "observedFooter": "PWR: reboot  PWRx2: off"
+  },
+  "powerKey": {
+    "singleClick": "hardware reset",
+    "doubleClick": "power off",
+    "physicallyActuatedInThisRun": false,
+    "reasonNotActuated": "Unattended proof; semantics are provided below the application by StickS3 hardware."
+  }
+}

@@ -20,6 +20,19 @@ describe("production Grok turn policy", () => {
     expect(requiredDeviceToolCallsForVoiceProof(20)).toBe(1);
   });
 
+  test("does not impose the colour scenario on an explicit audio-stress prompt", () => {
+    /*
+     * A long-story run exists to hold the exact production downlink open long
+     * enough to expose reservoir, pacing, and device-buffer failures. Tying
+     * that independent scenario to turn one's colour-tool assertion made a
+     * completely played 68-second response wait out the 90-second watchdog
+     * merely because a story quite correctly did not change the display.
+     */
+    const longStoryPrompt = "Tell me a detailed story lasting about one minute.";
+    expect(productionGrokTurnRequiresDeviceTool(1, longStoryPrompt)).toBe(false);
+    expect(requiredDeviceToolCallsForVoiceProof(1, longStoryPrompt)).toBe(0);
+  });
+
   test("rejects invalid turn counts instead of silently weakening the proof", () => {
     expect(() => productionGrokTurnRequiresDeviceTool(0)).toThrow("positive integer");
     expect(() => requiredDeviceToolCallsForVoiceProof(0)).toThrow("at least one turn");

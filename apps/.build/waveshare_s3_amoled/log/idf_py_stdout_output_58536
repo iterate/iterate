@@ -1,0 +1,97 @@
+[1/5] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/esptool_py && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/partition_table/partition-table.bin /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/iterate-kit-waveshare-s3-amoled.bin
+iterate-kit-waveshare-s3-amoled.bin binary size 0x1551b0 bytes. Smallest app partition is 0x400000 bytes. 0x2aae50 bytes (67%) free.
+[2/5] Performing build step for 'bootloader'
+[1/1] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/bootloader/esp-idf/esptool_py && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x0 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/bootloader/bootloader.bin
+Bootloader binary size 0x56c0 bytes. 0x2940 bytes (32%) free.
+[3/5] No install step for 'bootloader'
+[4/5] Completed 'bootloader'
+[4/5] cd /Users/jonastemplestein/esp/esp-idf/components/esptool_py && /opt/homebrew/bin/cmake -D IDF_PATH=/Users/jonastemplestein/esp/esp-idf -D "SERIAL_TOOL=/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python;;/Users/jonastemplestein/esp/esp-idf/components/esptool_py/esptool/esptool.py;--chip;esp32s3" -D "SERIAL_TOOL_ARGS=--before=default_reset;--after=hard_reset;write_flash;@flash_args" -D WORKING_DIRECTORY=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled -P /Users/jonastemplestein/esp/esp-idf/components/esptool_py/run_serial_tool.cmake
+esptool.py --chip esp32s3 -p /dev/cu.usbmodem11301 -b 921600 --before=default_reset --after=hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB 0x0 bootloader/bootloader.bin 0x10000 iterate-kit-waveshare-s3-amoled.bin 0x8000 partition_table/partition-table.bin
+esptool.py v4.12.0
+Serial port /dev/cu.usbmodem11301
+Connecting...
+Chip is ESP32-S3 (QFN56) (revision v0.2)
+Features: WiFi, BLE, Embedded PSRAM 8MB (AP_3v3)
+Crystal is 40MHz
+USB mode: USB-Serial/JTAG
+MAC: 1c:db:d4:7a:16:c8
+Uploading stub...
+Running stub...
+Stub running...
+Changing baud rate to 921600
+Changed.
+Configuring flash size...
+Flash will be erased from 0x00000000 to 0x00005fff...
+Flash will be erased from 0x00010000 to 0x00165fff...
+Flash will be erased from 0x00008000 to 0x00008fff...
+SHA digest in image updated
+Compressed 22208 bytes to 14076...
+Writing at 0x00000000... (100 %)
+Wrote 22208 bytes (14076 compressed) at 0x00000000 in 0.2 seconds (effective 838.0 kbit/s)...
+Hash of data verified.
+Compressed 1397168 bytes to 906329...
+Writing at 0x00010000... (1 %)
+Writing at 0x0001c792... (3 %)
+Writing at 0x0002a364... (5 %)
+Writing at 0x000322c9... (7 %)
+Writing at 0x0003bd11... (8 %)
+Writing at 0x00042829... (10 %)
+Writing at 0x000476b5... (12 %)
+Writing at 0x0004c932... (14 %)
+Writing at 0x00053aa8... (16 %)
+Writing at 0x0005eb83... (17 %)
+Writing at 0x00064e46... (19 %)
+Writing at 0x0006a887... (21 %)
+Writing at 0x0006fdc0... (23 %)
+Writing at 0x00074f61... (25 %)
+Writing at 0x0007a67d... (26 %)
+Writing at 0x000803de... (28 %)
+Writing at 0x0008560b... (30 %)
+Writing at 0x0008ab1d... (32 %)
+Writing at 0x00090a25... (33 %)
+Writing at 0x00095f8a... (35 %)
+Writing at 0x0009b2bb... (37 %)
+Writing at 0x000a0d5d... (39 %)
+Writing at 0x000a6457... (41 %)
+Writing at 0x000ad0b4... (42 %)
+Writing at 0x000b3a6e... (44 %)
+Writing at 0x000b97e5... (46 %)
+Writing at 0x000bf656... (48 %)
+Writing at 0x000c5343... (50 %)
+Writing at 0x000ca5bc... (51 %)
+Writing at 0x000cf9cd... (53 %)
+Writing at 0x000d4d1c... (55 %)
+Writing at 0x000da054... (57 %)
+Writing at 0x000df783... (58 %)
+Writing at 0x000e4810... (60 %)
+Writing at 0x000e9d6e... (62 %)
+Writing at 0x000ef3a2... (64 %)
+Writing at 0x000f45ed... (66 %)
+Writing at 0x000f9791... (67 %)
+Writing at 0x000fea67... (69 %)
+Writing at 0x001043c1... (71 %)
+Writing at 0x0010996d... (73 %)
+Writing at 0x0010ec82... (75 %)
+Writing at 0x00114212... (76 %)
+Writing at 0x0011a5ed... (78 %)
+Writing at 0x0011f78c... (80 %)
+Writing at 0x0012484b... (82 %)
+Writing at 0x00129e1c... (83 %)
+Writing at 0x0012f59a... (85 %)
+Writing at 0x00135ee8... (87 %)
+Writing at 0x00140024... (89 %)
+Writing at 0x00146321... (91 %)
+Writing at 0x0014bd0d... (92 %)
+Writing at 0x00151ee6... (94 %)
+Writing at 0x00157be0... (96 %)
+Writing at 0x0015df9e... (98 %)
+Writing at 0x001630ce... (100 %)
+Wrote 1397168 bytes (906329 compressed) at 0x00010000 in 7.7 seconds (effective 1443.0 kbit/s)...
+Hash of data verified.
+Compressed 3072 bytes to 121...
+Writing at 0x00008000... (100 %)
+Wrote 3072 bytes (121 compressed) at 0x00008000 in 0.0 seconds (effective 1062.5 kbit/s)...
+Hash of data verified.
+
+Leaving...
+Hard resetting via RTS pin...

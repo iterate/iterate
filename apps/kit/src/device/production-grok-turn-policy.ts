@@ -6,16 +6,28 @@
  * One successful raw-event-backed tool call proves `env.ITX`; keeping later
  * turns tool-free is the stronger test for persistent conversational audio.
  */
-export function productionGrokTurnRequiresDeviceTool(turn: number): boolean {
+export function productionGrokTurnRequiresDeviceTool(
+  turn: number,
+  explicitVoicePhrase?: string,
+): boolean {
   if (!Number.isSafeInteger(turn) || turn < 1) {
     throw new Error("Production Grok turn must be a positive integer.");
   }
-  return turn === 1;
+  /*
+   * An explicit phrase selects an audio scenario, such as a one-minute story.
+   * It must remain independent from the default first-turn device-tool proof:
+   * requiring both asks Grok to infer an unrelated colour mutation and turns
+   * a completed long playout into a false 90-second harness timeout.
+   */
+  return turn === 1 && !explicitVoicePhrase?.trim();
 }
 
-export function requiredDeviceToolCallsForVoiceProof(turns: number): number {
+export function requiredDeviceToolCallsForVoiceProof(
+  turns: number,
+  explicitVoicePhrase?: string,
+): number {
   if (!Number.isSafeInteger(turns) || turns < 1) {
     throw new Error("Production Grok proof must contain at least one turn.");
   }
-  return 1;
+  return explicitVoicePhrase?.trim() ? 0 : 1;
 }

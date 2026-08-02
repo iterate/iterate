@@ -100,6 +100,17 @@ request":
   ingress strips it at the trust boundary, and every receiver strips it
   before the request reaches worker code. Authority is the dispatching
   binding's own scope, exactly like `project.workers.get(ref)`.
+- **Stateful WebSocket lifetime ownership.** A stateful worker class is a child
+  facet behind `StatefulWorkerDurableObject`; a standard WebSocket accepted by
+  that facet does not keep the outer object alive. The outer object therefore
+  terminates a second WebSocket and relays frames to the facet for the complete
+  session. Returning the facet's 101 response unchanged is incorrect: the
+  outer object can be evicted while the socket appears healthy, and a later
+  capability call can create a new outer incarnation whose facet resolution
+  retires the old socket. The relay deliberately uses no application queue,
+  preserves ArrayBuffer binary frames, closes both sides on send failure, and
+  does not hibernate because the hosted worker's provider connection is also
+  in-memory session state.
 - **The building page.** Named errors do not survive fetch hops the way they
   survive RPC, so a budget-expired cold build answers a single shared
   response from whichever hop hit it (`workerBuildingResponse()`): a 503

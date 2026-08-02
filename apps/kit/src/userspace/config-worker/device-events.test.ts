@@ -22,7 +22,7 @@ describe("device push-to-talk event subscription", () => {
       inputStarted,
       inputStopped,
       setConversationActive,
-    });
+    }, "push-to-talk");
     callback?.({
       conversationActive: false,
       result: 0,
@@ -68,7 +68,7 @@ describe("device push-to-talk event subscription", () => {
       setConversationActive: vi.fn(() => true),
     };
 
-    await subscribePcmBridgeToDeviceEvents(device, bridge, (diagnostic) =>
+    await subscribePcmBridgeToDeviceEvents(device, bridge, "push-to-talk", (diagnostic) =>
       diagnostics.push(diagnostic),
     );
     callback?.({
@@ -118,6 +118,7 @@ describe("device push-to-talk event subscription", () => {
         },
       },
       bridge,
+      "push-to-talk",
       (diagnostic) => diagnostics.push(diagnostic),
       (event) => accepted.push(event),
     );
@@ -172,7 +173,7 @@ describe("device push-to-talk event subscription", () => {
       inputStopped: vi.fn(() => true),
       setConversationActive: vi.fn(() => true),
     };
-    await subscribePcmBridgeToDeviceEvents(device, bridge, (diagnostic) =>
+    await subscribePcmBridgeToDeviceEvents(device, bridge, "push-to-talk", (diagnostic) =>
       diagnostics.push(diagnostic),
     );
 
@@ -220,6 +221,7 @@ describe("device push-to-talk event subscription", () => {
     await subscribePcmBridgeToDeviceEvents(
       device,
       bridge,
+      "push-to-talk",
       () => undefined,
       (event) => tracker.observe(event),
     );
@@ -289,6 +291,7 @@ describe("device push-to-talk event subscription", () => {
         },
       },
       bridge,
+      "push-to-talk",
     );
 
     callback?.({
@@ -304,5 +307,74 @@ describe("device push-to-talk event subscription", () => {
     expect(bridge.setConversationActive).toHaveBeenCalledExactlyOnceWith(true);
     expect(bridge.inputStarted).not.toHaveBeenCalled();
     expect(bridge.inputStopped).not.toHaveBeenCalled();
+  });
+
+  test("full-duplex AEC uses conversation state and rejects stray PTT edges", async () => {
+    /*
+     * StackChan publishes microphone audio continuously while a conversation
+     * is active; Grok's server VAD, not a button edge, owns speech turns. A
+     * shared subscriber that remained implicitly PTT-shaped could call the
+     * bridge's manual commit path or arm its missing-marker watchdog. Pin the
+     * mode at this event boundary and keep the same ordered sequence/snapshot
+     * guarantees used by the Stick.
+     */
+    let callback: ((event: DeviceEvent) => void) | undefined;
+    const diagnostics: unknown[] = [];
+    const accepted: DeviceEvent[] = [];
+    const bridge = {
+      inputStarted: vi.fn(() => true),
+      inputStopped: vi.fn(() => true),
+      setConversationActive: vi.fn(() => true),
+    };
+    await subscribePcmBridgeToDeviceEvents(
+      {
+        async subscribeToEvents(next) {
+          callback = next;
+        },
+      },
+      bridge,
+      "full-duplex-aec",
+      (diagnostic) => diagnostics.push(diagnostic),
+      (event) => accepted.push(event),
+    );
+
+    callback?.({
+      conversationActive: true,
+      result: 0,
+      schemaVersion: 1,
+      sequence: 100,
+      snapshot: true,
+      source: "system",
+      type: "conversation.started",
+    });
+    callback?.({
+      conversationActive: true,
+      result: 0,
+      schemaVersion: 1,
+      sequence: 101,
+      source: "remote",
+      type: "pushToTalk.started",
+    });
+    callback?.({
+      conversationActive: false,
+      result: 0,
+      schemaVersion: 1,
+      sequence: 102,
+      source: "remote",
+      type: "conversation.ended",
+    });
+
+    expect(bridge.setConversationActive.mock.calls).toEqual([[true], [false]]);
+    expect(bridge.inputStarted).not.toHaveBeenCalled();
+    expect(bridge.inputStopped).not.toHaveBeenCalled();
+    expect(accepted.map((event) => event.type)).toEqual([
+      "conversation.started",
+      "conversation.ended",
+    ]);
+    expect(diagnostics).toContainEqual({
+      audioMode: "full-duplex-aec",
+      code: "device-event-audio-mode-mismatch",
+      event: expect.objectContaining({ type: "pushToTalk.started" }),
+    });
   });
 });

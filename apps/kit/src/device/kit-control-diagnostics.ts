@@ -35,8 +35,7 @@ const ringDiagnosticsSchema = z.strictObject({
  * an apparently clean reconnect and violate the physical rig's fail-closed
  * contract.
  */
-const controlDiagnosticsSchema = z.strictObject({
-  schemaVersion: z.literal(3),
+const controlDiagnosticsCommonShape = {
   producedAtMs: z.number().int().nonnegative().safe(),
   control: z.strictObject({
     websocketStartAttempts: uint32,
@@ -70,20 +69,42 @@ const controlDiagnosticsSchema = z.strictObject({
     inbox: ringDiagnosticsSchema,
     outbox: ringDiagnosticsSchema,
   }),
+} as const;
+const networkDiagnosticsV3Shape = {
+  wifiConnected: z.boolean(),
   /*
    * RSSI is optional because ESP-IDF can fail the instantaneous AP-info query
    * while the transport still reports association. Keeping the field absent
    * preserves provenance; coercing failure into a number would manufacture
    * evidence during exactly the reconnect window this snapshot diagnoses.
    */
-  network: z.strictObject({
-    wifiConnected: z.boolean(),
-    wifiRssiDbm: int32.optional(),
-    pcmWebsocketConnections: uint32,
-    pcmWebsocketDisconnects: uint32,
-    pcmWebsocketErrors: uint32,
+  wifiRssiDbm: int32.optional(),
+  pcmWebsocketConnections: uint32,
+  pcmWebsocketDisconnects: uint32,
+  pcmWebsocketErrors: uint32,
+} as const;
+const controlDiagnosticsSchema = z.discriminatedUnion("schemaVersion", [
+  z.strictObject({
+    schemaVersion: z.literal(3),
+    ...controlDiagnosticsCommonShape,
+    network: z.strictObject(networkDiagnosticsV3Shape),
   }),
-});
+  z.strictObject({
+    schemaVersion: z.literal(4),
+    ...controlDiagnosticsCommonShape,
+    network: z.strictObject({
+      ...networkDiagnosticsV3Shape,
+      pcmWebsocketRawWriteFailures: uint32,
+      pcmTransportFailureIncidents: uint32,
+      pcmLastFailureOperation: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),
+      pcmLastRawResult: int32,
+      pcmLastSocketErrno: int32,
+      pcmLastEspTlsError: int32,
+      pcmLastTlsStackError: int32,
+      pcmLastTlsCertFlags: int32,
+    }),
+  }),
+]);
 
 const websocketErrorTypeNames = {
   0: "none",

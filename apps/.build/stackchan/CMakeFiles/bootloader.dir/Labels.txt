@@ -1,0 +1,13 @@
+# Target labels
+ bootloader
+# Source files and their labels
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/CMakeFiles/bootloader
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/CMakeFiles/bootloader.rule
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/CMakeFiles/bootloader-complete.rule
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/bootloader-prefix/src/bootloader-stamp/bootloader-build.rule
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/bootloader-prefix/src/bootloader-stamp/bootloader-configure.rule
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/bootloader-prefix/src/bootloader-stamp/bootloader-download.rule
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/bootloader-prefix/src/bootloader-stamp/bootloader-install.rule
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/bootloader-prefix/src/bootloader-stamp/bootloader-mkdir.rule
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/bootloader-prefix/src/bootloader-stamp/bootloader-patch.rule
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/bootloader-prefix/src/bootloader-stamp/bootloader-update.rule

@@ -123,6 +123,38 @@ describe("Kit control diagnostics", () => {
     expect(kitControlWebsocketErrorTypeName(parsed.control.lastErrorType)).toBe("pongTimeout");
   });
 
+  test("requires the exact PCM lower-transport tuple in schema v4", () => {
+    /*
+     * ESP-IDF's WebSocket API reduces a terminal read/write to -1 and then
+     * destroys the transport during reconnect. The StackChan incident cannot
+     * be attributed from that value alone: peer FIN, errno, ESP-TLS, and the
+     * TLS stack are separate causal domains. Schema v4 must retain all of them
+     * together and fail closed if even one field disappears; defaulting a
+     * missing cause to zero would manufacture a clean network interval.
+     */
+    const previous = fixture();
+    const value = {
+      ...previous,
+      schemaVersion: 4,
+      network: {
+        ...previous.network,
+        pcmWebsocketRawWriteFailures: 7,
+        pcmTransportFailureIncidents: 8,
+        pcmLastFailureOperation: 3,
+        pcmLastRawResult: -1,
+        pcmLastSocketErrno: 104,
+        pcmLastEspTlsError: 32_776,
+        pcmLastTlsStackError: -29_312,
+        pcmLastTlsCertFlags: 0,
+      },
+    };
+
+    expect(parseKitControlDiagnostics(value)).toEqual(value);
+    const incomplete = structuredClone(value);
+    delete (incomplete.network as Record<string, unknown>).pcmLastSocketErrno;
+    expect(() => parseKitControlDiagnostics(incomplete)).toThrow(/pcmLastSocketErrno/u);
+  });
+
   test("keeps association separate from optional measured RSSI", () => {
     /*
      * Association is owned by the transport, while ESP-IDF's AP-info query may

@@ -1004,6 +1004,7 @@ export async function runDeviceE2e(
               return true;
             },
           },
+          "push-to-talk",
           (diagnostic) => {
             runtimeProbe.fail(
               new Error(`Physical device event subscription failed: ${JSON.stringify(diagnostic)}`),

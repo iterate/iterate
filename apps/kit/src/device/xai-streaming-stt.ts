@@ -3,10 +3,26 @@ import WebSocket from "ws";
 
 const pcm16BytesPerSample = 2;
 const sttChunkDurationMs = 100;
+const sttCompletionGraceMs = 30_000;
+const maximumNodeTimerMs = 2_147_483_647;
 
 export interface XaiStreamingSttSocket extends EventTarget {
   close(): void;
   send(value: string | Uint8Array): void;
+}
+
+export interface XaiStreamingSttResult {
+  durationSeconds: number;
+  rawEvents: string[];
+  text: string;
+  words: unknown[];
+}
+
+interface TimedTranscriptWord {
+  end: number;
+  raw: unknown;
+  start: number;
+  text: string;
 }
 
 interface XaiStreamingSttOptions {
@@ -16,13 +32,6 @@ interface XaiStreamingSttOptions {
   sampleRateHz: number;
   sleep?: (milliseconds: number) => Promise<void>;
   timeoutMs?: number;
-}
-
-export interface XaiStreamingSttResult {
-  durationSeconds: number;
-  rawEvents: string[];
-  text: string;
-  words: unknown[];
 }
 
 /**
@@ -66,14 +75,29 @@ export async function transcribePcm16WithXaiStreamingStt(
   const sleep = options.sleep ?? (async (milliseconds) => await delay(milliseconds));
   const rawEvents: string[] = [];
 
+  /*
+   * Audio is intentionally sent in realtime. The timeout must therefore buy
+   * the complete artifact duration before it starts judging xAI's completion
+   * latency. A fixed 30-second timer made every longer physical recording
+   * fail while this function was still correctly pacing its own input; the
+   * 30-second portion is now post-audio grace, not the total operation budget.
+   */
+  const audioDurationMs =
+    (options.pcm.byteLength / pcm16BytesPerSample / options.sampleRateHz) * 1_000;
+  const timeoutMs = options.timeoutMs ?? Math.ceil(audioDurationMs) + sttCompletionGraceMs;
+  if (!Number.isSafeInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > maximumNodeTimerMs) {
+    throw new Error("The acoustic STT timeout is outside Node's supported timer range.");
+  }
+
   return await new Promise<XaiStreamingSttResult>((resolve, reject) => {
     let settled = false;
     let sending = false;
+    let finalizedWords: TimedTranscriptWord[] = [];
     let speechFinalText = "";
     let speechFinalWords: unknown[] = [];
     const timeout = setTimeout(() => {
       finish(new Error("Timed out waiting for xAI acoustic STT."));
-    }, options.timeoutMs ?? 30_000);
+    }, timeoutMs);
 
     const finish = (result: XaiStreamingSttResult | Error) => {
       if (settled) return;
@@ -124,14 +148,34 @@ export async function transcribePcm16WithXaiStreamingStt(
           finish(new Error(`xAI acoustic STT failed: ${raw}`));
           return;
         }
-        if (
-          value.type === "transcript.partial" &&
-          value.speech_final === true &&
-          typeof value.text === "string" &&
-          value.text.trim()
-        ) {
-          speechFinalText = value.text;
-          speechFinalWords = Array.isArray(value.words) ? value.words : [];
+        if (value.type === "transcript.partial" && value.is_final === true) {
+          const partialText = typeof value.text === "string" ? value.text.trim() : "";
+          const partialWords = decodeTimedTranscriptWords(value.words);
+          if (partialWords.length > 0) {
+            const replacementStartsAt = partialWords[0]!.start;
+            /*
+             * xAI emits finalized, non-overlapping chunks during a long
+             * recording, then a speech-final chunk that repeats its trailing
+             * window. Keep all words strictly before that replacement window
+             * and use the final chunk as the authority for the overlap. This
+             * retains the whole utterance without duplicating its last
+             * several seconds.
+             */
+            finalizedWords = finalizedWords.filter((word) => word.end <= replacementStartsAt);
+            finalizedWords.push(...partialWords);
+          }
+          if (value.speech_final === true && partialText) {
+            speechFinalText =
+              finalizedWords.length > 0
+                ? finalizedWords.map((word) => word.text).join(" ")
+                : partialText;
+            speechFinalWords =
+              finalizedWords.length > 0
+                ? finalizedWords.map((word) => word.raw)
+                : Array.isArray(value.words)
+                  ? value.words
+                  : [];
+          }
           return;
         }
         if (value.type === "transcript.done") {
@@ -152,6 +196,26 @@ export async function transcribePcm16WithXaiStreamingStt(
     socket.addEventListener("message", onMessage);
     socket.addEventListener("error", onError);
   });
+}
+
+function decodeTimedTranscriptWords(value: unknown): TimedTranscriptWord[] {
+  if (!Array.isArray(value)) return [];
+  const words: TimedTranscriptWord[] = [];
+  for (const raw of value) {
+    if (
+      !isRecord(raw) ||
+      typeof raw.start !== "number" ||
+      !Number.isFinite(raw.start) ||
+      typeof raw.end !== "number" ||
+      !Number.isFinite(raw.end) ||
+      typeof raw.text !== "string" ||
+      !raw.text
+    ) {
+      return [];
+    }
+    words.push({ end: raw.end, raw, start: raw.start, text: raw.text });
+  }
+  return words;
 }
 
 function messageText(value: unknown): string {

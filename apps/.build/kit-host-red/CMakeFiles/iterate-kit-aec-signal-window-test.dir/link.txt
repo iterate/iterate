@@ -1,0 +1,1 @@
+/usr/bin/cc -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-aec-signal-window-test.dir/tests/aec_signal_window_test.c.o" -o iterate-kit-aec-signal-window-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a

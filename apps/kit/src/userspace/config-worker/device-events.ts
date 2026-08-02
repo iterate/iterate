@@ -1,3 +1,5 @@
+import type { KitAudioMode } from "./routes.ts";
+
 export interface DeviceEvent {
   conversationActive?: boolean;
   result: number;
@@ -31,6 +33,11 @@ export interface DeviceEventSessionMetrics {
 }
 
 export type DeviceEventSubscriptionDiagnostic =
+  | {
+      audioMode: KitAudioMode;
+      code: "device-event-audio-mode-mismatch";
+      event: DeviceEvent;
+    }
   | {
       actualSequence: number;
       code: "device-event-sequence-gap";
@@ -104,7 +111,7 @@ export class DeviceEventSessionMetricsTracker {
   }
 }
 
-interface PushToTalkBridge {
+interface PcmEventBridge {
   inputStarted(): boolean;
   inputStopped(): boolean;
   setConversationActive(active: boolean): boolean;
@@ -124,7 +131,8 @@ interface PushToTalkBridge {
  */
 export async function subscribePcmBridgeToDeviceEvents(
   device: DeviceEventCapability,
-  bridge: PushToTalkBridge,
+  bridge: PcmEventBridge,
+  audioMode: KitAudioMode,
   onDiagnostic: (diagnostic: DeviceEventSubscriptionDiagnostic) => void = () => undefined,
   onAcceptedEvent: (event: DeviceEvent) => void = () => undefined,
 ): Promise<void> {
@@ -195,17 +203,25 @@ export async function subscribePcmBridgeToDeviceEvents(
        * audio. Idempotence also absorbs a snapshot followed by a repeated
        * state observation without greeting twice.
        */
-      bridge.setConversationActive(conversationActive);
+      if (event.snapshot !== true) bridge.setConversationActive(conversationActive);
       onAcceptedEvent(event);
       return;
     }
     if (event.type === "pushToTalk.started") {
+      if (audioMode !== "push-to-talk") {
+        onDiagnostic({ audioMode, code: "device-event-audio-mode-mismatch", event });
+        return;
+      }
       onAcceptedEvent(event);
       if (!pressed) bridge.inputStarted();
       pressed = true;
       return;
     }
     if (event.type === "pushToTalk.stopped") {
+      if (audioMode !== "push-to-talk") {
+        onDiagnostic({ audioMode, code: "device-event-audio-mode-mismatch", event });
+        return;
+      }
       onAcceptedEvent(event);
       /*
        * This condition includes the initial released snapshot and repeated

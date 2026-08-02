@@ -8,6 +8,7 @@
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-stackchan-resource-profile.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-audio-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-aec-capture-bridge-test.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-aec-signal-window-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-pcm-clock-playback-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-core-s3-capture-reserve-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-device-events-test.dir
@@ -36,6 +37,7 @@
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-pcm-lane-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-pcm-capture-turn-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-pcm-generation-fence-test.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-pcm-playback-interruption-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-pcm-uplink-sender-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-pcm-uplink-conductor-test.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/iterate-kit-pcm-realtime-fault-harness-test.dir

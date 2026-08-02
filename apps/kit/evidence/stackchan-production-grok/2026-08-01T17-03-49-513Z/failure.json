@@ -1,0 +1,2827 @@
+{
+  "acoustic": null,
+  "aec": {
+    "assessment": {
+      "passed": false,
+      "reasons": [
+        "No aligned far-end speaker-reference window was observed.",
+        "No aligned near-end speech window was observed."
+      ],
+      "windows": {
+        "received": 21,
+        "unique": 21,
+        "firstSequence": 23,
+        "lastSequence": 43
+      },
+      "farEnd": {
+        "observed": false,
+        "sequence": null,
+        "echoSuppressionDb": null,
+        "nearMeanAbsolute": null,
+        "cleanMeanAbsolute": null,
+        "referencePeak": null
+      },
+      "nearEnd": {
+        "observed": false,
+        "sequence": null,
+        "cleanToNearRatio": null,
+        "nearMeanAbsolute": null,
+        "cleanMeanAbsolute": null,
+        "referencePeak": null
+      },
+      "lifecycleDeltas": {
+        "framesProcessed": 629,
+        "recreates": 0,
+        "recreateFailures": 0,
+        "captureReserveDroppedChunks": 0,
+        "captureBridgeErrors": 0,
+        "signalMeasurementFailures": 0
+      },
+      "timing": {
+        "maximumObservedCaptureToUplinkUs": 0,
+        "maximumObservedProcessingUs": 12862
+      }
+    },
+    "samples": [
+      {
+        "receivedAtMs": 1785603830935,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 23,
+          "windowStartedAtMs": 22670,
+          "producedAtMs": 23694,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 36,
+          "referencePeak": 11,
+          "cleanPeak": 17,
+          "nearMeanAbsolute": 5,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 4,
+          "lifetimeFramesProcessed": 761,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 6399,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6463,
+          "maximumNlpUs": 8446,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603831972,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 24,
+          "windowStartedAtMs": 23694,
+          "producedAtMs": 24718,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 50,
+          "referencePeak": 11,
+          "cleanPeak": 44,
+          "nearMeanAbsolute": 5,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 5,
+          "lifetimeFramesProcessed": 792,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 6060,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6492,
+          "maximumNlpUs": 8458,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603832999,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 25,
+          "windowStartedAtMs": 24718,
+          "producedAtMs": 25742,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 45,
+          "referencePeak": 11,
+          "cleanPeak": 44,
+          "nearMeanAbsolute": 5,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 4,
+          "lifetimeFramesProcessed": 824,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5911,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6611,
+          "maximumNlpUs": 8458,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603834024,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 26,
+          "windowStartedAtMs": 25742,
+          "producedAtMs": 26766,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 67,
+          "referencePeak": 12,
+          "cleanPeak": 36,
+          "nearMeanAbsolute": 4,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 3,
+          "lifetimeFramesProcessed": 856,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5976,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6333,
+          "maximumNlpUs": 8458,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603834963,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 27,
+          "windowStartedAtMs": 26766,
+          "producedAtMs": 27790,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 44,
+          "referencePeak": 12,
+          "cleanPeak": 26,
+          "nearMeanAbsolute": 5,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 5,
+          "lifetimeFramesProcessed": 887,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 6008,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6560,
+          "maximumNlpUs": 8458,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603835983,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 28,
+          "windowStartedAtMs": 27790,
+          "producedAtMs": 28814,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 53,
+          "referencePeak": 12,
+          "cleanPeak": 31,
+          "nearMeanAbsolute": 4,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 3,
+          "lifetimeFramesProcessed": 919,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5953,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6460,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603836983,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 29,
+          "windowStartedAtMs": 28814,
+          "producedAtMs": 29838,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 49,
+          "referencePeak": 11,
+          "cleanPeak": 32,
+          "nearMeanAbsolute": 4,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 2,
+          "lifetimeFramesProcessed": 950,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5918,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6415,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603838017,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 30,
+          "windowStartedAtMs": 29838,
+          "producedAtMs": 30862,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 50,
+          "referencePeak": 11,
+          "cleanPeak": 25,
+          "nearMeanAbsolute": 4,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 3,
+          "lifetimeFramesProcessed": 982,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 6125,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6359,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603839018,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 31,
+          "windowStartedAtMs": 30862,
+          "producedAtMs": 31886,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 59,
+          "referencePeak": 12,
+          "cleanPeak": 27,
+          "nearMeanAbsolute": 3,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 2,
+          "lifetimeFramesProcessed": 1013,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5966,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6431,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603840013,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 32,
+          "windowStartedAtMs": 31886,
+          "producedAtMs": 32910,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 44,
+          "referencePeak": 12,
+          "cleanPeak": 31,
+          "nearMeanAbsolute": 3,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 3,
+          "lifetimeFramesProcessed": 1045,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5911,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6672,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603841018,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 33,
+          "windowStartedAtMs": 32910,
+          "producedAtMs": 33934,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 41,
+          "referencePeak": 12,
+          "cleanPeak": 31,
+          "nearMeanAbsolute": 4,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 3,
+          "lifetimeFramesProcessed": 1077,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5930,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6436,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603842018,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 34,
+          "windowStartedAtMs": 33934,
+          "producedAtMs": 34958,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 47,
+          "referencePeak": 11,
+          "cleanPeak": 30,
+          "nearMeanAbsolute": 4,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 3,
+          "lifetimeFramesProcessed": 1108,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 6074,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6349,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603843031,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 35,
+          "windowStartedAtMs": 34958,
+          "producedAtMs": 35982,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 60,
+          "referencePeak": 13,
+          "cleanPeak": 45,
+          "nearMeanAbsolute": 4,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 3,
+          "lifetimeFramesProcessed": 1139,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5881,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6451,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603844043,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 36,
+          "windowStartedAtMs": 35982,
+          "producedAtMs": 37006,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 57,
+          "referencePeak": 12,
+          "cleanPeak": 29,
+          "nearMeanAbsolute": 3,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 2,
+          "lifetimeFramesProcessed": 1171,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 6023,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6458,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603845052,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 37,
+          "windowStartedAtMs": 37006,
+          "producedAtMs": 38030,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 55,
+          "referencePeak": 11,
+          "cleanPeak": 32,
+          "nearMeanAbsolute": 3,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 2,
+          "lifetimeFramesProcessed": 1202,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 6089,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6429,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603846082,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 38,
+          "windowStartedAtMs": 38030,
+          "producedAtMs": 39054,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 48,
+          "referencePeak": 13,
+          "cleanPeak": 34,
+          "nearMeanAbsolute": 3,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 2,
+          "lifetimeFramesProcessed": 1233,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 6103,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6329,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603847132,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 39,
+          "windowStartedAtMs": 39054,
+          "producedAtMs": 40078,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 44,
+          "referencePeak": 12,
+          "cleanPeak": 31,
+          "nearMeanAbsolute": 3,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 2,
+          "lifetimeFramesProcessed": 1265,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5899,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6440,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603848054,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 40,
+          "windowStartedAtMs": 40078,
+          "producedAtMs": 41102,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 45,
+          "referencePeak": 12,
+          "cleanPeak": 30,
+          "nearMeanAbsolute": 3,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 2,
+          "lifetimeFramesProcessed": 1296,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 6035,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6474,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603849050,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 41,
+          "windowStartedAtMs": 41102,
+          "producedAtMs": 42126,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 47,
+          "referencePeak": 11,
+          "cleanPeak": 26,
+          "nearMeanAbsolute": 3,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 2,
+          "lifetimeFramesProcessed": 1327,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5906,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6463,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603850051,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 42,
+          "windowStartedAtMs": 42126,
+          "producedAtMs": 43150,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 56,
+          "referencePeak": 12,
+          "cleanPeak": 35,
+          "nearMeanAbsolute": 3,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 2,
+          "lifetimeFramesProcessed": 1359,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5972,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6495,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      },
+      {
+        "receivedAtMs": 1785603851054,
+        "value": {
+          "schemaVersion": 1,
+          "sequence": 43,
+          "windowStartedAtMs": 43150,
+          "producedAtMs": 44174,
+          "sampleStride": 8,
+          "sampledSamples": 2048,
+          "nearPeak": 52,
+          "referencePeak": 11,
+          "cleanPeak": 31,
+          "nearMeanAbsolute": 3,
+          "referenceMeanAbsolute": 0,
+          "cleanMeanAbsolute": 2,
+          "lifetimeFramesProcessed": 1390,
+          "lifetimeRecreates": 0,
+          "lifetimeRecreateFailures": 0,
+          "lastLinearUs": 5897,
+          "maximumLinearUs": 9478,
+          "lastNlpUs": 6713,
+          "maximumNlpUs": 8730,
+          "lastCaptureToUplinkUs": 0,
+          "maximumCaptureToUplinkUs": 0,
+          "lifetimeCaptureReserveDroppedChunks": 0,
+          "lifetimeCaptureBridgeErrors": 0,
+          "lifetimeSignalMeasurementFailures": 0
+        }
+      }
+    ]
+  },
+  "device": {
+    "diagnostics": {
+      "baseline": null,
+      "terminal": {
+        "schemaVersion": 4,
+        "producedAtMs": 44809,
+        "control": {
+          "websocketStartAttempts": 1,
+          "websocketConnections": 1,
+          "websocketDisconnects": 0,
+          "websocketErrors": 0,
+          "wifiDisconnects": 0,
+          "protocolFailures": 0,
+          "receiveFailures": 0,
+          "sendFailures": 0,
+          "lastWifiDisconnectReason": 0,
+          "lastErrorGeneration": 0,
+          "lastErrorType": 0,
+          "lastTlsError": 0,
+          "lastTlsStackError": 0,
+          "lastTransportErrno": 0,
+          "lastHandshakeStatusCode": 0,
+          "lastCloseStatusCode": 0,
+          "protocolFailureGeneration": 0,
+          "lastApplicationCapnwebGeneration": 0,
+          "lastApplicationCapnwebStatus": 0,
+          "lastControlReceiveStatus": 0,
+          "messagesSent": 143,
+          "messagesDiscarded": 0,
+          "inboxDiscarded": 0,
+          "outboxDiscarded": 0,
+          "inbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 57,
+            "messagesConsumed": 55,
+            "producerBackpressure": 0,
+            "highWaterSlots": 3,
+            "currentSlots": 2
+          },
+          "outbox": {
+            "capacitySlots": 8,
+            "messagesPublished": 143,
+            "messagesConsumed": 143,
+            "producerBackpressure": 0,
+            "highWaterSlots": 1,
+            "currentSlots": 0
+          }
+        },
+        "network": {
+          "wifiConnected": true,
+          "wifiRssiDbm": -65,
+          "pcmWebsocketConnections": 0,
+          "pcmWebsocketDisconnects": 0,
+          "pcmWebsocketErrors": 0,
+          "pcmWebsocketRawWriteFailures": 0,
+          "pcmTransportFailureIncidents": 0,
+          "pcmLastFailureOperation": 0,
+          "pcmLastRawResult": 0,
+          "pcmLastSocketErrno": 0,
+          "pcmLastEspTlsError": 0,
+          "pcmLastTlsStackError": 0,
+          "pcmLastTlsCertFlags": 0
+        }
+      }
+    },
+    "generalMetrics": [
+      {
+        "receivedAtMs": 1785603830847,
+        "value": {
+          "uptimeMs": 24394,
+          "freeHeapBytes": 7141648,
+          "minimumFreeHeapBytes": 7130572,
+          "freeInternalHeapBytes": 101535,
+          "minimumFreeInternalHeapBytes": 95323,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 2180,
+          "cpuPermille": 251,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603830934,
+        "value": {
+          "uptimeMs": 24484,
+          "freeHeapBytes": 7140340,
+          "minimumFreeHeapBytes": 7130572,
+          "freeInternalHeapBytes": 100227,
+          "minimumFreeInternalHeapBytes": 95323,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 388,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603831972,
+        "value": {
+          "uptimeMs": 25485,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7129012,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 93763,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 257,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603832999,
+        "value": {
+          "uptimeMs": 26494,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7129012,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 93763,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 242,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603834023,
+        "value": {
+          "uptimeMs": 27504,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7128784,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 93535,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 248,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603834962,
+        "value": {
+          "uptimeMs": 28514,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7128784,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 93535,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 236,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603835984,
+        "value": {
+          "uptimeMs": 29524,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7128784,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 93535,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 250,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603836980,
+        "value": {
+          "uptimeMs": 30534,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7128784,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 93535,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 236,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603838017,
+        "value": {
+          "uptimeMs": 31544,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7128784,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 93535,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 247,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603839019,
+        "value": {
+          "uptimeMs": 32554,
+          "freeHeapBytes": 7140340,
+          "minimumFreeHeapBytes": 7128784,
+          "freeInternalHeapBytes": 100227,
+          "minimumFreeInternalHeapBytes": 93535,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 241,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603840005,
+        "value": {
+          "uptimeMs": 33564,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 242,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603841015,
+        "value": {
+          "uptimeMs": 34574,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 246,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603842018,
+        "value": {
+          "uptimeMs": 35574,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 242,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603843028,
+        "value": {
+          "uptimeMs": 36585,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 240,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603844042,
+        "value": {
+          "uptimeMs": 37594,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 241,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603845052,
+        "value": {
+          "uptimeMs": 38594,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 244,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603846080,
+        "value": {
+          "uptimeMs": 39595,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 247,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603847131,
+        "value": {
+          "uptimeMs": 40604,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 242,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603848046,
+        "value": {
+          "uptimeMs": 41604,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 243,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603849047,
+        "value": {
+          "uptimeMs": 42604,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 246,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603850048,
+        "value": {
+          "uptimeMs": 43604,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 245,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      },
+      {
+        "receivedAtMs": 1785603851043,
+        "value": {
+          "uptimeMs": 44604,
+          "freeHeapBytes": 7143460,
+          "minimumFreeHeapBytes": 7125668,
+          "freeInternalHeapBytes": 103347,
+          "minimumFreeInternalHeapBytes": 90419,
+          "freePsramBytes": 7064384,
+          "taskStackHighWaterBytes": 1988,
+          "cpuPermille": 244,
+          "audio": {
+            "capture": {
+              "sent": 0,
+              "dropped": 0,
+              "failures": 0
+            },
+            "uplink": {
+              "sent": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "sendDeferrals": 0,
+              "consecutiveSendDeferrals": 0,
+              "maximumConsecutiveSendDeferrals": 0,
+              "failures": 0,
+              "restartIncidents": 0,
+              "inPlaceFreshnessRecoveries": 0,
+              "socketRestarts": 0,
+              "producerBackpressureRestarts": 0,
+              "transportDisconnectRestarts": 0,
+              "noProgressTimeoutRestarts": 0,
+              "frameSendTimeoutRestarts": 0,
+              "captureStaleRestarts": 0,
+              "lastTransportAcceptAgeMs": 0,
+              "maximumTransportAcceptAgeMs": 0,
+              "lastRestartOldestCaptureAgeMs": 0,
+              "lastRestartReason": "none",
+              "lastRestartFramesDiscarded": 0
+            },
+            "downlink": {
+              "received": 0,
+              "dropped": 0,
+              "depth": 0,
+              "highWater": 0,
+              "failures": 0
+            },
+            "protocolFailures": 0,
+            "buffers": {
+              "uplinkApplication": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 20480
+              },
+              "websocketTransmitter": {
+                "evidence": "observed",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 910
+              },
+              "lwipSend": {
+                "evidence": "capacityOnly",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 5760
+              },
+              "tlsEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              },
+              "wifiEgress": {
+                "evidence": "unavailable",
+                "current": 0,
+                "highWater": 0,
+                "capacity": 0
+              }
+            }
+          }
+        }
+      }
+    ]
+  },
+  "digital": {
+    "passed": false,
+    "reasons": [
+      "The run did not retain complete digital boundary evidence."
+    ]
+  },
+  "error": {
+    "message": "Timed out waiting for one stable idle StackChan PCM generation.",
+    "name": "ProductionPcmWaitTimeoutError",
+    "stack": "ProductionPcmWaitTimeoutError: Timed out waiting for one stable idle StackChan PCM generation.\n    at waitForProductionPcmConversationIdle (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/src/device/production-pcm-generation.ts:148:9)\n    at async proveProductionStackChanGrok (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-stackchan-grok.ts:240:22)\n    at async proveProductionGrokFromDevice (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-grok-from-device.ts:180:9)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-grok-from-device.ts:193:22)"
+  },
+  "lifecycle": {
+    "conversationEnded": false,
+    "conversationStarted": false
+  },
+  "network": null,
+  "passed": false,
+  "provenance": {
+    "device": {
+      "buildDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan",
+      "currentPort": "/dev/cu.usbmodem11401",
+      "host": "192.168.1.178",
+      "id": "stackchan",
+      "name": "StackChan",
+      "stableUsbSerial": "68:EE:8F:D8:53:20"
+    },
+    "project": {
+      "baseUrl": "https://os.iterate.com",
+      "id": "prj_0363ecd53eda492e972b07debd56eb46",
+      "slug": "kit-stackchan-voice-e2e-20260801",
+      "workerHost": "kit--kit-stackchan-voice-e2e-20260801.iterate.app"
+    },
+    "routes": {
+      "capabilityMountPath": [
+        "kit",
+        "stackchan"
+      ],
+      "pcmUrl": "https://kit--kit-stackchan-voice-e2e-20260801.iterate.app/pcm",
+      "providerEventStreamPath": "/devices/stackchan"
+    },
+    "schemaVersion": 1
+  },
+  "providerEventsArtifact": null,
+  "schemaVersion": 1,
+  "turnEvidence": [],
+  "worker": {
+    "baseline": null,
+    "terminal": {
+      "awaitingCommitAcknowledgement": false,
+      "awaitingUplinkEndMarker": false,
+      "closed": true,
+      "conversationActive": false,
+      "conversationEnds": 1,
+      "conversationStartedAtMs": 1785602372611,
+      "conversationStarts": 1,
+      "devicePcmPeakSample": 4514,
+      "devicePcmRmsSample": 73.43696136441298,
+      "devicePcmSamples": 432960,
+      "downlinkDroppedBytes": 0,
+      "downlinkFrames": 60,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 30578,
+      "emptyUplinkTurns": 0,
+      "firstDevicePcmSentAtMs": 1785602374103,
+      "firstProviderPcmAtMs": 1785602373986,
+      "initialGreetingRequests": 1,
+      "interrupted": false,
+      "lastProviderError": null,
+      "lastProviderEventType": "ping",
+      "lastSocketClose": {
+        "code": 1006,
+        "reason": "WebSocket disconnected without sending Close frame.",
+        "source": "device"
+      },
+      "providerAvailable": false,
+      "providerAttachedAtMs": 1785602373222,
+      "providerCommitMessagesSent": 0,
+      "providerConnections": 1,
+      "providerControlEvents": 17,
+      "providerControlMessagesSent": 5,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 0,
+      "providerFunctionCallFailures": 0,
+      "providerFunctionCalls": 0,
+      "providerFunctionCallsPending": 0,
+      "providerKeepalivePings": 3,
+      "providerKeepalivePongs": 3,
+      "playbackInterruptionFailures": 0,
+      "playbackInterruptionPending": false,
+      "playbackInterruptionsCompleted": 0,
+      "playbackInterruptionsRequested": 0,
+      "providerPcmPeakSample": 15830,
+      "providerPcmRmsSample": 3235.525630270155,
+      "providerPcmSamples": 19129,
+      "providerRetirements": 1,
+      "providerResponseActive": false,
+      "providerResponseCreateMessagesSent": 1,
+      "providerResponsesCancelled": 0,
+      "providerResponsesCompleted": 1,
+      "providerResponsesFailed": 0,
+      "providerSessionReadyAtMs": 1785602373405,
+      "providerSendFailures": 0,
+      "providerSpeechStarts": 0,
+      "providerSpeechStops": 0,
+      "turnDetection": "server-vad",
+      "uplinkControlStarts": 0,
+      "uplinkControlStops": 0,
+      "uplinkDroppedBytes": 20480,
+      "uplinkEndMarkers": 0,
+      "uplinkEndMarkerTimeouts": 0,
+      "uplinkFrames": 1353,
+      "uplinkTurns": 0,
+      "uplinkUnavailableFrames": 32,
+      "audioMode": "full-duplex-aec",
+      "deviceEvents": {
+        "acceptedEvents": 2,
+        "lastEvent": {
+          "sequence": 3,
+          "source": "remote",
+          "type": "conversation.ended"
+        },
+        "physicalConversationEnds": 0,
+        "physicalConversationStarts": 0,
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteConversationEnds": 1,
+        "remoteConversationStarts": 0,
+        "remoteStarts": 0,
+        "remoteStops": 0
+      },
+      "deviceMetrics": {
+        "invalidSamples": 0,
+        "lastInvalidReason": null,
+        "latestSample": {
+          "metrics": {
+            "uptimeMs": 425295,
+            "freeHeapBytes": 7104816,
+            "minimumFreeHeapBytes": 7074012,
+            "freeInternalHeapBytes": 94371,
+            "minimumFreeInternalHeapBytes": 71591,
+            "freePsramBytes": 7034716,
+            "taskStackHighWaterBytes": 1812,
+            "cpuPermille": 382,
+            "audio": {
+              "capture": {
+                "sent": 3205,
+                "dropped": 115,
+                "failures": 0
+              },
+              "uplink": {
+                "sent": 3129,
+                "dropped": 189,
+                "depth": 0,
+                "highWater": 31,
+                "sendDeferrals": 28,
+                "consecutiveSendDeferrals": 0,
+                "maximumConsecutiveSendDeferrals": 9,
+                "failures": 0,
+                "restartIncidents": 0,
+                "inPlaceFreshnessRecoveries": 0,
+                "socketRestarts": 0,
+                "producerBackpressureRestarts": 0,
+                "transportDisconnectRestarts": 0,
+                "noProgressTimeoutRestarts": 0,
+                "frameSendTimeoutRestarts": 0,
+                "captureStaleRestarts": 0,
+                "lastTransportAcceptAgeMs": 25,
+                "maximumTransportAcceptAgeMs": 105,
+                "lastRestartOldestCaptureAgeMs": 0,
+                "lastRestartReason": "none",
+                "lastRestartFramesDiscarded": 0
+              },
+              "downlink": {
+                "received": 116,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 14,
+                "failures": 0
+              },
+              "protocolFailures": 0,
+              "buffers": {
+                "uplinkApplication": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 19840,
+                  "capacity": 20480
+                },
+                "websocketTransmitter": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 648,
+                  "capacity": 910
+                },
+                "lwipSend": {
+                  "evidence": "capacityOnly",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 5760
+                },
+                "tlsEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                },
+                "wifiEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                }
+              }
+            }
+          },
+          "receivedAtMs": 1785602399855
+        },
+        "samplesReceived": 28
+      },
+      "deviceId": "stackchan",
+      "deviceEventSubscriptionAttempts": 1,
+      "deviceEventSubscriptionFailures": 0,
+      "endedAtMs": 1785602400325,
+      "grokCredential": {
+        "attempts": 2,
+        "expiresAtEpochSeconds": 1785605973,
+        "failures": 0,
+        "lastError": null,
+        "state": "ready"
+      },
+      "lastProviderConnectError": null,
+      "providerEvents": {
+        "appendFailures": 0,
+        "appendedEvents": 17,
+        "droppedEvents": 0,
+        "lastAppendError": null,
+        "lastAppendedSequence": 17,
+        "observedEvents": 17,
+        "pendingEvents": 0,
+        "pendingRawBytes": 0,
+        "pendingRawHighWaterBytes": 1881
+      },
+      "providerConnectAttempts": 1,
+      "providerConnectFailures": 0,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:ad0157a3-15bd-462f-897c-c260dbdc9648",
+      "startup": {
+        "authenticationAndModeReadyAtMs": 1785602372535,
+        "credentialPrewarmDecodedAtMs": 1785602372824,
+        "credentialPrewarmReceivedAtMs": 1785602372824,
+        "credentialPrewarmStartedAtMs": 1785602372535,
+        "deviceLaneAcceptedAtMs": 1785602372535,
+        "providerConnectStartedAtMs": 1785602372611,
+        "providerSessionUpdateSentAtMs": 1785602373222,
+        "providerWebSocketCreatedAtMs": 1785602372824,
+        "providerWebSocketOpenedAtMs": 1785602373222,
+        "requestReceivedAtMs": 1785602372504,
+        "deviceUpgradeLatencyMs": 31,
+        "firstDevicePcmLatencyMs": 1599,
+        "firstDevicePcmSentAtMs": 1785602374103,
+        "firstDevicePcmFromConversationMs": 1492,
+        "firstProviderPcmAtMs": 1785602373986,
+        "firstProviderPcmLatencyMs": 1482,
+        "firstProviderPcmFromConversationMs": 1375,
+        "conversationStartedAtMs": 1785602372611,
+        "providerAttachedAtMs": 1785602373222,
+        "providerAttachedLatencyMs": 718,
+        "providerAttachedFromConversationMs": 611,
+        "credentialPrewarmLatencyMs": 289,
+        "credentialReadyBeforeConversationMs": 0,
+        "providerWebSocketOpenFromConversationMs": 611,
+        "providerSessionReadyAtMs": 1785602373405,
+        "providerSessionReadyLatencyMs": 901,
+        "providerSessionReadyFromConversationMs": 794
+      }
+    }
+  }
+}

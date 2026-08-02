@@ -1,0 +1,97 @@
+{
+  "assessment": {
+    "acceptance": "independent-stt-provisional",
+    "boundaryWordOverage": 0,
+    "normalizedMicrophoneTranscript": "the screen is green and the zebra is awake",
+    "normalizedProviderTranscript": "the screen is green and the zebra is awake",
+    "passed": true,
+    "reasons": [],
+    "relativeActiveWindowDeficit": 0,
+    "responseToBaselineMaximumRmsRatio": 8.097081040074846
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": [
+      "The causal response contained 0 active 20 ms windows; expected at least 4."
+    ]
+  },
+  "microphoneStt": {
+    "durationSeconds": 5.232,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"025a7a79-b9d7-45a4-9feb-ed40e601ea9c\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"It's\",\"words\":[{\"text\":\"It's\",\"start\":0.365,\"end\":1.378}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"green, and the sea is blue.\",\"words\":[{\"text\":\"green,\",\"start\":1.52,\"end\":1.743},{\"text\":\"and\",\"start\":2.25,\"end\":2.635},{\"text\":\"the\",\"start\":2.655,\"end\":2.736},{\"text\":\"sea\",\"start\":2.757,\"end\":2.818},{\"text\":\"is\",\"start\":2.818,\"end\":2.858},{\"text\":\"blue.\",\"start\":2.858,\"end\":2.959}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The screen is green and the zebra is awake.\",\"words\":[{\"text\":\"The\",\"start\":1.243,\"end\":1.303},{\"text\":\"screen\",\"start\":1.363,\"end\":1.744},{\"text\":\"is\",\"start\":1.824,\"end\":1.924},{\"text\":\"green\",\"start\":2.005,\"end\":2.345},{\"text\":\"and\",\"start\":2.546,\"end\":2.646},{\"text\":\"the\",\"start\":2.666,\"end\":2.746},{\"text\":\"zebra\",\"start\":2.806,\"end\":3.167},{\"text\":\"is\",\"start\":3.288,\"end\":3.368},{\"text\":\"awake.\",\"start\":3.408,\"end\":3.849}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":5.232,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":5.232}"
+    ],
+    "text": "The screen is green and the zebra is awake.",
+    "words": [
+      {
+        "text": "The",
+        "start": 1.243,
+        "end": 1.303
+      },
+      {
+        "text": "screen",
+        "start": 1.363,
+        "end": 1.744
+      },
+      {
+        "text": "is",
+        "start": 1.824,
+        "end": 1.924
+      },
+      {
+        "text": "green",
+        "start": 2.005,
+        "end": 2.345
+      },
+      {
+        "text": "and",
+        "start": 2.546,
+        "end": 2.646
+      },
+      {
+        "text": "the",
+        "start": 2.666,
+        "end": 2.746
+      },
+      {
+        "text": "zebra",
+        "start": 2.806,
+        "end": 3.167
+      },
+      {
+        "text": "is",
+        "start": 3.288,
+        "end": 3.368
+      },
+      {
+        "text": "awake.",
+        "start": 3.408,
+        "end": 3.849
+      }
+    ]
+  },
+  "providerOutputTranscript": "The screen is green and the zebra is awake.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 43,
+      "clippedSampleCount": 0,
+      "maximumRms": 30.422476614065022,
+      "p50Rms": 3.392239918795053,
+      "p95Rms": 17.84408748951129,
+      "p99Rms": 22.408424754988914,
+      "sampleCount": 251136,
+      "windowCount": 262,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 9.393038202129633
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

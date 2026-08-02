@@ -1,9 +1,15 @@
-import type { KitDevice, KitDeviceDescription, KitMetrics } from "./kit-device-contract.ts";
+import type {
+  KitAecMetrics,
+  KitDevice,
+  KitDeviceDescription,
+  KitMetrics,
+} from "./kit-device-contract.ts";
 
 export type StackChanMetrics = KitMetrics;
 export type StackChanDescription = KitDeviceDescription;
 
 export interface StackChan extends KitDevice {
+  subscribeToAecMetrics(callback: (metrics: KitAecMetrics) => void): Promise<void>;
   servos: {
     move(input: { yawDegrees: number; pitchDegrees: number; speed: number }): Promise<boolean>;
   };

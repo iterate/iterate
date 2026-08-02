@@ -857,6 +857,13 @@
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/iterate_esp_idf/CMakeFiles/install.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/iterate_esp_idf/CMakeFiles/install/local.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/iterate_esp_idf/CMakeFiles/install/strip.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/__idf_espressif__esp_lcd_touch.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/edit_cache.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/rebuild_cache.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/list_install_components.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/install.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/install/local.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/install/strip.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_codec_dev/CMakeFiles/__idf_espressif__esp_codec_dev.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_codec_dev/CMakeFiles/edit_cache.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_codec_dev/CMakeFiles/rebuild_cache.dir
@@ -905,13 +912,6 @@
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_panel_io_additions/CMakeFiles/install.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_panel_io_additions/CMakeFiles/install/local.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_panel_io_additions/CMakeFiles/install/strip.dir
-/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/__idf_espressif__esp_lcd_touch.dir
-/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/edit_cache.dir
-/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/rebuild_cache.dir
-/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/list_install_components.dir
-/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/install.dir
-/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/install/local.dir
-/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch/CMakeFiles/install/strip.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch_ft5x06/CMakeFiles/__idf_espressif__esp_lcd_touch_ft5x06.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch_ft5x06/CMakeFiles/edit_cache.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/espressif__esp_lcd_touch_ft5x06/CMakeFiles/rebuild_cache.dir

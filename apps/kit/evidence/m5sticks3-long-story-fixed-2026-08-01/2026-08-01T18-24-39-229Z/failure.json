@@ -1,0 +1,740 @@
+{
+  "capture": {
+    "ambientEnd": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-long-story-fixed-2026-08-01/2026-08-01T18-24-39-229Z/iterate-kit-acoustic-DowBpW/microphone.pcm16le",
+      "capturedByteLength": 131072,
+      "capturedSampleCount": 65536,
+      "sampleRateHz": 48000
+    },
+    "ambientStart": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-long-story-fixed-2026-08-01/2026-08-01T18-24-39-229Z/iterate-kit-acoustic-DowBpW/microphone.pcm16le",
+      "capturedByteLength": 32768,
+      "capturedSampleCount": 16384,
+      "sampleRateHz": 48000
+    },
+    "completed": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-long-story-fixed-2026-08-01/2026-08-01T18-24-39-229Z/iterate-kit-acoustic-DowBpW/microphone.pcm16le",
+      "capturedByteLength": 1761280,
+      "capturedSampleCount": 880640,
+      "sampleRateHz": 48000,
+      "captureProvenance": {
+        "input": {
+          "avFoundationSpecifier": ":0",
+          "displayName": "MacBook Pro Microphone",
+          "stableId": "BuiltInMicrophoneDevice",
+          "verification": "host-resolved-coreaudio-uid"
+        },
+        "processing": {
+          "activeMicrophoneMode": "standard",
+          "preferredMicrophoneMode": "standard",
+          "verification": "host-resolved-avfoundation-microphone-mode"
+        },
+        "recorder": {
+          "arguments": [
+            "-q",
+            "-t",
+            "coreaudio",
+            "MacBook Pro Microphone",
+            "-t",
+            "raw",
+            "-L",
+            "-c",
+            "1",
+            "-r",
+            "48000",
+            "-b",
+            "16",
+            "-e",
+            "signed-integer",
+            "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-long-story-fixed-2026-08-01/2026-08-01T18-24-39-229Z/iterate-kit-acoustic-DowBpW/microphone.pcm16le"
+          ],
+          "executable": "/opt/homebrew/bin/sox",
+          "version": "/opt/homebrew/bin/sox:      SoX v"
+        }
+      }
+    }
+  },
+  "deviceDiagnostics": {
+    "schemaVersion": 3,
+    "producedAtMs": 47910,
+    "control": {
+      "websocketStartAttempts": 1,
+      "websocketConnections": 1,
+      "websocketDisconnects": 0,
+      "websocketErrors": 0,
+      "wifiDisconnects": 0,
+      "protocolFailures": 0,
+      "receiveFailures": 0,
+      "sendFailures": 0,
+      "lastWifiDisconnectReason": 0,
+      "lastErrorGeneration": 0,
+      "lastErrorType": 0,
+      "lastTlsError": 0,
+      "lastTlsStackError": 0,
+      "lastTransportErrno": 0,
+      "lastHandshakeStatusCode": 0,
+      "lastCloseStatusCode": 0,
+      "protocolFailureGeneration": 0,
+      "lastApplicationCapnwebGeneration": 0,
+      "lastApplicationCapnwebStatus": 0,
+      "lastControlReceiveStatus": 0,
+      "messagesSent": 67,
+      "messagesDiscarded": 0,
+      "inboxDiscarded": 0,
+      "outboxDiscarded": 0,
+      "inbox": {
+        "capacitySlots": 8,
+        "messagesPublished": 31,
+        "messagesConsumed": 29,
+        "producerBackpressure": 0,
+        "highWaterSlots": 3,
+        "currentSlots": 2
+      },
+      "outbox": {
+        "capacitySlots": 8,
+        "messagesPublished": 67,
+        "messagesConsumed": 67,
+        "producerBackpressure": 0,
+        "highWaterSlots": 1,
+        "currentSlots": 0
+      }
+    },
+    "network": {
+      "wifiConnected": true,
+      "wifiRssiDbm": -69,
+      "pcmWebsocketConnections": 0,
+      "pcmWebsocketDisconnects": 0,
+      "pcmWebsocketErrors": 6
+    }
+  },
+  "deviceRoute": {
+    "deviceId": "m5sticks3",
+    "eventStreamPath": "/devices/m5sticks3",
+    "mountPath": [
+      "kit",
+      "m5sticks3"
+    ]
+  },
+  "error": {
+    "message": "Timed out waiting for one stable warm device PCM lane before call start.",
+    "name": "ProductionPcmWaitTimeoutError",
+    "stack": "ProductionPcmWaitTimeoutError: Timed out waiting for one stable warm device PCM lane before call start.\n    at waitForProductionPcmConversationIdle (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/src/device/production-pcm-generation.ts:148:9)\n    at async proveProductionM5StickS3Grok (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-m5sticks3-grok.ts:279:25)\n    at async proveProductionGrokFromDevice (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-grok-from-device.ts:181:9)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-grok-from-device.ts:193:22)",
+    "lastObservedMetrics": {
+      "awaitingCommitAcknowledgement": false,
+      "awaitingUplinkEndMarker": false,
+      "closed": true,
+      "conversationActive": true,
+      "conversationEnds": 0,
+      "conversationStartedAtMs": 1785607807424,
+      "conversationStarts": 1,
+      "downlinkDroppedBytes": 288138,
+      "downlinkFrames": 145,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 254714,
+      "emptyUplinkTurns": 0,
+      "firstDevicePcmSentAtMs": 1785607808944,
+      "firstProviderPcmAtMs": 1785607808810,
+      "initialGreetingRequests": 1,
+      "interrupted": false,
+      "lastProviderError": null,
+      "lastProviderEventType": "response.output_audio_transcript.delta",
+      "lastSocketClose": {
+        "code": 4000,
+        "reason": "The bounded userspace playback reservoir filled before realtime playout caught up.",
+        "source": "device"
+      },
+      "providerAvailable": false,
+      "providerAttachedAtMs": 1785607807940,
+      "providerCommitMessagesSent": 1,
+      "providerConnections": 1,
+      "providerControlEvents": 39,
+      "providerControlMessagesSent": 6,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 0,
+      "providerFunctionCallFailures": 0,
+      "providerFunctionCalls": 0,
+      "providerFunctionCallsPending": 0,
+      "providerKeepalivePings": 2,
+      "providerKeepalivePongs": 2,
+      "providerPcmPeakSample": 21168,
+      "providerPcmRmsSample": 3372.5798928943295,
+      "providerPcmSamples": 190310,
+      "providerRetirements": 0,
+      "providerResponseActive": false,
+      "providerResponseCreateMessagesSent": 2,
+      "providerResponsesCancelled": 0,
+      "providerResponsesCompleted": 1,
+      "providerResponsesFailed": 0,
+      "providerSessionReadyAtMs": 1785607808133,
+      "providerSendFailures": 0,
+      "uplinkControlStarts": 1,
+      "uplinkControlStops": 1,
+      "uplinkDroppedBytes": 0,
+      "uplinkEndMarkers": 1,
+      "uplinkEndMarkerTimeouts": 0,
+      "uplinkFrames": 379,
+      "uplinkTurns": 1,
+      "uplinkUnavailableFrames": 0,
+      "deviceEvents": {
+        "acceptedEvents": 4,
+        "lastEvent": {
+          "sequence": 4,
+          "source": "remote",
+          "type": "pushToTalk.stopped"
+        },
+        "physicalConversationEnds": 0,
+        "physicalConversationStarts": 0,
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteConversationEnds": 0,
+        "remoteConversationStarts": 1,
+        "remoteStarts": 1,
+        "remoteStops": 1
+      },
+      "deviceMetrics": {
+        "invalidSamples": 0,
+        "lastInvalidReason": null,
+        "latestSample": {
+          "metrics": {
+            "uptimeMs": 48020,
+            "freeHeapBytes": 8371036,
+            "minimumFreeHeapBytes": 8350620,
+            "freeInternalHeapBytes": 89807,
+            "minimumFreeInternalHeapBytes": 69663,
+            "freePsramBytes": 8305500,
+            "taskStackHighWaterBytes": 2400,
+            "cpuPermille": 280,
+            "audio": {
+              "capture": {
+                "sent": 410,
+                "dropped": 1,
+                "failures": 0
+              },
+              "uplink": {
+                "sent": 379,
+                "dropped": 32,
+                "depth": 0,
+                "highWater": 31,
+                "sendDeferrals": 140,
+                "consecutiveSendDeferrals": 0,
+                "maximumConsecutiveSendDeferrals": 44,
+                "failures": 0,
+                "restartIncidents": 1,
+                "inPlaceFreshnessRecoveries": 1,
+                "socketRestarts": 0,
+                "producerBackpressureRestarts": 1,
+                "transportDisconnectRestarts": 0,
+                "noProgressTimeoutRestarts": 0,
+                "frameSendTimeoutRestarts": 0,
+                "captureStaleRestarts": 0,
+                "lastTransportAcceptAgeMs": 0,
+                "maximumTransportAcceptAgeMs": 547,
+                "lastRestartOldestCaptureAgeMs": 630,
+                "lastRestartReason": "producer_backpressure",
+                "lastRestartFramesDiscarded": 31
+              },
+              "downlink": {
+                "received": 97,
+                "dropped": 0,
+                "depth": 4,
+                "highWater": 6,
+                "failures": 0
+              },
+              "playback": {
+                "submitted": 93,
+                "completed": 89,
+                "flushed": 0,
+                "depth": 4,
+                "highWater": 4,
+                "failures": 0
+              },
+              "protocolFailures": 0,
+              "buffers": {
+                "uplinkApplication": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 19840,
+                  "capacity": 20480
+                },
+                "websocketTransmitter": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 648,
+                  "capacity": 910
+                },
+                "lwipSend": {
+                  "evidence": "capacityOnly",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 5760
+                },
+                "tlsEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                },
+                "wifiEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                }
+              }
+            }
+          },
+          "receivedAtMs": 1785607821265
+        },
+        "samplesReceived": 16
+      },
+      "deviceId": "m5sticks3",
+      "deviceEventSubscriptionAttempts": 1,
+      "deviceEventSubscriptionFailures": 0,
+      "endedAtMs": 1785607822204,
+      "grokCredential": {
+        "attempts": 2,
+        "expiresAtEpochSeconds": 1785611407,
+        "failures": 0,
+        "lastError": null,
+        "state": "ready"
+      },
+      "lastProviderConnectError": null,
+      "providerEvents": {
+        "appendFailures": 0,
+        "appendedEvents": 39,
+        "droppedEvents": 0,
+        "lastAppendError": null,
+        "lastAppendedSequence": 39,
+        "observedEvents": 39,
+        "pendingEvents": 0,
+        "pendingRawBytes": 0,
+        "pendingRawHighWaterBytes": 1879
+      },
+      "providerConnectAttempts": 1,
+      "providerConnectFailures": 0,
+      "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:cbdb1ca9-c4dd-4598-afde-9a1541616b1b",
+      "startup": {
+        "authenticationAndModeReadyAtMs": 1785607806057,
+        "credentialPrewarmDecodedAtMs": 1785607806481,
+        "credentialPrewarmReceivedAtMs": 1785607806481,
+        "credentialPrewarmStartedAtMs": 1785607806057,
+        "deviceLaneAcceptedAtMs": 1785607806057,
+        "providerConnectStartedAtMs": 1785607807424,
+        "providerSessionUpdateSentAtMs": 1785607807940,
+        "providerWebSocketCreatedAtMs": 1785607807424,
+        "providerWebSocketOpenedAtMs": 1785607807940,
+        "requestReceivedAtMs": 1785607806016,
+        "deviceUpgradeLatencyMs": 41,
+        "firstDevicePcmLatencyMs": 2928,
+        "firstDevicePcmSentAtMs": 1785607808944,
+        "firstDevicePcmFromConversationMs": 1520,
+        "firstProviderPcmAtMs": 1785607808810,
+        "firstProviderPcmLatencyMs": 2794,
+        "firstProviderPcmFromConversationMs": 1386,
+        "conversationStartedAtMs": 1785607807424,
+        "providerAttachedAtMs": 1785607807940,
+        "providerAttachedLatencyMs": 1924,
+        "providerAttachedFromConversationMs": 516,
+        "credentialPrewarmLatencyMs": 424,
+        "credentialReadyBeforeConversationMs": 943,
+        "providerWebSocketOpenFromConversationMs": 516,
+        "providerSessionReadyAtMs": 1785607808133,
+        "providerSessionReadyLatencyMs": 2117,
+        "providerSessionReadyFromConversationMs": 709
+      }
+    }
+  },
+  "lifecycle": {
+    "directRedAcknowledged": false,
+    "remoteConversationEnded": false,
+    "remoteConversationStarted": false,
+    "remotePttStarted": false,
+    "remotePttStopped": false
+  },
+  "networkArtifact": null,
+  "provenance": {
+    "device": {
+      "buildDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/m5sticks3/build",
+      "currentPort": "/dev/cu.usbmodem11201",
+      "host": "192.168.1.210",
+      "id": "m5sticks3",
+      "name": "M5Stack M5StickS3",
+      "stableUsbSerial": "70:04:1D:D5:45:88"
+    },
+    "project": {
+      "baseUrl": "https://os.iterate.com",
+      "id": "prj_bd8785e119fe4f1d8631bb95e1dea748",
+      "slug": "kit-stick-voice-e2e-20260731",
+      "workerHost": "kit--kit-stick-voice-e2e-20260731.iterate.app"
+    },
+    "routes": {
+      "capabilityMountPath": [
+        "kit",
+        "m5sticks3"
+      ],
+      "pcmUrl": "https://kit--kit-stick-voice-e2e-20260731.iterate.app/pcm",
+      "providerEventStreamPath": "/devices/m5sticks3"
+    },
+    "schemaVersion": 1
+  },
+  "playback": {
+    "baseline": {
+      "schemaVersion": 5,
+      "sequence": 3,
+      "producedAtMs": 29007,
+      "downlinkAccepted": 0,
+      "playback": {
+        "submitted": 0,
+        "completed": 0,
+        "generationFramesFlushed": 0,
+        "freshnessFramesDropped": 0,
+        "partialPrebufferFramesDropped": 0,
+        "underrunFramesFlushed": 0,
+        "underrunIncidents": 0,
+        "underrunSilenceFramesSubmitted": 0,
+        "underrunSilenceFramesCompleted": 0,
+        "underrunSilenceFramesRetired": 0,
+        "underrunLateFramesDropped": 0,
+        "dmaDeadlineMissIncidents": 0,
+        "freshnessIncidents": 0,
+        "partialPrebufferIncidents": 0,
+        "endOfStreamMarkersConsumed": 0,
+        "endOfStreamResponses": 0,
+        "endOfStreamSilenceDescriptors": 0,
+        "endOfStreamPaddingDescriptorsCompleted": 0,
+        "driverQueueOverflowIncidents": 0,
+        "driverFailures": 0,
+        "driverStopFailures": 0,
+        "fatalFramesFlushed": 0,
+        "writeBackpressureIncidents": 0,
+        "writeBackpressureDestructiveResets": 0,
+        "writeBackpressureFramesDropped": 0,
+        "invalidFrames": 0,
+        "stateErrors": 0,
+        "ownerClockRegressions": 0,
+        "receiveToDmaStartSamples": 0,
+        "maximumReceiveToDmaStartMs": 0,
+        "downlinkInterarrivalSamples": 0,
+        "maximumDownlinkInterarrivalMs": 0,
+        "maximumEofToSuccessfulRefillUs": 0,
+        "maximumWriteCallDurationUs": 0,
+        "minimumReuseLeadAtSuccessfulRefillUs": 0
+      },
+      "runtime": {
+        "audioOwnerStackHeadroomBytes": 6644,
+        "mainStackHeadroomBytes": 2688,
+        "controlNetworkStackHeadroomBytes": 4568,
+        "pcmNetworkStackHeadroomBytes": 4456,
+        "freeInternalHeapBytes": 91691,
+        "minimumFreeInternalHeapBytes": 76867,
+        "freeDmaHeapBytes": 91691,
+        "minimumFreeDmaHeapBytes": 76867,
+        "largestFreeInternalHeapBlockBytes": 31744,
+        "largestFreeDmaBlockBytes": 31744,
+        "generationFenceAcknowledgementTimeouts": 0,
+        "lifecycleAcknowledgementTimeouts": 0,
+        "controlNetworkStackExhaustions": 0,
+        "pcmNetworkStackExhaustions": 0,
+        "pcmReceiveCalls": 0,
+        "pcmReceiveChunks": 0,
+        "controlNetworkMaximumWorkCycles": 437383304,
+        "pcmNetworkMaximumWorkCycles": 781548798,
+        "cpuPermille": 85
+      }
+    },
+    "latestBeforeCleanup": {
+      "schemaVersion": 5,
+      "sequence": 19,
+      "producedAtMs": 47897,
+      "downlinkAccepted": 0,
+      "playback": {
+        "submitted": 0,
+        "completed": 0,
+        "generationFramesFlushed": 0,
+        "freshnessFramesDropped": 0,
+        "partialPrebufferFramesDropped": 0,
+        "underrunFramesFlushed": 0,
+        "underrunIncidents": 0,
+        "underrunSilenceFramesSubmitted": 0,
+        "underrunSilenceFramesCompleted": 0,
+        "underrunSilenceFramesRetired": 0,
+        "underrunLateFramesDropped": 0,
+        "dmaDeadlineMissIncidents": 0,
+        "freshnessIncidents": 0,
+        "partialPrebufferIncidents": 0,
+        "endOfStreamMarkersConsumed": 0,
+        "endOfStreamResponses": 0,
+        "endOfStreamSilenceDescriptors": 0,
+        "endOfStreamPaddingDescriptorsCompleted": 0,
+        "driverQueueOverflowIncidents": 0,
+        "driverFailures": 0,
+        "driverStopFailures": 0,
+        "fatalFramesFlushed": 0,
+        "writeBackpressureIncidents": 0,
+        "writeBackpressureDestructiveResets": 0,
+        "writeBackpressureFramesDropped": 0,
+        "invalidFrames": 0,
+        "stateErrors": 0,
+        "ownerClockRegressions": 0,
+        "receiveToDmaStartSamples": 0,
+        "maximumReceiveToDmaStartMs": 0,
+        "downlinkInterarrivalSamples": 0,
+        "maximumDownlinkInterarrivalMs": 0,
+        "maximumEofToSuccessfulRefillUs": 0,
+        "maximumWriteCallDurationUs": 0,
+        "minimumReuseLeadAtSuccessfulRefillUs": 0
+      },
+      "runtime": {
+        "audioOwnerStackHeadroomBytes": 6644,
+        "mainStackHeadroomBytes": 2688,
+        "controlNetworkStackHeadroomBytes": 4568,
+        "pcmNetworkStackHeadroomBytes": 4456,
+        "freeInternalHeapBytes": 93263,
+        "minimumFreeInternalHeapBytes": 76867,
+        "freeDmaHeapBytes": 93263,
+        "minimumFreeDmaHeapBytes": 76867,
+        "largestFreeInternalHeapBlockBytes": 31744,
+        "largestFreeDmaBlockBytes": 31744,
+        "generationFenceAcknowledgementTimeouts": 0,
+        "lifecycleAcknowledgementTimeouts": 0,
+        "controlNetworkStackExhaustions": 0,
+        "pcmNetworkStackExhaustions": 0,
+        "pcmReceiveCalls": 0,
+        "pcmReceiveChunks": 0,
+        "controlNetworkMaximumWorkCycles": 437383304,
+        "pcmNetworkMaximumWorkCycles": 781548798,
+        "cpuPermille": 458
+      }
+    }
+  },
+  "schemaVersion": 2,
+  "snapshotErrors": [],
+  "worker": {
+    "latestBeforeCleanup": {
+      "awaitingCommitAcknowledgement": false,
+      "awaitingUplinkEndMarker": false,
+      "closed": true,
+      "conversationActive": true,
+      "conversationEnds": 0,
+      "conversationStartedAtMs": 1785607807424,
+      "conversationStarts": 1,
+      "downlinkDroppedBytes": 288138,
+      "downlinkFrames": 145,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 254714,
+      "emptyUplinkTurns": 0,
+      "firstDevicePcmSentAtMs": 1785607808944,
+      "firstProviderPcmAtMs": 1785607808810,
+      "initialGreetingRequests": 1,
+      "interrupted": false,
+      "lastProviderError": null,
+      "lastProviderEventType": "response.output_audio_transcript.delta",
+      "lastSocketClose": {
+        "code": 4000,
+        "reason": "The bounded userspace playback reservoir filled before realtime playout caught up.",
+        "source": "device"
+      },
+      "providerAvailable": false,
+      "providerAttachedAtMs": 1785607807940,
+      "providerCommitMessagesSent": 1,
+      "providerConnections": 1,
+      "providerControlEvents": 39,
+      "providerControlMessagesSent": 6,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 0,
+      "providerFunctionCallFailures": 0,
+      "providerFunctionCalls": 0,
+      "providerFunctionCallsPending": 0,
+      "providerKeepalivePings": 2,
+      "providerKeepalivePongs": 2,
+      "providerPcmPeakSample": 21168,
+      "providerPcmRmsSample": 3372.5798928943295,
+      "providerPcmSamples": 190310,
+      "providerRetirements": 0,
+      "providerResponseActive": false,
+      "providerResponseCreateMessagesSent": 2,
+      "providerResponsesCancelled": 0,
+      "providerResponsesCompleted": 1,
+      "providerResponsesFailed": 0,
+      "providerSessionReadyAtMs": 1785607808133,
+      "providerSendFailures": 0,
+      "uplinkControlStarts": 1,
+      "uplinkControlStops": 1,
+      "uplinkDroppedBytes": 0,
+      "uplinkEndMarkers": 1,
+      "uplinkEndMarkerTimeouts": 0,
+      "uplinkFrames": 379,
+      "uplinkTurns": 1,
+      "uplinkUnavailableFrames": 0,
+      "deviceEvents": {
+        "acceptedEvents": 4,
+        "lastEvent": {
+          "sequence": 4,
+          "source": "remote",
+          "type": "pushToTalk.stopped"
+        },
+        "physicalConversationEnds": 0,
+        "physicalConversationStarts": 0,
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteConversationEnds": 0,
+        "remoteConversationStarts": 1,
+        "remoteStarts": 1,
+        "remoteStops": 1
+      },
+      "deviceMetrics": {
+        "invalidSamples": 0,
+        "lastInvalidReason": null,
+        "latestSample": {
+          "metrics": {
+            "uptimeMs": 48020,
+            "freeHeapBytes": 8371036,
+            "minimumFreeHeapBytes": 8350620,
+            "freeInternalHeapBytes": 89807,
+            "minimumFreeInternalHeapBytes": 69663,
+            "freePsramBytes": 8305500,
+            "taskStackHighWaterBytes": 2400,
+            "cpuPermille": 280,
+            "audio": {
+              "capture": {
+                "sent": 410,
+                "dropped": 1,
+                "failures": 0
+              },
+              "uplink": {
+                "sent": 379,
+                "dropped": 32,
+                "depth": 0,
+                "highWater": 31,
+                "sendDeferrals": 140,
+                "consecutiveSendDeferrals": 0,
+                "maximumConsecutiveSendDeferrals": 44,
+                "failures": 0,
+                "restartIncidents": 1,
+                "inPlaceFreshnessRecoveries": 1,
+                "socketRestarts": 0,
+                "producerBackpressureRestarts": 1,
+                "transportDisconnectRestarts": 0,
+                "noProgressTimeoutRestarts": 0,
+                "frameSendTimeoutRestarts": 0,
+                "captureStaleRestarts": 0,
+                "lastTransportAcceptAgeMs": 0,
+                "maximumTransportAcceptAgeMs": 547,
+                "lastRestartOldestCaptureAgeMs": 630,
+                "lastRestartReason": "producer_backpressure",
+                "lastRestartFramesDiscarded": 31
+              },
+              "downlink": {
+                "received": 97,
+                "dropped": 0,
+                "depth": 4,
+                "highWater": 6,
+                "failures": 0
+              },
+              "playback": {
+                "submitted": 93,
+                "completed": 89,
+                "flushed": 0,
+                "depth": 4,
+                "highWater": 4,
+                "failures": 0
+              },
+              "protocolFailures": 0,
+              "buffers": {
+                "uplinkApplication": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 19840,
+                  "capacity": 20480
+                },
+                "websocketTransmitter": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 648,
+                  "capacity": 910
+                },
+                "lwipSend": {
+                  "evidence": "capacityOnly",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 5760
+                },
+                "tlsEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                },
+                "wifiEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                }
+              }
+            }
+          },
+          "receivedAtMs": 1785607821265
+        },
+        "samplesReceived": 16
+      },
+      "deviceId": "m5sticks3",
+      "deviceEventSubscriptionAttempts": 1,
+      "deviceEventSubscriptionFailures": 0,
+      "endedAtMs": 1785607822204,
+      "grokCredential": {
+        "attempts": 2,
+        "expiresAtEpochSeconds": 1785611407,
+        "failures": 0,
+        "lastError": null,
+        "state": "ready"
+      },
+      "lastProviderConnectError": null,
+      "providerEvents": {
+        "appendFailures": 0,
+        "appendedEvents": 39,
+        "droppedEvents": 0,
+        "lastAppendError": null,
+        "lastAppendedSequence": 39,
+        "observedEvents": 39,
+        "pendingEvents": 0,
+        "pendingRawBytes": 0,
+        "pendingRawHighWaterBytes": 1879
+      },
+      "providerConnectAttempts": 1,
+      "providerConnectFailures": 0,
+      "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:cbdb1ca9-c4dd-4598-afde-9a1541616b1b",
+      "startup": {
+        "authenticationAndModeReadyAtMs": 1785607806057,
+        "credentialPrewarmDecodedAtMs": 1785607806481,
+        "credentialPrewarmReceivedAtMs": 1785607806481,
+        "credentialPrewarmStartedAtMs": 1785607806057,
+        "deviceLaneAcceptedAtMs": 1785607806057,
+        "providerConnectStartedAtMs": 1785607807424,
+        "providerSessionUpdateSentAtMs": 1785607807940,
+        "providerWebSocketCreatedAtMs": 1785607807424,
+        "providerWebSocketOpenedAtMs": 1785607807940,
+        "requestReceivedAtMs": 1785607806016,
+        "deviceUpgradeLatencyMs": 41,
+        "firstDevicePcmLatencyMs": 2928,
+        "firstDevicePcmSentAtMs": 1785607808944,
+        "firstDevicePcmFromConversationMs": 1520,
+        "firstProviderPcmAtMs": 1785607808810,
+        "firstProviderPcmLatencyMs": 2794,
+        "firstProviderPcmFromConversationMs": 1386,
+        "conversationStartedAtMs": 1785607807424,
+        "providerAttachedAtMs": 1785607807940,
+        "providerAttachedLatencyMs": 1924,
+        "providerAttachedFromConversationMs": 516,
+        "credentialPrewarmLatencyMs": 424,
+        "credentialReadyBeforeConversationMs": 943,
+        "providerWebSocketOpenFromConversationMs": 516,
+        "providerSessionReadyAtMs": 1785607808133,
+        "providerSessionReadyLatencyMs": 2117,
+        "providerSessionReadyFromConversationMs": 709
+      }
+    }
+  }
+}

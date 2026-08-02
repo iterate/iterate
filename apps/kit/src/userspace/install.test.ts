@@ -10,6 +10,12 @@ import { installKitVoiceUserspace } from "./install.ts";
 
 function projectFixture() {
   const operations: string[] = [];
+  const worker = {
+    kill: vi.fn(async () => {
+      operations.push("restart");
+      throw new Error("kill requested");
+    }),
+  };
   const secret = {
     __describe: vi.fn(async () => ({ created: false })),
     create: vi.fn(async () => {
@@ -46,8 +52,9 @@ function projectFixture() {
       ),
     },
     secrets: { get: vi.fn(() => secret) },
+    workers: { get: vi.fn(() => worker) },
   };
-  return { operations, project, secret };
+  return { operations, project, secret, worker };
 }
 
 describe("kit voice userspace install", () => {
@@ -99,8 +106,16 @@ describe("kit voice userspace install", () => {
     expect(secret.__describe).not.toHaveBeenCalled();
   });
 
-  test("pins the Grok secret, commits one source generation, then selects that mode", async () => {
-    const { operations, project, secret } = projectFixture();
+  test("pins secret and source before selecting the mode, then boots that exact generation", async () => {
+    /*
+     * A physical install proved that committing source does not evict an
+     * already-running stateful worker: pcmMetrics() continued exposing the
+     * previous eight-second response reservoir after the new source commit.
+     * The installer must therefore use the platform worker lifecycle only
+     * after every dependency is durable. Otherwise the following proof can
+     * unknowingly exercise stale code, or boot midway through installation.
+     */
+    const { operations, project, secret, worker } = projectFixture();
     const result = await installKitVoiceUserspace({
       apply: true,
       appSources: { "apps/kit-voice/worker.ts": "export class KitVoiceWorker {}" },
@@ -110,17 +125,33 @@ describe("kit voice userspace install", () => {
       xaiApiKey: "xai-secret",
     });
 
-    expect(operations).toEqual(["secret", "source", "mode"]);
+    expect(operations).toEqual(["secret", "source", "mode", "restart"]);
     expect(secret.create).toHaveBeenCalledWith({
       egress: { urls: ["https://api.x.ai"] },
       material: "xai-secret",
     });
     expect(project.kv.set).toHaveBeenCalledWith("kit-pcm-mode", "grok");
+    expect(worker.kill).toHaveBeenCalledOnce();
     expect(result).toMatchObject({
       applied: true,
       changedPaths: ["worker.ts", "apps/kit-voice/worker.ts"],
       commitOid: "abc123",
     });
+  });
+
+  test("does not mistake an unexplained worker restart failure for a completed install", async () => {
+    const { project, worker } = projectFixture();
+    worker.kill.mockRejectedValueOnce(new Error("worker reset permission denied"));
+
+    await expect(
+      installKitVoiceUserspace({
+        apply: true,
+        appSources: { "apps/kit-voice/worker.ts": "export class KitVoiceWorker {}" },
+        mode: "tone",
+        project,
+        projectId: "prj_test",
+      }),
+    ).rejects.toThrow("worker reset permission denied");
   });
 
   test("prints a concise default result and exposes generated source only with --plan", () => {

@@ -76,6 +76,7 @@ describe("userspace PCM providers", () => {
       credential,
       onStage: (stage) => startupStages.push(stage.code),
       sampleRateHz: 16_000,
+      turnDetection: "manual",
     });
 
     expect(provider).toBe(socket);
@@ -111,7 +112,8 @@ describe("userspace PCM providers", () => {
           keep_context: true,
           tools: [
             {
-              description: "Change the physical M5StickS3 display background to red or green.",
+              description:
+                "Change the active Iterate Kit device display background to red or green.",
               name: "changeColour",
               parameters: {
                 additionalProperties: false,
@@ -129,6 +131,47 @@ describe("userspace PCM providers", () => {
         },
       }),
     );
+  });
+
+  test("configures provider-owned VAD explicitly for a continuous AEC session", async () => {
+    const socket = new FakeProviderSocket("wss://api.x.ai/v1/realtime");
+    await connectGrokRealtimeVoice({
+      createWebSocket: () => {
+        queueMicrotask(() => socket.open());
+        return socket as unknown as WebSocket;
+      },
+      credential: {
+        expiresAtEpochSeconds: Math.ceil(Date.now() / 1_000) + 3_600,
+        value: "server-vad-client-secret",
+      },
+      sampleRateHz: 16_000,
+      turnDetection: "server-vad",
+    });
+
+    const update = JSON.parse(String(socket.sent[0])) as {
+      session: {
+        turn_detection: {
+          prefix_padding_ms?: number;
+          silence_duration_ms?: number;
+          threshold?: number;
+          type: string | null;
+        };
+      };
+    };
+    /*
+     * xAI's documented 0.85 default and our first explicit 0.5 setting both
+     * failed to detect a production StackChan prompt. That exact 0.5 run sent
+     * 4,930 current PCM frames, reached a device-observed clean peak of 12,670,
+     * and retained zero speech_started events. Use 0.2 as the next bounded
+     * hardware calibration point; it remains above xAI's documented minimum
+     * of 0.1 and avoids hiding the failure behind firmware gain or resampling.
+     */
+    expect(update.session.turn_detection).toEqual({
+      prefix_padding_ms: 400,
+      silence_duration_ms: 1_000,
+            threshold: 0.1,
+      type: "server_vad",
+    });
   });
 
   test("replenishes the next single-use credential as soon as one is consumed", async () => {

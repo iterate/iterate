@@ -83,6 +83,30 @@ const physicalPressTimeoutMs = 5 * 60_000;
 const physicalReleaseTimeoutMs = 30_000;
 const responseTimeoutMs = 90_000;
 const ambientDurationMs = 1_000;
+const playbackIncidentFieldNames = [
+  "generationFramesFlushed",
+  "freshnessFramesDropped",
+  "partialPrebufferFramesDropped",
+  "underrunFramesFlushed",
+  "underrunIncidents",
+  "underrunSilenceFramesSubmitted",
+  "underrunSilenceFramesCompleted",
+  "underrunSilenceFramesRetired",
+  "underrunLateFramesDropped",
+  "dmaDeadlineMissIncidents",
+  "freshnessIncidents",
+  "partialPrebufferIncidents",
+  "driverQueueOverflowIncidents",
+  "driverFailures",
+  "driverStopFailures",
+  "fatalFramesFlushed",
+  "writeBackpressureIncidents",
+  "writeBackpressureDestructiveResets",
+  "writeBackpressureFramesDropped",
+  "invalidFrames",
+  "stateErrors",
+  "ownerClockRegressions",
+] as const satisfies readonly (keyof KitPlaybackMetrics["playback"])[];
 const responseAnalysisGuardMs = 400;
 const macOsSpeechDrainGuardMs = 1_200;
 const provisionalRelativeAmbientMultiplier = 2.5;
@@ -186,13 +210,33 @@ export async function proveProductionM5StickS3Grok(
   });
   let baselineDiagnostics = await readDiagnostics();
   const playbackSamples: KitPlaybackMetrics[] = [];
+  const playbackIncidentSamples: KitPlaybackMetrics[] = [];
   let playbackCallbackError: Error | undefined;
   await invoke<void>(
     [...devicePath, "subscribeToPlaybackMetrics"],
     [
       (value: unknown) => {
         try {
-          playbackSamples.push(parseKitPlaybackMetrics(value));
+          const parsed = parseKitPlaybackMetrics(value);
+          const previous = playbackSamples.at(-1);
+          /*
+           * The one-hertz callback is already bounded on the ESP. On the host
+           * we retain only transitions in destructive counters, not every
+           * ordinary sample. `producedAtMs` shares the device monotonic clock
+           * with network diagnostics, so a failed run can attribute each
+           * underrun/reset to its exact Wi-Fi/RTT interval without turning
+           * diagnostics into another unbounded streaming queue.
+           */
+          if (
+            previous &&
+            playbackIncidentFieldNames.some(
+              (name) => parsed.playback[name] !== previous.playback[name],
+            )
+          ) {
+            playbackIncidentSamples.push(parsed);
+            if (playbackIncidentSamples.length > 64) playbackIncidentSamples.shift();
+          }
+          playbackSamples.push(parsed);
           if (playbackSamples.length > 16) playbackSamples.shift();
         } catch (error) {
           playbackCallbackError = new Error("The device sent malformed playback metrics.", {
@@ -380,6 +424,7 @@ export async function proveProductionM5StickS3Grok(
     });
     networkMonitor.start();
     networkMeasurement = measureRemoteDnsAndTlsConnect(options.workerHost);
+    const configuredPhrase = environment.ITERATE_KIT_VOICE_PHRASE?.trim();
 
     for (let turn = 1; turn <= options.turns; turn += 1) {
       /*
@@ -393,7 +438,7 @@ export async function proveProductionM5StickS3Grok(
       const turnBaselineDiagnostics = turn === 1 ? baselineDiagnostics : await readDiagnostics();
       const turnBaselinePlayback = terminalPlayback ?? baselinePlayback;
       const providerSequenceBaseline = providerEventEvidence?.at(-1)?.sequence ?? 0;
-      const requiresDeviceTool = productionGrokTurnRequiresDeviceTool(turn);
+      const requiresDeviceTool = productionGrokTurnRequiresDeviceTool(turn, configuredPhrase);
       const expectedColour = requiresDeviceTool ? "green" : undefined;
       remotePttStarted = false;
       remotePttStopped = false;
@@ -448,16 +493,15 @@ export async function proveProductionM5StickS3Grok(
       firstHeldWorker ??= turnFirstHeldWorker;
       firstHeldDevice ??= turnFirstHeldDevice;
 
-      const configuredPhrase = environment.ITERATE_KIT_VOICE_PHRASE?.trim();
       const phrase =
         configuredPhrase && options.turns === 1
           ? configuredPhrase
           : requiresDeviceTool
             ? `Turn ${turn}. Use the change colour tool: ${expectedColour}. ` +
-              `Say exactly: production turn ${turn} is ${expectedColour}.` +
+              `Say exactly: The screen is ${expectedColour} and the zebra is awake.` +
               (options.pttAuthority === "physical" ? " Release Button A now." : "")
             : `Turn ${turn}. Reply in one short sentence. ` +
-              `Say exactly: production conversation turn ${turn} is clear.` +
+              `Say exactly: The physical device completed voice turn ${turn}.` +
               (options.pttAuthority === "physical" ? " Release Button A now." : "");
       console.log(`voice_prompt=started source=macos-say turn=${turn}`);
       /*
@@ -941,6 +985,7 @@ export async function proveProductionM5StickS3Grok(
       providerEvents: failureProviderEventEvidence,
       playback: {
         baseline: baselinePlayback,
+        incidentsBeforeCleanup: playbackIncidentSamples,
         latestBeforeCleanup: playbackSamples.at(-1) ?? null,
       },
       schemaVersion: 2,
@@ -1049,7 +1094,10 @@ export async function proveProductionM5StickS3Grok(
     baselineWorker,
     continuingHeldDevice,
     continuingHeldWorker,
-    expectedFunctionCalls: requiredDeviceToolCallsForVoiceProof(options.turns),
+    expectedFunctionCalls: requiredDeviceToolCallsForVoiceProof(
+      options.turns,
+      environment.ITERATE_KIT_VOICE_PHRASE,
+    ),
     expectedTurns: options.turns,
     firstHeldDevice,
     firstHeldWorker,
@@ -1166,6 +1214,7 @@ export async function proveProductionM5StickS3Grok(
       },
       playback: {
         baseline: baselinePlayback,
+        incidents: playbackIncidentSamples,
         terminal: terminalPlayback ?? playbackSamples.at(-1) ?? null,
       },
       turns: turnEvidence,

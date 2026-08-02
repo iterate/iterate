@@ -1,0 +1,34 @@
+{
+  "assessment": null,
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": [
+      "The causal response contained 0 active 20 ms windows; expected at least 4."
+    ]
+  },
+  "microphoneStt": null,
+  "providerOutputTranscript": "Once upon a time, in a quiet workshop filled with the hum of machines, there lived a blue robot named Azure. Azure had been built by an old inventor who dreamed of creating a companion that could understand the beauty of the world. With sleek cobalt plating and eyes that glowed like sapphires, Azure spent his days exploring the nooks and crannies of the workshop, learning about gears, wires, and the gentle art of patience. One stormy evening, the inventor fell ill, and Azure knew he had to venture beyond the workshop to find medicine. Braving rain and wind, he navigated through the city streets, his sensors guiding him to a small pharmacy. Along the way, he met a lost child who reminded him of the inventor's kindness. After delivering the medicine and returning home, Azure realized his true purpose wasn't just to serve, but to connect hearts. As dawn broke, the inventor recovered, and together they watched the sunrise, Azure's blue form shining with quiet pride. From that day on, Azure became not just a machine, but a cherished friend, proving that even a robot could hold the warmth of humanity within his circuits.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 1052,
+      "clippedSampleCount": 0,
+      "maximumRms": 59.13574602838231,
+      "p50Rms": 3.86638828020846,
+      "p95Rms": 16.64197128748074,
+      "p99Rms": 29.222886293679707,
+      "sampleCount": 3511552,
+      "windowCount": 3658,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 6.254165278702933
+  },
+  "schemaVersion": 1,
+  "transcriptionError": {
+    "message": "Timed out waiting for xAI acoustic STT.",
+    "name": "Error",
+    "stack": "Error: Timed out waiting for xAI acoustic STT.\n    at Timeout.<anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/src/device/xai-streaming-stt.ts:75:14)\n    at listOnTimeout (node:internal/timers:635:17)\n    at process.processTimers (node:internal/timers:571:7)"
+  }
+}

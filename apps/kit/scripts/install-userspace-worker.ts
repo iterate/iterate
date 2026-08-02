@@ -6,6 +6,7 @@ import type { KitVoiceInstallMode } from "../src/userspace/install-plan.ts";
 
 const runtimeSourceNames = [
   "app-ref.ts",
+  "device-control.ts",
   "device-id.ts",
   "device-events.ts",
   "device-metrics.ts",

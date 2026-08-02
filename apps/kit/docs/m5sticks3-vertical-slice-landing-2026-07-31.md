@@ -827,6 +827,149 @@ pipeline. Such a run also cannot prove audio good. A separate `valid` run is
 required for a positive audio verdict. Brownout/reset is a device-invalid
 hardware/power failure, not a network-invalid escape hatch.
 
+## Late-call reset and long-response correction (2026-08-01 23:20 UTC)
+
+The report that otherwise successful multi-turn calls eventually reset or cut
+off was reproduced and had two independent causes. Neither was attributed to
+Wi-Fi or the ESP audio owner without evidence.
+
+First, the platform `StatefulWorkerDurableObject` returned a child-facet
+WebSocket directly from a capability call. The outer Durable Object could then
+be evicted while the accepted socket was still live, terminating a healthy
+device `/pcm` generation. The outer object now accepts and relays both text and
+binary frames itself, so its lifetime owns the returned socket. The production
+OS deployment containing that correction is
+`7e2eca90-858d-4145-9e12-f230643b43d0`. Its regression keeps the same
+generation alive for 150 seconds, crosses a separate capability call, and then
+proves byte-exact text and binary traffic. A later failure during a different
+OS deployment was separately classified from Cloudflare's explicit `This
+script has been upgraded` close reason; it was not normalized as an audio bug.
+
+Second, Grok generated a measured 71.88-second story much faster than realtime.
+The then-current 60-second/1.92 MB userspace reservoir filled at 1,869,680
+bytes, deliberately dropped 1,938,262 bytes, and closed the provider with the
+explicit reason `The bounded userspace playback reservoir filled before
+realtime playout caught up.` The Stick had played only 566 frames even though
+its own queue, heap, sockets, and correlated network interval were healthy.
+That failure is retained at
+`apps/kit/evidence/m5sticks3-production-grok-from-device/2026-08-01T23-04-21-731Z/`
+(failure SHA-256
+`fa0e6f5f624aef872f76a37bacc19fc7800be05fea3ffb47a4b411bf3ad85618`).
+
+The userspace reservoir is now 4,500 frames: a finite 90-second/2.88 MB
+per-call budget. This does not enlarge the ESP queue or permit replay after an
+outage. The device still receives at most its 12-frame/240 ms lead, and
+interruption, socket failure, or overflow discards the userspace generation in
+one observable operation. A literal 3,600-frame/72-second regression first
+failed against the old bound and now proves complete realtime delivery; the
+overflow test still proves terminal, accounted recovery beyond the new bound.
+The deployed userspace source object is
+`d830139b5a6ad4d8720c33a4335f3342938bf2ea`.
+
+The fresh physical production run under
+`apps/kit/evidence/m5sticks3-production-grok-from-device/2026-08-01T23-20-19-310Z/`
+then completed a 70.86-second Grok response on one session. The worker emitted
+3,543 frames; the Stick accepted, submitted, and audibly completed exactly
+3,543, with zero drops, flushes, underruns, restarts, reconnects, provider
+disconnects, or protocol failures. The response-reservoir high-water mark was
+1,946,188 bytes, below the 2.88 MB bound. Device free heap changed from
+8,372,500 to 8,372,424 bytes, every queue drained, and the PCM socket remained
+open after 2,267,520 received bytes. Network attribution was independently
+`valid`: 84/84 device-link samples stayed between -44 and -40 dBm, all 83
+expected reachability samples existed for the Stick/router/worker, their
+maximum RTTs were 27.842/7.926/16.080 ms, DNS took 35.030 ms, and TLS connect
+took 42.318 ms.
+
+The immutable run manifest remains honestly `audio-invalid`, but only because
+the independent xAI STT helper used a fixed 30-second total timeout while it
+was deliberately replaying a 73.157-second Mac-microphone interval in realtime.
+Two red-first harness regressions now make the timeout equal to artifact
+duration plus 30 seconds of completion grace and assemble xAI's finalized
+chunks while replacing its overlapping speech-final tail. Reprocessing the
+retained microphone bytes produced a complete 197-word transcript from `Once
+upon a time` through `within his circuits`, closely following Grok's retained
+195-word story. This proves recognizable physical speech across the whole
+interval, but it is not relabelled as the stricter exact-transcript acceptance:
+the independent recognizer made substitutions such as `workplace` for
+`workshop` and `Asuka` for `Azure`. The immutable manifest, network artifact,
+and assembled transcription SHA-256 values are respectively
+`bb2065f5805a5a27ed4e48ce4a8dd99cef794fb316b2c8f35ab1a7889defb4ed`,
+`4da361ca79bfce9be90d25bc8d046eac1472df8a6a6635e80692699c8921212b`,
+and `ed0192433791ddf90573ddff1029cded0baefcbd70bf456ac06bf747570b6df9`.
+
+An immediately preceding attempt failed 1.6 seconds into the reply because the
+Mac harness's top-level `/api/itx` control session closed with `Network
+connection lost.` The device control and PCM sockets, Grok socket, frame
+counters, and correlated physical network interval all remained healthy. That
+non-reproducing attempt is retained as a harness-control-invalid run at
+`apps/kit/evidence/m5sticks3-production-grok-from-device/2026-08-01T23-09-55-409Z/`
+(failure SHA-256
+`7c46be5e9319922cd9363cfc9260746ba602563a152de1a0c5c9febd04c73dfa`),
+not used to judge audio or waive the later clean run.
+
+The same deployed userspace object then passed a fresh three-turn physical
+regression at
+`apps/kit/evidence/m5sticks3-production-grok-from-device/2026-08-01T23-36-53-106Z/`.
+One PCM session handled three remotely driven PTT turns, 1,499 microphone
+frames, 444 userspace downlink frames, and exactly 444 accepted, submitted,
+and completed playback frames. Every drop, audio failure, protocol failure,
+WebSocket disconnect, Wi-Fi disconnect, playback flush, and provider failure
+counter remained zero; all application queues drained at the end. The worker
+also completed the colour tool call and appended 120 raw provider events with
+zero event drops or append failures. The device heap changed from 8,372,520 to
+8,372,420 bytes and the final CPU sample was 250 permille.
+
+The interval's automatic network verdict was `valid`: all 48 expected device
+link samples were present at -43 to -40 dBm, all 47 expected reachability
+samples were present for the Stick, router, and production worker, their worst
+RTTs were 27.104 ms, 6.817 ms, and 18.413 ms respectively, DNS took 34.526 ms,
+TLS/connect took 41.329 ms, and the PCM socket remained open with no transport
+errors. Independent STT exactly recovered `The screen is green and the zebra
+is awake.` from the Mac microphone, matching the provider transcript. The
+immutable manifest, network artifact, and provider-event log SHA-256 values
+are respectively
+`e81fdae0008aa40af8011348e7ec262d9993e2b13979771321a630e542629bec`,
+`d02bbbc149314e9009f493b8d5816b1d7991960ed5c5fb1a2f4845cebe039405`,
+and `77a64f1d991b0b64f58ca6169cd1f44fac67eb1249fda60182159a349fcab8e3`.
+The unchanged absolute 120-RMS acoustic threshold still misses at the current
+brownout-safe gain; this run uses the previously agreed exact-STT plus causal
+relative-energy provisional acoustic gate and does not relax any digital,
+reset, or network requirement.
+
+## Dedicated recovery key and deferred conversation-policy correction
+
+The 2026-08-01 Stick build leaves the two programmable controls dedicated to
+their product jobs: Button B starts/ends a call and Button A is held for PTT.
+The screen now identifies the separate hardware-managed power key as the
+recovery control: one click resets the complete device, two clicks powers it
+off. This recovery path deliberately sits below the application event loop and
+both WebSockets, so it remains useful in precisely the wedged state that needs
+a reboot; implementing `esp_restart()` on a normal application button would
+have coupled recovery to the code that may be stuck.
+
+The build was flashed to the freshly resolved port for stable ROM MAC
+`70:04:1D:D5:45:88`, without replacing the provisioning partition. A live
+production Cap'n Web `getDiagnostics()` call after boot reported one control
+connection, zero control disconnects/errors, Wi-Fi connected at -61 dBm, and
+32,895 ms uptime. A separate `captureScreen()` call returned a 1,018-byte PNG
+whose framebuffer visibly includes `PWR: reboot  PWRx2: off`; its SHA-256 is
+`3882a295634af257ba823fa27ad2dd3f9d650e79533fac46309596a25b3c589c` and it is
+retained under
+`apps/kit/evidence/m5sticks3-power-button/2026-08-01T20-34-33-858Z/`.
+This proves the freshly flashed UI and production capability mount, while the
+actual reset semantics come from the StickS3 hardware contract; no human power
+press was claimed for this unattended run.
+
+Two later product decisions are recorded without expanding this focused
+recovery change:
+
+- Connecting a call must not make the assistant speak first. Grok should
+  respond only after the user supplies a PTT turn.
+- Pressing PTT while assistant audio is playing currently muddles the turn and
+  playback state. That needs a separate deterministic interruption/flush test
+  and correction; it is explicitly deferred from the recovery-key task, not
+  accepted as working behaviour.
+
 ## Explicit deferrals for this landing
 
 The following do not block the Stick slice and must be reported as deferred,

@@ -1,0 +1,99 @@
+{
+  "assessment": {
+    "acceptance": "independent-stt-provisional",
+    "boundaryWordOverage": 0,
+    "normalizedMicrophoneTranscript": "the screen is green and the zebra is awake",
+    "normalizedProviderTranscript": "the screen is green and the zebra is awake",
+    "passed": true,
+    "reasons": [],
+    "relativeActiveWindowDeficit": 0,
+    "responseToBaselineMaximumRmsRatio": 11.367345682528585
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": [
+      "The causal response contained 0 active 20 ms windows; expected at least 4."
+    ]
+  },
+  "microphoneStt": {
+    "durationSeconds": 6.085,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"1eb4d32c-3b86-4c38-9a04-d76cf2354728\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":6.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The screen is green and the zebra is awake.\",\"words\":[{\"text\":\"The\",\"start\":2.662,\"end\":2.722},{\"text\":\"screen\",\"start\":2.782,\"end\":3.163},{\"text\":\"is\",\"start\":3.263,\"end\":3.343},{\"text\":\"green\",\"start\":3.403,\"end\":3.783},{\"text\":\"and\",\"start\":3.923,\"end\":4.024},{\"text\":\"the\",\"start\":4.044,\"end\":4.124},{\"text\":\"zebra\",\"start\":4.184,\"end\":4.504},{\"text\":\"is\",\"start\":4.644,\"end\":4.724},{\"text\":\"awake.\",\"start\":4.784,\"end\":5.205}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":6.085}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The screen is green and the zebra is awake.\",\"words\":[{\"text\":\"The\",\"start\":2.662,\"end\":2.722},{\"text\":\"screen\",\"start\":2.782,\"end\":3.163},{\"text\":\"is\",\"start\":3.263,\"end\":3.343},{\"text\":\"green\",\"start\":3.403,\"end\":3.783},{\"text\":\"and\",\"start\":3.923,\"end\":4.024},{\"text\":\"the\",\"start\":4.044,\"end\":4.124},{\"text\":\"zebra\",\"start\":4.184,\"end\":4.504},{\"text\":\"is\",\"start\":4.644,\"end\":4.724},{\"text\":\"awake.\",\"start\":4.784,\"end\":5.205}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":6.085}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":6.085}"
+    ],
+    "text": "The screen is green and the zebra is awake.",
+    "words": [
+      {
+        "text": "The",
+        "start": 2.662,
+        "end": 2.722
+      },
+      {
+        "text": "screen",
+        "start": 2.782,
+        "end": 3.163
+      },
+      {
+        "text": "is",
+        "start": 3.263,
+        "end": 3.343
+      },
+      {
+        "text": "green",
+        "start": 3.403,
+        "end": 3.783
+      },
+      {
+        "text": "and",
+        "start": 3.923,
+        "end": 4.024
+      },
+      {
+        "text": "the",
+        "start": 4.044,
+        "end": 4.124
+      },
+      {
+        "text": "zebra",
+        "start": 4.184,
+        "end": 4.504
+      },
+      {
+        "text": "is",
+        "start": 4.644,
+        "end": 4.724
+      },
+      {
+        "text": "awake.",
+        "start": 4.784,
+        "end": 5.205
+      }
+    ]
+  },
+  "providerOutputTranscript": "The screen is green and the zebra is awake.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 55,
+      "clippedSampleCount": 0,
+      "maximumRms": 38.62354366186511,
+      "p50Rms": 2.0351085147152883,
+      "p95Rms": 16.306089097839084,
+      "p99Rms": 22.392288479146863,
+      "sampleCount": 292096,
+      "windowCount": 305,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 8.494406860791791
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

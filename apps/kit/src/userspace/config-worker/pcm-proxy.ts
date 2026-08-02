@@ -1,28 +1,38 @@
 export const ITERATE_KIT_PCM_FRAME_BYTES = 640;
 export const ITERATE_KIT_PCM_SAMPLE_RATE_HZ = 16_000;
 export const ITERATE_KIT_PCM_SUBPROTOCOL = "iterate.kit.pcm.v1";
+export type PcmTurnDetection = "manual" | "server-vad";
 
 /*
  * These bounds describe three different queues and must never be collapsed
  * into one magic number:
  *
- * - 400 frames / eight seconds is the userspace response reservoir. Grok can
- *   synthesize speech much faster than a loudspeaker consumes it, so retaining
- *   that burst in the Durable Object is necessary even though replay after an
- *   outage is forbidden. Interruption and socket failure discard it in one
- *   operation; overflow is terminal and visible.
+ * - 4,500 frames / 90 seconds is the userspace response reservoir. A physical
+ *   grok-voice-think-fast-2.0 run filled an eight-second reservoir after
+ *   generating roughly ten seconds of a requested thirty-second story. That
+ *   was normal source acceleration, not a slow device or network backlog. The
+ *   first sixty-second bound later cut off a measured 71.88-second story after
+ *   only eleven audible seconds: Grok had generated the valid future audio
+ *   faster than realtime, so reservoir exhaustion discarded content which the
+ *   healthy Stick was still draining exactly. Ninety seconds covers that real
+ *   incident plus generation jitter while remaining a finite 2.88 MB per-call
+ *   budget. The device still receives only realtime-paced frames; interruption
+ *   and socket failure discard the reservoir in one operation.
  * - 32 frames / 640 ms is the source-readiness watermark. A physical Grok run
  *   measured a 203.28 ms gap between provider packets, so the smaller hardware
  *   lead is not enough to prove that userspace has a continuous source.
- * - eight frames / 160 ms is the finite lead admitted to the Stick at startup.
- *   Subsequent frames cross the socket one per 20 ms media deadline. This is
- *   deliberately no larger than the firmware's measured receive/playback
- *   budget and therefore does not move the provider's burst into TCP or ESP
- *   RAM.
+ * - twelve frames / 240 ms is the finite lead admitted to the Stick at
+ *   startup. A production run observed a 170 ms post-send delivery gap while
+ *   userspace's pacing-lateness counters remained zero; the old 160 ms lead
+ *   therefore lost real speech despite a full userspace reservoir. Subsequent
+ *   frames still cross one per 20 ms media deadline. Twelve frames remain
+ *   below the firmware's existing 32-frame / 640 ms receive bound, so this
+ *   buys a measured radio/runtime-jitter reserve without moving the provider's
+ *   much larger burst into TCP or ESP RAM.
  */
-const DOWNLINK_RESPONSE_RESERVOIR_FRAMES = 400;
+const DOWNLINK_RESPONSE_RESERVOIR_FRAMES = 4_500;
 const DOWNLINK_SOURCE_STARTUP_FRAMES = 32;
-const DEVICE_INITIAL_LEAD_FRAMES = 8;
+const DEVICE_INITIAL_LEAD_FRAMES = 12;
 const PCM_FRAME_DURATION_MS = 20;
 /*
  * This is not an audio queue timeout. The PCM marker owns the turn boundary;
@@ -52,9 +62,12 @@ export interface ProviderNonPcmEvent {
 export interface PcmProxyDiagnostic {
   code:
     | "device-closed"
+    | "downlink-device-egress-overrun"
     | "downlink-overflow"
+    | "downlink-pacing-overrun"
     | "empty-uplink-turn"
     | "invalid-device-frame"
+    | "playback-interruption-failed"
     | "provider-closed"
     | "provider-event"
     | "provider-function-call-failed"
@@ -63,7 +76,9 @@ export interface PcmProxyDiagnostic {
     | "provider-unavailable"
     | "socket-error"
     | "uplink-backpressure"
-    | "uplink-end-marker-timeout";
+    | "uplink-end-marker-timeout"
+    | "unexpected-manual-turn-control"
+    | "unexpected-uplink-end-marker";
   detail?: unknown;
   droppedBytes?: number;
   sessionId: string;
@@ -78,8 +93,16 @@ export interface PcmSessionMetrics {
   conversationEnds: number;
   conversationStartedAtMs: number | null;
   conversationStarts: number;
+  devicePcmPeakSample: number;
+  devicePcmRmsSample: number;
+  devicePcmSamples: number;
+  downlinkDeviceEgressOverrunFrames: number;
   downlinkDroppedBytes: number;
   downlinkFrames: number;
+  downlinkPacingCatchUpFrames: number;
+  downlinkPacingCatchUpIncidents: number;
+  downlinkPacingMaximumLatenessMs: number;
+  downlinkPacingOverrunFrames: number;
   downlinkPartialBytes: number;
   downlinkQueuedBytes: number;
   downlinkQueueHighWaterBytes: number;
@@ -108,6 +131,10 @@ export interface PcmSessionMetrics {
   providerFunctionCallsPending: number;
   providerKeepalivePings: number;
   providerKeepalivePongs: number;
+  playbackInterruptionFailures: number;
+  playbackInterruptionPending: boolean;
+  playbackInterruptionsCompleted: number;
+  playbackInterruptionsRequested: number;
   providerPcmPeakSample: number;
   providerPcmRmsSample: number;
   providerPcmSamples: number;
@@ -119,6 +146,9 @@ export interface PcmSessionMetrics {
   providerResponsesFailed: number;
   providerSessionReadyAtMs: number | null;
   providerSendFailures: number;
+  providerSpeechStarts: number;
+  providerSpeechStops: number;
+  turnDetection: PcmTurnDetection;
   uplinkDroppedBytes: number;
   uplinkControlStarts: number;
   uplinkControlStops: number;
@@ -134,10 +164,12 @@ export interface PcmSessionBridgeOptions {
   initialGreeting?: string;
   maximumSocketBufferedBytes: number;
   onDiagnostic?: (diagnostic: PcmProxyDiagnostic) => void;
+  onPlaybackInterruption?: () => Promise<void> | void;
   onProviderEvent?: (event: ProviderNonPcmEvent) => void;
   onProviderFunctionCall?: (call: ProviderFunctionCall) => Promise<unknown>;
   onProviderUnavailable?: () => void;
   sessionId: string;
+  turnDetection: PcmTurnDetection;
 }
 
 /**
@@ -159,10 +191,12 @@ export class PcmSessionBridge {
   readonly #initialGreeting: string | undefined;
   readonly #maximumSocketBufferedBytes: number;
   readonly #onDiagnostic: (diagnostic: PcmProxyDiagnostic) => void;
+  readonly #onPlaybackInterruption: () => Promise<void> | void;
   readonly #onProviderEvent: (event: ProviderNonPcmEvent) => void;
   readonly #onProviderFunctionCall: (call: ProviderFunctionCall) => Promise<unknown>;
   readonly #onProviderUnavailable: () => void;
   readonly #sessionId: string;
+  readonly #turnDetection: PcmTurnDetection;
   readonly #downlinkQueue = new Uint8Array(
     ITERATE_KIT_PCM_FRAME_BYTES * DOWNLINK_RESPONSE_RESERVOIR_FRAMES,
   );
@@ -171,9 +205,17 @@ export class PcmSessionBridge {
   #conversationEnds = 0;
   #conversationStartedAtMs: number | null = null;
   #conversationStarts = 0;
+  #devicePcmNormalizedSquareSum = 0;
+  #devicePcmPeakSample = 0;
+  #devicePcmSamples = 0;
   #awaitingUplinkEndMarker = false;
+  #downlinkDeviceEgressOverrunFrames = 0;
   #downlinkDroppedBytes = 0;
   #downlinkFrames = 0;
+  #downlinkPacingCatchUpFrames = 0;
+  #downlinkPacingCatchUpIncidents = 0;
+  #downlinkPacingMaximumLatenessMs = 0;
+  #downlinkPacingOverrunFrames = 0;
   #downlinkQueuedBytes = 0;
   #downlinkQueueHighWaterBytes = 0;
   #downlinkReadOffset = 0;
@@ -201,6 +243,11 @@ export class PcmSessionBridge {
   #providerFunctionCalls = 0;
   #providerKeepalivePings = 0;
   #providerKeepalivePongs = 0;
+  #playbackInterruptionEpoch = 0;
+  #playbackInterruptionFailures = 0;
+  #playbackInterruptionPending = false;
+  #playbackInterruptionsCompleted = 0;
+  #playbackInterruptionsRequested = 0;
   #providerPcmNormalizedSquareSum = 0;
   #providerPcmPeakSample = 0;
   #providerPcmSamples = 0;
@@ -219,8 +266,12 @@ export class PcmSessionBridge {
   #providerResponsesFailed = 0;
   #providerSessionReadyAtMs: number | null = null;
   #providerSendFailures = 0;
+  #providerSpeechStarts = 0;
+  #providerSpeechStops = 0;
   #responseAfterCommitPending = false;
   #responseActive = false;
+  #serverVadAwaitingResponse = false;
+  #serverVadSpeechActive = false;
   #nextDownlinkAt = 0;
   #uplinkControlStarts = 0;
   #uplinkControlStops = 0;
@@ -242,6 +293,9 @@ export class PcmSessionBridge {
     ) {
       throw new Error("The PCM socket backlog limit must be from one frame through 256 KiB.");
     }
+    if (options.turnDetection !== "manual" && options.turnDetection !== "server-vad") {
+      throw new Error(`Unsupported PCM turn-detection policy: ${String(options.turnDetection)}`);
+    }
     const initialGreetingBytes =
       options.initialGreeting === undefined
         ? 0
@@ -256,6 +310,7 @@ export class PcmSessionBridge {
     this.#initialGreeting = options.initialGreeting;
     this.#maximumSocketBufferedBytes = options.maximumSocketBufferedBytes;
     this.#onDiagnostic = options.onDiagnostic ?? (() => undefined);
+    this.#onPlaybackInterruption = options.onPlaybackInterruption ?? (() => undefined);
     this.#onProviderEvent = options.onProviderEvent ?? (() => undefined);
     this.#onProviderFunctionCall =
       options.onProviderFunctionCall ??
@@ -264,6 +319,7 @@ export class PcmSessionBridge {
       });
     this.#onProviderUnavailable = options.onProviderUnavailable ?? (() => undefined);
     this.#sessionId = options.sessionId;
+    this.#turnDetection = options.turnDetection;
     this.#device.binaryType = "arraybuffer";
     this.#device.addEventListener("message", (event) => {
       this.#handleDeviceMessage(event.data);
@@ -294,8 +350,19 @@ export class PcmSessionBridge {
       conversationEnds: this.#conversationEnds,
       conversationStartedAtMs: this.#conversationStartedAtMs,
       conversationStarts: this.#conversationStarts,
+      devicePcmPeakSample: this.#devicePcmPeakSample,
+      devicePcmRmsSample:
+        this.#devicePcmSamples === 0
+          ? 0
+          : Math.sqrt(this.#devicePcmNormalizedSquareSum / this.#devicePcmSamples) * 32_768,
+      devicePcmSamples: this.#devicePcmSamples,
+      downlinkDeviceEgressOverrunFrames: this.#downlinkDeviceEgressOverrunFrames,
       downlinkDroppedBytes: this.#downlinkDroppedBytes,
       downlinkFrames: this.#downlinkFrames,
+      downlinkPacingCatchUpFrames: this.#downlinkPacingCatchUpFrames,
+      downlinkPacingCatchUpIncidents: this.#downlinkPacingCatchUpIncidents,
+      downlinkPacingMaximumLatenessMs: this.#downlinkPacingMaximumLatenessMs,
+      downlinkPacingOverrunFrames: this.#downlinkPacingOverrunFrames,
       downlinkPartialBytes: this.#downlinkQueuedBytes % ITERATE_KIT_PCM_FRAME_BYTES,
       downlinkQueuedBytes: this.#downlinkQueuedBytes,
       downlinkQueueHighWaterBytes: this.#downlinkQueueHighWaterBytes,
@@ -320,6 +387,10 @@ export class PcmSessionBridge {
       providerFunctionCallsPending: this.#providerResponseFunctionCallsPending,
       providerKeepalivePings: this.#providerKeepalivePings,
       providerKeepalivePongs: this.#providerKeepalivePongs,
+      playbackInterruptionFailures: this.#playbackInterruptionFailures,
+      playbackInterruptionPending: this.#playbackInterruptionPending,
+      playbackInterruptionsCompleted: this.#playbackInterruptionsCompleted,
+      playbackInterruptionsRequested: this.#playbackInterruptionsRequested,
       providerPcmPeakSample: this.#providerPcmPeakSample,
       providerPcmRmsSample:
         this.#providerPcmSamples === 0
@@ -334,6 +405,9 @@ export class PcmSessionBridge {
       providerResponsesFailed: this.#providerResponsesFailed,
       providerSessionReadyAtMs: this.#providerSessionReadyAtMs,
       providerSendFailures: this.#providerSendFailures,
+      providerSpeechStarts: this.#providerSpeechStarts,
+      providerSpeechStops: this.#providerSpeechStops,
+      turnDetection: this.#turnDetection,
       uplinkControlStarts: this.#uplinkControlStarts,
       uplinkControlStops: this.#uplinkControlStops,
       uplinkDroppedBytes: this.#uplinkDroppedBytes,
@@ -428,15 +502,20 @@ export class PcmSessionBridge {
       this.#providerSessionReadyAtMs = null;
       this.#initialGreetingRequestedForConversation = false;
       this.#interrupted = false;
+      this.#serverVadAwaitingResponse = false;
+      this.#serverVadSpeechActive = false;
       this.#uplinkFramesInTurn = 0;
       this.#uplinkTurnActive = false;
       return true;
     }
 
     this.#conversationEnds += 1;
+    this.#invalidatePlaybackInterruption();
     this.#clearUplinkEndMarkerWait();
     this.#responseAfterCommitPending = false;
     this.#interrupted = false;
+    this.#serverVadAwaitingResponse = false;
+    this.#serverVadSpeechActive = false;
     this.#uplinkFramesInTurn = 0;
     this.#uplinkTurnActive = false;
     this.#discardDownlinkQueue();
@@ -454,6 +533,14 @@ export class PcmSessionBridge {
 
   inputStarted(): boolean {
     if (this.#closed) return false;
+    if (this.#turnDetection === "server-vad") {
+      this.#diagnostic(
+        "unexpected-manual-turn-control",
+        "error",
+        "A manual input-start edge reached a provider-owned server-VAD session.",
+      );
+      return false;
+    }
     /*
      * Cap'n Web and PCM use independent sockets, so this edge cannot open or
      * reset a media epoch. Production proved that even on a healthy network the
@@ -467,6 +554,14 @@ export class PcmSessionBridge {
 
   inputStopped(): boolean {
     if (this.#closed) return false;
+    if (this.#turnDetection === "server-vad") {
+      this.#diagnostic(
+        "unexpected-manual-turn-control",
+        "error",
+        "A manual input-stop edge reached a provider-owned server-VAD session.",
+      );
+      return false;
+    }
     this.#uplinkControlStops += 1;
     /*
      * A stop that arrives before its in-band media marker starts only a bounded
@@ -501,6 +596,7 @@ export class PcmSessionBridge {
   close(code = 1000, reason = "PCM session ended."): void {
     if (this.#closed) return;
     this.#closed = true;
+    this.#invalidatePlaybackInterruption();
     this.#clearUplinkEndMarkerWait();
     this.#responseAfterCommitPending = false;
     this.#abandonProviderResponse();
@@ -519,6 +615,14 @@ export class PcmSessionBridge {
     if (this.#closed) return;
     const bytes = binaryBytes(data);
     if (bytes?.byteLength === 0) {
+      if (this.#turnDetection === "server-vad") {
+        this.#uplinkEndMarkers += 1;
+        this.#fail(
+          "unexpected-uplink-end-marker",
+          "Continuous AEC firmware emitted a manual PCM turn boundary into a server-VAD session.",
+        );
+        return;
+      }
       this.#handleUplinkEndMarker();
       return;
     }
@@ -532,7 +636,7 @@ export class PcmSessionBridge {
       );
       return;
     }
-    if (!this.#uplinkTurnActive) {
+    if (this.#turnDetection === "manual" && !this.#uplinkTurnActive) {
       /*
        * The first non-empty message after connection or END is the only start
        * fact that is ordered with the microphone samples. Let it own the turn.
@@ -578,8 +682,16 @@ export class PcmSessionBridge {
       this.#handleProviderSendFailure(provider, error, "pcm", bytes.byteLength);
       return;
     }
+    /*
+     * Observe only after the provider socket accepted the frame. Sampling at
+     * device ingress would make a backpressured/dropped frame look like audio
+     * Grok had received and would defeat this metric's attribution purpose.
+     * Device v1 frames are always complete little-endian int16 PCM, so this
+     * path needs neither a trailing-byte state nor an audio-retention buffer.
+     */
+    this.#observeDevicePcm(bytes);
     this.#uplinkFrames += 1;
-    this.#uplinkFramesInTurn += 1;
+    if (this.#turnDetection === "manual") this.#uplinkFramesInTurn += 1;
   }
 
   #handleUplinkEndMarker(): void {
@@ -652,6 +764,87 @@ export class PcmSessionBridge {
     this.#uplinkEndMarkerTimer = undefined;
   }
 
+  #handleServerVadSpeechStarted(): void {
+    if (this.#serverVadSpeechActive) return;
+    this.#serverVadSpeechActive = true;
+    this.#serverVadAwaitingResponse = false;
+    this.#providerSpeechStarts += 1;
+    this.#responseAfterCommitPending = false;
+    this.#interrupted = true;
+    this.#discardDownlinkQueue();
+    this.#abandonProviderResponse();
+    this.#playbackInterruptionsRequested += 1;
+    const interruptionEpoch = ++this.#playbackInterruptionEpoch;
+    this.#playbackInterruptionPending = true;
+    let acknowledgement: Promise<void> | void;
+    try {
+      /*
+       * Invoke the Cap'n Web reset immediately, but never await it in this
+       * provider MessageEvent. Later provider audio must keep entering the
+       * bounded userspace reservoir while the independent control socket makes
+       * the physical speaker discard already-admitted samples. The playout
+       * scheduler below is the barrier: it admits the fresh response only once
+       * the device has acknowledged that reset.
+       */
+      acknowledgement = this.#onPlaybackInterruption();
+    } catch (error) {
+      this.#handlePlaybackInterruptionFailure(interruptionEpoch, error);
+      return;
+    }
+    void Promise.resolve(acknowledgement).then(
+      () => this.#handlePlaybackInterruptionAcknowledged(interruptionEpoch),
+      (error: unknown) => this.#handlePlaybackInterruptionFailure(interruptionEpoch, error),
+    );
+  }
+
+  #handlePlaybackInterruptionAcknowledged(interruptionEpoch: number): void {
+    if (
+      this.#closed ||
+      interruptionEpoch !== this.#playbackInterruptionEpoch ||
+      !this.#playbackInterruptionPending
+    ) {
+      return;
+    }
+    this.#playbackInterruptionPending = false;
+    this.#playbackInterruptionsCompleted += 1;
+    this.#scheduleDownlink();
+  }
+
+  #handlePlaybackInterruptionFailure(interruptionEpoch: number, error: unknown): void {
+    if (
+      this.#closed ||
+      interruptionEpoch !== this.#playbackInterruptionEpoch ||
+      !this.#playbackInterruptionPending
+    ) {
+      return;
+    }
+    this.#playbackInterruptionPending = false;
+    this.#playbackInterruptionFailures += 1;
+    this.#fail(
+      "playback-interruption-failed",
+      "The device did not acknowledge the physical playback reset.",
+      0,
+      { message: boundedErrorMessage(error) },
+    );
+  }
+
+  #invalidatePlaybackInterruption(): void {
+    /*
+     * Promises cannot be cancelled, so every conversation boundary advances a
+     * generation fence. A late acknowledgement may then settle harmlessly but
+     * can never release audio belonging to a newer call or provider response.
+     */
+    this.#playbackInterruptionEpoch += 1;
+    this.#playbackInterruptionPending = false;
+  }
+
+  #handleServerVadSpeechStopped(): void {
+    if (!this.#serverVadSpeechActive) return;
+    this.#serverVadSpeechActive = false;
+    this.#serverVadAwaitingResponse = true;
+    this.#providerSpeechStops += 1;
+  }
+
   #handleProviderMessage(provider: WebSocket, data: unknown): void {
     if (this.#closed) return;
     if (typeof data === "string") {
@@ -662,6 +855,21 @@ export class PcmSessionBridge {
     if (!bytes) {
       this.#fail("socket-error", "Provider sent an unsupported WebSocket message.");
       return;
+    }
+    if (
+      this.#turnDetection === "server-vad" &&
+      this.#interrupted &&
+      !this.#serverVadSpeechActive &&
+      this.#serverVadAwaitingResponse
+    ) {
+      /*
+       * response.created is useful lifecycle evidence but binary media is the
+       * authoritative response start. Accept providers that omit/reorder the
+       * optional event only after speech_stopped; doing this while speech is
+       * still active would splice cancelled audio back into the interruption.
+       */
+      this.#serverVadAwaitingResponse = false;
+      this.#interrupted = false;
     }
     /*
      * A binary chunk is conclusive response activity even if a provider omits
@@ -732,6 +940,20 @@ export class PcmSessionBridge {
       }
       return;
     }
+    if (
+      this.#turnDetection === "server-vad" &&
+      event.type === "input_audio_buffer.speech_started"
+    ) {
+      this.#handleServerVadSpeechStarted();
+      return;
+    }
+    if (
+      this.#turnDetection === "server-vad" &&
+      event.type === "input_audio_buffer.speech_stopped"
+    ) {
+      this.#handleServerVadSpeechStopped();
+      return;
+    }
     if (event.type === "response.function_call_arguments.done") {
       this.#handleProviderFunctionCall(provider, event);
       return;
@@ -743,6 +965,15 @@ export class PcmSessionBridge {
       return;
     }
     if (event.type === "response.created") {
+      if (
+        this.#turnDetection === "server-vad" &&
+        this.#interrupted &&
+        !this.#serverVadSpeechActive &&
+        this.#serverVadAwaitingResponse
+      ) {
+        this.#serverVadAwaitingResponse = false;
+        this.#interrupted = false;
+      }
       this.#beginProviderResponse();
       this.#responseActive = true;
       return;
@@ -750,6 +981,25 @@ export class PcmSessionBridge {
     if (event.type !== "response.done") return;
     const responseStatus = providerResponseStatus(event);
     this.#responseActive = false;
+
+    if (this.#turnDetection === "server-vad" && this.#interrupted) {
+      if (responseStatus === "cancelled") {
+        this.#providerResponsesCancelled += 1;
+      } else if (responseStatus !== null && responseStatus !== "completed") {
+        this.#providerResponsesFailed += 1;
+        this.#diagnostic("provider-response-failed", "error", { status: responseStatus });
+      }
+      /*
+       * xAI owns cancellation after speech_started. Its old response.done may
+       * arrive before speech_stopped/new response.created; clearing the
+       * interruption here would admit a late binary tail. The physical reset
+       * callback already destroyed admitted speaker state, so retain the fence
+       * until the next provider response begins.
+       */
+      this.#discardDownlinkQueue();
+      this.#abandonProviderResponse();
+      return;
+    }
 
     if (responseStatus !== null && responseStatus !== "completed") {
       if (responseStatus === "cancelled") {
@@ -1000,6 +1250,17 @@ export class PcmSessionBridge {
     if (offset < bytes.byteLength) this.#providerPcmTrailingByte = bytes[offset]!;
   }
 
+  #observeDevicePcm(bytes: Uint8Array): void {
+    for (let offset = 0; offset < bytes.byteLength; offset += 2) {
+      const unsigned = bytes[offset]! | (bytes[offset + 1]! << 8);
+      const sample = unsigned >= 0x8000 ? unsigned - 0x1_0000 : unsigned;
+      this.#devicePcmPeakSample = Math.max(this.#devicePcmPeakSample, Math.abs(sample));
+      const normalized = sample / 32_768;
+      this.#devicePcmNormalizedSquareSum += normalized * normalized;
+      this.#devicePcmSamples += 1;
+    }
+  }
+
   #observeProviderPcmSample(lowByte: number, highByte: number): void {
     const unsigned = lowByte | (highByte << 8);
     const sample = unsigned >= 0x8_000 ? unsigned - 0x1_0000 : unsigned;
@@ -1015,15 +1276,12 @@ export class PcmSessionBridge {
       /*
        * There is intentionally no "drop oldest" policy for speech. Either
        * choice would splice two unrelated sample times into one apparently
-       * healthy answer. Destroying the generation preserves freshness and
-       * leaves an exact durable count of every byte that could not be played.
+       * healthy answer. The provider generation owns this finite response,
+       * however; the device WebSocket does not. Retiring only that generation
+       * preserves freshness and exact loss accounting without turning one
+       * overlong answer into Wi-Fi/TLS churn or a dead physical call.
        */
-      this.#downlinkDroppedBytes += bytes.byteLength;
-      this.#fail(
-        "downlink-overflow",
-        "The bounded userspace playback reservoir filled before realtime playout caught up.",
-        bytes.byteLength,
-      );
+      this.#retireProviderAfterDownlinkOverflow(bytes.byteLength);
       return;
     }
     const firstCopyBytes = Math.min(
@@ -1044,8 +1302,58 @@ export class PcmSessionBridge {
     this.#scheduleDownlink();
   }
 
+  #retireProviderAfterDownlinkOverflow(incomingBytes: number): void {
+    const provider = this.#provider;
+    const reason =
+      "The bounded userspace playback reservoir filled before realtime playout caught up.";
+    this.#downlinkDroppedBytes += incomingBytes;
+    this.#diagnostic(
+      "downlink-overflow",
+      "error",
+      {
+        capacityBytes: this.#downlinkQueue.byteLength,
+        incomingBytes,
+        queuedBytes: this.#downlinkQueuedBytes,
+        scope: "provider-response-reservoir",
+      },
+      incomingBytes,
+    );
+
+    /*
+     * Revoke the upstream identity before closing it. Its close event and any
+     * already-enqueued binary MessageEvents then fail the generation fence in
+     * attachProvider(), while detachProvider() atomically accounts for and
+     * discards the response tail that still occupied the reservoir.
+     */
+    if (provider !== undefined) {
+      this.#providerRetirements += 1;
+      this.#detachProvider(provider, 4000, reason, "provider-closed");
+    } else {
+      this.#abandonProviderResponse();
+      this.#discardDownlinkQueue();
+    }
+
+    /*
+     * The finite lead already admitted to the physical device is valid audio,
+     * but it needs an ordinary response boundary so firmware cannot wait for a
+     * marker that an aborted provider will never produce. Failure to send this
+     * marker is a device-egress incident and remains session-terminal.
+     */
+    if (!this.#sendDevice(pcmEndOfResponse)) return;
+    if (provider && socketIsOpenOrConnecting(provider)) {
+      provider.close(4000, reason);
+    }
+  }
+
   #scheduleDownlink(): void {
-    if (this.#closed || this.#interrupted || this.#downlinkTimer !== undefined) return;
+    if (
+      this.#closed ||
+      this.#interrupted ||
+      this.#playbackInterruptionPending ||
+      this.#downlinkTimer !== undefined
+    ) {
+      return;
+    }
     if (!this.#downlinkStarted) {
       if (this.#downlinkResponseDone && this.#downlinkQueuedBytes === 0) {
         this.#finishDownlinkResponse();
@@ -1083,32 +1391,83 @@ export class PcmSessionBridge {
     if (!hasCompleteFrame && !hasFinalPartialFrame) {
       if (this.#downlinkResponseDone && this.#downlinkQueuedBytes === 0) {
         this.#finishDownlinkResponse();
+      } else {
+        /*
+         * No timer is armed while the provider source is empty. Resetting the
+         * grid here is what distinguishes source starvation from an isolate
+         * callback that woke late while a full response reservoir existed.
+         * Newly generated PCM resumes immediately on a fresh grid; it is not
+         * burst as if JavaScript had merely failed to service an armed timer.
+         */
+        this.#nextDownlinkAt = 0;
       }
       return;
     }
     const delayMs = Math.max(0, this.#nextDownlinkAt - performance.now());
     this.#downlinkTimer = setTimeout(() => {
       this.#downlinkTimer = undefined;
-      this.#sendNextDownlinkFrame();
+      this.#sendDueDownlinkFrames();
     }, delayMs);
   }
 
-  #sendNextDownlinkFrame(): void {
-    if (this.#closed || this.#interrupted) return;
-    const hasCompleteFrame = this.#downlinkQueuedBytes >= ITERATE_KIT_PCM_FRAME_BYTES;
-    const hasFinalPartialFrame = this.#downlinkResponseDone && this.#downlinkQueuedBytes > 0;
-    if (!hasCompleteFrame && !hasFinalPartialFrame) {
-      if (this.#downlinkResponseDone && this.#downlinkQueuedBytes === 0) {
-        this.#finishDownlinkResponse();
-      }
-      return;
-    }
-    if (!this.#sendQueuedDownlinkFrame()) return;
-    this.#nextDownlinkAt = nextPcmFrameDeadline(
+  #sendDueDownlinkFrames(): void {
+    if (this.#closed || this.#interrupted || this.#playbackInterruptionPending) return;
+    const admission = planBoundedPcmAdmission(
       this.#nextDownlinkAt,
       performance.now(),
       PCM_FRAME_DURATION_MS,
+      DEVICE_INITIAL_LEAD_FRAMES,
     );
+
+    if (admission.framesDue > 1) {
+      this.#downlinkPacingCatchUpIncidents += 1;
+      this.#downlinkPacingMaximumLatenessMs = Math.max(
+        this.#downlinkPacingMaximumLatenessMs,
+        admission.latenessMs,
+      );
+    }
+
+    if (admission.overrunFrames > 0) {
+      /*
+       * A callback delayed beyond the already-declared device lead means the
+       * physical playout deadline has passed. Replaying those oldest frames
+       * would turn one finite glitch into permanent conversational delay. Drop
+       * only the elapsed whole frames, account every byte, then admit at most
+       * the ordinary lead so the call can become realtime again immediately.
+       */
+      const availableWholeFrames = Math.floor(
+        this.#downlinkQueuedBytes / ITERATE_KIT_PCM_FRAME_BYTES,
+      );
+      const discardedFrames = Math.min(admission.overrunFrames, availableWholeFrames);
+      if (discardedFrames > 0) {
+        const discardedBytes = discardedFrames * ITERATE_KIT_PCM_FRAME_BYTES;
+        this.#downlinkReadOffset =
+          (this.#downlinkReadOffset + discardedBytes) % this.#downlinkQueue.byteLength;
+        this.#downlinkQueuedBytes -= discardedBytes;
+        this.#downlinkDroppedBytes += discardedBytes;
+        this.#downlinkPacingOverrunFrames += discardedFrames;
+        this.#diagnostic(
+          "downlink-pacing-overrun",
+          "error",
+          {
+            callbackLatenessMs: admission.latenessMs,
+            discardedFrames,
+            scope: "userspace-playout-deadline",
+          },
+          discardedBytes,
+        );
+      }
+    }
+
+    let sentFrames = 0;
+    for (; sentFrames < admission.framesToSend; sentFrames += 1) {
+      const hasCompleteFrame = this.#downlinkQueuedBytes >= ITERATE_KIT_PCM_FRAME_BYTES;
+      const hasFinalPartialFrame = this.#downlinkResponseDone && this.#downlinkQueuedBytes > 0;
+      if (!hasCompleteFrame && !hasFinalPartialFrame) break;
+      if (!this.#sendQueuedDownlinkFrame()) return;
+    }
+    this.#downlinkPacingCatchUpFrames += Math.max(0, sentFrames - 1);
+    this.#nextDownlinkAt = admission.nextDeadlineMs;
     if (this.#downlinkResponseDone && this.#downlinkQueuedBytes === 0) {
       this.#finishDownlinkResponse();
       return;
@@ -1173,17 +1532,43 @@ export class PcmSessionBridge {
   }
 
   #sendDevice(bytes: Uint8Array): boolean {
-    if (
-      !socketIsOpen(this.#device) ||
-      socketBufferedAmount(this.#device) + bytes.byteLength > this.#maximumSocketBufferedBytes
-    ) {
+    if (!socketIsOpen(this.#device)) {
       this.#downlinkDroppedBytes += bytes.byteLength;
       this.#fail(
-        "downlink-overflow",
-        "Device egress could not accept the current playback frame.",
+        "device-closed",
+        "Device egress closed before the current playback frame could be sent.",
         bytes.byteLength,
       );
       return false;
+    }
+
+    if (
+      bytes.byteLength > 0 &&
+      socketBufferedAmount(this.#device) + bytes.byteLength > this.#maximumSocketBufferedBytes
+    ) {
+      /*
+       * A backed-up TCP/WebSocket egress already contains older audio. Adding
+       * another frame would increase conversational delay, while closing the
+       * socket turns a finite radio stall into the user's observed call reset.
+       * Drop this now-stale content frame, account it separately from an
+       * isolate pacing miss, and leave the generation alive so fresh media can
+       * resume as soon as the runtime backlog drains. The zero-byte response
+       * marker is still sent below: it adds no PCM backlog and TCP ordering
+       * places it after every already-accepted frame, preserving the device's
+       * exact response boundary even when some content was discarded.
+       */
+      this.#downlinkDeviceEgressOverrunFrames += 1;
+      this.#downlinkDroppedBytes += bytes.byteLength;
+      this.#diagnostic(
+        "downlink-device-egress-overrun",
+        "error",
+        {
+          maximumSocketBufferedBytes: this.#maximumSocketBufferedBytes,
+          socketBufferedBytes: socketBufferedAmount(this.#device),
+        },
+        bytes.byteLength,
+      );
+      return true;
     }
     this.#device.send(bytes);
     if (bytes.byteLength > 0) {
@@ -1204,27 +1589,32 @@ export class PcmSessionBridge {
     /*
      * The provider acknowledgement above is the first instant at which its
      * native PCM format, voice, tools, and manual turn policy are known to be
-     * installed. Sending this synthetic user item earlier can race those
-     * settings; waiting for physical speech instead makes a healthy call feel
-     * dead. The counter is a call-lifetime fence, so a replacement provider
-     * cannot surprise the user by greeting them again mid-conversation. The
-     * lifetime fence resets only on the next explicit Button B start; the
-     * public counter remains cumulative for diagnostics.
+     * installed. xAI's force_message is intentionally used instead of a
+     * synthetic user instruction plus response.create: the physical proof
+     * showed that the latter remains in conversation context and can make
+     * every later answer repeat the greeting. Marking this one scripted turn
+     * non-interruptible also makes xAI discard microphone audio during the
+     * greeting, rather than letting residual loudspeaker echo become the
+     * first user turn before AEC has settled. The counter is a call-lifetime
+     * fence, so a replacement provider cannot surprise the user by greeting
+     * them again mid-conversation. It resets only on the next explicit call;
+     * the public counter remains cumulative for diagnostics.
      */
     const itemSent = this.#sendProviderMessage({
       item: {
         content: [
           {
-            text: `Begin the call by saying exactly: "${this.#initialGreeting}" Do not add any other words.`,
-            type: "input_text",
+            text: this.#initialGreeting,
+            type: "output_text",
           },
         ],
-        role: "user",
-        type: "message",
+        interruptible: false,
+        role: "assistant",
+        type: "force_message",
       },
       type: "conversation.item.create",
     });
-    if (!itemSent || !this.#sendProviderControl("response.create")) return;
+    if (!itemSent) return;
     this.#initialGreetingRequestedForConversation = true;
     this.#initialGreetingRequests += 1;
   }
@@ -1445,12 +1835,44 @@ function socketBufferedAmount(socket: WebSocket): number {
  * The latter restarts one frame from now, leaving firmware metrics to classify
  * whether its finite hardware lead covered the scheduling delay.
  */
-function nextPcmFrameDeadline(
-  currentDeadline: number,
-  sentAt: number,
+interface BoundedPcmAdmission {
+  framesDue: number;
+  framesToSend: number;
+  latenessMs: number;
+  nextDeadlineMs: number;
+  overrunFrames: number;
+}
+
+/**
+ * Converts one possibly-late JavaScript timer wake into a bounded media-grid
+ * admission. The burst ceiling is the lead which was already explicit at
+ * response startup: catching up restores that reserve but cannot grow a new
+ * hidden TCP/device queue. A miss beyond the ceiling is returned separately so
+ * the caller can discard and diagnose elapsed content instead of replaying it.
+ */
+function planBoundedPcmAdmission(
+  currentDeadlineMs: number,
+  nowMs: number,
   frameDurationMs: number,
-): number {
-  if (currentDeadline <= 0) return sentAt + frameDurationMs;
-  const gridDeadline = currentDeadline + frameDurationMs;
-  return gridDeadline <= sentAt ? sentAt + frameDurationMs : gridDeadline;
+  maximumBurstFrames: number,
+): BoundedPcmAdmission {
+  if (currentDeadlineMs <= 0) {
+    return {
+      framesDue: 1,
+      framesToSend: 1,
+      latenessMs: 0,
+      nextDeadlineMs: nowMs + frameDurationMs,
+      overrunFrames: 0,
+    };
+  }
+  const latenessMs = Math.max(0, nowMs - currentDeadlineMs);
+  const framesDue = 1 + Math.floor(latenessMs / frameDurationMs);
+  const framesToSend = Math.min(framesDue, maximumBurstFrames);
+  return {
+    framesDue,
+    framesToSend,
+    latenessMs,
+    nextDeadlineMs: currentDeadlineMs + framesDue * frameDurationMs,
+    overrunFrames: framesDue - framesToSend,
+  };
 }

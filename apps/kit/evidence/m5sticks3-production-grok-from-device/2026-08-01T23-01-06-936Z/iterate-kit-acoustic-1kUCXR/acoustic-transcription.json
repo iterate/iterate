@@ -1,0 +1,91 @@
+{
+  "assessment": {
+    "acceptance": "independent-stt-provisional",
+    "boundaryWordOverage": 0,
+    "normalizedMicrophoneTranscript": "i ll use the tool to turn it green",
+    "normalizedProviderTranscript": "i ll use the tool to turn it green",
+    "passed": true,
+    "reasons": [],
+    "relativeActiveWindowDeficit": 0,
+    "responseToBaselineMaximumRmsRatio": 5.9389689085688175
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 120,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": [
+      "The causal response contained 0 active 20 ms windows; expected at least 4."
+    ]
+  },
+  "microphoneStt": {
+    "durationSeconds": 4.123,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"6ce8659b-1272-4c17-8fec-656deb1d0ef9\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"I'll use the\",\"words\":[{\"text\":\"I'll\",\"start\":0.831,\"end\":0.953},{\"text\":\"use\",\"start\":1.095,\"end\":1.257},{\"text\":\"the\",\"start\":1.297,\"end\":1.358}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"tool to turn it green.\",\"words\":[{\"text\":\"tool\",\"start\":1.541,\"end\":1.682},{\"text\":\"to\",\"start\":1.764,\"end\":1.824},{\"text\":\"turn\",\"start\":1.885,\"end\":2.149},{\"text\":\"it\",\"start\":2.169,\"end\":2.25},{\"text\":\"green.\",\"start\":2.331,\"end\":2.696}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"I'll use the tool to turn it green.\",\"words\":[{\"text\":\"I'll\",\"start\":0.845,\"end\":0.945},{\"text\":\"use\",\"start\":1.086,\"end\":1.247},{\"text\":\"the\",\"start\":1.287,\"end\":1.368},{\"text\":\"tool\",\"start\":1.428,\"end\":1.689},{\"text\":\"to\",\"start\":1.77,\"end\":1.83},{\"text\":\"turn\",\"start\":1.91,\"end\":2.152},{\"text\":\"it\",\"start\":2.192,\"end\":2.272},{\"text\":\"green.\",\"start\":2.333,\"end\":2.695}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":4.123,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":4.123}"
+    ],
+    "text": "I'll use the tool to turn it green.",
+    "words": [
+      {
+        "text": "I'll",
+        "start": 0.845,
+        "end": 0.945
+      },
+      {
+        "text": "use",
+        "start": 1.086,
+        "end": 1.247
+      },
+      {
+        "text": "the",
+        "start": 1.287,
+        "end": 1.368
+      },
+      {
+        "text": "tool",
+        "start": 1.428,
+        "end": 1.689
+      },
+      {
+        "text": "to",
+        "start": 1.77,
+        "end": 1.83
+      },
+      {
+        "text": "turn",
+        "start": 1.91,
+        "end": 2.152
+      },
+      {
+        "text": "it",
+        "start": 2.192,
+        "end": 2.272
+      },
+      {
+        "text": "green.",
+        "start": 2.333,
+        "end": 2.695
+      }
+    ]
+  },
+  "providerOutputTranscript": "I'll use the tool to turn it green.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 13,
+      "clippedSampleCount": 0,
+      "maximumRms": 37.13735765147183,
+      "p50Rms": 3.366501646120693,
+      "p95Rms": 19.05581166818494,
+      "p99Rms": 33.457342243519584,
+      "sampleCount": 197888,
+      "windowCount": 207,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 15.632914662126616
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

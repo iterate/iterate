@@ -189,12 +189,52 @@ export interface KitPlaybackMetrics {
 }
 
 /**
+ * One device-clocked AEC signal window.
+ *
+ * All six amplitudes come from identical sampled positions before and after
+ * AEC. A harness can therefore distinguish weak capture from aggressive
+ * suppression and derive an echo-suppression ratio during speaker-only
+ * intervals. Sequence zero is the explicitly partial startup window; completed
+ * one-second windows begin at one and may be repeated when a callback poll
+ * lands before the audio owner rotates again.
+ */
+export interface KitAecMetrics {
+  schemaVersion: 1;
+  sequence: number;
+  windowStartedAtMs: number;
+  producedAtMs: number;
+  sampleStride: number;
+  sampledSamples: number;
+  nearPeak: number;
+  referencePeak: number;
+  cleanPeak: number;
+  nearMeanAbsolute: number;
+  referenceMeanAbsolute: number;
+  cleanMeanAbsolute: number;
+  lifetimeFramesProcessed: number;
+  lifetimeRecreates: number;
+  lifetimeRecreateFailures: number;
+  lastLinearUs: number;
+  maximumLinearUs: number;
+  lastNlpUs: number;
+  maximumNlpUs: number;
+  lastCaptureToUplinkUs: number;
+  maximumCaptureToUplinkUs: number;
+  lifetimeCaptureReserveDroppedChunks: number;
+  lifetimeCaptureBridgeErrors: number;
+  lifetimeSignalMeasurementFailures: number;
+}
+
+/**
  * Raw ESP WebSocket error categories. Keep the numeric SDK value on the wire
  * and map it only for display: the accompanying TLS, errno, handshake, and
  * close fields live in different domains and must not be collapsed into one
  * generic JavaScript exception.
  */
 export type KitControlWebsocketErrorType = 0 | 1 | 2 | 3 | 4;
+
+/** Operation which observed the retained terminal PCM transport incident. */
+export type KitPcmTransportFailureOperation = 0 | 1 | 2 | 3;
 
 /**
  * Exact `capnweb_status` integer domain from the C peer. Keep it numeric on
@@ -212,8 +252,7 @@ export interface KitControlRingDiagnostics {
   currentSlots: number;
 }
 
-export interface KitControlDiagnostics {
-  schemaVersion: 3;
+interface KitControlDiagnosticsCommon {
   producedAtMs: number;
   control: {
     websocketStartAttempts: number;
@@ -251,14 +290,51 @@ export interface KitControlDiagnostics {
    * A missing wifiRssiDbm means the device could not obtain a current AP-info
    * observation. Consumers must not substitute zero or carry a prior sample.
    */
-  network: {
-    wifiConnected: boolean;
-    wifiRssiDbm?: number;
-    pcmWebsocketConnections: number;
-    pcmWebsocketDisconnects: number;
-    pcmWebsocketErrors: number;
-  };
 }
+
+interface KitControlNetworkDiagnosticsV3 {
+  wifiConnected: boolean;
+  wifiRssiDbm?: number;
+  pcmWebsocketConnections: number;
+  pcmWebsocketDisconnects: number;
+  pcmWebsocketErrors: number;
+}
+
+interface KitControlNetworkDiagnosticsV4 extends KitControlNetworkDiagnosticsV3 {
+  /** Terminal raw-write calls, distinct from ordinary nonblocking deferrals. */
+  pcmWebsocketRawWriteFailures: number;
+  /** Number of retained connect/read/write lower-transport incidents. */
+  pcmTransportFailureIncidents: number;
+  /** 0 none, 1 connect, 2 read, 3 write. */
+  pcmLastFailureOperation: KitPcmTransportFailureOperation;
+  /** Exact return from the ESP-IDF transport operation. */
+  pcmLastRawResult: number;
+  /** Exact lwIP/socket errno, or zero when that domain had no cause. */
+  pcmLastSocketErrno: number;
+  /** Exact `esp_err_t` returned by ESP-TLS's retained error handle. */
+  pcmLastEspTlsError: number;
+  /** Exact mbedTLS/wolfSSL error retained by ESP-TLS. */
+  pcmLastTlsStackError: number;
+  /** Exact certificate verification flags retained by ESP-TLS. */
+  pcmLastTlsCertFlags: number;
+}
+
+/**
+ * Schema v3 remains readable for already-flashed devices. New firmware emits
+ * v4 and must provide the complete PCM transport tuple; making those fields
+ * optional on v4 would let a partial diagnosis masquerade as zero/healthy.
+ */
+export type KitControlDiagnosticsV3 = KitControlDiagnosticsCommon & {
+  schemaVersion: 3;
+  network: KitControlNetworkDiagnosticsV3;
+};
+
+export type KitControlDiagnosticsV4 = KitControlDiagnosticsCommon & {
+  schemaVersion: 4;
+  network: KitControlNetworkDiagnosticsV4;
+};
+
+export type KitControlDiagnostics = KitControlDiagnosticsV3 | KitControlDiagnosticsV4;
 
 export interface KitDeviceDescription {
   instructions: string;

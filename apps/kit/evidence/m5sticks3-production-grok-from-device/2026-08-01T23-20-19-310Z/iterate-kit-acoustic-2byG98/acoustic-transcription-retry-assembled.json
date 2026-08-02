@@ -1,0 +1,1053 @@
+{
+  "input": "evidence/m5sticks3-production-grok-from-device/2026-08-01T23-20-19-310Z/iterate-kit-acoustic-2byG98/microphone.pcm16le",
+  "interval": {
+    "endSample": 4251648,
+    "startSample": 740096
+  },
+  "result": {
+    "durationSeconds": 73.157,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"6a2bf220-6354-4394-810f-adff1111b271\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Once upon a time\",\"words\":[{\"text\":\"Once\",\"start\":0.993,\"end\":1.257},{\"text\":\"upon\",\"start\":1.297,\"end\":1.399},{\"text\":\"a\",\"start\":1.399,\"end\":1.419},{\"text\":\"time\",\"start\":1.419,\"end\":1.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\", in a quiet workplace\",\"words\":[{\"text\":\",\",\"start\":1.5,\"end\":2.169},{\"text\":\"in\",\"start\":2.169,\"end\":2.23},{\"text\":\"a\",\"start\":2.25,\"end\":2.27},{\"text\":\"quiet\",\"start\":2.351,\"end\":2.757},{\"text\":\"workplace\",\"start\":2.757,\"end\":2.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"filled with the hum of machines\",\"words\":[{\"text\":\"filled\",\"start\":3.466,\"end\":3.709},{\"text\":\"with\",\"start\":3.75,\"end\":3.892},{\"text\":\"the\",\"start\":3.912,\"end\":3.973},{\"text\":\"hum\",\"start\":4.054,\"end\":4.257},{\"text\":\"of\",\"start\":4.257,\"end\":4.297},{\"text\":\"machines\",\"start\":4.297,\"end\":4.48}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\", there lived a\",\"words\":[{\"text\":\",\",\"start\":4.5,\"end\":5.412},{\"text\":\"there\",\"start\":5.412,\"end\":5.595},{\"text\":\"lived\",\"start\":5.595,\"end\":5.797},{\"text\":\"a\",\"start\":5.858,\"end\":5.878}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":6.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"blue robot named Asuka.\",\"words\":[{\"text\":\"blue\",\"start\":6.041,\"end\":6.284},{\"text\":\"robot\",\"start\":6.304,\"end\":6.709},{\"text\":\"named\",\"start\":6.851,\"end\":7.135},{\"text\":\"Asuka.\",\"start\":7.216,\"end\":7.48}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":7.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Asuka had been\",\"words\":[{\"text\":\"Asuka\",\"start\":8.291,\"end\":8.554},{\"text\":\"had\",\"start\":8.696,\"end\":8.818},{\"text\":\"been\",\"start\":8.858,\"end\":8.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":9.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"built by an old inventor\",\"words\":[{\"text\":\"built\",\"start\":9.101,\"end\":9.345},{\"text\":\"by\",\"start\":9.446,\"end\":9.568},{\"text\":\"an\",\"start\":9.608,\"end\":9.689},{\"text\":\"old\",\"start\":9.831,\"end\":10.014},{\"text\":\"inventor\",\"start\":10.095,\"end\":10.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":10.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"who dreamed of creating\",\"words\":[{\"text\":\"who\",\"start\":10.784,\"end\":10.905},{\"text\":\"dreamed\",\"start\":10.905,\"end\":11.291},{\"text\":\"of\",\"start\":11.331,\"end\":11.412},{\"text\":\"creating\",\"start\":11.473,\"end\":11.939}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":12.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"a companion that could understand\",\"words\":[{\"text\":\"a\",\"start\":12.02,\"end\":12.041},{\"text\":\"companion\",\"start\":12.041,\"end\":12.649},{\"text\":\"that\",\"start\":12.75,\"end\":12.851},{\"text\":\"could\",\"start\":12.872,\"end\":13.095},{\"text\":\"understand\",\"start\":13.115,\"end\":13.48}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":13.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"the beauty of the world.\",\"words\":[{\"text\":\"the\",\"start\":13.743,\"end\":13.824},{\"text\":\"beauty\",\"start\":13.885,\"end\":14.189},{\"text\":\"of\",\"start\":14.27,\"end\":14.351},{\"text\":\"the\",\"start\":14.392,\"end\":14.473},{\"text\":\"world.\",\"start\":14.514,\"end\":14.878}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":15.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"With sleek cobalt\",\"words\":[{\"text\":\"With\",\"start\":15.345,\"end\":15.486},{\"text\":\"sleek\",\"start\":15.547,\"end\":15.872},{\"text\":\"cobalt\",\"start\":16.014,\"end\":16.459}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":16.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"plating and eyes that gleamed\",\"words\":[{\"text\":\"plating\",\"start\":16.601,\"end\":17.027},{\"text\":\"and\",\"start\":17.128,\"end\":17.23},{\"text\":\"eyes\",\"start\":17.432,\"end\":17.696},{\"text\":\"that\",\"start\":17.757,\"end\":17.838},{\"text\":\"gleamed\",\"start\":17.838,\"end\":17.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":18.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"like sapphires.\",\"words\":[{\"text\":\"like\",\"start\":18.345,\"end\":18.547},{\"text\":\"sapphires.\",\"start\":18.588,\"end\":19.176}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":19.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Asuka spent his days\",\"words\":[{\"text\":\"Asuka\",\"start\":19.601,\"end\":19.946},{\"text\":\"spent\",\"start\":20.047,\"end\":20.311},{\"text\":\"his\",\"start\":20.372,\"end\":20.493},{\"text\":\"days\",\"start\":20.574,\"end\":20.858}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":21.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"exploring the nooks and crannies\",\"words\":[{\"text\":\"exploring\",\"start\":21.041,\"end\":21.547},{\"text\":\"the\",\"start\":21.547,\"end\":21.628},{\"text\":\"nooks\",\"start\":21.75,\"end\":22.034},{\"text\":\"and\",\"start\":22.115,\"end\":22.176},{\"text\":\"crannies\",\"start\":22.257,\"end\":22.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":22.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"of the workplace, learning\",\"words\":[{\"text\":\"of\",\"start\":22.723,\"end\":22.784},{\"text\":\"the\",\"start\":22.824,\"end\":22.885},{\"text\":\"workplace,\",\"start\":22.946,\"end\":23.797},{\"text\":\"learning\",\"start\":23.818,\"end\":24.0}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":24.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"about gears, wires.\",\"words\":[{\"text\":\"about\",\"start\":24.162,\"end\":24.385},{\"text\":\"gears,\",\"start\":24.486,\"end\":24.892},{\"text\":\"wires.\",\"start\":25.155,\"end\":25.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":25.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"And the gentle art of\",\"words\":[{\"text\":\"And\",\"start\":25.743,\"end\":25.804},{\"text\":\"the\",\"start\":25.845,\"end\":25.905},{\"text\":\"gentle\",\"start\":25.986,\"end\":26.392},{\"text\":\"art\",\"start\":26.514,\"end\":26.716},{\"text\":\"of\",\"start\":26.777,\"end\":26.818}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":27.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"patience.\",\"words\":[{\"text\":\"patience.\",\"start\":28.074,\"end\":28.399}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":28.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"One stormy evening, the inventor\",\"words\":[{\"text\":\"One\",\"start\":28.5,\"end\":28.561},{\"text\":\"stormy\",\"start\":28.561,\"end\":28.682},{\"text\":\"evening,\",\"start\":28.845,\"end\":29.189},{\"text\":\"the\",\"start\":29.453,\"end\":29.514},{\"text\":\"inventor\",\"start\":29.574,\"end\":30.0}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":30.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"fell ill, and Asuka\",\"words\":[{\"text\":\"fell\",\"start\":30.122,\"end\":30.77},{\"text\":\"ill,\",\"start\":30.851,\"end\":30.993},{\"text\":\"and\",\"start\":31.014,\"end\":31.115},{\"text\":\"Asuka\",\"start\":31.236,\"end\":31.48}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":31.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"knew he had to venture beyond\",\"words\":[{\"text\":\"knew\",\"start\":31.662,\"end\":31.845},{\"text\":\"he\",\"start\":31.946,\"end\":32.007},{\"text\":\"had\",\"start\":32.128,\"end\":32.27},{\"text\":\"to\",\"start\":32.311,\"end\":32.392},{\"text\":\"venture\",\"start\":32.453,\"end\":32.838},{\"text\":\"beyond\",\"start\":32.838,\"end\":33.0}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":33.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"the workplace to find medicine.\",\"words\":[{\"text\":\"the\",\"start\":33.203,\"end\":33.284},{\"text\":\"workplace\",\"start\":33.324,\"end\":33.851},{\"text\":\"to\",\"start\":33.872,\"end\":33.953},{\"text\":\"find\",\"start\":34.034,\"end\":34.135},{\"text\":\"medicine.\",\"start\":34.155,\"end\":34.419}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":34.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Braving rain\",\"words\":[{\"text\":\"Braving\",\"start\":35.27,\"end\":35.696},{\"text\":\"rain\",\"start\":35.797,\"end\":35.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":36.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"and wind, he navigated\",\"words\":[{\"text\":\"and\",\"start\":36.081,\"end\":36.182},{\"text\":\"wind,\",\"start\":36.264,\"end\":36.547},{\"text\":\"he\",\"start\":36.831,\"end\":36.892},{\"text\":\"navigated\",\"start\":36.993,\"end\":37.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":37.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"through the city streets, his\",\"words\":[{\"text\":\"through\",\"start\":37.662,\"end\":37.845},{\"text\":\"the\",\"start\":37.845,\"end\":37.905},{\"text\":\"city\",\"start\":37.966,\"end\":38.169},{\"text\":\"streets,\",\"start\":38.25,\"end\":38.676},{\"text\":\"his\",\"start\":38.878,\"end\":39.0}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":39.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"sensors guiding him to a\",\"words\":[{\"text\":\"sensors\",\"start\":39.061,\"end\":39.507},{\"text\":\"guiding\",\"start\":39.588,\"end\":39.953},{\"text\":\"him\",\"start\":39.953,\"end\":40.115},{\"text\":\"to\",\"start\":40.196,\"end\":40.318},{\"text\":\"a\",\"start\":40.338,\"end\":40.358}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":40.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"small pharmacy.\",\"words\":[{\"text\":\"small\",\"start\":40.52,\"end\":40.743},{\"text\":\"pharmacy.\",\"start\":40.845,\"end\":41.291}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":42.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Along the way, he met a lost\",\"words\":[{\"text\":\"Along\",\"start\":42.02,\"end\":42.122},{\"text\":\"the\",\"start\":42.162,\"end\":42.223},{\"text\":\"way,\",\"start\":42.264,\"end\":42.466},{\"text\":\"he\",\"start\":42.669,\"end\":42.73},{\"text\":\"met\",\"start\":42.791,\"end\":42.953},{\"text\":\"a\",\"start\":42.993,\"end\":43.014},{\"text\":\"lost\",\"start\":43.115,\"end\":43.358}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":43.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"child who reminded him of\",\"words\":[{\"text\":\"child\",\"start\":43.541,\"end\":43.804},{\"text\":\"who\",\"start\":44.027,\"end\":44.149},{\"text\":\"reminded\",\"start\":44.169,\"end\":44.635},{\"text\":\"him\",\"start\":44.676,\"end\":44.818},{\"text\":\"of\",\"start\":44.818,\"end\":44.878}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":45.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"the inventor's kindness.\",\"words\":[{\"text\":\"the\",\"start\":45.02,\"end\":45.101},{\"text\":\"inventor's\",\"start\":45.142,\"end\":45.628},{\"text\":\"kindness.\",\"start\":45.689,\"end\":46.338}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":46.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"After discovering the medicine\",\"words\":[{\"text\":\"After\",\"start\":46.845,\"end\":47.068},{\"text\":\"discovering\",\"start\":47.088,\"end\":47.554},{\"text\":\"the\",\"start\":47.574,\"end\":47.655},{\"text\":\"medicine\",\"start\":47.676,\"end\":48.0}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":48.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"and returning home.\",\"words\":[{\"text\":\"and\",\"start\":48.182,\"end\":48.264},{\"text\":\"returning\",\"start\":48.304,\"end\":48.77},{\"text\":\"home.\",\"start\":48.831,\"end\":49.034}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":49.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Asuka realized his true\",\"words\":[{\"text\":\"Asuka\",\"start\":49.561,\"end\":49.986},{\"text\":\"realized\",\"start\":49.986,\"end\":50.493},{\"text\":\"his\",\"start\":50.534,\"end\":50.676},{\"text\":\"true\",\"start\":50.757,\"end\":50.959}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":51.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"purpose wasn't just to serve\",\"words\":[{\"text\":\"purpose\",\"start\":51.0,\"end\":51.568},{\"text\":\"wasn't\",\"start\":51.628,\"end\":51.932},{\"text\":\"just\",\"start\":51.953,\"end\":52.155},{\"text\":\"to\",\"start\":52.196,\"end\":52.277},{\"text\":\"serve\",\"start\":52.277,\"end\":52.439}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":52.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\", but to connect hearts.\",\"words\":[{\"text\":\",\",\"start\":52.5,\"end\":52.986},{\"text\":\"but\",\"start\":52.986,\"end\":53.108},{\"text\":\"to\",\"start\":53.149,\"end\":53.209},{\"text\":\"connect\",\"start\":53.27,\"end\":53.676},{\"text\":\"hearts.\",\"start\":53.757,\"end\":54.0}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":54.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"As dawn broke\",\"words\":[{\"text\":\"As\",\"start\":54.628,\"end\":54.73},{\"text\":\"dawn\",\"start\":54.831,\"end\":55.054},{\"text\":\"broke\",\"start\":55.196,\"end\":55.48}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":55.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\", the inventor recovered.\",\"words\":[{\"text\":\",\",\"start\":55.5,\"end\":55.662},{\"text\":\"the\",\"start\":55.662,\"end\":55.723},{\"text\":\"inventor\",\"start\":55.784,\"end\":56.25},{\"text\":\"recovered.\",\"start\":56.291,\"end\":56.777}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":57.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"And together they watched the sun rise.\",\"words\":[{\"text\":\"And\",\"start\":57.041,\"end\":57.162},{\"text\":\"together\",\"start\":57.162,\"end\":57.547},{\"text\":\"they\",\"start\":57.628,\"end\":57.73},{\"text\":\"watched\",\"start\":57.831,\"end\":58.115},{\"text\":\"the\",\"start\":58.115,\"end\":58.216},{\"text\":\"sun\",\"start\":58.216,\"end\":58.277},{\"text\":\"rise.\",\"start\":58.277,\"end\":58.419}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":58.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":60.0,\"duration\":0.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Shining with quiet beauty\",\"words\":[{\"text\":\"Shining\",\"start\":60.507,\"end\":60.77},{\"text\":\"with\",\"start\":60.77,\"end\":60.953},{\"text\":\"quiet\",\"start\":60.953,\"end\":61.135},{\"text\":\"beauty\",\"start\":61.135,\"end\":61.399}],\"is_final\":true,\"speech_final\":false,\"start\":60.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\".\",\"words\":[{\"text\":\".\",\"start\":61.5,\"end\":63.0}],\"is_final\":true,\"speech_final\":false,\"start\":60.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"From that day on, Azur became known\",\"words\":[{\"text\":\"From\",\"start\":63.284,\"end\":63.446},{\"text\":\"that\",\"start\":63.507,\"end\":63.649},{\"text\":\"day\",\"start\":63.73,\"end\":63.811},{\"text\":\"on,\",\"start\":63.811,\"end\":63.892},{\"text\":\"Azur\",\"start\":63.892,\"end\":63.993},{\"text\":\"became\",\"start\":63.993,\"end\":64.378},{\"text\":\"known\",\"start\":64.378,\"end\":64.5}],\"is_final\":true,\"speech_final\":false,\"start\":60.0,\"duration\":4.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"not just as a machine, but a chariot\",\"words\":[{\"text\":\"not\",\"start\":64.52,\"end\":64.601},{\"text\":\"just\",\"start\":64.601,\"end\":64.804},{\"text\":\"as\",\"start\":64.804,\"end\":64.845},{\"text\":\"a\",\"start\":64.845,\"end\":64.865},{\"text\":\"machine,\",\"start\":64.885,\"end\":65.372},{\"text\":\"but\",\"start\":65.432,\"end\":65.514},{\"text\":\"a\",\"start\":65.615,\"end\":65.635},{\"text\":\"chariot\",\"start\":65.635,\"end\":65.899}],\"is_final\":true,\"speech_final\":false,\"start\":60.0,\"duration\":6.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"friend, proving\",\"words\":[{\"text\":\"friend,\",\"start\":66.081,\"end\":66.811},{\"text\":\"proving\",\"start\":67.135,\"end\":67.5}],\"is_final\":true,\"speech_final\":false,\"start\":60.0,\"duration\":7.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"that even a robot could hold\",\"words\":[{\"text\":\"that\",\"start\":67.561,\"end\":67.723},{\"text\":\"even\",\"start\":67.845,\"end\":68.027},{\"text\":\"a\",\"start\":68.088,\"end\":68.108},{\"text\":\"robot\",\"start\":68.189,\"end\":68.615},{\"text\":\"could\",\"start\":68.696,\"end\":68.838},{\"text\":\"hold\",\"start\":68.878,\"end\":69.0}],\"is_final\":true,\"speech_final\":false,\"start\":60.0,\"duration\":9.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"the warmth of humanity.\",\"words\":[{\"text\":\"the\",\"start\":69.142,\"end\":69.223},{\"text\":\"warmth\",\"start\":69.284,\"end\":69.568},{\"text\":\"of\",\"start\":69.689,\"end\":69.75},{\"text\":\"humanity.\",\"start\":69.831,\"end\":70.297}],\"is_final\":true,\"speech_final\":false,\"start\":60.0,\"duration\":10.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":60.0,\"duration\":12.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Shining with quiet pride. From that day on, Azul became not just a machine, but a cherished friend, proving that even a robot could hold the warmth of humanity within his circuits.\",\"words\":[{\"text\":\"Shining\",\"start\":60.501,\"end\":60.901},{\"text\":\"with\",\"start\":60.961,\"end\":61.081},{\"text\":\"quiet\",\"start\":61.121,\"end\":61.522},{\"text\":\"pride.\",\"start\":61.622,\"end\":62.063},{\"text\":\"From\",\"start\":62.463,\"end\":62.603},{\"text\":\"that\",\"start\":62.643,\"end\":62.804},{\"text\":\"day\",\"start\":62.864,\"end\":63.004},{\"text\":\"on,\",\"start\":63.144,\"end\":63.284},{\"text\":\"Azul\",\"start\":63.605,\"end\":63.945},{\"text\":\"became\",\"start\":63.985,\"end\":64.346},{\"text\":\"not\",\"start\":64.406,\"end\":64.546},{\"text\":\"just\",\"start\":64.606,\"end\":64.786},{\"text\":\"a\",\"start\":64.846,\"end\":64.866},{\"text\":\"machine,\",\"start\":64.906,\"end\":65.367},{\"text\":\"but\",\"start\":65.627,\"end\":65.748},{\"text\":\"a\",\"start\":65.788,\"end\":65.808},{\"text\":\"cherished\",\"start\":65.888,\"end\":66.368},{\"text\":\"friend,\",\"start\":66.448,\"end\":66.809},{\"text\":\"proving\",\"start\":67.129,\"end\":67.55},{\"text\":\"that\",\"start\":67.57,\"end\":67.71},{\"text\":\"even\",\"start\":67.83,\"end\":68.031},{\"text\":\"a\",\"start\":68.071,\"end\":68.091},{\"text\":\"robot\",\"start\":68.191,\"end\":68.611},{\"text\":\"could\",\"start\":68.691,\"end\":68.832},{\"text\":\"hold\",\"start\":68.892,\"end\":69.112},{\"text\":\"the\",\"start\":69.152,\"end\":69.232},{\"text\":\"warmth\",\"start\":69.292,\"end\":69.613},{\"text\":\"of\",\"start\":69.693,\"end\":69.753},{\"text\":\"humanity\",\"start\":69.833,\"end\":70.334},{\"text\":\"within\",\"start\":70.494,\"end\":70.734},{\"text\":\"his\",\"start\":70.794,\"end\":70.934},{\"text\":\"circuits.\",\"start\":70.994,\"end\":71.535}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":73.157,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":73.157}"
+    ],
+    "text": "Once upon a time , in a quiet workplace filled with the hum of machines , there lived a blue robot named Asuka. Asuka had been built by an old inventor who dreamed of creating a companion that could understand the beauty of the world. With sleek cobalt plating and eyes that gleamed like sapphires. Asuka spent his days exploring the nooks and crannies of the workplace, learning about gears, wires. And the gentle art of patience. One stormy evening, the inventor fell ill, and Asuka knew he had to venture beyond the workplace to find medicine. Braving rain and wind, he navigated through the city streets, his sensors guiding him to a small pharmacy. Along the way, he met a lost child who reminded him of the inventor's kindness. After discovering the medicine and returning home. Asuka realized his true purpose wasn't just to serve , but to connect hearts. As dawn broke , the inventor recovered. And together they watched the sun rise. Shining with quiet pride. From that day on, Azul became not just a machine, but a cherished friend, proving that even a robot could hold the warmth of humanity within his circuits.",
+    "words": [
+      {
+        "text": "Once",
+        "start": 0.993,
+        "end": 1.257
+      },
+      {
+        "text": "upon",
+        "start": 1.297,
+        "end": 1.399
+      },
+      {
+        "text": "a",
+        "start": 1.399,
+        "end": 1.419
+      },
+      {
+        "text": "time",
+        "start": 1.419,
+        "end": 1.5
+      },
+      {
+        "text": ",",
+        "start": 1.5,
+        "end": 2.169
+      },
+      {
+        "text": "in",
+        "start": 2.169,
+        "end": 2.23
+      },
+      {
+        "text": "a",
+        "start": 2.25,
+        "end": 2.27
+      },
+      {
+        "text": "quiet",
+        "start": 2.351,
+        "end": 2.757
+      },
+      {
+        "text": "workplace",
+        "start": 2.757,
+        "end": 2.98
+      },
+      {
+        "text": "filled",
+        "start": 3.466,
+        "end": 3.709
+      },
+      {
+        "text": "with",
+        "start": 3.75,
+        "end": 3.892
+      },
+      {
+        "text": "the",
+        "start": 3.912,
+        "end": 3.973
+      },
+      {
+        "text": "hum",
+        "start": 4.054,
+        "end": 4.257
+      },
+      {
+        "text": "of",
+        "start": 4.257,
+        "end": 4.297
+      },
+      {
+        "text": "machines",
+        "start": 4.297,
+        "end": 4.48
+      },
+      {
+        "text": ",",
+        "start": 4.5,
+        "end": 5.412
+      },
+      {
+        "text": "there",
+        "start": 5.412,
+        "end": 5.595
+      },
+      {
+        "text": "lived",
+        "start": 5.595,
+        "end": 5.797
+      },
+      {
+        "text": "a",
+        "start": 5.858,
+        "end": 5.878
+      },
+      {
+        "text": "blue",
+        "start": 6.041,
+        "end": 6.284
+      },
+      {
+        "text": "robot",
+        "start": 6.304,
+        "end": 6.709
+      },
+      {
+        "text": "named",
+        "start": 6.851,
+        "end": 7.135
+      },
+      {
+        "text": "Asuka.",
+        "start": 7.216,
+        "end": 7.48
+      },
+      {
+        "text": "Asuka",
+        "start": 8.291,
+        "end": 8.554
+      },
+      {
+        "text": "had",
+        "start": 8.696,
+        "end": 8.818
+      },
+      {
+        "text": "been",
+        "start": 8.858,
+        "end": 8.98
+      },
+      {
+        "text": "built",
+        "start": 9.101,
+        "end": 9.345
+      },
+      {
+        "text": "by",
+        "start": 9.446,
+        "end": 9.568
+      },
+      {
+        "text": "an",
+        "start": 9.608,
+        "end": 9.689
+      },
+      {
+        "text": "old",
+        "start": 9.831,
+        "end": 10.014
+      },
+      {
+        "text": "inventor",
+        "start": 10.095,
+        "end": 10.5
+      },
+      {
+        "text": "who",
+        "start": 10.784,
+        "end": 10.905
+      },
+      {
+        "text": "dreamed",
+        "start": 10.905,
+        "end": 11.291
+      },
+      {
+        "text": "of",
+        "start": 11.331,
+        "end": 11.412
+      },
+      {
+        "text": "creating",
+        "start": 11.473,
+        "end": 11.939
+      },
+      {
+        "text": "a",
+        "start": 12.02,
+        "end": 12.041
+      },
+      {
+        "text": "companion",
+        "start": 12.041,
+        "end": 12.649
+      },
+      {
+        "text": "that",
+        "start": 12.75,
+        "end": 12.851
+      },
+      {
+        "text": "could",
+        "start": 12.872,
+        "end": 13.095
+      },
+      {
+        "text": "understand",
+        "start": 13.115,
+        "end": 13.48
+      },
+      {
+        "text": "the",
+        "start": 13.743,
+        "end": 13.824
+      },
+      {
+        "text": "beauty",
+        "start": 13.885,
+        "end": 14.189
+      },
+      {
+        "text": "of",
+        "start": 14.27,
+        "end": 14.351
+      },
+      {
+        "text": "the",
+        "start": 14.392,
+        "end": 14.473
+      },
+      {
+        "text": "world.",
+        "start": 14.514,
+        "end": 14.878
+      },
+      {
+        "text": "With",
+        "start": 15.345,
+        "end": 15.486
+      },
+      {
+        "text": "sleek",
+        "start": 15.547,
+        "end": 15.872
+      },
+      {
+        "text": "cobalt",
+        "start": 16.014,
+        "end": 16.459
+      },
+      {
+        "text": "plating",
+        "start": 16.601,
+        "end": 17.027
+      },
+      {
+        "text": "and",
+        "start": 17.128,
+        "end": 17.23
+      },
+      {
+        "text": "eyes",
+        "start": 17.432,
+        "end": 17.696
+      },
+      {
+        "text": "that",
+        "start": 17.757,
+        "end": 17.838
+      },
+      {
+        "text": "gleamed",
+        "start": 17.838,
+        "end": 17.98
+      },
+      {
+        "text": "like",
+        "start": 18.345,
+        "end": 18.547
+      },
+      {
+        "text": "sapphires.",
+        "start": 18.588,
+        "end": 19.176
+      },
+      {
+        "text": "Asuka",
+        "start": 19.601,
+        "end": 19.946
+      },
+      {
+        "text": "spent",
+        "start": 20.047,
+        "end": 20.311
+      },
+      {
+        "text": "his",
+        "start": 20.372,
+        "end": 20.493
+      },
+      {
+        "text": "days",
+        "start": 20.574,
+        "end": 20.858
+      },
+      {
+        "text": "exploring",
+        "start": 21.041,
+        "end": 21.547
+      },
+      {
+        "text": "the",
+        "start": 21.547,
+        "end": 21.628
+      },
+      {
+        "text": "nooks",
+        "start": 21.75,
+        "end": 22.034
+      },
+      {
+        "text": "and",
+        "start": 22.115,
+        "end": 22.176
+      },
+      {
+        "text": "crannies",
+        "start": 22.257,
+        "end": 22.5
+      },
+      {
+        "text": "of",
+        "start": 22.723,
+        "end": 22.784
+      },
+      {
+        "text": "the",
+        "start": 22.824,
+        "end": 22.885
+      },
+      {
+        "text": "workplace,",
+        "start": 22.946,
+        "end": 23.797
+      },
+      {
+        "text": "learning",
+        "start": 23.818,
+        "end": 24
+      },
+      {
+        "text": "about",
+        "start": 24.162,
+        "end": 24.385
+      },
+      {
+        "text": "gears,",
+        "start": 24.486,
+        "end": 24.892
+      },
+      {
+        "text": "wires.",
+        "start": 25.155,
+        "end": 25.5
+      },
+      {
+        "text": "And",
+        "start": 25.743,
+        "end": 25.804
+      },
+      {
+        "text": "the",
+        "start": 25.845,
+        "end": 25.905
+      },
+      {
+        "text": "gentle",
+        "start": 25.986,
+        "end": 26.392
+      },
+      {
+        "text": "art",
+        "start": 26.514,
+        "end": 26.716
+      },
+      {
+        "text": "of",
+        "start": 26.777,
+        "end": 26.818
+      },
+      {
+        "text": "patience.",
+        "start": 28.074,
+        "end": 28.399
+      },
+      {
+        "text": "One",
+        "start": 28.5,
+        "end": 28.561
+      },
+      {
+        "text": "stormy",
+        "start": 28.561,
+        "end": 28.682
+      },
+      {
+        "text": "evening,",
+        "start": 28.845,
+        "end": 29.189
+      },
+      {
+        "text": "the",
+        "start": 29.453,
+        "end": 29.514
+      },
+      {
+        "text": "inventor",
+        "start": 29.574,
+        "end": 30
+      },
+      {
+        "text": "fell",
+        "start": 30.122,
+        "end": 30.77
+      },
+      {
+        "text": "ill,",
+        "start": 30.851,
+        "end": 30.993
+      },
+      {
+        "text": "and",
+        "start": 31.014,
+        "end": 31.115
+      },
+      {
+        "text": "Asuka",
+        "start": 31.236,
+        "end": 31.48
+      },
+      {
+        "text": "knew",
+        "start": 31.662,
+        "end": 31.845
+      },
+      {
+        "text": "he",
+        "start": 31.946,
+        "end": 32.007
+      },
+      {
+        "text": "had",
+        "start": 32.128,
+        "end": 32.27
+      },
+      {
+        "text": "to",
+        "start": 32.311,
+        "end": 32.392
+      },
+      {
+        "text": "venture",
+        "start": 32.453,
+        "end": 32.838
+      },
+      {
+        "text": "beyond",
+        "start": 32.838,
+        "end": 33
+      },
+      {
+        "text": "the",
+        "start": 33.203,
+        "end": 33.284
+      },
+      {
+        "text": "workplace",
+        "start": 33.324,
+        "end": 33.851
+      },
+      {
+        "text": "to",
+        "start": 33.872,
+        "end": 33.953
+      },
+      {
+        "text": "find",
+        "start": 34.034,
+        "end": 34.135
+      },
+      {
+        "text": "medicine.",
+        "start": 34.155,
+        "end": 34.419
+      },
+      {
+        "text": "Braving",
+        "start": 35.27,
+        "end": 35.696
+      },
+      {
+        "text": "rain",
+        "start": 35.797,
+        "end": 35.98
+      },
+      {
+        "text": "and",
+        "start": 36.081,
+        "end": 36.182
+      },
+      {
+        "text": "wind,",
+        "start": 36.264,
+        "end": 36.547
+      },
+      {
+        "text": "he",
+        "start": 36.831,
+        "end": 36.892
+      },
+      {
+        "text": "navigated",
+        "start": 36.993,
+        "end": 37.5
+      },
+      {
+        "text": "through",
+        "start": 37.662,
+        "end": 37.845
+      },
+      {
+        "text": "the",
+        "start": 37.845,
+        "end": 37.905
+      },
+      {
+        "text": "city",
+        "start": 37.966,
+        "end": 38.169
+      },
+      {
+        "text": "streets,",
+        "start": 38.25,
+        "end": 38.676
+      },
+      {
+        "text": "his",
+        "start": 38.878,
+        "end": 39
+      },
+      {
+        "text": "sensors",
+        "start": 39.061,
+        "end": 39.507
+      },
+      {
+        "text": "guiding",
+        "start": 39.588,
+        "end": 39.953
+      },
+      {
+        "text": "him",
+        "start": 39.953,
+        "end": 40.115
+      },
+      {
+        "text": "to",
+        "start": 40.196,
+        "end": 40.318
+      },
+      {
+        "text": "a",
+        "start": 40.338,
+        "end": 40.358
+      },
+      {
+        "text": "small",
+        "start": 40.52,
+        "end": 40.743
+      },
+      {
+        "text": "pharmacy.",
+        "start": 40.845,
+        "end": 41.291
+      },
+      {
+        "text": "Along",
+        "start": 42.02,
+        "end": 42.122
+      },
+      {
+        "text": "the",
+        "start": 42.162,
+        "end": 42.223
+      },
+      {
+        "text": "way,",
+        "start": 42.264,
+        "end": 42.466
+      },
+      {
+        "text": "he",
+        "start": 42.669,
+        "end": 42.73
+      },
+      {
+        "text": "met",
+        "start": 42.791,
+        "end": 42.953
+      },
+      {
+        "text": "a",
+        "start": 42.993,
+        "end": 43.014
+      },
+      {
+        "text": "lost",
+        "start": 43.115,
+        "end": 43.358
+      },
+      {
+        "text": "child",
+        "start": 43.541,
+        "end": 43.804
+      },
+      {
+        "text": "who",
+        "start": 44.027,
+        "end": 44.149
+      },
+      {
+        "text": "reminded",
+        "start": 44.169,
+        "end": 44.635
+      },
+      {
+        "text": "him",
+        "start": 44.676,
+        "end": 44.818
+      },
+      {
+        "text": "of",
+        "start": 44.818,
+        "end": 44.878
+      },
+      {
+        "text": "the",
+        "start": 45.02,
+        "end": 45.101
+      },
+      {
+        "text": "inventor's",
+        "start": 45.142,
+        "end": 45.628
+      },
+      {
+        "text": "kindness.",
+        "start": 45.689,
+        "end": 46.338
+      },
+      {
+        "text": "After",
+        "start": 46.845,
+        "end": 47.068
+      },
+      {
+        "text": "discovering",
+        "start": 47.088,
+        "end": 47.554
+      },
+      {
+        "text": "the",
+        "start": 47.574,
+        "end": 47.655
+      },
+      {
+        "text": "medicine",
+        "start": 47.676,
+        "end": 48
+      },
+      {
+        "text": "and",
+        "start": 48.182,
+        "end": 48.264
+      },
+      {
+        "text": "returning",
+        "start": 48.304,
+        "end": 48.77
+      },
+      {
+        "text": "home.",
+        "start": 48.831,
+        "end": 49.034
+      },
+      {
+        "text": "Asuka",
+        "start": 49.561,
+        "end": 49.986
+      },
+      {
+        "text": "realized",
+        "start": 49.986,
+        "end": 50.493
+      },
+      {
+        "text": "his",
+        "start": 50.534,
+        "end": 50.676
+      },
+      {
+        "text": "true",
+        "start": 50.757,
+        "end": 50.959
+      },
+      {
+        "text": "purpose",
+        "start": 51,
+        "end": 51.568
+      },
+      {
+        "text": "wasn't",
+        "start": 51.628,
+        "end": 51.932
+      },
+      {
+        "text": "just",
+        "start": 51.953,
+        "end": 52.155
+      },
+      {
+        "text": "to",
+        "start": 52.196,
+        "end": 52.277
+      },
+      {
+        "text": "serve",
+        "start": 52.277,
+        "end": 52.439
+      },
+      {
+        "text": ",",
+        "start": 52.5,
+        "end": 52.986
+      },
+      {
+        "text": "but",
+        "start": 52.986,
+        "end": 53.108
+      },
+      {
+        "text": "to",
+        "start": 53.149,
+        "end": 53.209
+      },
+      {
+        "text": "connect",
+        "start": 53.27,
+        "end": 53.676
+      },
+      {
+        "text": "hearts.",
+        "start": 53.757,
+        "end": 54
+      },
+      {
+        "text": "As",
+        "start": 54.628,
+        "end": 54.73
+      },
+      {
+        "text": "dawn",
+        "start": 54.831,
+        "end": 55.054
+      },
+      {
+        "text": "broke",
+        "start": 55.196,
+        "end": 55.48
+      },
+      {
+        "text": ",",
+        "start": 55.5,
+        "end": 55.662
+      },
+      {
+        "text": "the",
+        "start": 55.662,
+        "end": 55.723
+      },
+      {
+        "text": "inventor",
+        "start": 55.784,
+        "end": 56.25
+      },
+      {
+        "text": "recovered.",
+        "start": 56.291,
+        "end": 56.777
+      },
+      {
+        "text": "And",
+        "start": 57.041,
+        "end": 57.162
+      },
+      {
+        "text": "together",
+        "start": 57.162,
+        "end": 57.547
+      },
+      {
+        "text": "they",
+        "start": 57.628,
+        "end": 57.73
+      },
+      {
+        "text": "watched",
+        "start": 57.831,
+        "end": 58.115
+      },
+      {
+        "text": "the",
+        "start": 58.115,
+        "end": 58.216
+      },
+      {
+        "text": "sun",
+        "start": 58.216,
+        "end": 58.277
+      },
+      {
+        "text": "rise.",
+        "start": 58.277,
+        "end": 58.419
+      },
+      {
+        "text": "Shining",
+        "start": 60.501,
+        "end": 60.901
+      },
+      {
+        "text": "with",
+        "start": 60.961,
+        "end": 61.081
+      },
+      {
+        "text": "quiet",
+        "start": 61.121,
+        "end": 61.522
+      },
+      {
+        "text": "pride.",
+        "start": 61.622,
+        "end": 62.063
+      },
+      {
+        "text": "From",
+        "start": 62.463,
+        "end": 62.603
+      },
+      {
+        "text": "that",
+        "start": 62.643,
+        "end": 62.804
+      },
+      {
+        "text": "day",
+        "start": 62.864,
+        "end": 63.004
+      },
+      {
+        "text": "on,",
+        "start": 63.144,
+        "end": 63.284
+      },
+      {
+        "text": "Azul",
+        "start": 63.605,
+        "end": 63.945
+      },
+      {
+        "text": "became",
+        "start": 63.985,
+        "end": 64.346
+      },
+      {
+        "text": "not",
+        "start": 64.406,
+        "end": 64.546
+      },
+      {
+        "text": "just",
+        "start": 64.606,
+        "end": 64.786
+      },
+      {
+        "text": "a",
+        "start": 64.846,
+        "end": 64.866
+      },
+      {
+        "text": "machine,",
+        "start": 64.906,
+        "end": 65.367
+      },
+      {
+        "text": "but",
+        "start": 65.627,
+        "end": 65.748
+      },
+      {
+        "text": "a",
+        "start": 65.788,
+        "end": 65.808
+      },
+      {
+        "text": "cherished",
+        "start": 65.888,
+        "end": 66.368
+      },
+      {
+        "text": "friend,",
+        "start": 66.448,
+        "end": 66.809
+      },
+      {
+        "text": "proving",
+        "start": 67.129,
+        "end": 67.55
+      },
+      {
+        "text": "that",
+        "start": 67.57,
+        "end": 67.71
+      },
+      {
+        "text": "even",
+        "start": 67.83,
+        "end": 68.031
+      },
+      {
+        "text": "a",
+        "start": 68.071,
+        "end": 68.091
+      },
+      {
+        "text": "robot",
+        "start": 68.191,
+        "end": 68.611
+      },
+      {
+        "text": "could",
+        "start": 68.691,
+        "end": 68.832
+      },
+      {
+        "text": "hold",
+        "start": 68.892,
+        "end": 69.112
+      },
+      {
+        "text": "the",
+        "start": 69.152,
+        "end": 69.232
+      },
+      {
+        "text": "warmth",
+        "start": 69.292,
+        "end": 69.613
+      },
+      {
+        "text": "of",
+        "start": 69.693,
+        "end": 69.753
+      },
+      {
+        "text": "humanity",
+        "start": 69.833,
+        "end": 70.334
+      },
+      {
+        "text": "within",
+        "start": 70.494,
+        "end": 70.734
+      },
+      {
+        "text": "his",
+        "start": 70.794,
+        "end": 70.934
+      },
+      {
+        "text": "circuits.",
+        "start": 70.994,
+        "end": 71.535
+      }
+    ]
+  },
+  "sampleRateHz": 48000,
+  "schemaVersion": 1
+}

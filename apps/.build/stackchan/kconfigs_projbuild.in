@@ -1,0 +1,6 @@
+source "/Users/jonastemplestein/esp/esp-idf/components/bootloader/Kconfig.projbuild"
+source "/Users/jonastemplestein/esp/esp-idf/components/esp_app_format/Kconfig.projbuild"
+source "/Users/jonastemplestein/esp/esp-idf/components/esp_rom/Kconfig.projbuild"
+source "/Users/jonastemplestein/esp/esp-idf/components/esptool_py/Kconfig.projbuild"
+source "/Users/jonastemplestein/esp/esp-idf/components/partition_table/Kconfig.projbuild"
+source "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/stackchan/managed_components/espressif__esp-sr/Kconfig.projbuild"

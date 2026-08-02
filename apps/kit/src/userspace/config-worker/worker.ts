@@ -7,6 +7,7 @@ import {
   subscribePcmBridgeToDeviceEvents,
 } from "./device-events.ts";
 import { DeviceMetricsSessionTracker, type DeviceMetricsSessionMetrics } from "./device-metrics.ts";
+import { interruptKitDevicePlayback } from "./device-control.ts";
 import { executeKitDeviceTool } from "./device-tools.ts";
 import {
   ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
@@ -32,7 +33,9 @@ import {
   authenticateProjectBearer,
   handleKitVoiceRequest,
   loadProjectBearerCredential,
+  readKitAudioMode,
   readKitDeviceIdentity,
+  type KitAudioMode,
   type KitVoiceMode,
 } from "./routes.ts";
 const PCM_MODE_KEY = "kit-pcm-mode";
@@ -53,6 +56,7 @@ interface PcmSessionStartupTimeline {
 }
 
 interface ActivePcmSession {
+  audioMode: KitAudioMode;
   bridge: PcmSessionBridge;
   closeProjectSession(): void;
   deviceEvents: DeviceEventSessionMetricsTracker;
@@ -73,6 +77,7 @@ interface ActivePcmSession {
 }
 
 interface ClosedPcmSessionReport extends PcmSessionMetrics {
+  audioMode: KitAudioMode;
   deviceEvents: DeviceEventSessionMetrics;
   deviceMetrics: DeviceMetricsSessionMetrics;
   deviceId: string;
@@ -152,6 +157,7 @@ export class KitVoiceWorker extends IterateDurableObject {
     const bridgeMetrics = active.bridge.metrics();
     return {
       ...bridgeMetrics,
+      audioMode: active.audioMode,
       deviceEvents: active.deviceEvents.metrics(),
       deviceId: active.deviceId,
       deviceMetrics: active.deviceMetrics.metrics(),
@@ -222,6 +228,10 @@ export class KitVoiceWorker extends IterateDurableObject {
     if (deviceId === null) {
       return new Response("A valid Iterate Kit device identity is required.", { status: 400 });
     }
+    const audioMode = readKitAudioMode(request);
+    if (audioMode === null) {
+      return new Response("A valid Iterate Kit audio mode is required.", { status: 400 });
+    }
     const { mode } = await loadIngressConfiguration();
     startup.authenticationAndModeReadyAtMs = Date.now();
 
@@ -260,10 +270,37 @@ export class KitVoiceWorker extends IterateDurableObject {
       waitUntil: (promise) => this.ctx.waitUntil(promise),
     });
     let active: ActivePcmSession | undefined;
+    let project: (Project & Disposable) | undefined;
+    let projectSessionClosed = false;
+    const closeProjectSession = () => {
+      if (projectSessionClosed) return;
+      projectSessionClosed = true;
+      project?.[Symbol.dispose]();
+      project = undefined;
+    };
     const bridge = new PcmSessionBridge({
       device: server,
       maximumSocketBufferedBytes: PCM_SOCKET_BACKLOG_LIMIT_BYTES,
       onDiagnostic: (diagnostic) => this.#onPcmDiagnostic(diagnostic),
+      onPlaybackInterruption: () => {
+        const deviceProject = project;
+        if (deviceProject === undefined || projectSessionClosed) {
+          throw new Error("The retained device capability session is unavailable.");
+        }
+        const reset = interruptKitDevicePlayback(deviceProject, deviceId);
+        /*
+         * The bridge owns the acknowledgement as a playout fence. waitUntil
+         * independently keeps the Durable Object turn alive without putting
+         * the Cap'n Web round trip in the provider MessageEvent receive lane.
+         */
+        this.ctx.waitUntil(
+          reset.then(
+            () => undefined,
+            () => undefined,
+          ),
+        );
+        return reset;
+      },
       onProviderEvent: (event) => providerEvents.observe(event, sessionId),
       onProviderFunctionCall: (call) =>
         this.#executeProviderFunctionCall(call, sessionId, deviceId),
@@ -274,19 +311,13 @@ export class KitVoiceWorker extends IterateDurableObject {
       },
       ...(mode === "grok" ? { initialGreeting: "How can I help you?" } : {}),
       sessionId,
+      turnDetection: audioMode === "full-duplex-aec" ? "server-vad" : "manual",
     });
     const deviceEvents = new DeviceEventSessionMetricsTracker();
     const deviceMetrics = new DeviceMetricsSessionTracker();
 
-    let project: (Project & Disposable) | undefined;
-    let projectSessionClosed = false;
-    const closeProjectSession = () => {
-      if (projectSessionClosed) return;
-      projectSessionClosed = true;
-      project?.[Symbol.dispose]();
-      project = undefined;
-    };
     active = {
+      audioMode,
       bridge,
       closeProjectSession,
       deviceEvents,
@@ -356,6 +387,13 @@ export class KitVoiceWorker extends IterateDurableObject {
         project = openedProject;
         return true;
       },
+      releaseProject(openedProject) {
+        if (project === openedProject) {
+          project = undefined;
+          if (projectSessionClosed) return;
+        }
+        openedProject[Symbol.dispose]();
+      },
     });
     this.ctx.waitUntil(subscription);
 
@@ -387,6 +425,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       credential,
       onStage,
       sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
+      turnDetection: active.audioMode === "full-duplex-aec" ? "server-vad" : "manual",
     });
   }
 
@@ -489,7 +528,10 @@ export class KitVoiceWorker extends IterateDurableObject {
 
   async #establishDeviceEventSubscription(
     active: ActivePcmSession,
-    owner: { assignProject(project: Project & Disposable): boolean },
+    owner: {
+      assignProject(project: Project & Disposable): boolean;
+      releaseProject(project: Project & Disposable): void;
+    },
   ): Promise<void> {
     const retryDelaysMs = [0, 250, 500, 1_000, 2_000, 4_000, 8_000];
     for (const delayMs of retryDelaysMs) {
@@ -502,16 +544,16 @@ export class KitVoiceWorker extends IterateDurableObject {
       let project: (Project & Disposable) | undefined;
       try {
         project = await this.env.ITX.get();
+        if (!owner.assignProject(project)) return;
         await this.#subscribeToDeviceEvents(project, active, active.sessionId);
         await this.#subscribeToDeviceMetrics(project, active, active.sessionId);
-        if (!owner.assignProject(project)) return;
         this.#log("device-event-subscribed", "info", {
           attempt: active.deviceEventSubscriptionAttempts,
           sessionId: active.sessionId,
         });
         return;
       } catch (error) {
-        project?.[Symbol.dispose]();
+        if (project !== undefined) owner.releaseProject(project);
         active.deviceEventSubscriptionFailures += 1;
         const finalAttempt = active.deviceEventSubscriptionAttempts === retryDelaysMs.length;
         this.#log(
@@ -580,6 +622,7 @@ export class KitVoiceWorker extends IterateDurableObject {
         },
       },
       active.bridge,
+      active.audioMode,
       (diagnostic) => this.#onDeviceEventDiagnostic(diagnostic, active.bridge, sessionId),
       (event) => {
         active.deviceEvents.observe(event);
@@ -680,6 +723,7 @@ export class KitVoiceWorker extends IterateDurableObject {
     const bridgeMetrics = active.bridge.metrics();
     const report: ClosedPcmSessionReport = {
       ...bridgeMetrics,
+      audioMode: active.audioMode,
       deviceEvents: active.deviceEvents.metrics(),
       deviceMetrics: active.deviceMetrics.metrics(),
       deviceId: active.deviceId,

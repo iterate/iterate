@@ -1,6 +1,8 @@
 file(REMOVE_RECURSE
   "CMakeFiles/iterate-kit-core.dir/components/core/src/aec_capture_bridge.c.o"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/aec_capture_bridge.c.o.d"
+  "CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o"
+  "CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o.d"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o.d"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o"
@@ -23,6 +25,8 @@ file(REMOVE_RECURSE
   "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o.d"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o.d"
+  "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o"
+  "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o.d"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o.d"
   "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.o"

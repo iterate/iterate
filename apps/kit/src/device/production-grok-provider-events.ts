@@ -26,6 +26,12 @@ const CompletedOutputAudioTranscript = z.object({
   type: z.literal("response.output_audio_transcript.done"),
 });
 
+const CompletedInputAudioTranscript = z.object({
+  status: z.literal("completed"),
+  transcript: z.string(),
+  type: z.literal("conversation.item.input_audio_transcription.completed"),
+});
+
 const ProviderFunctionCallDone = z.object({
   arguments: z.string(),
   call_id: z.string().min(1),
@@ -140,6 +146,31 @@ export function completedProviderOutputTranscript(
   const transcript = parsed.transcript.trim();
   if (!transcript) {
     throw new Error("The completed output-audio event contained no non-empty transcript.");
+  }
+  return transcript;
+}
+
+/** Reads the final recognizer result for one retained physical input turn. */
+export function completedProviderInputTranscript(
+  events: readonly ProductionGrokProviderEvent[],
+): string {
+  const event = events.findLast((candidate) => {
+    if (candidate.providerType !== "conversation.item.input_audio_transcription.completed") {
+      return false;
+    }
+    try {
+      return CompletedInputAudioTranscript.safeParse(JSON.parse(candidate.raw)).success;
+    } catch {
+      return false;
+    }
+  });
+  if (!event) {
+    throw new Error("The Grok stream did not retain a terminal input-audio transcript.");
+  }
+  const parsed = CompletedInputAudioTranscript.parse(JSON.parse(event.raw));
+  const transcript = parsed.transcript.trim();
+  if (!transcript) {
+    throw new Error("The terminal input-audio transcript contained no non-empty text.");
   }
   return transcript;
 }

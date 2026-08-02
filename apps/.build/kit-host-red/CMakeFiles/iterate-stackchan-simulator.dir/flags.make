@@ -6,7 +6,7 @@ CXX_DEFINES =
 
 CXX_INCLUDES = -I/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/simulator/include -I/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/include -I/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include -I/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/vendor/capnweb/include -I/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/devices/stackchan/include
 
-CXX_FLAGSarm64 = -g -std=gnu++17 -arch arm64 -Wall -Wextra -Werror -Wpedantic -fno-exceptions -fno-rtti
+CXX_FLAGSarm64 = -UNDEBUG -g -std=gnu++17 -arch arm64 -Wall -Wextra -Werror -Wpedantic -fno-exceptions -fno-rtti
 
-CXX_FLAGS = -g -std=gnu++17 -arch arm64 -Wall -Wextra -Werror -Wpedantic -fno-exceptions -fno-rtti
+CXX_FLAGS = -UNDEBUG -g -std=gnu++17 -arch arm64 -Wall -Wextra -Werror -Wpedantic -fno-exceptions -fno-rtti
 

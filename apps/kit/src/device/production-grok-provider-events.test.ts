@@ -1,6 +1,7 @@
 import { describe, expect, test } from "vitest";
 import { KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE } from "../userspace/config-worker/provider-event-stream.ts";
 import {
+  completedProviderInputTranscript,
   completedProviderToolCall,
   completedProviderOutputTranscript,
   parseAvailableProductionGrokProviderEvents,
@@ -191,6 +192,40 @@ describe("production Grok provider event evidence", () => {
 
     expect(completedProviderOutputTranscript(events)).toBe(
       "The physical Stick spoke this sentence.",
+    );
+  });
+
+  test("extracts only the terminal input transcript for the current physical turn", () => {
+    /*
+     * xAI can emit several events with the same `completed` suffix while its
+     * streaming recognizer still marks the item in progress. Treating the
+     * first one as the user's utterance made the StackChan proof accept
+     * "Reply exactly" even though the three-second acoustic prompt continued.
+     * The terminal status is therefore an evidence boundary, not incidental
+     * provider metadata.
+     */
+    const event = (sequence: number, transcript: string, status: string) => ({
+      createdAt: "2026-08-01T00:00:00.000Z",
+      offset: 40 + sequence,
+      providerType: "conversation.item.input_audio_transcription.completed",
+      raw: JSON.stringify({
+        status,
+        transcript,
+        type: "conversation.item.input_audio_transcription.completed",
+      }),
+      receivedAtMs: 2_000 + sequence,
+      sequence,
+      sessionId: "current",
+    });
+
+    expect(
+      completedProviderInputTranscript([
+        event(1, "Tell me", "in_progress"),
+        event(2, "Tell me one short joke.", "completed"),
+      ]),
+    ).toBe("Tell me one short joke.");
+    expect(() => completedProviderInputTranscript([event(1, "Tell me", "in_progress")])).toThrow(
+      "terminal input-audio transcript",
     );
   });
 

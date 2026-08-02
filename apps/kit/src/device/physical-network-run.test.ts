@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import type { KitControlDiagnostics } from "./kit-device-contract.ts";
+import type { KitControlDiagnostics, KitControlDiagnosticsV3 } from "./kit-device-contract.ts";
 import {
   buildPhysicalNetworkRunArtifact,
   type PhysicalDeviceDiagnosticsObservation,
@@ -10,7 +10,7 @@ import type { PhysicalReachabilitySample } from "./physical-network-reachability
 function diagnostics(options: {
   producedAtMs: number;
   wifiDisconnects?: number;
-}): KitControlDiagnostics {
+}): KitControlDiagnosticsV3 {
   return {
     schemaVersion: 3,
     producedAtMs: options.producedAtMs,
@@ -62,6 +62,28 @@ function diagnostics(options: {
       pcmWebsocketConnections: 1,
       pcmWebsocketDisconnects: 0,
       pcmWebsocketErrors: 0,
+    },
+  };
+}
+
+function diagnosticsV4(options: {
+  producedAtMs: number;
+  transportFailureIncidents: number;
+}): KitControlDiagnostics {
+  const previous = diagnostics({ producedAtMs: options.producedAtMs });
+  return {
+    ...previous,
+    schemaVersion: 4,
+    network: {
+      ...previous.network,
+      pcmWebsocketRawWriteFailures: 0,
+      pcmTransportFailureIncidents: options.transportFailureIncidents,
+      pcmLastFailureOperation: options.transportFailureIncidents === 0 ? 0 : 2,
+      pcmLastRawResult: options.transportFailureIncidents === 0 ? 0 : -1,
+      pcmLastSocketErrno: 0,
+      pcmLastEspTlsError: options.transportFailureIncidents === 0 ? 0 : 32_776,
+      pcmLastTlsStackError: 0,
+      pcmLastTlsCertFlags: 0,
     },
   };
 }
@@ -292,6 +314,58 @@ describe("physical network run evidence", () => {
     expect(artifact.network.reasons).toEqual(
       expect.arrayContaining([expect.objectContaining({ code: "device-wifi-disconnect" })]),
     );
+  });
+
+  test("classifies a retained lower-transport incident before aggregate PCM error catches up", () => {
+    /*
+     * The platform captures the ESP-TLS tuple at the exact failing call, while
+     * the outer PCM lifecycle may increment its generic WebSocket error only
+     * on a later owner iteration. The interval must already be network-invalid
+     * from the monotonic incident counter; otherwise the most useful causal
+     * sample can be labelled healthy during that one-iteration attribution
+     * gap. Raw diagnostics remain attached to preserve the exact peer-FIN/TLS
+     * tuple behind this coarse classifier decision.
+     */
+    const input = healthyInput();
+    input.diagnostics = [
+      {
+        completedAtMonotonicMs: 1_100,
+        diagnostics: diagnosticsV4({
+          producedAtMs: 100,
+          transportFailureIncidents: 0,
+        }),
+        outcome: "success",
+        startedAtMonotonicMs: 1_050,
+      },
+      {
+        completedAtMonotonicMs: 2_900,
+        diagnostics: diagnosticsV4({
+          producedAtMs: 1_900,
+          transportFailureIncidents: 1,
+        }),
+        outcome: "success",
+        startedAtMonotonicMs: 2_850,
+      },
+    ];
+
+    const artifact = buildPhysicalNetworkRunArtifact(input);
+
+    expect(artifact.classification).toBe("network-invalid");
+    expect(artifact.network.reasons).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ code: "pcm-socket-lower-transport-failure" }),
+      ]),
+    );
+    expect(artifact.diagnostics.at(-1)).toMatchObject({
+      diagnostics: {
+        network: {
+          pcmLastEspTlsError: 32_776,
+          pcmLastFailureOperation: 2,
+          pcmLastRawResult: -1,
+          pcmTransportFailureIncidents: 1,
+        },
+      },
+    });
   });
 
   test("cannot claim validity after a failed diagnostics observation", () => {

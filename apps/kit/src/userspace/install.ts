@@ -5,6 +5,7 @@ import {
   type KitVoiceInstallMode,
   type KitVoiceInstallPlan,
 } from "./install-plan.ts";
+import { kitVoiceWorkerRef } from "./config-worker/app-ref.ts";
 
 const XAI_EGRESS_POLICY = { urls: ["https://api.x.ai"] };
 
@@ -26,6 +27,11 @@ interface InstallProject {
       __describe(): Promise<{ created: boolean }>;
       create(input: { egress: { urls: string[] }; material: unknown }): Promise<unknown>;
       update(input: { egress: { urls: string[] }; material: unknown }): Promise<unknown>;
+    };
+  };
+  workers: {
+    get(ref: typeof kitVoiceWorkerRef): {
+      kill(): Promise<void>;
     };
   };
 }
@@ -57,6 +63,8 @@ export interface InstallKitVoiceResult {
  * 1. Pin the provider key before any source can reference it.
  * 2. Commit the complete worker source as one repository mutation.
  * 3. Flip the tiny mode knob last.
+ * 4. Abort the old stateful incarnation so the next device reconnect must
+ *    boot from that complete committed generation.
  *
  * If the final KV write fails, the installed worker safely retains the old
  * mode (or its tone default) and a rerun converges. There is no interval where
@@ -108,6 +116,18 @@ export async function installKitVoiceUserspace(
     message: "Install Iterate Kit voice userspace worker",
   });
   await options.project.kv.set(KIT_VOICE_MODE_KEY, options.mode);
+  try {
+    await options.project.workers.get(kitVoiceWorkerRef).kill();
+  } catch (error) {
+    /*
+     * DurableObjectState.abort() destroys the target before its RPC can send
+     * a success response, so the platform's successful lifecycle boundary is
+     * necessarily observed as this exact rejection by the caller. Match only
+     * the explicit abort reason: auth, routing, or build failures must still
+     * make an install fail rather than being normalized as a restart.
+     */
+    if (!isExpectedWorkerKill(error)) throw error;
+  }
   return {
     applied: true,
     changedPaths: commit.changedPaths,
@@ -116,4 +136,8 @@ export async function installKitVoiceUserspace(
     plan,
     projectId: options.projectId,
   };
+}
+
+function isExpectedWorkerKill(error: unknown): boolean {
+  return error instanceof Error && error.message === "kill requested";
 }

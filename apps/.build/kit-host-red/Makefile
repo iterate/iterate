@@ -257,6 +257,19 @@ iterate-kit-aec-capture-bridge-test/fast:
 .PHONY : iterate-kit-aec-capture-bridge-test/fast
 
 #=============================================================================
+# Target rules for targets named iterate-kit-aec-signal-window-test
+
+# Build rule for target.
+iterate-kit-aec-signal-window-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-aec-signal-window-test
+.PHONY : iterate-kit-aec-signal-window-test
+
+# fast build rule for target.
+iterate-kit-aec-signal-window-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-signal-window-test.dir/build.make CMakeFiles/iterate-kit-aec-signal-window-test.dir/build
+.PHONY : iterate-kit-aec-signal-window-test/fast
+
+#=============================================================================
 # Target rules for targets named iterate-kit-pcm-clock-playback-test
 
 # Build rule for target.
@@ -619,6 +632,19 @@ iterate-kit-pcm-generation-fence-test: cmake_check_build_system
 iterate-kit-pcm-generation-fence-test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-generation-fence-test.dir/build.make CMakeFiles/iterate-kit-pcm-generation-fence-test.dir/build
 .PHONY : iterate-kit-pcm-generation-fence-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-pcm-playback-interruption-test
+
+# Build rule for target.
+iterate-kit-pcm-playback-interruption-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-pcm-playback-interruption-test
+.PHONY : iterate-kit-pcm-playback-interruption-test
+
+# fast build rule for target.
+iterate-kit-pcm-playback-interruption-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-playback-interruption-test.dir/build.make CMakeFiles/iterate-kit-pcm-playback-interruption-test.dir/build
+.PHONY : iterate-kit-pcm-playback-interruption-test/fast
 
 #=============================================================================
 # Target rules for targets named iterate-kit-pcm-uplink-sender-test
@@ -1129,6 +1155,30 @@ components/core/src/aec_capture_bridge.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_capture_bridge.c.s
 .PHONY : components/core/src/aec_capture_bridge.c.s
 
+components/core/src/aec_signal_window.o: components/core/src/aec_signal_window.c.o
+.PHONY : components/core/src/aec_signal_window.o
+
+# target to build an object file
+components/core/src/aec_signal_window.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o
+.PHONY : components/core/src/aec_signal_window.c.o
+
+components/core/src/aec_signal_window.i: components/core/src/aec_signal_window.c.i
+.PHONY : components/core/src/aec_signal_window.i
+
+# target to preprocess a source file
+components/core/src/aec_signal_window.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.i
+.PHONY : components/core/src/aec_signal_window.c.i
+
+components/core/src/aec_signal_window.s: components/core/src/aec_signal_window.c.s
+.PHONY : components/core/src/aec_signal_window.s
+
+# target to generate assembly for a file
+components/core/src/aec_signal_window.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.s
+.PHONY : components/core/src/aec_signal_window.c.s
+
 components/core/src/audio.o: components/core/src/audio.c.o
 .PHONY : components/core/src/audio.o
 
@@ -1392,6 +1442,30 @@ components/core/src/pcm_lane.s: components/core/src/pcm_lane.c.s
 components/core/src/pcm_lane.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.s
 .PHONY : components/core/src/pcm_lane.c.s
+
+components/core/src/pcm_playback_interruption.o: components/core/src/pcm_playback_interruption.c.o
+.PHONY : components/core/src/pcm_playback_interruption.o
+
+# target to build an object file
+components/core/src/pcm_playback_interruption.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o
+.PHONY : components/core/src/pcm_playback_interruption.c.o
+
+components/core/src/pcm_playback_interruption.i: components/core/src/pcm_playback_interruption.c.i
+.PHONY : components/core/src/pcm_playback_interruption.i
+
+# target to preprocess a source file
+components/core/src/pcm_playback_interruption.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.i
+.PHONY : components/core/src/pcm_playback_interruption.c.i
+
+components/core/src/pcm_playback_interruption.s: components/core/src/pcm_playback_interruption.c.s
+.PHONY : components/core/src/pcm_playback_interruption.s
+
+# target to generate assembly for a file
+components/core/src/pcm_playback_interruption.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.s
+.PHONY : components/core/src/pcm_playback_interruption.c.s
 
 components/core/src/pcm_uplink_conductor.o: components/core/src/pcm_uplink_conductor.c.o
 .PHONY : components/core/src/pcm_uplink_conductor.o
@@ -1968,6 +2042,30 @@ tests/aec_capture_bridge_test.s: tests/aec_capture_bridge_test.c.s
 tests/aec_capture_bridge_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-capture-bridge-test.dir/build.make CMakeFiles/iterate-kit-aec-capture-bridge-test.dir/tests/aec_capture_bridge_test.c.s
 .PHONY : tests/aec_capture_bridge_test.c.s
+
+tests/aec_signal_window_test.o: tests/aec_signal_window_test.c.o
+.PHONY : tests/aec_signal_window_test.o
+
+# target to build an object file
+tests/aec_signal_window_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-signal-window-test.dir/build.make CMakeFiles/iterate-kit-aec-signal-window-test.dir/tests/aec_signal_window_test.c.o
+.PHONY : tests/aec_signal_window_test.c.o
+
+tests/aec_signal_window_test.i: tests/aec_signal_window_test.c.i
+.PHONY : tests/aec_signal_window_test.i
+
+# target to preprocess a source file
+tests/aec_signal_window_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-signal-window-test.dir/build.make CMakeFiles/iterate-kit-aec-signal-window-test.dir/tests/aec_signal_window_test.c.i
+.PHONY : tests/aec_signal_window_test.c.i
+
+tests/aec_signal_window_test.s: tests/aec_signal_window_test.c.s
+.PHONY : tests/aec_signal_window_test.s
+
+# target to generate assembly for a file
+tests/aec_signal_window_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-signal-window-test.dir/build.make CMakeFiles/iterate-kit-aec-signal-window-test.dir/tests/aec_signal_window_test.c.s
+.PHONY : tests/aec_signal_window_test.c.s
 
 tests/atomic_test.o: tests/atomic_test.c.o
 .PHONY : tests/atomic_test.o
@@ -2668,6 +2766,30 @@ tests/pcm_lane_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-lane-test.dir/build.make CMakeFiles/iterate-kit-pcm-lane-test.dir/tests/pcm_lane_test.c.s
 .PHONY : tests/pcm_lane_test.c.s
 
+tests/pcm_playback_interruption_test.o: tests/pcm_playback_interruption_test.c.o
+.PHONY : tests/pcm_playback_interruption_test.o
+
+# target to build an object file
+tests/pcm_playback_interruption_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-playback-interruption-test.dir/build.make CMakeFiles/iterate-kit-pcm-playback-interruption-test.dir/tests/pcm_playback_interruption_test.c.o
+.PHONY : tests/pcm_playback_interruption_test.c.o
+
+tests/pcm_playback_interruption_test.i: tests/pcm_playback_interruption_test.c.i
+.PHONY : tests/pcm_playback_interruption_test.i
+
+# target to preprocess a source file
+tests/pcm_playback_interruption_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-playback-interruption-test.dir/build.make CMakeFiles/iterate-kit-pcm-playback-interruption-test.dir/tests/pcm_playback_interruption_test.c.i
+.PHONY : tests/pcm_playback_interruption_test.c.i
+
+tests/pcm_playback_interruption_test.s: tests/pcm_playback_interruption_test.c.s
+.PHONY : tests/pcm_playback_interruption_test.s
+
+# target to generate assembly for a file
+tests/pcm_playback_interruption_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-playback-interruption-test.dir/build.make CMakeFiles/iterate-kit-pcm-playback-interruption-test.dir/tests/pcm_playback_interruption_test.c.s
+.PHONY : tests/pcm_playback_interruption_test.c.s
+
 tests/pcm_realtime_fault_harness_test.o: tests/pcm_realtime_fault_harness_test.c.o
 .PHONY : tests/pcm_realtime_fault_harness_test.o
 
@@ -3112,6 +3234,7 @@ help:
 	@echo "... capnweb"
 	@echo "... capnweb-native-peer"
 	@echo "... iterate-kit-aec-capture-bridge-test"
+	@echo "... iterate-kit-aec-signal-window-test"
 	@echo "... iterate-kit-atomic-test"
 	@echo "... iterate-kit-audio-intent-reconciler-test"
 	@echo "... iterate-kit-audio-test"
@@ -3141,6 +3264,7 @@ help:
 	@echo "... iterate-kit-pcm-clock-playback-test"
 	@echo "... iterate-kit-pcm-generation-fence-test"
 	@echo "... iterate-kit-pcm-lane-test"
+	@echo "... iterate-kit-pcm-playback-interruption-test"
 	@echo "... iterate-kit-pcm-realtime-fault-harness-test"
 	@echo "... iterate-kit-pcm-uplink-conductor-test"
 	@echo "... iterate-kit-pcm-uplink-sender-test"
@@ -3200,6 +3324,9 @@ help:
 	@echo "... components/core/src/aec_capture_bridge.o"
 	@echo "... components/core/src/aec_capture_bridge.i"
 	@echo "... components/core/src/aec_capture_bridge.s"
+	@echo "... components/core/src/aec_signal_window.o"
+	@echo "... components/core/src/aec_signal_window.i"
+	@echo "... components/core/src/aec_signal_window.s"
 	@echo "... components/core/src/audio.o"
 	@echo "... components/core/src/audio.i"
 	@echo "... components/core/src/audio.s"
@@ -3233,6 +3360,9 @@ help:
 	@echo "... components/core/src/pcm_lane.o"
 	@echo "... components/core/src/pcm_lane.i"
 	@echo "... components/core/src/pcm_lane.s"
+	@echo "... components/core/src/pcm_playback_interruption.o"
+	@echo "... components/core/src/pcm_playback_interruption.i"
+	@echo "... components/core/src/pcm_playback_interruption.s"
 	@echo "... components/core/src/pcm_uplink_conductor.o"
 	@echo "... components/core/src/pcm_uplink_conductor.i"
 	@echo "... components/core/src/pcm_uplink_conductor.s"
@@ -3305,6 +3435,9 @@ help:
 	@echo "... tests/aec_capture_bridge_test.o"
 	@echo "... tests/aec_capture_bridge_test.i"
 	@echo "... tests/aec_capture_bridge_test.s"
+	@echo "... tests/aec_signal_window_test.o"
+	@echo "... tests/aec_signal_window_test.i"
+	@echo "... tests/aec_signal_window_test.s"
 	@echo "... tests/atomic_test.o"
 	@echo "... tests/atomic_test.i"
 	@echo "... tests/atomic_test.s"
@@ -3392,6 +3525,9 @@ help:
 	@echo "... tests/pcm_lane_test.o"
 	@echo "... tests/pcm_lane_test.i"
 	@echo "... tests/pcm_lane_test.s"
+	@echo "... tests/pcm_playback_interruption_test.o"
+	@echo "... tests/pcm_playback_interruption_test.i"
+	@echo "... tests/pcm_playback_interruption_test.s"
 	@echo "... tests/pcm_realtime_fault_harness_test.o"
 	@echo "... tests/pcm_realtime_fault_harness_test.i"
 	@echo "... tests/pcm_realtime_fault_harness_test.s"

@@ -1,7 +1,9 @@
 import { isKitDeviceId } from "./device-id.ts";
 
 export type KitVoiceMode = "grok" | "tone";
+export type KitAudioMode = "full-duplex-aec" | "push-to-talk";
 export const KIT_DEVICE_ID_HEADER = "x-iterate-kit-device-id";
+export const KIT_AUDIO_MODE_HEADER = "x-iterate-kit-audio-mode";
 
 export interface KitVoiceRouteDependencies {
   handlePcm(request: Request): Promise<Response>;
@@ -103,6 +105,19 @@ export function readKitDeviceIdentity(request: Request): string | null {
     return null;
   }
   return deviceId;
+}
+
+/**
+ * Reads the immutable turn policy negotiated by firmware for this PCM socket.
+ *
+ * Device ids identify capability children; they must never double as an audio
+ * policy switch. Keeping this a closed wire union makes unknown/new firmware
+ * fail the handshake visibly instead of letting one side treat a zero-length
+ * frame as a PTT commit while the other expects provider-owned server VAD.
+ */
+export function readKitAudioMode(request: Request): KitAudioMode | null {
+  const mode = request.headers.get(KIT_AUDIO_MODE_HEADER);
+  return mode === "push-to-talk" || mode === "full-duplex-aec" ? mode : null;
 }
 
 function sameAsciiSecret(candidate: string, expected: string): boolean {

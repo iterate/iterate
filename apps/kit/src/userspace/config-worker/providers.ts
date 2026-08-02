@@ -39,6 +39,7 @@ export interface GrokRealtimeVoiceOptions {
   model?: string;
   onStage?: (stage: GrokRealtimeVoiceStage) => void;
   sampleRateHz: number;
+  turnDetection: "manual" | "server-vad";
   voice?: string;
 }
 
@@ -389,14 +390,16 @@ export async function connectGrokRealtimeVoice(
            */
           keep_context: true,
           /*
-           * This userspace app serves a physical PTT device. Keeping manual
-           * turn detection unconditional makes it impossible for a future
-           * caller to silently re-enable server VAD without also redesigning
-           * the two-button firmware contract and its interruption evidence.
+           * The authenticated firmware handshake chooses this once per PCM
+           * generation. Manual PTT owns explicit commit markers; continuous
+           * AEC delegates speech boundaries and natural barge-in to xAI. Do
+           * not infer this from a device slug: that would split the shared
+           * StackChan/HAVPE path and conceal firmware/worker disagreement.
            */
           tools: [
             {
-              description: "Change the physical M5StickS3 display background to red or green.",
+              description:
+                "Change the active Iterate Kit device display background to red or green.",
               name: "changeColour",
               parameters: {
                 additionalProperties: false,
@@ -409,7 +412,7 @@ export async function connectGrokRealtimeVoice(
               type: "function",
             },
           ],
-          turn_detection: { type: null },
+          turn_detection: providerTurnDetection(options.turnDetection),
           voice: options.voice ?? "eve",
         },
       }),
@@ -420,6 +423,40 @@ export async function connectGrokRealtimeVoice(
     socket.close(1000, "Grok connection setup failed.");
     throw error;
   }
+}
+
+function providerTurnDetection(mode: GrokRealtimeVoiceOptions["turnDetection"]) {
+  if (mode === "manual") return { type: null } as const;
+  if (mode === "server-vad") {
+    /*
+     * xAI defaults `threshold` to 0.85. A physical CoreS3 measurement showed
+     * the AEC-clean Mac prompt at roughly 2,200/32,767 peak while preserving
+     * its near-field energy, yet that default emitted no speech-start event.
+     * Lowering the provider policy is preferable to multiplying every sample
+     * in firmware: it preserves AEC headroom, avoids clipping loud nearby
+     * speech, and leaves one provider-owned tuning point for every continuous
+     * AEC device. The one-second tail favors complete conversational turns;
+     * 400 ms of prefix protects the first phoneme at this lower threshold.
+     */
+    return {
+      prefix_padding_ms: 400,
+      silence_duration_ms: 1_000,
+      /*
+       * This is a measured hardware calibration, not an arbitrary departure
+       * from xAI's default. A production StackChan run at 0.5 delivered 4,930
+       * current clean-AEC frames and a 12,670 peak yet produced no VAD edge.
+       * Start at 0.2—still above xAI's documented 0.1 minimum—before considering
+     * firmware gain, which would also amplify residual echo and background.
+     * The next production run at 0.2 retained all three seconds of clean AEC
+     * speech in the device signal window, but xAI closed the VAD item after
+     * only "Reply exactly". Use the documented 0.1 floor so the provider owns
+     * that sensitivity without perturbing the shared hardware/DSP samples.
+     */
+      threshold: 0.1,
+      type: "server_vad",
+    } as const;
+  }
+  throw new Error(`Unsupported Grok turn detection mode: ${String(mode)}`);
 }
 
 function nativeSocketPair(): AcceptedSocketPair {

@@ -3,6 +3,7 @@ import {
   authenticateProjectBearer,
   handleKitVoiceRequest,
   loadProjectBearerCredential,
+  readKitAudioMode,
   readKitDeviceIdentity,
   type KitVoiceRouteDependencies,
 } from "./routes.ts";
@@ -106,6 +107,24 @@ describe("kit voice userspace routes", () => {
       const headers = new Headers();
       if (value !== null) headers.set("x-iterate-kit-device-id", value);
       expect(readKitDeviceIdentity(new Request("https://kit.invalid/pcm", { headers }))).toBeNull();
+    }
+  });
+
+  test("accepts only the two firmware audio policies on the PCM upgrade", () => {
+    for (const mode of ["push-to-talk", "full-duplex-aec"] as const) {
+      expect(
+        readKitAudioMode(
+          new Request("https://kit.invalid/pcm", {
+            headers: { "x-iterate-kit-audio-mode": mode },
+          }),
+        ),
+      ).toBe(mode);
+    }
+
+    for (const mode of [null, "", "server-vad", "full_duplex_aec", "PUSH-TO-TALK"]) {
+      const headers = new Headers();
+      if (mode !== null) headers.set("x-iterate-kit-audio-mode", mode);
+      expect(readKitAudioMode(new Request("https://kit.invalid/pcm", { headers }))).toBeNull();
     }
   });
 

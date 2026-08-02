@@ -14,6 +14,7 @@ import { flashLocalFirmware } from "./flash.ts";
 import { installUserspaceWorkerFromCli } from "./install-userspace-worker.ts";
 import { proveProductionM5StickS3Grok } from "./prove-production-m5sticks3-grok.ts";
 import { proveProductionM5StickS3Tone } from "./prove-production-m5sticks3-tone.ts";
+import { proveProductionStackChanGrok } from "./prove-production-stackchan-grok.ts";
 
 const executeFile = promisify(execFile);
 const defaultPackageDirectory = fileURLToPath(new URL("../", import.meta.url));
@@ -174,11 +175,10 @@ export async function proveProductionGrokFromDevice(
     return { ...result, provenance: plan.provenance };
   }
 
-  const result = await proveProductionM5StickS3Grok(
-    plan.grokProofArgs,
-    proofEnvironment,
-    plan.provenance,
-  );
+  const result =
+    options.deviceId === "stackchan"
+      ? await proveProductionStackChanGrok(plan.grokProofArgs, proofEnvironment, plan.provenance)
+      : await proveProductionM5StickS3Grok(plan.grokProofArgs, proofEnvironment, plan.provenance);
   return { ...result, provenance: plan.provenance };
 }
 

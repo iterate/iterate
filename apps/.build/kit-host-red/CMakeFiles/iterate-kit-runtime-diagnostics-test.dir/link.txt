@@ -1,1 +1,1 @@
-/usr/bin/cc -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-runtime-diagnostics-test.dir/tests/runtime_diagnostics_test.c.o" -o iterate-kit-runtime-diagnostics-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a
+/usr/bin/cc -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-runtime-diagnostics-test.dir/tests/runtime_diagnostics_test.c.o" -o iterate-kit-runtime-diagnostics-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a

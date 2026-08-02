@@ -1,0 +1,110 @@
+{
+  "assessment": {
+    "acceptance": "failed",
+    "boundaryWordOverage": 0,
+    "normalizedMicrophoneTranscript": "i ll change the color to green and say the exact phrase",
+    "normalizedProviderTranscript": "i ll change the color to green and say the exact phrase",
+    "passed": false,
+    "reasons": [
+      "The response maximum RMS was only 1.3835475605241558x the ambient maximum; expected at least 2.5x.",
+      "The causal response contained 0 windows above the relative ambient threshold; expected at least 3 for provisional acceptance (the stricter follow-up gate remains 4)."
+    ],
+    "relativeActiveWindowDeficit": 4,
+    "responseToBaselineMaximumRmsRatio": 1.3835475605241558
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 146.75314093742594,
+    "activeWindowCount": 0,
+    "passed": false,
+    "reasons": [
+      "The causal response contained 0 active 20 ms windows; expected at least 4."
+    ]
+  },
+  "microphoneStt": {
+    "durationSeconds": 5.659,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"74a25936-2093-4417-9841-4f4b0a20bb21\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"I'll change the\",\"words\":[{\"text\":\"I'll\",\"start\":0.912,\"end\":1.014},{\"text\":\"change\",\"start\":1.014,\"end\":1.338},{\"text\":\"the\",\"start\":1.358,\"end\":1.419}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"color to green and save the image\",\"words\":[{\"text\":\"color\",\"start\":1.541,\"end\":1.743},{\"text\":\"to\",\"start\":1.764,\"end\":1.824},{\"text\":\"green\",\"start\":1.905,\"end\":2.23},{\"text\":\"and\",\"start\":2.372,\"end\":2.473},{\"text\":\"save\",\"start\":2.534,\"end\":2.736},{\"text\":\"the\",\"start\":2.736,\"end\":2.818},{\"text\":\"image\",\"start\":2.818,\"end\":2.98}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\".\",\"words\":[{\"text\":\".\",\"start\":3.0,\"end\":4.5}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"I'll change the color to green and say the exact phrase.\",\"words\":[{\"text\":\"I'll\",\"start\":0.903,\"end\":1.003},{\"text\":\"change\",\"start\":1.023,\"end\":1.324},{\"text\":\"the\",\"start\":1.364,\"end\":1.445},{\"text\":\"color\",\"start\":1.465,\"end\":1.726},{\"text\":\"to\",\"start\":1.766,\"end\":1.826},{\"text\":\"green\",\"start\":1.906,\"end\":2.227},{\"text\":\"and\",\"start\":2.368,\"end\":2.468},{\"text\":\"say\",\"start\":2.548,\"end\":2.709},{\"text\":\"the\",\"start\":2.749,\"end\":2.849},{\"text\":\"exact\",\"start\":2.91,\"end\":3.331},{\"text\":\"phrase.\",\"start\":3.451,\"end\":3.913}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":5.659,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":5.659}"
+    ],
+    "text": "I'll change the color to green and say the exact phrase.",
+    "words": [
+      {
+        "text": "I'll",
+        "start": 0.903,
+        "end": 1.003
+      },
+      {
+        "text": "change",
+        "start": 1.023,
+        "end": 1.324
+      },
+      {
+        "text": "the",
+        "start": 1.364,
+        "end": 1.445
+      },
+      {
+        "text": "color",
+        "start": 1.465,
+        "end": 1.726
+      },
+      {
+        "text": "to",
+        "start": 1.766,
+        "end": 1.826
+      },
+      {
+        "text": "green",
+        "start": 1.906,
+        "end": 2.227
+      },
+      {
+        "text": "and",
+        "start": 2.368,
+        "end": 2.468
+      },
+      {
+        "text": "say",
+        "start": 2.548,
+        "end": 2.709
+      },
+      {
+        "text": "the",
+        "start": 2.749,
+        "end": 2.849
+      },
+      {
+        "text": "exact",
+        "start": 2.91,
+        "end": 3.331
+      },
+      {
+        "text": "phrase.",
+        "start": 3.451,
+        "end": 3.913
+      }
+    ]
+  },
+  "providerOutputTranscript": "I'll change the color to green and say the exact phrase.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 0,
+      "clippedSampleCount": 0,
+      "maximumRms": 81.21598005729332,
+      "p50Rms": 19.75440351752827,
+      "p95Rms": 31.865635879423465,
+      "p99Rms": 52.016894290861565,
+      "sampleCount": 271616,
+      "windowCount": 283,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 146.75314093742594
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

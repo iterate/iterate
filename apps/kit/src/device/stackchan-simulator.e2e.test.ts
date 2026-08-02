@@ -6,7 +6,11 @@ import { fileURLToPath } from "node:url";
 import { RpcSession, type RpcStub, type RpcTransport } from "@iterate-com/capnweb";
 import { beforeAll, expect, test } from "vitest";
 import { encodeDeviceConfiguration, type DeviceConfiguration } from "../firmware/config-image.ts";
-import type { KitDeviceEvent, KitPlaybackMetrics } from "./kit-device-contract.ts";
+import type {
+  KitAecMetrics,
+  KitDeviceEvent,
+  KitPlaybackMetrics,
+} from "./kit-device-contract.ts";
 import type { M5StickS3 } from "./m5sticks3-contract.ts";
 import type { StackChan, StackChanMetrics } from "./stackchan-contract.ts";
 
@@ -257,8 +261,14 @@ test("the real embedded capability layer exposes the StackChan surface", async (
   await using fixture = new StackChanSimulatorFixture();
   const { stackchan } = fixture;
   const description = await stackchan.__describe();
-  expect(description.instructions).not.toMatch(/microphone|speaker|AEC/i);
+  /*
+   * Audio is intentionally described but not mounted as fake PCM RPCs: media
+   * remains on the independent realtime WebSocket while Cap'n Web exposes
+   * lifecycle, diagnostics, and the aligned AEC measurement view.
+   */
+  expect(description.instructions).toMatch(/full-duplex AEC.*separate realtime WebSocket/i);
   expect(description.children).toMatchObject({
+    subscribeToAecMetrics: expect.any(String),
     subscribeToMetrics: expect.any(String),
     renderOnScreen: expect.any(String),
     servos: expect.any(String),
@@ -570,6 +580,45 @@ test("subscribeToMetrics calls a remote callback from the C peer", async () => {
   expect(metrics.uptimeMs).toBeGreaterThanOrEqual(0);
 });
 
+test("subscribeToAecMetrics carries one aligned signal window through the C peer", async () => {
+  await using fixture = new StackChanSimulatorFixture();
+  const { stackchan } = fixture;
+  const firstMetric = Promise.withResolvers<KitAecMetrics>();
+  /*
+   * This is a capability-boundary regression, not an acoustic simulation. It
+   * proves the target-specific view is discoverable and that all three aligned
+   * signal channels survive the bounded C serializer and callback transport.
+   * Physical suppression claims still require the CoreS3 speaker/microphone
+   * rig because a host fake cannot model enclosure coupling or ESP-SR.
+   */
+  await stackchan.subscribeToAecMetrics((metrics) => firstMetric.resolve(metrics));
+
+  const metrics = await Promise.race([
+    firstMetric.promise,
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error("AEC metrics callback did not arrive")), 2_000),
+    ),
+  ]);
+  expect(metrics).toMatchObject({
+    schemaVersion: 1,
+    sampleStride: 8,
+    sampledSamples: 2_000,
+    nearPeak: 12_000,
+    referencePeak: 10_000,
+    cleanPeak: 1_500,
+    nearMeanAbsolute: 2_400,
+    referenceMeanAbsolute: 2_000,
+    cleanMeanAbsolute: 300,
+    lifetimeFramesProcessed: 31,
+    lifetimeRecreates: 1,
+    lifetimeRecreateFailures: 0,
+    lastCaptureToUplinkUs: 3_100,
+    maximumCaptureToUplinkUs: 3_500,
+    lifetimeSignalMeasurementFailures: 0,
+  });
+  expect(metrics.producedAtMs).toBeGreaterThanOrEqual(metrics.windowStartedAtMs);
+});
+
 test("subscribeToPlaybackMetrics carries the bounded detailed C view end to end", async () => {
   await using fixture = new M5StickS3SimulatorFixture();
   const { m5sticks3 } = fixture;
@@ -644,7 +693,7 @@ test("getDiagnostics carries one retained control snapshot through the C peer", 
       pcmWebsocketDisconnects: 0,
       pcmWebsocketErrors: 0,
     },
-    schemaVersion: 3,
+    schemaVersion: 4,
   });
 });
 
@@ -667,7 +716,7 @@ test("sequential retained diagnostic replies do not exhaust the C Cap'n Web sess
    */
   for (let cycle = 0; cycle < 512; cycle++) {
     const diagnostics = await m5sticks3.getDiagnostics();
-    expect(diagnostics.schemaVersion).toBe(3);
+    expect(diagnostics.schemaVersion).toBe(4);
   }
 });
 

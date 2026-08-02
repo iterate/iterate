@@ -1,1 +1,1 @@
-/usr/bin/c++ -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-release-owned-handle-test.dir/tests/release_owned_handle_test.cpp.o" -o iterate-kit-release-owned-handle-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a
+/usr/bin/c++ -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-release-owned-handle-test.dir/tests/release_owned_handle_test.cpp.o" -o iterate-kit-release-owned-handle-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a

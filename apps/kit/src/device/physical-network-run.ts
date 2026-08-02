@@ -352,6 +352,10 @@ export function buildPhysicalNetworkRunArtifact(
       pcm: {
         connected: network.pcmWebsocketConnections > network.pcmWebsocketDisconnects,
         disconnectCount: network.pcmWebsocketDisconnects,
+        lowerTransportFailureCount:
+          observation.diagnostics.schemaVersion === 4
+            ? observation.diagnostics.network.pcmTransportFailureIncidents
+            : undefined,
         reconnectCount: network.pcmWebsocketConnections,
         transportErrorCount: network.pcmWebsocketErrors,
       },
@@ -439,6 +443,13 @@ export function buildPhysicalNetworkRunArtifact(
             ),
             pcmCloseEvents.length,
           ),
+          lowerTransportFailureCount:
+            firstDiagnostics.schemaVersion === 4 && finalDiagnostics.schemaVersion === 4
+              ? counterDelta(
+                  finalDiagnostics.network.pcmTransportFailureIncidents,
+                  firstDiagnostics.network.pcmTransportFailureIncidents,
+                )
+              : undefined,
           receivedBytes: options.pcmEvidence.progress.workerToDeviceBytes,
           reconnectCount: Math.max(
             counterDelta(

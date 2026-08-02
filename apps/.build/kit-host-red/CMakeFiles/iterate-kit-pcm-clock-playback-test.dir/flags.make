@@ -6,7 +6,7 @@ C_DEFINES =
 
 C_INCLUDES = -I/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/stackchan/main -I/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/include -I/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/vendor/capnweb/include
 
-C_FLAGSarm64 = -g -arch arm64 -UNDEBUG -Wall -Wextra -Werror -Wpedantic
+C_FLAGSarm64 = -UNDEBUG -g -arch arm64 -UNDEBUG -Wall -Wextra -Werror -Wpedantic
 
-C_FLAGS = -g -arch arm64 -UNDEBUG -Wall -Wextra -Werror -Wpedantic
+C_FLAGS = -UNDEBUG -g -arch arm64 -UNDEBUG -Wall -Wextra -Werror -Wpedantic
 

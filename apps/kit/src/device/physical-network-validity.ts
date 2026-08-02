@@ -43,6 +43,8 @@ export interface SocketCounterSample {
   capturedAtMonotonicMs: number;
   connected: boolean;
   disconnectCount: number;
+  /** Exact platform-level connect/read/write incidents when the device exposes schema v4. */
+  lowerTransportFailureCount?: number;
   reconnectCount: number;
   transportErrorCount: number;
 }
@@ -77,6 +79,7 @@ export type DnsAndConnectEvidence =
 export interface TerminalPcmSocketAggregate {
   coverage: PhysicalAudioInterval;
   disconnectCount: number;
+  lowerTransportFailureCount?: number;
   receivedBytes: number;
   reconnectCount: number;
   sentBytes: number;
@@ -336,6 +339,18 @@ export function classifyPhysicalNetworkValidity(
             `to ${sample[counter]}.`,
         });
       }
+      if (
+        baseline?.lowerTransportFailureCount !== undefined &&
+        sample.lowerTransportFailureCount !== undefined &&
+        sample.lowerTransportFailureCount > baseline.lowerTransportFailureCount
+      ) {
+        networkInvalidReasons.push({
+          code: `${lane}-socket-lower-transport-failure`,
+          message:
+            `${lane} socket lower-transport failure count increased from ` +
+            `${baseline.lowerTransportFailureCount} to ${sample.lowerTransportFailureCount}.`,
+        });
+      }
     }
   }
 
@@ -423,6 +438,15 @@ export function classifyPhysicalNetworkValidity(
       networkInvalidReasons.push({
         code: `terminal-pcm-socket-${label.replace(" ", "-")}`,
         message: `Terminal PCM socket recorded ${count} ${label} incident(s).`,
+      });
+    }
+    if ((evidence.terminalPcmSocket.lowerTransportFailureCount ?? 0) > 0) {
+      networkInvalidReasons.push({
+        code: "terminal-pcm-socket-lower-transport-failure",
+        message:
+          "Terminal PCM socket recorded " +
+          `${evidence.terminalPcmSocket.lowerTransportFailureCount} ` +
+          "lower-transport incident(s).",
       });
     }
   }

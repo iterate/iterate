@@ -97,10 +97,11 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       );
     }
     return await tracing.enterSpan("dynamic_worker.stateful.target_fetch", async (span) => {
-      const response = withWorkerCommit(
+      const targetResponse = withWorkerCommit(
         await (loaded.target as Fetcher).fetch(taken.request),
         loaded.commitOid,
       );
+      const response = this.#retainFacetWebSocket(targetResponse);
       span.setAttribute("http.response.status_code", response.status);
       return response;
     });
@@ -216,6 +217,90 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
    * converges on current source and a rebuilt class that newly accepts
    * identity gets it without waiting for an eviction. */
   #identityDelivered: string | undefined;
+
+  /**
+   * WebSockets accepted by a child facet do not attach to this outer Durable
+   * Object. Passing the child's 101 Response straight through therefore leaves
+   * the outer object idle: Cloudflare can evict it while the child socket is
+   * still live. A later capability RPC starts a new outer incarnation, whose
+   * attempt to resolve the same named facet retires the old facet and cuts off
+   * the application socket. That exact sequence reset production voice calls
+   * whenever diagnostics invoked a read-only method on the worker.
+   *
+   * Terminate a second, standard WebSocket at the outer object and relay each
+   * frame to the facet's socket. `server.accept()` is deliberate rather than
+   * the hibernation API: both the relay closures and the hosted worker's
+   * provider connection are in-memory session state, so allowing this outer
+   * object to hibernate would recreate the same split lifetime under a less
+   * obvious name. The relay adds no application queue; if either runtime send
+   * buffer refuses a frame, both sides close and the client performs its normal
+   * bounded reconnect instead of accumulating stale data.
+   */
+  #retainFacetWebSocket(response: Response): Response {
+    const facetSocket = response.webSocket;
+    if (facetSocket === null) return response;
+
+    const [client, outerSocket] = Object.values(new WebSocketPair());
+    let closed = false;
+    const closeBoth = (code: number, reason: string) => {
+      if (closed) return;
+      closed = true;
+      for (const socket of [facetSocket, outerSocket]) {
+        try {
+          socket.close(code, reason);
+        } catch {
+          // One endpoint can already be closing when its peer reports the
+          // terminal event. The other close remains the authoritative result.
+        }
+      }
+    };
+    const forward = (destination: WebSocket, event: MessageEvent) => {
+      try {
+        destination.send(event.data);
+      } catch {
+        closeBoth(1011, "Stateful worker WebSocket relay failed.");
+      }
+    };
+    const forwardClose = (event: CloseEvent) => {
+      const code =
+        event.code === 1000 ||
+        (event.code >= 1001 && event.code <= 1014 && ![1004, 1005, 1006].includes(event.code)) ||
+        (event.code >= 3000 && event.code <= 4999)
+          ? event.code
+          : 1011;
+      closeBoth(code, event.reason || "Stateful worker WebSocket closed.");
+    };
+
+    outerSocket.addEventListener("message", (event) => forward(facetSocket, event));
+    facetSocket.addEventListener("message", (event) => forward(outerSocket, event));
+    outerSocket.addEventListener("close", forwardClose);
+    facetSocket.addEventListener("close", forwardClose);
+    outerSocket.addEventListener("error", () =>
+      closeBoth(1011, "Stateful worker client WebSocket failed."),
+    );
+    facetSocket.addEventListener("error", () =>
+      closeBoth(1011, "Stateful worker facet WebSocket failed."),
+    );
+
+    // Workers default received binary data to Blob. A Blob is not a supported
+    // `WebSocket.send()` payload in workerd's server API, and relaying it can
+    // stringify a PCM frame into a text frame. Force both relay receivers to
+    // expose ArrayBuffers so binary opcode and bytes survive both directions.
+    outerSocket.binaryType = "arraybuffer";
+    facetSocket.binaryType = "arraybuffer";
+
+    // Attach listeners before accept(): workerd buffers messages on each
+    // pending endpoint, so early application frames cannot race registration.
+    outerSocket.accept();
+    facetSocket.accept();
+
+    return new Response(null, {
+      headers: response.headers,
+      status: 101,
+      statusText: response.statusText,
+      webSocket: client,
+    });
+  }
 
   async #facet(
     ref: StatefulDynamicWorkerRef,

@@ -1,0 +1,43 @@
+/*
+ * Read-only body for:
+ *
+ *   pnpm cli itx run --context <project-id> --file <this-file> --vars <json>
+ *
+ * It intentionally uses the production OS admin connection established by
+ * the normal apps/os CLI. Incident collection must not depend on retaining a
+ * second copy of the device's project bearer secret on the development Mac,
+ * and it must never install, kill, or remount the worker it is inspecting.
+ */
+using worker = itx.workers.get(vars.workerRef);
+using root = itx.capabilityHosts.get("/");
+using stream = itx.streams.get(vars.streamPath);
+
+const head = await stream.getEventPage({
+  afterOffset: Number.MAX_SAFE_INTEGER,
+  eventTypes: [vars.eventType],
+  limit: 1,
+});
+const events = await stream.getEvents({
+  afterOffset: Math.max(0, head.streamMaxOffset - 500),
+  eventTypes: [vars.eventType],
+  limit: 500,
+});
+
+const [metrics, deviceDiagnostics, repoLog] = await Promise.all([
+  worker.pcmMetrics(),
+  root.invokeCapability({
+    args: [],
+    path: ["kit", vars.deviceId, "getDiagnostics"],
+  }),
+  itx.repo.log({ limit: 12 }),
+]);
+
+return {
+  collectedAt: new Date().toISOString(),
+  deviceDiagnostics,
+  deviceId: vars.deviceId,
+  events,
+  metrics,
+  repoLog,
+  streamHead: head.streamMaxOffset,
+};
