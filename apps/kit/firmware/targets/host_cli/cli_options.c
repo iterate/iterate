@@ -15,6 +15,8 @@ enum {
 #define CLI_OPTIONS_DEFAULT_NAME "host"
 #define CLI_OPTIONS_DEFAULT_SPEAKER_WAV "iterate-kit-playback.wav"
 #define CLI_OPTIONS_DEFAULT_REPORT_JSON "iterate-kit-report.json"
+/* Parts per thousand of real time; matches CLI_VIRTUAL_CLOCK_RATE_UNIT. */
+#define CLI_OPTIONS_DEFAULT_CLOCK_RATE 1000U
 
 /** What a flag does with the word after it. */
 enum cli_options_kind {
@@ -43,6 +45,26 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_MINUTES,
   CLI_OPTIONS_FIELD_BACK_OFFICE_EVERY,
   CLI_OPTIONS_FIELD_SPEAKER_PACE,
+  CLI_OPTIONS_FIELD_DEVICE,
+  CLI_OPTIONS_FIELD_SCHEDULE_OUT,
+  CLI_OPTIONS_FIELD_SCHEDULE_IN,
+  CLI_OPTIONS_FIELD_SCHEDULE_SEED,
+  CLI_OPTIONS_FIELD_CLOCK_RATE,
+  CLI_OPTIONS_FIELD_SEALED,
+  CLI_OPTIONS_FIELD_CPU_STALLS,
+  CLI_OPTIONS_FIELD_CPU_STALL_MS,
+  CLI_OPTIONS_FIELD_CLOCK_SKEWS,
+  CLI_OPTIONS_FIELD_CLOCK_SKEW_MS,
+  CLI_OPTIONS_FIELD_CLOCK_JITTER_MS,
+  CLI_OPTIONS_FIELD_WIRE_STALLS,
+  CLI_OPTIONS_FIELD_WIRE_STALL_MS,
+  CLI_OPTIONS_FIELD_WIRE_RESETS,
+  CLI_OPTIONS_FIELD_WIRE_THROTTLE,
+  CLI_OPTIONS_FIELD_FRAME_LOSS,
+  CLI_OPTIONS_FIELD_FRAME_DUPLICATE,
+  CLI_OPTIONS_FIELD_FRAME_REORDER,
+  CLI_OPTIONS_FIELD_MIC_SHORT,
+  CLI_OPTIONS_FIELD_MIC_CLIP,
   CLI_OPTIONS_FIELD_LIVE_AUDIO,
   CLI_OPTIONS_FIELD_LIVE_MIC,
   CLI_OPTIONS_FIELD_PUSH_TO_TALK,
@@ -122,6 +144,69 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    NULL,
    "  --speaker-pace FPS    Model a converter consuming FPS frames/second "
    "(0 disables; 50 is the device)\n"},
+  {"--device", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_DEVICE, NULL,
+   "  --device NAME         Wear a board's bounded sizes "
+   "(host-ideal, waveshare-s3-amoled)\n"},
+  {"--schedule-seed", CLI_OPTIONS_KIND_COUNT, CLI_OPTIONS_FIELD_SCHEDULE_SEED,
+   NULL,
+   "  --schedule-seed N     Draw this session's faults from N (0 draws "
+   "none)\n"},
+  {"--schedule-out", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_SCHEDULE_OUT,
+   NULL,
+   "  --schedule-out FILE   Write the schedule used, to attach to a bug\n"},
+  {"--schedule-in", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_SCHEDULE_IN,
+   NULL,
+   "  --schedule-in FILE    Replay a schedule verbatim, ignoring the "
+   "recipe\n"},
+  {"--sealed", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_SEALED, NULL,
+   "  --sealed              No host clock at all; a seed replays bit for "
+   "bit\n"},
+  {"--clock-rate", CLI_OPTIONS_KIND_COUNT, CLI_OPTIONS_FIELD_CLOCK_RATE, NULL,
+   "  --clock-rate N        Session ms per real ms, per thousand "
+   "(1000 is realtime)\n"},
+  {"--cpu-stalls-per-min", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_CPU_STALLS, NULL,
+   "  --cpu-stalls-per-min N   Preempt the loop N times a minute\n"},
+  {"--cpu-stall-max-ms", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_CPU_STALL_MS, NULL,
+   "  --cpu-stall-max-ms MS    Longest such stall\n"},
+  {"--clock-skews-per-min", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_CLOCK_SKEWS, NULL,
+   "  --clock-skews-per-min N  Step the clock backwards N times a minute\n"},
+  {"--clock-skew-max-ms", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_CLOCK_SKEW_MS, NULL,
+   "  --clock-skew-max-ms MS   Furthest such step\n"},
+  {"--clock-jitter-ms", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_CLOCK_JITTER_MS, NULL,
+   "  --clock-jitter-ms MS     Wander stamps by up to MS either way\n"},
+  {"--wire-stalls-per-min", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_WIRE_STALLS, NULL,
+   "  --wire-stalls-per-min N  Stop bytes moving N times a minute "
+   "(needs the proxy)\n"},
+  {"--wire-stall-max-ms", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_WIRE_STALL_MS, NULL,
+   "  --wire-stall-max-ms MS   Longest such stall\n"},
+  {"--wire-resets", CLI_OPTIONS_KIND_COUNT, CLI_OPTIONS_FIELD_WIRE_RESETS,
+   NULL, "  --wire-resets N          Sever the connection N times\n"},
+  {"--wire-throttle-fps", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_WIRE_THROTTLE, NULL,
+   "  --wire-throttle-fps FPS  Hold the downlink to FPS frames/second "
+   "(9 was measured)\n"},
+  {"--frame-loss-one-in", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_FRAME_LOSS, NULL,
+   "  --frame-loss-one-in N    Drop one delivered frame in N\n"},
+  {"--frame-duplicate-one-in", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_FRAME_DUPLICATE, NULL,
+   "  --frame-duplicate-one-in N  Deliver one frame in N twice\n"},
+  {"--frame-reorder-one-in", CLI_OPTIONS_KIND_COUNT,
+   CLI_OPTIONS_FIELD_FRAME_REORDER, NULL,
+   "  --frame-reorder-one-in N    Hold one frame in N back\n"},
+  {"--mic-short-one-in", CLI_OPTIONS_KIND_COUNT, CLI_OPTIONS_FIELD_MIC_SHORT,
+   NULL,
+   "  --mic-short-one-in N     Return a partial capture buffer one time in "
+   "N\n"},
+  {"--mic-clip", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_MIC_CLIP, NULL,
+   "  --mic-clip               Drive capture to full scale\n"},
   {"--report-json", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_REPORT_JSON,
    NULL,
    "  --report-json FILE    Unattended JSON report (default "
@@ -183,6 +268,31 @@ static void cli_options_fill_text(
 static void cli_options_fill_defaults(struct cli_options *out);
 
 /* Rejects an options set nothing could act on. */
+
+/**
+ * Whether `name` can be a capability mount segment.
+ *
+ * ORIGINATING FAILURE. The name becomes `kit.<name>`, and a hyphen in it is
+ * rejected by the platform as an invalid argument. The rig did not find out
+ * until the Cap'n Web mount failed five seconds into the run, reporting
+ * `capnweb=-1` and a URL — nothing about names, nothing about which argument.
+ * A shell wrapper passed `mac-$STAMP` for weeks on that basis and had never
+ * once connected. Refusing it here costs one comparison and names the flag.
+ */
+static bool cli_options_name_is_mountable(const char *name)
+{
+  size_t index;
+  assert(name != NULL);
+  if (name[0] == '\0') return false;
+  for (index = 0U; name[index] != '\0'; index++) {
+    const char c = name[index];
+    const bool lower = c >= 'a' && c <= 'z';
+    const bool digit = c >= '0' && c <= '9';
+    if (!lower && !digit && c != '_') return false;
+  }
+  return true;
+}
+
 static enum cli_options_status cli_options_check(
     const struct cli_options *out, char *problem, size_t problem_bytes);
 
@@ -325,6 +435,41 @@ static enum cli_options_status cli_options_apply(
       return cli_options_read_count(value, &out->back_office_every);
     case CLI_OPTIONS_FIELD_SPEAKER_PACE:
       return cli_options_read_count(value, &out->speaker_pace_fps);
+    case CLI_OPTIONS_FIELD_DEVICE: out->device = value; break;
+    case CLI_OPTIONS_FIELD_SCHEDULE_OUT: out->schedule_out = value; break;
+    case CLI_OPTIONS_FIELD_SCHEDULE_IN: out->schedule_in = value; break;
+    case CLI_OPTIONS_FIELD_SCHEDULE_SEED:
+      return cli_options_read_count(value, &out->schedule_seed);
+    case CLI_OPTIONS_FIELD_CLOCK_RATE:
+      return cli_options_read_count(value, &out->clock_rate);
+    case CLI_OPTIONS_FIELD_CPU_STALLS:
+      return cli_options_read_count(value, &out->cpu_stalls_per_minute);
+    case CLI_OPTIONS_FIELD_CPU_STALL_MS:
+      return cli_options_read_count(value, &out->cpu_stall_max_ms);
+    case CLI_OPTIONS_FIELD_CLOCK_SKEWS:
+      return cli_options_read_count(value, &out->clock_skews_per_minute);
+    case CLI_OPTIONS_FIELD_CLOCK_SKEW_MS:
+      return cli_options_read_count(value, &out->clock_skew_max_ms);
+    case CLI_OPTIONS_FIELD_CLOCK_JITTER_MS:
+      return cli_options_read_count(value, &out->clock_jitter_ms);
+    case CLI_OPTIONS_FIELD_WIRE_STALLS:
+      return cli_options_read_count(value, &out->wire_stalls_per_minute);
+    case CLI_OPTIONS_FIELD_WIRE_STALL_MS:
+      return cli_options_read_count(value, &out->wire_stall_max_ms);
+    case CLI_OPTIONS_FIELD_WIRE_RESETS:
+      return cli_options_read_count(value, &out->wire_resets);
+    case CLI_OPTIONS_FIELD_WIRE_THROTTLE:
+      return cli_options_read_count(value, &out->wire_throttle_fps);
+    case CLI_OPTIONS_FIELD_FRAME_LOSS:
+      return cli_options_read_count(value, &out->frame_loss_one_in);
+    case CLI_OPTIONS_FIELD_FRAME_DUPLICATE:
+      return cli_options_read_count(value, &out->frame_duplicate_one_in);
+    case CLI_OPTIONS_FIELD_FRAME_REORDER:
+      return cli_options_read_count(value, &out->frame_reorder_one_in);
+    case CLI_OPTIONS_FIELD_MIC_SHORT:
+      return cli_options_read_count(value, &out->mic_short_one_in);
+    case CLI_OPTIONS_FIELD_MIC_CLIP: out->mic_clip = true; break;
+    case CLI_OPTIONS_FIELD_SEALED: out->sealed = true; break;
     case CLI_OPTIONS_FIELD_LIVE_AUDIO: out->live_audio = true; break;
     case CLI_OPTIONS_FIELD_LIVE_MIC: out->live_mic = true; break;
     case CLI_OPTIONS_FIELD_PUSH_TO_TALK: out->push_to_talk = true; break;
@@ -426,12 +571,24 @@ static void cli_options_fill_defaults(struct cli_options *out)
   if (out->report_json == NULL) {
     out->report_json = CLI_OPTIONS_DEFAULT_REPORT_JSON;
   }
+  /*
+   * Realtime unless somebody asked otherwise. A zero here would mean "time
+   * does not pass", and every deadline in the process would wait forever for
+   * a stamp that never moves — a hang with no message, from a flag nobody set.
+   */
+  if (out->clock_rate == 0U) out->clock_rate = CLI_OPTIONS_DEFAULT_CLOCK_RATE;
 }
 
 static enum cli_options_status cli_options_check(
     const struct cli_options *out, char *problem, size_t problem_bytes)
 {
   assert(out != NULL);
+  if (out->name != NULL && !cli_options_name_is_mountable(out->name)) {
+    cli_options_note(
+        problem, problem_bytes,
+        "--name becomes the mount kit.<name>: use a-z, 0-9 or _ only");
+    return CLI_OPTIONS_ERR_INCOMPATIBLE;
+  }
   /*
    * The three credentials have no default because there is no safe one. A
    * CLI that picks a project to talk to is worse than a CLI that refuses.

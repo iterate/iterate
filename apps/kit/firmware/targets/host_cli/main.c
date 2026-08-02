@@ -31,6 +31,13 @@ enum {
   CLI_MAIN_RESTART_REPLY_MS = 400,
   CLI_MAIN_INITIAL_PLAYOUT_SEQUENCE = 1,
   CLI_MAIN_MS_PER_SECOND = 1000,
+  /*
+   * How long a schedule assumes a session lasts when nobody said. Episodes
+   * are scattered across this span, so a number far below the real run leaves
+   * the tail of it fault-free and a number far above it makes faults rare.
+   * An hour matches the longest run anybody has asked this rig for.
+   */
+  CLI_MAIN_DEFAULT_SESSION_MINUTES = 60,
   CLI_MAIN_NS_PER_MS = 1000000,
   CLI_MAIN_US_PER_SECOND = 1000000,
   CLI_MAIN_NS_PER_US = 1000,
@@ -245,6 +252,15 @@ static void cli_main_recycle_if_ready(
 static void cli_main_reexec_if_ready(
     struct cli_runtime *runtime, uint64_t now_ms);
 
+/* Points the process's one clock at the schedule. */
+static bool cli_main_arm_clock(struct cli_runtime *runtime);
+
+/* Draws this session's adversity and arms the clock with it. */
+static bool cli_main_init_harness(struct cli_runtime *runtime);
+
+/* Adopts a named board's bounded sizes. */
+static bool cli_main_init_profile(struct cli_runtime *runtime);
+
 /* Sleeps one bounded cooperative loop interval. */
 static void cli_main_sleep(void);
 
@@ -378,7 +394,13 @@ static void cli_main_explain_options(
     (void)fprintf(
         stderr, "--colleague-every must be a nonnegative integer\n");
   } else if (status == CLI_OPTIONS_ERR_INCOMPATIBLE) {
-    (void)fprintf(stderr, "--converse requires --utterance-dir\n");
+    /*
+     * Print what the parser actually found. This used to print a fixed
+     * sentence about --converse whatever the incompatibility was, so a bad
+     * --name was reported as a missing --utterance-dir and the operator went
+     * looking in the wrong place.
+     */
+    (void)fprintf(stderr, "%s\n", problem);
   } else {
     (void)fprintf(
         stderr, "project id, API key, and OS base URL are required; see --help\n");
@@ -507,6 +529,13 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
         "error", "cannot open speaker WAV: %s", runtime->options.speaker_wav);
     return false;
   }
+  /*
+   * Order matters. The profile decides the converter's rate and lead, and the
+   * harness decides what time itself will do, so both must be settled before
+   * anything samples a clock or offers a frame.
+   */
+  if (!cli_main_init_profile(runtime)) return false;
+  if (!cli_main_init_harness(runtime)) return false;
   if (!cli_main_init_converter(runtime)) return false;
   if (runtime->options.live_audio &&
       cli_audio_out_open(&runtime->live_out) != CLI_AUDIO_OUT_OK) {
@@ -519,12 +548,185 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
   return false;
 }
 
+/** Turn the command line's recipe knobs into a schedule recipe. */
+static struct cli_fault_recipe cli_main_recipe(
+    const struct cli_options *options, uint64_t session_ms)
+{
+  struct cli_fault_recipe recipe;
+  assert(options != NULL);
+  memset(&recipe, 0, sizeof(recipe));
+  recipe.session_ms = session_ms;
+  recipe.cpu_stalls_per_minute = options->cpu_stalls_per_minute;
+  recipe.cpu_stall_max_ms = options->cpu_stall_max_ms;
+  recipe.clock_skews_per_minute = options->clock_skews_per_minute;
+  recipe.clock_skew_max_ms = options->clock_skew_max_ms;
+  recipe.clock_jitter_ms = options->clock_jitter_ms;
+  recipe.wire_stalls_per_minute = options->wire_stalls_per_minute;
+  recipe.wire_stall_max_ms = options->wire_stall_max_ms;
+  recipe.wire_resets_per_session = options->wire_resets;
+  recipe.wire_throttle_fps = options->wire_throttle_fps;
+  recipe.frame_loss_one_in = options->frame_loss_one_in;
+  recipe.frame_duplicate_one_in = options->frame_duplicate_one_in;
+  recipe.frame_reorder_one_in = options->frame_reorder_one_in;
+  recipe.mic_short_one_in = options->mic_short_one_in;
+  recipe.mic_clip = options->mic_clip;
+  return recipe;
+}
+
+/** Read a schedule back from a file, so a failure can be replayed exactly. */
+static bool cli_main_load_schedule(
+    struct cli_fault_schedule *schedule, const char *path)
+{
+  enum cli_fault_schedule_status status;
+  FILE *file = fopen(path, "r");
+  assert(schedule != NULL && path != NULL);
+  if (file == NULL) {
+    cli_runtime_log("error", "cannot read schedule %s", path);
+    return false;
+  }
+  status = cli_fault_schedule_read_json(schedule, file);
+  (void)fclose(file);
+  if (status == CLI_FAULT_SCHEDULE_OK) return true;
+  cli_runtime_log(
+      "error", "schedule %s is %s", path,
+      cli_fault_schedule_status_name(status));
+  return false;
+}
+
+/** Write the schedule actually used, so it can be attached to a bug. */
+static void cli_main_save_schedule(
+    const struct cli_fault_schedule *schedule, const char *path)
+{
+  FILE *file;
+  assert(schedule != NULL && path != NULL);
+  file = fopen(path, "w");
+  if (file == NULL) {
+    cli_runtime_log("warn", "cannot write schedule %s", path);
+    return;
+  }
+  (void)cli_fault_schedule_write_json(schedule, file);
+  (void)fclose(file);
+}
+
+/**
+ * Draw this session's adversity, then arm the clock with it.
+ *
+ * The seed is logged FIRST, before anything can fail, because a truncated log
+ * from an overnight run must still carry the one number that reproduces it.
+ * It is logged last as well, by the report, since that is where anybody looks.
+ */
+static bool cli_main_init_harness(struct cli_runtime *runtime)
+{
+  const struct cli_options *options = &runtime->options;
+  uint64_t session_ms;
+  assert(runtime != NULL);
+
+  cli_fault_schedule_clear(&runtime->schedule);
+  session_ms = (uint64_t)((options->converse_minutes > 0.0
+                               ? options->converse_minutes
+                               : CLI_MAIN_DEFAULT_SESSION_MINUTES) *
+                          60000.0);
+  if (options->schedule_in != NULL) {
+    if (!cli_main_load_schedule(&runtime->schedule, options->schedule_in)) {
+      return false;
+    }
+  } else if (options->schedule_seed != 0U) {
+    const struct cli_fault_recipe recipe =
+        cli_main_recipe(options, session_ms);
+    const enum cli_fault_schedule_status status = cli_fault_schedule_generate(
+        &runtime->schedule, options->schedule_seed, &recipe);
+    if (status != CLI_FAULT_SCHEDULE_OK) {
+      cli_runtime_log(
+          "error", "cannot draw a schedule: %s",
+          cli_fault_schedule_status_name(status));
+      return false;
+    }
+  }
+  if (options->schedule_out != NULL) {
+    cli_main_save_schedule(&runtime->schedule, options->schedule_out);
+  }
+  if (!runtime->schedule.empty) {
+    cli_runtime_log(
+        "info", "schedule seed=%" PRIu64 " episodes=%zu sessionMs=%" PRIu64,
+        runtime->schedule.seed, runtime->schedule.episode_count,
+        runtime->schedule.session_ms);
+  }
+  return cli_main_arm_clock(runtime);
+}
+
+/** Point the process's one clock at the schedule, sealed or anchored. */
+static bool cli_main_arm_clock(struct cli_runtime *runtime)
+{
+  struct cli_virtual_clock *clock = cli_runtime_clock();
+  const struct cli_fault_schedule *schedule =
+      runtime->schedule.empty ? NULL : &runtime->schedule;
+  enum cli_virtual_clock_status status;
+  assert(runtime != NULL);
+
+  if (runtime->options.sealed) {
+    cli_runtime_log(
+        "info", "sealed: no host clock is read, so this seed replays exactly");
+    return cli_virtual_clock_seal(clock, schedule) == CLI_VIRTUAL_CLOCK_OK;
+  }
+  status = cli_virtual_clock_anchor(
+      clock, cli_virtual_clock_now_ms(clock), runtime->options.clock_rate,
+      schedule);
+  if (status == CLI_VIRTUAL_CLOCK_OK) return true;
+  cli_runtime_log(
+      "error", "--clock-rate %u is %s", runtime->options.clock_rate,
+      cli_virtual_clock_status_name(status));
+  return false;
+}
+
+/**
+ * Adopt a board's bounded sizes, so "it works on the CLI" stops meaning "it
+ * works at the host's sizes".
+ */
+static bool cli_main_init_profile(struct cli_runtime *runtime)
+{
+  const struct cli_device_profile *profile = NULL;
+  assert(runtime != NULL);
+  if (runtime->options.device == NULL) {
+    runtime->profile = cli_device_profile_default();
+    return true;
+  }
+  if (cli_device_profile_find(runtime->options.device, &profile) !=
+      CLI_DEVICE_PROFILE_OK) {
+    size_t index;
+    cli_runtime_log("error", "no device named %s. Known:",
+                    runtime->options.device);
+    for (index = 0U; index < cli_device_profile_count(); index++) {
+      cli_runtime_log("error", "  %s", cli_device_profile_at(index)->name);
+    }
+    return false;
+  }
+  if (!cli_device_profile_check(profile)) {
+    cli_runtime_log("error", "device profile %s is incoherent", profile->name);
+    return false;
+  }
+  runtime->profile = profile;
+  cli_runtime_log("info", "device %s: %s", profile->name, profile->summary);
+  return true;
+}
+
 static bool cli_main_init_converter(struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
+  /*
+   * A device profile names the converter's true rate and lead, so wearing a
+   * board implies pacing at that board's rate: a rig claiming to be the
+   * Waveshare while its speaker accepts everything instantly is claiming the
+   * one thing the board never does.
+   */
   const struct cli_paced_sink_config config = {
-    .frames_per_second = runtime->options.speaker_pace_fps,
-    .depth_frames = 0U,
+    .frames_per_second = runtime->options.speaker_pace_fps != 0U
+                             ? runtime->options.speaker_pace_fps
+                             : (runtime->options.device != NULL
+                                    ? runtime->profile->capture_frames_per_second
+                                    : 0U),
+    .depth_frames = runtime->options.device != NULL
+                        ? runtime->profile->output_lead_frames
+                        : 0U,
   };
   if (cli_paced_sink_configure(&runtime->paced_sink, &config) !=
       CLI_PACED_SINK_OK) {

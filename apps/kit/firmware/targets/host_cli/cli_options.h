@@ -71,6 +71,45 @@ struct cli_options {
    * makes reachable, and adversarial-seams.md for why it exists.
    */
   uint32_t speaker_pace_fps;
+  /**
+   * Which board the rig wears, by name. NULL is the host at its own sizes.
+   *
+   * Selecting one sets the bounded resources — I2S lead, ring, prefill — to
+   * that hardware's, so "it works on the CLI" stops meaning "it works at the
+   * host's sizes". See cli_device_profile.h.
+   */
+  const char *device;
+  /** Where to write the schedule actually used, for attaching to a bug. */
+  const char *schedule_out;
+  /**
+   * A schedule to replay verbatim, overriding every recipe knob.
+   *
+   * Exists because a seed only reproduces a run against the generator that
+   * drew it, and generators get edited.
+   */
+  const char *schedule_in;
+  /** Seed for the session's adversity; 0 draws nothing. */
+  uint32_t schedule_seed;
+  /** Session time per real second, in parts per thousand. 1000 is realtime. */
+  uint32_t clock_rate;
+  /** The fault recipe, drawn from schedule_seed. Zeroes leave the rig alone. */
+  uint32_t cpu_stalls_per_minute;
+  uint32_t cpu_stall_max_ms;
+  uint32_t clock_skews_per_minute;
+  uint32_t clock_skew_max_ms;
+  uint32_t clock_jitter_ms;
+  uint32_t wire_stalls_per_minute;
+  uint32_t wire_stall_max_ms;
+  uint32_t wire_resets;
+  uint32_t wire_throttle_fps;
+  uint32_t frame_loss_one_in;
+  uint32_t frame_duplicate_one_in;
+  uint32_t frame_reorder_one_in;
+  uint32_t mic_short_one_in;
+  /** Runs with no host clock at all, so a seed replays bit for bit. */
+  bool sealed;
+  /** Drives capture to full scale, where the mu-law encoder's edge lives. */
+  bool mic_clip;
   bool live_audio;
   /** Captures from this machine's default input device instead of a WAV. */
   bool live_mic;

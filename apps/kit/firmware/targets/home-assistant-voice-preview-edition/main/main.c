@@ -97,14 +97,26 @@
   ((1000U * ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME) /                 \
    ITERATE_KIT_PCM_V1_SAMPLE_RATE_HZ)
 /*
- * 640 ms is measured loss reserve for scheduler/TLS bursts, not target
- * latency. Freshness and generation barriers ensure neither direction drains
- * those 32 slots after an outage. The capacity is deliberately the same as
- * the proven Stick profile so device comparison changes hardware, not policy.
+ * Uplink and downlink do not have the same failure policy and therefore must
+ * not share one convenient capacity. Microphone capture keeps the established
+ * 640 ms freshness budget: after that point old speech is useless and must be
+ * discarded visibly. Playback retains the same 400 ms age gate, but needs a
+ * separate 1,280 ms allocation to absorb sub-second TCP/TLS delivery bunching.
+ * A physical count-to-100 run filled the former 32-frame downlink ring and its
+ * transport retired the call around audible number 37 even though Grok had
+ * completed the response. Sixty-four downlink slots cost about 21 KiB more
+ * internal RAM on this 8 MiB-PSRAM target; they are burst headroom, not target
+ * latency. The userspace scheduler's device-depth feedback prevents slow
+ * cross-clock drift, while the 400 ms age gate prevents this larger allocation
+ * from replaying outage history. Growing both directions would spend scarce
+ * internal RAM without improving microphone freshness.
  */
-#define HAVPE_PCM_RESERVE_MS 640U
-#define HAVPE_PCM_RING_SLOTS \
-  (HAVPE_PCM_RESERVE_MS / HAVPE_PCM_FRAME_DURATION_MS)
+#define HAVPE_PCM_UPLINK_RESERVE_MS 640U
+#define HAVPE_PCM_DOWNLINK_RESERVE_MS 1280U
+#define HAVPE_PCM_UPLINK_RING_SLOTS \
+  (HAVPE_PCM_UPLINK_RESERVE_MS / HAVPE_PCM_FRAME_DURATION_MS)
+#define HAVPE_PCM_DOWNLINK_RING_SLOTS \
+  (HAVPE_PCM_DOWNLINK_RESERVE_MS / HAVPE_PCM_FRAME_DURATION_MS)
 #define HAVPE_MAIN_LOOP_DELAY_MS 10U
 
 static const char *const TAG = "iterate-havpe";
@@ -133,14 +145,19 @@ _Static_assert(
     HAVPE_LED_COUNT == HAVPE_UI_RING_LED_COUNT,
     "the physical strip and host-tested HAVPE UI must describe one ring");
 _Static_assert(
-    HAVPE_PCM_RESERVE_MS % HAVPE_PCM_FRAME_DURATION_MS == 0U,
-    "PCM reserve must contain complete protocol frames");
+    HAVPE_PCM_UPLINK_RESERVE_MS % HAVPE_PCM_FRAME_DURATION_MS == 0U &&
+        HAVPE_PCM_DOWNLINK_RESERVE_MS % HAVPE_PCM_FRAME_DURATION_MS == 0U,
+    "PCM reserves must contain complete protocol frames");
 _Static_assert(
-    (HAVPE_PCM_RING_SLOTS & (HAVPE_PCM_RING_SLOTS - 1U)) == 0U,
-    "SPSC PCM slot count must be a power of two");
+    (HAVPE_PCM_UPLINK_RING_SLOTS &
+     (HAVPE_PCM_UPLINK_RING_SLOTS - 1U)) == 0U &&
+        (HAVPE_PCM_DOWNLINK_RING_SLOTS &
+         (HAVPE_PCM_DOWNLINK_RING_SLOTS - 1U)) == 0U,
+    "SPSC PCM slot counts must be powers of two");
 _Static_assert(
-    HAVPE_PCM_RESERVE_MS == ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS,
-    "ring reserve and uplink freshness policy are one latency budget");
+    HAVPE_PCM_UPLINK_RESERVE_MS ==
+        ITERATE_KIT_ESP_IDF_PCM_CAPTURE_MAX_AGE_MS,
+    "uplink ring reserve and capture freshness are one latency budget");
 _Static_assert(
     (HAVPE_CONTROL_INBOX_SLOTS &
      (HAVPE_CONTROL_INBOX_SLOTS - 1U)) == 0U &&
@@ -191,11 +208,11 @@ struct havpe_runtime {
   struct iterate_kit_spsc_ring pcm_uplink;
   struct iterate_kit_spsc_ring pcm_downlink;
   struct iterate_kit_pcm_uplink_slot
-      pcm_uplink_storage[HAVPE_PCM_RING_SLOTS];
+      pcm_uplink_storage[HAVPE_PCM_UPLINK_RING_SLOTS];
   struct iterate_kit_pcm_downlink_slot
-      pcm_downlink_storage[HAVPE_PCM_RING_SLOTS];
-  size_t pcm_uplink_lengths[HAVPE_PCM_RING_SLOTS];
-  size_t pcm_downlink_lengths[HAVPE_PCM_RING_SLOTS];
+      pcm_downlink_storage[HAVPE_PCM_DOWNLINK_RING_SLOTS];
+  size_t pcm_uplink_lengths[HAVPE_PCM_UPLINK_RING_SLOTS];
+  size_t pcm_downlink_lengths[HAVPE_PCM_DOWNLINK_RING_SLOTS];
   struct iterate_kit_pcm_lane pcm_lane;
 
   struct iterate_kit_esp_idf_itx_transport control_transport;
@@ -622,13 +639,13 @@ static bool initialise_rings(struct havpe_runtime *state) {
              &state->pcm_uplink,
              state->pcm_uplink_storage,
              sizeof(state->pcm_uplink_storage[0]),
-             HAVPE_PCM_RING_SLOTS,
+             HAVPE_PCM_UPLINK_RING_SLOTS,
              state->pcm_uplink_lengths) == ITERATE_KIT_OK &&
       iterate_kit_spsc_ring_init(
              &state->pcm_downlink,
              state->pcm_downlink_storage,
              sizeof(state->pcm_downlink_storage[0]),
-             HAVPE_PCM_RING_SLOTS,
+             HAVPE_PCM_DOWNLINK_RING_SLOTS,
              state->pcm_downlink_lengths) == ITERATE_KIT_OK &&
       iterate_kit_pcm_lane_init(
              &state->pcm_lane,

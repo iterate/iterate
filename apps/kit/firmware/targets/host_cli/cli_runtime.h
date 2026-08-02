@@ -24,6 +24,8 @@
 #include "cli_options.h"
 #include "cli_paced_sink.h"
 #include "cli_speaker.h"
+#include "cli_device_profile.h"
+#include "cli_fault_schedule.h"
 #include "cli_virtual_clock.h"
 #include "cli_wav.h"
 #include "iterate/kit/audio_playout.h"
@@ -77,6 +79,12 @@ struct cli_runtime {
   struct cli_keyboard keyboard;
   /* Models the converter's clock; unpaced by default. See cli_paced_sink.h. */
   struct cli_paced_sink paced_sink;
+  /* This session's adversity, drawn in full before the first frame moves. */
+  struct cli_fault_schedule schedule;
+  /* Which board the rig is wearing; never NULL after startup. */
+  const struct cli_device_profile *profile;
+  /* CPU stall episodes actually served, for the report. */
+  uint32_t cpu_stalls_injected;
   struct cli_conversation conversation;
   /** Wall-clock end of an interactive session; 0 means no limit was asked. */
   uint64_t finish_at_ms;
