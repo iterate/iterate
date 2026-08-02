@@ -15,7 +15,7 @@ export interface VoicelabConnectOptions {
   baseUrl?: string;
 }
 
-export async function connectProject(options: VoicelabConnectOptions) {
+export function resolveVoicelabBaseUrl(options: Pick<VoicelabConnectOptions, "baseUrl">) {
   const baseUrl =
     options.baseUrl ??
     process.env.APP_CONFIG_BASE_URL?.trim() ??
@@ -27,6 +27,11 @@ export async function connectProject(options: VoicelabConnectOptions) {
       "No base URL: pass --base-url, set APP_CONFIG_BASE_URL, or start the local dev server.",
     );
   }
+  return baseUrl;
+}
+
+export async function connectProject(options: VoicelabConnectOptions) {
+  const baseUrl = resolveVoicelabBaseUrl(options);
   const secret = process.env.APP_CONFIG_ADMIN_API_SECRET?.trim() ?? "";
   if (!secret) throw new Error("APP_CONFIG_ADMIN_API_SECRET is required.");
   return await connectItxReady({

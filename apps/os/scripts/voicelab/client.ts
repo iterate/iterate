@@ -258,7 +258,7 @@ export async function client(options: ClientOptions) {
   // comes back — exactly what the ESP32 does.
   if (options.detached) {
     // `itx.worker` is typed as the config-repo TEMPLATE's worker; this
-    // project's worker.ts (scripts/voicelab/config-repo/worker.ts) adds
+    // voice-agent guest (scripts/voicelab/config-repo/voice-agent.ts) adds
     // startCall, so the call is declared at the call site.
     const worker = itx.worker as unknown as {
       startCall(options: Record<string, unknown>): Promise<{

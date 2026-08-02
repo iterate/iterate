@@ -1,6 +1,6 @@
 # Pressure test: what the bridge does when the provider misbehaves
 
-An adversarial pass over `config-repo/worker.ts` — the userspace server side of
+An adversarial pass over `config-repo/voice-agent.ts` — the userspace server side of
 the voice pipe — against a **provider I control**, so the failures a real
 provider only produces occasionally could be produced on demand.
 
@@ -596,7 +596,7 @@ pass/fail line.
 
 ## Changes made, and changes deliberately not made
 
-Everything below is in `config-repo/worker.ts` unless stated.
+Everything below is in `config-repo/voice-agent.ts` unless stated.
 
 | change                                                                                                             | why                                                                                                                                                                                                                                                                                                                                                 |
 | ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

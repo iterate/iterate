@@ -26,6 +26,8 @@ export interface DeviceOptions extends VoicelabConnectOptions {
   path?: string;
 }
 
+const RECORDED_FILES = ["mic.pcm", "speaker.pcm", "call.log"];
+
 /** The device's capability surface, as this script uses it. */
 interface DeviceCapability {
   conversation: { start(): Promise<boolean>; hangUp(): Promise<boolean> };
@@ -45,8 +47,6 @@ interface DeviceCapability {
     read(name: string, offset: number): Promise<ArrayBuffer>;
   };
 }
-
-const RECORDED_FILES = ["mic.pcm", "speaker.pcm", "call.log"];
 
 export async function device(options: DeviceOptions) {
   const action = options.action ?? "status";

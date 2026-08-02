@@ -66,12 +66,6 @@ interface DeviceStats {
   [key: string]: unknown;
 }
 
-interface DeviceCapability {
-  conversation: { start(): Promise<boolean>; hangUp(): Promise<boolean> };
-  pushToTalk: { start(): Promise<boolean>; stop(): Promise<boolean> };
-  recording: { status(): Promise<{ recording?: boolean }> };
-}
-
 /** Counters that must never move during a healthy soak. */
 const MUST_NOT_MOVE = [
   "livenessRestarts",
@@ -96,6 +90,12 @@ const PROMPTS = [
   "In one sentence, what makes bread rise?",
   "Tell me one short thing about volcanoes.",
 ];
+
+interface DeviceCapability {
+  conversation: { start(): Promise<boolean>; hangUp(): Promise<boolean> };
+  pushToTalk: { start(): Promise<boolean>; stop(): Promise<boolean> };
+  recording: { status(): Promise<{ recording?: boolean }> };
+}
 
 export async function soak(options: SoakOptions) {
   const minutes = options.minutes ?? 60;

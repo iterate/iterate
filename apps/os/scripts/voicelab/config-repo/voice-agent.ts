@@ -2,9 +2,18 @@ import {
   IterateDurableObject,
   IterateWorkerEntrypoint,
   type StatefulDynamicWorkerRef,
+  type Stream,
+  createProcessorHost,
 } from "iterate/sdk";
+import {
+  defineProcessorContract,
+  StreamProcessor,
+  type ProcessEventArgs,
+  type ReduceArgs,
+} from "iterate/processors";
+import { z } from "zod";
 
-// voicelab worker: the "server side" of the voice pipe, in userspace.
+// Voice-agent guest worker: the "server side" of the voice pipe, in userspace.
 //
 // Three modes, one Durable Object, reached via wss to the `voice` app host
 // (voice--<slug>.<base>/?mode=...):
@@ -24,7 +33,7 @@ import {
 //                 with ctx.waitUntil for as long as it is doing work, and
 //                 ends on the stream's call-ended event, on Grok hanging up,
 //                 on silence, or at the hard deadline. This is what a device
-//                 uses — `itx.worker.startCall(...)` returns the moment the
+//                 uses — a `voicelab/call-requested` stream event returns the moment the
 //                 Grok session is live and nothing outside the platform has
 //                 to stay running for the call to continue.
 //
@@ -65,6 +74,11 @@ const HANDSHAKE_TIMEOUT_MS = 15_000;
  * tool, or being RIGHT belongs to a text model with no clock on it.
  */
 const COLLEAGUE_PATH = "/agents/colleague";
+const VOICE_AGENT_PROCESSOR_SLUG = "voice-agent";
+const VOICE_AGENT_SUBSCRIPTION_KEY = "app-voice-agent#voice-agent";
+const VOICE_AGENT_BIRTH_REVISION = 1;
+const BACK_OFFICE_BRIEF_REVISION = 1;
+const CALL_REQUEST_FRESHNESS_MS = 30_000;
 /**
  * What the voice model is told it is.
  *
@@ -106,6 +120,66 @@ const VOICE_INSTRUCTIONS = [
   "Speak plainly and briefly — one or two sentences unless asked for more. Never",
   "read out URLs, code, or long lists.",
 ].join(" ");
+const BACK_OFFICE_BRIEF = [
+  "You are the BACK OFFICE of a two-part assistant. A voice model is",
+  "the FRONT OFFICE: it talks to a customer out loud, and it is the only",
+  "way anything you say reaches them. Everything the customer says and",
+  "everything the front office says arrives here as context, so you always",
+  "know the conversation without being asked about it.",
+  "",
+  "This is messaging, not question-and-answer. You and the front office are",
+  "colleagues passing notes. Send a message whenever you have something",
+  "worth saying: an answer, a partial answer while you keep working, a",
+  "question back, a correction, or something nobody asked for that they",
+  "plainly need to know. Send as many as you like, in any order, at any",
+  "time. Nothing is waiting on you, so silence is always an option and a",
+  "slow careful reply is better than a fast wrong one.",
+  "",
+  "Messages arrive labelled 'Message #n'. When yours is about a particular",
+  "one, START with that label — '#3: An octopus has three hearts…' — so the",
+  "front office can tell the customer which thread it is picking up. When",
+  "it is about nothing in particular, just say it.",
+  "",
+  "SEND A CHAT MESSAGE. That is the only channel that reaches the customer",
+  "— work in scripts all you like, but the words themselves have to be a",
+  "message. Everything you send will be read out loud, so write to be",
+  "spoken: two or three sentences of plain language, no lists, no URLs, no",
+  "code. Lead with the point.",
+].join("\n");
+
+const VoiceCallRequestedPayload = z.strictObject({
+  callId: z.string().trim().min(1),
+  colleague: z.boolean().optional(),
+  effort: z.enum(["none", "high"]).optional(),
+  greet: z.string().optional(),
+  grokBaseUrl: z.url({ protocol: /^https?$/ }).optional(),
+  instructions: z.string().optional(),
+  model: z.string().trim().min(1).optional(),
+  turns: z.enum(["manual", "vad"]).optional(),
+  voice: z.string().trim().min(1).optional(),
+});
+
+export const VoiceAgentProcessorContract = defineProcessorContract({
+  slug: VOICE_AGENT_PROCESSOR_SLUG,
+  version: "1.0.0",
+  description: "Starts bounded voice bridges from fresh call requests on one configured stream.",
+  stateSchema: z.object({
+    birthCertificate: z.strictObject({}).nullable().default(null),
+  }),
+  events: {
+    "events.iterate.com/voice-agent/created": {
+      description: "The voice-agent guest exists on this stream.",
+      payloadSchema: z.strictObject({}),
+    },
+    "voicelab/call-requested": {
+      description: "A listener asked the configured voice-agent guest to open a call.",
+      payloadSchema: VoiceCallRequestedPayload,
+    },
+  },
+  consumes: ["events.iterate.com/voice-agent/created", "voicelab/call-requested"],
+  emits: [],
+});
+export type VoiceAgentProcessorContract = typeof VoiceAgentProcessorContract;
 const FORWARDED_GROK_EVENTS = new Set([
   /*
    * `error` and the commit acknowledgement are here because their ABSENCE is
@@ -299,7 +373,6 @@ export class VoiceBridge extends IterateDurableObject {
       (url.searchParams.get("colleague") === "1"
         ? VOICE_INSTRUCTIONS
         : "You are a concise voice assistant. Answer in one short sentence unless asked for detail.");
-    const greeting = url.searchParams.get("greet");
     const manualTurns = url.searchParams.get("turns") === "manual";
 
     // One project stub for the whole call; valid because this invocation's
@@ -549,7 +622,6 @@ export class VoiceBridge extends IterateDurableObject {
      */
     const backOffice = url.searchParams.get("colleague") === "1";
     const backOfficeAgent = project.agents.get(COLLEAGUE_PATH);
-    let backOfficeReady: Promise<boolean> | null = null;
     /** Messages sent to the back office, and messages heard back. */
     let sentCount = 0;
     let backOfficeHeard = 0;
@@ -559,62 +631,11 @@ export class VoiceBridge extends IterateDurableObject {
      * conversation and must not be read out in this one.
      */
     const backOfficeSince = Date.now();
-    const ensureBackOffice = () => {
-      backOfficeReady ??= (async () => {
-        try {
-          await backOfficeAgent.create({});
-        } catch {
-          /* Already born: create over an existing agent is loud, not fatal. */
-        }
-        try {
-          await backOfficeAgent.append({
-            payload: {
-              content: [
-                "You are the BACK OFFICE of a two-part assistant. A voice model is",
-                "the FRONT OFFICE: it talks to a customer out loud, and it is the only",
-                "way anything you say reaches them. Everything the customer says and",
-                "everything the front office says arrives here as context, so you always",
-                "know the conversation without being asked about it.",
-                "",
-                "This is messaging, not question-and-answer. You and the front office are",
-                "colleagues passing notes. Send a message whenever you have something",
-                "worth saying: an answer, a partial answer while you keep working, a",
-                "question back, a correction, or something nobody asked for that they",
-                "plainly need to know. Send as many as you like, in any order, at any",
-                "time. Nothing is waiting on you, so silence is always an option and a",
-                "slow careful reply is better than a fast wrong one.",
-                "",
-                "Messages arrive labelled 'Message #n'. When yours is about a particular",
-                "one, START with that label — '#3: An octopus has three hearts…' — so the",
-                "front office can tell the customer which thread it is picking up. When",
-                "it is about nothing in particular, just say it.",
-                "",
-                "SEND A CHAT MESSAGE. That is the only channel that reaches the customer",
-                "— work in scripts all you like, but the words themselves have to be a",
-                "message. Everything you send will be read out loud, so write to be",
-                "spoken: two or three sentences of plain language, no lists, no URLs, no",
-                "code. Lead with the point.",
-              ].join("\n"),
-              key: "voicelab/colleague-brief",
-              llmRequestPolicy: { behaviour: "dont-trigger-request" },
-              role: "system",
-            },
-            type: "events.iterate.com/agents/context-added",
-          });
-          return true;
-        } catch (error) {
-          console.log(`colleague unavailable: ${String(error)}`);
-          return false;
-        }
-      })();
-      return backOfficeReady;
-    };
     /** Give the back office a line of the conversation, without waking it. */
     const overhear = (who: "customer" | "voice", text: string) => {
       if (!backOffice || text.trim().length === 0) return;
       this.ctx.waitUntil(
         (async () => {
-          if (!(await ensureBackOffice())) return;
           await backOfficeAgent
             .append({
               payload: {
@@ -755,7 +776,6 @@ export class VoiceBridge extends IterateDurableObject {
       });
       this.ctx.waitUntil(
         (async () => {
-          if (!(await ensureBackOffice())) return;
           await backOfficeAgent
             .append({
               payload: {
@@ -1302,7 +1322,6 @@ export class VoiceBridge extends IterateDurableObject {
     let generation = 0;
     let currentConnection: { close(): void } | null = null;
     let currentBatches = 0;
-    let lastBatchAt = Date.now();
     /*
      * When a PEER last spoke to us — a mic frame, a turn edge, a ping. Not
      * the same thing as "a batch arrived": the platform's own connection
@@ -1322,7 +1341,6 @@ export class VoiceBridge extends IterateDurableObject {
     let closedDown = false;
 
     const handleEvents = (events: { type: string; offset: number; payload?: unknown }[]) => {
-      lastBatchAt = Date.now();
       currentBatches++;
       for (const event of events) {
         if (event.offset <= lastSeenOffset) continue;
@@ -1530,7 +1548,6 @@ export class VoiceBridge extends IterateDurableObject {
         });
         currentConnection = next;
         currentBatches = 0;
-        lastBatchAt = Date.now();
         previous?.close();
       } finally {
         opening = false;
@@ -1669,10 +1686,28 @@ export const voiceBridgeRef = {
   durableWorkerKey: "voicelab-bridge",
   path: "/",
   source: {
-    createWorker: { entryPoint: "worker.ts", files: { repoPath: "/repos/config", type: "repo" } },
+    createWorker: {
+      entryPoint: "voice-agent.ts",
+      files: { repoPath: "/repos/config", type: "repo" },
+    },
   },
   type: "stateful",
 } satisfies StatefulDynamicWorkerRef;
+
+function voiceAgentProcessorRef(streamPath: string) {
+  return {
+    className: "VoiceAgentProcessorHost",
+    durableWorkerKey: "voice-agent-processor",
+    path: streamPath,
+    source: {
+      createWorker: {
+        entryPoint: "voice-agent.ts",
+        files: { repoPath: "/repos/config", type: "repo" },
+      },
+    },
+    type: "stateful",
+  } satisfies StatefulDynamicWorkerRef;
+}
 
 /** What a caller may ask for when it opens a call. */
 export interface StartCallOptions {
@@ -1705,7 +1740,313 @@ export interface StartCallOptions {
   colleague?: boolean;
 }
 
-export default class ProjectWorker extends IterateWorkerEntrypoint {
+export interface SetupVoiceAgentOptions {
+  /** The conversation stream. A fresh /agents/voice/* path is generated when omitted. */
+  streamPath?: string;
+  /**
+   * Install the subscription under a fresh key.
+   *
+   * Only needed after `removeVoiceAgent`. Setup appends its subscription under
+   * a key derived from the stream path, so re-running it is a no-op — which is
+   * the point, but it also means a subscription somebody removed would stay
+   * removed, the re-install being deduplicated against the original. This says
+   * "I know, do it again anyway", and `removeVoiceAgent` names it in its
+   * result so nobody has to discover the need for it.
+   */
+  reinstall?: boolean;
+}
+
+export interface SetupVoiceAgentResult {
+  streamPath: string;
+  created: string[];
+  alreadyThere: string[];
+}
+
+const SubscriptionLifecyclePayload = z.object({ subscriptionKey: z.string() });
+
+async function voiceAgentSubscriptionStatus(stream: Stream): Promise<{
+  active: boolean;
+  installation: number;
+}> {
+  let active = false;
+  let installation = 0;
+  using pager = stream.readEvents({
+    eventTypes: [
+      "events.iterate.com/stream/subscription-configured",
+      "events.iterate.com/stream/subscription-removed",
+    ],
+  });
+  for (;;) {
+    const events = await pager.next();
+    if (events.length === 0) break;
+    for (const event of events) {
+      const payload = SubscriptionLifecyclePayload.safeParse(event.payload);
+      if (!payload.success || payload.data.subscriptionKey !== VOICE_AGENT_SUBSCRIPTION_KEY) {
+        continue;
+      }
+      if (event.type === "events.iterate.com/stream/subscription-configured") {
+        installation++;
+        active = true;
+      }
+      if (event.type === "events.iterate.com/stream/subscription-removed") active = false;
+    }
+  }
+  return { active, installation };
+}
+
+type FetchVoiceBridge = (
+  request: Request,
+  ref: StatefulDynamicWorkerRef,
+  options: { buildBudgetMs: number },
+) => Promise<Response>;
+
+async function startVoiceCall(
+  fetchBridge: FetchVoiceBridge,
+  options: StartCallOptions,
+): Promise<Record<string, unknown>> {
+  const path = options.path;
+  if (!path.startsWith("/")) return { ok: false, reason: "path must be an absolute stream path" };
+  const callId = options.callId ?? crypto.randomUUID().slice(0, 8);
+  const params = new URLSearchParams({ callId, mode: "detached", path });
+  if (options.model) params.set("model", options.model);
+  if (options.grokBaseUrl) params.set("grokBaseUrl", options.grokBaseUrl);
+  if (options.voice) params.set("voice", options.voice);
+  if (options.effort) params.set("effort", options.effort);
+  if (options.instructions) params.set("instructions", options.instructions);
+  if (options.greet) params.set("greet", options.greet);
+  if (options.turns === "manual") params.set("turns", "manual");
+  if (options.colleague) params.set("colleague", "1");
+
+  const startedAt = Date.now();
+  const response = await fetchBridge(
+    new Request(`https://voicelab.invalid/start?${params.toString()}`),
+    { ...voiceBridgeRef, path },
+    { buildBudgetMs: 30_000 },
+  );
+  if (!response.ok) {
+    return {
+      callId,
+      ok: false,
+      reason: `bridge ${response.status}: ${(await response.text()).slice(0, 200)}`,
+    };
+  }
+  const result = (await response.json()) as Record<string, unknown>;
+  return { ...result, callId, startMs: Date.now() - startedAt };
+}
+
+export class VoiceAgentProcessor extends StreamProcessor<
+  VoiceAgentProcessorContract,
+  {
+    now(): number;
+    startCall(options: StartCallOptions): Promise<Record<string, unknown>>;
+  }
+> {
+  readonly contract = VoiceAgentProcessorContract;
+
+  protected override processEvent({
+    blockProcessorWhile,
+    event,
+    state,
+  }: ProcessEventArgs<VoiceAgentProcessorContract>): undefined {
+    if (event?.type !== "voicelab/call-requested" || state.birthCertificate === null) return;
+
+    const createdAtMs = Date.parse(event.createdAt);
+    if (
+      !Number.isFinite(createdAtMs) ||
+      this.deps.now() - createdAtMs > CALL_REQUEST_FRESHNESS_MS
+    ) {
+      return;
+    }
+
+    // The checkpoint must not pass a fresh request until the provider handshake
+    // succeeds. A failed wake is retried; the bridge's per-stream supersession
+    // makes that at-least-once retry converge on one live call.
+    blockProcessorWhile(async () => {
+      const result = await this.deps.startCall({ path: this.path, ...event.payload });
+      if (result.ok !== true) {
+        throw new Error(
+          typeof result.reason === "string"
+            ? result.reason
+            : `voice bridge rejected call request: ${JSON.stringify(result)}`,
+        );
+      }
+    });
+  }
+
+  protected override reduce({ event, state }: ReduceArgs<VoiceAgentProcessorContract>) {
+    if (event.type !== "events.iterate.com/voice-agent/created") return state;
+    return { ...state, birthCertificate: {} };
+  }
+}
+
+export class VoiceAgentProcessorHost extends IterateDurableObject {
+  #host = createProcessorHost({
+    ctx: this.ctx,
+    env: this.env,
+    recovery: true,
+    createProcessor: (deps) =>
+      new VoiceAgentProcessor({
+        ...deps,
+        now: () => Date.now(),
+        startCall: async (options) =>
+          await startVoiceCall(
+            async (request, ref, fetchOptions) =>
+              await this.fetchDynamicWorker(request, ref, fetchOptions),
+            options,
+          ),
+      }),
+  });
+
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await this.#host.handleAlarm(alarmInfo);
+  }
+
+  get processor() {
+    return this.#host.wakeProcessor;
+  }
+}
+
+export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
+  async setupVoiceAgent(options: SetupVoiceAgentOptions = {}): Promise<SetupVoiceAgentResult> {
+    const streamPath = options.streamPath ?? `/agents/voice/${crypto.randomUUID()}`;
+    if (!streamPath.startsWith("/")) {
+      throw new Error(
+        `voice-agent streamPath must be absolute; received ${JSON.stringify(streamPath)}`,
+      );
+    }
+
+    const project = await this.itx;
+    const xaiSecret = await project.secrets.get(XAI_SECRET).__describe();
+    if (!xaiSecret.created || !xaiSecret.hasMaterial) {
+      throw new Error(
+        'Voice agent setup requires secret "/secrets/xai" with material. Create it explicitly with ' +
+          'await itx.secrets.get("/secrets/xai").create({ egress: { urls: ["https://api.x.ai"] }, material: "<xAI API key>" }); then rerun setupVoiceAgent. The voice agent never creates or copies credentials.',
+      );
+    }
+
+    /*
+     * Setting up is APPENDING, and an append carrying an idempotencyKey is
+     * already idempotent — the platform deduplicates on it. So there is no
+     * read-then-write here and no existence check: every event below is
+     * appended unconditionally under a key derived from what it is, and a
+     * second run appends the same keys and changes nothing.
+     *
+     * The earlier shape asked "does this exist?" before each append purely to
+     * print a nicer report. That cost four extra round trips, raced with
+     * itself (two concurrent setups would both read "absent" and both claim
+     * to have created), and still could not be trusted. What is reported
+     * instead is derived from what came back: a deduplicated append returns
+     * the event that was already on the stream, so an event older than this
+     * call is one this call did not create.
+     */
+    const stream = project.streams.get(streamPath);
+    const backOffice = project.agents.get(COLLEAGUE_PATH);
+    const subscriptionKey = options.reinstall
+      ? `voice-agent/subscription-configured:v1:${streamPath}:${crypto.randomUUID()}`
+      : `voice-agent/subscription-configured:v1:${streamPath}`;
+    const briefKey = `voice-agent/back-office-brief:v${BACK_OFFICE_BRIEF_REVISION}`;
+    const birthKey = `voice-agent/created:v${VOICE_AGENT_BIRTH_REVISION}:${streamPath}`;
+
+    // The agent must exist before anything is appended to its stream. Creating
+    // one that is already there is itself a no-op, so this needs no guard.
+    await backOffice.create({});
+
+    const startedAt = Date.now();
+    const [voiceEvents, agentEvents] = await Promise.all([
+      stream.append(
+        { type: "events.iterate.com/voice-agent/created", idempotencyKey: birthKey, payload: {} },
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          idempotencyKey: subscriptionKey,
+          payload: {
+            subscriptionKey: VOICE_AGENT_SUBSCRIPTION_KEY,
+            description: "Wake the separately deployed voice-agent guest for call requests.",
+            filter: {
+              eventTypes: ["events.iterate.com/voice-agent/created", "voicelab/call-requested"],
+            },
+            receiver: {
+              action: "processor-wake",
+              expression: [
+                "workers",
+                ["get", voiceAgentProcessorRef(streamPath)],
+                "processor",
+                "wakeStreamProcessor",
+              ],
+              processorSlug: VOICE_AGENT_PROCESSOR_SLUG,
+            },
+          },
+        },
+      ),
+      backOffice.append({
+        type: "events.iterate.com/agents/context-added",
+        idempotencyKey: briefKey,
+        payload: {
+          content: BACK_OFFICE_BRIEF,
+          key: "voicelab/colleague-brief",
+          llmRequestPolicy: { behaviour: "dont-trigger-request" },
+          role: "system",
+        },
+      }),
+    ]);
+
+    const created: string[] = [];
+    const alreadyThere: string[] = [];
+    for (const event of [...voiceEvents, ...agentEvents]) {
+      const key = event.idempotencyKey ?? `${event.path}@${String(event.offset)}`;
+      (Date.parse(event.createdAt) < startedAt ? alreadyThere : created).push(key);
+    }
+    return { streamPath, created, alreadyThere };
+  }
+
+  async removeVoiceAgent(options: { streamPath: string }): Promise<{
+    streamPath: string;
+    removed: string[];
+    alreadyAbsent: string[];
+    /**
+     * What to call to get this stream talking again.
+     *
+     * Named here because setup's subscription key is derived from the stream
+     * path, so a plain re-run after a removal deduplicates against the
+     * original install and silently does nothing. Making the caller discover
+     * that by watching a conversation fail to start would be cruel.
+     */
+    reinstallWith: string;
+  }> {
+    if (!options.streamPath?.startsWith("/")) {
+      throw new Error(
+        `removeVoiceAgent requires an absolute streamPath; received ${JSON.stringify(options.streamPath)}`,
+      );
+    }
+    const project = await this.itx;
+    const stream = project.streams.get(options.streamPath);
+    const subscription = await voiceAgentSubscriptionStatus(stream);
+
+    const removed: string[] = [];
+    const alreadyAbsent: string[] = [];
+    if (subscription.active) {
+      const removalKey = `voice-agent/subscription-removed:v1:${options.streamPath}:install:${subscription.installation}`;
+      await stream.append({
+        type: "events.iterate.com/stream/subscription-removed",
+        idempotencyKey: removalKey,
+        payload: { subscriptionKey: VOICE_AGENT_SUBSCRIPTION_KEY, reason: "requested" },
+      });
+      removed.push(removalKey);
+    } else {
+      alreadyAbsent.push(VOICE_AGENT_SUBSCRIPTION_KEY);
+    }
+
+    using processor = project.workers.get(voiceAgentProcessorRef(options.streamPath));
+    await processor.kill();
+    using bridge = project.workers.get({ ...voiceBridgeRef, path: options.streamPath });
+    await bridge.kill();
+    return {
+      streamPath: options.streamPath,
+      removed,
+      alreadyAbsent,
+      reinstallWith: `setupVoiceAgent({ streamPath: ${JSON.stringify(options.streamPath)}, reinstall: true })`,
+    };
+  }
+
   /**
    * Open a voice call that outlives this request: the bridge DO holds the
    * Grok socket and the stream subscription by itself, so the only thing a
@@ -1715,36 +2056,11 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
    * callId — no second connection, anywhere.
    */
   async startCall(options: StartCallOptions): Promise<Record<string, unknown>> {
-    const path = options.path;
-    if (typeof path !== "string" || !path.startsWith("/")) {
-      return { ok: false, reason: "path must be an absolute stream path" };
-    }
-    const callId = options.callId ?? crypto.randomUUID().slice(0, 8);
-    const params = new URLSearchParams({ callId, mode: "detached", path });
-    if (options.model) params.set("model", options.model);
-    if (options.grokBaseUrl) params.set("grokBaseUrl", options.grokBaseUrl);
-    if (options.voice) params.set("voice", options.voice);
-    if (options.effort) params.set("effort", options.effort);
-    if (options.instructions) params.set("instructions", options.instructions);
-    if (options.greet) params.set("greet", options.greet);
-    if (options.turns === "manual") params.set("turns", "manual");
-    if (options.colleague) params.set("colleague", "1");
-
-    const startedAt = Date.now();
-    const response = await this.fetchDynamicWorker(
-      new Request(`https://voicelab.invalid/start?${params.toString()}`),
-      { ...voiceBridgeRef, path },
-      { buildBudgetMs: 30_000 },
+    return await startVoiceCall(
+      async (request, ref, fetchOptions) =>
+        await this.fetchDynamicWorker(request, ref, fetchOptions),
+      options,
     );
-    if (!response.ok) {
-      return {
-        callId,
-        ok: false,
-        reason: `bridge ${response.status}: ${(await response.text()).slice(0, 200)}`,
-      };
-    }
-    const result = (await response.json()) as Record<string, unknown>;
-    return { ...result, callId, startMs: Date.now() - startedAt };
   }
 
   /** Hang up. Equivalent to appending call-ended yourself; here for callers
