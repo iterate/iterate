@@ -7,6 +7,10 @@ import {
   subscribePcmBridgeToDeviceEvents,
 } from "./device-events.ts";
 import { DeviceMetricsSessionTracker, type DeviceMetricsSessionMetrics } from "./device-metrics.ts";
+import {
+  DeviceSubscriptionCoordinator,
+  type DeviceSubscriptionMetrics,
+} from "./device-subscriptions.ts";
 import { interruptKitDevicePlayback } from "./device-control.ts";
 import { executeKitDeviceTool } from "./device-tools.ts";
 import {
@@ -62,8 +66,7 @@ interface ActivePcmSession {
   deviceEvents: DeviceEventSessionMetricsTracker;
   deviceMetrics: DeviceMetricsSessionTracker;
   deviceId: string;
-  deviceEventSubscriptionAttempts: number;
-  deviceEventSubscriptionFailures: number;
+  deviceSubscriptions: DeviceSubscriptionCoordinator<Project & Disposable>;
   grokCredentialPrewarmer?: GrokCredentialPrewarmer;
   lastProviderConnectError: string | null;
   mode: KitVoiceMode;
@@ -81,6 +84,7 @@ interface ClosedPcmSessionReport extends PcmSessionMetrics {
   deviceEvents: DeviceEventSessionMetrics;
   deviceMetrics: DeviceMetricsSessionMetrics;
   deviceId: string;
+  deviceSubscriptions: DeviceSubscriptionMetrics;
   deviceEventSubscriptionAttempts: number;
   deviceEventSubscriptionFailures: number;
   endedAtMs: number;
@@ -155,14 +159,16 @@ export class KitVoiceWorker extends IterateDurableObject {
     const active = this.#activePcm;
     if (active === undefined) return this.#readPreviousPcm() ?? null;
     const bridgeMetrics = active.bridge.metrics();
+    const deviceSubscriptions = active.deviceSubscriptions.metrics();
     return {
       ...bridgeMetrics,
       audioMode: active.audioMode,
       deviceEvents: active.deviceEvents.metrics(),
       deviceId: active.deviceId,
       deviceMetrics: active.deviceMetrics.metrics(),
-      deviceEventSubscriptionAttempts: active.deviceEventSubscriptionAttempts,
-      deviceEventSubscriptionFailures: active.deviceEventSubscriptionFailures,
+      deviceSubscriptions,
+      deviceEventSubscriptionAttempts: deviceSubscriptions.eventAttempts,
+      deviceEventSubscriptionFailures: deviceSubscriptions.eventFailures,
       endedAtMs: null,
       grokCredential: active.grokCredentialPrewarmer?.metrics() ?? null,
       lastProviderConnectError: active.lastProviderConnectError,
@@ -315,6 +321,54 @@ export class KitVoiceWorker extends IterateDurableObject {
     });
     const deviceEvents = new DeviceEventSessionMetricsTracker();
     const deviceMetrics = new DeviceMetricsSessionTracker();
+    const deviceSubscriptions = new DeviceSubscriptionCoordinator<Project & Disposable>({
+      isCurrent: () => {
+        const session = active;
+        return (
+          session !== undefined && this.#activePcm === session && !session.bridge.metrics().closed
+        );
+      },
+      onDiagnostic: (diagnostic) => {
+        const severity = diagnostic.code.endsWith("-subscribed")
+          ? "info"
+          : diagnostic.code.endsWith("-exhausted")
+            ? "error"
+            : "warn";
+        this.#log(diagnostic.code, severity, {
+          attempt: diagnostic.attempt,
+          message: diagnostic.message,
+          nextDelayMs: diagnostic.nextDelayMs,
+          sessionId,
+        });
+      },
+      openProject: async () => await this.env.ITX.get(),
+      releaseProject(openedProject) {
+        if (project === openedProject) {
+          project = undefined;
+        } else if (projectSessionClosed) {
+          /* closeProjectSession already disposed this exact generation. */
+          return;
+        }
+        openedProject[Symbol.dispose]();
+      },
+      retainProject(openedProject) {
+        if (projectSessionClosed) return false;
+        project = openedProject;
+        return true;
+      },
+      retryDelaysMs: [0, 250, 500, 1_000, 2_000, 4_000, 8_000],
+      subscribeToEvents: async (openedProject) => {
+        const session = active;
+        if (session === undefined) throw new Error("The PCM session is not initialized.");
+        await this.#subscribeToDeviceEvents(openedProject, session, sessionId);
+      },
+      subscribeToMetrics: async (openedProject) => {
+        const session = active;
+        if (session === undefined) throw new Error("The PCM session is not initialized.");
+        await this.#subscribeToDeviceMetrics(openedProject, session, sessionId);
+      },
+      wait: async (delayMs) => await new Promise<void>((resolve) => setTimeout(resolve, delayMs)),
+    });
 
     active = {
       audioMode,
@@ -323,8 +377,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       deviceEvents,
       deviceId,
       deviceMetrics,
-      deviceEventSubscriptionAttempts: 0,
-      deviceEventSubscriptionFailures: 0,
+      deviceSubscriptions,
       lastProviderConnectError: null,
       mode,
       providerEvents,
@@ -378,23 +431,7 @@ export class KitVoiceWorker extends IterateDurableObject {
      * audio lane. Retry a finite, explicit window and retain the successful
      * project session for exactly the device socket lifetime.
      */
-    const subscription = this.#establishDeviceEventSubscription(active, {
-      assignProject(openedProject) {
-        if (projectSessionClosed) {
-          openedProject[Symbol.dispose]();
-          return false;
-        }
-        project = openedProject;
-        return true;
-      },
-      releaseProject(openedProject) {
-        if (project === openedProject) {
-          project = undefined;
-          if (projectSessionClosed) return;
-        }
-        openedProject[Symbol.dispose]();
-      },
-    });
+    const subscription = deviceSubscriptions.establish();
     this.ctx.waitUntil(subscription);
 
     return new Response(null, {
@@ -524,52 +561,6 @@ export class KitVoiceWorker extends IterateDurableObject {
       }
     });
     this.ctx.waitUntil(tracked);
-  }
-
-  async #establishDeviceEventSubscription(
-    active: ActivePcmSession,
-    owner: {
-      assignProject(project: Project & Disposable): boolean;
-      releaseProject(project: Project & Disposable): void;
-    },
-  ): Promise<void> {
-    const retryDelaysMs = [0, 250, 500, 1_000, 2_000, 4_000, 8_000];
-    for (const delayMs of retryDelaysMs) {
-      if (delayMs > 0) {
-        await new Promise<void>((resolve) => setTimeout(resolve, delayMs));
-      }
-      if (this.#activePcm !== active || active.bridge.metrics().closed) return;
-
-      active.deviceEventSubscriptionAttempts += 1;
-      let project: (Project & Disposable) | undefined;
-      try {
-        project = await this.env.ITX.get();
-        if (!owner.assignProject(project)) return;
-        await this.#subscribeToDeviceEvents(project, active, active.sessionId);
-        await this.#subscribeToDeviceMetrics(project, active, active.sessionId);
-        this.#log("device-event-subscribed", "info", {
-          attempt: active.deviceEventSubscriptionAttempts,
-          sessionId: active.sessionId,
-        });
-        return;
-      } catch (error) {
-        if (project !== undefined) owner.releaseProject(project);
-        active.deviceEventSubscriptionFailures += 1;
-        const finalAttempt = active.deviceEventSubscriptionAttempts === retryDelaysMs.length;
-        this.#log(
-          finalAttempt ? "device-event-subscribe-exhausted" : "device-event-subscribe-retrying",
-          finalAttempt ? "error" : "warn",
-          {
-            attempt: active.deviceEventSubscriptionAttempts,
-            message: errorMessage(error),
-            nextDelayMs: finalAttempt
-              ? null
-              : retryDelaysMs[active.deviceEventSubscriptionAttempts],
-            sessionId: active.sessionId,
-          },
-        );
-      }
-    }
   }
 
   async #loadPcmIngressConfiguration() {
@@ -721,14 +712,16 @@ export class KitVoiceWorker extends IterateDurableObject {
      * the normal device stream instead; PCM is never retained.
      */
     const bridgeMetrics = active.bridge.metrics();
+    const deviceSubscriptions = active.deviceSubscriptions.metrics();
     const report: ClosedPcmSessionReport = {
       ...bridgeMetrics,
       audioMode: active.audioMode,
       deviceEvents: active.deviceEvents.metrics(),
       deviceMetrics: active.deviceMetrics.metrics(),
       deviceId: active.deviceId,
-      deviceEventSubscriptionAttempts: active.deviceEventSubscriptionAttempts,
-      deviceEventSubscriptionFailures: active.deviceEventSubscriptionFailures,
+      deviceSubscriptions,
+      deviceEventSubscriptionAttempts: deviceSubscriptions.eventAttempts,
+      deviceEventSubscriptionFailures: deviceSubscriptions.eventFailures,
       endedAtMs: Date.now(),
       grokCredential: active.grokCredentialPrewarmer?.metrics() ?? null,
       lastProviderConnectError: active.lastProviderConnectError,

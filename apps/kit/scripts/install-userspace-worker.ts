@@ -10,6 +10,7 @@ const runtimeSourceNames = [
   "device-id.ts",
   "device-events.ts",
   "device-metrics.ts",
+  "device-subscriptions.ts",
   "device-tools.ts",
   "pcm-proxy.ts",
   "provider-event-stream.ts",

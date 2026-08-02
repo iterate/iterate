@@ -1,0 +1,33 @@
+/*
+ * Scoped production repair body for the established Kit test project.
+ *
+ * The normal installer authenticates with the device project's own secret.
+ * This incident repair instead runs through the existing OS operator CLI so
+ * it does not copy that bearer out of the flashed device merely to replace two
+ * userspace source files. The caller supplies the inspected source text and
+ * worker reference; this body neither changes firmware nor remounts the
+ * device capability.
+ */
+const commit = await itx.repo.commitFiles({
+  changes: vars.changes,
+  message: "Fix Kit event and metrics subscription isolation",
+});
+
+using worker = itx.workers.get(vars.workerRef);
+let restart = "completed";
+try {
+  await worker.kill();
+} catch (error) {
+  /*
+   * DurableObjectState.abort() destroys the target before its RPC can return
+   * success. Keep the expected abort distinct from build, auth, and routing
+   * errors, which must still fail this repair visibly.
+   */
+  if (error instanceof Error && error.message === "kill requested") {
+    restart = "aborted-as-requested";
+  } else {
+    throw error;
+  }
+}
+
+return { commit, restart };

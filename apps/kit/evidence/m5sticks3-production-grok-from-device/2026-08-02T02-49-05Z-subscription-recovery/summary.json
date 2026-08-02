@@ -1,0 +1,129 @@
+{
+  "schemaVersion": 1,
+  "collectedAt": "2026-08-02T02:49:05.160Z",
+  "classification": "production-path-valid-acoustic-oracle-indeterminate",
+  "classificationReason": "The real production userspace worker, device capability callback, /pcm route, Grok provider, and Stick I2S driver completed three exact spoken turns with conserved frames and no transport or provider errors. The Mac microphone recorder was unavailable across the Herdr/TCC process boundary, so this emergency regression did not produce an independent recording of the Stick speaker and must not be represented as a fresh formal acoustic-oracle pass.",
+  "project": {
+    "id": "prj_bd8785e119fe4f1d8631bb95e1dea748",
+    "slug": "kit-stick-voice-e2e-20260731",
+    "host": "kit--kit-stick-voice-e2e-20260731.iterate.app",
+    "deviceCapabilityPath": "itx.kit.m5sticks3",
+    "providerEventStream": "/devices/m5sticks3",
+    "model": "grok-voice-think-fast-2.0"
+  },
+  "deployment": {
+    "configCommitBeforeFix": "d830139b5a6ad4d8720c33a4335f3342938bf2ea",
+    "configCommitWithFix": "f5d06f2fa1d8ffb87aa6dc8acca09f3102a3ff0a",
+    "message": "Fix Kit event and metrics subscription isolation"
+  },
+  "incident": {
+    "symptom": "The Stick opened the production /pcm socket but remotely and physically generated PTT events did not reach the worker, so microphone audio never reached Grok.",
+    "preFixEvidence": "Event subscription attempts and failures both reached seven. Each attempt received only the initial event snapshot before its callback owner was disposed.",
+    "rootCause": "worker.ts subscribed to critical device events and optional metrics in one try/catch. When the metrics subscription failed after the event subscription succeeded, the catch disposed the retained Cap'n Web project session and silently killed the working PTT callback.",
+    "fix": "DeviceSubscriptionCoordinator gives the event control plane and metrics observability plane independent failure lifecycles while retaining one bounded Cap'n Web project session. Metrics degradation can retry and remain visible without destroying PTT events.",
+    "redFirstRegression": "device-subscriptions.test.ts models an accepted event callback followed by repeated metrics-capacity failures and proves that the event callback remains callable and its project is not released. The installer regression also proves the new runtime source is packaged."
+  },
+  "proof": {
+    "sessionId": "prj_bd8785e119fe4f1d8631bb95e1dea748:m5sticks3:dafdf28a-f158-4e5a-b7f9-3cbbe6a38d99",
+    "inputMethod": "Each prompt was rendered to AIFF by macOS say, played through the Mac speaker with afplay, captured by the physical Stick microphone while the normal device PTT event was remotely driven, then sent through the deployed production /pcm worker to Grok.",
+    "turns": [
+      {
+        "inputFinalTranscript": "Reply in one short sentence. Say exactly: Production conversation turn one succeeded.",
+        "outputFinalTranscript": "Production conversation turn one succeeded.",
+        "providerResponseStatus": "completed"
+      },
+      {
+        "inputFinalTranscript": "Reply in one short sentence. Say exactly: Production conversation turn two succeeded.",
+        "outputFinalTranscript": "Production conversation turn two succeeded.",
+        "providerResponseStatus": "completed"
+      },
+      {
+        "inputFinalTranscript": "Reply in one short sentence. Say exactly: Production conversation turn three succeeded.",
+        "outputFinalTranscript": "Production conversation turn three succeeded.",
+        "providerResponseStatus": "completed"
+      }
+    ],
+    "subscriptions": {
+      "eventAttempts": 1,
+      "eventFailures": 0,
+      "eventReady": true,
+      "metricsAttempts": 1,
+      "metricsFailures": 0,
+      "metricsReady": true
+    },
+    "worker": {
+      "uplinkFrames": 6648,
+      "uplinkTurns": 9,
+      "uplinkDroppedBytes": 0,
+      "uplinkUnavailableFrames": 0,
+      "uplinkEndMarkerTimeouts": 0,
+      "downlinkFrames": 1368,
+      "downlinkDroppedBytes": 0,
+      "downlinkQueuedBytesAtEnd": 0,
+      "providerConnectFailures": 0,
+      "providerDisconnects": 0,
+      "providerSendFailures": 0,
+      "providerResponsesFailed": 0,
+      "providerEventAppendFailures": 0,
+      "providerEventDrops": 0,
+      "lastProviderError": null
+    },
+    "deviceAudio": {
+      "captureSent": 6648,
+      "captureDropped": 0,
+      "captureFailures": 0,
+      "uplinkSent": 6648,
+      "uplinkDropped": 0,
+      "uplinkDepthAtEnd": 0,
+      "uplinkHighWaterFrames": 4,
+      "maximumTransportAcceptAgeMs": 77,
+      "restartIncidents": 0,
+      "downlinkReceived": 1368,
+      "downlinkDropped": 0,
+      "downlinkDepthAtEnd": 0,
+      "downlinkHighWaterFrames": 13,
+      "playbackSubmitted": 1364,
+      "playbackCompleted": 1360,
+      "playbackFlushedCumulative": 8,
+      "playbackDepthAtEnd": 0,
+      "playbackFailures": 0,
+      "protocolFailures": 0,
+      "conservationNote": "1360 completed plus eight cumulative flushed frames equals 1368 received. All eight flushes predated the exact three-turn proof and came from a deliberate stress-harness PTT interruption before an initial greeting had drained; the counter did not increase during the three exact turns."
+    },
+    "deviceRuntime": {
+      "freeHeapBytesAtFinalSnapshot": 8378364,
+      "minimumFreeHeapBytesSinceBoot": 8352336,
+      "freeInternalHeapBytesAtFinalSnapshot": 97135,
+      "minimumFreeInternalHeapBytesSinceBoot": 71379,
+      "freePsramBytesAtFinalSnapshot": 8305500,
+      "cpuPermilleAtFinalSnapshot": 152
+    },
+    "deviceTransport": {
+      "controlWebsocketConnections": 1,
+      "controlWebsocketDisconnects": 0,
+      "controlWebsocketErrors": 0,
+      "controlProtocolFailures": 0,
+      "controlMessagesDiscarded": 0,
+      "wifiDisconnects": 0,
+      "wifiRssiDbmAtFinalSnapshot": -43,
+      "pcmWebsocketConnections": 1,
+      "pcmWebsocketDisconnects": 0,
+      "pcmWebsocketErrors": 0,
+      "pcmWebsocketRawWriteFailures": 0,
+      "pcmTransportFailureIncidents": 0
+    },
+    "networkAttribution": {
+      "verdict": "indeterminate",
+      "reason": "Device counters cover the interval and show a continuously healthy Wi-Fi/control/PCM path. A ten-packet post-run probe had zero loss with 4.554/7.418/22.750/5.284 ms min/mean/max/stddev RTT, but the formal interval-aligned network monitor was not running for this emergency reproduction, so the stricter automatic network-valid verdict is not claimed."
+    },
+    "knownUnrelatedCumulativeState": {
+      "initialGreetingRequests": 4,
+      "note": "The retained worker still requested an initial greeting on these remotely started test calls. The product decision is that connection must be silent until the first PTT turn; that policy correction was already explicitly deferred from this subscription-regression fix."
+    }
+  },
+  "failedHarnessAttempt": {
+    "path": "../2026-08-02T02-19-56-820Z/failure.json",
+    "classification": "host-harness-invalid",
+    "reason": "CoreAudio opened under the Herdr daemon but delivered zero microphone samples until the bounded recorder was terminated. It is retained as a harness failure and is not used to judge the Stick audio path."
+  }
+}

@@ -936,6 +936,70 @@ brownout-safe gain; this run uses the previously agreed exact-STT plus causal
 relative-energy provisional acoustic gate and does not relax any digital,
 reset, or network requirement.
 
+## PTT callback regression and production recovery (2026-08-02 02:49 UTC)
+
+The later report that several conversations did not work at all was real and
+was not an audio-quality fluctuation. The Stick opened its production `/pcm`
+socket, but the worker never observed subsequent PTT events and therefore sent
+no microphone frames to Grok. Before the fix, the worker reported seven device
+event subscription attempts and seven failures; the only accepted events were
+the initial snapshots delivered while each subscription was being created.
+
+The root cause was failure ownership in `worker.ts`. It subscribed to the
+critical device-event control plane and the metrics observability plane in one
+try/catch. The event subscription succeeded, then the metrics subscription
+failed, and the shared catch disposed the Cap'n Web project session that owned
+the already-live PTT callback. A new `DeviceSubscriptionCoordinator` keeps one
+bounded project session but gives the two subscriptions independent lifecycles:
+an event failure still releases and retries the session, while a metrics failure
+is retried and reported without destroying the working event callback.
+
+The red-first regression models exactly that partial-success sequence. It
+proves that the event callback remains callable and that its project is not
+released after repeated metrics-capacity failures. A second installer
+regression proves the new runtime module is included in the deployed source
+bundle. The full userspace/config-worker lane passes 83 tests and the Kit
+package typecheck. The corrected production config commit is
+`f5d06f2fa1d8ffb87aa6dc8acca09f3102a3ff0a`, parent
+`d830139b5a6ad4d8720c33a4335f3342938bf2ea`.
+
+After the worker restart, one production Cap'n Web subscription generation
+remained healthy across four fresh calls and nine remotely driven PTT cycles:
+event and metrics attempts both remained one, both readiness flags remained
+true, and both failure counters remained zero. A final three-turn physical
+microphone proof used macOS `say`/`afplay` as a repeatable nearby speaker. The
+Stick microphone captured each prompt, the deployed `/pcm` worker sent it to
+`grok-voice-think-fast-2.0`, and raw events retained in `/devices/m5sticks3`
+contained exact final input and output transcripts for turns one, two, and
+three (`Production conversation turn N succeeded.`).
+
+Digital accounting at the final snapshot was exact: device capture/uplink and
+worker uplink were all 6,648 frames, worker/device downlink were both 1,368
+frames, and 1,360 completed plus eight cumulative flushed frames accounted for
+all 1,368 received frames. Those eight flushes already existed before the
+three-turn proof because the stress harness deliberately began PTT before an
+initial greeting had drained; no new flush occurred during the exact turns.
+Every drop, provider failure/disconnect, send failure, end-marker timeout,
+protocol failure, audio failure, and restart counter remained zero; all queues
+drained. Final free heap was 8,378,364 bytes, the boot minimum was 8,352,336
+bytes, and final CPU use was 152 permille. The device reported -43 dBm, zero
+Wi-Fi/control/PCM disconnects, and a ten-packet post-run probe had zero loss.
+
+This emergency proof is deliberately classified
+`production-path-valid-acoustic-oracle-indeterminate`, not promoted to the
+formal all-or-nothing acoustic acceptance. The Herdr daemon's CoreAudio process
+opened the Mac microphone but received zero samples, so it could not record the
+Stick speaker independently. The failed bounded recorder run is retained as
+`host-harness-invalid`. The device driver nevertheless reported completed
+playback for every non-interrupted return frame. The formal interval-aligned
+network monitor was also not running; device counters span the call and the
+post-run probe was healthy, but the strict network verdict remains
+`indeterminate` rather than being inferred as `valid`.
+
+The complete structured recovery summary, exact transcripts, counters,
+classification, and caveats are retained at
+`apps/kit/evidence/m5sticks3-production-grok-from-device/2026-08-02T02-49-05Z-subscription-recovery/summary.json`.
+
 ## Dedicated recovery key and deferred conversation-policy correction
 
 The 2026-08-01 Stick build leaves the two programmable controls dedicated to
