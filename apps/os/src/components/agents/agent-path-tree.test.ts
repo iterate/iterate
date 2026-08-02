@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
-import { buildAgentPathForest } from "./agent-path-tree.ts";
+import { agentPathNodeRuntime, buildAgentPathForest } from "./agent-path-tree.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 
 const createdAt = "2026-08-02T10:00:00.000Z";
@@ -37,5 +37,24 @@ describe("agent path forest", () => {
       path: operationsAgent.path,
       agent: operationsAgent,
     });
+  });
+
+  test("replaces only the materialized agent runtime with its live value", () => {
+    const parent = {
+      ...agent("/agents/research"),
+      runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 1 },
+    };
+    const child = {
+      ...agent("/agents/research/bath"),
+      runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 2 },
+    };
+    const [agentsRoot] = buildAgentPathForest({
+      [parent.path]: parent,
+      [child.path]: child,
+    });
+    const research = agentsRoot?.children[0];
+    if (research === undefined) throw new Error("missing research path node");
+
+    expect(agentPathNodeRuntime(research, ZERO_AGENT_RUNTIME).runningScripts).toBe(2);
   });
 });

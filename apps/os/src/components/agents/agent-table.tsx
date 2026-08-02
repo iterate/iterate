@@ -17,6 +17,7 @@ import { BindingLink, PinButton, StateDot } from "./agent.tsx";
 import { AGENT_DISPLAY_STATE_PRESENTATION } from "./agent-presentation.ts";
 import {
   agentPathNodeDisplayState,
+  agentPathNodeRuntime,
   agentPathNodeWaitingFor,
   type AgentPathTreeNode,
 } from "./agent-path-tree.ts";
@@ -174,9 +175,15 @@ function AgentTableRow({
 }) {
   const node = row.original;
   const agent = node.agent;
-  const runtime = runtimeTransition?.runtime ?? node.aggregateRuntime;
+  const runtime = agentPathNodeRuntime(node, runtimeTransition?.runtime);
   const runtimeState = deriveAgentRuntimeDisplayState(runtime);
-  const displayState = runtimeState === "idle" ? agentPathNodeDisplayState(node) : runtimeState;
+  const displayState =
+    runtimeState === "idle"
+      ? agentPathNodeDisplayState({
+          aggregateRuntime: runtime,
+          aggregateWaiting: node.aggregateWaiting,
+        })
+      : runtimeState;
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
   const waitingFor =
     agent !== undefined && row.getIsExpanded()

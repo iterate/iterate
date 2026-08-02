@@ -79,6 +79,19 @@ export function agentPathNodeDisplayState(
   return "idle";
 }
 
+/** Replace a materialized agent's catalog runtime with its live runtime while
+ * preserving the aggregate runtime of every descendant. */
+export function agentPathNodeRuntime(
+  node: Pick<AgentPathTreeNode, "agent" | "aggregateRuntime">,
+  liveRuntime?: AgentRuntime,
+): AgentRuntime {
+  if (node.agent === undefined || liveRuntime === undefined) return node.aggregateRuntime;
+  return addRuntime(
+    subtractRuntime(node.aggregateRuntime, node.agent.runtime ?? ZERO_AGENT_RUNTIME),
+    liveRuntime,
+  );
+}
+
 function absolutePathPrefixes(path: string): string[] {
   const segments = path.split("/").filter(Boolean);
   return segments.map((_, index) => `/${segments.slice(0, index + 1).join("/")}`);
@@ -162,5 +175,20 @@ function addRuntime(left: AgentRuntime, right: AgentRuntime): AgentRuntime {
       started: left.llmRequests.started + right.llmRequests.started,
     },
     runningScripts: left.runningScripts + right.runningScripts,
+  };
+}
+
+function subtractRuntime(left: AgentRuntime, right: AgentRuntime): AgentRuntime {
+  return {
+    triggers: {
+      pending: Math.max(0, left.triggers.pending - right.triggers.pending),
+      runnable: Math.max(0, left.triggers.runnable - right.triggers.runnable),
+    },
+    llmRequests: {
+      scheduled: Math.max(0, left.llmRequests.scheduled - right.llmRequests.scheduled),
+      requested: Math.max(0, left.llmRequests.requested - right.llmRequests.requested),
+      started: Math.max(0, left.llmRequests.started - right.llmRequests.started),
+    },
+    runningScripts: Math.max(0, left.runningScripts - right.runningScripts),
   };
 }
