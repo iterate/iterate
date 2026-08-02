@@ -92,6 +92,8 @@ struct cli_runtime {
   const struct cli_device_profile *profile;
   /* CPU stall episodes actually served, for the report. */
   uint32_t cpu_stalls_injected;
+  /** Whether the CPU stall episode now running has yet to fire. */
+  bool stall_armed;
   struct cli_conversation conversation;
   /** Wall-clock end of an interactive session; 0 means no limit was asked. */
   uint64_t finish_at_ms;

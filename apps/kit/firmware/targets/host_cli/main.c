@@ -272,6 +272,10 @@ static bool cli_main_init_harness(struct cli_runtime *runtime);
 /* Adopts a named board's bounded sizes. */
 static bool cli_main_init_profile(struct cli_runtime *runtime);
 
+/* Stops scheduling the loop for a scheduled stall. */
+static void cli_main_stall_if_scheduled(
+    struct cli_runtime *runtime, uint64_t now_ms);
+
 /* Sleeps one bounded cooperative loop interval. */
 static void cli_main_sleep(void);
 
@@ -693,6 +697,7 @@ static bool cli_main_init_harness(struct cli_runtime *runtime)
         runtime->schedule.seed, runtime->schedule.episode_count,
         runtime->schedule.session_ms);
   }
+  runtime->stall_armed = true;
   cli_delivery_fault_configure(
       &runtime->delivery_fault,
       runtime->schedule.empty ? NULL : &runtime->schedule);
@@ -1832,6 +1837,62 @@ static void cli_main_poll_interactive(
   cli_main_apply_key(runtime, event, now_ms);
 }
 
+/**
+ * Stop scheduling the loop for as long as the schedule says.
+ *
+ * THE DEVICE'S TASK IS PREEMPTED; THIS ONE IS NOT. Everything the loop
+ * forgives during a stall — the playback clamp, the mic deadline, the four
+ * frames of I2S lead that cover a short hiccup — is unreachable on a host
+ * that always gets its turn. So a stall must be INJECTED to be tested, and a
+ * rig that never injects one is testing a scheduler the board does not have.
+ *
+ * A real sleep, because the point is that everything else keeps moving while
+ * this loop does not: the socket fills, the converter drains, and the gap is
+ * one a listener would have heard. Skipping time instead would stall nothing.
+ */
+static void cli_main_stall_if_scheduled(
+    struct cli_runtime *runtime, uint64_t now_ms)
+{
+  uint32_t magnitude = 0U;
+  uint64_t elapsed;
+  assert(runtime != NULL);
+  if (runtime->schedule.empty || runtime->options.sealed) return;
+  elapsed = iterate_kit_voice_elapsed_ms(now_ms, runtime->started_ms);
+  if (!cli_fault_schedule_active(
+          &runtime->schedule, CLI_FAULT_KIND_CPU_STALL, elapsed, &magnitude)) {
+    runtime->stall_armed = true;
+    return;
+  }
+  /* Once per episode: a stall re-entered every iteration would be a hang. */
+  if (!runtime->stall_armed) return;
+  runtime->stall_armed = false;
+  ++runtime->cpu_stalls_injected;
+  {
+    const struct cli_fault_episode *episode = NULL;
+    size_t index;
+    for (index = 0U; index < runtime->schedule.episode_count; index++) {
+      const struct cli_fault_episode *candidate =
+          &runtime->schedule.episodes[index];
+      if (candidate->kind != CLI_FAULT_KIND_CPU_STALL) continue;
+      if (elapsed < candidate->at_ms) break;
+      if (elapsed >= candidate->at_ms + candidate->duration_ms) continue;
+      episode = candidate;
+      break;
+    }
+    if (episode == NULL) return;
+    cli_runtime_log(
+        "warn", "cpu stall %ums (scheduled)", episode->duration_ms);
+    {
+      const struct timespec delay = {
+        .tv_sec = (time_t)(episode->duration_ms / CLI_MAIN_MS_PER_SECOND),
+        .tv_nsec = (long)(episode->duration_ms % CLI_MAIN_MS_PER_SECOND) *
+            CLI_MAIN_NS_PER_MS,
+      };
+      (void)nanosleep(&delay, NULL);
+    }
+  }
+}
+
 static void cli_main_sleep(void)
 {
   const struct timespec delay = {
@@ -1851,6 +1912,7 @@ static void cli_main_run_loop(struct cli_runtime *runtime)
         &runtime->transport, CLI_MAIN_TRANSPORT_POLL_EVENTS);
     cli_main_announce_states(runtime);
     cli_main_start_voicelab(runtime);
+    cli_main_stall_if_scheduled(runtime, now_ms);
     cli_main_poll_playback(runtime, now_ms);
     /*
      * The pretend speaker's converter runs on this loop rather than on
