@@ -257,3 +257,15 @@ interval when RF conditions return to the earlier -55 to -57 dBm range, then
 continue the 1 → 2 → 10 minute endurance ladder and the already-recorded
 watchdog/DSP hardening. StackChan follow-up work must not fork a second
 transport or queueing model merely to add endurance or product capabilities.
+
+## Backup checkpoint
+
+The complete worktree checkpoint—including every tracked modification and
+untracked evidence artifact visible to Git—was committed as
+`e4a3f33d29d5cf4d9d16db13fd02f29f4b99aaf8` with message
+`backup: checkpoint c-capabilities StackChan avatar 2026-08-02`. It was pushed
+without overwriting another branch to
+`origin/backup/c-capabilities-stackchan-avatar-20260802-185601`. The remote ref
+was independently read back after the push. This is a recovery checkpoint,
+not a merge or a claim that the deferred network-valid rerun/endurance work is
+finished.
