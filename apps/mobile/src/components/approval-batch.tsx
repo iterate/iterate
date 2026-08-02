@@ -163,7 +163,7 @@ export function ApprovalBatchBody({
         </View>
       )}
 
-      {streamContext?.kind === "script-execution" ? (
+      {streamContext?.kind === "script-execution" && (showThreadInfo || showScriptSource) ? (
         <View style={styles.detailSection}>
           {showThreadInfo ? (
             <View style={styles.sourceHeader}>
