@@ -1654,7 +1654,7 @@ static void cli_main_pulse(
       "pulse loops=%u outbox=%u/%u sent=%u frames=%u batches=%u rx=%u "
       "gaps=%u played=%u conceal=%u under=%u ringMs=%u convUnder=%u "
       "convRefused=%u micIn=%u micLost=%u roomDrop=%u roomStarve=%u "
-      "roomMs=%u",
+      "roomMs=%u injLost=%u injDup=%u injLate=%u",
       runtime->loop_count, outbox->current_slots,
       ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS,
       runtime->transport.control_sender.messages_sent,
@@ -1676,7 +1676,15 @@ static void cli_main_pulse(
        */
       runtime->speaker_room_drops, runtime->live_out.starved,
       cli_audio_out_queued_bytes(&runtime->live_out) /
-          (ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS));
+          (ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS),
+      /*
+       * What the harness DID, beside what happened. Without these a run that
+       * injected nothing and a run that injected everything read the same,
+       * and a clean result from a schedule that never fired would look like
+       * proof.
+       */
+      runtime->delivery_fault.dropped, runtime->delivery_fault.duplicated,
+      runtime->delivery_fault.reordered);
 }
 
 static void cli_main_poll_ready(

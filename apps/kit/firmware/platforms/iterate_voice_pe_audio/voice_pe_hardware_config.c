@@ -67,16 +67,24 @@ iterate_kit_voice_pe_aic3204_power_up_writes(size_t *count) {
 enum iterate_kit_voice_pe_xmos_stage
 iterate_kit_voice_pe_xmos_uplink_stage(void) {
   /*
-   * The public XMOS firmware orders this path AEC -> IC -> NS -> AGC. A
-   * network-valid physical run showed that the final AGC expanded quiet
-   * speaker residue by roughly two orders of magnitude and made Grok hear its
-   * own reply as a new user turn. Stage NS retains every echo-processing stage
-   * while omitting only that destabilising final gain. The userspace bridge
-   * applies a measured fixed multiplier after transport because native NS
-   * level is below xAI's VAD floor. Unlike XMOS AGC, that multiplier cannot
-   * adapt upward specifically when quiet far-end residue is present.
+   * XMOS exposes cumulative taps in the order AEC -> IC -> NS -> AGC. AGC is
+   * already excluded because a production full-duplex run showed it expanding
+   * quiet speaker residue by roughly two orders of magnitude and retriggering
+   * server VAD. The retained spoken double-talk oracle then isolated the next
+   * boundary: the identical nearby phrase was intelligible at NS but reached
+   * only 0.746 similarity and -5.07 dB residual against its near-only capture,
+   * while far-only NS output was nearly empty. Select IC so the device still
+   * performs XMOS's adaptive echo cancellation and two-microphone interference
+   * cancellation, but does not nonlinearly suppress the near speaker we need
+   * to preserve during interruption.
+   *
+   * This is deliberately guarded by the physical oracle rather than assumed
+   * from the tap name. Removing NS may expose more far-end residue; the same
+   * run must reject this policy if tone, PRBS, or spoken far-only leakage is no
+   * longer near-empty. Userspace may apply one fixed post-transport gain for
+   * provider VAD, but it must never substitute adaptive AGC or hide that gate.
    */
-  return ITERATE_KIT_VOICE_PE_XMOS_STAGE_NS;
+  return ITERATE_KIT_VOICE_PE_XMOS_STAGE_IC;
 }
 
 enum iterate_kit_status iterate_kit_voice_pe_xmos_pipeline_command(
