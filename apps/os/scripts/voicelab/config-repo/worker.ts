@@ -419,6 +419,10 @@ export class VoiceBridge extends IterateDurableObject {
                 "then reply with something short enough to be SPOKEN: two or three",
                 "sentences of plain language, no lists, no URLs, no code. Lead with the",
                 "answer. If you genuinely cannot answer, say so in one sentence.",
+                "",
+                "Answer by SENDING A CHAT MESSAGE. That is the only channel that reaches",
+                "the customer — work in scripts all you like, but the reply itself has to",
+                "be a message, and a silent agent leaves the voice apologising for you.",
               ].join("\n"),
               key: "voicelab/colleague-brief",
               llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -475,8 +479,15 @@ export class VoiceBridge extends IterateDurableObject {
             const reply = (await colleagueAgent.ask({
               message: `The customer asked, through the voice: ${question}`,
               timeoutMs: 120_000,
-            })) as { payload?: { content?: string } };
-            answer = reply.payload?.content ?? "";
+            })) as { payload?: { message?: string; content?: string } };
+            /*
+             * `ask` resolves on agents/web-message-sent, whose payload field
+             * is `message`. Reading `content` (the field on context items)
+             * returned an empty string for a perfectly good answer, and the
+             * voice dutifully told the customer their colleague could not
+             * help.
+             */
+            answer = reply.payload?.message ?? reply.payload?.content ?? "";
           } catch (error) {
             answer = "";
             console.log(`colleague failed: ${String(error)}`);

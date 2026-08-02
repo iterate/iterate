@@ -51,6 +51,8 @@ export async function probe(options: ProbeOptions) {
   const at = () => `${((Date.now() - startedAt) / 1000).toFixed(1)}s`;
   let responded = false;
   let spoken = "";
+  let colleagueAsks = 0;
+  let colleagueAnswers = 0;
 
   const connection = await stream.openConnection({
     connectionKey: `probe-${startedAt}`,
@@ -65,10 +67,12 @@ export async function probe(options: ProbeOptions) {
       for (const event of batch.events) {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         if (event.type === "voicelab/colleague-asked") {
+          colleagueAsks++;
           console.log(`${at()}  ASKED COLLEAGUE: ${String(payload.question)}`);
           continue;
         }
         if (event.type === "voicelab/colleague-answered") {
+          colleagueAnswers++;
           console.log(`${at()}  COLLEAGUE (${payload.ms}ms): ${String(payload.answer)}`);
           continue;
         }
@@ -139,6 +143,21 @@ export async function probe(options: ProbeOptions) {
     if (wait > 0 && index < turnCount - 1) {
       await new Promise((resolve) => setTimeout(resolve, wait));
     }
+  }
+
+  /*
+   * Do not hang up on a colleague who is still thinking. Their answer takes
+   * as long as it takes — that is the whole premise — and ending the call
+   * first proves nothing except that the probe is impatient.
+   */
+  if (colleagueAsks > colleagueAnswers) {
+    console.log(`${at()}  waiting for ${colleagueAsks - colleagueAnswers} colleague answer(s)`);
+    const deadline = Date.now() + 150_000;
+    while (colleagueAnswers < colleagueAsks && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+    /* Let the voice actually speak what it was handed. */
+    await new Promise((resolve) => setTimeout(resolve, 8000));
   }
 
   await stream.append({
