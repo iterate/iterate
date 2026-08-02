@@ -502,6 +502,17 @@ export class VoiceBridge extends IterateDurableObject {
             type: "voicelab/colleague-answered",
           });
           /*
+           * Wait for a gap. A colleague who answers while the assistant is
+           * mid-sentence, or while the customer is still holding the talk
+           * button, would have its response.create collide with the turn in
+           * flight — two answers, interleaved, which is the corruption this
+           * lab has heard before from two bridges.
+           */
+          for (let waited = 0; (responseActive || micOpen) && waited < 60_000; waited += 250) {
+            await new Promise((resolve) => setTimeout(resolve, 250));
+          }
+          if (closedDown) return;
+          /*
            * Delivered as a plain conversation item and a fresh response,
            * NOT as the tool's output: by now the voice has long since spoken,
            * and this has to interrupt the conversation the way a colleague
@@ -582,6 +593,8 @@ export class VoiceBridge extends IterateDurableObject {
     });
     let lastActivityAt = Date.now();
     let responseActive = false;
+    /** True between a turn's start and its commit: the customer is speaking. */
+    let micOpen = false;
 
     upstream.addEventListener("message", (event) => {
       const tGrok = Date.now();
@@ -835,6 +848,7 @@ export class VoiceBridge extends IterateDurableObject {
           case "voicelab/turn": {
             lastActivityAt = Date.now();
             if (payload.action === "start") {
+              micOpen = true;
               // Everything queued is answer the user just talked over.
               dropQueuedAudio();
               if (responseActive) {
@@ -842,6 +856,7 @@ export class VoiceBridge extends IterateDurableObject {
                 responseActive = false;
               }
             } else if (payload.action === "commit") {
+              micOpen = false;
               upstream.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
               upstream.send(JSON.stringify({ type: "response.create" }));
             }
