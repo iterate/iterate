@@ -391,7 +391,7 @@ static enum iterate_kit_status sample_metrics(
   sample->aec_detail.lifetime_signal_measurement_failures =
       fixture->maximum_metrics ? UINT32_MAX : 87U;
   sample->has_raw_clean_aec_detail = fixture->include_raw_clean_aec;
-  sample->raw_clean_aec_detail.schema_version = 2U;
+  sample->raw_clean_aec_detail.schema_version = 3U;
   sample->raw_clean_aec_detail.sequence =
       fixture->maximum_metrics ? UINT32_MAX : 88U;
   sample->raw_clean_aec_detail.window_started_at_ms =
@@ -410,6 +410,10 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 1100U;
   sample->raw_clean_aec_detail.clean_mean_absolute =
       fixture->maximum_metrics ? UINT32_MAX : 250U;
+  sample->raw_clean_aec_detail.raw_absolute_sum =
+      fixture->maximum_metrics ? INT64_MAX : 2200000;
+  sample->raw_clean_aec_detail.clean_absolute_sum =
+      fixture->maximum_metrics ? INT64_MAX : 500000;
   sample->raw_clean_aec_detail.playback_content_samples =
       fixture->maximum_metrics ? UINT32_MAX : 48000U;
   sample->raw_clean_aec_detail.lifetime_capture_frames =
@@ -1109,7 +1113,7 @@ static void raw_clean_aec_metrics_preserve_the_truthful_topology(void) {
   assert(
       strstr(
           fixture.captured[1],
-          "\"schemaVersion\":2,\"topology\":\"raw-clean\","
+          "\"schemaVersion\":3,\"topology\":\"raw-clean\","
           "\"sequence\":4294967295,"
           "\"windowStartedAtMs\":9223372036854775807,"
           "\"producedAtMs\":9223372036854775807") != NULL);
@@ -1119,6 +1123,8 @@ static void raw_clean_aec_metrics_preserve_the_truthful_topology(void) {
           "\"rawPeak\":4294967295,\"cleanPeak\":4294967295,"
           "\"rawMeanAbsolute\":4294967295,"
           "\"cleanMeanAbsolute\":4294967295,"
+          "\"rawAbsoluteSum\":9223372036854775807,"
+          "\"cleanAbsoluteSum\":9223372036854775807,"
           "\"playbackContentSamples\":4294967295") != NULL);
   assert(
       strstr(

@@ -1222,8 +1222,10 @@ esp_err_t iterate_kit_voice_pe_audio_owner_start(
       (unsigned)sizeof(owner));
   ESP_LOGI(
       TAG,
-      "XMOS channel0=NS(AEC+IC+NS), channel1=NONE(original mic); "
-      "server VAD; no device turn markers");
+      "XMOS channel0 cumulative stage=%d "
+      "(NONE=0,AEC=1,IC=2,NS=3,AGC=4), "
+      "channel1=NONE(original mic); server VAD; no device turn markers",
+      (int)iterate_kit_voice_pe_xmos_uplink_stage());
   return ESP_OK;
 }
 
@@ -1437,6 +1439,8 @@ iterate_kit_voice_pe_audio_owner_aec_signal_metrics_snapshot(
         window.raw_absolute_sum, window.sampled_samples),
     .clean_mean_absolute = bounded_mean(
         window.clean_absolute_sum, window.sampled_samples),
+    .raw_absolute_sum = window.raw_absolute_sum,
+    .clean_absolute_sum = window.clean_absolute_sum,
     .playback_content_samples = window.playback_content_samples,
   };
   return ITERATE_KIT_OK;

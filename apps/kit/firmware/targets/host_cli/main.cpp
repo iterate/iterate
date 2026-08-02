@@ -814,6 +814,7 @@ void on_control(void *, iterate_kit_voicelab_control control) {
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
     log_line("info", "call accepted");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
+    log_line("warn", "call ended by the bridge");
     ++runtime.calls_lost;
     runtime.talking = false;
     runtime.flushing_turn = false;
@@ -898,10 +899,10 @@ size_t health_json(char *out, size_t capacity) {
       runtime.voicelab.ping_count, runtime.voicelab.ping_failures,
       runtime.liveness_restarts, runtime.bridge_losses,
       runtime.voicelab.last_bridge_ms == 0U ? 0U :
-          static_cast<uint32_t>(now - runtime.voicelab.last_bridge_ms),
+          static_cast<uint32_t>(iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_bridge_ms)),
       runtime.downlink_recycles,
       runtime.voicelab.last_batch_ms == 0U ? 0U :
-          static_cast<uint32_t>(now - runtime.voicelab.last_batch_ms),
+          static_cast<uint32_t>(iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_batch_ms)),
       now - runtime.started_ms, metrics.control_messages_sent,
       metrics.control_outbox_discarded, metrics.control_inbox.messages_published,
       metrics.control_inbox.messages_consumed, metrics.control_inbox_discarded,
@@ -1520,14 +1521,30 @@ void supervise(uint64_t now, size_t outbox_free) {
     ++runtime.transport_restarts;
     iterate_kit_posix_itx_transport_request_restart(&runtime.transport);
   }
-  if (now - runtime.last_liveness_ms >
+  if (iterate_kit_voice_elapsed_ms(now, runtime.last_liveness_ms) >
       ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS) {
     request_process_restart(now);
   }
   if (runtime.voicelab.state != ITERATE_KIT_VOICELAB_READY) return;
   if (runtime.voicelab.call_active && runtime.voicelab.last_bridge_ms != 0U &&
-      now - runtime.voicelab.last_bridge_ms >
+      iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_bridge_ms) >
           ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS) {
+    /*
+     * Dropping a call is the most consequential thing this loop does — it
+     * throws away a live provider session and makes the next turn wait for a
+     * whole new one — so it says why, with the ages that decided it. Counting
+     * it silently made "callsLost=42" a number with no story attached.
+     */
+    log_line("warn",
+             "call dropped: no bridge event for %llums (bridgeAge=%llu batchAge=%llu "
+             "batches=%u rtt=%u)",
+             (unsigned long long)ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS,
+             (unsigned long long)(iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_bridge_ms)),
+             (unsigned long long)(runtime.voicelab.last_batch_ms == 0U
+                                      ? 0U
+                                      : iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_batch_ms)),
+             runtime.voicelab.batches_on_connection,
+             runtime.voicelab.last_rtt_ms);
     ++runtime.bridge_losses;
     ++runtime.calls_lost;
     iterate_kit_voicelab_forget_call(&runtime.voicelab);
@@ -1536,7 +1553,7 @@ void supervise(uint64_t now, size_t outbox_free) {
   if (runtime.wants_call && runtime.voicelab.has_connection_capability &&
       !runtime.voicelab.recycle_pending && outbox_free >= 4U &&
       runtime.voicelab.last_batch_ms != 0U &&
-      now - runtime.voicelab.last_batch_ms >
+      iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_batch_ms) >
           ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS) {
     ++runtime.downlink_recycles;
     if (runtime.downlink_recycles_running >= 3U) {
@@ -1557,7 +1574,7 @@ void supervise(uint64_t now, size_t outbox_free) {
 
 void reconcile_call(uint64_t now, size_t outbox_free) {
   if (runtime.voicelab.call_pending && runtime.call_pending_since_ms != 0U &&
-      now - runtime.call_pending_since_ms > kCallPendingTimeoutMs) {
+      iterate_kit_voice_elapsed_ms(now, runtime.call_pending_since_ms) > kCallPendingTimeoutMs) {
     iterate_kit_voicelab_forget_call(&runtime.voicelab);
     runtime.call_pending_since_ms = 0U;
     runtime.next_call_attempt_at_ms = 0U;
@@ -1579,8 +1596,8 @@ void reconcile_call(uint64_t now, size_t outbox_free) {
 
 void pulse(uint64_t now, const struct iterate_kit_spsc_ring_metrics &outbox) {
   if (!(runtime.talking || runtime.voicelab.call_active ||
-        now - runtime.last_pulse_ms < 3000U)) return;
-  if (now - runtime.last_pulse_ms < 1000U) return;
+        iterate_kit_voice_elapsed_ms(now, runtime.last_pulse_ms) < 3000U)) return;
+  if (iterate_kit_voice_elapsed_ms(now, runtime.last_pulse_ms) < 1000U) return;
   runtime.last_pulse_ms = now;
   log_line("info",
       "pulse loops=%u outbox=%u/%u sent=%u frames=%u batches=%u rx=%u "
@@ -1689,7 +1706,7 @@ void run_loop() {
     ++runtime.loop_count;
     /* Give the one-way transport a full poll interval to put the reply on wire. */
     if (runtime.restart_requested &&
-        now - runtime.restart_requested_at_ms >= 400U) {
+        iterate_kit_voice_elapsed_ms(now, runtime.restart_requested_at_ms) >= 400U) {
       log_line("warn", "re-executing iterate-kit-cli");
       wav_sink_close(&runtime.sink);
       audio_queue_close(&runtime.live_sink);

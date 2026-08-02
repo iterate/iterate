@@ -1,6 +1,8 @@
 #ifndef ITERATE_KIT_VOICE_DEVICE_PROFILE_H
 #define ITERATE_KIT_VOICE_DEVICE_PROFILE_H
 
+#include <stdint.h>
+
 /*
  * THE MEASUREMENT PROFILE SHARED BY THE PHYSICAL AND HOST VOICE TARGETS.
  *
@@ -79,5 +81,31 @@ enum {
   ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS = 10000,
   ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 180000,
 };
+
+/**
+ * How long ago `since` was, on the same monotonic clock as `now`.
+ *
+ * WHY THIS EXISTS RATHER THAN `now - since`. Every deadline in this runtime
+ * is a supervision rule: no bridge event for 20s means the call is gone, no
+ * batch for 10s means the delivery lane is dead. Written as a bare
+ * subtraction on unsigned time they are all armed with the same landmine —
+ * a stamp one millisecond in the FUTURE underflows to 18446744073709551615,
+ * which exceeds every deadline there is.
+ *
+ * That is not hypothetical, and it does not need a clock that goes backwards.
+ * A loop samples `now` once at the top and checks its deadlines at the
+ * bottom; in between it polls the network, and an arriving batch stamps its
+ * own, later, reading. One millisecond of ordinary progress inside a single
+ * iteration was enough: measured on a healthy session with a 78ms round
+ * trip, the call was declared gone and restarted, over and over, forty-two
+ * times in three minutes.
+ *
+ * So a stamp from the future reads as "just now", which is the only sane
+ * meaning it can have.
+ */
+static inline uint64_t iterate_kit_voice_elapsed_ms(
+    uint64_t now, uint64_t since) {
+  return since > now ? 0U : now - since;
+}
 
 #endif /* ITERATE_KIT_VOICE_DEVICE_PROFILE_H */

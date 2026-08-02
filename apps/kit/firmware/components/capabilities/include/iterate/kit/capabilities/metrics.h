@@ -191,6 +191,8 @@ struct iterate_kit_raw_clean_aec_metrics_sample {
   uint32_t clean_peak;
   uint32_t raw_mean_absolute;
   uint32_t clean_mean_absolute;
+  int64_t raw_absolute_sum;
+  int64_t clean_absolute_sum;
   uint32_t playback_content_samples;
   uint32_t lifetime_capture_frames;
   uint32_t lifetime_clean_uplink_frames;

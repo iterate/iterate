@@ -71,9 +71,10 @@ iterate_kit_voice_pe_xmos_uplink_stage(void) {
    * network-valid physical run showed that the final AGC expanded quiet
    * speaker residue by roughly two orders of magnitude and made Grok hear its
    * own reply as a new user turn. Stage NS retains every echo-processing stage
-   * while omitting only that destabilising final gain. Provider-side input
-   * gain can be tuned independently if speech later proves too quiet; it must
-   * not be bought by amplifying far-end residue inside the feedback loop.
+   * while omitting only that destabilising final gain. The userspace bridge
+   * applies a measured fixed multiplier after transport because native NS
+   * level is below xAI's VAD floor. Unlike XMOS AGC, that multiplier cannot
+   * adapt upward specifically when quiet far-end residue is present.
    */
   return ITERATE_KIT_VOICE_PE_XMOS_STAGE_NS;
 }

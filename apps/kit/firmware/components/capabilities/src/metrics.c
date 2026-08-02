@@ -137,7 +137,7 @@ enum {
   PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT = 35,
   PLAYBACK_VIEW_RUNTIME_FIELD_COUNT = 19,
   AEC_VIEW_FIELD_COUNT = 24,
-  RAW_CLEAN_AEC_VIEW_FIELD_COUNT = 19,
+  RAW_CLEAN_AEC_VIEW_FIELD_COUNT = 21,
 };
 
 struct playback_metrics_expression_workspace {
@@ -1041,7 +1041,7 @@ static bool build_raw_clean_aec_metrics_expression(
       &sample->raw_clean_aec_detail;
   size_t count = 0U;
   if (!sample->has_raw_clean_aec_detail ||
-      detail->schema_version != 2U ||
+      detail->schema_version != 3U ||
       detail->sample_stride == 0U ||
       detail->window_started_at_ms > detail->produced_at_ms) {
     /*
@@ -1083,6 +1083,8 @@ static bool build_raw_clean_aec_metrics_expression(
   SET_RAW_CLEAN_AEC_INTEGER("cleanPeak", clean_peak);
   SET_RAW_CLEAN_AEC_INTEGER("rawMeanAbsolute", raw_mean_absolute);
   SET_RAW_CLEAN_AEC_INTEGER("cleanMeanAbsolute", clean_mean_absolute);
+  SET_RAW_CLEAN_AEC_INTEGER("rawAbsoluteSum", raw_absolute_sum);
+  SET_RAW_CLEAN_AEC_INTEGER("cleanAbsoluteSum", clean_absolute_sum);
   SET_RAW_CLEAN_AEC_INTEGER(
       "playbackContentSamples", playback_content_samples);
   SET_RAW_CLEAN_AEC_INTEGER(

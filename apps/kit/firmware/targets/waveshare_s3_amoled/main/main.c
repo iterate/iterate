@@ -924,11 +924,11 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       runtime.bridge_losses,
       runtime.voicelab.last_bridge_ms == 0U
           ? 0U
-          : (uint32_t)(now - runtime.voicelab.last_bridge_ms),
+          : (uint32_t)(iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_bridge_ms)),
       runtime.downlink_recycles,
       runtime.voicelab.last_batch_ms == 0U
           ? 0U
-          : (uint32_t)(now - runtime.voicelab.last_batch_ms),
+          : (uint32_t)(iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_batch_ms)),
       now,
       (int)esp_reset_reason(),
       (uint32_t)esp_get_free_heap_size(),
@@ -1251,7 +1251,7 @@ void app_main(void) {
         unhealthy_since = 0U;
       } else if (unhealthy_since == 0U) {
         unhealthy_since = now;
-      } else if (now - unhealthy_since > UNHEALTHY_RESTART_MS) {
+      } else if (iterate_kit_voice_elapsed_ms(now, unhealthy_since) > UNHEALTHY_RESTART_MS) {
         ESP_LOGE(
             tag,
             "transport unrecoverable for %us — restarting",
@@ -1261,7 +1261,7 @@ void app_main(void) {
       }
     }
 
-    if (restart_requested_at != 0U && now - restart_requested_at > 400U) {
+    if (restart_requested_at != 0U && iterate_kit_voice_elapsed_ms(now, restart_requested_at) > 400U) {
       ESP_LOGW(tag, "restart requested over itx");
       waveshare_display_set_status("restarting…");
       waveshare_recorder_end_call("restart requested");
@@ -1457,7 +1457,7 @@ void app_main(void) {
        */
       if (runtime.voicelab.call_active &&
           runtime.voicelab.last_bridge_ms != 0U &&
-          now - runtime.voicelab.last_bridge_ms > BRIDGE_SILENCE_MS) {
+          iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_bridge_ms) > BRIDGE_SILENCE_MS) {
         ++runtime.bridge_losses;
         ESP_LOGE(
             tag,
@@ -1499,7 +1499,7 @@ void app_main(void) {
           runtime.voicelab.has_connection_capability &&
           !runtime.voicelab.recycle_pending && outbox_free >= 4U &&
           runtime.voicelab.last_batch_ms != 0U &&
-          now - runtime.voicelab.last_batch_ms > DOWNLINK_SILENCE_MS) {
+          iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_batch_ms) > DOWNLINK_SILENCE_MS) {
         ++runtime.downlink_recycles;
         if (runtime.downlink_recycles_running >= 3U) {
           ESP_LOGE(
@@ -1539,7 +1539,7 @@ void app_main(void) {
        * it wants and no call, for as long as it is left on.
        */
       if (runtime.voicelab.call_pending && call_pending_since != 0U &&
-          now - call_pending_since > 20000U) {
+          iterate_kit_voice_elapsed_ms(now, call_pending_since) > 20000U) {
         ESP_LOGW(tag, "call start went unanswered for 20s — trying again");
         iterate_kit_voicelab_forget_call(&runtime.voicelab);
         call_pending_since = 0U;
@@ -1777,8 +1777,8 @@ void app_main(void) {
        * a listener hears as clipping in and out.
        */
       if (runtime.talking || runtime.voicelab.call_active ||
-          now - runtime.last_pulse_ms < 3000U) {
-        if (now - runtime.last_pulse_ms >= 1000U) {
+          iterate_kit_voice_elapsed_ms(now, runtime.last_pulse_ms) < 3000U) {
+        if (iterate_kit_voice_elapsed_ms(now, runtime.last_pulse_ms) >= 1000U) {
           struct iterate_kit_esp_idf_itx_transport_metrics pulse;
           iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &pulse);
           runtime.last_pulse_ms = now;

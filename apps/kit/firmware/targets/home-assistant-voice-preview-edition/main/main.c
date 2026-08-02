@@ -371,7 +371,7 @@ static enum iterate_kit_status sample_runtime_metrics(
 
   sample->has_aec_detail = false;
   sample->has_raw_clean_aec_detail = true;
-  sample->raw_clean_aec_detail.schema_version = 2U;
+  sample->raw_clean_aec_detail.schema_version = 3U;
   sample->raw_clean_aec_detail.sequence = aec_signal.sequence;
   sample->raw_clean_aec_detail.window_started_at_ms =
       aec_signal.window_started_at_us >= (uint64_t)state->booted_at_us
@@ -396,6 +396,20 @@ static enum iterate_kit_status sample_runtime_metrics(
       aec_signal.signal.raw_mean_absolute;
   sample->raw_clean_aec_detail.clean_mean_absolute =
       aec_signal.signal.clean_mean_absolute;
+  /*
+   * A one-second window is orders of magnitude below INT64_MAX, but keep the
+   * conversion explicit because the capability protocol's integer domain is
+   * signed. If a future window policy grows without bound, saturation remains
+   * observable instead of wrapping a valid magnitude into a negative value.
+   */
+  sample->raw_clean_aec_detail.raw_absolute_sum =
+      aec_signal.signal.raw_absolute_sum > INT64_MAX
+      ? INT64_MAX
+      : (int64_t)aec_signal.signal.raw_absolute_sum;
+  sample->raw_clean_aec_detail.clean_absolute_sum =
+      aec_signal.signal.clean_absolute_sum > INT64_MAX
+      ? INT64_MAX
+      : (int64_t)aec_signal.signal.clean_absolute_sum;
   sample->raw_clean_aec_detail.playback_content_samples =
       aec_signal.signal.playback_content_samples;
   sample->raw_clean_aec_detail.lifetime_capture_frames =

@@ -56,6 +56,15 @@ struct iterate_kit_voice_pe_aec_signal_summary {
   uint32_t clean_peak;
   uint32_t raw_mean_absolute;
   uint32_t clean_mean_absolute;
+  /*
+   * The original microphone is quiet enough that an integer mean of 9 versus
+   * 11 changes a normalized AEC verdict by several dB. These exact totals are
+   * copied from accumulators the realtime path already maintains: publishing
+   * them adds no per-sample work and lets the host combine settled windows
+   * without inventing precision from rounded means.
+   */
+  uint64_t raw_absolute_sum;
+  uint64_t clean_absolute_sum;
   /* Non-silence physically submitted while this capture window was open. */
   uint32_t playback_content_samples;
 };
