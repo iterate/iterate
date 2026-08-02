@@ -297,6 +297,59 @@ export function deriveBatchDetail(
 }
 
 /**
+ * Every batch a script execution parked, with its resolution — what the
+ * activity card's Approvals tab renders. Matching is by the batch's
+ * script-execution provenance (streamContext.executionId), the same identity
+ * the code step carries. Order follows the requested events' offsets.
+ */
+export function deriveBatchesForExecution(
+  events: readonly StreamEvent[],
+  executionId: string,
+): { offset: number; payload: RequestedPayload; resolved: ResolvedBatch | null }[] {
+  return [...events]
+    .filter((event) => {
+      if (event.type !== EVENT.requested) return false;
+      const streamContext = (event.payload as RequestedPayload).streamContext;
+      return (
+        streamContext?.kind === "script-execution" && streamContext.executionId === executionId
+      );
+    })
+    .sort((left, right) => left.offset - right.offset)
+    .map((event) => {
+      const detail = deriveBatchDetail(events, event.offset);
+      return {
+        offset: event.offset,
+        payload: detail?.payload || (event.payload as RequestedPayload),
+        resolved: detail?.resolved || null,
+      };
+    });
+}
+
+/**
+ * Collapse a run's batches into the counts behind the activity card's
+ * status glyphs: open (undecided), approved (every verdict approve),
+ * rejected (every verdict reject — the door's expiry decision included),
+ * mixed (a decision with both).
+ */
+export function summarizeBatchOutcomes(batches: readonly { resolved: ResolvedBatch | null }[]): {
+  open: number;
+  approved: number;
+  rejected: number;
+  mixed: number;
+} {
+  const counts = { open: 0, approved: 0, rejected: 0, mixed: 0 };
+  for (const batch of batches) {
+    if (batch.resolved === null) counts.open += 1;
+    else if (batch.resolved.verdicts.every((verdict) => verdict === "approve")) {
+      counts.approved += 1;
+    } else if (batch.resolved.verdicts.every((verdict) => verdict === "reject")) {
+      counts.rejected += 1;
+    } else counts.mixed += 1;
+  }
+  return counts;
+}
+
+/**
  * Page the project stream once and return deriveOpenBatches' result, plus
  * the highest offset seen so a live tail resumes exactly past it. The e2e's
  * connect-fresh entrypoint — no local event cache to derive from.

@@ -41,7 +41,11 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { RpcStub } from "capnweb";
 import type { Agent, StreamEvent } from "iterate/sdk/itx/react";
-import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
+import {
+  ActivityCard,
+  CodeBlock,
+  type ActivityApprovalContext,
+} from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
@@ -261,6 +265,14 @@ export default function ChatScreen() {
                 ))
           }
           feed={feed}
+          // The card's Approvals tab and status glyphs derive from the same
+          // live root-stream approval events the in-thread dialogs use.
+          activityApprovals={{
+            baseUrl: baseUrl!,
+            events: approvalEvents.data || [],
+            projectId,
+            projectSlug: slug || "",
+          }}
           sendPending={send.isPending}
         />
       ) : (
@@ -337,10 +349,12 @@ export default function ChatScreen() {
 }
 
 function FeedList({
+  activityApprovals,
   approvals,
   feed,
   sendPending,
 }: {
+  activityApprovals: ActivityApprovalContext;
   approvals: React.ReactNode;
   feed: ReturnType<typeof reduceFeed>;
   sendPending: boolean;
@@ -378,15 +392,21 @@ function FeedList({
           </Text>
         </View>
       }
-      renderItem={({ item }) => <FeedItem item={item} />}
+      renderItem={({ item }) => <FeedItem activityApprovals={activityApprovals} item={item} />}
     />
   );
 }
 
-function FeedItem({ item }: { item: MobileFeedItem }) {
+function FeedItem({
+  activityApprovals,
+  item,
+}: {
+  activityApprovals: ActivityApprovalContext;
+  item: MobileFeedItem;
+}) {
   switch (item.kind) {
     case "activity":
-      return <ActivityCard activity={item} />;
+      return <ActivityCard activity={item} approvals={activityApprovals} />;
     case "stream-woken":
       return (
         <Text style={styles.wakeMarker}>

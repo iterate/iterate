@@ -1,27 +1,64 @@
 // One activity roll-up in the chat feed — the mobile rendering of the web's
 // "Ran code 2× · 3 requests · 7.4s" rows (packages/ui agent-ui-reducer items).
-// Collapsed: the one-line summary. Expanded (tap, or automatically while
-// live-streaming): every step with its thinking text and code, updating
-// token-by-token as chunks arrive over the stream subscription.
+// Collapsed: the one-line summary plus status glyphs (spinner while running,
+// approval marks once the run parked batches at the egress door). Expanded
+// (tap, or automatically while live-streaming): the run organized into
+// ROUNDS — the llm step that writes a script and the code step that runs it
+// — where each code step is a tabbed view: Script | Approvals | Result. The
+// Approvals tab renders the SAME shared ApprovalBatchBody the Notifications
+// expansion uses, so the in-context view can never drift from the archive.
 
 import { useId, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import type { StreamEvent } from "iterate/sdk/itx/react";
 import { llmResponseForDisplay } from "../lib/activity-display.ts";
-import type { AgentUiActivity, AgentUiStep } from "../lib/feed.ts";
-import { summarizeActivity } from "../lib/feed.ts";
+import {
+  deriveBatchesForExecution,
+  summarizeBatchOutcomes,
+  type RequestedPayload,
+  type ResolvedBatch,
+} from "../lib/approvals.ts";
+import type { AgentUiActivity, AgentUiCodeStep, AgentUiLlmStep, AgentUiStep } from "../lib/feed.ts";
+import { groupActivityRounds, summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import { ApprovalBatchBody } from "./approval-batch.tsx";
 import CodeEditor from "./code-editor.tsx";
 
-export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
+/** What the card needs to find and render its run's approval batches: the
+ * chat screen's live root-stream approval events plus routing context. */
+export type ActivityApprovalContext = {
+  baseUrl: string;
+  events: StreamEvent[];
+  projectId: string;
+  projectSlug: string;
+};
+
+export function ActivityCard({
+  activity,
+  approvals,
+}: {
+  activity: AgentUiActivity;
+  approvals: ActivityApprovalContext;
+}) {
   const isLive = activity.status !== "done";
   const [toggled, setToggled] = useState<boolean | null>(null);
   // Live activities stream open so you can watch the code being written;
   // settled ones collapse to their summary until tapped.
   const expanded = toggled ?? isLive;
+  const rounds = groupActivityRounds(activity.steps);
+  const batchesByExecution = new Map(
+    activity.steps
+      .filter((step): step is AgentUiCodeStep => step.kind === "code")
+      .map((step) => [
+        step.executionId,
+        deriveBatchesForExecution(approvals.events, step.executionId),
+      ]),
+  );
+  const outcomes = summarizeBatchOutcomes([...batchesByExecution.values()].flat());
 
   return (
-    <View style={[styles.card, isLive && styles.cardLive]}>
+    <View style={[styles.card, isLive && styles.cardLive]} testID={`activity-card-${activity.id}`}>
       <Pressable style={styles.summaryRow} onPress={() => setToggled(!expanded)}>
         {isLive && activity.status === "running" ? (
           <ActivityIndicator accessibilityLabel="Loading" size="small" color={colors.working} />
@@ -31,12 +68,57 @@ export function ActivityCard({ activity }: { activity: AgentUiActivity }) {
         <Text style={styles.summary} numberOfLines={1}>
           {isLive ? liveSummary(activity) : summarizeActivity(activity)}
         </Text>
+        <ApprovalGlyphs outcomes={outcomes} />
       </Pressable>
       {expanded
-        ? activity.steps.map((step, index) => (
-            <StepView key={step.id} nextStep={activity.steps[index + 1]} step={step} />
+        ? rounds.map((round, index) => (
+            <View key={round.code?.id || round.llm?.id || index} style={styles.step}>
+              {rounds.length > 1 ? <Text style={styles.roundLabel}>Round {index + 1}</Text> : null}
+              {round.llm ? <LlmStepView code={round.code} step={round.llm} /> : null}
+              {round.code ? (
+                <CodeStepTabs
+                  approvals={approvals}
+                  batches={batchesByExecution.get(round.code.executionId) || []}
+                  step={round.code}
+                />
+              ) : null}
+            </View>
           ))
         : null}
+    </View>
+  );
+}
+
+/**
+ * The collapsed card's approval marks: ◷ while any batch awaits its human,
+ * ✓ when a batch was fully approved, ✗ when one was rejected or mixed — so
+ * "did that run get its approvals?" reads without expanding anything.
+ * No batches, no glyphs.
+ */
+function ApprovalGlyphs({
+  outcomes,
+}: {
+  outcomes: { open: number; approved: number; rejected: number; mixed: number };
+}) {
+  const glyphs = [
+    ...(outcomes.open > 0
+      ? [{ mark: "◷", style: styles.glyphOpen, label: "approval pending" }]
+      : []),
+    ...(outcomes.approved > 0
+      ? [{ mark: "✓", style: styles.glyphApproved, label: "approved" }]
+      : []),
+    ...(outcomes.rejected + outcomes.mixed > 0
+      ? [{ mark: "✗", style: styles.glyphRejected, label: "rejected" }]
+      : []),
+  ];
+  if (glyphs.length === 0) return null;
+  return (
+    <View style={styles.glyphRow}>
+      {glyphs.map((glyph) => (
+        <Text accessibilityLabel={glyph.label} key={glyph.mark} style={[styles.glyph, glyph.style]}>
+          {glyph.mark}
+        </Text>
+      ))}
     </View>
   );
 }
@@ -50,43 +132,127 @@ function liveSummary(activity: AgentUiActivity): string {
   return "working…";
 }
 
-function StepView({ nextStep, step }: { nextStep: AgentUiStep | undefined; step: AgentUiStep }) {
-  const responseText =
-    step.kind === "llm"
-      ? llmResponseForDisplay(
-          step.responseText,
-          nextStep?.kind === "code" ? nextStep.code : undefined,
-        )
-      : "";
+function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: AgentUiLlmStep }) {
+  // Same next-step dedupe as before the rounds layout: the llm's response IS
+  // the round's script, so it renders only where it differs from the code.
+  const responseText = llmResponseForDisplay(step.responseText, code?.code);
   return (
-    <View style={styles.step}>
+    <View style={styles.stepBody}>
       <Text style={styles.stepLabel}>
-        {step.kind === "llm"
-          ? `llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`
-          : `code${step.durationMs ? ` · ${(step.durationMs / 1000).toFixed(1)}s` : ""}${
-              step.status === "done" && step.success === false ? " · failed" : ""
-            }`}
+        {`llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`}
       </Text>
-      {step.kind === "llm" ? (
-        <>
-          {step.thinkingText !== "" ? (
-            <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
-          ) : null}
-          {responseText !== "" ? (
-            <CodeBlock language="typescript" muted={false} text={responseText} />
-          ) : null}
-          {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
-        </>
-      ) : (
+      {step.thinkingText !== "" ? (
+        <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
+      ) : null}
+      {responseText !== "" ? (
+        <CodeBlock language="typescript" muted={false} text={responseText} />
+      ) : null}
+      {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
+    </View>
+  );
+}
+
+/**
+ * One code step as tabs. Script is always there; Approvals only when the
+ * run parked batches at the egress door (rendered through the shared
+ * ApprovalBatchBody — the same component the Notifications expansion uses,
+ * so the two can't drift); Result only once the run settled with a value or
+ * an error. Tab choice follows the card's useState precedent, falling back
+ * to Script whenever the chosen tab isn't offered.
+ */
+function CodeStepTabs({
+  approvals,
+  batches,
+  step,
+}: {
+  approvals: ActivityApprovalContext;
+  batches: { offset: number; payload: RequestedPayload; resolved: ResolvedBatch | null }[];
+  step: AgentUiCodeStep;
+}) {
+  const [selected, setSelected] = useState<"script" | "approvals" | "result" | null>(null);
+  const tabs: ("script" | "approvals" | "result")[] = [
+    "script",
+    ...(batches.length > 0 ? ["approvals" as const] : []),
+    ...(step.status === "done" && (step.result !== undefined || step.errorMessage)
+      ? ["result" as const]
+      : []),
+  ];
+  const active = selected !== null && tabs.includes(selected) ? selected : "script";
+  return (
+    <View style={styles.stepBody}>
+      <Text style={styles.stepLabel}>
+        {`code${step.durationMs ? ` · ${(step.durationMs / 1000).toFixed(1)}s` : ""}${
+          step.status === "done" && step.success === false ? " · failed" : ""
+        }`}
+      </Text>
+      {tabs.length > 1 ? (
+        <View style={styles.tabRow}>
+          {tabs.map((tab) => (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityState={{ selected: tab === active }}
+              key={tab}
+              onPress={() => setSelected(tab)}
+              style={[styles.tab, tab === active && styles.tabActive]}
+            >
+              <Text style={[styles.tabLabel, tab === active && styles.tabLabelActive]}>
+                {tab === "script" ? "Script" : tab === "approvals" ? "Approvals" : "Result"}
+              </Text>
+            </Pressable>
+          ))}
+        </View>
+      ) : null}
+      {active === "script" ? (
         <>
           {step.code !== "" ? (
             <CodeBlock language="typescript" muted={false} text={step.code} />
           ) : null}
-          {step.status === "done" && step.result !== undefined ? (
+          {tabs.includes("result") ? null : step.errorMessage ? (
+            <Text style={styles.error}>{step.errorMessage}</Text>
+          ) : null}
+        </>
+      ) : active === "approvals" ? (
+        <View style={styles.tabBody}>
+          {batches.map((batch) => (
+            <View key={batch.offset} style={styles.batch}>
+              {batch.resolved ? (
+                <View style={styles.decisionRow}>
+                  <Text
+                    style={[
+                      styles.outcomeBadge,
+                      batch.resolved.decisionSummary === "Approved"
+                        ? styles.approvedBadge
+                        : styles.rejectedBadge,
+                    ]}
+                  >
+                    {batch.resolved.decisionSummary}
+                  </Text>
+                </View>
+              ) : (
+                <Text style={styles.awaiting}>Awaiting decision</Text>
+              )}
+              {batch.resolved?.reason ? (
+                <Text style={styles.rejectReason}>Rejected because: {batch.resolved.reason}</Text>
+              ) : null}
+              <ApprovalBatchBody
+                baseUrl={approvals.baseUrl}
+                offset={batch.offset}
+                payload={batch.payload}
+                projectId={approvals.projectId}
+                projectSlug={approvals.projectSlug}
+                resolved={batch.resolved}
+                surface={`activity:${step.executionId}`}
+              />
+            </View>
+          ))}
+        </View>
+      ) : (
+        <View style={styles.tabBody}>
+          {step.result !== undefined ? (
             <CodeBlock language="json" text={previewJson(step.result)} muted />
           ) : null}
           {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
-        </>
+        </View>
       )}
     </View>
   );
@@ -222,7 +388,41 @@ const styles = StyleSheet.create({
     paddingTop: spacing.xs,
     gap: spacing.xs,
   },
+  stepBody: { gap: spacing.xs },
   stepLabel: { color: colors.textFaint, fontSize: 11, textTransform: "uppercase" },
+  roundLabel: { color: colors.text, fontSize: 12, fontWeight: "700" },
+  glyphRow: { flexDirection: "row", gap: 4, marginLeft: "auto" },
+  glyph: { fontSize: 12, fontWeight: "700" },
+  glyphOpen: { color: colors.working },
+  glyphApproved: { color: colors.accent },
+  glyphRejected: { color: colors.danger },
+  tabRow: { flexDirection: "row", gap: spacing.xs },
+  tab: {
+    borderColor: colors.border,
+    borderRadius: radius.full,
+    borderWidth: 1,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+  },
+  tabActive: { backgroundColor: colors.background, borderColor: colors.accent },
+  tabLabel: { color: colors.textMuted, fontSize: 11, fontWeight: "600" },
+  tabLabelActive: { color: colors.accent },
+  tabBody: { gap: spacing.xs },
+  batch: { gap: 4 },
+  decisionRow: { flexDirection: "row" },
+  awaiting: { color: colors.textMuted, fontSize: 12 },
+  rejectReason: { color: colors.danger, fontSize: 12 },
+  outcomeBadge: {
+    borderRadius: radius.full,
+    borderWidth: 1,
+    fontSize: 11,
+    fontWeight: "700",
+    overflow: "hidden",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+  },
+  approvedBadge: { borderColor: colors.accent, color: colors.accent },
+  rejectedBadge: { borderColor: colors.danger, color: colors.danger },
   thinking: { color: colors.textMuted, fontSize: 12, fontStyle: "italic", lineHeight: 17 },
   codeViewer: {
     backgroundColor: colors.background,

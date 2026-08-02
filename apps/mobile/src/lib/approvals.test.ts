@@ -4,6 +4,8 @@ import {
   approvalBodyForDisplay,
   decide,
   deriveBatchDetail,
+  deriveBatchesForExecution,
+  summarizeBatchOutcomes,
   deriveOpenBatches,
   deriveRecentResolvedBatches,
   EVENT,
@@ -448,3 +450,26 @@ function settled(
     payload: { approvalRequestEventOffset, index, status },
   };
 }
+
+test("batches for an execution: provenance-matched, resolution attached, outcome counts", () => {
+  const events = [
+    requestedBurst(1, "gmail-sends", 3), // executionId exec-a
+    requested(5, "other-rule"), // no script provenance — never matches
+    requestedBurst(7, "gmail-sends", 2), // exec-a again (round 2)
+    decided(8, 1, ["approve", "approve", "approve"]),
+  ];
+  const batches = deriveBatchesForExecution(events, "exec-a");
+  expect(batches).toMatchObject([
+    { offset: 1, resolved: { decisionSummary: "Approved" } },
+    { offset: 7, resolved: null },
+  ]);
+  expect(deriveBatchesForExecution(events, "exec-nope")).toEqual([]);
+
+  expect(summarizeBatchOutcomes(batches)).toEqual({ open: 1, approved: 1, rejected: 0, mixed: 0 });
+  expect(
+    summarizeBatchOutcomes([
+      ...deriveBatchesForExecution([...events, decided(9, 7, ["reject", "reject"])], "exec-a"),
+      { resolved: { verdicts: ["approve", "reject"] } as any },
+    ]),
+  ).toEqual({ open: 0, approved: 1, rejected: 1, mixed: 1 });
+});
