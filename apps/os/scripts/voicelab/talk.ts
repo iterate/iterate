@@ -125,7 +125,8 @@ export async function talk(options: TalkOptions = {}) {
 
   const binary = buildIfAbsent(kitDir);
   const stamp = new Date().toISOString().replace(/\D/g, "").slice(8, 14);
-  const playback = `/tmp/iterate-talk-${stamp}.wav`;
+  const playback = `/tmp/iterate-talk-${stamp}-speaker.wav`;
+  const micRecord = `/tmp/iterate-talk-${stamp}-mic.wav`;
 
   console.log(`\n  ${baseUrl} · ${project}`);
   if (options.converse === undefined) {
@@ -137,7 +138,9 @@ export async function talk(options: TalkOptions = {}) {
   } else {
     console.log(`\n  unattended: ${String(options.converse)} minutes, taking its own turns.`);
   }
-  console.log(`\n  what you hear is also written to ${playback}\n`);
+  console.log(`\n  recorded both directions, so a failure can be listened to:`);
+  console.log(`    speaker ${playback}`);
+  console.log(`    mic     ${micRecord}\n`);
 
   runInherited(
     binary,
@@ -154,6 +157,8 @@ export async function talk(options: TalkOptions = {}) {
       ...driverArgs(options, minutes),
       "--speaker-wav",
       playback,
+      "--mic-record",
+      micRecord,
       "--report-json",
       `/tmp/iterate-talk-${stamp}.json`,
     ],
