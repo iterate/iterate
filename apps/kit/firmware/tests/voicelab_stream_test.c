@@ -201,14 +201,25 @@ static int64_t spoken_sequence = -1;
 static int speech_started_count;
 static int response_done_count;
 
+static uint32_t spoken_answer;
+
+/*
+ * Records the identity the frame CARRIED, not one reconstructed here. A stub
+ * that invented the answer number would have passed while the production call
+ * sites did exactly that and could never detect a superseded answer.
+ */
 static void record_speaker(
-    void *context, const uint8_t *pcm, size_t pcm_length, int64_t sequence) {
+    void *context,
+    const uint8_t *pcm,
+    size_t pcm_length,
+    const struct iterate_kit_playout_frame *identity) {
   (void)context;
   if (pcm_length <= sizeof(spoken)) {
     memcpy(spoken, pcm, pcm_length);
     spoken_length = pcm_length;
   }
-  spoken_sequence = sequence;
+  spoken_sequence = identity == NULL ? -1 : (int64_t)identity->frame;
+  spoken_answer = identity == NULL ? 0U : identity->answer;
 }
 
 static char heard_user[192];

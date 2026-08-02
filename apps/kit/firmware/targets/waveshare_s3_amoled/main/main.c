@@ -451,8 +451,10 @@ static uint64_t now_ms(void *context) {
 /* --- speaker path (voicelab callbacks run on the app task) ---------------- */
 
 static void on_speaker_pcm(
-    void *context, const uint8_t *pcm, size_t pcm_length, int64_t sequence) {
-  struct iterate_kit_playout_frame frame;
+    void *context,
+    const uint8_t *pcm,
+    size_t pcm_length,
+    const struct iterate_kit_playout_frame *identity) {
   enum iterate_kit_playout_action action;
   (void)context;
   /*
@@ -461,16 +463,11 @@ static void on_speaker_pcm(
    * a full buffer that happens to EVERY frame. An odd length would shift the
    * 16-bit sample grid permanently, so it is refused outright.
    */
-  if ((pcm_length & 1U) != 0U || sequence < 0 || sequence > UINT32_MAX) {
+  if ((pcm_length & 1U) != 0U || identity == NULL) {
     ++runtime.speaker_bad_frames;
     return;
   }
-  frame = (struct iterate_kit_playout_frame){
-    .call = 1U,
-    .answer = runtime.playout.answer,
-    .frame = (uint32_t)sequence,
-  };
-  action = iterate_kit_playout_classify(&runtime.playout, &frame);
+  action = iterate_kit_playout_classify(&runtime.playout, identity);
   if (action == ITERATE_KIT_PLAYOUT_IGNORE) return;
   if (action == ITERATE_KIT_PLAYOUT_REPLACE) {
     /*

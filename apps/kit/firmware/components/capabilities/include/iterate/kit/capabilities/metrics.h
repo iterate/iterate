@@ -168,10 +168,10 @@ struct iterate_kit_aec_metrics_sample {
  * One aligned raw/fully-processed window for hardware whose AEC reference is
  * private.
  *
- * Some audio coprocessors expose the original microphone and their fully
- * processed AEC+IC+NS+AGC output on the same I2S capture edge, but do not
+ * Some audio coprocessors expose the original microphone and a selected
+ * processed AEC+IC+NS output on the same I2S capture edge, but do not
  * expose the internal far-end reference. The processed path has intentional
- * automatic gain, so equal-gain raw/processed division is not an AEC metric;
+ * different transfer, so equal-gain raw/processed division is not an AEC metric;
  * the acceptance harness first measures that transfer on live near-end speech.
  * This is not a degraded three-tap sample: it is a different, truthful
  * topology. `playback_content_samples` counts physically submitted non-silence

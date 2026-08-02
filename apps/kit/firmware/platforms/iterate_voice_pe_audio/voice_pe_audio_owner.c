@@ -702,7 +702,7 @@ static esp_err_t initialize_hardware(void) {
       xmos_version.minor,
       xmos_version.patch);
   status = configure_xmos_pipeline(
-      0U, ITERATE_KIT_VOICE_PE_XMOS_STAGE_AGC);
+      0U, iterate_kit_voice_pe_xmos_uplink_stage());
   if (status != ESP_OK) {
     return status;
   }
@@ -1222,7 +1222,7 @@ esp_err_t iterate_kit_voice_pe_audio_owner_start(
       (unsigned)sizeof(owner));
   ESP_LOGI(
       TAG,
-      "XMOS channel0=AGC(clean/AEC), channel1=NONE(original mic); "
+      "XMOS channel0=NS(AEC+IC+NS), channel1=NONE(original mic); "
       "server VAD; no device turn markers");
   return ESP_OK;
 }

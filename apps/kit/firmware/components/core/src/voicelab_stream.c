@@ -209,11 +209,30 @@ static void handle_spk_frame(
     const struct capnweb_value *payload) {
   struct capnweb_value pcm_value;
   struct capnweb_value sequence_value;
+  struct iterate_kit_playout_frame identity;
   int64_t sequence = -1;
+  int64_t answer = 0;
+  int64_t frame_index = -1;
   size_t b64_length;
   size_t pcm_length;
   if (capnweb_value_object_get(payload, "seq", &sequence_value)) {
     (void)capnweb_value_get_int64(&sequence_value, &sequence);
+  }
+  /*
+   * `answer` and `frame` are the sender's account of WHICH answer this belongs
+   * to and where in it. They are what makes a superseded answer rejectable
+   * without a cancellation message and without a clock, so they are read from
+   * the payload and never substituted from local state — doing that once
+   * already made the "newer answer" test compare a number with itself.
+   *
+   * A sender that omits them is one answer numbered zero whose frames are its
+   * call-wide sequence: older, but still monotonic, so nothing here breaks.
+   */
+  if (capnweb_value_object_get(payload, "answer", &sequence_value)) {
+    (void)capnweb_value_get_int64(&sequence_value, &answer);
+  }
+  if (capnweb_value_object_get(payload, "frame", &sequence_value)) {
+    (void)capnweb_value_get_int64(&sequence_value, &frame_index);
   }
   if (!capnweb_value_object_get(payload, "pcm", &pcm_value) ||
       capnweb_value_copy_string(
@@ -239,11 +258,16 @@ static void handle_spk_frame(
   }
   ++voicelab->spk_frames_received;
   if (voicelab->options.on_speaker != NULL) {
+    identity.call = 1U;
+    identity.answer = answer < 0 ? 0U : (uint32_t)answer;
+    identity.frame =
+        frame_index < 0 ? (uint32_t)(sequence < 0 ? 0 : sequence)
+                        : (uint32_t)frame_index;
     voicelab->options.on_speaker(
         voicelab->options.downlink_context,
         voicelab->pcm_buffer,
         pcm_length,
-        sequence);
+        &identity);
   }
 }
 

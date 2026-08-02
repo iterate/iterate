@@ -30,6 +30,17 @@ enum iterate_kit_voice_pe_xmos_stage {
   ITERATE_KIT_VOICE_PE_XMOS_STAGE_COUNT,
 };
 
+/**
+ * Selects the XMOS tap that is allowed onto the realtime `/pcm` uplink.
+ *
+ * Keeping this policy beside the first-party stage enum makes a consequential
+ * DSP choice host-testable. It must not be buried as a literal in the ESP-IDF
+ * owner task: changing AEC/NS/AGC order changes both intelligibility and
+ * whether speaker residue can retrigger provider VAD.
+ */
+enum iterate_kit_voice_pe_xmos_stage
+iterate_kit_voice_pe_xmos_uplink_stage(void);
+
 struct iterate_kit_voice_pe_xmos_version {
   uint8_t major;
   uint8_t minor;

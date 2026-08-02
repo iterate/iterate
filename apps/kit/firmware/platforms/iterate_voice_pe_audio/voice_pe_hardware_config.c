@@ -64,6 +64,20 @@ iterate_kit_voice_pe_aic3204_power_up_writes(size_t *count) {
   return power_up_writes;
 }
 
+enum iterate_kit_voice_pe_xmos_stage
+iterate_kit_voice_pe_xmos_uplink_stage(void) {
+  /*
+   * The public XMOS firmware orders this path AEC -> IC -> NS -> AGC. A
+   * network-valid physical run showed that the final AGC expanded quiet
+   * speaker residue by roughly two orders of magnitude and made Grok hear its
+   * own reply as a new user turn. Stage NS retains every echo-processing stage
+   * while omitting only that destabilising final gain. Provider-side input
+   * gain can be tuned independently if speech later proves too quiet; it must
+   * not be bought by amplifying far-end residue inside the feedback loop.
+   */
+  return ITERATE_KIT_VOICE_PE_XMOS_STAGE_NS;
+}
+
 enum iterate_kit_status iterate_kit_voice_pe_xmos_pipeline_command(
     uint8_t channel,
     enum iterate_kit_voice_pe_xmos_stage stage,
@@ -76,8 +90,9 @@ enum iterate_kit_status iterate_kit_voice_pe_xmos_pipeline_command(
   }
   /*
    * Resource 241 and command IDs 0x30/0x40 come from the XMOS firmware's
-   * configuration_servicer. Channel 0 AGC is the fully processed public mic;
-   * channel 1 NONE is the original microphone used only for AEC diagnostics.
+   * configuration_servicer. The caller deliberately selects channel 0's
+   * public DSP tap; channel 1 NONE is the original microphone used only for
+   * AEC diagnostics.
    */
   destination[0] = VOICE_PE_XMOS_CONFIGURATION_RESOURCE;
   destination[1] = channel == 0U ? 0x30U : 0x40U;

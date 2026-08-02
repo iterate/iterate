@@ -732,17 +732,14 @@ void playback_poll(uint64_t now) {
   }
 }
 
-void on_speaker(void *, const uint8_t *pcm, size_t length, int64_t sequence) {
+void on_speaker(void *, const uint8_t *pcm, size_t length,
+                const iterate_kit_playout_frame *identity) {
   if ((length & 1U) != 0U || length != ITERATE_KIT_VOICE_FRAME_BYTES ||
-      sequence < 0 || sequence > UINT32_MAX) {
+      identity == nullptr) {
     ++runtime.speaker_bad_frames;
     return;
   }
-  iterate_kit_playout_frame identity{};
-  identity.call = 1U;
-  identity.answer = runtime.playout.answer;
-  identity.frame = static_cast<uint32_t>(sequence);
-  const auto action = iterate_kit_playout_classify(&runtime.playout, &identity);
+  const auto action = iterate_kit_playout_classify(&runtime.playout, identity);
   if (action == ITERATE_KIT_PLAYOUT_IGNORE) return;
   if (action == ITERATE_KIT_PLAYOUT_REPLACE) {
     ring_clear(&runtime.speaker_ring);

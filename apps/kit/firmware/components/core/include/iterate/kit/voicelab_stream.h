@@ -6,6 +6,7 @@
 #include <stdint.h>
 
 #include "capnweb/capnweb.h"
+#include "iterate/kit/audio_playout.h"
 #include "iterate/kit/voice_device_profile.h"
 
 #ifdef __cplusplus
@@ -77,12 +78,25 @@ enum iterate_kit_voicelab_control {
   ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED,
 };
 
-/** One decoded speaker PCM frame (16 kHz mono S16LE) from the stream. */
+/**
+ * One decoded speaker PCM frame (16 kHz mono S16LE) with the identity it
+ * carried on the wire.
+ *
+ * `identity` is the frame's OWN account of which call, which answer and which
+ * position within that answer — never the receiver's belief about those. That
+ * distinction is the entire point and it has already been got wrong: both
+ * targets filled `answer` in from their own state before classifying, which
+ * makes "is this a newer answer?" ask whether a number equals itself. The
+ * REPLACE path became unreachable, so a barge-in never flushed the queue and
+ * the assistant talked over the person for the rest of the answer.
+ *
+ * It is passed by pointer and borrowed for the duration of the call.
+ */
 typedef void (*iterate_kit_voicelab_speaker_fn)(
     void *context,
     const uint8_t *pcm,
     size_t pcm_length,
-    int64_t sequence);
+    const struct iterate_kit_playout_frame *identity);
 
 typedef void (*iterate_kit_voicelab_control_fn)(
     void *context, enum iterate_kit_voicelab_control control);
