@@ -461,12 +461,26 @@ static void on_control(
     waveshare_display_set_status("hold the lower button to talk");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
     waveshare_recorder_end_call("bridge hung up");
-    /* The bridge hung up (its idle timeout, Grok closing, or our own
-     * hangup echoing back) — the button must agree with reality. */
-    waveshare_display_request_call(false);
+    /*
+     * The BELIEF ends here; the INTENT does not.
+     *
+     * This used to clear the call request too, on the reasoning that the
+     * button should agree with reality. But the bridge ends a call for
+     * reasons that have nothing to do with what the person wants — the
+     * provider closing its socket, an eviction, an idle timeout — and
+     * clearing the request turned every one of those into "your call is
+     * over, press the button again". Measured: the provider closed at 296s
+     * into an hour-long soak and the device sat there for the remaining 55
+     * minutes with wantsCall false, answering RPCs, waiting to be pressed.
+     *
+     * Intent is owned locally and only a person changes it: hanging up sets
+     * it false BEFORE announcing the end, so the bridge's echo arrives to a
+     * device that already agrees. Anything else is a call to reopen.
+     */
     waveshare_display_set_call_active(false);
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
-    waveshare_display_set_status("call ended");
+    waveshare_display_set_status(
+        waveshare_display_call_requested() ? "reconnecting" : "call ended");
   }
 }
 
@@ -1285,6 +1299,7 @@ void app_main(void) {
       static uint64_t drain_window_at;
       static uint64_t next_call_attempt_at;
       static uint64_t next_recorder_attempt_at;
+      static uint64_t call_pending_since;
       static bool call_active_shown;
 
       /*
@@ -1329,9 +1344,27 @@ void app_main(void) {
         next_call_attempt_at = 0U; /* reconnect now, not on the old backoff */
       }
 
+      /*
+       * call_pending is a promise that something will answer, and promises
+       * expire. It is cleared by call-accepted or by the start RPC failing —
+       * so a start whose reply is simply lost (the session died underneath
+       * it, the bridge never came up) latched it true forever, and the
+       * reconcile below never ran again. The device then waits, with a call
+       * it wants and no call, for as long as it is left on.
+       */
+      if (runtime.voicelab.call_pending && call_pending_since != 0U &&
+          now - call_pending_since > 20000U) {
+        ESP_LOGW(tag, "call start went unanswered for 20s — trying again");
+        iterate_kit_voicelab_forget_call(&runtime.voicelab);
+        call_pending_since = 0U;
+        next_call_attempt_at = 0U;
+      }
+      if (!runtime.voicelab.call_pending) call_pending_since = 0U;
+
       if (wants_call && !runtime.voicelab.call_active &&
           !runtime.voicelab.call_pending && outbox_free >= 3U &&
           now >= next_call_attempt_at) {
+        call_pending_since = now;
         next_call_attempt_at = now + 8000U; /* a start takes ~1-3s; don't spam */
         if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==
             CAPNWEB_OK) {

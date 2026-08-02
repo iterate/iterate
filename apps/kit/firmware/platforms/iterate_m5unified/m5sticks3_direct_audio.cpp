@@ -78,10 +78,12 @@ M5StickS3DirectI2sOps::createAndConfigure(
   }
 
   /*
-   * Eight 320-stereo-frame descriptors are exactly 160 ms of physical reserve.
-   * That value comes from a production 90 ms interarrival gap which exhausted
-   * the old 80 ms cycle; it is not an arbitrary latency budget. ESP-IDF's own
-   * guidance sizes dma_desc_num from the maximum measured service interval.
+   * Sixteen 320-stereo-frame descriptors are exactly 320 ms of physical
+   * reserve. That value comes from a production 250 ms interarrival gap which
+   * exhausted the prior 160 ms cycle; it is not an arbitrary latency budget.
+   * ESP-IDF's own guidance sizes dma_desc_num from the maximum measured service
+   * interval. This remains physical cyclic ownership, not a software queue;
+   * the portable age fence still destroys delayed conversation history.
    * `auto_clear_before_cb` remains the safety valve: a missed refill plays
    * silence on the next wrap instead of replaying old speech. Clearing after
    * callback would race the Core-1 owner that receives descriptor ownership

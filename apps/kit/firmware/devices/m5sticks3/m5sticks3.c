@@ -77,11 +77,12 @@ static enum iterate_kit_status handle_event(
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED: {
       /*
        * Hang-up leaves the half-duplex speaker deliberately suspended after
-       * purging the previous generation. Grok speaks first in a new call, so
-       * waiting for the first PTT release to restore the speaker silently
-       * discarded the entire greeting even though `/pcm` delivered it on
-       * time. Treat hardware readiness as part of accepting the start event:
-       * userspace receives success only after new downlink PCM can be played.
+       * purging the previous generation. Conversation start must still make
+       * the output hardware ready before returning success, but it does not
+       * authorize provider speech: in manual PTT mode only a completed front-
+       * button turn does that. Preparing here keeps the first legitimate
+       * answer off the codec/I2S initialization path without resurrecting the
+       * discarded "Grok speaks first" product behavior.
        */
       const enum iterate_kit_status status =
           iterate_kit_audio_prepare_playback(&device->audio);

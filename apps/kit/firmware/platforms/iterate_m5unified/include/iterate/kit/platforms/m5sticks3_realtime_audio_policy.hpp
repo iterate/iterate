@@ -17,18 +17,21 @@ namespace iterate::kit::platforms {
  */
 struct M5StickS3RealtimeAudioPolicy {
   /*
-   * Eight 20 ms physical DMA descriptors provide 160 ms of bounded playout
-   * reserve. A production run observed a 90 ms provider-to-device interarrival
-   * gap; the former four-descriptor cycle necessarily substituted and dropped
-   * two 20 ms slots. Six descriptors are still marginal because a
-   * phase-aligned 90 ms gap can complete five descriptors, exactly filling
-   * ESP-IDF's dma_desc_num-1 finished-pointer queue. Eight spans that measured
-   * event with two further slots of margin for about 5 KiB more internal RAM.
+   * Sixteen 20 ms physical DMA descriptors provide 320 ms of bounded playout
+   * reserve. The first production trace measured a 90 ms provider-to-device
+   * interarrival gap and proved eight descriptors sufficient for that case.
+   * The next run measured 250 ms: thirteen phase-aligned slots completed,
+   * exhausted the eight-descriptor cycle, and produced one exact recovery
+   * silence/late-frame pair. Sixteen spans those thirteen completions with two
+   * entries of margin below ESP-IDF's dma_desc_num-1 finished-pointer bound.
+   * Relative to eight descriptors this costs 10,240 bytes of internal DMA RAM;
+   * the same run's 68,163-byte minimum leaves roughly 57 KiB after that charge,
+   * which the physical resource proof must confirm rather than assume.
    *
    * This is the hardware ownership cycle, not a software FIFO. Frame-age and
    * generation policy below still reject delayed history after an outage.
    */
-  static constexpr std::size_t descriptorCount = 8U;
+  static constexpr std::size_t descriptorCount = 16U;
 
   /*
    * The initial 200 ms bound was below a measured 257 ms receive-to-DMA

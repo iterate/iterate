@@ -32,7 +32,15 @@ void testAssert(
 
 constexpr std::size_t sampleCount =
     ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME;
-constexpr std::size_t laneSlotCount = 8U;
+/*
+ * The Stick owns a 32-frame / 640 ms application downlink ring. The old
+ * eight-slot host fixture accidentally made it impossible to preload the
+ * target's now-larger physical descriptor cycle and therefore tested a
+ * topology the device cannot have. Matching the production ring keeps fault
+ * scenarios free to exercise DMA policy; individual tests still publish only
+ * the frames their invariant needs, so this adds no hidden playback queue.
+ */
+constexpr std::size_t laneSlotCount = 32U;
 constexpr std::uint32_t sampleRate =
     ITERATE_KIT_PCM_V1_SAMPLE_RATE_HZ;
 constexpr std::uint32_t frameDurationMs =
@@ -1203,9 +1211,15 @@ void productionStartupJitterDoesNotClipAnOrderedResponse() {
   TEST_ASSERT(result.status == ITERATE_KIT_OK);
   TEST_ASSERT(result.playbackStarted);
   TEST_ASSERT(
-      output.submittedHistory ==
-      std::vector<std::int16_t>(
-          {1, 2, 3, 4, 5, 6, 7, 8}));
+      output.submittedHistory.size() ==
+      m5StickS3ProductionDescriptorCount);
+  for (std::size_t index = 0U;
+       index < output.submittedHistory.size();
+       ++index) {
+    TEST_ASSERT(
+        output.submittedHistory[index] ==
+        static_cast<std::int16_t>(index + 1U));
+  }
   TEST_ASSERT(playback.metrics().freshnessIncidents == 0U);
   TEST_ASSERT(playback.metrics().freshnessFramesDropped == 0U);
 }
@@ -1261,6 +1275,69 @@ void productionReserveAbsorbsMeasuredNinetyMillisecondGap() {
   TEST_ASSERT(output.stopCount == 0U);
   TEST_ASSERT(
       output.submittedHistory.size() == descriptorCount + 5U);
+  for (std::size_t index = 0U;
+       index < output.submittedHistory.size();
+       ++index) {
+    TEST_ASSERT(
+        output.submittedHistory[index] ==
+        static_cast<std::int16_t>(index + 1U));
+  }
+}
+
+/*
+ * The August 2 eight-descriptor production proof then observed a 250 ms
+ * provider-to-device interarrival gap: all 148 frames reached the Stick, but
+ * thirteen phase-aligned 20 ms EOFs exhausted the 160 ms hardware cycle and
+ * forced exactly one recovery-silence/late-frame pair. The interval was
+ * network-invalid (111 ms host RTT), yet realtime recovery must become clean
+ * again as soon as current packets resume; clipping a complete ordered reply
+ * is not an acceptable recovery policy. Sixteen physical descriptors span the
+ * measured thirteen EOFs with two completed-pointer slots of margin. This is
+ * still a bounded DMA ownership cycle—not a software FIFO—and the independent
+ * 400 ms freshness fence continues to purge speech after a real outage.
+ */
+void productionReserveAbsorbsMeasuredTwoHundredFiftyMillisecondGap() {
+  constexpr std::size_t descriptorCount =
+      m5StickS3ProductionDescriptorCount;
+  static_assert(descriptorCount >= 16U);
+  LaneFixture fixture;
+  FakeDirectOutputFor<descriptorCount> output;
+  M5StickS3ProductionPlayback playback;
+  TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
+  for (std::int16_t value = 1;
+       value <= static_cast<std::int16_t>(descriptorCount);
+       ++value) {
+    fixture.publish(value, 0U);
+  }
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 0U).
+          playbackStarted);
+
+  /* Thirteen EOFs are possible across a phase-aligned 250 ms gap. */
+  output.complete(13U);
+  output.oldestEofToOwnerUs = 240'000U;
+  output.nextEofLeadUs = 60'000U;
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 250U).status ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(playback.metrics().underrunIncidents == 0U);
+  TEST_ASSERT(output.runningSilenceWrites == 0U);
+
+  for (std::int16_t value =
+           static_cast<std::int16_t>(descriptorCount + 1U);
+       value <= static_cast<std::int16_t>(descriptorCount + 13U);
+       ++value) {
+    fixture.publish(value, 250U);
+  }
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 250U).status ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(playback.metrics().underrunLateFramesDropped == 0U);
+  TEST_ASSERT(playback.metrics().underrunSilenceFramesSubmitted == 0U);
+  TEST_ASSERT(playback.metrics().dmaDeadlineMissIncidents == 0U);
+  TEST_ASSERT(output.stopCount == 0U);
+  TEST_ASSERT(
+      output.submittedHistory.size() == descriptorCount + 13U);
   for (std::size_t index = 0U;
        index < output.submittedHistory.size();
        ++index) {
@@ -2174,6 +2251,7 @@ int main() {
   staleDownlinkIsPurgedInsteadOfPlayedLate();
   productionStartupJitterDoesNotClipAnOrderedResponse();
   productionReserveAbsorbsMeasuredNinetyMillisecondGap();
+  productionReserveAbsorbsMeasuredTwoHundredFiftyMillisecondGap();
   productionSpeechPastTheBoundIsStillPurged();
   partialPrebufferTimesOutAsOneClassifiedDiscard();
   finiteResponsesFromOneThroughFiveFramesEndCleanly();

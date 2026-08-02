@@ -972,8 +972,9 @@ class RealtimePlayback {
         /*
          * All earlier PCM has already been submitted because this marker shares
          * the lane FIFO. Stop refilling completed descriptors; auto-clear makes
-         * them silent, and at most three content EOFs remain before clean stop,
-         * within ESP-IDF's three-entry completion queue.
+         * them silent. At most DmaFrameCount-1 content EOFs remain before the
+         * final content completion stops the channel, which is exactly the
+         * target-sized ESP-IDF completion-queue bound.
          */
         increment(metrics_.endOfStreamMarkersConsumed);
         drainingEndOfStream_ = true;
@@ -1322,8 +1323,9 @@ class RealtimePlayback {
     /*
      * The final content EOF is not the only finite-stream obligation. ESP-IDF
      * retains each completed DMA pointer in a queue with DmaFrameCount-1
-     * entries; simply declining to refill after EOS makes the fourth callback
-     * drop the oldest pointer before the owner can account for the last frame.
+     * entries; simply declining to refill after EOS lets the next callback
+     * beyond that target-sized bound drop the oldest pointer before the owner
+     * can account for the last frame.
      *
      * Consume every available pointer by placing silence *behind* remaining
      * content. This neither delays nor counts as server audio. It only keeps
