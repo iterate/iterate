@@ -33,10 +33,19 @@ import {
 // pinned origin.
 
 const XAI_SECRET = "/secrets/xai";
-/** A call with no mic frames and no Grok traffic for this long is over. */
-const IDLE_TIMEOUT_MS = 180_000;
-/** Backstop so a wedged detached call can never hold a DO forever. */
-const MAX_CALL_MS = 900_000;
+/**
+ * A call with no mic frames and no Grok traffic for this long is over.
+ * Pings deliberately do NOT count: a device pinging into an empty room is
+ * exactly the case this is here to end.
+ */
+const IDLE_TIMEOUT_MS = 600_000;
+/**
+ * Backstop so a wedged detached call can never hold a DO forever. The goal
+ * is hour-long conversations, so this is not the thing that should end one:
+ * a device losing its bridge now notices within 20s and opens another, but
+ * an hour of talking should not need that to happen at all.
+ */
+const MAX_CALL_MS = 3_900_000;
 const FORWARDED_GROK_EVENTS = new Set([
   "input_audio_buffer.speech_started",
   "input_audio_buffer.speech_stopped",
@@ -426,6 +435,15 @@ export class VoiceBridge extends IterateDurableObject {
     let currentConnection: { close(): void } | null = null;
     let currentBatches = 0;
     let lastBatchAt = Date.now();
+    /*
+     * When a PEER last spoke to us — a mic frame, a turn edge, a ping. Not
+     * the same thing as "a batch arrived": the platform's own connection
+     * bookkeeping is not delivered here, and an idle call legitimately
+     * carries no traffic at all for minutes.
+     */
+    let heardFromPeerAt = Date.now();
+    /** A peer that pings is one whose silence means something. */
+    let pingsSeen = 0;
     let lastSeenOffset = -1;
     let reconnects = 0;
     let opening = false;
@@ -437,6 +455,9 @@ export class VoiceBridge extends IterateDurableObject {
       for (const event of events) {
         if (event.offset <= lastSeenOffset) continue;
         lastSeenOffset = event.offset;
+        // Everything delivered here was appended by a peer, by definition:
+        // the subscription only names voicelab/* types.
+        heardFromPeerAt = Date.now();
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         switch (event.type) {
           case "voicelab/mic-frame": {
@@ -492,10 +513,18 @@ export class VoiceBridge extends IterateDurableObject {
             break;
           }
           case "voicelab/ping":
+            /*
+             * The pong is this bridge's proof of life, and the only event a
+             * device receives during a silent call. A detached call lives in
+             * a Durable Object that can be evicted or replaced without ever
+             * running its teardown, so "no call-ended arrived" is NOT
+             * evidence that the call is alive — the pong is.
+             */
+            pingsSeen++;
             fireAppend({
               type: "voicelab/pong",
               ephemeral: true,
-              payload: { id: payload.id, t0: payload.t0, t1: Date.now() },
+              payload: { bridgeId, callId, id: payload.id, t0: payload.t0, t1: Date.now() },
             });
             break;
           case "voicelab/call-accepted":
@@ -558,7 +587,20 @@ export class VoiceBridge extends IterateDurableObject {
       if (now - startedAt > MAX_CALL_MS) return teardown("max call duration");
       if (detached && now - lastActivityAt > IDLE_TIMEOUT_MS) return teardown("idle");
       if (opening) return;
-      if (now - lastBatchAt > 5000) void reopen();
+      /*
+       * Recycle on SILENCE FROM A PEER WE KNOW IS TALKING, never on stream
+       * silence. This used to fire whenever no batch had arrived for 5s —
+       * which is the normal state of an idle call, so the bridge reopened
+       * its connection every 5 seconds for as long as it lived, each cycle
+       * appending the platform's connection-opened/closed pair to the
+       * stream. That is a stream being written to on a timer, which is
+       * exactly what makes a Durable Object slow forever.
+       *
+       * A device pings every 5s, so once one has ever pinged, three missed
+       * pings means the delivery lane is dead and worth replacing. A peer
+       * that never pings (a script, a test) is never second-guessed.
+       */
+      if (pingsSeen > 0 && now - heardFromPeerAt > 16_000) void reopen();
     }, 500);
 
     const teardown = (reason: string, superseded = false) => {
