@@ -25,7 +25,7 @@ import {
   isCheckoutId,
   isGuestWorkspacePath,
   normalizeRepoPath,
-  parseBoardWorkspacePath,
+  boardAddressFor,
 } from "./lib/checkout-shared.ts";
 import { requireWorkspacePath } from "./config-bridge.ts";
 import {
@@ -138,9 +138,10 @@ class TasksProjectApi extends RpcTarget implements TasksProject {
   /**
    * Every workspace stream in the project, newest first — the picker's list.
    * The platform's stream catalog is the source of truth (the sidebar's old
-   * checkout-index DO is retired): board workspaces parse back into their
-   * (checkoutId, repoPath) address; everything else (agent workspaces, ...)
-   * lists as a plain path a lens can open as a guest.
+   * checkout-index DO is retired): board workspaces resolve back to their
+   * (checkoutId, repoPath) address against the project's real repo list;
+   * everything else (agent workspaces, ...) lists as a plain path a lens can
+   * open as a guest.
    *
    * Ancestor pruning: every stream announces itself to every ancestor path,
    * so a nested agent workspace (/workspaces/agents/repos/config/pr/21)
@@ -160,6 +161,9 @@ class TasksProjectApi extends RpcTarget implements TasksProject {
       ).streams;
       return catalog.list();
     })) as { createdAt: string; path: string }[];
+    // The project's repos resolve board paths EXACTLY (a board path is
+    // re-minted per repo and compared) — no guessing at the "--" separator.
+    const repoPaths = await this.repos();
     const candidates = streams.filter((stream) => stream.path.startsWith("/workspaces/"));
     const paths = candidates.map((stream) => stream.path);
     return candidates
@@ -167,7 +171,7 @@ class TasksProjectApi extends RpcTarget implements TasksProject {
       .map((stream) => ({
         path: stream.path,
         createdAt: stream.createdAt,
-        board: parseBoardWorkspacePath(stream.path),
+        board: boardAddressFor(stream.path, repoPaths),
       }))
       .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }

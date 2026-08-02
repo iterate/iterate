@@ -37,6 +37,10 @@ export function AppSidebar() {
   const navigate = useNavigate();
   const location = useRouterState({ select: (state) => state.location });
   const activeCheckoutId = decodeURIComponent(/^\/w\/([^/]+)/.exec(location.pathname)?.[1] ?? "");
+  // The router types search per-route, but the sidebar renders OUTSIDE any
+  // one route, so it reads the union loosely. Safe: both fields are optional
+  // and feed only the active-row highlight — a route without them (or with
+  // other shapes) simply highlights nothing.
   const search = location.search as { repo?: string; workspace?: string };
   const activeRepoPath = (search.repo ?? "") || DEFAULT_REPO_PATH;
   const activeWorkspacePath = search.workspace ?? "";

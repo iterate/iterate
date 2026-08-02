@@ -1,9 +1,5 @@
 import { describe, expect, test } from "vitest";
-import {
-  checkoutWorkspacePath,
-  isGuestWorkspacePath,
-  parseBoardWorkspacePath,
-} from "./checkout-shared.ts";
+import { boardAddressFor, checkoutWorkspacePath, isGuestWorkspacePath } from "./checkout-shared.ts";
 
 describe("checkout workspace stream paths", () => {
   test("slug collisions stay distinct workspaces", () => {
@@ -27,26 +23,30 @@ describe("checkout workspace stream paths", () => {
     );
   });
 
-  test("parse is the hash-verified inverse (the sidebar's board detector)", () => {
-    const path = checkoutWorkspacePath("20260731-ab_c", "/repos/a/b");
-    expect(parseBoardWorkspacePath(path)).toEqual({
-      checkoutId: "20260731-ab_c",
-      repoPath: "/repos/a/b",
-    });
-    // "/repos/a--b" slugs identically to "/repos/a/b" — the embedded hash
-    // must pick the right reading, not fail it (a board on that repo could
-    // never commit otherwise).
-    expect(parseBoardWorkspacePath(checkoutWorkspacePath("c1", "/repos/a--b"))).toEqual({
-      checkoutId: "c1",
-      repoPath: "/repos/a--b",
-    });
-    expect(parseBoardWorkspacePath("/workspaces/agents/you")).toBeNull();
-    expect(parseBoardWorkspacePath("/workspaces/tasks/plain-no-separator")).toBeNull();
+  test("board addresses resolve exactly against the project's repos", () => {
+    // "/repos/a/b" and "/repos/a--b" slug identically; re-minting per repo
+    // resolves each to ITS own board, however deep the path nests.
+    const repos = ["/repos/a/b", "/repos/a--b", "/repos/deep/a/b/c/d/e/f/g/h", "/repos/config"];
+    for (const repoPath of repos) {
+      expect(boardAddressFor(checkoutWorkspacePath("20260731-ab_c", repoPath), repos)).toEqual({
+        checkoutId: "20260731-ab_c",
+        repoPath,
+      });
+    }
+    // Not a board: an agent's workspace, a foreign tasks-namespace name, or
+    // a board on a repo this project does not have.
+    expect(boardAddressFor("/workspaces/agents/you", repos)).toBeNull();
+    expect(boardAddressFor("/workspaces/tasks/plain-no-separator", repos)).toBeNull();
+    expect(boardAddressFor(checkoutWorkspacePath("c1", "/repos/gone"), repos)).toBeNull();
   });
 
   test("guest rule: owned = a board path scoped to its own encoded repo", () => {
     const board = checkoutWorkspacePath("c1", "/repos/config");
     expect(isGuestWorkspacePath(board, "/repos/config")).toBe(false);
+    // However deeply the repo nests, the app's OWN board stays owned — the
+    // check re-mints rather than parsing the ambiguous slug.
+    const deep = "/repos/a/b/c/d/e/f/g/h";
+    expect(isGuestWorkspacePath(checkoutWorkspacePath("c1", deep), deep)).toBe(false);
     // A board lens pointed at a DIFFERENT mount must not publish it.
     expect(isGuestWorkspacePath(board, "/repos/other")).toBe(true);
     expect(isGuestWorkspacePath("/workspaces/agents/you", "/repos/config")).toBe(true);

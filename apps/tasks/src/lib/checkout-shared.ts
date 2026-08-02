@@ -40,35 +40,28 @@ export function checkoutWorkspacePath(checkoutId: string, repoPath: string): str
 }
 
 /**
- * Inverse of checkoutWorkspacePath, hash-verified. The slug alone is not
- * injective ("--" is both the path separator and a legal repo-name
- * substring), so every reading of the slug is enumerated — bounded — and
- * the embedded hash picks the real one. Returns null for anything that is
- * not a board workspace path (an agent workspace, a foreign name under the
- * tasks namespace, ...).
+ * Which board address a workspace path carries, resolved EXACTLY: the slug
+ * alone is not injective ("--" is both the path separator and a legal repo
+ * name substring), so instead of guessing readings we re-mint the path for
+ * each repo the project actually has and keep the one that matches. Returns
+ * null for anything that is not one of this app's board workspaces.
  */
-export function parseBoardWorkspacePath(
+export function boardAddressFor(
   path: string,
+  repoPaths: readonly string[],
 ): { checkoutId: string; repoPath: string } | null {
-  const match = /^\/workspaces\/tasks\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})~(.+)-([0-9a-f]{8})$/.exec(
-    path,
+  const checkoutId = boardCheckoutId(path);
+  if (checkoutId === null) return null;
+  const repoPath = repoPaths.find(
+    (candidate) => checkoutWorkspacePath(checkoutId, candidate) === path,
   );
-  if (match === null) return null;
-  const [, checkoutId, slug, hash] = match;
-  const parts = slug!.split("--");
-  // 2^6 candidate readings is plenty for real repo names; anything wilder
-  // is not a path this app minted.
-  if (parts.length < 2 || parts.length > 7) return null;
-  for (let mask = 0; mask < 1 << (parts.length - 1); mask++) {
-    let repoPath = `/${parts[0]}`;
-    for (let index = 1; index < parts.length; index++) {
-      repoPath += (mask & (1 << (index - 1))) === 0 ? `/${parts[index]}` : `--${parts[index]}`;
-    }
-    if (fnv1a32Hex(repoPath) === hash && normalizeRepoPath(repoPath) !== null) {
-      return { checkoutId: checkoutId!, repoPath };
-    }
-  }
-  return null;
+  return repoPath === undefined ? null : { checkoutId, repoPath };
+}
+
+/** The board id a /workspaces/tasks/ path carries, if it is shaped like one. */
+function boardCheckoutId(path: string): string | null {
+  const match = /^\/workspaces\/tasks\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})~/.exec(path);
+  return match?.[1] ?? null;
 }
 
 /**
@@ -85,17 +78,17 @@ export type BoardAddress = {
 };
 
 /**
- * Publishing is the workspace owner's act: the tasks app owns only its own
- * /workspaces/tasks/ naming (boards, shared by every project member), and a
- * board workspace ENCODES its one repo — so ownership requires the path to
- * parse as a board AND the lens to be scoped to that board's own repo. A
- * lens on anything else (an agent's workspace mid-thought, an unparseable
- * tasks-namespace path, a board opened against a different mount) is a
- * guest: read, comment, edit, but never Commit or Discard-all.
+ * Publishing is the workspace OWNER's act. The tasks app owns only the board
+ * workspaces it mints itself, and a board workspace ENCODES its one repo —
+ * so ownership is proven by RE-MINTING the path from (board id, this lens's
+ * repo) and requiring an exact match. Anything else — an agent's workspace
+ * mid-thought, a foreign name under the tasks namespace, a board opened
+ * against a different mount — is a guest: read, comment, edit, but never
+ * Commit or Discard-all.
  */
 export function isGuestWorkspacePath(workspacePath: string, repoPath: string): boolean {
-  const board = parseBoardWorkspacePath(workspacePath);
-  return board === null || board.repoPath !== repoPath;
+  const checkoutId = boardCheckoutId(workspacePath);
+  return checkoutId === null || checkoutWorkspacePath(checkoutId, repoPath) !== workspacePath;
 }
 
 /** 32-bit FNV-1a as 8 lowercase hex chars. */
