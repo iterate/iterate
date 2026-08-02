@@ -487,10 +487,29 @@ Every defect above was re-driven against the deployed fix with the same script.
 | `colleague-answers-twice`     | a stray message announced as "on question #2"                                                                | **delivered with no question number, `unlabelled: true` on the stream**                                                                  |
 | `close-mid-answer`            | (harness fault, see below)                                                                                   | **provider hung up 1.5s into a paced answer after 19 frames; the next turn was still answered, 2 provider sessions**                     |
 
-And the real provider still works — `voicelab probe --turns 2` against
+And the real provider still works. `voicelab probe --turns 2` against
 `api.x.ai` after all of it: call live in 2946ms, both turns answered, hangup
 clean, `appendErrors=0, reconnects=0, redials=0, providerJunk=0,
-handlerErrors=0`.
+handlerErrors=0`. And with the real Grok model driving the real colleague
+through the numbered tool, two questions in one call:
+
+```
+ 4.6s  startCall {"callId":"7a91daf7","ok":true,"startMs":4044}
+ 6.4s  VOICE: I've asked my colleague about the population of Lisbon.
+ 6.4s  TOOL CALL ask_colleague: {"question":"What is the population of Lisbon?"}
+ 7.8s  VOICE: While we wait, what made you curious about Lisbon's population?
+16.7s  COLLEAGUE (10399ms): Lisbon municipality had an estimated 575,739 residents…
+19.5s  VOICE: Lisbon municipality had an estimated 575,739 residents at the end of 2024.
+26.1s  TOOL CALL ask_colleague: {"question":"what our project id is"}
+27.5s  VOICE: While we wait on that, anything else on your mind?
+35.3s  COLLEAGUE (9606ms): The project ID is prj_698c23da57f84d92a9ba5dc959efebec.
+38.8s  VOICE: The project ID is prj_698c23da57f84d92a9ba5dc959efebec.
+```
+
+Two questions, two right answers, no cross-talk, and the model keeps the
+customer company while it waits. Note it does not read the numbers out here —
+which is correct: the instructions ask it to name the question only when more
+than one is outstanding, and these two never overlapped.
 
 ---
 
@@ -559,19 +578,19 @@ pass/fail line.
 - **The real device.** Everything here drives the stream directly. The ESP32
   firmware is not in this worktree, which is exactly why the D6 fix
   self-calibrates rather than asserting a callId contract I cannot read.
-- **A colleague that never answers.** The colleague is a real LLM agent; I
-  could not make it deliberately silent. The path (a 120s `ask` timeout, then
-  "Your colleague could not answer question #n") is exercised by construction
-  but not observed. Making it testable would mean either an injectable
-  colleague path or appending `agents/web-message-sent` to the agent's stream
-  directly from the driver — the latter is possible and would also give a
-  deterministic test for the "agent sends two messages" hazard that survives
-  serialisation.
-- **Provider stalls that are not closes** (`response.created` then nothing;
-  commit never answered) have scripts (`created-then-nothing`, `no-answer`) but
-  no dedicated scenario asserting on them; the bridge has no per-turn answer
-  timeout, so the expected outcome is "the customer waits for ever", which is
-  a product decision rather than a bug to fix here.
+- **A colleague that never answers, and one that answers after 120s.** The
+  colleague is a real LLM agent and I could not make it deliberately silent.
+  The timeout path (120s, then "Your colleague could not answer question #n")
+  is exercised by construction but never observed. The _other_ half of that
+  brief — a colleague that answers **twice** — turned out to be testable after
+  all, by appending `agents/web-message-sent` to the agent's own stream from
+  the driver (that being precisely the event `ask()` waits for), and it found
+  D6b. The same trick would make "never answers" testable with an injectable
+  colleague path, which is a small change to `COLLEAGUE_PATH`.
+- **Overlapping answers proper.** `double-created` covers two `response.created`
+  back to back, but not two answers whose _audio_ genuinely interleaves. The
+  fake would need to emit two answers concurrently on one socket, which no real
+  provider does — worth adding only if the real one is ever seen to.
 
 ---
 
@@ -579,20 +598,21 @@ pass/fail line.
 
 Everything below is in `config-repo/worker.ts` unless stated.
 
-| change                                                                                                      | why                                                                                                                                                                                                                                                                                                                                                 |
-| ----------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `grokBaseUrl` option + `GROK_REALTIME_URL` default                                                          | the ask; makes every scenario above possible                                                                                                                                                                                                                                                                                                        |
-| xAI key only sent to `*.x.ai`                                                                               | `grokBaseUrl` is caller-chosen; a token that follows the URL anywhere is exfiltratable                                                                                                                                                                                                                                                              |
-| buffer provider messages from `accept()`                                                                    | **D1**                                                                                                                                                                                                                                                                                                                                              |
-| `HANDSHAKE_TIMEOUT_MS = 15_000`                                                                             | **D2**                                                                                                                                                                                                                                                                                                                                              |
-| `handleGrokMessage` wrapped; guarded `JSON.parse`; `providerJunk`/`handlerErrors` counters                  | **D3**                                                                                                                                                                                                                                                                                                                                              |
-| `MIC_MAX_LEAD = 64`, `micStale` counter                                                                     | **D4**                                                                                                                                                                                                                                                                                                                                              |
-| `turn-committed` reports delivered vs arrived                                                               | **D4** — the instrument was lying                                                                                                                                                                                                                                                                                                                   |
-| serialised `ask()` + numbered questions + `#n` cross-check                                                  | **D5**                                                                                                                                                                                                                                                                                                                                              |
-| self-calibrating callId filter, `stray` counter                                                             | **D6**                                                                                                                                                                                                                                                                                                                                              |
-| `sendUpstream(...)` for every provider send; `sendMic` try/catch; `sendFailures` counter                    | a `send` on a closed-but-not-yet-closed socket throws, and these run inside the stream-delivery callback — the same class of accident as D3, reachable whenever the provider socket dies between a redial's dial and its attach                                                                                                                     |
-| `MAX_QUEUED_EVENTS = 20_000` on the outbound queue, dropping oldest speaker frames, counted as `droppedSpk` | **hardening, not an observed defect.** 90s of burst audio (4500 events) delivered fine; but the queue had no ceiling at all, and the failure past one is a Durable Object running out of memory, which ends a call with no event and no reason. ~6 minutes of speech in hand is far past any answer a person sits through, so it should never fire. |
-| `call-ended` reason carries `redials, providerJunk, handlerErrors, sendFailures, droppedSpk, stray`         | every counter above is useless if it dies with the isolate                                                                                                                                                                                                                                                                                          |
+| change                                                                                                             | why                                                                                                                                                                                                                                                                                                                                                 |
+| ------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `grokBaseUrl` option + `GROK_REALTIME_URL` default                                                                 | the ask; makes every scenario above possible                                                                                                                                                                                                                                                                                                        |
+| xAI key only sent to `*.x.ai`                                                                                      | `grokBaseUrl` is caller-chosen; a token that follows the URL anywhere is exfiltratable                                                                                                                                                                                                                                                              |
+| buffer provider messages from `accept()`                                                                           | **D1**                                                                                                                                                                                                                                                                                                                                              |
+| `HANDSHAKE_TIMEOUT_MS = 15_000`                                                                                    | **D2**                                                                                                                                                                                                                                                                                                                                              |
+| `handleGrokMessage` wrapped; guarded `JSON.parse`; `providerJunk`/`handlerErrors` counters                         | **D3**                                                                                                                                                                                                                                                                                                                                              |
+| `MIC_MAX_LEAD = 64`, `micStale` counter                                                                            | **D4**                                                                                                                                                                                                                                                                                                                                              |
+| `turn-committed` reports delivered vs arrived                                                                      | **D4** — the instrument was lying                                                                                                                                                                                                                                                                                                                   |
+| serialised `ask()` + numbered questions + `#n` cross-check                                                         | **D5**                                                                                                                                                                                                                                                                                                                                              |
+| the `#n` label decides the announcement; no label means no number is claimed; `unlabelled`/`mislabelled` published | **D6b** — numbering on top of a shaky correlation is a confident lie                                                                                                                                                                                                                                                                                |
+| self-calibrating callId filter, `stray` counter                                                                    | **D6**                                                                                                                                                                                                                                                                                                                                              |
+| `sendUpstream(...)` for every provider send; `sendMic` try/catch; `sendFailures` counter                           | a `send` on a closed-but-not-yet-closed socket throws, and these run inside the stream-delivery callback — the same class of accident as D3, reachable whenever the provider socket dies between a redial's dial and its attach                                                                                                                     |
+| `MAX_QUEUED_EVENTS = 20_000` on the outbound queue, dropping oldest speaker frames, counted as `droppedSpk`        | **hardening, not an observed defect.** 90s of burst audio (4500 events) delivered fine; but the queue had no ceiling at all, and the failure past one is a Durable Object running out of memory, which ends a call with no event and no reason. ~6 minutes of speech in hand is far past any answer a person sits through, so it should never fire. |
+| `call-ended` reason carries `redials, providerJunk, handlerErrors, sendFailures, droppedSpk, stray`                | every counter above is useless if it dies with the isolate                                                                                                                                                                                                                                                                                          |
 
 Deliberately **not** changed:
 
