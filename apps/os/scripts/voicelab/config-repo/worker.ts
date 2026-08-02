@@ -77,6 +77,15 @@ const VOICE_INSTRUCTIONS = [
   "read out URLs, code, or long lists.",
 ].join(" ");
 const FORWARDED_GROK_EVENTS = new Set([
+  /*
+   * `error` and the commit acknowledgement are here because their ABSENCE is
+   * the symptom that costs the most: a device that talks and gets nothing
+   * back looks identical whether its audio never arrived, arrived as
+   * nonsense, or arrived fine and the provider rejected the commit. Only the
+   * provider can tell those apart, so its complaints ride the stream too.
+   */
+  "error",
+  "input_audio_buffer.committed",
   "response.function_call_arguments.done",
   "input_audio_buffer.speech_started",
   "input_audio_buffer.speech_stopped",
@@ -294,22 +303,23 @@ export class VoiceBridge extends IterateDurableObject {
      * accumulating over the answer the way a rate multiplier does.
      */
     /*
-     * 250ms, not 450 — because this lead is NOT the whole cushion.
+     * 600ms. This lead and the device's own ~390ms prefill STACK, so the
+     * ceiling is the device's ring — and cutting the lead to fit a 900ms
+     * ring was the wrong half of that trade: it stopped the overflow and
+     * produced a device whose margin never exceeded 384ms and which
+     * concealed more frames than it played. Silence inserted to cover a dry
+     * buffer sounds exactly like speech thrown away on a full one.
      *
-     * The device buys its own before it starts playing: it waits for ~390ms
-     * of prefill so the first frame does not play with an empty ring. That
-     * prefill and this lead STACK, and measured against the device's 900ms
-     * internal ring the steady-state margin sat at 811-898ms — a ring
-     * essentially full, with tens of milliseconds of headroom for jitter.
+     * The ring is now 1500ms, so there is room for far more than this — but
+     * the DELIVERY LANE, not the ring, is what caps the opening. One batch
+     * carries 240ms of audio and the next waits on the device's reply, so a
+     * burst bigger than a batch is a burst partly dropped on the floor: at
+     * 600ms, 46 of 225 frames never arrived and were concealed instead.
      *
-     * A 5-minute soak overflowed it 64 times in one answer: a second and a
-     * quarter of speech thrown away on arrival, and then five underruns as
-     * the hole came round. This is what "very choppy" has been.
-     *
-     * 250 + 390 is ~640ms of cushion in a 900ms ring: still far more than the
-     * worst RTT ever measured here, with a quarter of a second spare.
+     * One batch of lead, then realtime. The device's own 390ms prefill sits
+     * on top of it, and the lane's 1.37x headroom repays any hiccup.
      */
-    const BURST_MS = 250;
+    const BURST_MS = 240;
     /** Barge-in discards pending audio; everything else keeps its place. */
     const dropQueuedAudio = () => {
       for (let index = paceQueue.length - 1; index >= 0; index--) {
@@ -607,6 +617,9 @@ export class VoiceBridge extends IterateDurableObject {
     let responseActive = false;
     /** True between a turn's start and its commit: the customer is speaking. */
     let micOpen = false;
+    /** Mic frames and expanded PCM bytes handed to the provider this turn. */
+    let micFrames = 0;
+    let micBytes = 0;
 
     /*
      * What has been said, so a redialled session does not start amnesiac.
@@ -931,6 +944,7 @@ export class VoiceBridge extends IterateDurableObject {
         switch (event.type) {
           case "voicelab/mic-frame": {
             lastActivityAt = Date.now();
+            micFrames++;
             try {
               /*
                * `enc: "u"` is G.711 mu-law, which is how a microcontroller
@@ -940,7 +954,9 @@ export class VoiceBridge extends IterateDurableObject {
                * PCM16.
                */
               const bytes = base64ToBytes(payload.pcm as string);
-              upstream.send(payload.enc === "u" ? mulawToPcm16(bytes) : bytes);
+              const pcm = payload.enc === "u" ? mulawToPcm16(bytes) : bytes;
+              micBytes += pcm.byteLength;
+              upstream.send(pcm);
             } catch {
               /* upstream closing; teardown follows via close event */
             }
@@ -978,6 +994,8 @@ export class VoiceBridge extends IterateDurableObject {
             lastActivityAt = Date.now();
             if (payload.action === "start") {
               micOpen = true;
+              micFrames = 0;
+              micBytes = 0;
               // Everything queued is answer the user just talked over.
               dropQueuedAudio();
               if (responseActive) {
@@ -988,6 +1006,23 @@ export class VoiceBridge extends IterateDurableObject {
               micOpen = false;
               upstream.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
               upstream.send(JSON.stringify({ type: "response.create" }));
+              /*
+               * What the provider was actually given for this turn. A device
+               * that speaks and hears nothing back is either not reaching
+               * here (frames 0) or being answered badly (frames fine) — and
+               * without this number those two look the same from the outside.
+               */
+              fireAppend({
+                type: "voicelab/turn-committed",
+                ephemeral: true,
+                payload: {
+                  bridgeId,
+                  callId,
+                  frames: micFrames,
+                  bytes: micBytes,
+                  ms: Math.round(micBytes / 32),
+                },
+              });
             }
             break;
           }
