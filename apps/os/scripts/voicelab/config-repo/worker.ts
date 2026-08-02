@@ -932,7 +932,15 @@ export class VoiceBridge extends IterateDurableObject {
           case "voicelab/mic-frame": {
             lastActivityAt = Date.now();
             try {
-              upstream.send(base64ToBytes(payload.pcm as string));
+              /*
+               * `enc: "u"` is G.711 mu-law, which is how a microcontroller
+               * gets its microphone onto the wire at all: PCM16 base64 is
+               * ~100 KB/s and stalled the device's TCP flow outright. Half
+               * the bytes, expanded back here so the provider only ever sees
+               * PCM16.
+               */
+              const bytes = base64ToBytes(payload.pcm as string);
+              upstream.send(payload.enc === "u" ? mulawToPcm16(bytes) : bytes);
             } catch {
               /* upstream closing; teardown follows via close event */
             }
@@ -1120,6 +1128,25 @@ export class VoiceBridge extends IterateDurableObject {
     const ready = await sessionReady;
     return Response.json({ callId, ...ready });
   }
+}
+
+/**
+ * G.711 mu-law to little-endian PCM16. The inverse of what the device does to
+ * fit its microphone through a link that could not carry PCM16.
+ */
+function mulawToPcm16(mulaw: ArrayBuffer): ArrayBuffer {
+  const input = new Uint8Array(mulaw);
+  const output = new Int16Array(input.length);
+  for (let index = 0; index < input.length; index++) {
+    const value = ~input[index]!;
+    const sign = value & 0x80;
+    const exponent = (value >> 4) & 0x07;
+    const mantissa = value & 0x0f;
+    let sample = ((mantissa << 3) + 0x84) << exponent;
+    sample -= 0x84;
+    output[index] = sign !== 0 ? -sample : sample;
+  }
+  return output.buffer;
 }
 
 function bytesToBase64(bytes: Uint8Array): string {
