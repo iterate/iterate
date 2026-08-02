@@ -88,7 +88,9 @@ being only a deep link.
       failed" row and asserts URL + "Rejected because: …" + the status
       line, and drives "Open thread" from inside the expansion; 3
       consecutive local passes_
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm test`; PR hygiene
+      _all four green from the worktree root after the spinner-disable
+      removal round (2026-08-02); PR body update stays with the parent_
 
 ## Out of scope
 
