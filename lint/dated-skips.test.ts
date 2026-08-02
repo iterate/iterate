@@ -50,6 +50,11 @@ const ALLOWED_UNDATED: AllowedUndated[] = [
     match: "Email OTP sign-in is disabled for this deployment",
     note: "env-gated: the authenticated seeded app proof requires a real signup",
   },
+  {
+    file: "specs/workspace-lens-board.spec.ts",
+    match: "demo spec for the preview-9 lens-demo-live project only",
+    note: "env-gated: the PR #2375 demo recording drives a standing preview-9 project",
+  },
   // -- Grandfathered parked markers (predate the convention, 2026-07-15).
   // Do NOT add entries here — date new parked markers instead. This list
   // only shrinks.
