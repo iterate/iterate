@@ -288,6 +288,45 @@ the human to wait or speak about something else`, with `n` a plain
    the agent, verifiable and published; it is deliberately _not_ used as the
    correlation, because a model can forget to emit it.
 
+**Verified afterwards**, three questions asked in one breath:
+
+```
+asked:  #1 "What is the capital of Portugal?"                        queuedBehind 0
+        #2 "How many hearts does an octopus have?"                   queuedBehind 0
+        #3 "What is the boiling point of water in degrees Fahrenheit?"  queuedBehind 1
+
+answered: {question:1, labelledAs:1, mislabelled:false, ms:9919, waiting:2}
+          {question:2, labelledAs:2, mislabelled:false, ms:8674, waiting:1}
+          {question:3, labelledAs:3, mislabelled:false, ms:9525, waiting:0}
+
+injected into the conversation, 8.7s and 9.5s apart:
+  "Your colleague says, on question #1: Lisbon is the capital of Portugal."
+  "Your colleague says, on question #2: An octopus has three hearts."
+  "Your colleague says, on question #3: Water boils at 212 degrees Fahrenheit at sea level."
+
+tool outputs handed to the model:
+  "asked as question #1 - colleague will get back to you ASAP. you can tell
+   the human to wait or speak about something else"   (…#2, …#3)
+```
+
+Three questions, three different right answers, each announced against the
+question it belongs to, and the colleague's own `#n` agreeing every time.
+Before the fix, the same shape produced one answer injected N times inside ten
+milliseconds.
+
+Note the assertion this test needed twice. Its first version asked "fake
+question 1/2/3", got three identical "that appears to be a placeholder" replies,
+and reported a DEFECT on duplicate answer text — with correct correlation
+underneath. Identical questions cannot distinguish a correct attribution from a
+wrong one, so the fake now asks real questions with different answers, and the
+verdict turns on the delivery **spread** (18199ms — one at a time) rather than
+on the strings.
+
+**`colleague-barge-in`** covers the other half: barge in twenty times while the
+colleague thinks, and the answer still lands once the mic closes —
+`response.cancel` twice, then `Your colleague says, on question #1: …` delivered
+in the gap.
+
 ### D6 — A peer with a foreign callId can drive somebody else's call
 
 **Rank 6.** `handleEvents` checked `callId` on `call-ended` and
@@ -325,6 +364,52 @@ callIds is never second-guessed; one that does gets everyone else's traffic
 filtered from that moment on — which is precisely when a second bridge becomes
 audible. Rejections are counted (`stray=`) on `call-ended`.
 
+### D6b — Serialising the asks is not sufficient on its own, and the fix for D5 announced a wrong number
+
+Found by attacking my own fix, and it is the exact failure the brief warned
+about: **"the voice model announcing 'on question #2' while reading the answer
+to question #1"**, which is what numbering makes possible when the correlation
+underneath is not airtight.
+
+Serialisation makes "the agent's next message" the right answer _for the ask
+that is in flight_. It cannot stop an agent that sends a **second** message for
+a question it already answered — that message lands after the _next_ ask's
+append, so it is that ask's "next message". Driven deliberately, by appending
+an unsolicited `agents/web-message-sent` to the colleague's own stream while
+question 2's ask was in flight:
+
+```
+{question:1, labelledAs:1, mislabelled:false, ms:19938, answer:"Lisbon is the capital of Portugal."}
+{question:2, labelledAs:null, mislabelled:false, ms:1763,
+ answer:"IGNORE ME — a stray second message about question one."}
+
+injected: "Your colleague says, on question #1: Lisbon is the capital of Portugal."
+          "Your colleague says, on question #2: IGNORE ME — a stray second message about question one."
+```
+
+And my `#n` cross-check **did not catch it**: `mislabelled` was only true on a
+positive disagreement, so an answer with _no_ label — a check that could not run
+— was scored as fine and announced with full confidence as question #2.
+
+**The customer hears:** "on your second question — ignore me, a stray second
+message about question one." Nonsense, delivered with a number attached, which
+is worse than the same nonsense delivered without one.
+
+**Fixed.** The colleague's own `#n` label now decides what is _said_, not just
+what is logged:
+
+| the label                      | what the voice is told                                                                                                                     |
+| ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| agrees with the queue position | `Your colleague says, on question #n: …`                                                                                                   |
+| positively disagrees           | the **label's** number — the colleague knows what it is answering better than a queue position does — and `mislabelled: true` is published |
+| absent                         | `Your colleague says: …` with **no number at all**, and `unlabelled: true` is published                                                    |
+
+`VOICE_INSTRUCTIONS` now covers the third row: a message with no number means
+nobody can tell which question it answers, so pass it on without claiming one.
+That converts the failure from "confidently announces the wrong question" into
+"declines to name a question it cannot vouch for", which is the honest outcome
+when no correlation the platform provides can settle it.
+
 ### D7 — Speaker audio before `response.created` is labelled with the previous answer
 
 **Rank 7, and deliberately NOT fixed.**
@@ -335,11 +420,15 @@ answer 1: 75 frames, frame 0..74, 0 discontinuities
 frames labelled answer 0 (before any response.created): 20
 ```
 
-Audio that arrives before its `response.created` inherits the previous answer's
-number, and its frame counter continues from that answer rather than restarting.
-A listener that has already finished answer N will either drop the fragment or
-append it to speech it has already played — 0.4s of stutter at the head of an
-answer.
+Audio that arrives before its `response.created` inherits **the previous
+answer's** number, because `answerSeq` only advances on `response.created`. In
+the run above this happened on the call's first answer, so the orphan landed as
+"answer 0" and the listener's own rule — drop anything older than the newest
+answer number seen — discards it correctly when answer 1 arrives; the customer
+loses 0.4s from the head of the answer. Mid-call it is worse in a way I did not
+capture: the orphan carries answer N's number with `frame` continuing from
+answer N's count, so a listener that has finished answer N appends 0.4s of the
+_next_ answer onto speech it has already played.
 
 I chose not to fix it. The obvious fix — "audio while `responseActive` is false
 starts a new answer" — would also re-number any trailing chunk that arrives
@@ -347,6 +436,61 @@ after `response.done`, which would make the listener discard the tail of a
 perfectly good answer. That is a worse defect than the one being fixed, and
 picking between them needs to be driven by what the real provider actually does
 at answer boundaries, which is a measurement I have not made.
+
+### D8 — A provider that swallows a turn produces silence with no deadline
+
+**Rank 8 — reported, not fixed, because the fix is a product decision.**
+
+With the provider accepting the commit and never answering:
+
+```
+session 1 script=no-answer … commits=1 responses=0
+  received=[session.update,input_audio_buffer.commit,response.create]
+turn-committed: {"frames":25,"bytes":16000,"ms":500,"arrived":25,"lost":0,"stale":0}
+anything from the provider in 30s: false
+call-ended: []
+```
+
+The bridge did everything right — 16000 bytes delivered, the commit and the
+`response.create` both sent — and then waited for ever. There is no per-turn
+answer deadline anywhere, so nothing is appended to say the turn died. The
+customer speaks, and the call is simply silent, indefinitely.
+
+`RESULTS.md` already flagged the shape of this ("~1-in-6 streams-worker calls
+wedge mid-call… a product client needs a turn-level timeout+retry"). What the
+right behaviour is — retry the commit, tell the customer, end the call — is a
+decision about the product, not a bug with an obvious patch, so I have measured
+it and left it.
+
+Its sibling **does** recover: `created-then-nothing` (an answer that starts and
+never finishes) is a `pass` — the customer's next turn cancels the wedged
+response and starts a fresh one (`cancels=1`, second `response.created`
+observed). So a _stuck answer_ is escapable by talking again; a _swallowed
+commit_ is not distinguishable from thinking.
+
+---
+
+## After the fixes: the same scenarios, re-run
+
+Every defect above was re-driven against the deployed fix with the same script.
+
+| scenario                      | before                                                                                                       | after                                                                                                                                    |
+| ----------------------------- | ------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `handshake-race`              | greeting at 0ms → `{"hung":true}` at 25002ms, provider `received: []`                                        | **`{"ok":true,"startMs":2784}`**, provider `received: [session.update]`                                                                  |
+| `no-session-created`          | unanswered at 75002ms                                                                                        | **`{"ok":false,"reason":"the provider never completed a session handshake (0 dials)","startMs":18813}`**                                 |
+| `close-handshake`             | unanswered at 75003ms, 19 dials                                                                              | **`ok:false … (7 dials)` in 17924ms**                                                                                                    |
+| `close-after-session-created` | unanswered at 60002ms, 35 dials                                                                              | **`ok:false … (7 dials)` in 19358ms**                                                                                                    |
+| `malformed-json`              | 0 speaker frames, no `response.done`, next turn unanswered, no `call-ended`, call dead                       | **75 speaker frames, `response.done` seen, second turn answered, one provider session, no redial needed**                                |
+| `mic-straggler-poison`        | provider handed 12800 bytes of the _previous_ turn, `turn-committed` claimed `frames:50 bytes:32000 ms:1000` | **provider handed 19200 bytes = all 30 frames**; `turn-committed`: `frames:30 bytes:19200 ms:600 arrived:50 arrivedBytes:32000 stale:20` |
+| `stale-peer`                  | stranger injected text and committed a turn on a live call                                                   | **`items the stranger got injected: []`, `commits caused by the stranger: 0`**                                                           |
+| `colleague-three-questions`   | 22 asks → one answer injected 22× inside 10ms                                                                | **3 asks → 3 different right answers, correctly numbered, 8.7s and 9.5s apart**                                                          |
+| `colleague-answers-twice`     | a stray message announced as "on question #2"                                                                | **delivered with no question number, `unlabelled: true` on the stream**                                                                  |
+| `close-mid-answer`            | (harness fault, see below)                                                                                   | **provider hung up 1.5s into a paced answer after 19 frames; the next turn was still answered, 2 provider sessions**                     |
+
+And the real provider still works — `voicelab probe --turns 2` against
+`api.x.ai` after all of it: call live in 2946ms, both turns answered, hangup
+clean, `appendErrors=0, reconnects=0, redials=0, providerJunk=0,
+handlerErrors=0`.
 
 ---
 
@@ -367,6 +511,11 @@ at answer boundaries, which is a measurement I have not made.
 | **empty-commit**                           | a commit with no frames produced an empty turn; the next real turn was answered                                                                                                                                                                             |
 | **turn-never-committed**                   | an abandoned turn's 25600 bytes folded into the next commit; the call answered                                                                                                                                                                              |
 | **rapid-barge-in**                         | six barge-ins in four seconds against a 20s **paced** answer: 1 `response.cancel` reached the provider, answer numbers 1→2, **0 non-monotonic frame runs within an answer**                                                                                 |
+| **created-then-nothing**                   | an answer that starts and never finishes is escapable: the customer's next turn sent `response.cancel` and started a second `response.created`                                                                                                              |
+| **colleague-barge-in**                     | 20 barge-ins while the colleague thought, 2 `response.cancel`; the answer was still delivered in the gap once the mic closed                                                                                                                                |
+
+The final post-fix sweep of the non-colleague scenarios: **12 pass, 1 DEFECT** —
+`audio-without-created` (D7), the one deliberately left alone.
 
 ### Two scenarios that first reported a pass they had not earned
 

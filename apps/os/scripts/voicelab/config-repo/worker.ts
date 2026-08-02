@@ -93,6 +93,10 @@ const VOICE_INSTRUCTIONS = [
   "for something else while one is pending, tell them which number you are still",
   "waiting on. Never read out an answer as though it belonged to a different",
   "question: the number on the message is the only thing that says which is which.",
+  "Occasionally a message arrives with NO number — 'Your colleague says:' with",
+  "nothing after 'says'. That means nobody can tell which question it answers, so",
+  "pass it on WITHOUT claiming one: say your colleague sent this along, and let",
+  "the customer place it.",
   "",
   "Speak plainly and briefly — one or two sentences unless asked for more. Never",
   "read out URLs, code, or long lists.",
@@ -579,15 +583,30 @@ export class VoiceBridge extends IterateDurableObject {
      * the honest cost. The voice model is told the number it is waiting on
      * and can say so out loud.
      *
-     * The `#n` label the colleague is asked to echo is a CHECK, not the
-     * correlation: it catches an agent that sent two messages for one
-     * question, which would slip past the serialisation. When it disagrees,
-     * the disagreement is published rather than hidden.
+     * Serialisation is not quite the whole story, and the gap is measured:
+     * an agent that sends a SECOND message for a question it has already
+     * answered still slips through, because that message lands after the
+     * NEXT ask's append and is therefore the next ask's "next message". Driven
+     * deliberately, question #2 was answered with a stray message about
+     * question #1 — and announced, out loud, as the answer to #2.
+     *
+     * So the `#n` label the colleague is asked to echo is a CHECK on top, and
+     * it decides what is said rather than only what is logged:
+     *
+     *   label agrees        say "on question #n" — normal case
+     *   label disagrees     say the LABEL's number. The colleague knows what
+     *                       it is answering better than a queue position does,
+     *                       and `mislabelled` is published so the disagreement
+     *                       is visible.
+     *   no label at all     say NOTHING about which question it is. The check
+     *                       could not run, so the number cannot be vouched
+     *                       for, and a confidently wrong "on question #2" is
+     *                       worse than no number at all.
      */
     const askQueue: { number: number; question: string }[] = [];
     let asking = false;
     /** Answers in hand, waiting for a gap in the conversation to be spoken. */
-    const deliverQueue: { number: number; answer: string }[] = [];
+    const deliverQueue: { number: number; answer: string; vouched: number | null }[] = [];
     let delivering = false;
 
     const pumpDelivery = async () => {
@@ -613,13 +632,20 @@ export class VoiceBridge extends IterateDurableObject {
            * and this has to interrupt the conversation the way a colleague
            * putting their head round the door does.
            */
+          /*
+           * `vouched` is the number the colleague itself put on the answer.
+           * When it is null nobody can say which question this belongs to,
+           * so the voice is handed an answer with no number rather than a
+           * number that might be a lie.
+           */
+          const about = next.vouched === null ? "" : `, on question #${next.vouched}`;
           sendUpstream({
             item: {
               content: [
                 {
                   text:
                     next.answer.length > 0
-                      ? `Your colleague says, on question #${next.number}: ${next.answer}`
+                      ? `Your colleague says${about}: ${next.answer}`
                       : `Your colleague could not answer question #${next.number} — tell the customer plainly which one it was.`,
                   type: "input_text",
                 },
@@ -682,11 +708,14 @@ export class VoiceBridge extends IterateDurableObject {
               mislabelled: labelledAs !== null && labelledAs !== next.number,
               ms: Date.now() - startedAsk,
               question: next.number,
+              /* No label means the answer cannot be attributed at all, and
+               * the voice will be told so rather than guessing. */
+              unlabelled: labelledAs === null && answer.length > 0,
               waiting: askQueue.length,
             },
             type: "voicelab/colleague-answered",
           });
-          deliverQueue.push({ answer, number: next.number });
+          deliverQueue.push({ answer, number: next.number, vouched: labelledAs });
           void pumpDelivery();
         }
       } finally {

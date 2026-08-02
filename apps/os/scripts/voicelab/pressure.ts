@@ -63,6 +63,12 @@ interface Call {
   }): Promise<void>;
   /** Append any event to this call's stream verbatim — including a foreign callId. */
   strayer(type: string, payload: Record<string, unknown>): Promise<void>;
+  /**
+   * Make the colleague appear to send a chat message it was never asked for.
+   * `agent.ask()` waits for exactly this event type, so appending one is the
+   * only way to drive "the agent replied twice" without a cooperative model.
+   */
+  strayColleague(message: string): Promise<void>;
   /** Wait until `check` is true or the deadline passes; returns whether it was. */
   until(what: string, check: () => boolean, ms?: number): Promise<boolean>;
   hangUp(): Promise<void>;
@@ -361,6 +367,12 @@ async function openCall(
     startMs,
     startTimedOut,
     started,
+    strayColleague: async (message) => {
+      await itx.streams.get("/agents/colleague").append({
+        payload: { message },
+        type: "events.iterate.com/agents/web-message-sent",
+      });
+    },
     strayer: async (type, payload) => {
       await stream.append({
         ...(type === "voicelab/mic-frame" ? { ephemeral: true as const } : {}),
@@ -1441,6 +1453,187 @@ function buildScenarios(): Scenario[] {
       };
     },
     what: "sixty turns back to back on one call",
+  });
+
+  add({
+    expected:
+      "the customer is told something. Silence with no timeout is indistinguishable from a dead call",
+    name: "no-answer-to-commit",
+    run: async (harness) => {
+      const call = await harness.open({ script: "no-answer" });
+      const evidence = [`startCall: ${JSON.stringify(call.started)} in ${call.startMs}ms`];
+      await call.speak({ frames: 25 });
+      /*
+       * NOT `call.grok.length > 0`: the commit acknowledgement is a forwarded
+       * provider event, so that condition is true the moment the turn is
+       * committed and the scenario reported "the provider did answer" for a
+       * provider that had answered nothing.
+       */
+      const answered = await call.until(
+        "an actual answer",
+        () =>
+          call.spk.length > 0 ||
+          call.grok.some(
+            (event) => event.type === "response.created" || event.type === "response.done",
+          ),
+        30_000,
+      );
+      const session = harness.lastSession();
+      evidence.push(describeSession(session));
+      evidence.push(
+        `turn-committed: ${JSON.stringify(call.seen.filter((e) => e.type === "voicelab/turn-committed").map((e) => e.payload))}`,
+      );
+      evidence.push(`anything from the provider in 30s: ${answered}`);
+      evidence.push(
+        `call-ended: ${JSON.stringify(call.seen.filter((e) => e.type === "voicelab/call-ended").map((e) => e.payload))}`,
+      );
+      // Is the call still usable if the provider starts behaving again?
+      const pongs = call.seen.filter((event) => event.type === "voicelab/pong").length;
+      evidence.push(`pongs (the bridge's proof of life): ${pongs}`);
+      await call.hangUp();
+      call.close();
+      return {
+        evidence,
+        observed: answered
+          ? "the provider did answer, so the scenario did not test what it claims"
+          : `the provider swallowed a 25-frame turn (${session.micBytesByTurn[0] ?? 0} bytes committed) and said nothing for 30s; the bridge has no per-turn deadline, so nothing is ever appended to say so`,
+        verdict: answered ? ("inconclusive" as const) : ("DEFECT" as const),
+      };
+    },
+    what: "provider accepts the commit and never answers it",
+  });
+
+  add({
+    expected:
+      "an answer that starts and never finishes is noticed; a listener stuck mid-answer is told",
+    name: "created-then-nothing",
+    run: async (harness) => {
+      const call = await harness.open({ script: "created-then-nothing" });
+      const evidence = [`startCall: ${JSON.stringify(call.started)} in ${call.startMs}ms`];
+      await call.speak({ frames: 20 });
+      const created = await call.until(
+        "response.created",
+        () => call.grok.some((event) => event.type === "response.created"),
+        25_000,
+      );
+      await sleep(12_000);
+      const done = call.grok.some((event) => event.type === "response.done");
+      evidence.push(`response.created seen: ${created}, response.done seen: ${done}`);
+      evidence.push(`speaker frames: ${call.spk.length}`);
+      // Can the customer get out of it by talking again?
+      const before = call.grok.filter((event) => event.type === "response.created").length;
+      await call.speak({ frames: 20 });
+      const recovered = await call.until(
+        "a second response.created",
+        () => call.grok.filter((event) => event.type === "response.created").length > before,
+        25_000,
+      );
+      evidence.push(`a new turn started a new answer: ${recovered}`);
+      const session = harness.lastSession();
+      evidence.push(describeSession(session));
+      evidence.push(`provider cancels: ${session.cancels}`);
+      await call.hangUp();
+      call.close();
+      return {
+        evidence,
+        observed: created
+          ? `the answer started and never finished (0 audio, no response.done); the customer's next turn ${recovered ? "did" : "did NOT"} start a fresh answer${session.cancels > 0 ? ` and cancelled the wedged one` : ""}`
+          : "the provider never even started an answer",
+        verdict: !created
+          ? ("inconclusive" as const)
+          : recovered
+            ? ("pass" as const)
+            : ("DEFECT" as const),
+      };
+    },
+    what: "provider sends response.created and then nothing",
+  });
+
+  add({
+    expected:
+      "a stray second message from the colleague is not read out as the answer to the next question",
+    name: "colleague-answers-twice",
+    run: async (harness) => {
+      /*
+       * The residual hazard of serialising asks, driven directly: serialising
+       * makes "the agent's NEXT message" the right answer, so an agent that
+       * sends a SECOND message for a question it has already answered can
+       * still be picked up by the following ask. The stray is appended to the
+       * colleague's own stream as the very event `ask()` waits for, so this
+       * tests the mechanism rather than hoping a model misbehaves.
+       */
+      const call = await harness.open({
+        colleague: true,
+        query: { toolCallsPerTurn: 2, toolEveryTurn: 1, toolMaxTotal: 2 },
+        script: "tool",
+        startPatienceMs: 60_000,
+      });
+      const evidence = [`startCall: ${JSON.stringify(call.started)} in ${call.startMs}ms`];
+      await call.say("ask your colleague two things");
+      const asked = await call.until(
+        "two asks",
+        () => call.seen.filter((event) => event.type === "voicelab/colleague-asked").length >= 2,
+        60_000,
+      );
+      const first = await call.until(
+        "the first answer",
+        () => call.seen.some((event) => event.type === "voicelab/colleague-answered"),
+        180_000,
+      );
+      // Question 2's ask is now in flight. Have the colleague "say something
+      // else" — a second message for question 1, arriving too late.
+      await sleep(1500);
+      const stray = "IGNORE ME — a stray second message about question one.";
+      await call.strayColleague(stray);
+      const second = await call.until(
+        "the second answer",
+        () => call.seen.filter((event) => event.type === "voicelab/colleague-answered").length >= 2,
+        180_000,
+      );
+      const answers = call.seen
+        .filter((event) => event.type === "voicelab/colleague-answered")
+        .map((event) => event.payload);
+      evidence.push(`answered: ${JSON.stringify(answers)}`);
+      const session = harness.lastSession();
+      const spoken = session.injected.filter((item) => item.text.startsWith("Your colleague"));
+      evidence.push(`injected: ${JSON.stringify(spoken)}`);
+      await call.hangUp();
+      call.close();
+      const misdelivered = answers.some(
+        (payload) => typeof payload.answer === "string" && payload.answer.includes("IGNORE ME"),
+      );
+      /*
+       * The defect is not that the stray was picked up — serialisation cannot
+       * prevent that, and no correlation the platform offers can either. The
+       * defect is the bridge ASSERTING a question number for it. So the test
+       * is on what the voice was told: a stray must arrive with no "on
+       * question #n" clause at all.
+       */
+      const falselyNumbered = spoken.some(
+        (item) => item.text.includes("IGNORE ME") && /on question #\d+/.test(item.text),
+      );
+      const flagged = answers.some(
+        (payload) => payload.mislabelled === true || payload.unlabelled === true,
+      );
+      return {
+        evidence,
+        observed:
+          !asked || !first
+            ? "the colleague never got as far as answering"
+            : !misdelivered
+              ? `the stray was never attributed to a question at all (second answer arrived: ${second})`
+              : falselyNumbered
+                ? `a stray second message was read out AS "on question #${answers.find((p) => String(p.answer).includes("IGNORE ME"))?.question}" — a number the bridge could not vouch for`
+                : `the stray was picked up (serialisation cannot prevent that) but delivered with NO question number, and flagged on the stream (${flagged ? "unlabelled/mislabelled set" : "NOT flagged"})`,
+        verdict:
+          !asked || !first
+            ? ("inconclusive" as const)
+            : falselyNumbered || (misdelivered && !flagged)
+              ? ("DEFECT" as const)
+              : ("pass" as const),
+      };
+    },
+    what: "the colleague sends a second message for a question it already answered",
   });
 
   return scenarios;

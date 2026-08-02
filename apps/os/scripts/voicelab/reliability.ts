@@ -181,6 +181,15 @@ export async function reliability(options: ReliabilityOptions) {
          */
         let back = false;
         let lastBootError = "";
+        /*
+         * The restart REQUEST can be lost — the call it interrupts, a session
+         * that dies underneath it, an RPC that times out — and a lost request
+         * is not a device that failed to reboot. Left unretried it cost a
+         * whole attempt: "did not come back within 90000ms (uptimeMs=159502)"
+         * is a device that was never asked. So keep asking, and let uptime be
+         * the thing that decides.
+         */
+        let askedAgainAt = at;
         while (Date.now() - at < LIMITS.bootMs && !back) {
           try {
             await reconnect();
@@ -188,7 +197,14 @@ export async function reliability(options: ReliabilityOptions) {
               uptimeMs?: number;
             };
             back = typeof health.uptimeMs === "number" && health.uptimeMs < 60_000;
-            if (!back) lastBootError = `uptimeMs=${String(health.uptimeMs)}`;
+            if (!back) {
+              lastBootError = `uptimeMs=${String(health.uptimeMs)}`;
+              if (Date.now() - askedAgainAt > 15_000) {
+                askedAgainAt = Date.now();
+                console.error(`  · still up (${lastBootError}); asking again`);
+                await withTimeout("restart", () => device().restart()).catch(() => {});
+              }
+            }
           } catch (error) {
             lastBootError = String(error).slice(0, 100);
           }
@@ -258,11 +274,22 @@ export async function reliability(options: ReliabilityOptions) {
         }
         ms.answer = Date.now() - at;
         if (spokeBytes <= 0) {
+          /*
+           * "Answered but silent" has two completely different causes and the
+           * device can tell them apart: a delivery lane that stopped existing
+           * (batchAgeMs large, and a recycle it did or did not manage) versus
+           * audio that arrived and was not played. Ask before giving up, or
+           * the report says the same words for both.
+           */
+          const why = (await withTimeout("health", () => device().health(), 8000).catch(
+            () => ({}),
+          )) as Record<string, number>;
+          const lane = `batchAgeMs=${why.batchAgeMs} batches=${why.batches} conn=${why.connGeneration} recycles=${why.downlinkRecycles} spkFrames=${why.spkFrames} conceal=${why.spkConceal}`;
           fail(
             "audio",
             answeredAt > 0
-              ? `the model answered but the speaker played nothing (transcript: ${transcript.slice(0, 60)})`
-              : "no answer and no audio",
+              ? `the model answered but the speaker played nothing (${lane}) (transcript: ${transcript.slice(0, 60)})`
+              : `no answer and no audio (${lane})`,
           );
           throw new Error("audio");
         }
