@@ -82,6 +82,15 @@ export interface TalkOptions extends Partial<VoicelabConnectOptions> {
   utteranceDir?: string;
   /** Force a back-office consultation every Nth utterance. */
   colleagueEvery?: number;
+  /**
+   * Play into this file instead of this Mac's speaker.
+   *
+   * The SAME converter either way — same ring, same pull, same starvation
+   * accounting — so a session run this way exercises the path a listener
+   * depends on while making no sound and needing nobody at the machine. The
+   * recording it leaves is the true timeline, silence included.
+   */
+  pretendSpeaker?: string;
 }
 
 interface VoiceAgentSetup {
@@ -206,6 +215,9 @@ export async function talk(options: TalkOptions = {}) {
       "--stream-path",
       setup.streamPath,
       ...driverArgs(options, minutes),
+      ...(options.pretendSpeaker === undefined
+        ? []
+        : ["--pretend-speaker", options.pretendSpeaker]),
       "--speaker-wav",
       playback,
       "--mic-record",
@@ -347,7 +359,13 @@ function resolveKitDir(explicit?: string): string {
  */
 function driverArgs(options: TalkOptions, minutes: number): string[] {
   if (options.converse === undefined) {
-    return ["--live-audio", "--live-mic", "--push-to-talk", "--minutes", String(minutes)];
+    return [
+      ...(options.pretendSpeaker === undefined ? ["--live-audio"] : []),
+      "--live-mic",
+      "--push-to-talk",
+      "--minutes",
+      String(minutes),
+    ];
   }
   if (options.utteranceDir === undefined) {
     throw new Error(
