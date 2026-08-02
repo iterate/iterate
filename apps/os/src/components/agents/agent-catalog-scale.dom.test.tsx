@@ -273,6 +273,53 @@ test("table leaves a real agent's missing activity blank", async () => {
   await act(async () => root.unmount());
 });
 
+test("table subagent aggregates exclude self and use singular folder labels", async () => {
+  const parent = {
+    ...record(0),
+    path: "/agents/active",
+    runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 1 },
+  };
+  const child = {
+    ...record(1),
+    path: "/agents/active/child",
+    runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 1 },
+  };
+  const operationsAgent = {
+    ...record(2),
+    path: "/operations/releases/check",
+  };
+  const container = document.createElement("div");
+  Object.assign(container.style, { height: "800px", width: "1000px" });
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () =>
+    root.render(
+      <AgentCatalog
+        agents={{
+          [parent.path]: parent,
+          [child.path]: child,
+          [operationsAgent.path]: operationsAgent,
+        }}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+        projectId="prj_table_aggregates"
+        projectSlug="table-aggregates"
+        view="table"
+      />,
+    ),
+  );
+
+  const parentRow = container.querySelector('[data-agent-path="/agents/active"]');
+  const childRow = container.querySelector('[data-agent-path="/agents/active/child"]');
+  const operationsRow = container.querySelector('[data-agent-path="/operations"]');
+  expect(parentRow?.querySelectorAll("td")[4]?.textContent).toBe("11 active");
+  expect(childRow?.querySelectorAll("td")[4]?.textContent).toBe("0");
+  expect(operationsRow?.querySelectorAll("td")[2]?.textContent).toBe("1 descendant agent");
+
+  await act(async () => root.unmount());
+});
+
 test("the 5,000-agent table mounts bounded rows", async () => {
   const agents = Object.fromEntries(
     Array.from({ length: 5_000 }, (_, index) => {

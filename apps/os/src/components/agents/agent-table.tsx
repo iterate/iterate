@@ -191,7 +191,9 @@ function AgentTableRow({
       : agentPathNodeWaitingFor(node);
   const runtimeCounts = runtimeCountLabels(runtime);
   const descendantCount = node.aggregateAgentCount - (agent === undefined ? 0 : 1);
-  const activeCount = Math.max(node.aggregateActiveCount, runtimeState === "idle" ? 0 : 1);
+  const activeCount =
+    node.aggregateActiveCount -
+    (agent === undefined || deriveAgentRuntimeDisplayState(agent.runtime) === "idle" ? 0 : 1);
   const updated = agent === undefined ? undefined : latestAgentUpdate(agent.timestamps);
 
   return (
@@ -284,7 +286,7 @@ function AgentTableRow({
       <TableCell className="min-w-0 whitespace-normal">
         <span className="block truncate">
           {agent === undefined
-            ? `${node.aggregateAgentCount} descendant agents`
+            ? `${node.aggregateAgentCount} descendant ${node.aggregateAgentCount === 1 ? "agent" : "agents"}`
             : (agent.summary.activity ?? "—")}
         </span>
         {agent?.summary.description === undefined ? null : (
