@@ -160,3 +160,41 @@ Removal-round log:
   spec logic. Cure: `pnpm dev restart --detach` before each run; the 3x
   series for both specs was recorded with fresh servers. Worth a separate
   look at the dev server's memory ceiling.
+
+## Tabbed activity cards (Misha, comment 5158038879)
+
+- [x] "Ran code" cards show the run's approvals in context via the SAME
+      shared component
+      _each code step is now Script | Approvals | Result tabs
+      (activity-card.tsx CodeStepTabs); the Approvals tab renders decision
+      badge + reason + the shared ApprovalBatchBody, matched by
+      streamContext.executionId against the step's executionId
+      (deriveBatchesForExecution in lib/approvals.ts, unit-tested)_
+- [x] Approvals tab absent with no batches; Result absent while pending
+      _tabs array is conditional; Result appears once the run settled with a
+      value or an error; single-tab steps render no tab row at all_
+- [x] Multi-turn runs organize vertically as Round 1 / Round 2
+      _pure groupActivityRounds in lib/feed.ts (llm-writes-script +
+      code-runs-it pairs; stray steps get their own round), labels only when
+      >1 round. WORD CHOICE: kept "Round" — "Turn" is overloaded with chat
+      turns and "Pass"/"Attempt" mislead (not retries; the script passes
+      itself a value)_
+- [x] Collapsed status glyphs
+      _spinner while running (unchanged) + approval marks in the summary
+      row: ◷ any batch awaiting decision, ✓ fully approved batch(es), ✗
+      rejected or mixed (summarizeBatchOutcomes, unit-tested)_
+- [x] Batch plumbing
+      _CHOICE: prop-drilled from chat.tsx (FeedList → FeedItem →
+      ActivityCard as ActivityApprovalContext) — the chat screen already
+      holds the live root-stream approval subscription for its in-thread
+      dialogs, so the tabs and glyphs update live with zero extra fetches;
+      a per-card query would duplicate already-subscribed data and need the
+      same context props anyway. ActivityCard's only usage is chat.tsx_
+- [x] approvals.spec.ts extended: finds both settled cards by glyph
+      (✓ / ✗), opens the approved card's Approvals tab, asserts badge +
+      policy through the shared body; 3x consecutive passes, and
+      notifications.spec.ts re-verified 3x (fresh dev server per run — the
+      miniflare heap OOM again)
+- [x] VIDEO_MODE re-record of approvals spec → activity-tabs.webm
+      (32s: live card with Script|Approvals tabs + ◷, settled cards with
+      ✓/✗, Approvals tab opened)
