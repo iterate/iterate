@@ -66,6 +66,18 @@ struct cli_wav_sink {
 const char *cli_wav_status_name(enum cli_wav_status status);
 
 /**
+ * Bring the RIFF and data lengths up to date without closing the file.
+ *
+ * ORIGINATING FAILURE. The lengths were patched only on close, so a session
+ * ended with Ctrl-C — which is how every interactive session ends — left a
+ * file whose header claimed zero samples. The audio was all there; no player
+ * would open it, and the one recording of the failure everybody wanted to
+ * hear looked like an empty file. Called periodically, this makes the
+ * recording readable at any instant, at the cost of two seeks.
+ */
+enum cli_wav_status cli_wav_sink_sync(struct cli_wav_sink *sink);
+
+/**
  * Open `path` for replay, or start bounded synthesis when `path` is NULL.
  * `source` is caller-owned and is left closed on failure. Pairs with
  * cli_wav_source_close.

@@ -40,6 +40,7 @@ enum cli_options_field {
   CLI_OPTIONS_FIELD_MIC_WAV,
   CLI_OPTIONS_FIELD_UTTERANCE_DIR,
   CLI_OPTIONS_FIELD_SPEAKER_WAV,
+  CLI_OPTIONS_FIELD_MIC_RECORD,
   CLI_OPTIONS_FIELD_REPORT_JSON,
   CLI_OPTIONS_FIELD_CONVERSE,
   CLI_OPTIONS_FIELD_MINUTES,
@@ -207,6 +208,8 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
    "N\n"},
   {"--mic-clip", CLI_OPTIONS_KIND_SWITCH, CLI_OPTIONS_FIELD_MIC_CLIP, NULL,
    "  --mic-clip               Drive capture to full scale\n"},
+  {"--mic-record", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_MIC_RECORD, NULL,
+   "  --mic-record FILE     Record what the microphone captured\n"},
   {"--report-json", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_REPORT_JSON,
    NULL,
    "  --report-json FILE    Unattended JSON report (default "
@@ -426,6 +429,7 @@ static enum cli_options_status cli_options_apply(
     case CLI_OPTIONS_FIELD_MIC_WAV: out->mic_wav = value; break;
     case CLI_OPTIONS_FIELD_UTTERANCE_DIR: out->utterance_dir = value; break;
     case CLI_OPTIONS_FIELD_SPEAKER_WAV: out->speaker_wav = value; break;
+    case CLI_OPTIONS_FIELD_MIC_RECORD: out->mic_record = value; break;
     case CLI_OPTIONS_FIELD_REPORT_JSON: out->report_json = value; break;
     case CLI_OPTIONS_FIELD_CONVERSE:
       return cli_options_read_minutes(value, &out->converse_minutes);

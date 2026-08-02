@@ -121,6 +121,10 @@ static void cli_main_on_transcript(
 static void cli_main_record_frame(
     struct cli_runtime *runtime, const uint8_t *pcm);
 
+/* Records one captured microphone frame to the uplink WAV. */
+static void cli_main_record_mic_frame(
+    struct cli_runtime *runtime, const uint8_t *pcm);
+
 /* Records the silence the modelled converter emitted for want of a frame. */
 static void cli_main_record_converter_silence(
     struct cli_runtime *runtime, uint32_t frames);
@@ -534,6 +538,13 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
    * harness decides what time itself will do, so both must be settled before
    * anything samples a clock or offers a frame.
    */
+  if (runtime->options.mic_record != NULL &&
+      cli_wav_sink_open(&runtime->mic_sink, runtime->options.mic_record) !=
+          CLI_WAV_OK) {
+    cli_runtime_log(
+        "error", "cannot open microphone WAV: %s", runtime->options.mic_record);
+    return false;
+  }
   if (!cli_main_init_profile(runtime)) return false;
   if (!cli_main_init_harness(runtime)) return false;
   if (!cli_main_init_converter(runtime)) return false;
@@ -828,6 +839,7 @@ static void cli_main_close_runtime(struct cli_runtime *runtime)
   (void)iterate_kit_posix_itx_transport_stop(&runtime->transport);
   cli_wav_source_close(&runtime->source);
   cli_wav_sink_close(&runtime->sink);
+  cli_wav_sink_close(&runtime->mic_sink);
   cli_audio_out_close(&runtime->live_out);
   cli_audio_in_close(&runtime->live_in);
 }
@@ -956,8 +968,36 @@ static void cli_main_record_frame(
     runtime->stop_requested = true;
     return;
   }
-  (void)cli_audio_out_write(
-      &runtime->live_out, pcm, ITERATE_KIT_VOICE_FRAME_BYTES);
+  /*
+   * NOT discarded. This refusal used to be cast away, so a speaker that was
+   * dropping most of a conversation reported nothing at all and the room went
+   * quiet while every counter stayed clean.
+   */
+  if (cli_audio_out_write(
+          &runtime->live_out, pcm, ITERATE_KIT_VOICE_FRAME_BYTES) !=
+      CLI_AUDIO_OUT_OK) {
+    ++runtime->speaker_room_drops;
+  }
+}
+
+/**
+ * Record one captured frame to the microphone WAV.
+ *
+ * The uplink deserves a witness as much as the downlink does. Without one,
+ * "it did not hear me" and "it heard me and answered badly" are the same
+ * observation, and the only way to tell them apart is to ask the provider
+ * what it thought it received.
+ */
+static void cli_main_record_mic_frame(
+    struct cli_runtime *runtime, const uint8_t *pcm)
+{
+  assert(runtime != NULL && pcm != NULL);
+  if (runtime->options.mic_record == NULL) return;
+  if (cli_wav_sink_write(
+          &runtime->mic_sink, pcm, ITERATE_KIT_VOICE_FRAME_BYTES) == CLI_WAV_OK) {
+    return;
+  }
+  ++runtime->mic_write_failures;
 }
 
 static void cli_main_record_converter_silence(
@@ -1146,6 +1186,7 @@ static void cli_main_capture_live_frame(struct cli_runtime *runtime)
   if (cli_audio_in_pop(&runtime->live_in, frame, sizeof(frame)) !=
       CLI_AUDIO_IN_OK) return;
   ++runtime->mic_frames_captured;
+  cli_main_record_mic_frame(runtime, frame);
   (void)cli_microphone_push(&runtime->microphone, frame, sizeof(frame));
 }
 
@@ -1160,6 +1201,7 @@ static void cli_main_capture_recorded_frame(struct cli_runtime *runtime)
     return;
   }
   ++runtime->mic_frames_captured;
+  cli_main_record_mic_frame(runtime, frame);
   (void)cli_microphone_push(&runtime->microphone, frame, sizeof(frame));
 }
 
@@ -1494,11 +1536,21 @@ static void cli_main_pulse(
         age < CLI_MAIN_PULSE_ACTIVE_TAIL_MS)) return;
   if (age < CLI_MAIN_PULSE_INTERVAL_MS) return;
   runtime->last_pulse_ms = now_ms;
+  /*
+   * Keep both recordings openable. An interactive session ends with Ctrl-C,
+   * which never reaches the close path, and a header patched only at close
+   * left every such recording unplayable.
+   */
+  (void)cli_wav_sink_sync(&runtime->sink);
+  if (runtime->options.mic_record != NULL) {
+    (void)cli_wav_sink_sync(&runtime->mic_sink);
+  }
   cli_runtime_log(
       "info",
       "pulse loops=%u outbox=%u/%u sent=%u frames=%u batches=%u rx=%u "
       "gaps=%u played=%u conceal=%u under=%u ringMs=%u convUnder=%u "
-      "convRefused=%u micIn=%u micLost=%u",
+      "convRefused=%u micIn=%u micLost=%u roomDrop=%u roomStarve=%u "
+      "roomMs=%u",
       runtime->loop_count, outbox->current_slots,
       ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS,
       runtime->transport.control_sender.messages_sent,
@@ -1512,7 +1564,15 @@ static void cli_main_pulse(
        * anybody watching a session will already be reading.
        */
       runtime->paced_sink.underrun_frames, runtime->paced_sink.refused_frames,
-      runtime->live_in.captured, runtime->live_in.dropped);
+      runtime->live_in.captured, runtime->live_in.dropped,
+      /*
+       * The room, as distinct from the recording. roomDrop is audio the
+       * speaker never got, roomStarve is silence somebody actually heard, and
+       * both were invisible while a whole conversation failed to be audible.
+       */
+      runtime->speaker_room_drops, runtime->live_out.starved,
+      cli_audio_out_queued_bytes(&runtime->live_out) /
+          (ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS));
 }
 
 static void cli_main_poll_ready(
@@ -1579,6 +1639,7 @@ static void cli_main_reexec_if_ready(
   /* execv keeps the file descriptors, so the terminal must be handed back. */
   cli_keyboard_close(&runtime->keyboard);
   cli_wav_sink_close(&runtime->sink);
+  cli_wav_sink_close(&runtime->mic_sink);
   cli_audio_out_close(&runtime->live_out);
   cli_audio_in_close(&runtime->live_in);
   (void)iterate_kit_posix_itx_transport_stop(&runtime->transport);

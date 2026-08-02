@@ -74,6 +74,8 @@ struct cli_runtime {
   struct iterate_kit_voice_playback_clock playback_clock;
   struct cli_wav_source source;
   struct cli_wav_sink sink;
+  /* What the microphone captured; opened only when --mic-record was given. */
+  struct cli_wav_sink mic_sink;
   struct cli_audio_out live_out;
   struct cli_audio_in live_in;
   struct cli_keyboard keyboard;
@@ -128,6 +130,9 @@ struct cli_runtime {
   uint32_t speaker_catchup_frames;
   uint32_t speaker_debt_paid;
   uint32_t speaker_write_failures;
+  uint32_t mic_write_failures;
+  /* Frames the room never got because the speaker ring was full. */
+  uint32_t speaker_room_drops;
   uint32_t speaker_margin_min_ms;
   uint32_t speaker_margin_max_ms;
   uint32_t speaker_writes;

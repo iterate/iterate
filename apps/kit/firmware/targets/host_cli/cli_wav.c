@@ -175,6 +175,23 @@ enum cli_wav_status cli_wav_sink_write(
   return CLI_WAV_OK;
 }
 
+enum cli_wav_status cli_wav_sink_sync(struct cli_wav_sink *sink)
+{
+  enum cli_wav_status status;
+  if (sink == NULL) return CLI_WAV_ERR_ARG;
+  if (sink->file == NULL) return CLI_WAV_ERR_IO;
+  status = cli_wav_patch_length(
+      sink->file, CLI_WAV_RIFF_SIZE_OFFSET,
+      CLI_WAV_RIFF_SIZE_BIAS + sink->bytes);
+  if (status != CLI_WAV_OK) return status;
+  status = cli_wav_patch_length(
+      sink->file, CLI_WAV_DATA_SIZE_OFFSET, sink->bytes);
+  if (status != CLI_WAV_OK) return status;
+  /* Back to the end, because the next write must append, not overwrite. */
+  if (fseek(sink->file, 0L, SEEK_END) != 0) return CLI_WAV_ERR_IO;
+  return CLI_WAV_OK;
+}
+
 void cli_wav_sink_close(struct cli_wav_sink *sink)
 {
   if (sink == NULL || sink->file == NULL) return;

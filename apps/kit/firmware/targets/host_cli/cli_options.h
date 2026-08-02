@@ -51,6 +51,14 @@ struct cli_options {
   const char *mic_wav;
   const char *utterance_dir;
   const char *speaker_wav;
+  /**
+   * Where to record what the microphone captured.
+   *
+   * The downlink has had a witness since this rig existed; the uplink has
+   * not, so "it did not hear me" and "it heard me and answered badly" have
+   * been the same observation.
+   */
+  const char *mic_record;
   const char *report_json;
   /** Minutes of unattended conversation; 0 means "just stay mounted". */
   double converse_minutes;
