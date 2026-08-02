@@ -58,7 +58,23 @@ bool iterate_kit_voice_playback_clock_ready(
    * is silent at both ends: the model believes it spoke, and the listener
    * hears nothing.
    */
-  if (clock->answer_done) {
+  /*
+   * A finished answer short-circuits the PREFILL WAIT, and nothing else.
+   *
+   * Written as an unconditional `if (answer_done) return true`, this became a
+   * latch: `answer_done` stays set until the dry-tick path clears it, that
+   * path is only reached once a frame has been taken, and a caller that skips
+   * its idle branch because ready() said true never takes one. The speaker
+   * task then span on an empty buffer for the rest of the session - played
+   * and concealed both frozen while frames arrived, no counter moving,
+   * because neither the play path nor the conceal path was ever reached.
+   *
+   * Measured: 0 of 5 journeys, recovering completely on a restart, after the
+   * first answer completed. Scoped to `priming` it does what it was added
+   * for - an answer shorter than the prefill still plays - and stops being a
+   * latch, because once priming is false the flag is irrelevant anyway.
+   */
+  if (clock->priming && clock->answer_done) {
     clock->priming = false;
     return true;
   }
