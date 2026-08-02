@@ -215,8 +215,8 @@ test("search reveals matching descendants without changing the collapsed tree", 
   if (setInputValue === undefined) throw new Error("missing native input value setter");
 
   await act(async () => {
-    setInputValue.call(input, "cattle");
-    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: "cattle" }));
+    setInputValue.call(input, " cattle ");
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: " cattle " }));
   });
 
   expect(container.textContent).toContain("Bath cattle survey");
@@ -229,6 +229,46 @@ test("search reveals matching descendants without changing the collapsed tree", 
 
   expect(container.textContent).not.toContain("Bath cattle survey");
   expect(container.querySelector('button[aria-label="Expand child agents"]')).not.toBeNull();
+
+  await act(async () => root.unmount());
+});
+
+test("table leaves a real agent's missing activity blank", async () => {
+  const idleAgent = {
+    ...record(0),
+    path: "/agents/idle",
+    summary: { pinned: false, title: "Idle agent" },
+  };
+  const container = document.createElement("div");
+  Object.assign(container.style, { height: "800px", width: "1000px" });
+  document.body.appendChild(container);
+  const root = createRoot(container);
+
+  await act(async () =>
+    root.render(
+      <AgentCatalog
+        agents={{ [idleAgent.path]: idleAgent }}
+        onOpen={() => undefined}
+        onTogglePinned={() => undefined}
+        projectId="prj_table_activity"
+        projectSlug="table-activity"
+        view="table"
+      />,
+    ),
+  );
+
+  const input = container.querySelector('input[aria-label="Search agents"]');
+  if (!(input instanceof HTMLInputElement)) throw new Error("missing agent search input");
+  const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (setInputValue === undefined) throw new Error("missing native input value setter");
+
+  await act(async () => {
+    setInputValue.call(input, " Idle agent ");
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: " Idle agent " }));
+  });
+
+  const row = container.querySelector('[data-agent-path="/agents/idle"]');
+  expect(row?.querySelectorAll("td")[2]?.textContent).toBe("—");
 
   await act(async () => root.unmount());
 });

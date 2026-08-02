@@ -33,7 +33,8 @@ export function useAgentPathTable({
   query: string;
 }) {
   const forest = useMemo(() => buildAgentPathForest(agents), [agents]);
-  const searching = query.trim() !== "";
+  const normalizedQuery = query.trim();
+  const searching = normalizedQuery !== "";
   const expanded = useMemo<ExpandedState>(() => {
     if (searching) return true;
     const entries: [string, boolean][] = [];
@@ -50,7 +51,7 @@ export function useAgentPathTable({
   return useReactTable({
     data: forest,
     columns: SEARCH_COLUMN,
-    state: { expanded, globalFilter: query },
+    state: { expanded, globalFilter: normalizedQuery },
     getRowId: (node) => node.path,
     getSubRows: (node) => node.children,
     getCoreRowModel: getCoreRowModel(),

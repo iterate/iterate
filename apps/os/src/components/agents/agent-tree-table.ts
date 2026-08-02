@@ -28,7 +28,8 @@ export function useAgentTreeTable({
   query: string;
 }) {
   const forest = useMemo(() => buildAgentForest(agents), [agents]);
-  const searching = query.trim() !== "";
+  const normalizedQuery = query.trim();
+  const searching = normalizedQuery !== "";
   const expanded = useMemo<ExpandedState>(() => {
     if (searching) return true;
     return Object.fromEntries([...expandedPaths].map((path) => [path, true]));
@@ -37,7 +38,7 @@ export function useAgentTreeTable({
   return useReactTable({
     data: forest,
     columns: SEARCH_COLUMN,
-    state: { expanded, globalFilter: query },
+    state: { expanded, globalFilter: normalizedQuery },
     getRowId: (node) => node.agent.path,
     getSubRows: (node) => node.children,
     getCoreRowModel: getCoreRowModel(),

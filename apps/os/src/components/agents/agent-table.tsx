@@ -283,7 +283,9 @@ function AgentTableRow({
       </TableCell>
       <TableCell className="min-w-0 whitespace-normal">
         <span className="block truncate">
-          {agent?.summary.activity ?? `${node.aggregateAgentCount} descendant agents`}
+          {agent === undefined
+            ? `${node.aggregateAgentCount} descendant agents`
+            : (agent.summary.activity ?? "—")}
         </span>
         {agent?.summary.description === undefined ? null : (
           <span className="block truncate text-xs text-muted-foreground">
