@@ -18,6 +18,14 @@ export interface DeployOptions extends VoicelabConnectOptions {
   message?: string;
 }
 
+/** What committing the guest did, for a caller that wants to say so itself. */
+export interface InstallResult {
+  commitOid: string;
+  changed: boolean;
+  bytes: number;
+  file: string;
+}
+
 interface ConfigRepo {
   readFile(input: { path: string }): Promise<{ content?: string } | string | null>;
   commitFiles(input: {
@@ -26,25 +34,49 @@ interface ConfigRepo {
   }): Promise<{ commitOid: string; changedPaths: string[]; noChanges: boolean }>;
 }
 
-export async function deploy(options: DeployOptions) {
+/**
+ * Commit the guest worker into an already-connected project's config repo.
+ *
+ * Separate from the `deploy` command because `talk` needs it too, and for a
+ * reason worth stating: `setupVoiceAgent` LIVES IN this file, so the file has
+ * to be in the repo before anybody can call it. A talk command that only ran
+ * setup would work on the machine that had deployed by hand and fail against
+ * a fresh project, which is the whole failure this command exists to end.
+ *
+ * Committing identical content is a no-op the platform reports, so callers
+ * may do this unconditionally.
+ */
+export async function installVoiceAgent(
+  itx: unknown,
+  options: { file?: string; message?: string } = {},
+): Promise<InstallResult> {
   const file = options.file ?? new URL("./config-repo/voice-agent.ts", import.meta.url).pathname;
   const content = fs.readFileSync(file, "utf8");
-  using itx = await connectProject(options);
-  const repo = (itx as unknown as { repo: ConfigRepo }).repo;
-
+  const repo = (itx as { repo: ConfigRepo }).repo;
   const result = await repo.commitFiles({
     changes: [{ content, path: "voice-agent.ts" }],
     message: options.message ?? "voicelab: deploy voice-agent.ts",
   });
+  return {
+    bytes: content.length,
+    changed: !result.noChanges,
+    commitOid: result.commitOid,
+    file,
+  };
+}
+
+export async function deploy(options: DeployOptions) {
+  using itx = await connectProject(options);
+  const result = await installVoiceAgent(itx, options);
   console.log(
-    result.noChanges
-      ? `no change — the project already runs this worker (${result.commitOid.slice(0, 8)})`
-      : `committed ${result.commitOid.slice(0, 8)}: ${result.changedPaths.join(", ")}`,
+    result.changed
+      ? `committed ${result.commitOid.slice(0, 8)}: voice-agent.ts`
+      : `no change — the project already runs this worker (${result.commitOid.slice(0, 8)})`,
   );
   /*
    * A commit is not a deployment: the worker is rebuilt on the next call
    * into it. Saying so beats a caller assuming the old code is gone —
    * two bridges answering one turn is a failure this lab has already had.
    */
-  console.log(`${content.length} bytes from ${file}`);
+  console.log(`${String(result.bytes)} bytes from ${result.file}`);
 }

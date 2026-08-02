@@ -24,6 +24,7 @@ import { fileURLToPath } from "node:url";
 import type { DynamicWorkerCapability } from "iterate/sdk";
 
 import { connectProject, resolveVoicelabBaseUrl, type VoicelabConnectOptions } from "./connect.ts";
+import { installVoiceAgent } from "./deploy.ts";
 import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
 
 const DEFAULT_PROJECT = "prj_698c23da57f84d92a9ba5dc959efebec";
@@ -84,6 +85,21 @@ export async function talk(options: TalkOptions = {}) {
   const connection = { baseUrl: options.baseUrl, project };
   const baseUrl = resolveVoicelabBaseUrl(connection);
   using itx = await connectProject(connection);
+
+  /*
+   * Install the guest BEFORE calling into it. `setupVoiceAgent` lives inside
+   * voice-agent.ts, so the file has to be in the config repo before there is
+   * anything to call — a talk command that only ran setup would work on the
+   * machine that had already deployed by hand and fail against a fresh
+   * project. Committing identical content is a no-op the platform reports.
+   */
+  const install = await installVoiceAgent(itx);
+  console.log(
+    install.changed
+      ? `installed voice-agent.ts (${install.commitOid.slice(0, 8)})`
+      : `voice-agent.ts already current (${install.commitOid.slice(0, 8)})`,
+  );
+
   // The generated Cap'n Web client cannot carry a userspace worker's methods;
   // this is the RPC contract exported by the exact source ref above.
   using voiceAgent = itx.workers.get(
@@ -126,8 +142,13 @@ export async function talk(options: TalkOptions = {}) {
   runInherited(
     binary,
     [
+      // NO HYPHEN. The name becomes the capability mount `kit.<name>`, and a
+      // hyphen there is rejected as an invalid argument — the mount fails
+      // about five seconds in with `capnweb=-1` and a message that says
+      // nothing about names. The shell script this replaced used `mac-$STAMP`
+      // and had never once connected.
       "--name",
-      `mac-${stamp}`,
+      `mac${stamp}`,
       "--stream-path",
       setup.streamPath,
       ...driverArgs(options, minutes),

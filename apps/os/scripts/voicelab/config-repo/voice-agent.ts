@@ -1,6 +1,7 @@
 import {
   IterateDurableObject,
   IterateWorkerEntrypoint,
+  type Agent,
   type StatefulDynamicWorkerRef,
   type Stream,
   createProcessorHost,
@@ -76,8 +77,6 @@ const HANDSHAKE_TIMEOUT_MS = 15_000;
 const COLLEAGUE_PATH = "/agents/colleague";
 const VOICE_AGENT_PROCESSOR_SLUG = "voice-agent";
 const VOICE_AGENT_SUBSCRIPTION_KEY = "app-voice-agent#voice-agent";
-const VOICE_AGENT_BIRTH_REVISION = 1;
-const BACK_OFFICE_BRIEF_REVISION = 1;
 const CALL_REQUEST_FRESHNESS_MS = 30_000;
 /**
  * What the voice model is told it is.
@@ -146,8 +145,51 @@ const BACK_OFFICE_BRIEF = [
   "spoken: two or three sentences of plain language, no lists, no URLs, no",
   "code. Lead with the point.",
 ].join("\n");
+/** The brief as the context event that carries it — one payload, one key. */
+const BACK_OFFICE_BRIEF_CONTEXT = {
+  content: BACK_OFFICE_BRIEF,
+  key: "voicelab/colleague-brief",
+  llmRequestPolicy: { behaviour: "dont-trigger-request" },
+  role: "system",
+} as const;
+const BACK_OFFICE_BRIEF_KEY = `voice-agent/back-office-brief:${contentHash(BACK_OFFICE_BRIEF_CONTEXT)}`;
 
-const VoiceCallRequestedPayload = z.strictObject({
+/**
+ * The back office exists, and knows what it is for.
+ *
+ * Called from setup AND from the call path, because a call can perfectly well
+ * start without setup ever having run: a direct `startCall`, a `mode=bridge`
+ * host, a project somebody configured by hand. Appending to an agent that is
+ * not there fails quietly down in the call path while `handleToolCall` goes on
+ * telling the model "the back office will reply when it has something" — so
+ * the assistant keeps promising a colleague that never answers.
+ */
+async function ensureBackOffice(agent: Agent) {
+  try {
+    // Nothing may be appended to the agent's stream before the agent exists.
+    await agent.create({});
+  } catch {
+    /* Already born: create over an existing agent is loud, not fatal. */
+  }
+  return await agent.append({
+    type: "events.iterate.com/agents/context-added",
+    idempotencyKey: BACK_OFFICE_BRIEF_KEY,
+    payload: BACK_OFFICE_BRIEF_CONTEXT,
+  });
+}
+
+/*
+ * LOOSE, DELIBERATELY — the same doctrine the callId filter is built on: the
+ * peers are not all in this repository.
+ *
+ * A strict object rejects the whole event for one field nobody here has heard
+ * of, and the failure is total and silent: the event is skipped, no call
+ * happens, and nothing says why. Firmware stamping a build id, a script
+ * carrying its own correlation field, a future field added on the device
+ * before it is added here — every one of those is a dropped call. The fields
+ * this bridge acts on are still validated; the rest ride along untouched.
+ */
+const VoiceCallRequestedPayload = z.looseObject({
   callId: z.string().trim().min(1),
   colleague: z.boolean().optional(),
   effort: z.enum(["none", "high"]).optional(),
@@ -165,6 +207,25 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
   description: "Starts bounded voice bridges from fresh call requests on one configured stream.",
   stateSchema: z.object({
     birthCertificate: z.strictObject({}).nullable().default(null),
+    /**
+     * The call request nothing has answered yet — the OBLIGATION.
+     *
+     * Starting a bridge is long work that no longer holds the cursor, so what
+     * recovers the outcome when an attempt is dropped cannot be the closure
+     * that was dropped with it. It is this: a request opens the obligation,
+     * the bridge's own `call-accepted` or this processor's `call-failed`
+     * closes it, and the at-head pass takes on whatever is still open.
+     */
+    pendingCall: z
+      .object({
+        callId: z.string(),
+        /** Epoch ms of the request, so the freshness window survives eviction. */
+        requestedAtMs: z.number(),
+        /** What to start, verbatim, so a revived incarnation can retry it. */
+        request: VoiceCallRequestedPayload,
+      })
+      .nullable()
+      .default(null),
   }),
   events: {
     "events.iterate.com/voice-agent/created": {
@@ -175,9 +236,28 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
       description: "A listener asked the configured voice-agent guest to open a call.",
       payloadSchema: VoiceCallRequestedPayload,
     },
+    "voicelab/call-accepted": {
+      description: "A bridge has this call live: the provider accepted the session.",
+      /* The BRIDGE writes this one; loose for the same reason as the request. */
+      payloadSchema: z.looseObject({ callId: z.string().trim().min(1) }),
+    },
+    "voicelab/call-failed": {
+      description: "The call a listener asked for will not happen, and why.",
+      payloadSchema: z.looseObject({
+        callId: z.string().trim().min(1),
+        reason: z.string(),
+      }),
+    },
   },
-  consumes: ["events.iterate.com/voice-agent/created", "voicelab/call-requested"],
-  emits: [],
+  consumes: [
+    "events.iterate.com/voice-agent/created",
+    "voicelab/call-requested",
+    /* The ANSWERS, so an outstanding request is a fact of the fold rather
+     * than a closure that an eviction takes with it. */
+    "voicelab/call-accepted",
+    "voicelab/call-failed",
+  ],
+  emits: ["voicelab/call-failed"],
 });
 export type VoiceAgentProcessorContract = typeof VoiceAgentProcessorContract;
 const FORWARDED_GROK_EVENTS = new Set([
@@ -631,11 +711,30 @@ export class VoiceBridge extends IterateDurableObject {
      * conversation and must not be read out in this one.
      */
     const backOfficeSince = Date.now();
+    /**
+     * Born and briefed, once per call, before anything is appended to it.
+     *
+     * Setup does this too, but setup is not the only way a call starts: a
+     * direct `startCall`, a `mode=bridge` host, or a project where nobody ran
+     * setup all land here with an agent that may not exist.
+     */
+    let backOfficeReady: Promise<boolean> | null = null;
+    const ensureBackOfficeOnce = () => {
+      backOfficeReady ??= ensureBackOffice(backOfficeAgent).then(
+        () => true,
+        (error: unknown) => {
+          console.log(`colleague unavailable: ${String(error)}`);
+          return false;
+        },
+      );
+      return backOfficeReady;
+    };
     /** Give the back office a line of the conversation, without waking it. */
     const overhear = (who: "customer" | "voice", text: string) => {
       if (!backOffice || text.trim().length === 0) return;
       this.ctx.waitUntil(
         (async () => {
+          if (!(await ensureBackOfficeOnce())) return;
           await backOfficeAgent
             .append({
               payload: {
@@ -776,6 +875,7 @@ export class VoiceBridge extends IterateDurableObject {
       });
       this.ctx.waitUntil(
         (async () => {
+          if (!(await ensureBackOfficeOnce())) return;
           await backOfficeAgent
             .append({
               payload: {
@@ -1674,6 +1774,33 @@ function bytesToBase64(bytes: Uint8Array): string {
   return btoa(binary);
 }
 
+/**
+ * A short stable fingerprint of a payload, for deriving idempotency keys FROM
+ * WHAT IS BEING APPENDED rather than from a number somebody has to remember to
+ * bump.
+ *
+ * An append whose key matches an existing event but whose payload does not
+ * THROWS, naming an offset rather than a cause. So a hand-versioned key turns
+ * every future edit to a payload into a setup that fails for every stream
+ * already configured — and for the project-global back-office brief, one
+ * unbumped edit would brick setup for every stream in the project at once.
+ * Content-derived, an unchanged payload keeps its key and deduplicates, and a
+ * changed one gets a new key and commits.
+ *
+ * FNV-1a over the serialised payload. Deterministic and dependency-free is the
+ * whole requirement: this is not a security boundary, it is a way of noticing
+ * that two payloads differ.
+ */
+function contentHash(value: unknown): string {
+  const json = JSON.stringify(value);
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < json.length; index++) {
+    hash ^= json.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(36).padStart(7, "0");
+}
+
 function base64ToBytes(base64: string): ArrayBuffer {
   const binary = atob(base64);
   const bytes = new Uint8Array(binary.length);
@@ -1746,12 +1873,14 @@ export interface SetupVoiceAgentOptions {
   /**
    * Install the subscription under a fresh key.
    *
-   * Only needed after `removeVoiceAgent`. Setup appends its subscription under
-   * a key derived from the stream path, so re-running it is a no-op — which is
-   * the point, but it also means a subscription somebody removed would stay
-   * removed, the re-install being deduplicated against the original. This says
-   * "I know, do it again anyway", and `removeVoiceAgent` names it in its
-   * result so nobody has to discover the need for it.
+   * A MANUAL OVERRIDE, no longer a requirement: setup appends its subscription
+   * under a key derived from the stream path and the payload's own content, so
+   * re-running it is a no-op — which is the point, but it also means a
+   * subscription somebody removed would stay removed, the re-install being
+   * deduplicated against the original. Setup now checks whether the
+   * subscription is really active afterwards and heals it under a fresh key if
+   * it is not, so a plain re-run after `removeVoiceAgent` works. This says "do
+   * it again anyway" without asking.
    */
   reinstall?: boolean;
 }
@@ -1843,40 +1972,186 @@ export class VoiceAgentProcessor extends StreamProcessor<
 > {
   readonly contract = VoiceAgentProcessorContract;
 
+  /**
+   * Attempts THIS isolate is already making, as `<callId>@<requestedAtMs>`.
+   *
+   * The at-head pass below runs on every frame and a bridge start takes
+   * seconds, so without this each frame arriving mid-build would start another
+   * bridge for the same request. Keyed by the REQUEST rather than the call, so
+   * a peer that asks again under the same callId is dialled again rather than
+   * silently ignored by an isolate that remembers the name.
+   *
+   * A finished attempt is never forgotten on success: `call-accepted` is
+   * appended by the bridge and takes a moment to come back round, and
+   * forgetting the attempt inside that window is exactly how a second bridge
+   * gets started for a call that is already live. Only a total failure — no
+   * call AND no obituary — drops the entry, so the next pass can try again.
+   * In memory on purpose: losing the set to an eviction is precisely what
+   * makes the revived incarnation pick the obligation back up.
+   */
+  readonly #starting = new Set<string>();
+
   protected override processEvent({
+    append,
     blockProcessorWhile,
+    delivery,
     event,
+    runInBackground,
     state,
   }: ProcessEventArgs<VoiceAgentProcessorContract>): undefined {
-    if (event?.type !== "voicelab/call-requested" || state.birthCertificate === null) return;
+    if (state.birthCertificate === null) return;
 
-    const createdAtMs = Date.parse(event.createdAt);
-    if (
-      !Number.isFinite(createdAtMs) ||
-      this.deps.now() - createdAtMs > CALL_REQUEST_FRESHNESS_MS
-    ) {
-      return;
+    if (event?.type === "voicelab/call-requested") {
+      const requestedAtMs = Date.parse(event.createdAt);
+      /*
+       * A fresh request is dialled the moment it is seen. A stale one falls
+       * through to the at-head pass instead of being answered here, so replay
+       * writes ONE obituary for the request nothing answered rather than one
+       * per request this stream has ever carried.
+       */
+      if (this.#fresh(requestedAtMs)) {
+        this.#startCall({ append, runInBackground }, event.payload, requestedAtMs);
+        return;
+      }
     }
 
-    // The checkpoint must not pass a fresh request until the provider handshake
-    // succeeds. A failed wake is retried; the bridge's per-stream supersession
-    // makes that at-least-once retry converge on one live call.
+    /*
+     * THE AT-HEAD PASS — what replaced holding the cursor.
+     *
+     * Starting a bridge is a cold dynamic-worker build (30s budget) plus up
+     * to HANDSHAKE_TIMEOUT_MS of provider handshake, and under
+     * `blockProcessorWhile` all of that head-of-line-blocked every later
+     * event on this stream — including the call-ended that would have
+     * cancelled it. So the start is kicked off droppably and the OUTCOME is
+     * recovered here: `pendingCall` is the fold's record of a request nothing
+     * has answered, and this pass takes it on again when an eviction lost the
+     * attempt that owed it.
+     */
+    if (!delivery.caughtUp) return;
+    const pending = state.pendingCall;
+    if (pending === null) return;
+    if (this.#fresh(pending.requestedAtMs)) {
+      this.#startCall({ append, runInBackground }, pending.request, pending.requestedAtMs);
+      return;
+    }
+    /* Not while this isolate is still building it: that attempt answers with
+     * a call-accepted or a call-failed of its own. */
+    if (this.#starting.has(attemptKey(pending.callId, pending.requestedAtMs))) return;
+    /*
+     * BLOCKING, and only because this is one short append that closes an
+     * obligation: the next event must not pass a request whose only remaining
+     * outcome is an obituary, or a dropped attempt leaves the requester
+     * waiting on a call that will never be built.
+     */
     blockProcessorWhile(async () => {
-      const result = await this.deps.startCall({ path: this.path, ...event.payload });
-      if (result.ok !== true) {
-        throw new Error(
-          typeof result.reason === "string"
-            ? result.reason
-            : `voice bridge rejected call request: ${JSON.stringify(result)}`,
-        );
-      }
+      await this.#recordFailure(
+        append,
+        pending.callId,
+        pending.requestedAtMs,
+        `no bridge started within ${CALL_REQUEST_FRESHNESS_MS}ms of the request`,
+      );
     });
   }
 
   protected override reduce({ event, state }: ReduceArgs<VoiceAgentProcessorContract>) {
-    if (event.type !== "events.iterate.com/voice-agent/created") return state;
-    return { ...state, birthCertificate: {} };
+    if (event.type === "events.iterate.com/voice-agent/created") {
+      return { ...state, birthCertificate: {} };
+    }
+    if (event.type === "voicelab/call-requested") {
+      const requestedAtMs = Date.parse(event.createdAt);
+      return {
+        ...state,
+        pendingCall: {
+          callId: event.payload.callId,
+          requestedAtMs: Number.isFinite(requestedAtMs) ? requestedAtMs : 0,
+          request: event.payload,
+        },
+      };
+    }
+    /* The two answers. Either one closes the obligation it names. */
+    if (event.type === "voicelab/call-accepted" || event.type === "voicelab/call-failed") {
+      if (state.pendingCall?.callId !== event.payload.callId) return state;
+      return { ...state, pendingCall: null };
+    }
+    return state;
   }
+
+  /** Is this request still worth dialling, or has the moment passed? */
+  #fresh(requestedAtMs: number): boolean {
+    return (
+      Number.isFinite(requestedAtMs) && this.deps.now() - requestedAtMs <= CALL_REQUEST_FRESHNESS_MS
+    );
+  }
+
+  #startCall(
+    lane: Pick<ProcessEventArgs<VoiceAgentProcessorContract>, "append" | "runInBackground">,
+    request: ProcessorRequest,
+    requestedAtMs: number,
+  ): void {
+    const callId = request.callId;
+    const attempt = attemptKey(callId, requestedAtMs);
+    if (this.#starting.has(attempt)) return;
+    this.#starting.add(attempt);
+    lane.runInBackground(async () => {
+      let reason: string;
+      try {
+        const result = await this.deps.startCall({ path: this.path, ...request });
+        /* The BRIDGE appends call-accepted when the provider accepts the
+         * session; that is what closes this obligation on success. */
+        if (result.ok === true) return;
+        reason =
+          typeof result.reason === "string"
+            ? result.reason
+            : `voice bridge rejected call request: ${JSON.stringify(result)}`;
+      } catch (error) {
+        reason = String(error);
+      }
+      try {
+        await this.#recordFailure(lane.append, callId, requestedAtMs, reason);
+      } catch (error) {
+        /*
+         * Neither the call nor its obituary landed, so nothing closed the
+         * obligation. Forget the ATTEMPT — never the obligation, which is the
+         * fold's — so the next at-head pass takes it on again.
+         */
+        this.#starting.delete(attempt);
+        throw error;
+      }
+    });
+  }
+
+  /**
+   * Say out loud that this call is not happening.
+   *
+   * A failed start used to append nothing at all, and past the freshness
+   * window the handler returned early forever — so a device that appended
+   * `voicelab/call-requested` and never saw `voicelab/call-accepted` had no
+   * way to tell "still building" from "never going to happen".
+   */
+  async #recordFailure(
+    append: ProcessEventArgs<VoiceAgentProcessorContract>["append"],
+    callId: string,
+    requestedAtMs: number,
+    reason: string,
+  ): Promise<void> {
+    await append({
+      type: "voicelab/call-failed",
+      /* State-derived, so the deciding state is folded into the key and NO
+       * event is bound: a redelivery or a revival must not rotate this into a
+       * second obituary for one call. */
+      idempotencyKey: this.idempotencyKey(`call-failed:${callId}:${requestedAtMs}`),
+      payload: { callId, reason: reason.slice(0, 500) },
+    });
+  }
+}
+
+/** The call-request payload as the fold stores and replays it. */
+type ProcessorRequest = z.output<typeof VoiceCallRequestedPayload>;
+
+/** One attempt at one request — a callId reused for a second request is a
+ * second attempt, not the same one already in flight. */
+function attemptKey(callId: string, requestedAtMs: number): string {
+  return `${callId}@${String(requestedAtMs)}`;
 }
 
 export class VoiceAgentProcessorHost extends IterateDurableObject {
@@ -1926,10 +2201,10 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
 
     /*
      * Setting up is APPENDING, and an append carrying an idempotencyKey is
-     * already idempotent — the platform deduplicates on it. So there is no
-     * read-then-write here and no existence check: every event below is
-     * appended unconditionally under a key derived from what it is, and a
-     * second run appends the same keys and changes nothing.
+     * already idempotent — the platform deduplicates on it. So nothing below
+     * is read before it is written: every event is appended unconditionally
+     * under a key derived from what it is, and a second run appends the same
+     * keys and changes nothing.
      *
      * The earlier shape asked "does this exist?" before each append purely to
      * print a nicer report. That cost four extra round trips, raced with
@@ -1938,55 +2213,71 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
      * instead is derived from what came back: a deduplicated append returns
      * the event that was already on the stream, so an event older than this
      * call is one this call did not create.
+     *
+     * There is ONE read, at the end, and it is a different question: not "did
+     * I create this?" but "is this stream actually listening?" — see below.
      */
     const stream = project.streams.get(streamPath);
     const backOffice = project.agents.get(COLLEAGUE_PATH);
+    const birthPayload = {};
+    /*
+     * THE SUBSCRIPTION, as one value, because its KEY is derived from it.
+     *
+     * `subscriptionKey` inside the payload is the platform's own handle on the
+     * subscription and must stay the stable VOICE_AGENT_SUBSCRIPTION_KEY: that
+     * is what makes a re-install REPLACE this subscription rather than run a
+     * second one alongside it. The idempotency key underneath is a different
+     * thing entirely and follows the content — see contentHash.
+     */
+    const subscriptionPayload = {
+      subscriptionKey: VOICE_AGENT_SUBSCRIPTION_KEY,
+      description: "Wake the separately deployed voice-agent guest for call requests.",
+      filter: {
+        eventTypes: [
+          "events.iterate.com/voice-agent/created",
+          "voicelab/call-requested",
+          /* The processor folds the ANSWERS too — an outstanding call request
+           * is a fact of its state, not a closure an eviction can take with
+           * it — and hosted delivery is filtered, so an event missing from
+           * this list never reaches the fold at all. */
+          "voicelab/call-accepted",
+          "voicelab/call-failed",
+        ],
+      },
+      receiver: {
+        action: "processor-wake",
+        expression: [
+          "workers",
+          ["get", voiceAgentProcessorRef(streamPath)],
+          "processor",
+          "wakeStreamProcessor",
+        ],
+        processorSlug: VOICE_AGENT_PROCESSOR_SLUG,
+      },
+    };
+    const subscriptionKeyPrefix = `voice-agent/subscription-configured:${streamPath}`;
     const subscriptionKey = options.reinstall
-      ? `voice-agent/subscription-configured:v1:${streamPath}:${crypto.randomUUID()}`
-      : `voice-agent/subscription-configured:v1:${streamPath}`;
-    const briefKey = `voice-agent/back-office-brief:v${BACK_OFFICE_BRIEF_REVISION}`;
-    const birthKey = `voice-agent/created:v${VOICE_AGENT_BIRTH_REVISION}:${streamPath}`;
-
-    // The agent must exist before anything is appended to its stream. Creating
-    // one that is already there is itself a no-op, so this needs no guard.
-    await backOffice.create({});
+      ? `${subscriptionKeyPrefix}:reinstall:${crypto.randomUUID()}`
+      : `${subscriptionKeyPrefix}:${contentHash(subscriptionPayload)}`;
+    const birthKey = `voice-agent/created:${streamPath}:${contentHash(birthPayload)}`;
 
     const startedAt = Date.now();
     const [voiceEvents, agentEvents] = await Promise.all([
       stream.append(
-        { type: "events.iterate.com/voice-agent/created", idempotencyKey: birthKey, payload: {} },
+        {
+          type: "events.iterate.com/voice-agent/created",
+          idempotencyKey: birthKey,
+          payload: birthPayload,
+        },
         {
           type: "events.iterate.com/stream/subscription-configured",
           idempotencyKey: subscriptionKey,
-          payload: {
-            subscriptionKey: VOICE_AGENT_SUBSCRIPTION_KEY,
-            description: "Wake the separately deployed voice-agent guest for call requests.",
-            filter: {
-              eventTypes: ["events.iterate.com/voice-agent/created", "voicelab/call-requested"],
-            },
-            receiver: {
-              action: "processor-wake",
-              expression: [
-                "workers",
-                ["get", voiceAgentProcessorRef(streamPath)],
-                "processor",
-                "wakeStreamProcessor",
-              ],
-              processorSlug: VOICE_AGENT_PROCESSOR_SLUG,
-            },
-          },
+          payload: subscriptionPayload,
         },
       ),
-      backOffice.append({
-        type: "events.iterate.com/agents/context-added",
-        idempotencyKey: briefKey,
-        payload: {
-          content: BACK_OFFICE_BRIEF,
-          key: "voicelab/colleague-brief",
-          llmRequestPolicy: { behaviour: "dont-trigger-request" },
-          role: "system",
-        },
-      }),
+      /* Born and briefed — the same helper the call path uses, so a call that
+       * never went through setup gets the same colleague. */
+      ensureBackOffice(backOffice),
     ]);
 
     const created: string[] = [];
@@ -1994,6 +2285,26 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
     for (const event of [...voiceEvents, ...agentEvents]) {
       const key = event.idempotencyKey ?? `${event.path}@${String(event.offset)}`;
       (Date.parse(event.createdAt) < startedAt ? alreadyThere : created).push(key);
+    }
+
+    /*
+     * AND IS IT ACTUALLY LISTENING?
+     *
+     * Setup's contract is "this stream is ready to hold a conversation", so it
+     * must not report success having left it deaf. The append above
+     * deduplicates against the original install, which is the point — but
+     * after `removeVoiceAgent` the original is REMOVED, and a deduplicated
+     * re-append changes nothing while reporting that it did. Nobody discovers
+     * that until a conversation fails to start.
+     */
+    if (!(await voiceAgentSubscriptionStatus(stream)).active) {
+      const healKey = `${subscriptionKeyPrefix}:reinstall:${crypto.randomUUID()}`;
+      await stream.append({
+        type: "events.iterate.com/stream/subscription-configured",
+        idempotencyKey: healKey,
+        payload: subscriptionPayload,
+      });
+      created.push(healKey);
     }
     return { streamPath, created, alreadyThere };
   }
@@ -2006,9 +2317,11 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
      * What to call to get this stream talking again.
      *
      * Named here because setup's subscription key is derived from the stream
-     * path, so a plain re-run after a removal deduplicates against the
-     * original install and silently does nothing. Making the caller discover
-     * that by watching a conversation fail to start would be cruel.
+     * path and the payload's content, so a plain re-run after a removal
+     * deduplicates against the original install. Setup heals that itself now —
+     * it checks the subscription really is active and re-installs it under a
+     * fresh key if not — but saying so still beats making the caller work it
+     * out by watching a conversation fail to start.
      */
     reinstallWith: string;
   }> {
