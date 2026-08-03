@@ -41,13 +41,22 @@ export const E2E_CI_RETRIES = 1;
 export const E2E_CI_RETRY_DELAY_MS = 5_000;
 
 /**
- * Playwright per-action wait. Deliberately tight: the middlewright
- * spinner-waiter extends it (up to ~30s) only while the app visibly reports
- * progress, so an app that goes blank fails fast instead of being slept
- * through. This tightness is what caught the blank `ssr: false` outlet bug
- * (flake 21) — do not widen it to paper over a missing loading state.
+ * Playwright per-action wait — ONE number, every project, video mode
+ * included. Deliberately tight: the middlewright spinner-waiter extends it
+ * (up to ~30s) only while the app visibly reports progress, so an app that
+ * goes blank fails fast instead of being slept through. This tightness is
+ * what caught the blank `ssr: false` outlet bug (flake 21) — do not widen
+ * it to paper over a missing loading state.
+ *
+ * To future agents tempted to re-add a video-mode or mobile override: this
+ * number was set after removing unmeasured 5s/10s margins. Video mode's
+ * runtime cost is one click-moment screenshot (~100-300ms — pointer
+ * animation and holds are post-production), and Metro's mid-spec dev
+ * compiles hold a spinner marker while any bundle request is in flight
+ * (specs/test-support/metro-bundle-spinner.ts). If a flake tempts you to
+ * raise this, measure the actual action latency first.
  */
-export const SPEC_ACTION_TIMEOUT_MS = 750;
+export const SPEC_ACTION_TIMEOUT_MS = 1_000;
 
 /** Playwright `expect` polling budget — one UI assertion, not a whole flow. */
 export const SPEC_EXPECT_TIMEOUT_MS = 15_000;
