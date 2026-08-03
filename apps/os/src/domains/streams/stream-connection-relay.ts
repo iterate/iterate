@@ -380,41 +380,62 @@ export function openRelayedLiveState(input: {
     }
   };
 
-  const ensureSocket = async () => {
-    if (socket !== undefined) return;
-    try {
-      const upgrade = await input.stub().fetch("https://stream-wake.internal/", {
-        headers: {
-          Upgrade: "websocket",
-          [STREAM_WAKE_SOCKET_HEADER]: STATE_SOCKET_HEADER_BODY,
-        },
-      });
-      const ws = upgrade.webSocket ?? undefined;
-      if (ws === undefined) return;
-      ws.accept();
-      ws.addEventListener("message", (event) => {
-        const frame = parseStateSocketFrame(event.data);
-        if (frame === undefined) return;
-        // The only producer of state frames is this stream DO's pushState,
-        // which sends exactly #readRuntimeState() — the same value the
-        // snapshot read returns typed. The protocol module keeps the payload
-        // `unknown` on purpose (forward-compat across deploy skew), and
-        // liveState consumers are read-only debug surfaces that tolerate
-        // transient shape drift, so a full runtime re-validation here would
-        // buy nothing but a second schema to keep in sync.
-        apply(frame.state as StreamRuntimeDebugState);
-      });
-      ws.addEventListener("close", () => {
-        // Stale-until-next-read: the next subscribe re-opens and re-seeds.
-        if (socket === ws) socket = undefined;
-      });
-      socket = ws;
-    } catch (error) {
-      console.warn("stream state socket unavailable; liveState reads stay snapshot-only", {
-        error,
-      });
-    }
-  };
+  // Memoized while an open is in flight: concurrent subscribes must share
+  // one dial, or each opens its own DO-side socket and only the last keeps a
+  // worker reference — the rest linger as watchers the DO keeps
+  // materializing state for.
+  let socketOpening: Promise<void> | undefined;
+
+  const ensureSocket = (): Promise<void> =>
+    (socketOpening ??= (async () => {
+      if (socket !== undefined) return;
+      try {
+        const upgrade = await input.stub().fetch("https://stream-wake.internal/", {
+          headers: {
+            Upgrade: "websocket",
+            [STREAM_WAKE_SOCKET_HEADER]: STATE_SOCKET_HEADER_BODY,
+          },
+        });
+        const ws = upgrade.webSocket ?? undefined;
+        if (ws === undefined) return;
+        ws.accept();
+        // Subscribers can vanish while the upgrade is in flight — a fast
+        // useLiveState mount/unmount is the common case — and the
+        // unsubscribe-time release no-ops while `socket` is still undefined.
+        // Adopting the fresh socket anyway would orphan it on the DO.
+        if (!engine.observed) {
+          try {
+            ws.close(1000, "no subscribers");
+          } catch {
+            // Already closed.
+          }
+          return;
+        }
+        ws.addEventListener("message", (event) => {
+          const frame = parseStateSocketFrame(event.data);
+          if (frame === undefined) return;
+          // The only producer of state frames is this stream DO's pushState,
+          // which sends exactly #readRuntimeState() — the same value the
+          // snapshot read returns typed. The protocol module keeps the payload
+          // `unknown` on purpose (forward-compat across deploy skew), and
+          // liveState consumers are read-only debug surfaces that tolerate
+          // transient shape drift, so a full runtime re-validation here would
+          // buy nothing but a second schema to keep in sync.
+          apply(frame.state as StreamRuntimeDebugState);
+        });
+        ws.addEventListener("close", () => {
+          // Stale-until-next-read: the next subscribe re-opens and re-seeds.
+          if (socket === ws) socket = undefined;
+        });
+        socket = ws;
+      } catch (error) {
+        console.warn("stream state socket unavailable; liveState reads stay snapshot-only", {
+          error,
+        });
+      } finally {
+        socketOpening = undefined;
+      }
+    })());
 
   const releaseSocketIfUnobserved = () => {
     if (engine.observed || socket === undefined) return;
@@ -434,8 +455,14 @@ export function openRelayedLiveState(input: {
         const subscription = engine.subscribe(sink);
         // Socket lifetime tracks observation: open on first subscriber, and
         // re-seed once attached so a change landing between the pre-read
-        // snapshot and the socket attach still becomes visible.
-        void ensureSocket().then(() => (socket === undefined ? undefined : seed()));
+        // snapshot and the socket attach still becomes visible. Best-effort
+        // end to end — the subscriber already holds a snapshot, so a failed
+        // follow-up seed must log, never surface an unhandled rejection.
+        void ensureSocket()
+          .then(() => (socket === undefined ? undefined : seed()))
+          .catch((error: unknown) => {
+            console.warn("stream state socket post-attach seed failed", { error });
+          });
         return {
           ping: () => subscription.ping(),
           unsubscribe: () => {
