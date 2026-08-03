@@ -60,6 +60,55 @@ export class DocsAppRpcTarget extends RpcTarget {
   }
 }
 
+export type TasksLinkInput = {
+  /** Absolute /workspaces/** stream path of the workspace the board renders. */
+  workspace: string;
+  /** Absolute /repos/** path of the repo whose task files the board shows. */
+  repo: string;
+  /** Repo-relative task file to open (a .md file under a `tasks/` folder). */
+  task?: string;
+};
+
+/** Project-side capability exposed by config workers as `itx.worker.tasks`.
+ * The board is the /w view of the SAME app that serves docs — one host,
+ * two lenses — so a tasks link is a docs-app URL. */
+export class TasksAppRpcTarget extends RpcTarget {
+  readonly #env: DocsEnv;
+
+  constructor(env: DocsEnv) {
+    super();
+    this.#env = env;
+  }
+
+  /** Build a board URL for one workspace's task files under one repo. */
+  async link(input: TasksLinkInput): Promise<string> {
+    // Same validation the board applies when it opens, so a minted link can
+    // only address a workspace/repo/task the board UI will accept.
+    const workspace = requireWorkspacePath(input.workspace);
+    const repo = requireRepoPath(input.repo);
+    const task = input.task === undefined ? undefined : requireTaskPath(input.task);
+    const itx = await this.#env.ITX.get();
+    try {
+      const url = new URL(await itx.appUrl("docs"));
+      url.pathname = "/w";
+      url.searchParams.set("workspace", workspace);
+      url.searchParams.set("repo", repo);
+      if (task !== undefined) url.searchParams.set("task", task);
+      return url.href;
+    } finally {
+      itx[Symbol.dispose]();
+    }
+  }
+}
+
+/** The board capability alone — the /w view rides DocsApp's fetch proxy, so
+ * there is no tasks fetch handler and no tasks host. */
+export const TasksApp = {
+  create(env: DocsEnv) {
+    return { rpc: new TasksAppRpcTarget(env) };
+  },
+};
+
 export const DocsApp = {
   create(env: DocsEnv, options: DocsAppOptions) {
     const configuredOrigin = parseHttpsOrigin(options.proxy.origin, "Docs app proxy origin");
@@ -110,6 +159,36 @@ export function requireDocumentPath(value: string): string {
   if (path.startsWith("/") && !path.startsWith("/workspaces/") && !path.startsWith("/repos/")) {
     throw new Error(
       'an absolute document path must be fully qualified (under "/workspaces/" or "/repos/"); use a relative path to target the workspace\'s own directory',
+    );
+  }
+  return path;
+}
+
+/** A board's repo path is a fully qualified /repos/** mount path — the SAME
+ * rule the board applies on open (normalizeRepoPath), so a minted link can
+ * never carry a repo the route would reject. */
+export function requireRepoPath(value: string): string {
+  const path = requireCanonicalPath(value, "repo path");
+  const segments = path.startsWith("/repos/") ? path.slice(1).split("/") : [];
+  if (
+    segments.length < 2 ||
+    segments.some((segment) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))
+  ) {
+    throw new Error(`repo path must name a repo under "/repos/": ${JSON.stringify(value)}`);
+  }
+  return path;
+}
+
+/** A task path is repo-relative: a Markdown file below a `tasks/` folder. */
+export function requireTaskPath(value: string): string {
+  const path = requireCanonicalPath(value, "task path");
+  if (path.startsWith("/")) {
+    throw new Error(`task path must be repo-relative: ${JSON.stringify(value)}`);
+  }
+  const segments = path.split("/");
+  if (!/\.(?:md|markdown)$/i.test(segments.at(-1) ?? "") || !segments.includes("tasks")) {
+    throw new Error(
+      `task path must be a .md file below a "tasks" folder: ${JSON.stringify(value)}`,
     );
   }
   return path;

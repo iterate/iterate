@@ -112,27 +112,6 @@ function makeKitWorkspace(): WorkspaceConfig {
   };
 }
 
-function makeTasksWorkspace(): WorkspaceConfig {
-  return {
-    entry: [
-      "vite.config.ts",
-      "vitest.config.ts",
-      "src/worker.ts!",
-      // Operational probe/dev scripts, run by hand against live deployments.
-      "scripts/**/*.mjs",
-    ],
-    project: ["src/**/*.{ts,tsx}!", "scripts/**/*.mjs", "!dist/**!"],
-    vite: false,
-    paths: {
-      "~/*": ["../os/src/*"],
-    },
-    // tailwindcss backs the @tailwindcss/vite plugin and the ui package's
-    // globals.css; nothing imports it from TS. `cloudflare:workers` parses as
-    // the "cloudflare" package — same posture as the other app workspaces.
-    ignoreDependencies: ["cloudflare", "tailwindcss"],
-  };
-}
-
 function makeDocsWorkspace(): WorkspaceConfig {
   return {
     entry: ["vite.config.ts", "vitest.config.ts", "src/worker.ts!", "scripts/**/*.ts"],
@@ -244,7 +223,6 @@ const config: KnipConfig = {
     "!apps/streams-example-app",
     "!apps/tanstack",
     "!apps/kit",
-    "!apps/tasks",
     "!apps/docs",
     "packages/*",
     "!packages/shared",
@@ -265,7 +243,6 @@ const config: KnipConfig = {
     "apps/semaphore/src/router.tsx": ["exports"],
     "apps/tanstack/src/router.tsx": ["exports"],
     "apps/kit/src/router.tsx": ["exports"],
-    "apps/tasks/src/router.tsx": ["exports"],
     "apps/docs/src/router.tsx": ["exports"],
   },
   workspaces: {
@@ -274,7 +251,6 @@ const config: KnipConfig = {
     "apps/streams-example-app": makeStreamsExampleAppWorkspace(),
     "apps/tanstack": makeTanstackTodoWorkspace(),
     "apps/kit": makeKitWorkspace(),
-    "apps/tasks": makeTasksWorkspace(),
     "apps/docs": makeDocsWorkspace(),
     "packages/shared": makeSharedWorkspace(),
     "packages/ui": makeUiWorkspace(),
