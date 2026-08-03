@@ -1,3 +1,5 @@
+import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
+
 export function DocumentError({
   workspacePath,
   path,
@@ -8,7 +10,8 @@ export function DocumentError({
   message: string;
 }) {
   return (
-    <main className="grid min-h-svh place-items-center bg-muted/20 px-6">
+    <main className="relative grid min-h-svh place-items-center bg-muted/20 px-6">
+      <SidebarTrigger className="absolute top-3 left-3 md:hidden" />
       <div className="w-full max-w-xl rounded-2xl border bg-background p-8 shadow-sm">
         <p className="text-xs font-medium tracking-wide text-destructive uppercase">
           Could not open document

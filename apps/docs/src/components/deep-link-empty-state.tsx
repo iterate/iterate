@@ -1,8 +1,10 @@
 import { FileTextIcon } from "lucide-react";
+import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 
 export function DeepLinkEmptyState() {
   return (
-    <main className="grid min-h-svh place-items-center bg-muted/20 px-6">
+    <main className="relative grid min-h-svh place-items-center bg-muted/20 px-6">
+      <SidebarTrigger className="absolute top-3 left-3 md:hidden" />
       <div className="w-full max-w-lg rounded-2xl border bg-background p-8 shadow-sm">
         <div className="mb-5 flex size-10 items-center justify-center rounded-xl bg-foreground text-background">
           <FileTextIcon aria-hidden className="size-5" />

@@ -32,7 +32,10 @@ function RootComponent() {
       <TooltipProvider delay={0}>
         <SidebarProvider defaultOpen={sidebarDefaultOpen} className="h-svh">
           <AppSidebar />
-          <SidebarInset className="min-w-0 overflow-hidden">
+          {/* Mobile scrolls the inset (the page stacks editor + comments taller
+              than the viewport); only lg pins the height, matching the doc
+              page's own lg:h-svh / lg:overflow-hidden split. */}
+          <SidebarInset className="min-w-0 overflow-auto lg:overflow-hidden">
             <Outlet />
           </SidebarInset>
         </SidebarProvider>
