@@ -141,15 +141,23 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
           workspaces: { get(path: string): { glob(pattern: string): Promise<string[]> } };
         }
       ).workspaces.get(workspace);
-      // Every extension requireDocumentPath accepts, no more and no less.
-      const lists = await Promise.all(
-        ["md", "markdown", "html", "htm"].map((ext) => stub.glob(`${workspace}/**/*.${ext}`)),
-      );
-      return lists
-        .flat()
-        .map((path) => path.slice(workspace.length + 1))
-        .sort((left, right) => left.localeCompare(right))
-        .slice(0, 200);
+      // ONE tree walk, filtered here to every extension requireDocumentPath
+      // accepts (no more and no less) — the platform glob enumerates the
+      // whole tree per pattern, so four extension globs cost four walks.
+      const everything = await stub.glob(`${workspace}/**/*`);
+      const documents: string[] = [];
+      for (const path of everything) {
+        const extension = path.slice(path.lastIndexOf(".") + 1).toLowerCase();
+        if (
+          extension === "md" ||
+          extension === "markdown" ||
+          extension === "html" ||
+          extension === "htm"
+        ) {
+          documents.push(path.slice(workspace.length + 1));
+        }
+      }
+      return documents.sort((left, right) => left.localeCompare(right)).slice(0, 200);
     });
   }
 

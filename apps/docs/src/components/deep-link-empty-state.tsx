@@ -52,15 +52,21 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
     let cancelled = false;
     setDocuments(null);
     setDocumentsError(null);
-    void withDocsProject((project) => project.documents(chosen))
-      .then((list) => {
-        if (!cancelled) setDocuments(list);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) setDocumentsError(error instanceof Error ? error.message : String(error));
-      });
+    // Debounced: a keystroke mid-path is not a workspace address yet —
+    // fetching every prefix flashes "not found" errors and walks the tree
+    // once per attempt. List-row clicks land here too, a beat later.
+    const timer = setTimeout(() => {
+      void withDocsProject((project) => project.documents(chosen))
+        .then((list) => {
+          if (!cancelled) setDocuments(list);
+        })
+        .catch((error: unknown) => {
+          if (!cancelled) setDocumentsError(error instanceof Error ? error.message : String(error));
+        });
+    }, 350);
     return () => {
       cancelled = true;
+      clearTimeout(timer);
     };
   }, [chosen]);
 

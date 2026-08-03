@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -150,12 +150,20 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
   // failure has no list to keep, so the error itself becomes the row —
   // never an eternal "Loading…".
   const [listError, setListError] = useState<string | null>(null);
+  // Reopening while a fetch is in flight must not let the OLDER response
+  // land last and hide a just-minted workspace — latest request wins.
+  const listRequestRef = useRef(0);
   const loadWorkspaces = () => {
+    const requestId = ++listRequestRef.current;
     setListError(null);
     void withDocsProject((project) => project.workspaces())
-      .then(setWorkspaces)
+      .then((list) => {
+        if (listRequestRef.current === requestId) setWorkspaces(list);
+      })
       .catch((error: unknown) => {
-        setListError(error instanceof Error ? error.message : String(error));
+        if (listRequestRef.current === requestId) {
+          setListError(error instanceof Error ? error.message : String(error));
+        }
       });
   };
 
