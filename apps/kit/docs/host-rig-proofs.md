@@ -92,6 +92,37 @@ seed only reproduces a run against the generator that drew it.
 that injected nothing reads exactly like one that injected everything, and a
 clean result from a schedule that never fired looks like proof.
 
+## 6. The board does the same thing
+
+Flashed 2026-08-03 with the firmware and a provisioning partition pointing at
+the same preview project and the stream `/voicelab/device`, which
+`setupVoiceAgent` had prepared exactly as it does for the CLI. Nothing about
+the server side is device-specific.
+
+A full journey driven the way a person drives it — press call, wait for live,
+hold talk, release, wait for the answer:
+
+| step           |                                                                                |
+| -------------- | ------------------------------------------------------------------------------ |
+| call went live | 4403 ms                                                                        |
+| answered       | 4048 ms — _"I'll get that looked into right away. What were you thinking of?"_ |
+
+Its own counters after that turn: `spkFrames=171`, `spkPlayed=171` — **every
+frame received reached the speaker** — with `spkOverflow=0`, `spkSeqGaps=0`,
+`spkDecodeFailures=0`, `spkBadFrames=0`, `spkDiscarded=0`, and 356 microphone
+frames sent up. `spkConceal=24` and `spkUnderruns=2`, which is the board's
+known behaviour when an answer arrives faster than realtime playback.
+
+A note on identifying the board, because getting it wrong cost four flashes of
+somebody else's hardware: resolve the port from the USB serial number every
+time. `1C:DB:D4:7A:16:C8` is at location `0x01120000`, which macOS names
+`/dev/cu.usbmodem11201` — and that mapping was confirmed by reading the MAC
+back before writing anything.
+
+The `iterate_kit` provisioning partition is **0x1000 bytes**, not the 0x10000
+a first guess produces. An image built at the larger size would have been
+written straight past the end of the partition.
+
 ## What this still cannot tell you
 
 The analogue path — codec gain staging, amplifier settle, the acoustic path,
