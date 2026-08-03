@@ -23,7 +23,6 @@ import { authorColor, authorLabel } from "@iterate-com/workspace-documents/colla
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import { MarkdownDocumentPreview } from "@iterate-com/workspace-documents/preview";
 import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
-import { parseAnnotatedMarkdown } from "iterate/annotated-markdown";
 import { withDocsProject, withDocsProjectOnce } from "../lib/docs-client.ts";
 import type { DocsUser, WorkspaceDocumentSnapshot } from "../lib/docs-api.ts";
 import { DocumentError } from "./document-error.tsx";
