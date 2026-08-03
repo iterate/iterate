@@ -1,5 +1,4 @@
 import { useMemo } from "react";
-import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   getCoreRowModel,
   getExpandedRowModel,
@@ -9,26 +8,14 @@ import {
   type ExpandedState,
 } from "@tanstack/react-table";
 import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
-import { normalizePath } from "~/domains/durable-object-names.ts";
 import { closestAncestorByPath } from "~/lib/tree-rows.ts";
-import { readStreamStateOnce, type StreamTreeSource } from "~/lib/stream-navigation.ts";
 
+/** A real indexed stream or a synthesized file-system-like path container. */
 export type StreamTreeNode = {
   path: string;
   eventCount?: number;
-  loadState: "loaded" | "loading" | "error";
+  indexed: boolean;
   children: StreamTreeNode[];
-};
-
-type RemoteStreamNodeData = {
-  eventCount: number;
-  childPaths: string[];
-};
-
-type RemoteStreamNodeSnapshot = {
-  path: string;
-  loadState: StreamTreeNode["loadState"];
-  data?: RemoteStreamNodeData;
 };
 
 const SEARCH_COLUMN: ColumnDef<StreamTreeNode>[] = [
@@ -38,21 +25,25 @@ const SEARCH_COLUMN: ColumnDef<StreamTreeNode>[] = [
   },
 ];
 
-/** Build the hierarchy exposed by the materialized project stream index. */
+/** Build a file-system-like hierarchy from the materialized project stream index. */
 export function buildIndexedStreamForest(
   streams: Record<string, StreamIndexRow>,
 ): StreamTreeNode[] {
-  const nodes = new Map<string, StreamTreeNode>(
-    Object.values(streams).map((stream) => [
-      stream.path,
-      {
-        path: stream.path,
-        eventCount: stream.eventCount,
-        loadState: "loaded",
-        children: [],
-      },
-    ]),
-  );
+  const nodes = new Map<string, StreamTreeNode>();
+  for (const stream of Object.values(streams)) {
+    for (const path of streamTreePathPrefixes(stream.path)) {
+      if (!nodes.has(path)) {
+        nodes.set(path, { path, indexed: false, children: [] });
+      }
+    }
+    let node = nodes.get(stream.path);
+    if (node === undefined) {
+      node = { path: stream.path, indexed: false, children: [] };
+      nodes.set(stream.path, node);
+    }
+    node.eventCount = stream.eventCount;
+    node.indexed = true;
+  }
   const roots: StreamTreeNode[] = [];
   for (const node of nodes.values()) {
     const parent =
@@ -64,73 +55,31 @@ export function buildIndexedStreamForest(
   return roots;
 }
 
-/** Build the same hierarchy from lazy remote snapshots and their explicit child links. */
-export function buildRemoteStreamForest(
-  snapshots: readonly RemoteStreamNodeSnapshot[],
-): StreamTreeNode[] {
-  const nodes = new Map<string, StreamTreeNode>();
-
-  for (const snapshot of snapshots) {
-    nodes.set(snapshot.path, {
-      path: snapshot.path,
-      eventCount: snapshot.data?.eventCount,
-      loadState: snapshot.loadState,
-      children: [],
-    });
-  }
-  for (const snapshot of snapshots) {
-    for (const childPath of snapshot.data?.childPaths ?? []) {
-      if (!nodes.has(childPath)) {
-        nodes.set(childPath, {
-          path: childPath,
-          loadState: "loading",
-          children: [],
-        });
-      }
-    }
-  }
-
-  const roots: StreamTreeNode[] = [];
-  for (const node of nodes.values()) {
-    const parent =
-      closestAncestorByPath(node.path, nodes) ?? (node.path === "/" ? undefined : nodes.get("/"));
-    if (parent === undefined || parent === node) roots.push(node);
-    else parent.children.push(node);
-  }
-  sortStreamNodes(roots);
-  return roots;
-}
-
-/** Shared hierarchical row model for indexed Cmd+K and lazy admin streams. */
-function useStreamTreeTable({
-  forest,
-  expansionMode,
-  expansionPaths,
+/** Shared hierarchical row model for every stream-index tree. */
+export function useIndexedStreamTreeTable({
+  streams,
+  collapsedPaths,
   query,
 }: {
-  forest: StreamTreeNode[];
-  expansionMode: "expanded" | "collapsed";
-  expansionPaths: ReadonlySet<string>;
+  streams: Record<string, StreamIndexRow>;
+  collapsedPaths: ReadonlySet<string>;
   query: string;
 }) {
+  const forest = useMemo(() => buildIndexedStreamForest(streams), [streams]);
   const normalizedQuery = query.trim();
   const searching = normalizedQuery !== "";
   const expanded = useMemo<ExpandedState>(() => {
     if (searching) return true;
-    if (expansionMode === "expanded") {
-      return Object.fromEntries([...expansionPaths].map((path) => [path, true]));
-    }
-
     const expandedPaths: [string, boolean][] = [];
     const visit = (node: StreamTreeNode) => {
-      if (node.children.length > 0 && !expansionPaths.has(node.path)) {
+      if (node.children.length > 0 && !collapsedPaths.has(node.path)) {
         expandedPaths.push([node.path, true]);
       }
       for (const child of node.children) visit(child);
     };
     for (const root of forest) visit(root);
     return Object.fromEntries(expandedPaths);
-  }, [expansionMode, expansionPaths, forest, searching]);
+  }, [collapsedPaths, forest, searching]);
 
   return useReactTable({
     data: forest,
@@ -145,105 +94,6 @@ function useStreamTreeTable({
   });
 }
 
-export function useIndexedStreamTreeTable({
-  streams,
-  collapsedPaths,
-  query,
-}: {
-  streams: Record<string, StreamIndexRow>;
-  collapsedPaths: ReadonlySet<string>;
-  query: string;
-}) {
-  const forest = useMemo(() => buildIndexedStreamForest(streams), [streams]);
-  return useStreamTreeTable({
-    forest,
-    expansionMode: "collapsed",
-    expansionPaths: collapsedPaths,
-    query,
-  });
-}
-
-/**
- * Lazy admin adapter. It observes one query per visible node and lets cached
- * child lists grow the query set on the next render. Collapsed subtrees stay
- * cached but inactive, so remote work remains bounded by what the user opens.
- */
-export function useRemoteStreamTreeTable({
-  currentPath,
-  expandedPaths,
-  scope,
-  source,
-}: {
-  currentPath: string;
-  expandedPaths: ReadonlySet<string>;
-  scope: string;
-  source: StreamTreeSource;
-}) {
-  const queryClient = useQueryClient();
-  const queryPrefix = ["remote-stream-tree", scope] satisfies [string, string];
-  const cachedNodes = queryClient.getQueriesData<RemoteStreamNodeData>({ queryKey: queryPrefix });
-  const cachedByPath = new Map<string, RemoteStreamNodeData>();
-  for (const [queryKey, data] of cachedNodes) {
-    const path = queryKey.at(-1);
-    if (typeof path === "string" && data !== undefined) cachedByPath.set(path, data);
-  }
-
-  const pathsToLoad = new Set(["/", ...streamPathPrefixes(currentPath)]);
-  let discoveredVisiblePath = true;
-  while (discoveredVisiblePath) {
-    discoveredVisiblePath = false;
-    for (const path of pathsToLoad) {
-      if (!expandedPaths.has(path)) continue;
-      for (const childPath of cachedByPath.get(path)?.childPaths ?? []) {
-        if (pathsToLoad.has(childPath)) continue;
-        pathsToLoad.add(childPath);
-        discoveredVisiblePath = true;
-      }
-    }
-  }
-  const orderedPathSignature = [...pathsToLoad].toSorted().join("\0");
-  const orderedPaths = useMemo(() => orderedPathSignature.split("\0"), [orderedPathSignature]);
-  const snapshots = useQueries({
-    queries: orderedPaths.map((path) => ({
-      queryKey: [...queryPrefix, path],
-      queryFn: async (): Promise<RemoteStreamNodeData> => {
-        const streamState = await readStreamStateOnce(source, normalizePath(path));
-        return {
-          eventCount: streamState.eventCount,
-          childPaths: streamState.childPaths.toSorted(),
-        };
-      },
-    })),
-    combine: (results) =>
-      orderedPaths.map<RemoteStreamNodeSnapshot>((path, index) => {
-        const result = results[index];
-        if (result?.data !== undefined) {
-          return {
-            path,
-            loadState: result.isError ? "error" : "loaded",
-            data: result.data,
-          };
-        }
-        if (result?.isError) return { path, loadState: "error" };
-        return { path, loadState: "loading" };
-      }),
-  });
-  const forest = useMemo(() => buildRemoteStreamForest(snapshots), [snapshots]);
-  const table = useStreamTreeTable({
-    forest,
-    expansionMode: "expanded",
-    expansionPaths: expandedPaths,
-    query: "",
-  });
-
-  return {
-    table,
-    retryPath(path: string) {
-      void queryClient.refetchQueries({ queryKey: [...queryPrefix, path], exact: true });
-    },
-  };
-}
-
 export function streamTreeLabel(path: string): string {
   if (path === "/") return "/";
   return path.split("/").filter(Boolean).at(-1) ?? path;
@@ -253,12 +103,19 @@ export function formatEventCount(count: number): string {
   return count === 1 ? "1 event" : `${count.toLocaleString()} events`;
 }
 
-function streamPathPrefixes(path: string): string[] {
-  const segments = path.split("/").filter(Boolean);
-  return segments.map((_, index) => `/${segments.slice(0, index + 1).join("/")}`);
-}
-
 function sortStreamNodes(nodes: StreamTreeNode[]): void {
   nodes.sort((left, right) => left.path.localeCompare(right.path));
   for (const node of nodes) sortStreamNodes(node.children);
+}
+
+/** Every file-system-like container needed to place one indexed path. */
+function streamTreePathPrefixes(path: string): string[] {
+  const prefixes = ["/"];
+  let boundary = path.indexOf("/", 1);
+  while (boundary >= 0) {
+    prefixes.push(path.slice(0, boundary));
+    boundary = path.indexOf("/", boundary + 1);
+  }
+  if (!prefixes.includes(path)) prefixes.push(path);
+  return prefixes;
 }

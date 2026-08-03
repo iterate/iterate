@@ -1,92 +1,12 @@
 // Stream navigation helpers for the platform-wide admin stream explorer.
 
 import { useMemo } from "react";
-import type { StreamConnectionHandle } from "iterate/processors";
 import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/sdk/itx/react";
-import {
-  parseBrowserCoreStreamTreeState,
-  type BrowserCoreStreamTreeState,
-} from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 
-/** Minimal stream handle required by the one-shot remote tree reader. */
-type StreamTreeHandle = {
-  openConnection(args: {
-    events?: boolean;
-    processEventBatch(batch: { state: unknown }): unknown;
-  }): Promise<StreamConnectionHandle>;
-};
-
-/** Where remote admin tree nodes get state: path → stream callback connection. */
-export type StreamTreeSource = (streamPath: string) => StreamTreeHandle | Promise<StreamTreeHandle>;
-
-/**
- * Navigation plus the optional lazy source required only by the admin explorer.
- * Project navigation reads the single materialized live-state index instead.
- */
+/** Open a stream path from a project or admin navigation surface. */
 export type StreamNavigator = {
-  remoteTreeSource?: StreamTreeSource;
   onOpenPath: (streamPath: string) => void;
 };
-
-/**
- * Reads one remote admin stream's state via a short-lived callback connection:
- * the first push carries current state (DECISIONS D20), so open → first push
- * → close is the cheapest "fetch".
- */
-export function readStreamStateOnce(
-  source: StreamTreeSource,
-  streamPath: string,
-): Promise<BrowserCoreStreamTreeState> {
-  const READ_STATE_TIMEOUT_MS = 10_000;
-  return new Promise((resolve, reject) => {
-    let done = false;
-    let release: (() => void) | null = null;
-    const finish = () => {
-      clearTimeout(deadline);
-      release?.();
-    };
-    // Subscribe can succeed without a state push ever arriving (a wedged
-    // stream); bound the wait so the ⌘K child query errors instead of hanging.
-    const deadline = setTimeout(() => {
-      if (done) return;
-      done = true;
-      reject(new Error(`timed out reading state for ${streamPath}`));
-      finish();
-    }, READ_STATE_TIMEOUT_MS);
-    Promise.resolve()
-      .then(() => source(streamPath))
-      .then((stream) =>
-        stream.openConnection({
-          events: false,
-          processEventBatch: (batch) => {
-            if (done) return;
-            done = true;
-            try {
-              resolve(parseBrowserCoreStreamTreeState(batch.state));
-            } catch (error) {
-              reject(error instanceof Error ? error : new Error(String(error)));
-            }
-            finish();
-          },
-        }),
-      )
-      .then((connection) => {
-        release = () =>
-          void Promise.resolve(connection.close())
-            .catch(() => {})
-            // Release the stub too: on the tab-long shared socket, an
-            // undisposed handle leaks one import-table entry per ⌘K node read.
-            .finally(() => (connection as Partial<Disposable>)[Symbol.dispose]?.());
-        if (done) finish();
-      })
-      .catch((error: unknown) => {
-        if (done) return;
-        done = true;
-        reject(error instanceof Error ? error : new Error(String(error)));
-        finish();
-      });
-  });
-}
 
 /**
  * URL sentinel for streams that live outside any project (platform streams):

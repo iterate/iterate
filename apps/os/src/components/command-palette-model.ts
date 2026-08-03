@@ -135,7 +135,7 @@ export function normalizeDestination(raw: string): string | null {
   return parsed.success && parsed.data !== "/" ? parsed.data : null;
 }
 
-export function defaultPaletteTab(currentPath: string, liveIndex: boolean): PaletteTab {
-  if (!liveIndex) return "tree";
+export function defaultPaletteTab(currentPath: string, fullProjectNavigation: boolean): PaletteTab {
+  if (!fullProjectNavigation) return "tree";
   return currentPath === "/agents" || currentPath.startsWith("/agents/") ? "agents" : "recent";
 }

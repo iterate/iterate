@@ -1,4 +1,4 @@
-import { ChevronRight, LoaderCircle, RefreshCw } from "lucide-react";
+import { ChevronRight } from "lucide-react";
 import type { Row } from "@tanstack/react-table";
 import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-path-label";
 import { cn } from "@iterate-com/ui/lib/utils";
@@ -22,13 +22,11 @@ export function StreamTreeHeader({ className }: { className?: string }) {
 export function StreamTreeRowContent({
   row,
   onOpen,
-  onRetry,
   onToggleExpanded,
   selected = false,
 }: {
   row: Row<StreamTreeNode>;
   onOpen?: (path: string) => void;
-  onRetry?: (path: string) => void;
   onToggleExpanded?: (path: string) => void;
   selected?: boolean;
 }) {
@@ -42,11 +40,7 @@ export function StreamTreeRowContent({
         className="text-xs"
       />
       <span className="ml-auto shrink-0 text-[11px] tabular-nums text-foreground/70">
-        {node.loadState === "error"
-          ? "failed to load"
-          : node.eventCount === undefined
-            ? null
-            : formatEventCount(node.eventCount)}
+        {node.eventCount === undefined ? null : formatEventCount(node.eventCount)}
       </span>
     </>
   );
@@ -55,23 +49,7 @@ export function StreamTreeRowContent({
     <>
       <span style={{ width: Math.min(row.depth, 8) * 12 }} className="shrink-0" aria-hidden />
       <span className="flex w-4 shrink-0 justify-center">
-        {node.loadState === "error" ? (
-          <button
-            type="button"
-            aria-label={`Retry loading ${node.path}`}
-            title="Failed to load this stream's state — click to retry"
-            className="-m-1 flex size-4 items-center justify-center rounded-sm text-destructive hover:bg-muted"
-            onClick={(event) => {
-              event.preventDefault();
-              event.stopPropagation();
-              onRetry?.(node.path);
-            }}
-          >
-            <RefreshCw className="size-3.5" />
-          </button>
-        ) : node.loadState === "loading" ? (
-          <LoaderCircle className="size-3.5 animate-spin text-muted-foreground" aria-hidden />
-        ) : hasChildren && onToggleExpanded !== undefined ? (
+        {hasChildren && onToggleExpanded !== undefined ? (
           <button
             type="button"
             aria-label={row.getIsExpanded() ? `Collapse ${node.path}` : `Expand ${node.path}`}

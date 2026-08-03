@@ -2,19 +2,11 @@
 
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { RemoteStreamTable } from "./remote-stream-table.tsx";
+import { afterEach, beforeEach, expect, test } from "vitest";
+import { StreamIndexTable } from "./stream-index-table.tsx";
 import { StreamTreeRowContent } from "./stream-tree-row.tsx";
-import { useIndexedStreamTreeTable, useRemoteStreamTreeTable } from "./stream-tree-table.ts";
+import { useIndexedStreamTreeTable } from "./stream-tree-table.ts";
 import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
-
-const { readStreamStateOnce } = vi.hoisted(() => ({ readStreamStateOnce: vi.fn() }));
-
-vi.mock("~/lib/stream-navigation.ts", async (importOriginal) => ({
-  ...(await importOriginal()),
-  readStreamStateOnce,
-}));
 
 const reactEnvironment = globalThis as typeof globalThis & {
   IS_REACT_ACT_ENVIRONMENT?: boolean;
@@ -23,7 +15,6 @@ const createdAt = "2026-07-17T10:00:00.000Z";
 
 beforeEach(() => {
   reactEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
-  readStreamStateOnce.mockReset();
 });
 
 afterEach(() => {
@@ -116,104 +107,37 @@ test("cmdk row content keeps disclosures passive inside an option", async () => 
   await act(async () => root.unmount());
 });
 
-function RemoteHarness({ expandedPaths }: { expandedPaths: ReadonlySet<string> }) {
-  const { table } = useRemoteStreamTreeTable({
-    currentPath: "/",
-    expandedPaths,
-    scope: "project-1",
-    source: () => {
-      throw new Error("the read function is mocked");
-    },
-  });
-  return table
-    .getRowModel()
-    .rows.map((row) => <p key={row.id} data-stream-path={row.original.path} />);
-}
-
-test("the remote table loads only visible levels and grows through the same row model", async () => {
-  readStreamStateOnce.mockImplementation(async (_source, path: string) => {
-    if (path === "/") return { eventCount: 4, childPaths: ["/agents"] };
-    if (path === "/agents") return { eventCount: 2, childPaths: ["/agents/slack"] };
-    return { eventCount: 1, childPaths: [] };
-  });
+test("the index table has no row-loading UI and reveals the current path", async () => {
   const container = document.createElement("div");
   document.body.appendChild(container);
   const root = createRoot(container);
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const render = (expandedPaths: ReadonlySet<string>) =>
-    root.render(
-      <QueryClientProvider client={queryClient}>
-        <RemoteHarness expandedPaths={expandedPaths} />
-      </QueryClientProvider>,
-    );
-
-  await act(async () => render(new Set(["/"])));
-  await act(async () =>
-    vi.waitFor(() => expect(visiblePaths(container)).toEqual(["/", "/agents"])),
-  );
-  expect(readStreamStateOnce.mock.calls.map((call) => call[1]).toSorted()).toEqual([
-    "/",
-    "/agents",
-  ]);
-
-  await act(async () => render(new Set(["/", "/agents"])));
-  await act(async () =>
-    vi.waitFor(() => expect(visiblePaths(container)).toEqual(["/", "/agents", "/agents/slack"])),
-  );
-  expect(readStreamStateOnce.mock.calls.map((call) => call[1]).toSorted()).toEqual([
-    "/",
-    "/agents",
-    "/agents/slack",
-  ]);
-
-  await act(async () => root.unmount());
-  queryClient.clear();
-});
-
-test("the remote table preserves manual expansion when the current path changes", async () => {
-  readStreamStateOnce.mockImplementation(async (_source, path: string) => {
-    if (path === "/") return { eventCount: 5, childPaths: ["/agents", "/global"] };
-    if (path === "/agents") return { eventCount: 2, childPaths: ["/agents/slack"] };
-    return { eventCount: 1, childPaths: [] };
-  });
-  const container = document.createElement("div");
-  document.body.appendChild(container);
-  const root = createRoot(container);
-  const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const render = (currentPath: string) =>
     root.render(
-      <QueryClientProvider client={queryClient}>
-        <RemoteStreamTable
-          currentPath={currentPath}
-          onOpenPath={() => {}}
-          scope="project-1"
-          source={() => {
-            throw new Error("the read function is mocked");
-          }}
-        />
-      </QueryClientProvider>,
+      <StreamIndexTable currentPath={currentPath} onOpenPath={() => {}} streams={indexedStreams} />,
     );
 
   await act(async () => render("/"));
-  await act(async () =>
-    vi.waitFor(() => expect(visiblePaths(container)).toEqual(["/", "/agents", "/global"])),
-  );
-  const expandAgents = container.querySelector<HTMLButtonElement>(
-    'button[aria-label="Expand /agents"]',
-  );
-  expect(expandAgents).not.toBeNull();
-  await act(async () => expandAgents?.click());
-  await act(async () =>
-    vi.waitFor(() =>
-      expect(visiblePaths(container)).toEqual(["/", "/agents", "/agents/slack", "/global"]),
-    ),
-  );
+  expect(visiblePaths(container)).toEqual(["/", "/agents", "/agents/cows"]);
+  expect(container.querySelector(".animate-spin")).toBeNull();
+  expect(container.querySelector('button[aria-label^="Retry loading"]')).toBeNull();
 
-  await act(async () => render("/global"));
-  expect(visiblePaths(container)).toEqual(["/", "/agents", "/agents/slack", "/global"]);
+  const collapseAgents = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Collapse /agents"]',
+  );
+  expect(collapseAgents).not.toBeNull();
+  await act(async () => collapseAgents?.click());
+  expect(visiblePaths(container)).toEqual(["/", "/agents"]);
+
+  await act(async () => render("/agents/cows"));
+  expect(visiblePaths(container)).toEqual(["/", "/agents", "/agents/cows"]);
+
+  const collapseCurrentParent = container.querySelector<HTMLButtonElement>(
+    'button[aria-label="Collapse /agents"]',
+  );
+  await act(async () => collapseCurrentParent?.click());
+  expect(visiblePaths(container)).toEqual(["/", "/agents"]);
 
   await act(async () => root.unmount());
-  queryClient.clear();
 });
 
 function visiblePaths(container: HTMLElement): string[] {

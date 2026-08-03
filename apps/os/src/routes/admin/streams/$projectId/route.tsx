@@ -1,7 +1,12 @@
 import { Outlet, createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
-import { RemoteStreamTable } from "~/components/streams/remote-stream-table.tsx";
+import { useLiveState } from "iterate/sdk/itx/react";
+import { StreamIndexTablePanel } from "~/components/streams/stream-index-table.tsx";
 import { streamPathFromSplatOrRoot } from "~/lib/stream-links.ts";
-import { streamProjectDisplayLabel, useAdminStreamSource } from "~/lib/stream-navigation.ts";
+import { linkOptionsForAdminStreamPath } from "~/lib/stream-routes.ts";
+import {
+  NULL_DURABLE_OBJECT_PROJECT_ID,
+  streamProjectDisplayLabel,
+} from "~/lib/stream-navigation.ts";
 
 export const Route = createFileRoute("/admin/streams/$projectId")({
   component: AdminStreamProjectLayout,
@@ -13,24 +18,13 @@ function AdminStreamProjectLayout() {
   const params = useParams({ strict: false });
   const splat = typeof params._splat === "string" ? params._splat : undefined;
   const currentPath = streamPathFromSplatOrRoot(splat);
-  const { source } = useAdminStreamSource(projectId);
-  const openStreamPath = (path: string) => {
-    if (path === "/") {
-      void navigate({
-        to: "/admin/streams/$projectId",
-        params: { projectId },
-        search: {},
-      });
-      return;
-    }
-
-    void navigate({
-      to: "/admin/streams/$projectId/$",
-      params: { projectId, _splat: path },
-      search: {},
-    });
-  };
-
+  const streamIndexAvailable = projectId !== NULL_DURABLE_OBJECT_PROJECT_ID;
+  const streamsState = useLiveState(
+    (itx) => itx.liveState,
+    (state) => state.streamsIndex,
+    [projectId],
+    { slug: projectId, enabled: streamIndexAvailable },
+  );
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
       <aside className="flex max-h-72 min-h-0 shrink-0 flex-col border-b lg:max-h-none lg:w-80 lg:border-r lg:border-b-0">
@@ -41,12 +35,15 @@ function AdminStreamProjectLayout() {
           </p>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto">
-          <RemoteStreamTable
+          <StreamIndexTablePanel
             key={projectId}
+            available={streamIndexAvailable}
             currentPath={currentPath}
-            scope={projectId}
-            source={source}
-            onOpenPath={openStreamPath}
+            error={streamsState.status === "error"}
+            streams={streamsState.value}
+            onOpenPath={(path) => {
+              void navigate(linkOptionsForAdminStreamPath(projectId, path));
+            }}
           />
         </div>
       </aside>

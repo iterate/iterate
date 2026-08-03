@@ -91,7 +91,7 @@ describe("command palette models", () => {
     expect(hasPathDescendant(["/agents/research"], "/agents/research")).toBe(false);
   });
 
-  test("defaults by route and keeps admin in remote tree mode", () => {
+  test("defaults by route and keeps admin in stream-tree mode", () => {
     expect(defaultPaletteTab("/agents", true)).toBe("agents");
     expect(defaultPaletteTab("/agents/research/child", true)).toBe("agents");
     expect(defaultPaletteTab("/repos/config", true)).toBe("recent");
