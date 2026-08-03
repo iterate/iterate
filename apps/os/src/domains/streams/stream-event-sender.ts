@@ -295,6 +295,19 @@ type StreamEventSenderHooks = {
   runDurable(work: () => Promise<unknown>): void;
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
+  /**
+   * Whether a live hibernatable wake socket is bound for this session
+   * connectionKey (see wake-socket.ts). Only such session connections are
+   * idle-teardown-eligible: severing a session callback with no wake channel
+   * would strand the subscriber with no way to learn about new events.
+   */
+  hasWakeChannel(connectionKey: string): boolean;
+  /**
+   * Idle teardown just closed these session connections. Stamp their wake
+   * sockets' attachments with the current (post-close-facts) max offset so
+   * the close facts themselves can never wake the subscriber back up.
+   */
+  recordSessionIdleClosed(connectionKeys: readonly string[]): void;
 };
 
 export class StreamEventSender {
@@ -1538,6 +1551,8 @@ type StreamConnectionsHooks = Pick<
   | "now"
   | "armAlarm"
   | "keepAlive"
+  | "hasWakeChannel"
+  | "recordSessionIdleClosed"
 > & {
   readBatch(afterOffset: number, beforeOffset: number, limit: number): SizedStreamEvent[];
   hostedDeliveryStillMatches(
@@ -1864,7 +1879,8 @@ export class StreamConnections {
   }
 
   armOrClearIdleAlarm(): void {
-    if (this.#hostedConnectionKeys().length === 0) {
+    const eligible = this.#idleEligibleConnectionKeys();
+    if (eligible.hosted.length === 0 && eligible.session.length === 0) {
       this.#idleTeardownAtMs = null;
       return;
     }
@@ -1874,9 +1890,10 @@ export class StreamConnections {
 
   runIdleTeardownNow(): string[] {
     this.#idleTeardownAtMs = null;
-    const keys = this.#hostedConnectionKeys();
+    const { hosted, session } = this.#idleEligibleConnectionKeys();
+    const keys = [...hosted, ...session];
     const wedgedKeys = new Set(
-      keys.filter((key) => this.#connections.get(key)?.hasPendingDelivery() === true),
+      hosted.filter((key) => this.#connections.get(key)?.hasPendingDelivery() === true),
     );
     this.#tearingDown = true;
     try {
@@ -1893,19 +1910,33 @@ export class StreamConnections {
     // replays from its own reported checkpoint; the sending cursor is only the
     // source stream's wake/delivery position.
     const maxOffset = this.#hooks.coreState().maxOffset;
-    for (const connectionKey of keys) {
+    for (const connectionKey of hosted) {
       if (wedgedKeys.has(connectionKey)) continue;
       this.#hooks.store.ack(connectionKey, maxOffset);
     }
+    // Session connections have no cursor row; their equivalent of the ack
+    // above is the wake-socket attachment stamp, which must likewise land
+    // AFTER the close facts so those facts can never wake the subscriber.
+    if (session.length > 0) this.#hooks.recordSessionIdleClosed(session);
     this.#idleTeardownAtMs = null;
     if (wedgedKeys.size > 0) queueMicrotask(() => this.#hooks.sendDueSubscriptions());
     return keys.filter((connectionKey) => !wedgedKeys.has(connectionKey));
   }
 
-  #hostedConnectionKeys(): string[] {
-    return [...this.#connections]
-      .filter(([, connection]) => connection.kind === "hosted")
-      .map(([connectionKey]) => connectionKey);
+  /**
+   * Hosted connections are always idle-eligible (the durable subscription
+   * re-wakes them). A session connection is eligible only when its owner's
+   * relay holds a live wake socket; every other session connection keeps
+   * today's semantics — it lives (and pins) as long as its session does.
+   */
+  #idleEligibleConnectionKeys(): { hosted: string[]; session: string[] } {
+    const hosted: string[] = [];
+    const session: string[] = [];
+    for (const [connectionKey, connection] of this.#connections) {
+      if (connection.kind === "hosted") hosted.push(connectionKey);
+      else if (this.#hooks.hasWakeChannel(connectionKey)) session.push(connectionKey);
+    }
+    return { hosted, session };
   }
 
   #open<Batch extends StreamEventBatch>(args: OpenConnectionArgs<Batch>): StreamConnection {

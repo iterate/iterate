@@ -2174,6 +2174,90 @@ test("a hosted processor returns its callback, idles cleanly, and wakes again af
   );
 });
 
+// The wake-socket cycle for session connections (wake-socket.ts): idle
+// teardown severs the pinning RPC leg while the owner's Cap'n Web session
+// stays open, and the next matching append makes the worker relay re-dial —
+// the SAME processEventBatch callback receives it, with no client
+// re-subscribe. Lifecycle facts and non-matching appends must not resurrect
+// the dormant subscriber (the close→wake→open→idle-close loop).
+test("an idle-torn session connection resumes on the next matching append without re-subscribing", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/subscriptions/session/wake/${marker}`;
+  const connectionKey = `wake-${marker.slice(0, 8)}`;
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using stream = project.streams.get(streamPath);
+
+  const received: StreamEvent[] = [];
+  const handle = await stream.openConnection({
+    connectionKey,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    processEventBatch: ({ events }) => {
+      received.push(...events);
+    },
+  });
+  try {
+    const [first] = await stream.append({
+      type: MATCHING_EVENT_TYPE,
+      payload: { round: "before-idle" },
+    });
+    await waitForCondition(async () => received.some((event) => event.offset === first!.offset), {
+      description: "the live session connection to deliver the first append",
+    });
+
+    await forceStreamIdleTeardown(stream);
+    await waitForCondition(
+      async () =>
+        runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
+      { description: "idle teardown to sever the wake-socket-backed session connection" },
+    );
+    expect(
+      (
+        await stream.getEvents({
+          eventTypes: ["events.iterate.com/stream/connection-closed"],
+          limit: 100,
+        })
+      ).some(
+        (event) =>
+          event.payload?.connectionKey === connectionKey && event.payload?.reason === "idle",
+      ),
+    ).toBe(true);
+    // The logical subscription stays live across dormancy: the relay-local
+    // handle answers for it, not the severed RPC leg.
+    await expect(Promise.resolve(handle.ping())).resolves.toBe(true);
+
+    // A non-matching append must not resurrect the dormant subscriber…
+    await stream.append({ type: OTHER_EVENT_TYPE, payload: { round: "while-dormant" } });
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(
+      runtimeState(await stream.runtimeState()).runtime.connections[connectionKey],
+    ).toBeUndefined();
+
+    // …while a matching one wakes the relay, which re-dials from its exact
+    // cursor and delivers through the ORIGINAL callback.
+    const [second] = await stream.append({
+      type: MATCHING_EVENT_TYPE,
+      payload: { round: "after-idle" },
+    });
+    await waitForCondition(async () => received.some((event) => event.offset === second!.offset), {
+      description: "the wake re-dial to deliver the post-idle append to the original callback",
+      timeoutMs: 30_000,
+    });
+    expect(received.map((event) => event.type)).toEqual([MATCHING_EVENT_TYPE, MATCHING_EVENT_TYPE]);
+    expect(received.map((event) => event.offset)).toEqual([first!.offset, second!.offset]);
+    await waitForCondition(
+      async () =>
+        runtimeState(await stream.runtimeState()).runtime.connections[connectionKey]?.kind ===
+        "session",
+      { description: "the re-dialed session connection to appear in runtime state" },
+    );
+  } finally {
+    await handle.close();
+    disposeRpc(handle);
+  }
+});
+
 // Reset ends one source-stream lifetime and starts another at the same path.
 // Wrangler cannot model the required ctx.abort(), so this host-survival proof
 // runs only against a real preview deployment.

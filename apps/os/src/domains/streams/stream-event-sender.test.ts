@@ -156,6 +156,8 @@ function harness(args: {
       armAlarm: (atMs) => alarms.push(atMs),
       runDurable: (work) => kept.push(work()),
       keepAlive: (promise) => kept.push(promise),
+      hasWakeChannel: () => false,
+      recordSessionIdleClosed: () => undefined,
     },
   });
 
@@ -1812,6 +1814,8 @@ function connectionsHarness(
       now: () => now,
       armAlarm: (atMs) => alarmTimes.push(atMs),
       keepAlive: () => undefined,
+      hasWakeChannel: () => false,
+      recordSessionIdleClosed: () => undefined,
       hostedDeliveryStillMatches: (_subscriptionKey, candidate) =>
         candidate.configuredAtOffset === expectedDelivery.configuredAtOffset &&
         candidate.cursorChangedAtOffset === expectedDelivery.cursorChangedAtOffset &&

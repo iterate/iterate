@@ -441,6 +441,8 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         armAlarm: () => undefined,
         runDurable: (work) => kept.push(work()),
         keepAlive: (promise) => kept.push(promise),
+        hasWakeChannel: () => false,
+        recordSessionIdleClosed: () => undefined,
       },
     });
     async function settle() {

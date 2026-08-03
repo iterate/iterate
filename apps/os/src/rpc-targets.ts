@@ -204,7 +204,12 @@ import type {
   ProjectWorker,
   StatefulDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
-import { retainProcessEventBatch } from "./domains/streams/retained-event-callbacks.ts";
+import {
+  retainConnectionPing,
+  retainGetProcessorRuntimeState,
+  retainProcessEventBatch,
+} from "./domains/streams/retained-event-callbacks.ts";
+import { STREAM_WAKE_SOCKET_HEADER } from "./domains/streams/wake-socket.ts";
 import {
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
@@ -947,7 +952,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * event sending is configured separately by appending events to the source
    * stream.
    */
-  openConnection(args: {
+  async openConnection(args: {
     connectionKey?: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
@@ -1008,13 +1013,236 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     // Terminating the call HERE keeps the callback leg one-way: the forwarder
     // invokes the callback owner's stub and disposes the result
     // unpulled, and the DO's Workers RPC result is the forwarder's own
-    // synchronous `undefined`. The retained stub is session-owned — Cap'n Web
-    // disposes a session's exports when the session ends, which is exactly a
-    // session connection's lifetime.
+    // synchronous `undefined`. The retained stubs are session-owned — Cap'n
+    // Web disposes a session's exports when the session ends, which is
+    // exactly a session connection's lifetime.
+    //
+    // The same decoupling makes the RPC leg droppable. A retained callback is
+    // a live capability into the Stream DO's isolate and pins it (billable
+    // duration) for the connection's whole life, so this relay also dials a
+    // hibernatable WAKE SOCKET through the DO stub's real fetch()
+    // (wake-socket.ts). After the stream's idle window the DO severs the RPC
+    // leg and hibernates at zero duration; the next matching append sends one
+    // wake frame here, and the relay re-dials openConnection from its exact
+    // delivered cursor. The caller's Cap'n Web leg — including the handle
+    // returned below, which is deliberately relay-local so ping() reflects
+    // the logical subscription rather than the current RPC leg — never
+    // observes the cycle.
+    const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
+    const wakeSocketId = crypto.randomUUID();
     const forward = retainProcessEventBatch(args.processEventBatch);
-    return this[STREAM_DURABLE_OBJECT_STUB].openConnection({
-      ...args,
-      processEventBatch: (batch) => void forward(batch),
+    const ping = retainConnectionPing(args.ping);
+    const getRuntimeState = retainGetProcessorRuntimeState(args.getRuntimeState);
+    const disposeRetained = () => {
+      for (const dispose of [
+        () => forward[Symbol.dispose](),
+        () => ping?.[Symbol.dispose](),
+        () => getRuntimeState?.[Symbol.dispose](),
+      ]) {
+        try {
+          dispose();
+        } catch {
+          // Session teardown disposes exports concurrently; a double dispose is fine.
+        }
+      }
+    };
+    const disposeStub = (value: unknown) => {
+      try {
+        (value as Partial<Disposable>)[Symbol.dispose]?.();
+      } catch {
+        // A broken stub has nothing left to release.
+      }
+    };
+
+    let active = true;
+    let closedByOwner = false;
+    let dialing = false;
+    let currentHandle: StreamConnectionHandle | undefined;
+    let deliveredThroughOffset = args.replayAfterOffset;
+    const forwardIntoDo = (batch: Parameters<ProcessEventBatch>[0]) => {
+      deliveredThroughOffset = batch.scannedThroughOffset;
+      void forward(batch);
+    };
+    const dial = (replayAfterOffset: number | undefined, redial: boolean) =>
+      this[STREAM_DURABLE_OBJECT_STUB].openConnection({
+        connectionKey,
+        // Bind the relay's own wake socket; the DO closes same-key strays.
+        ...(wakeSocket === undefined ? {} : { wakeSocketId }),
+        processEventBatch: forwardIntoDo,
+        ...(replayAfterOffset === undefined ? {} : { replayAfterOffset }),
+        ...(args.expectedStreamId === undefined ? {} : { expectedStreamId: args.expectedStreamId }),
+        // On a wake re-dial the relay resumes from its exact delivered
+        // cursor, so the caller's replay-gap guard applies only to the
+        // caller-chosen initial cursor.
+        ...(redial || args.maxReplayOffsetGap === undefined
+          ? {}
+          : { maxReplayOffsetGap: args.maxReplayOffsetGap }),
+        ...(args.eventTypes === undefined ? {} : { eventTypes: args.eventTypes }),
+        ...(args.filter === undefined ? {} : { filter: args.filter }),
+        ...(args.events === undefined ? {} : { events: args.events }),
+        ...(args.maxDeliveryEvents === undefined
+          ? {}
+          : { maxDeliveryEvents: args.maxDeliveryEvents }),
+        ...(args.maxDeliveryBytes === undefined ? {} : { maxDeliveryBytes: args.maxDeliveryBytes }),
+        ...(args.state === undefined ? {} : { state: args.state }),
+        ...(args.openedBy === undefined ? {} : { openedBy: args.openedBy }),
+        ...(getRuntimeState === undefined ? {} : { getRuntimeState: () => getRuntimeState() }),
+        ...(ping === undefined
+          ? {}
+          : { ping: (input: Parameters<StreamConnectionPing>[0]) => ping(input) }),
+      });
+    const breakRelay = (reason: string, error?: unknown) => {
+      if (!active) return;
+      active = false;
+      console.warn("stream connection relay broke; the owner's watchdog re-subscribes", {
+        connectionKey,
+        reason,
+        error,
+      });
+      try {
+        wakeSocket?.close(1011, "relay broken");
+      } catch {
+        // Already closed.
+      }
+      const handle = currentHandle;
+      currentHandle = undefined;
+      disposeStub(handle);
+      disposeRetained();
+    };
+
+    // Best-effort: without a wake socket the connection simply keeps today's
+    // semantics — never idle-closed, pinned for the session's life.
+    let wakeSocket: WebSocket | undefined;
+    try {
+      const upgrade = await this[STREAM_DURABLE_OBJECT_STUB].fetch(
+        "https://stream-wake.internal/",
+        {
+          headers: {
+            Upgrade: "websocket",
+            [STREAM_WAKE_SOCKET_HEADER]: JSON.stringify({ connectionKey, socketId: wakeSocketId }),
+          },
+        },
+      );
+      wakeSocket = upgrade.webSocket ?? undefined;
+      wakeSocket?.accept();
+    } catch (error) {
+      console.warn("stream wake socket unavailable; session connection will stay pinned", {
+        connectionKey,
+        error,
+      });
+    }
+    wakeSocket?.addEventListener("message", (event) => {
+      if (!active) return;
+      let frame: unknown;
+      try {
+        frame = JSON.parse(typeof event.data === "string" ? event.data : "");
+      } catch {
+        return;
+      }
+      const frameType = (frame as { type?: unknown } | null)?.type;
+      if (frameType === "idle") {
+        // The DO idle-closed the RPC leg. Dropping this handle stub releases
+        // the relay's last live reference into the DO's isolate, which is
+        // what lets the DO actually hibernate; the wake socket alone carries
+        // the dormancy.
+        const idled = currentHandle;
+        currentHandle = undefined;
+        disposeStub(idled);
+        return;
+      }
+      if (frameType !== "wake" || dialing) return;
+      dialing = true;
+      void (async () => {
+        try {
+          const previous = currentHandle;
+          currentHandle = undefined;
+          disposeStub(previous);
+          currentHandle = await dial(deliveredThroughOffset, true);
+        } catch (error) {
+          breakRelay("wake re-dial failed", error);
+        } finally {
+          dialing = false;
+        }
+      })();
+    });
+    wakeSocket?.addEventListener("close", () => {
+      wakeSocket = undefined;
+      if (!active || closedByOwner) return;
+      void (async () => {
+        // While the RPC leg is live the socket was only a future optimization:
+        // degrade to pinned mode (the DO's hasWakeChannel already sees the
+        // socket gone). A dead socket while dormant means wakes can no longer
+        // arrive — break, and the owner's watchdog re-subscribes.
+        const live = await Promise.resolve()
+          .then(() => currentHandle?.ping())
+          .catch(() => false);
+        if (live !== true) breakRelay("wake socket closed while dormant");
+      })();
+    });
+
+    // The dialing guard also covers this initial dial: a wake frame for a
+    // just-bound socket must not race a second openConnection under it.
+    dialing = true;
+    try {
+      currentHandle = await dial(args.replayAfterOffset, false);
+    } catch (error) {
+      closedByOwner = true;
+      active = false;
+      try {
+        wakeSocket?.close(1000, "open failed");
+      } catch {
+        // Already closed.
+      }
+      disposeRetained();
+      throw error;
+    } finally {
+      dialing = false;
+    }
+    const streamMaxOffset = await currentHandle.streamMaxOffset;
+
+    return new StreamConnectionRpcTarget({
+      connectionKey,
+      streamMaxOffset,
+      isLive: () => {
+        if (!active) return false;
+        const handle = currentHandle;
+        // Dormant: the wake socket carries liveness (its close breaks the relay).
+        if (handle === undefined) return true;
+        // Live leg: probe the DO-side connection so a DO eviction or
+        // non-idle close cannot hide behind a relay-local `true`. A gone leg
+        // with the wake socket still open is dormancy, not death — the next
+        // matching append re-dials (the DO wakes any socket whose connection
+        // is absent, stamped or not).
+        return Promise.resolve()
+          .then(() => handle.ping())
+          .catch(() => false)
+          .then((live) => {
+            if (live === true || currentHandle !== handle) return active;
+            currentHandle = undefined;
+            disposeStub(handle);
+            if (wakeSocket === undefined) breakRelay("rpc leg gone with no wake socket");
+            return active;
+          });
+      },
+      close: () => {
+        if (closedByOwner) return;
+        closedByOwner = true;
+        active = false;
+        try {
+          wakeSocket?.close(1000, "closed-by-owner");
+        } catch {
+          // Already closed.
+        }
+        const handle = currentHandle;
+        currentHandle = undefined;
+        if (handle !== undefined) {
+          void Promise.resolve()
+            .then(() => handle.close())
+            .catch(() => undefined)
+            .finally(() => disposeStub(handle));
+        }
+        disposeRetained();
+      },
     });
   }
 
@@ -6901,14 +7129,15 @@ class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision
  */
 export class StreamConnectionRpcTarget extends IterateRpcRelay<"StreamConnectionHandle"> {
   readonly #close: () => void;
-  readonly #isLive: () => boolean;
+  readonly #isLive: () => boolean | Promise<boolean>;
   readonly #streamMaxOffset: number;
   readonly #connectionKey: string;
   #closed = false;
 
   constructor(args: {
     close: () => void;
-    isLive: () => boolean;
+    /** Sync inside the Stream DO; the worker relay's probe crosses RPC and is async. */
+    isLive: () => boolean | Promise<boolean>;
     streamMaxOffset: number;
     connectionKey: string;
   }) {
@@ -6935,8 +7164,9 @@ export class StreamConnectionRpcTarget extends IterateRpcRelay<"StreamConnection
    * the connection's own open flag, not a lookup by key, so a replacement
    * connection under the same key reports `false` here.
    */
-  ping(): boolean {
-    return !this.#closed && this.#isLive();
+  ping(): boolean | Promise<boolean> {
+    if (this.#closed) return false;
+    return this.#isLive();
   }
 
   /** Close this connection; safe to call more than once. */

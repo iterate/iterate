@@ -39,7 +39,14 @@ import {
   STREAM_PAUSED_ERROR_PREFIX,
   StreamCoreProcessor,
 } from "./core-processor.ts";
-import { compileEventFilter } from "./event-filter.ts";
+import { compileEventFilter, type EventFilter } from "./event-filter.ts";
+import {
+  STREAM_WAKE_SOCKET_HEADER,
+  WAKE_EXCLUDED_EVENT_TYPES,
+  WAKE_SOCKET_TAG,
+  WakeSocketAttachment,
+  WakeSocketUpgradeHeader,
+} from "./wake-socket.ts";
 import {
   internalStreamId,
   isInternalStreamIdempotencyKey,
@@ -469,6 +476,33 @@ export class StreamDurableObject extends DurableObject<Env> {
       armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
       runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
+      hasWakeChannel: (connectionKey) => this.#wakeSockets(connectionKey).length > 0,
+      recordSessionIdleClosed: (connectionKeys) => {
+        const maxOffset = this.#coreProcessorState.maxOffset;
+        const idled = new Set(connectionKeys);
+        for (const { ws, attachment } of this.#wakeSockets()) {
+          if (!idled.has(attachment.connectionKey)) continue;
+          const { wakeSentAtOffset: _cleared, ...rest } = attachment;
+          ws.serializeAttachment({
+            ...rest,
+            idleDeliveredThrough: maxOffset,
+          } satisfies WakeSocketAttachment);
+          // Closing the RPC leg released the retained callback, but the
+          // relay still holds its StreamConnectionHandle stub — a live
+          // reference into this isolate that blocks hibernation on its own.
+          // The idle frame tells the relay to dispose it (wake-socket.ts);
+          // best-effort, since a broken socket already means the relay's
+          // execution context (and with it the stub) is gone.
+          try {
+            ws.send(JSON.stringify({ type: "idle" }));
+          } catch (error) {
+            console.warn("stream idle frame send failed", {
+              connectionKey: attachment.connectionKey,
+              error,
+            });
+          }
+        }
+      },
     },
   });
   #coreProcessorState: CoreProcessorState;
@@ -1056,9 +1090,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         ? this.#eventSender.onAlarm()
         : this.#eventSender.sendDue(args.justCommittedEvents),
     );
-    attempt("arm hosted-connection idle alarm", () =>
-      this.#eventSender.connections.armOrClearIdleAlarm(),
+    attempt("wake dormant session subscribers", () =>
+      this.#wakeDormantSessionSubscribers(args.justCommittedEvents),
     );
+    attempt("arm connection idle alarm", () => this.#eventSender.connections.armOrClearIdleAlarm());
     if (args.alarmTurn === true) {
       attempt("flush core state checkpoint", () => this.#flushCoreProcessorState());
     }
@@ -1441,7 +1476,12 @@ export class StreamDurableObject extends DurableObject<Env> {
    * (`subscription-configured` events); the source stream wakes a hosted
    * processor and retains the `processEventBatch` callback it returns.
    */
-  openConnection(args: Parameters<Stream["openConnection"]>[0]): StreamConnectionHandle {
+  openConnection(
+    // `wakeSocketId` is internal relay plumbing (which wake socket this open
+    // binds), never part of the public Stream contract — the fronting
+    // relay generates it and public callers cannot reach this DO directly.
+    args: Parameters<Stream["openConnection"]>[0] & { wakeSocketId?: string },
+  ): StreamConnectionHandle {
     const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
     if (this.#coreProcessorState.subscriptions.outbound.byKey[connectionKey] !== undefined) {
       throw new Error(`connectionKey "${connectionKey}" is reserved by a subscription`);
@@ -1500,10 +1540,11 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     // One filter shape everywhere: `eventTypes` is sugar for the filter's
     // type list (compileEventFilter also validates any condition upfront).
-    const filter = compileEventFilter({
+    const filterSpec: EventFilter = {
       ...args.filter,
       ...(args.eventTypes === undefined ? {} : { eventTypes: [...args.eventTypes] }),
-    });
+    };
+    const filter = compileEventFilter(filterSpec);
 
     const connection = this.#eventSender.connections.openSession({
       connectionKey,
@@ -1520,6 +1561,31 @@ export class StreamDurableObject extends DurableObject<Env> {
       getRuntimeState: args.getRuntimeState,
       ping: args.ping,
     });
+
+    // Bind this connection's own wake socket (dialed by its relay just before
+    // this call, or surviving a DO eviction): store the raw filter spec so a
+    // dormant-period append can be matched without a live connection, and
+    // clear any dormancy state from an earlier idle close. Every OTHER socket
+    // under this connectionKey belongs to a replaced relay — close it so that
+    // relay breaks (today's last-writer-wins) instead of lingering dormant
+    // and wake-fighting the winner (see WakeSocketUpgradeHeader.socketId).
+    for (const { ws, attachment } of this.#wakeSockets(connectionKey)) {
+      if (attachment.socketId !== args.wakeSocketId) {
+        try {
+          ws.close(1000, "superseded");
+        } catch {
+          // Already closing.
+        }
+        continue;
+      }
+      ws.serializeAttachment({
+        v: 1,
+        connectionKey,
+        socketId: attachment.socketId,
+        ...(Object.keys(filterSpec).length === 0 ? {} : { filter: filterSpec }),
+        ...(args.events === false ? { events: false as const } : {}),
+      } satisfies WakeSocketAttachment);
+    }
 
     return new StreamConnectionRpcTarget({
       close: () => connection.close("closed-by-owner"),
@@ -1663,6 +1729,148 @@ export class StreamDurableObject extends DurableObject<Env> {
         storageSizeBytes: this.ctx.storage.sql.databaseSize,
       },
     };
+  }
+
+  // ===========================================================================
+  // Wake sockets: the hibernatable channel behind idle-closed session
+  // connections (protocol in wake-socket.ts).
+  // ===========================================================================
+
+  /**
+   * The Stream DO's only fetch surface: the wake-socket upgrade, dialed by
+   * `StreamRpcTarget.openConnection`'s relay through this DO's stub (a 101
+   * response cannot cross an RPC method call, so this rides a real `fetch()`).
+   * Unreachable from external requests — no ingress lane routes fetches to
+   * Stream DOs — and additionally gated on the internal header. Sockets are
+   * accepted with the Hibernation API so a dormant subscriber costs no
+   * duration while it waits.
+   */
+  async fetch(request: Request): Promise<Response> {
+    const wakeHeader = request.headers.get(STREAM_WAKE_SOCKET_HEADER);
+    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket" || wakeHeader === null) {
+      return Response.json(
+        { error: "stream durable objects accept only wake-socket upgrades" },
+        { status: 400 },
+      );
+    }
+    let binding: z.infer<typeof WakeSocketUpgradeHeader>;
+    try {
+      binding = WakeSocketUpgradeHeader.parse(JSON.parse(wakeHeader));
+    } catch (error) {
+      return Response.json(
+        {
+          error: `invalid ${STREAM_WAKE_SOCKET_HEADER} header: ${error instanceof Error ? error.message : String(error)}`,
+        },
+        { status: 400 },
+      );
+    }
+    const pair = new WebSocketPair();
+    this.ctx.acceptWebSocket(pair[1], [WAKE_SOCKET_TAG]);
+    pair[1].serializeAttachment({
+      v: 1,
+      connectionKey: binding.connectionKey,
+      socketId: binding.socketId,
+    } satisfies WakeSocketAttachment);
+    return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /** Wake sockets are one-way (this DO → relay); inbound frames are ignored. */
+  webSocketMessage(): void {}
+
+  /**
+   * A closed socket disappears from `getWebSockets`, which IS the cleanup:
+   * `hasWakeChannel` stops reporting it and the connection (if any) keeps
+   * today's non-idle-eligible session semantics.
+   */
+  webSocketClose(): void {}
+
+  webSocketError(): void {}
+
+  /** Live wake sockets with a valid attachment, optionally for one connectionKey. */
+  #wakeSockets(connectionKey?: string): { ws: WebSocket; attachment: WakeSocketAttachment }[] {
+    const sockets: { ws: WebSocket; attachment: WakeSocketAttachment }[] = [];
+    for (const ws of this.ctx.getWebSockets(WAKE_SOCKET_TAG)) {
+      let raw: unknown;
+      try {
+        raw = ws.deserializeAttachment();
+      } catch {
+        continue;
+      }
+      const parsed = WakeSocketAttachment.safeParse(raw);
+      if (!parsed.success) continue;
+      if (connectionKey !== undefined && parsed.data.connectionKey !== connectionKey) continue;
+      sockets.push({ ws, attachment: parsed.data });
+    }
+    return sockets;
+  }
+
+  /**
+   * Post-commit twin of `sendDue` for dormant session subscribers: an append
+   * necessarily runs inside this DO, so the DO is awake exactly when there is
+   * news — no alarm is needed. At most one wake frame per dormancy period
+   * (`wakeSentAtOffset`; cleared when the relay's re-dial re-binds the key),
+   * and never for the stream's own lifecycle facts or ephemeral rows — a
+   * re-dialed connection cannot replay ephemeral history, and waking on
+   * lifecycle facts is the resurrection loop wake-socket.ts documents.
+   */
+  #wakeDormantSessionSubscribers(
+    justCommittedEvents?: { event: StreamEvent; byteLength: number }[],
+  ): void {
+    if (justCommittedEvents === undefined || justCommittedEvents.length === 0) return;
+    const sockets = this.#wakeSockets();
+    if (sockets.length === 0) return;
+    const news = justCommittedEvents
+      .map((entry) => entry.event)
+      .filter((event) => event.ephemeral !== true);
+    if (news.length === 0) return;
+
+    for (const { ws, attachment } of sockets) {
+      if (attachment.wakeSentAtOffset !== undefined) continue;
+      if (this.#eventSender.connections.has(attachment.connectionKey)) continue;
+      // A stamped attachment is ordinary dormancy (idle teardown). An
+      // UNSTAMPED socket whose connection is absent means the RPC leg died
+      // without the idle protocol — DO eviction mid-live, a delivery-failure
+      // close — so its cursor is unknown: any qualifying news wakes it, and
+      // the relay re-dials from its own exact cursor. That makes the wake
+      // path double as eviction recovery for session subscribers.
+      const idleDeliveredThrough = attachment.idleDeliveredThrough;
+      const explicitTypes = attachment.filter?.eventTypes;
+      const matched = news.some((event) => {
+        if (idleDeliveredThrough !== undefined && event.offset <= idleDeliveredThrough) {
+          return false;
+        }
+        // Lifecycle facts wake only a subscriber whose filter names them.
+        if (
+          WAKE_EXCLUDED_EVENT_TYPES.has(event.type) &&
+          explicitTypes?.includes(event.type) !== true
+        ) {
+          return false;
+        }
+        // A state-only connection wants any state change; a filterless one wants everything.
+        if (attachment.events === false || attachment.filter === undefined) return true;
+        try {
+          return compileEventFilter(attachment.filter).matches(event);
+        } catch {
+          // A condition that throws at match time is the delivery side's
+          // policy decision; wake the subscriber and let delivery decide.
+          return true;
+        }
+      });
+      if (!matched) continue;
+      try {
+        ws.send(JSON.stringify({ type: "wake" }));
+      } catch (error) {
+        console.warn("stream wake frame send failed", {
+          connectionKey: attachment.connectionKey,
+          error,
+        });
+        continue;
+      }
+      ws.serializeAttachment({
+        ...attachment,
+        wakeSentAtOffset: this.#coreProcessorState.maxOffset,
+      } satisfies WakeSocketAttachment);
+    }
   }
 
   // ===========================================================================
