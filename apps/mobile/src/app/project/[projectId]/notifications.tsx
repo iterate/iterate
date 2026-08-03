@@ -387,11 +387,17 @@ function ApprovalNotificationDetail({
         <ApprovalBatchActions
           baseUrl={baseUrl}
           offset={batchOffset}
-          onDecided={() =>
-            queryClient.invalidateQueries({
+          onDecided={() => {
+            void queryClient.invalidateQueries({
               queryKey: ["notification-approval-batch", baseUrl, projectId, batchOffset],
-            })
-          }
+            });
+            // Synthetic-row MEMBERSHIP derives from the live approval cache —
+            // refetch it too, so a decided orphan row leaves (or flips to
+            // awaiting-release) without waiting on the websocket catch-up.
+            void queryClient.invalidateQueries({
+              queryKey: ["approval-events", baseUrl, projectId],
+            });
+          }}
           payload={payload}
           projectId={projectId}
         />
