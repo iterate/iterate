@@ -80,7 +80,7 @@ test("workspace lens board demo", async ({ page }) => {
   const reply = page.getByRole("textbox", { name: "Message this agent" });
   await reply.waitFor({ timeout: 60_000 });
   await reply.fill(
-    'thanks — incorporate my feedback in jokes.md, then create 5 task files under tasks/ in /repos/config in your workspace (one per joke, do NOT commit). Then send me a board link minted with itx.worker.tasks.link({ workspace: <your workspace>, repo: "/repos/config" }) so I can review them.',
+    'thanks — incorporate my feedback in jokes.md, then create 5 task files under tasks/ in /repos/config in your workspace (one per joke, do NOT commit). Then send me a board link minted with itx.worker.docs.link({ workspace: <your workspace>, repo: "/repos/config" }) so I can review them.',
   );
   await page.getByRole("button", { name: "Send message" }).click();
   // A real board deep link, not the bare app URL: the agent occasionally

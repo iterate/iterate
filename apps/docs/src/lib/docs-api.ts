@@ -1,5 +1,6 @@
 import type { ProjectCredential } from "@iterate-com/workspace-documents/server";
 import type { WorkspaceDocumentLane } from "@iterate-com/workspace-documents/types";
+import type { TasksWorkspace, WorkspaceListEntry } from "./tasks-api.ts";
 
 export type { ProjectCredential } from "@iterate-com/workspace-documents/server";
 
@@ -24,13 +25,30 @@ export interface DocsApi {
 }
 
 export interface DocsProject {
+  projectId(): Promise<string>;
   whoami(): Promise<DocsUser>;
-  /** Address an existing workspace. This never creates one. */
+  /** Address an existing workspace through the DOCUMENT lens. This never
+   * creates one. */
   workspace(workspacePath: string): DocsWorkspace;
-  /** Every workspace stream in the project, newest first (the home picker).
-   * Ancestor stream paths that were never created as workspaces are
-   * pruned, same as the tasks picker. */
-  workspaces(): Promise<{ path: string; createdAt: string }[]>;
+  /** The project's repo catalog — paths a board can be opened against. */
+  repos(): Promise<string[]>;
+  /**
+   * A board on the app's own workspace naming: the workspace path derives
+   * from (checkoutId, repoPath) and is lazily created on first use.
+   * Synchronous on purpose so calls pipeline through it.
+   */
+  board(checkoutId: string, repoPath?: string): TasksWorkspace;
+  /**
+   * The BOARD lens on an existing workspace addressed by its platform path —
+   * plain `get`, like workspace(). Outside /workspaces/tasks/ the lens is a
+   * guest: reads, comments, and edits work; owner acts (commit, assignAgent)
+   * are refused.
+   */
+  workspaceAt(workspacePath: string, repoPath?: string): TasksWorkspace;
+  /** Every workspace stream in the project, newest first (the pickers).
+   * Ancestor stream paths that were never created as workspaces are pruned;
+   * `board` is resolved for the app's own board workspaces. */
+  workspaces(): Promise<WorkspaceListEntry[]>;
   /** The documents (.md/.html) in one workspace's OWN directory,
    * workspace-relative — the home picker's file list. Mount files open by
    * absolute path instead; this deliberately does not walk the mounts. */
