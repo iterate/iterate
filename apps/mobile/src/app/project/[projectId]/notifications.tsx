@@ -149,6 +149,7 @@ export default function NotificationsScreen() {
           renderItem={({ item: row }) => (
             <NotificationRow
               baseUrl={baseUrl!}
+              liveApprovalEvents={approvalEvents.data || []}
               projectId={projectId}
               projectSlug={slug || ""}
               row={row}
@@ -174,12 +175,14 @@ export default function NotificationsScreen() {
  */
 function NotificationRow({
   baseUrl,
+  liveApprovalEvents,
   projectId,
   projectSlug,
   row,
   targeted,
 }: {
   baseUrl: string;
+  liveApprovalEvents: StreamEvent[];
   projectId: string;
   projectSlug: string;
   row: NotificationListRow;
@@ -241,6 +244,7 @@ function NotificationRow({
         <ApprovalNotificationDetail
           baseUrl={baseUrl}
           batchOffset={row.approvalRequestEventOffset}
+          liveApprovalEvents={liveApprovalEvents}
           projectId={projectId}
           projectSlug={projectSlug}
         />
@@ -260,11 +264,13 @@ function NotificationRow({
 function ApprovalNotificationDetail({
   baseUrl,
   batchOffset,
+  liveApprovalEvents,
   projectId,
   projectSlug,
 }: {
   baseUrl: string;
   batchOffset: number;
+  liveApprovalEvents: StreamEvent[];
   projectId: string;
   projectSlug: string;
 }) {
@@ -316,7 +322,13 @@ function ApprovalNotificationDetail({
       </View>
     );
   }
-  const { payload, resolved } = batch.data;
+  // Live overlay: a decision arriving over the screen's approval
+  // subscription retires the actions IMMEDIATELY — the 5s provisional poll
+  // covers backlog gaps, not races against other surfaces' decisions. The
+  // fetched detail stays authoritative when the live window doesn't reach
+  // this batch (deep history).
+  const liveDetail = deriveBatchDetail(liveApprovalEvents, batchOffset);
+  const { payload, resolved } = liveDetail?.resolved ? liveDetail : batch.data;
   const streamContext = payload.streamContext;
   const expired = Date.parse(payload.expiresAt) <= Date.now();
   return (
