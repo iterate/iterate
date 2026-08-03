@@ -2,6 +2,7 @@
 #define ITERATE_KIT_DEVICES_STACKCHAN_H
 
 #include "iterate/kit/capabilities/callback_budget.h"
+#include "iterate/kit/capabilities/avatar.h"
 #include "iterate/kit/capabilities/camera.h"
 #include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/device_event_stream.h"
@@ -30,7 +31,7 @@ enum {
    * Each target still has to prove that its transport storage fits this
    * profile budget.
    */
-  ITERATE_KIT_STACKCHAN_MODULE_COUNT = 7,
+  ITERATE_KIT_STACKCHAN_MODULE_COUNT = 8,
   ITERATE_KIT_STACKCHAN_EVENTS_PER_POLL = 4,
   ITERATE_KIT_STACKCHAN_EVENT_CAPACITY = 8,
   ITERATE_KIT_STACKCHAN_EVENT_NOTIFICATION_CAPACITY = 8,
@@ -53,6 +54,9 @@ struct iterate_kit_stackchan_options {
   struct iterate_kit_screen_driver screen;
   char *screen_url_scratch;
   size_t screen_url_scratch_size;
+  struct iterate_kit_avatar_driver avatar;
+  char *avatar_slug_scratch;
+  size_t avatar_slug_scratch_size;
   struct iterate_kit_servo_driver servos;
   struct iterate_kit_led_driver leds;
   struct iterate_kit_camera_driver camera;
@@ -97,6 +101,7 @@ struct iterate_kit_stackchan {
   struct iterate_kit_device_event_stream event_stream;
   struct iterate_kit_conversation conversation;
   struct iterate_kit_screen screen;
+  struct iterate_kit_avatar avatar;
   struct iterate_kit_servos servos;
   struct iterate_kit_leds leds;
   struct iterate_kit_camera camera;
@@ -110,7 +115,7 @@ extern const struct iterate_kit_device_manifest
     iterate_kit_stackchan_manifest;
 
 /**
- * Assembles all seven generic modules after hardware drivers/storage are ready.
+ * Assembles all eight generic modules after hardware drivers/storage are ready.
  * No module is exposed on error; initialization itself performs no hardware
  * I/O and allocates nothing.
  */

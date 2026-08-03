@@ -19,17 +19,24 @@ static bool overlaps(VisualRect left, VisualRect right) {
 }
 
 /*
- * The sprite, recognizable twelve-pixel status ring, instructions, and footer
- * must coexist on the physical 240x135 panel. This boundary test prevents a
- * visually plausible desktop mock from clipping on the Stick or covering the
- * avatar after a future copy/layout tweak.
+ * The face is the product surface; status is only a narrow left rail. A prior
+ * 80-pixel sidebar plus footer made diagnostics visually dominant and forced
+ * frequent status repaint over too much of the panel. These bounds protect the
+ * physical 240x135 panel while preventing that dashboard layout from creeping
+ * back in during future UI changes.
  */
 static void places_every_region_inside_the_physical_panel(void) {
   const auto layout = M5StickS3VisualLayout::make();
-  assert(layout.avatar.x == 0U && layout.avatar.y == 0U);
-  assert(layout.avatar.width == 160U && layout.avatar.height == 120U);
-  assert(layout.footer.y == 120U && layout.footer.height == 15U);
-  assert(layout.sidebar.x >= layout.avatar.width);
+  assert(layout.sidebar.x == 0U && layout.sidebar.y == 0U);
+  assert(layout.sidebar.width <= 24U);
+  assert(layout.sidebar.height == M5StickS3VisualLayout::displayHeight);
+  assert(layout.avatar.x >= layout.sidebar.width);
+  assert(layout.avatar.y == 0U);
+  assert(layout.avatar.width >= 180U);
+  assert(layout.avatar.height == M5StickS3VisualLayout::displayHeight);
+  assert(layout.avatar.x + layout.avatar.width <=
+         M5StickS3VisualLayout::displayWidth);
+  assert(!overlaps(layout.avatar, layout.sidebar));
 
   for (const auto &cell : layout.statusRing) {
     assert(cell.x >= layout.sidebar.x);
@@ -40,6 +47,7 @@ static void places_every_region_inside_the_physical_panel(void) {
            layout.sidebar.y + layout.sidebar.height);
     assert(cell.x + cell.width <= M5StickS3VisualLayout::displayWidth);
     assert(cell.y + cell.height <= M5StickS3VisualLayout::displayHeight);
+    assert(cell.width <= 4U && cell.height <= 4U);
   }
 }
 

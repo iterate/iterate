@@ -153,6 +153,27 @@ enum {
   ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS = 20000,
   ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS = 10000,
   ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 180000,
+  /*
+   * How long an IDLE device may hold a mount nobody is answering before it
+   * replaces the session.
+   *
+   * Every other watchdog here needs a call in progress, and the one that does
+   * not keys on pings — which ride the SOCKET, not the mount. So a device
+   * whose capability has gone offline server-side while its TCP connection
+   * stays perfectly healthy is watched by nothing at all: it loops, it pings,
+   * it reports itself ready, and every RPC to it fails with "capability is
+   * offline" until somebody power-cycles it.
+   *
+   * Measured: after eighteen turns the soak's calls ended, the capability
+   * went offline, and the device sat there for minutes — rx and played both
+   * frozen at 8468, conceal 0, gaps 0, entirely healthy and entirely
+   * unreachable.
+   *
+   * Ninety seconds is far longer than any legitimate quiet — a mounted device
+   * exchanges a ping every five — and short enough that a person who walks up
+   * to it finds it working.
+   */
+  ITERATE_KIT_VOICE_IDLE_REMOUNT_MS = 90000,
 };
 
 /**

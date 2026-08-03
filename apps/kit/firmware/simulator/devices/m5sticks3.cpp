@@ -31,6 +31,7 @@ constexpr std::size_t subscriptionCapacity = 2U;
  * production defaults for every board.
  */
 constexpr std::size_t screenUrlCapacity = 513U;
+constexpr std::size_t avatarSlugCapacity = 32U;
 constexpr std::size_t eventCapacity = 8U;
 constexpr std::size_t eventNotificationCapacity = 8U;
 constexpr std::size_t eventSubscriptionCapacity = 2U;
@@ -41,6 +42,7 @@ struct Simulation {
   /* All buffers and profile state are embedded so the production allocation-
    * free lifetime contract remains intact in the host process. */
   char screenUrlScratch[screenUrlCapacity]{};
+  char avatarSlugScratch[avatarSlugCapacity]{};
   char diagnosticsExpression
       [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY]{};
   iterate_kit_metrics_subscription subscriptions[subscriptionCapacity]{};
@@ -426,9 +428,12 @@ capnweb_status initialize(
   const iterate_kit_m5sticks3_options options{
     {&simulation.common,
      iterate::kit::simulator::renderPng,
-     iterate::kit::simulator::changeColour},
+     nullptr},
     simulation.screenUrlScratch,
     sizeof(simulation.screenUrlScratch),
+    {&simulation.common, iterate::kit::simulator::changeSpriteSet},
+    simulation.avatarSlugScratch,
+    sizeof(simulation.avatarSlugScratch),
     {&simulation, captureScreen},
     2'800U,
     {

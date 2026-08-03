@@ -29,6 +29,15 @@ typedef struct {
 bool face_avatar_registry_init(face_avatar_registry_t *registry);
 bool face_avatar_registry_select(
     face_avatar_registry_t *registry, size_t index);
+/*
+ * Selects an exact catalogue slug without allocation or temporary NUL
+ * termination. The caller may therefore pass a bounded RPC string view. A
+ * failed lookup leaves the current player untouched.
+ */
+bool face_avatar_registry_select_slug(
+    face_avatar_registry_t *registry,
+    const char *slug,
+    size_t slug_length);
 bool face_avatar_registry_next(face_avatar_registry_t *registry);
 
 size_t face_avatar_registry_count(void);

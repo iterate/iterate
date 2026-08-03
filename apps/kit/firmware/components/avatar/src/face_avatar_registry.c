@@ -3,6 +3,8 @@
 #include "iterate/kit/avatar/face_performance.h"
 #include "iterate/kit/avatar/face_sprite_sheet.h"
 
+#include <string.h>
+
 typedef struct {
     const char *slug;
     const char *name;
@@ -97,6 +99,31 @@ bool face_avatar_registry_init(face_avatar_registry_t *registry)
     }
     *registry = (face_avatar_registry_t){0};
     return face_avatar_registry_select(registry, 0U);
+}
+
+bool face_avatar_registry_select_slug(
+    face_avatar_registry_t *registry,
+    const char *slug,
+    size_t slug_length)
+{
+    if (registry == NULL || slug == NULL || slug_length == 0U) {
+        return false;
+    }
+    for (size_t index = 0U; index < avatar_count(); ++index) {
+        const char *const candidate = GENERATED_AVATARS[index].slug;
+        /*
+         * Catalogue slugs are generator-owned NUL-terminated ASCII, while the
+         * public RPC value is a bounded byte view. Check length before bytes so
+         * neither a prefix nor a suffixed value can alias a real character.
+         * Selection remains transactional because the registry is mutated only
+         * after a complete match.
+         */
+        if (strlen(candidate) == slug_length &&
+            memcmp(candidate, slug, slug_length) == 0) {
+            return face_avatar_registry_select(registry, index);
+        }
+    }
+    return false;
 }
 
 bool face_avatar_registry_next(face_avatar_registry_t *registry)

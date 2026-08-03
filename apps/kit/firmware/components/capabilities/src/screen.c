@@ -81,7 +81,6 @@ enum iterate_kit_status iterate_kit_screen_init(
   if (screen == NULL ||
       driver == NULL ||
       driver->render_png == NULL ||
-      driver->change_colour == NULL ||
       url_scratch == NULL ||
       url_scratch_size < 2U) {
     return ITERATE_KIT_INVALID_ARGUMENT;
@@ -95,13 +94,25 @@ enum iterate_kit_status iterate_kit_screen_init(
 
 struct iterate_kit_module iterate_kit_screen_module(
     struct iterate_kit_screen *screen) {
-  static const struct iterate_kit_method methods[] = {
+  static const struct iterate_kit_method render_only_methods[] = {
+    {render_path, 1U, render},
+  };
+  static const struct iterate_kit_method colour_methods[] = {
     {render_path, 1U, render},
     {change_colour_path, 1U, change_colour},
   };
+  const bool supports_colour =
+      screen != NULL && screen->driver.change_colour != NULL;
   const struct iterate_kit_module module = {
-    .methods = methods,
-    .method_count = sizeof(methods) / sizeof(methods[0]),
+    /*
+     * Background colour is not an intrinsic property of every screen. Keep
+     * the legacy method only on drivers that opt into it, so adding a proper
+     * avatar capability does not leave a misleading no-op on the Stick.
+     */
+    .methods = supports_colour ? colour_methods : render_only_methods,
+    .method_count = supports_colour
+        ? sizeof(colour_methods) / sizeof(colour_methods[0])
+        : sizeof(render_only_methods) / sizeof(render_only_methods[0]),
     .context = screen,
     .poll = NULL,
     .close = NULL,

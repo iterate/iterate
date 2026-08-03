@@ -105,6 +105,13 @@ constexpr std::uint64_t controlFatalRestartAfterMs = 5'000U;
  */
 constexpr std::size_t screenUrlCapacity = 513U;
 /*
+ * The longest generated public sprite slug is well below 31 bytes. Keeping a
+ * separately budgeted scratch block prevents a future URL limit change from
+ * silently inflating every avatar RPC while leaving room for descriptive
+ * stable names rather than brittle numeric indices.
+ */
+constexpr std::size_t avatarSlugCapacity = 32U;
+/*
  * Cap'n Web represents byte arrays as base64 inside one control message. The
  * 2.8 KiB PNG ceiling leaves 256 bytes for the RPC envelope within the fixed
  * 4 KiB transport slot. The retained call UI compresses well below this bound;
@@ -311,6 +318,7 @@ struct Runtime {
   capnweb_json_token tokens[tokenCapacity]{};
   char outputBuffer[outputCapacity]{};
   char screenUrlScratch[screenUrlCapacity]{};
+  char avatarSlugScratch[avatarSlugCapacity]{};
   /*
    * A one-shot diagnostics reply can outlive the stack frame that sampled it
    * while Cap'n Web waits for the remote pull. Keep exactly one profile-owned
@@ -381,6 +389,15 @@ struct Runtime {
    * as a reboot-era wrap.
    */
   std::uint32_t playbackMetricsSequence = 0U;
+  /*
+   * The screen needs network-quality evidence even when nobody subscribed to
+   * metrics. Cache one ESP-IDF AP observation per second on the low-priority
+   * application owner; querying Wi-Fi from a 10 ms display loop would add
+   * unnecessary driver contention while adding no human-visible precision.
+   */
+  bool uiWifiObserved = false;
+  std::int32_t uiWifiRssiDbm = 0;
+  std::uint64_t nextUiNetworkSampleMs = 0U;
   bool pcmTransportStarted = false;
   bool pcmTransportStartAttempted = false;
   /*
@@ -437,6 +454,67 @@ selectCallUiState(Runtime &state) {
     return M5StickS3CallUiState::waitingForReply;
   }
   return M5StickS3CallUiState::callReady;
+}
+
+void updateUiNetworkEvidence(
+    Runtime &state, std::uint64_t nowMilliseconds) {
+  if (nowMilliseconds < state.nextUiNetworkSampleMs) return;
+  wifi_ap_record_t accessPoint{};
+  const bool wasObserved = state.uiWifiObserved;
+  const bool observed = esp_wifi_sta_get_ap_info(&accessPoint) == ESP_OK;
+  state.uiWifiObserved = observed;
+  if (observed) {
+    const auto measured = static_cast<std::int32_t>(accessPoint.rssi);
+    /*
+     * RSSI naturally wanders by a few dB while the link is perfectly stable.
+     * Feeding every sample to a status view made the LCD repaint at the 1 Hz
+     * telemetry cadence and visibly flicker. Retain precise Wi-Fi evidence in
+     * diagnostics; this UI cache moves only after a 4 dB excursion, which is
+     * enough to cross a meaningful visual band without boundary ping-pong.
+     */
+    if (!wasObserved ||
+        measured >= state.uiWifiRssiDbm + 4 ||
+        measured <= state.uiWifiRssiDbm - 4) {
+      state.uiWifiRssiDbm = measured;
+    }
+  }
+  state.nextUiNetworkSampleMs = nowMilliseconds + 1'000U;
+}
+
+iterate_kit_conversation_visual_state
+selectConversationVisualState(const Runtime &state) {
+  iterate_kit_conversation_visual_state visual{};
+  if (!state.uiWifiObserved) {
+    visual.network = ITERATE_KIT_NETWORK_DISCONNECTED;
+  } else if (
+      state.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
+    visual.network = ITERATE_KIT_NETWORK_CONNECTED;
+  } else {
+    visual.network = ITERATE_KIT_NETWORK_CONNECTING;
+  }
+  visual.has_wifi_rssi = state.uiWifiObserved;
+  visual.wifi_rssi_dbm = state.uiWifiRssiDbm;
+  visual.conversation_active =
+      iterate_kit_m5sticks3_is_conversation_active(&state.device);
+  visual.media_ready = state.pcmTransportStarted &&
+      state.pcmTransport.state == ITERATE_KIT_ESP_IDF_PCM_READY;
+  visual.media_failed =
+      (state.pcmTransportStarted &&
+       state.pcmTransport.state == ITERATE_KIT_ESP_IDF_PCM_FAILED) ||
+      state.platform.playbackState() ==
+          iterate::kit::platforms::RealtimePlaybackState::failed;
+  /*
+   * Stick is intentionally half duplex: an open call is not a live
+   * microphone. Keeping this physical capture fact explicit prevents the
+   * shared ring from claiming that a quiet, unheld PTT button is listening.
+   * Exact speaker amplitude is injected by the physical-DMA avatar sidecar.
+   */
+  visual.microphone_listening =
+      iterate_kit_m5sticks3_is_capturing(&state.device);
+  visual.microphone_peak = 0U;
+  visual.speaker_peak = 0U;
+  visual.restart_armed = false;
+  return visual;
 }
 
 iterate_kit_status downlinkGenerationBarrier(
@@ -1224,6 +1302,9 @@ bool initialiseDevice(Runtime &state) {
     .screen = state.platform.screenDriver(),
     .screen_url_scratch = state.screenUrlScratch,
     .screen_url_scratch_size = sizeof(state.screenUrlScratch),
+    .avatar = state.platform.avatarDriver(),
+    .avatar_slug_scratch = state.avatarSlugScratch,
+    .avatar_slug_scratch_size = sizeof(state.avatarSlugScratch),
     .screen_capture = state.platform.screenCaptureDriver(),
     .maximum_screen_capture_bytes = maximumScreenCaptureBytes,
     .metrics = {
@@ -1674,7 +1755,12 @@ extern "C" void app_main(void) {
      * reconnects, and audio-owner edges without scattering display writes
      * through those paths or continuously stealing time from audio.
      */
-    runtime.platform.showCallUi(selectCallUiState(runtime));
+    updateUiNetworkEvidence(
+        runtime,
+        static_cast<std::uint64_t>(nowMicroseconds / 1000));
+    runtime.platform.showCallUi(
+        selectCallUiState(runtime),
+        selectConversationVisualState(runtime));
 
     (void)ulTaskNotifyTake(pdFALSE, mainLoopDelayTicks);
     /*

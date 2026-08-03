@@ -46,6 +46,40 @@ iterate_kit_status changeColour(
   return ITERATE_KIT_OK;
 }
 
+iterate_kit_status changeSpriteSet(
+    void *context, const char *slug, std::size_t slugLength) {
+  if (slug == nullptr || slugLength == 0U) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  auto &hardware = *static_cast<CommonHardware *>(context);
+  if (slugLength >= sizeof(hardware.spriteSet)) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  /*
+   * This fake observes the stable RPC value, not atlas rendering. Restrict it
+   * to the same published catalogue as firmware so host e2e cannot prove an
+   * impossible character while still avoiding a second sprite implementation.
+   */
+  static constexpr const char *known[] = {
+    "dot-matrix-oracle",
+    "gameboy-fine-black",
+    "karakuri-brass",
+    "starbyte",
+  };
+  bool found = false;
+  for (const char *candidate : known) {
+    if (std::strlen(candidate) == slugLength &&
+        std::memcmp(candidate, slug, slugLength) == 0) {
+      found = true;
+      break;
+    }
+  }
+  if (!found) return ITERATE_KIT_INVALID_ARGUMENT;
+  std::memcpy(hardware.spriteSet, slug, slugLength);
+  hardware.spriteSet[slugLength] = '\0';
+  return ITERATE_KIT_OK;
+}
+
 iterate_kit_status sampleMetrics(
     void *context, iterate_kit_metrics_sample *sample) {
   if (sample == nullptr) return ITERATE_KIT_INVALID_ARGUMENT;

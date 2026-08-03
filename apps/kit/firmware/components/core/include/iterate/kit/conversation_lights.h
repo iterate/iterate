@@ -63,6 +63,19 @@ void iterate_kit_conversation_lights_render(
     struct iterate_kit_rgb8
         pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]);
 
+/**
+ * Reports whether two snapshots produce exactly the same logical lights.
+ *
+ * This is view equality, not telemetry equality: two RSSI readings inside the
+ * same displayed band are deliberately equal. Display adapters should use
+ * this at their invalidation boundary so high-resolution diagnostic noise
+ * cannot trigger pointless SPI traffic or visible flicker. Precise readings
+ * remain available through metrics and are not discarded by this function.
+ */
+bool iterate_kit_conversation_lights_equal(
+    const struct iterate_kit_conversation_visual_state *left,
+    const struct iterate_kit_conversation_visual_state *right);
+
 #ifdef __cplusplus
 }
 #endif

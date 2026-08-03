@@ -2,6 +2,9 @@
 #define ITERATE_KIT_PLATFORMS_M5UNIFIED_HPP
 
 #include "iterate/kit/audio.h"
+#include "iterate/kit/avatar/face_avatar_registry.h"
+#include "iterate/kit/capabilities/avatar.h"
+#include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/capabilities/metrics.h"
 #include "iterate/kit/capabilities/screen.h"
 #include "iterate/kit/capabilities/screen_capture.h"
@@ -102,6 +105,7 @@ class M5UnifiedHalfDuplex {
 
   /* Lightweight driver views borrow this object for its entire lifetime. */
   iterate_kit_screen_driver screenDriver();
+  iterate_kit_avatar_driver avatarDriver();
   iterate_kit_screen_capture_driver screenCaptureDriver();
   iterate_kit_metrics_driver metricsDriver();
   iterate_kit_audio_hardware audioHardware();
@@ -138,7 +142,9 @@ class M5UnifiedHalfDuplex {
    * Calling this from every application-owner pass is therefore cheap and
    * cannot turn the 10 ms control cadence into continuous display/SPI work.
    */
-  void showCallUi(M5StickS3CallUiState state);
+  void showCallUi(
+      M5StickS3CallUiState state,
+      const iterate_kit_conversation_visual_state &visualState);
 
  private:
   using Capture = BoundedCapture<captureSampleCount, captureSampleRate>;
@@ -148,11 +154,12 @@ class M5UnifiedHalfDuplex {
    * sample or sending the transient to provider VAD as apparent speech.
    */
   static constexpr std::uint8_t microphoneStartupFramesToDiscard = 1U;
+  static constexpr std::int64_t avatarRenderIntervalMicroseconds = 66'000;
 
   static iterate_kit_status renderPngUrl(
       void *context, const char *url, std::size_t urlLength);
-  static iterate_kit_status changeColour(
-      void *context, iterate_kit_screen_colour colour);
+  static iterate_kit_status changeSpriteSet(
+      void *context, const char *slug, std::size_t slugLength);
   static iterate_kit_status captureScreen(
       void *context, iterate_kit_captured_screen *capture);
   static void releaseCapturedScreen(void *context);
@@ -168,6 +175,8 @@ class M5UnifiedHalfDuplex {
       iterate_kit_audio_capture_submit_fn submit,
       void *submitContext);
   void renderCallUi(bool force);
+  void renderStatusPanel();
+  bool renderAvatar(std::int64_t nowMicroseconds, bool force);
 
   /*
    * Capture buffers remain inline because M5Unified retains their pointers.
@@ -184,10 +193,23 @@ class M5UnifiedHalfDuplex {
   bool buttonBPressPending_ = false;
   bool microphoneActive_ = false;
   void *capturedScreenPng_ = nullptr;
-  std::uint32_t backgroundColour_ = 0U;
+  /*
+   * One PSRAM framebuffer is the entire display-side frame storage. It is not
+   * DMA/audio memory and no second visual frame or render queue exists. A
+   * later pose simply replaces these pixels after the current synchronous
+   * display upload, so visual load can lose detail but can never accumulate.
+   */
+  std::uint16_t *avatarFramebuffer_ = nullptr;
+  face_avatar_registry_t avatarRegistry_{};
   M5StickS3CallUiState callUiState_ =
       M5StickS3CallUiState::booting;
+  iterate_kit_conversation_visual_state conversationVisualState_{};
+  std::uint32_t renderedAvatarPublication_ = 0U;
+  std::int64_t nextAvatarRenderMicroseconds_ = 0;
+  std::uint32_t avatarRenderFailures_ = 0U;
   bool callUiDrawn_ = false;
+  bool conversationVisualStateDrawn_ = false;
+  bool avatarNeedsRender_ = true;
 };
 
 }  // namespace iterate::kit::platforms

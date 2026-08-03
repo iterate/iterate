@@ -33,7 +33,8 @@ static const char description[] =
     "\"renderOnScreen\":\"Download and render a PNG from {url}.\"," 
     "\"captureScreen\":\"Return the pixels currently shown on the panel as a "
     "bounded PNG byte array.\"," 
-    "\"changeColour\":\"Fill the screen with red or green.\"," 
+    "\"changeSpriteSet\":\"Select dot-matrix-oracle, gameboy-fine-black, "
+    "karakuri-brass, or starbyte.\","
     "\"conversation\":{\"start\":\"Open the PCM conversation.\","
     "\"hangUp\":\"End the current conversation.\"},"
     "\"pushToTalk\":{\"start\":\"Start one manual microphone turn.\","
@@ -174,6 +175,11 @@ enum capnweb_status iterate_kit_m5sticks3_init(
           &options->screen,
           options->screen_url_scratch,
           options->screen_url_scratch_size) != ITERATE_KIT_OK ||
+      iterate_kit_avatar_init(
+          &device->avatar,
+          &options->avatar,
+          options->avatar_slug_scratch,
+          options->avatar_slug_scratch_size) != ITERATE_KIT_OK ||
       iterate_kit_screen_capture_init(
           &device->screen_capture,
           &options->screen_capture,
@@ -220,13 +226,14 @@ enum capnweb_status iterate_kit_m5sticks3_init(
           &device->event_stream);
   device->modules[1] = iterate_kit_metrics_module(&device->metrics);
   device->modules[2] = iterate_kit_screen_module(&device->screen);
-  device->modules[3] =
-      iterate_kit_screen_capture_module(&device->screen_capture);
+  device->modules[3] = iterate_kit_avatar_module(&device->avatar);
   device->modules[4] =
-      iterate_kit_conversation_module(&device->conversation);
+      iterate_kit_screen_capture_module(&device->screen_capture);
   device->modules[5] =
+      iterate_kit_conversation_module(&device->conversation);
+  device->modules[6] =
       iterate_kit_push_to_talk_module(&device->push_to_talk);
-  device->modules[6] = iterate_kit_audio_module(&device->audio);
+  device->modules[7] = iterate_kit_audio_module(&device->audio);
   /*
    * A flat module table is sufficient: modules themselves publish the desired
    * method paths (for example conversation.start). Building a heap capability

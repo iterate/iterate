@@ -182,6 +182,7 @@ if(APPLE)
 endif()
 
 add_library(iterate-kit-capabilities STATIC
+  components/capabilities/src/avatar.c
   components/capabilities/src/callback_budget.c
   components/capabilities/src/conversation.c
   components/capabilities/src/camera.c

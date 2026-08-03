@@ -43,6 +43,7 @@ struct fixture {
   size_t captured_count;
   bool message_open;
   char screen_url[64];
+  char avatar_slug[32];
   struct iterate_kit_metrics_subscription metrics_subscriptions[2];
   char diagnostics_expression
       [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY];
@@ -51,8 +52,8 @@ struct fixture {
   enum iterate_kit_status observed_results[OBSERVED_EVENT_CAPACITY];
   size_t handled_count;
   size_t observed_count;
-  size_t screen_colour_count;
-  enum iterate_kit_screen_colour last_screen_colour;
+  size_t sprite_set_count;
+  char last_sprite_set[32];
   size_t metrics_sample_count;
   uint32_t playback_interruption_requests;
   uint32_t playback_interruption_polls;
@@ -117,11 +118,18 @@ static enum iterate_kit_status render_png(
   return ITERATE_KIT_OK;
 }
 
-static enum iterate_kit_status change_colour(
-    void *context, enum iterate_kit_screen_colour colour) {
+static enum iterate_kit_status change_sprite_set(
+    void *context, const char *slug, size_t slug_length) {
   struct fixture *fixture = context;
-  ++fixture->screen_colour_count;
-  fixture->last_screen_colour = colour;
+  if (slug == NULL ||
+      slug_length != strlen("karakuri-brass") ||
+      memcmp(slug, "karakuri-brass", slug_length) != 0 ||
+      slug_length >= sizeof(fixture->last_sprite_set)) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  ++fixture->sprite_set_count;
+  memcpy(fixture->last_sprite_set, slug, slug_length);
+  fixture->last_sprite_set[slug_length] = '\0';
   return ITERATE_KIT_OK;
 }
 
@@ -239,9 +247,12 @@ static void fixture_init(struct fixture *fixture) {
   memset(fixture, 0, sizeof(*fixture));
   fixture->playback_interruption_result = ITERATE_KIT_OK;
   device_options = (struct iterate_kit_stackchan_options){
-    .screen = {fixture, render_png, change_colour},
+    .screen = {fixture, render_png, NULL},
     .screen_url_scratch = fixture->screen_url,
     .screen_url_scratch_size = sizeof(fixture->screen_url),
+    .avatar = {fixture, change_sprite_set},
+    .avatar_slug_scratch = fixture->avatar_slug,
+    .avatar_slug_scratch_size = sizeof(fixture->avatar_slug),
     .servos = {fixture, move_servos},
     .leds = {fixture, set_led, fill_leds},
     .camera = {fixture, take_photo},
@@ -514,38 +525,28 @@ static void remote_and_physical_conversation_controls_share_one_owner_queue(
 }
 
 /*
- * Screen fill is the smallest real actuator proof the userspace voice Worker
- * can request while audio and network work continue independently. Routing it
- * through the existing screen module keeps StackChan and Stick on one public
- * red|green union; accepting arbitrary strings in this richer profile would
- * create device-specific tool behavior and defer malformed input to a board
- * driver. Exercise the real root dispatcher so this test also catches a module
- * table omission during profile growth.
+ * StackChan and Stick share stable sprite slugs even though their display-owner
+ * scheduling differs. Exercise the real root dispatcher so profile growth
+ * cannot silently omit the avatar module, and reject an unknown slug before a
+ * caller can mistake model output for an applied character change.
  */
-static void change_colour_keeps_the_shared_red_green_contract(void) {
+static void change_sprite_set_reaches_the_shared_avatar_driver(void) {
   struct fixture fixture;
   fixture_init(&fixture);
 
   receive(
       &fixture,
-      "[\"push\",[\"pipeline\",0,[\"changeColour\"],[\"red\"]]]");
+      "[\"push\",[\"pipeline\",0,[\"changeSpriteSet\"],[\"karakuri-brass\"]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(fixture.screen_colour_count == 1U);
-  assert(fixture.last_screen_colour == ITERATE_KIT_SCREEN_RED);
+  assert(fixture.sprite_set_count == 1U);
+  assert(strcmp(fixture.last_sprite_set, "karakuri-brass") == 0);
 
   receive(
       &fixture,
-      "[\"push\",[\"pipeline\",0,[\"changeColour\"],[\"green\"]]]");
+      "[\"push\",[\"pipeline\",0,[\"changeSpriteSet\"],[\"unknown\"]]]");
   receive(&fixture, "[\"pull\",2]");
-  assert(fixture.screen_colour_count == 2U);
-  assert(fixture.last_screen_colour == ITERATE_KIT_SCREEN_GREEN);
-
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"changeColour\"],[\"blue\"]]]");
-  receive(&fixture, "[\"pull\",3]");
-  assert(fixture.screen_colour_count == 2U);
-  assert(captured_contains(&fixture, "expected red or green"));
+  assert(fixture.sprite_set_count == 1U);
+  assert(captured_contains(&fixture, "hardware rejected"));
   fixture_close(&fixture);
 }
 
@@ -644,7 +645,7 @@ int main(void) {
   playback_interruption_acknowledges_the_audio_owner();
   playback_interruption_timeout_is_visible_and_drainable();
   remote_and_physical_conversation_controls_share_one_owner_queue();
-  change_colour_keeps_the_shared_red_green_contract();
+  change_sprite_set_reaches_the_shared_avatar_driver();
   event_and_metrics_subscriptions_share_bounded_profile_state();
   full_duplex_profile_does_not_mount_push_to_talk();
   manifest_advertises_the_shared_full_duplex_aec_contract();

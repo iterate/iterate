@@ -146,11 +146,34 @@ static void restart_arm_supersedes_all_status(void) {
   }
 }
 
+/*
+ * Wi-Fi RSSI naturally moves by a few dB while the device is stationary. The
+ * Stick originally compared that raw telemetry and repainted its whole status
+ * panel every second, producing visible flicker even though the three network
+ * lights had not changed. Output equality is the correct invalidation seam:
+ * diagnostics retain precise RSSI while renderers wake only for a visible
+ * semantic change.
+ */
+static void treats_rssi_changes_inside_one_bar_as_same_visual_output(void) {
+  const struct iterate_kit_conversation_visual_state first = {
+    .network = ITERATE_KIT_NETWORK_CONNECTED,
+    .has_wifi_rssi = true,
+    .wifi_rssi_dbm = -73,
+  };
+  struct iterate_kit_conversation_visual_state second = first;
+  second.wifi_rssi_dbm = -77;
+  assert(iterate_kit_conversation_lights_equal(&first, &second));
+
+  second.wifi_rssi_dbm = -68;
+  assert(!iterate_kit_conversation_lights_equal(&first, &second));
+}
+
 int main(void) {
   renders_one_shared_three_sector_grammar();
   distinguishes_listening_silence_from_idle();
   keeps_half_duplex_microphone_dark_until_capture();
   makes_media_failure_unambiguously_red();
   restart_arm_supersedes_all_status();
+  treats_rssi_changes_inside_one_bar_as_same_visual_output();
   return 0;
 }

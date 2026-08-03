@@ -1,5 +1,6 @@
 idf_component_register(
   SRCS
+    "src/avatar.c"
     "src/callback_budget.c"
     "src/conversation.c"
     "src/camera.c"

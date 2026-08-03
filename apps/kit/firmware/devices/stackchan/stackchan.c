@@ -30,7 +30,8 @@ static const char description[] =
     "\"getDiagnostics\":\"Return one retained control-transport incident "
     "snapshot.\","
     "\"renderOnScreen\":\"Download and render a PNG from {url}.\","
-    "\"changeColour\":\"Fill the screen with red or green.\","
+    "\"changeSpriteSet\":\"Select dot-matrix-oracle, gameboy-fine-black, "
+    "karakuri-brass, or starbyte.\","
     "\"conversation\":{\"start\":\"Open the PCM conversation intent.\","
     "\"hangUp\":\"End the current conversation intent.\","
     "\"interruptPlayback\":\"Purge assistant speech and acknowledge only "
@@ -176,6 +177,11 @@ enum capnweb_status iterate_kit_stackchan_init(
           &options->screen,
           options->screen_url_scratch,
           options->screen_url_scratch_size) != ITERATE_KIT_OK ||
+      iterate_kit_avatar_init(
+          &device->avatar,
+          &options->avatar,
+          options->avatar_slug_scratch,
+          options->avatar_slug_scratch_size) != ITERATE_KIT_OK ||
       iterate_kit_servos_init(
           &device->servos,
           &options->servos,
@@ -226,11 +232,12 @@ enum capnweb_status iterate_kit_stackchan_init(
       iterate_kit_device_event_stream_module(&device->event_stream);
   device->modules[1] = iterate_kit_metrics_module(&device->metrics);
   device->modules[2] = iterate_kit_screen_module(&device->screen);
-  device->modules[3] =
+  device->modules[3] = iterate_kit_avatar_module(&device->avatar);
+  device->modules[4] =
       iterate_kit_conversation_module(&device->conversation);
-  device->modules[4] = iterate_kit_servos_module(&device->servos);
-  device->modules[5] = iterate_kit_leds_module(&device->leds);
-  device->modules[6] = iterate_kit_camera_module(&device->camera);
+  device->modules[5] = iterate_kit_servos_module(&device->servos);
+  device->modules[6] = iterate_kit_leds_module(&device->leds);
+  device->modules[7] = iterate_kit_camera_module(&device->camera);
   /*
    * Routing remains one fixed table even though the public description is
    * nested. Each generic module owns its method path, avoiding a per-profile

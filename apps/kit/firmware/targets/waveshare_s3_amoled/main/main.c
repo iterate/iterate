@@ -278,6 +278,7 @@ enum {
    * in-process recovery has worked and the chip restarts.
    */
   NO_LIVENESS_RESTART_MS = ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS,
+  IDLE_REMOUNT_MS = ITERATE_KIT_VOICE_IDLE_REMOUNT_MS,
 };
 
 /* PSRAM-resident: 256 KiB would crowd internal RAM out of TLS headroom. */
@@ -436,6 +437,8 @@ static struct {
    */
   volatile uint64_t answer_started_ms;
   volatile uint32_t answer_emitted_ms;
+  /** When an RPC was last answered: the mount's own liveness, not the socket's. */
+  volatile uint64_t last_served_ms;
   uint32_t speaker_lag_max_ms;
   volatile bool speaker_answer_done;
   uint32_t flush_frames_left;
@@ -1049,6 +1052,12 @@ void waveshare_request_restart(void) {
 
 size_t waveshare_health_json(char *out, size_t capacity) {
   /*
+   * Answering an RPC is the only proof the mount is still reachable. Pings
+   * ride the socket and prove nothing about it — which is how a device whose
+   * capability had gone offline sat healthy and unreachable for minutes.
+   */
+  runtime.last_served_ms = now_ms(NULL);
+  /*
    * NAME AND VALUE TRAVEL TOGETHER.
    *
    * This was one snprintf with sixty-odd "%" specifiers in a format string
@@ -1589,6 +1598,26 @@ void app_main(void) {
             "no answer to a ping in %us — replacing the transport",
             (unsigned int)(PING_TIMEOUT_MS / 1000U));
         waveshare_display_set_status("reconnecting");
+        iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
+      }
+      /*
+       * NOBODY HAS ASKED US FOR ANYTHING IN A LONG TIME.
+       *
+       * The downlink watchdog needs a call in progress and the liveness one
+       * keys on pings, so an idle device whose mount has gone offline
+       * server-side is watched by neither: the socket stays healthy, the
+       * pings keep answering, and every RPC fails until somebody power-cycles
+       * it. Replacing the session re-mounts the capability, which is the one
+       * thing that fixes it.
+       */
+      if (runtime.voicelab_generation == runtime.connection.generation &&
+          runtime.last_served_ms != 0U &&
+          iterate_kit_voice_elapsed_ms(now, runtime.last_served_ms) >
+              IDLE_REMOUNT_MS) {
+        ESP_LOGW(
+            tag, "no RPC served in %us — replacing the session to re-mount",
+            (unsigned int)(IDLE_REMOUNT_MS / 1000U));
+        runtime.last_served_ms = now;
         iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
       }
       if (iterate_kit_voice_elapsed_ms(now, last_liveness_ms) > NO_LIVENESS_RESTART_MS) {

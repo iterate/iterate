@@ -153,3 +153,22 @@ void iterate_kit_conversation_lights_render(
   render_network(state, pixels);
   render_audio(state, pixels);
 }
+
+bool iterate_kit_conversation_lights_equal(
+    const struct iterate_kit_conversation_visual_state *left,
+    const struct iterate_kit_conversation_visual_state *right) {
+  struct iterate_kit_rgb8
+      left_pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  struct iterate_kit_rgb8
+      right_pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+
+  /*
+   * Compare the portable render product rather than duplicating every band
+   * threshold in each display adapter. `render` initializes the complete
+   * arrays (including any implementation padding in rgb8), so byte comparison
+   * is deterministic. It also preserves NULL's documented all-dark meaning.
+   */
+  iterate_kit_conversation_lights_render(left, left_pixels);
+  iterate_kit_conversation_lights_render(right, right_pixels);
+  return memcmp(left_pixels, right_pixels, sizeof(left_pixels)) == 0;
+}

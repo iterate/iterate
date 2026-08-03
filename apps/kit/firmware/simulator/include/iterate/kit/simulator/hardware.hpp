@@ -2,6 +2,7 @@
 #define ITERATE_KIT_SIMULATOR_HARDWARE_HPP
 
 #include "iterate/kit/capabilities/metrics.h"
+#include "iterate/kit/capabilities/avatar.h"
 #include "iterate/kit/capabilities/screen.h"
 #include "iterate/kit/status.h"
 
@@ -50,6 +51,7 @@ struct CommonHardware {
    */
   std::uint32_t renderUrlHash = 0U;
   iterate_kit_screen_colour screenColour = ITERATE_KIT_SCREEN_RED;
+  char spriteSet[32] = "dot-matrix-oracle";
 };
 
 /*
@@ -62,6 +64,8 @@ iterate_kit_status renderPng(
     void *context, const char *url, std::size_t urlLength);
 iterate_kit_status changeColour(
     void *context, iterate_kit_screen_colour colour);
+iterate_kit_status changeSpriteSet(
+    void *context, const char *slug, std::size_t slugLength);
 iterate_kit_status sampleMetrics(
     void *context, iterate_kit_metrics_sample *sample);
 

@@ -45,6 +45,7 @@ struct fixture {
   size_t captured_count;
   bool message_open;
   char screen_url[64];
+  char avatar_slug[32];
   struct iterate_kit_metrics_subscription subscription;
   struct iterate_kit_device_event event_storage[EVENT_CAPACITY];
   struct iterate_kit_device_event_notification
@@ -58,8 +59,8 @@ struct fixture {
   size_t stop_capture_count;
   size_t prepare_playback_count;
   size_t capture_poll_count;
-  size_t screen_colour_count;
-  int last_screen_colour;
+  size_t sprite_set_count;
+  char last_sprite_set[32];
   struct iterate_kit_m5sticks3 device;
 };
 
@@ -120,11 +121,20 @@ static enum iterate_kit_status render_png(
   return ITERATE_KIT_OK;
 }
 
-static enum iterate_kit_status change_colour(
-    void *context, enum iterate_kit_screen_colour colour) {
+static enum iterate_kit_status change_sprite_set(
+    void *context, const char *slug, size_t slug_length) {
   struct fixture *fixture = context;
-  ++fixture->screen_colour_count;
-  fixture->last_screen_colour = colour;
+  if (slug == NULL ||
+      !((slug_length == strlen("starbyte") &&
+         memcmp(slug, "starbyte", slug_length) == 0) ||
+        (slug_length == strlen("dot-matrix-oracle") &&
+         memcmp(slug, "dot-matrix-oracle", slug_length) == 0)) ||
+      slug_length >= sizeof(fixture->last_sprite_set)) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  ++fixture->sprite_set_count;
+  memcpy(fixture->last_sprite_set, slug, slug_length);
+  fixture->last_sprite_set[slug_length] = '\0';
   return ITERATE_KIT_OK;
 }
 
@@ -220,9 +230,12 @@ static void fixture_init(struct fixture *fixture) {
   struct capnweb_session_options session_options;
   memset(fixture, 0, sizeof(*fixture));
   device_options = (struct iterate_kit_m5sticks3_options){
-    .screen = {fixture, render_png, change_colour},
+    .screen = {fixture, render_png, NULL},
     .screen_url_scratch = fixture->screen_url,
     .screen_url_scratch_size = sizeof(fixture->screen_url),
+    .avatar = {fixture, change_sprite_set},
+    .avatar_slug_scratch = fixture->avatar_slug,
+    .avatar_slug_scratch_size = sizeof(fixture->avatar_slug),
     .screen_capture = {fixture, capture_screen},
     .maximum_screen_capture_bytes = 1U,
     .metrics = {
@@ -307,37 +320,37 @@ static void receive(struct fixture *fixture, const char *message) {
 }
 
 /*
- * `changeColour` is intentionally a tiny scalar capability: it proves that a
- * production OS mount can invoke real hardware without involving image fetch,
- * heap allocation, or the high-volume PCM lane. Both accepted literals and a
- * rejected third value pin the public union instead of relying on a permissive
- * string-to-colour conversion in the display driver.
+ * Sprite-set selection is a tiny scalar capability which proves production OS
+ * can reach the avatar owner without image fetch, allocation, or the PCM lane.
+ * Public slugs are stable while catalogue indices may be reordered. A rejected
+ * unknown slug protects that naming boundary and proves the old colour
+ * scaffolding is no longer the Stick's product control.
  */
-static void changes_only_the_two_public_screen_colours(void) {
+static void changes_only_to_known_public_sprite_sets(void) {
   struct fixture fixture;
   fixture_init(&fixture);
 
   receive(
       &fixture,
-      "[\"push\",[\"pipeline\",0,[\"changeColour\"],[\"red\"]]]");
+      "[\"push\",[\"pipeline\",0,[\"changeSpriteSet\"],[\"starbyte\"]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(fixture.screen_colour_count == 1U);
-  assert(fixture.last_screen_colour == 0);
+  assert(fixture.sprite_set_count == 1U);
+  assert(strcmp(fixture.last_sprite_set, "starbyte") == 0);
   assert(strcmp(fixture.captured[0], "[\"resolve\",1,true]") == 0);
 
   receive(
       &fixture,
-      "[\"push\",[\"pipeline\",0,[\"changeColour\"],[\"green\"]]]");
+      "[\"push\",[\"pipeline\",0,[\"changeSpriteSet\"],[\"dot-matrix-oracle\"]]]");
   receive(&fixture, "[\"pull\",2]");
-  assert(fixture.screen_colour_count == 2U);
-  assert(fixture.last_screen_colour == 1);
+  assert(fixture.sprite_set_count == 2U);
+  assert(strcmp(fixture.last_sprite_set, "dot-matrix-oracle") == 0);
 
   receive(
       &fixture,
-      "[\"push\",[\"pipeline\",0,[\"changeColour\"],[\"blue\"]]]");
+      "[\"push\",[\"pipeline\",0,[\"changeSpriteSet\"],[\"unknown\"]]]");
   receive(&fixture, "[\"pull\",3]");
-  assert(fixture.screen_colour_count == 2U);
-  assert(strstr(fixture.captured[2], "expected red or green") != NULL);
+  assert(fixture.sprite_set_count == 2U);
+  assert(strstr(fixture.captured[2], "hardware rejected") != NULL);
 
   capnweb_session_close(&fixture.session);
   iterate_kit_peer_session_ended(&fixture.device.peer);
@@ -823,7 +836,7 @@ static void conversation_lifetime_contains_manual_push_to_talk_turns(void) {
 }
 
 int main(void) {
-  changes_only_the_two_public_screen_colours();
+  changes_only_to_known_public_sprite_sets();
   conversation_lifetime_contains_manual_push_to_talk_turns();
   remote_and_physical_conversation_controls_share_one_event_path();
   flattened_host_invocation_reaches_the_static_method_table();

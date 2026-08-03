@@ -84,10 +84,35 @@ static void registries_do_not_share_selection_state(void)
     assert(face_avatar_registry_current_index(&second) == 0U);
 }
 
+/*
+ * `changeSpriteSet` receives a public slug rather than an implementation
+ * index: catalogue generation may reorder entries, while a remotely stored
+ * user choice must continue naming the same character. Exact length matching
+ * also prevents a valid prefix or embedded suffix from selecting the wrong
+ * atlas at the C/Cap'n Web boundary.
+ */
+static void selects_sprite_sets_by_exact_public_slug(void)
+{
+    face_avatar_registry_t registry;
+
+    assert(face_avatar_registry_init(&registry));
+    assert(face_avatar_registry_select_slug(
+        &registry, "starbyte", strlen("starbyte")));
+    assert(strcmp(
+        face_avatar_registry_current_slug(&registry), "starbyte") == 0);
+    assert(!face_avatar_registry_select_slug(
+        &registry, "star", strlen("star")));
+    assert(!face_avatar_registry_select_slug(
+        &registry, "starbyte-extra", strlen("starbyte-extra")));
+    assert(strcmp(
+        face_avatar_registry_current_slug(&registry), "starbyte") == 0);
+}
+
 int main(void)
 {
     all_device_avatars_are_renderable();
     registries_do_not_share_selection_state();
+    selects_sprite_sets_by_exact_public_slug();
     puts("face_avatar_registry_test: PASS");
     return 0;
 }
