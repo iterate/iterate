@@ -902,11 +902,12 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       ",\"spkDecodeFailures\":%" PRIu32 ",\"bargeIns\":%" PRIu32
       ",\"batches\":%" PRIu32 ",\"connGeneration\":%" PRIu32
       ",\"rttMs\":%" PRIu32 ",\"pings\":%" PRIu32
-      ",\"pingFailures\":%" PRIu32 ",\"livenessRestarts\":%" PRIu32
+      ",\"pingFailures\":%" PRIu32
       ",\"spkDiscarded\":%" PRIu32
       ",\"spkIgnoredCall\":%" PRIu32 ",\"spkIgnoredStale\":%" PRIu32
       ",\"spkIgnoredDup\":%" PRIu32 ",\"spkReplaced\":%" PRIu32
       ",\"spkWaitPriming\":%" PRIu32 ",\"spkWaitDry\":%" PRIu32
+      ",\"livenessRestarts\":%" PRIu32
       ",\"bridgeLosses\":%" PRIu32 ",\"bridgeAgeMs\":%" PRIu32
       ",\"downlinkRecycles\":%" PRIu32 ",\"batchAgeMs\":%" PRIu32
       ",\"uptimeMs\":%" PRIu64 ",\"resetReason\":%d"

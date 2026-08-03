@@ -123,40 +123,44 @@ The `iterate_kit` provisioning partition is **0x1000 bytes**, not the 0x10000
 a first guess produces. An image built at the larger size would have been
 written straight past the end of the partition.
 
-## Open: the device asks for transport restarts it does not need
+## The device's telemetry was lying, and it fooled me
 
-Found by the soak on 2026-08-03 and NOT yet fixed. Recorded here with what it
-is and — more usefully — what it is not, because three plausible explanations
-were tested and refuted.
+Found 2026-08-03 and FIXED. The stats line's format string and its argument
+list disagreed: the format named `livenessRestarts` immediately after
+`pingFailures`, while the arguments supplied it eight positions later. Every
+counter in between was reported under its neighbour's name.
 
-**The observation.** A nine-minute held call on the board: 14 turns, every one
-answered in 2.1-3.9s, `unanswered: 0`. Over the same window
-`livenessRestarts` moved by 133.
+All of them are `uint32_t`, so `-Wformat` cannot see it — a compiler checks
+types, and a reordering among identically typed arguments is invisible. It
+survived precisely because it was type-correct.
 
-**What it is not.**
+What that cost: a "defect" was investigated and written up here — 133 liveness
+restarts during a nine-minute call — that never happened. The real
+`livenessRestarts` is 0. The 133 belonged to `speaker_discarded_frames`.
+`spkReplaced` reading 13301 with no audio playing was `speaker_waits_priming`,
+which climbs whenever the device is idle. Three hypotheses were tested and
+refuted against numbers that were never measuring what their labels claimed.
 
-- Not a clock mismatch. The supervision loop and the voicelab ping use the
-  same `now_ms` (`esp_timer`).
-- Not slow pings. `pings` advances steadily, `pingFailures` is 0, and RTT
-  measures 71-112 ms.
-- Not calls in general. A single journey call moves the counter by zero; only
-  a sustained call does.
+The lesson worth keeping is not "check your format strings". It is that a
+counter nobody has ever seen move in a known-good run is not evidence. Every
+number in the section above was cross-checked against something outside the
+code that produced it — a recording measured independently, a file read back
+out of the project — and that discipline is why those numbers survived and
+these did not.
 
-**What it is, so far.** The counter counts REQUESTS, and requests coalesce:
-`connGeneration` reached 3 while the counter reached 133, so the transport
-actually regenerated three times, not a hundred and thirty-three. The name
-overstates severity by roughly forty times, which is itself worth fixing —
-`livenessRestartRequests` is what it measures. The counter is frozen at 133
-whenever the device is idle.
+## Open: the device conceals a third of a long answer
 
-**How to reproduce.** `pnpm cli voicelab soak --name waveshare --minutes 9
---every 40`. The soak compares first and last sample, so the number it prints
-is the movement during the soak and not a lifetime total.
+With the telemetry fixed, the real fault is plain and matches what a listener
+reports as jagged. On a single turn: `spkFrames=143`, `spkPlayed=143` — every
+frame that arrived was played, nothing ignored, no sequence gaps — but
+`spkConceal=64`. The device inserted 1.28 s of silence into a 2.9 s answer
+because the downlink delivered about 34 frames a second against the 50 that
+realtime playback consumes.
 
-The most promising remaining line is that a ping's completion is delayed
-behind inbound audio in the control inbox during a sustained call — the same
-shape as the server-side bug where a recycle was retried against a peer that
-was simply busy. That is a hypothesis, not a finding.
+Nothing is being lost; audio is arriving too slowly, and the playout clock
+fills the difference with silence, exactly as designed. The host rig
+reproduces this class with `voicelab wire --throttle-fps`, which turns a clean
+conversation into first audio at 7446 ms and 64% concealment.
 
 ## What this still cannot tell you
 
