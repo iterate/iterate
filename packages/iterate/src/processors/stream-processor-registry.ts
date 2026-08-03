@@ -172,6 +172,23 @@ type RegistryEntry = {
   runner: StreamProcessorRunner<any>;
 };
 
+/**
+ * Options for {@link StreamProcessorRegistry.register}. `name` is the
+ * registered processor's identity on this host — the subscription NAME under
+ * the identity doctrine (docs/stream-subscription-model-redesign.md): the same
+ * string as the stream's catalog key, the facet name under facet placement,
+ * and the progress-key component. It defaults to the contract slug, so
+ * single-instance hosts read exactly as before; two instances of one contract
+ * are two registrations with two names and one slug.
+ */
+export type RegisterProcessorOptions = {
+  /** Post-eviction keepalive recovery — REQUIRED for consequential
+   * `runInBackground` work (see the module doc). */
+  recovery?: boolean;
+  /** Registered name (subscription name). Defaults to the contract slug. */
+  name?: string;
+};
+
 const WakeDeliveryThrowableFields = z.object({
   durableObjectReset: z.unknown().optional(),
   itxCallId: z.unknown().optional(),
@@ -247,18 +264,21 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    * storage, one must not — is exactly what a call site gets wrong.)
    */
   loadAndRefreshLive(): Promise<void>;
+  /** Registered processor names, in registration order. */
+  readonly names: readonly string[];
   /**
    * Register a processor (constructed by the DO — the processor is the star,
-   * the registry is plumbing) under its contract slug and build its runner:
-   * durable two-cursor progress in DO KV keyed by the slug, plus — WHEN THE
+   * the registry is plumbing) under its NAME (default: the contract slug —
+   * see {@link RegisterProcessorOptions}) and build its runner: durable
+   * two-cursor progress in DO KV keyed by the name, plus — WHEN THE
    * DO PASSES `{ recovery: true }` — the per-runner recovery adapter
    * (keepalive + the core `stream/processor-revived` fact). See the module
    * doc: recovery is REQUIRED for any processor whose `runInBackground` work
    * is consequential; the registry cannot infer that.
-   * Duplicate slugs throw. Returns the processor, so DOs keep their
-   * `field = registry.register(new XProcessor(...))` shape.
+   * Duplicate names (and re-registering the same instance) throw. Returns the
+   * processor, so DOs keep their `field = registry.register(new XProcessor(...))` shape.
    */
-  register<P extends RegisterableProcessor>(processor: P, opts?: { recovery?: boolean }): P;
+  register<P extends RegisterableProcessor>(processor: P, opts?: RegisterProcessorOptions): P;
   /**
    * The runner-backed READ surface for one registered processor. The runner
    * owns both cursors and the fold — the processor instance holds no
@@ -268,11 +288,14 @@ export type StreamProcessorRegistry<Live extends object = Record<string, unknown
    * progress; `getRuntimeState` assembles the processor's contributed
    * runtime bag under the runner's snapshot; `currentState` / `isLoaded`
    * serve `getLiveState` closures without an async hop. Takes the registered
-   * instance (not a slug) so the state type flows through.
+   * instance so the state type flows through, or a registered NAME for hosts
+   * that route doors by subscription name (the facet) — the name form cannot
+   * carry the state type, so its reads publish `unknown` state.
    */
   reads<P extends RegisterableProcessor>(
     processor: P,
   ): RegisteredProcessorReads<RegisteredProcessorState<P>>;
+  reads(name: string): RegisteredProcessorReads<unknown>;
   /** Observe committed fold changes for one registered processor. */
   observeStateChanges<P extends RegisterableProcessor>(
     processor: P,
@@ -417,20 +440,52 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     const entry = entries.get(name);
     if (entry === undefined) {
       throw new Error(
-        `Unknown stream processor "${name}" on this registry (registered: ${[...entries.keys()].join(", ") || "none"})`,
+        `Unknown stream processor name "${name}" on this registry (registered: ${[...entries.keys()].join(", ") || "none"})`,
       );
     }
     return entry;
   }
 
-  function resolveProcessorName(args: StreamProcessorWakeRequest): string {
-    if (args.processorSlug !== undefined) {
-      requireEntry(args.processorSlug);
-      return args.processorSlug;
+  function requireEntryForInstance(processor: RegisterableProcessor, verb: string): RegistryEntry {
+    for (const entry of entries.values()) {
+      if (entry.processor === processor) return entry;
     }
-    if (entries.size === 1) return [...entries.keys()][0]!;
+    // Instance identity, not slug lookup: two instances of one contract can be
+    // registered under two names, so only the exact registered instance names
+    // its runner.
     throw new Error(
-      `wakeStreamProcessor for "${args.subscriptionKey}" needs a processorSlug on a multi-processor registry (registered: ${[...entries.keys()].join(", ")})`,
+      `stream processor "${processor.contract.slug}" instance passed to ${verb}() is not ` +
+        `registered on this registry — pass the exact instance register() returned ` +
+        `(registered names: ${[...entries.keys()].join(", ") || "none"})`,
+    );
+  }
+
+  /**
+   * Route a wake to a registered entry. The subscription NAME is the primary
+   * key (name-based registration; under facet placement the name IS the facet
+   * name); a default-named host (name = slug) still resolves through the
+   * required contract slug, so today's subscriptions with generated names keep
+   * waking without re-registration.
+   */
+  function resolveProcessorName(args: StreamProcessorWakeRequest): string {
+    const named = entries.get(args.name);
+    if (named !== undefined) {
+      if (named.processor.contract.slug !== args.processorSlug) {
+        throw new Error(
+          `wakeStreamProcessor for "${args.name}" expects contract "${args.processorSlug}", ` +
+            `but that name is registered with contract "${named.processor.contract.slug}"`,
+        );
+      }
+      return args.name;
+    }
+    const bySlug = [...entries].filter(
+      ([, entry]) => entry.processor.contract.slug === args.processorSlug,
+    );
+    if (bySlug.length === 1) return bySlug[0]![0];
+    throw new Error(
+      `wakeStreamProcessor for "${args.name}" (contract "${args.processorSlug}") matches ` +
+        `${bySlug.length === 0 ? "no registered processor" : "more than one registered instance — subscribe by registered name"} ` +
+        `(registered: ${[...entries.keys()].join(", ") || "none"})`,
     );
   }
 
@@ -469,10 +524,23 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     refreshLive: assembleLive,
     loadAndRefreshLive: loadThenAssemble,
 
+    get names() {
+      return [...entries.keys()];
+    },
+
     register(processor, opts) {
       const { slug } = processor.contract;
-      if (entries.has(slug)) {
-        throw new Error(`Stream processor "${slug}" is already registered on this registry`);
+      const name = opts?.name ?? slug;
+      if (entries.has(name)) {
+        throw new Error(`Stream processor name "${name}" is already registered on this registry`);
+      }
+      for (const [registeredName, entry] of entries) {
+        if (entry.processor === processor) {
+          throw new Error(
+            `this exact processor instance is already registered as "${registeredName}" — ` +
+              `construct one instance per registration`,
+          );
+        }
       }
       // Recovery FIRST, because durableObjectRecovery's construction re-issues
       // a persisted alarm desire (the lost-platform-alarm heal) through this
@@ -480,10 +548,11 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
       const recovery = opts?.recovery
         ? durableObjectRecovery({
             storage: ctx.storage,
-            slug,
+            name,
+            processorSlug: slug,
             stream: options.stream,
             version: options.version,
-            armAlarm: (atMs) => void setAlarmSlice(`keepalive:${slug}`, atMs),
+            armAlarm: (atMs) => void setAlarmSlice(`keepalive:${name}`, atMs),
             waitUntil: (work) => ctx.waitUntil(work),
             now,
           })
@@ -498,7 +567,7 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         durability: {
           progress: durableObjectProgressStore({
             storage: ctx.storage,
-            slug,
+            name,
           }),
           ...(recovery === undefined ? {} : { recovery }),
         },
@@ -508,21 +577,17 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         keepAlive: (work) => ctx.waitUntil(work()),
         now,
       });
-      entries.set(slug, { processor, runner });
+      entries.set(name, { processor, runner });
       // Any runner's committed-state change reassembles the node's live state.
       runner.observeStateChanges(() => assembleLive());
       return processor;
     },
 
-    reads(processor) {
-      const entry = requireEntry(processor.contract.slug);
-      if (entry.processor !== processor) {
-        throw new Error(
-          `stream processor "${processor.contract.slug}" is registered on this registry, ` +
-            `but reads() was passed a DIFFERENT instance — build reads from the exact ` +
-            `processor register() returned`,
-        );
-      }
+    reads(processorOrName: RegisterableProcessor | string) {
+      const entry =
+        typeof processorOrName === "string"
+          ? requireEntry(processorOrName)
+          : requireEntryForInstance(processorOrName, "reads");
       const { runner } = entry;
       const reads: RegisteredProcessorReads<unknown> = {
         snapshot: () => runner.snapshot(),
@@ -547,21 +612,16 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
         },
       };
       // The runner is stored under the type-erased `RegistryEntry` (a map of
-      // heterogeneous processors), so the concrete state type re-enters here:
-      // the registered instance's contract carries it, and `reads()` promised
-      // it in the signature.
-      return reads as RegisteredProcessorReads<RegisteredProcessorState<typeof processor>>;
+      // heterogeneous processors), so the concrete state type re-enters at the
+      // overloaded signature: the registered instance's contract carries it
+      // and `reads()` promised it there; the name form honestly publishes
+      // `unknown` state.
+      return reads as RegisteredProcessorReads<any>;
     },
 
     observeStateChanges(processor, observer) {
-      const entry = requireEntry(processor.contract.slug);
-      if (entry.processor !== processor) {
-        throw new Error(
-          `stream processor "${processor.contract.slug}" is registered on this registry, ` +
-            "but observeStateChanges() was passed a DIFFERENT instance",
-        );
-      }
-      // The identity check above restores the relationship erased by the
+      const entry = requireEntryForInstance(processor, "observeStateChanges");
+      // The instance-identity lookup restores the relationship erased by the
       // registry's heterogeneous entry map: this runner and observer share the
       // state type carried by the exact registered processor instance.
       return entry.runner.observeStateChanges(

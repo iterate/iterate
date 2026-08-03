@@ -186,17 +186,30 @@ export type SubscriptionConfigurationForDelivery = {
   createdAt: string;
   path: string;
   payload: {
-    subscriptionKey?: string;
+    /** The subscription's caller-chosen name; omitted when the effective name
+     * is derived from this event's offset (`subscription:<offset>`). */
+    name?: string;
     description?: string;
     filter?: {
       eventTypes?: string[];
       jsonataCondition?: string;
     };
+    /** Per-subscription delivery controls (see the platform contract): batch
+     * event cap, serialized-bytes cap, and `state: false` to omit reduced
+     * state from wake-fed batches. */
+    maxDeliveryEvents?: number;
+    maxDeliveryBytes?: number;
+    state?: false;
     receiver:
       | {
           action: "processor-wake";
-          expression: Array<string | [method: string, ...args: unknown[]]>;
-          processorSlug?: string;
+          /** Which contract runs — required; the name is the instance identity. */
+          processorSlug: string;
+          /** `"facet"`: the processor runs as a facet of the stream's own
+           * Durable Object (the name IS the facet name; no expression).
+           * Omitted: the wake dials `expression` as before. */
+          placement?: "facet";
+          expression?: Array<string | [method: string, ...args: unknown[]]>;
         }
       | {
           action: "copy-to-stream";
@@ -426,9 +439,16 @@ export type StreamProcessorWakeRequest = {
     streamId: string;
     streamMaxOffset: number;
   };
-  subscriptionKey: SubscriptionKey;
-  /** Which hosted processor to wake (multi-processor hosts resolve on it). */
-  processorSlug?: string;
+  /**
+   * The subscription's NAME — the caller-chosen per-stream binding this wake
+   * serves. Under name-based registration it is also the registered processor
+   * name (and, under facet placement, the facet name), so hosts route on it
+   * first; `processorSlug` says which CONTRACT the named instance must run.
+   */
+  name: SubscriptionKey;
+  /** Which processor contract to wake. Required: the slug is an attribute of
+   * the subscription, never derived from its name. */
+  processorSlug: string;
 };
 
 /**

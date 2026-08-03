@@ -5,9 +5,9 @@
 //     {@link ProcessorProgressStore} over the DO's synchronous KV facade.
 //   - `durableObjectRecovery` — the {@link ProcessorRecovery} adapter for a
 //     durable processor that owns background work: ONE ProcessorKeepalive per
-//     runner, storage-backed per-slug, with the DO-shaped seams (alarm slice,
-//     waitUntil) INJECTED so nothing here touches `storage.setAlarm` or a
-//     Cloudflare ctx directly.
+//     runner, storage-backed per registered NAME, with the DO-shaped seams
+//     (alarm slice, waitUntil) INJECTED so nothing here touches
+//     `storage.setAlarm` or a Cloudflare ctx directly.
 //
 // This file is deliberately runtime-light so its tests run in plain-node
 // vitest over an in-memory `storage.kv` fake
@@ -24,14 +24,18 @@ import type {
 } from "./stream-processor-runner.ts";
 
 // -----------------------------------------------------------------------------
-// Key layout. Per-slug, all under the `stream-processor:` prefix.
+// Key layout. Per registered NAME (the subscription name; defaults to the
+// contract slug on single-instance hosts, so existing keys read unchanged),
+// all under the `stream-processor:` prefix. Keying by name — not slug — is
+// what lets two instances of one contract live on one host without their
+// cursors colliding.
 // -----------------------------------------------------------------------------
 
 /** The two-cursor progress record ({@link ProcessorProgress}). */
-export const processorProgressKey = (slug: string) => `stream-processor:${slug}:progress`;
+export const processorProgressKey = (name: string) => `stream-processor:${name}:progress`;
 
 /** The per-runner keepalive record ({@link KeepaliveRecord}). */
-export const processorKeepaliveKey = (slug: string) => `stream-processor:${slug}:keepalive`;
+export const processorKeepaliveKey = (name: string) => `stream-processor:${name}:keepalive`;
 
 /** A recovery alarm belongs to one stream lifetime, not merely one path. */
 type StreamKeepaliveRecord = KeepaliveRecord & { streamId: string };
@@ -73,10 +77,12 @@ function sameKeepaliveAttempt(
  */
 export function durableObjectProgressStore<State>(args: {
   storage: DurableObjectStorage;
-  slug: string;
+  /** The registered processor name (subscription name; defaults to the
+   * contract slug on single-instance hosts) — keys the progress record. */
+  name: string;
 }): ProcessorProgressStore<State> {
-  const { storage, slug } = args;
-  const progressKey = processorProgressKey(slug);
+  const { storage, name } = args;
+  const progressKey = processorProgressKey(name);
 
   return {
     read: () => storage.kv.get<ProcessorProgress<State>>(progressKey),
@@ -87,7 +93,7 @@ export function durableObjectProgressStore<State>(args: {
       const persisted = storage.kv.get<ProcessorProgress<State>>(progressKey);
       if (persisted?.streamId !== opts.expectedStreamId) {
         throw new Error(
-          `stream processor "${slug}" progress commit fenced: expected stream ID ` +
+          `stream processor "${name}" progress commit fenced: expected stream ID ` +
             `${String(opts.expectedStreamId)}, persisted ${String(persisted?.streamId)} — ` +
             `the stream lifetime changed after this continuation began`,
         );
@@ -95,7 +101,7 @@ export function durableObjectProgressStore<State>(args: {
       const persistedRevision = persisted?.processing.cursorRevision ?? 0;
       if (opts.expectedCursorRevision !== persistedRevision) {
         throw new Error(
-          `stream processor "${slug}" progress commit fenced: expected cursorRevision ` +
+          `stream processor "${name}" progress commit fenced: expected cursorRevision ` +
             `${opts.expectedCursorRevision}, persisted ${persistedRevision} — ` +
             `a cursor rewind landed after this continuation began`,
         );
@@ -112,7 +118,7 @@ export function durableObjectProgressStore<State>(args: {
         progress.processing.cursorRevision <= persistedRevision
       ) {
         throw new Error(
-          `stream processor "${slug}" progress commit fenced: acknowledgedThroughOffset would ` +
+          `stream processor "${name}" progress commit fenced: acknowledgedThroughOffset would ` +
             `move backward (${persisted.processing.acknowledgedThroughOffset} -> ` +
             `${progress.processing.acknowledgedThroughOffset}) without a cursorRevision bump — ` +
             `a stale incarnation is rolling the cursor back`,
@@ -127,14 +133,14 @@ export function durableObjectProgressStore<State>(args: {
         persisted.processing.cursorRevision !== opts.expectedCursorRevision
       ) {
         throw new Error(
-          `stream processor "${slug}" stream replacement fenced: expected ` +
+          `stream processor "${name}" stream replacement fenced: expected ` +
             `${opts.expectedStreamId}@${opts.expectedCursorRevision}, persisted ` +
             `${String(persisted?.streamId)}@${persisted?.processing.cursorRevision ?? 0}`,
         );
       }
       // Old-lifetime recovery desires must not append revival facts into the
       // recreated stream. A new obligation will arm a fresh record.
-      storage.kv.delete(processorKeepaliveKey(slug));
+      storage.kv.delete(processorKeepaliveKey(name));
       storage.kv.put(progressKey, progress);
     },
   };
@@ -173,8 +179,13 @@ export function durableObjectProgressStore<State>(args: {
  */
 export function durableObjectRecovery(args: {
   storage: DurableObjectStorage;
-  /** The processor's contract slug — keys the per-runner keepalive record. */
-  slug: string;
+  /** The registered processor name (subscription name; defaults to the
+   * contract slug) — keys the per-runner keepalive record and the revival
+   * fact's idempotency key, so two instances of one contract never collide. */
+  name: string;
+  /** The processor's contract slug — carried in the revival fact's payload
+   * (`processorSlug`), which names the CONTRACT that was revived. */
+  processorSlug: string;
   /** The processor's home stream: revived facts and crash-loop evidence land here. */
   stream: ProcessorStream;
   /** Worker deploy version; a change resets the keepalive's crash-loop budget
@@ -191,14 +202,14 @@ export function durableObjectRecovery(args: {
   now?: () => number;
 }): ProcessorRecovery {
   const now = args.now ?? (() => Date.now());
-  const recordKey = processorKeepaliveKey(args.slug);
-  const progressKey = processorProgressKey(args.slug);
+  const recordKey = processorKeepaliveKey(args.name);
+  const progressKey = processorProgressKey(args.name);
   const readProgress = () => args.storage.kv.get<ProcessorProgress<unknown>>(progressKey);
 
   const discardStoredRecord = (reason: string): void => {
     args.storage.kv.delete(recordKey);
     args.armAlarm(null);
-    console.warn(`stream processor "${args.slug}" discarded its recovery record: ${reason}`);
+    console.warn(`stream processor "${args.name}" discarded its recovery record: ${reason}`);
   };
 
   const readStoredRecord = (context: string): StreamKeepaliveRecord | undefined => {
@@ -215,7 +226,7 @@ export function durableObjectRecovery(args: {
     const streamId = readProgress()?.streamId;
     if (streamId === undefined || streamId.trim().length === 0) {
       throw new Error(
-        `stream processor "${args.slug}" cannot arm recovery before its stream lifetime is bound`,
+        `stream processor "${args.name}" cannot arm recovery before its stream lifetime is bound`,
       );
     }
     return streamId;
@@ -225,7 +236,7 @@ export function durableObjectRecovery(args: {
     const currentStreamId = readProgress()?.streamId;
     if (currentStreamId !== expectedStreamId) {
       throw new StreamIdMismatchError(
-        `stream processor "${args.slug}" recovery belongs to stream ID ${expectedStreamId}, ` +
+        `stream processor "${args.name}" recovery belongs to stream ID ${expectedStreamId}, ` +
           `but current progress belongs to ${String(currentStreamId)}`,
       );
     }
@@ -257,10 +268,10 @@ export function durableObjectRecovery(args: {
         {
           type: STREAM_PROCESSOR_REVIVED_EVENT_TYPE,
           idempotencyKey:
-            `processor-revived:${args.slug}` +
+            `processor-revived:${args.name}` +
             `@${record.version}:${record.revivals}:${record.lastRevivalAt}`,
           payload: {
-            processorSlug: args.slug,
+            processorSlug: args.processorSlug,
             revivals: record.revivals,
             version: record.version,
           },
@@ -286,7 +297,7 @@ export function durableObjectRecovery(args: {
         const persisted = readStoredRecord("arming recovery");
         if (persisted !== undefined && persisted.streamId !== streamId) {
           throw new StreamIdMismatchError(
-            `stream processor "${args.slug}" cannot arm recovery for stream ID ${streamId} ` +
+            `stream processor "${args.name}" cannot arm recovery for stream ID ${streamId} ` +
               `over the record for ${persisted.streamId}`,
           );
         }
@@ -320,7 +331,7 @@ export function durableObjectRecovery(args: {
           })
           .catch((error: unknown) => {
             console.error(
-              `stream processor "${args.slug}" keepalive evidence append failed`,
+              `stream processor "${args.name}" keepalive evidence append failed`,
               error,
             );
           });

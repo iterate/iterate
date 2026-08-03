@@ -381,7 +381,7 @@ export function makeMemoryProgressStore(
   const durability = makeDurabilitySubstrate();
   const progress = durableObjectProgressStore<unknown>({
     storage: durability.storage,
-    slug: contract.slug,
+    name: contract.slug,
   });
   progressSubstrates.set(progress, durability);
   return progress;
@@ -457,11 +457,12 @@ export function makeProcessorHarness<
     });
     progress ??= durableObjectProgressStore<ProcessorState<Contract>>({
       storage: durability.storage,
-      slug: processor.contract.slug,
+      name: processor.contract.slug,
     });
     recovery = durableObjectRecovery({
       storage: durability.storage,
-      slug: processor.contract.slug,
+      name: processor.contract.slug,
+      processorSlug: processor.contract.slug,
       stream,
       version: "test-harness",
       armAlarm: (atMs) => {
