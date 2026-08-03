@@ -92,7 +92,11 @@ export function AppSidebar() {
                     render={
                       <Link
                         to="/"
-                        search={workspacePath === undefined ? {} : { workspace: workspacePath }}
+                        search={
+                          workspacePath === undefined
+                            ? {}
+                            : { repo: search.repo, workspace: workspacePath }
+                        }
                       />
                     }
                   >
@@ -110,7 +114,7 @@ export function AppSidebar() {
                         search={{
                           group: "folder",
                           q: "",
-                          repo: "",
+                          repo: search.repo ?? "",
                           task: "",
                           workspace: workspacePath ?? "",
                         }}
