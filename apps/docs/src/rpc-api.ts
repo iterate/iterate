@@ -104,6 +104,71 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     return new DocsWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath));
   }
 
+  async workspaces(): Promise<{ path: string; createdAt: string }[]> {
+    const streams = (await this.#dial.withProject((project) => {
+      const catalog = (
+        project as unknown as {
+          streams: { list(): Promise<{ createdAt: string; path: string }[]> };
+        }
+      ).streams;
+      return catalog.list();
+    })) as { createdAt: string; path: string }[];
+    // Ancestor pruning, same as the tasks picker: every stream announces to
+    // every ancestor path, so a nested workspace drags phantom ancestor
+    // streams into the catalog that were never created as workspaces.
+    const candidates = streams.filter((stream) => stream.path.startsWith("/workspaces/"));
+    const paths = candidates.map((stream) => stream.path);
+    return candidates
+      .filter((stream) => !paths.some((other) => other.startsWith(`${stream.path}/`)))
+      .map((stream) => ({ path: stream.path, createdAt: stream.createdAt }))
+      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+  }
+
+  async documents(workspacePath: string): Promise<string[]> {
+    const workspace = requireWorkspacePath(workspacePath);
+    return this.#dial.withProject(async (project) => {
+      const stub = (
+        project as unknown as {
+          workspaces: { get(path: string): { glob(pattern: string): Promise<string[]> } };
+        }
+      ).workspaces.get(workspace);
+      const [markdown, html] = await Promise.all([
+        stub.glob(`${workspace}/**/*.md`),
+        stub.glob(`${workspace}/**/*.html`),
+      ]);
+      return [...markdown, ...html]
+        .map((path) => path.slice(workspace.length + 1))
+        .sort((left, right) => left.localeCompare(right))
+        .slice(0, 200);
+    });
+  }
+
+  async createWorkspace(): Promise<{ workspacePath: string; path: string }> {
+    // Human-readable stamp + random tail, the tasks board-id recipe.
+    const now = new Date();
+    const pad = (value: number) => String(value).padStart(2, "0");
+    const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;
+    const workspacePath = `/workspaces/docs/${stamp}-${Math.random().toString(36).slice(2, 6)}`;
+    const path = "notes.md";
+    await this.#dial.withProject(async (project) => {
+      const stub = (
+        project as unknown as {
+          workspaces: {
+            get(path: string): {
+              create(input: object): Promise<unknown>;
+              writeFile(path: string, content: string): Promise<void>;
+            };
+          };
+        }
+      ).workspaces.get(workspacePath);
+      await stub.create({});
+      // The document must EXIST before the editor opens it (no lazy file
+      // create anywhere in Docs) — seed the starter note in the same breath.
+      await stub.writeFile(`${workspacePath}/${path}`, "# Notes\n\n");
+    });
+    return { workspacePath, path };
+  }
+
   /** Release the downstream OS session when Cap'n Web drops this project capability. */
   [Symbol.dispose](): void {
     this.#dial.close();
