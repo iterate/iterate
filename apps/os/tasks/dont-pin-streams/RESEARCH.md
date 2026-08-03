@@ -341,6 +341,53 @@ Wake-only keeps exactly-once-ish delivery where it already lives. Revisit if
 wake→re-dial latency or dial volume ever shows up in metrics; the frame
 format should leave room (`{type:"wake"}` today, `{type:"events", …}` later).
 
+### Real-clock proof on a deployed preview (2026-08-03)
+
+Run against preview-12 (no test verbs, real 5-minute window; client kept
+alive under `caffeinate` with a worker-only keepalive and a
+socket-death canary — an earlier run invalidated by macOS App Nap proved the
+canary necessary, and a second run caught the sliding-deadline bug below):
+
+- `connection-closed reason:"idle"` exactly 5:00 after the last delivery.
+- Four `stream/woken` events during dormancy — each is a fresh-incarnation
+  boot, so the DO demonstrably left memory while the subscriber stayed
+  logically connected — and none of them resurrected the dormant subscriber
+  (the lifecycle-exclusion loop-breaker, proven in production).
+- A matching append then re-opened the connection 28 ms later and delivered
+  to the original, untouched callback ~64 ms after commit.
+
+The first honest run also exposed that the idle deadline was reset to
+`now+window` on every reconcile — including the idle alarm's own turn — so a
+fire landing moments before the freshly pushed deadline missed it and
+teardown took up to two windows (a latent flaw of the hosted path on main
+too; its e2e only exercises the forced-teardown verb). The deadline is now
+derived level-triggered from the newest `lastDeliveredAt`.
+
+Incidental pre-existing observation (main behavior, not this PR): a quiet
+stream with durable subscriptions re-boots every ~21 s — the in-flight
+delivery watchdog alarm armed before each successful send survives
+completion, fires, boots the DO, appends `woken`, whose delivery arms the
+next watchdog. Milliseconds of duration per boot, but quiet streams never
+fully sleep; clearing the watchdog after successful completion is a
+worthwhile follow-up.
+
+### Follow-up design: liveState over the wake socket
+
+liveState subscriptions pin the same way (retained diff-callback stubs both
+directions), but their semantics are latest-wins snapshot+diff — no cursor,
+no replay, reconnect = fresh snapshot. That is exactly raw hibernatable-WS
+semantics, so liveState should not park/re-dial at all: the worker-side
+liveState relay opens a wake socket, makes one transient `runtimeState()`
+call for the initial snapshot, and the DO pushes `{type:"state", …}` frames
+on change (state only changes while it is awake; sends are free). No RPC leg
+exists, so no idle machinery, no re-dial cycle, and none of the three
+loop-breakers are needed. Clients keep `useLiveState` unchanged — the relay
+feeds the same engine from frames. The frame union is deliberately loose so
+adding the frame type is forward-compatible. Scope note: the wake-socket
+lane currently exists only on StreamDurableObject; other liveState hosts
+(agents, sandboxes) need `WakeSocketRegistry` lifted into a shared helper —
+the same helper a future device deep-sleep mode would mount.
+
 ### Explicitly out of scope (but real, and adjacent)
 
 1. **CapabilityHost live mounts** pin that DO by holding duped device stubs

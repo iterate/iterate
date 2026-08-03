@@ -14,7 +14,9 @@
 // | ITX expression   | evaluate and await the named method             | method result          |
 // | webhook          | send one attributed HTTP POST per event         | 2xx response           |
 //
-// Session connections are forgotten when they close.
+// Session connections are forgotten when they close (a wake-socket-backed
+// session's dormancy lives on in its socket attachment — wake-socket.ts —
+// never in this module's memory).
 // Stored subscriptions are stored configuration — the directional events
 // reduced into core state. Delivery uses one SQLite cursor row per subscription
 // (stream-storage.ts) plus the Durable Object alarm for retries. Cursor rows
@@ -1891,10 +1893,15 @@ export class StreamConnections {
   }
 
   armOrClearIdleAlarm(): void {
+    // Teardown's own close-fact appends reconcile through here while the
+    // remainder still looks idle-eligible with stale activity; arming from
+    // that nested turn issues one pointless immediate wake per teardown.
+    if (this.#tearingDown) return;
     const eligible = this.#idleEligibleConnectionKeys();
-    // Wedged connections are skipped by teardown and their in-flight watchdog
-    // owns their future; letting their stale lastDeliveredAt drive a past-due
-    // idle deadline would arm an immediate alarm every turn.
+    // Wedged connections are excluded from the activity derivation (teardown
+    // still closes them, but never acks or memoizes them) — their in-flight
+    // watchdog owns their future, and letting their stale lastDeliveredAt
+    // drive a past-due idle deadline would arm an immediate alarm every turn.
     const idleCandidates = [...eligible.hosted, ...eligible.session].filter(
       (key) => this.#connections.get(key)?.hasPendingDelivery() !== true,
     );

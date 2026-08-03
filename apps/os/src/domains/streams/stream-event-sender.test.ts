@@ -1757,6 +1757,7 @@ function connectionsHarness(
   options: {
     events?: StreamEvent[];
     wakeChannelKeys?: () => ReadonlySet<string>;
+    onSessionsIdleClosed?: (connectionKeys: readonly string[]) => void;
     readBatch?: ConstructorParameters<typeof StreamConnections>[0]["hooks"]["readBatch"];
     onAppend?: (args: {
       connections: StreamConnections;
@@ -1818,7 +1819,10 @@ function connectionsHarness(
       armAlarm: (atMs) => alarmTimes.push(atMs),
       keepAlive: () => undefined,
       wakeChannelKeys: options.wakeChannelKeys ?? (() => new Set<string>()),
-      onSessionsIdleClosed: (keys) => sessionsIdleClosed.push([...keys]),
+      onSessionsIdleClosed: (keys) => {
+        sessionsIdleClosed.push([...keys]);
+        options.onSessionsIdleClosed?.(keys);
+      },
       hostedDeliveryStillMatches: (_subscriptionKey, candidate) =>
         candidate.configuredAtOffset === expectedDelivery.configuredAtOffset &&
         candidate.cursorChangedAtOffset === expectedDelivery.cursorChangedAtOffset &&
@@ -2421,15 +2425,15 @@ describe("StreamConnections hosted delivery watchdog", () => {
   });
 
   it("idle-tears a session connection only when it has a wake channel, stamping after the close fact", () => {
-    const appended: string[] = [];
+    // One shared journal so append-vs-stamp ORDERING is actually assertable.
+    const journal: string[] = [];
     const h = connectionsHarness({
       wakeChannelKeys: () => new Set(["with-channel"]),
       onAppend: ({ event }) => {
-        appended.push(event.type);
+        journal.push(event.type);
       },
+      onSessionsIdleClosed: (keys) => journal.push(`stamp:${keys.join(",")}`),
     });
-    const withChannelDisposed = vi.fn();
-    const withoutChannelDisposed = vi.fn();
     h.connections.openSession({
       connectionKey: "with-channel",
       processEventBatch: () => undefined,
@@ -2438,22 +2442,21 @@ describe("StreamConnections hosted delivery watchdog", () => {
       connectionKey: "without-channel",
       processEventBatch: () => undefined,
     });
-    const withChannel = h.connections;
-    void withChannelDisposed;
-    void withoutChannelDisposed;
 
     expect(h.connections.runIdleTeardownNow()).toEqual(["with-channel"]);
 
     // The wake-channel-backed session closed with "idle"; the socketless one
     // keeps today's pinned semantics and stays live.
-    expect(withChannel.has("with-channel")).toBe(false);
-    expect(withChannel.has("without-channel")).toBe(true);
+    expect(h.connections.has("with-channel")).toBe(false);
+    expect(h.connections.has("without-channel")).toBe(true);
     // The dormancy stamp is ordered AFTER the close fact so this teardown's
     // own append can never wake the subscriber it closed.
-    const closeIndex = appended.lastIndexOf("events.iterate.com/stream/connection-closed");
+    const closeIndex = journal.lastIndexOf("events.iterate.com/stream/connection-closed");
+    const stampIndex = journal.indexOf("stamp:with-channel");
     expect(closeIndex).toBeGreaterThanOrEqual(0);
+    expect(stampIndex).toBeGreaterThan(closeIndex);
     expect(h.sessionsIdleClosed).toEqual([["with-channel"]]);
-    // Session connections have no cursor rows; the hosted row is untouched.
+    // Session connections never grow cursor rows.
     expect(h.store.get("with-channel")).toBeUndefined();
   });
 

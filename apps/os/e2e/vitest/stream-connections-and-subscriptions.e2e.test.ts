@@ -2283,6 +2283,14 @@ test("an idle close never wakes the subscriber it closed, even when its filter n
     },
   });
   try {
+    // Deliver one matching event first so the relay has a concrete cursor;
+    // tearing down before any delivery would make the eventual re-dial
+    // replay from head and could miss the close fact the final assertion
+    // requires.
+    const [seed] = await stream.append({ type: MATCHING_EVENT_TYPE, payload: { phase: "seed" } });
+    await waitForCondition(async () => received.some((event) => event.offset === seed!.offset), {
+      description: "the live connection to deliver the seed event",
+    });
     await forceStreamIdleTeardown(stream);
     await waitForCondition(
       async () =>

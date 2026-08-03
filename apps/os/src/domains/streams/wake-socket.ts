@@ -271,8 +271,26 @@ export class WakeSocketRegistry {
       // path double as eviction recovery for session subscribers.
       const idleDeliveredThrough = attachment.idleDeliveredThrough;
       const explicitTypes = attachment.filter?.eventTypes;
-      const matcher =
-        attachment.filter === undefined ? undefined : compileEventFilter(attachment.filter);
+      let matcher: ReturnType<typeof compileEventFilter> | undefined;
+      try {
+        matcher =
+          attachment.filter === undefined ? undefined : compileEventFilter(attachment.filter);
+      } catch (error) {
+        // A stored spec that compiled at bind time can stop compiling under a
+        // later deploy; throwing out of the post-commit send check would put
+        // every append into repair backoff with the socket never culled.
+        // Same degrade as a failed stamp: drop the socket, connection pins.
+        console.warn("wake socket filter no longer compiles; closing socket", {
+          connectionKey: attachment.connectionKey,
+          error,
+        });
+        try {
+          ws.close(1011, "filter compile failed");
+        } catch {
+          // Already closing.
+        }
+        continue;
+      }
       const matched = news.some((event) => {
         if (idleDeliveredThrough !== undefined && event.offset <= idleDeliveredThrough) {
           return false;

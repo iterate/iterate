@@ -153,15 +153,16 @@ export async function openRelayedStreamConnection(input: {
     }
     const handle = currentHandle;
     currentHandle = undefined;
-    if (handle !== undefined && closedByOwner) {
-      // Owner close is the one teardown where the DO-side connection should
-      // be closed promptly rather than left to session-end disposal.
+    if (handle !== undefined) {
+      // Always attempt the prompt DO-side close, whatever ended the relay: a
+      // teardown triggered by a transient probe failure can hold a HEALTHY
+      // leg, and merely disposing it would leave a zombie connection —
+      // socketless, so never idle-eligible — delivering into the disposed
+      // forward until session end. A genuinely broken stub just rejects.
       void Promise.resolve()
         .then(() => handle.close())
         .catch(() => undefined)
         .finally(() => disposeStub(handle));
-    } else {
-      disposeStub(handle);
     }
     disposeRetained();
   };
@@ -251,7 +252,20 @@ export async function openRelayedStreamConnection(input: {
   // just-bound socket must not race a second openConnection under it.
   dialing = true;
   try {
-    currentHandle = await dial(args.replayAfterOffset, false);
+    const fresh = await dial(args.replayAfterOffset, false);
+    if (!active) {
+      // The socket-close handler tore the relay down while this dial was in
+      // flight (reachable when bind's oversized-attachment degrade closes
+      // the socket in the same openConnection turn). Adopting the leg would
+      // hand back a connection whose forward is already disposed —
+      // socketless, never idle-eligible, silently swallowing every delivery.
+      void Promise.resolve()
+        .then(() => fresh.close())
+        .catch(() => undefined)
+        .finally(() => disposeStub(fresh));
+      throw new Error(`stream connection relay closed while opening "${connectionKey}"`);
+    }
+    currentHandle = fresh;
   } catch (error) {
     closedByOwner = true;
     teardown({ reason: "open failed", socketCode: 1000 });
