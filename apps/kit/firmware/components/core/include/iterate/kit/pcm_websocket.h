@@ -30,6 +30,12 @@ enum {
   ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME = 320,
   ITERATE_KIT_PCM_V1_FRAME_BYTES =
       ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME * 2,
+  /*
+   * Device-to-server receipts are transport control, not audio. Their fixed
+   * size is deliberately neither zero nor 640 bytes, so a peer can classify
+   * them before touching the microphone path without an envelope on PCM.
+   */
+  ITERATE_KIT_PCM_V1_DOWNLINK_RECEIPT_BYTES = 8,
 };
 
 enum iterate_kit_pcm_encoding {
@@ -64,6 +70,29 @@ enum iterate_kit_status iterate_kit_pcm_websocket_validate_frame(
     const struct iterate_kit_pcm_websocket_format *format,
     const void *frame,
     size_t frame_bytes);
+
+/**
+ * Encodes the cumulative count of complete downlink items accepted by the
+ * device in this WebSocket generation.
+ *
+ * Server-side workerd WebSockets do not expose their egress buffer depth, so a
+ * successful send cannot bound audio hidden below userspace. This receipt is
+ * the peer-parse boundary used for an explicit finite in-flight window. It is
+ * cumulative so several 20 ms arrivals can coalesce into one tiny write, and
+ * it acknowledges the zero-length response marker as an ordered item too.
+ */
+enum iterate_kit_status
+iterate_kit_pcm_websocket_encode_downlink_receipt(
+    uint32_t accepted_items,
+    uint8_t *destination,
+    size_t destination_bytes);
+
+/** Validates and decodes the exact v1 receipt shape. */
+enum iterate_kit_status
+iterate_kit_pcm_websocket_decode_downlink_receipt(
+    const void *message,
+    size_t message_bytes,
+    uint32_t *accepted_items);
 
 #ifdef __cplusplus
 }

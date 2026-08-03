@@ -1,6 +1,11 @@
 #include "iterate/kit/pcm_websocket.h"
 
 #include <stdint.h>
+#include <string.h>
+
+static const uint8_t downlink_receipt_prefix[4] = {
+  (uint8_t)'I', (uint8_t)'K', (uint8_t)'A', 1U,
+};
 
 /*
  * Protocol v1 intentionally has almost no device-side negotiation: one binary
@@ -59,5 +64,55 @@ enum iterate_kit_status iterate_kit_pcm_websocket_validate_frame(
   if (frame == NULL || frame_bytes != expected_bytes) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
+  return ITERATE_KIT_OK;
+}
+
+enum iterate_kit_status
+iterate_kit_pcm_websocket_encode_downlink_receipt(
+    uint32_t accepted_items,
+    uint8_t *destination,
+    size_t destination_bytes) {
+  if (destination == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  if (destination_bytes <
+      ITERATE_KIT_PCM_V1_DOWNLINK_RECEIPT_BYTES) {
+    return ITERATE_KIT_LIMIT;
+  }
+  memcpy(
+      destination,
+      downlink_receipt_prefix,
+      sizeof(downlink_receipt_prefix));
+  destination[4] = (uint8_t)(accepted_items & 0xffU);
+  destination[5] = (uint8_t)((accepted_items >> 8U) & 0xffU);
+  destination[6] = (uint8_t)((accepted_items >> 16U) & 0xffU);
+  destination[7] = (uint8_t)((accepted_items >> 24U) & 0xffU);
+  return ITERATE_KIT_OK;
+}
+
+enum iterate_kit_status
+iterate_kit_pcm_websocket_decode_downlink_receipt(
+    const void *message,
+    size_t message_bytes,
+    uint32_t *accepted_items) {
+  const uint8_t *bytes = message;
+  if (accepted_items == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  *accepted_items = 0U;
+  if (bytes == NULL ||
+      message_bytes !=
+          ITERATE_KIT_PCM_V1_DOWNLINK_RECEIPT_BYTES ||
+      memcmp(
+          bytes,
+          downlink_receipt_prefix,
+          sizeof(downlink_receipt_prefix)) != 0) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  *accepted_items =
+      (uint32_t)bytes[4] |
+      ((uint32_t)bytes[5] << 8U) |
+      ((uint32_t)bytes[6] << 16U) |
+      ((uint32_t)bytes[7] << 24U);
   return ITERATE_KIT_OK;
 }

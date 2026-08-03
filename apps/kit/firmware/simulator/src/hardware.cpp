@@ -124,7 +124,7 @@ iterate_kit_status sampleMetrics(
    */
   sample->has_aec_detail = true;
   auto &aec = sample->aec_detail;
-  aec.schema_version = 2U;
+  aec.schema_version = 3U;
   aec.sequence = detail.sequence;
   aec.window_started_at_ms = sample->uptime_ms;
   aec.produced_at_ms = sample->uptime_ms;
@@ -132,9 +132,11 @@ iterate_kit_status sampleMetrics(
   aec.sampled_samples = 2'000U;
   aec.near_peak = 12'000U;
   aec.reference_peak = 10'000U;
+  aec.linear_peak = 4'000U;
   aec.clean_peak = 1'500U;
   aec.near_mean_absolute = 2'400U;
   aec.reference_mean_absolute = 2'000U;
+  aec.linear_mean_absolute = 800U;
   aec.clean_mean_absolute = 300U;
   aec.lifetime_frames_processed = 31U;
   aec.lifetime_recreates = 1U;

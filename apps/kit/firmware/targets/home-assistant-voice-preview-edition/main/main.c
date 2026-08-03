@@ -496,6 +496,14 @@ static enum iterate_kit_status sample_runtime_metrics(
       .lifetime_reset_failures = owner.playback_reset_failures;
   sample->raw_clean_aec_detail.playback_health
       .lifetime_observation_failures = 0U;
+  sample->raw_clean_aec_detail.playback_health
+      .lifetime_underrun_incidents = owner.playback_underrun_incidents;
+  sample->raw_clean_aec_detail.playback_health
+      .lifetime_underrun_silence_samples =
+      owner.playback_underrun_silence_samples;
+  sample->raw_clean_aec_detail.playback_health
+      .lifetime_stale_frames_discarded =
+      owner.playback_stale_frames_discarded;
   sample->raw_clean_aec_detail.playback_health.last_write_us =
       owner.last_playback_write_us;
   sample->raw_clean_aec_detail.playback_health.maximum_write_us =

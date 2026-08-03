@@ -314,6 +314,22 @@ static bool wait_for_downlink_publications(
   return false;
 }
 
+static bool wait_for_downlink_acknowledgement(
+    struct fixture *fixture, uint32_t expected) {
+  const int64_t deadline =
+      monotonic_milliseconds() + WAIT_TIMEOUT_MS;
+  while (monotonic_milliseconds() < deadline) {
+    struct iterate_kit_esp_idf_pcm_transport_metrics metrics;
+    iterate_kit_esp_idf_pcm_transport_metrics(
+        &fixture->transport, &metrics);
+    if (metrics.downlink_items_acknowledged == expected) {
+      return true;
+    }
+    pause_one_millisecond();
+  }
+  return false;
+}
+
 /*
  * ESP-IDF can finish the socket upgrade on the network task before the
  * application task has discarded the prior generation's playback frames. If
@@ -484,6 +500,13 @@ static void content_and_eos_remain_ordered_across_the_transport_task(void) {
   CHECK(fixture.transport.state ==
       ITERATE_KIT_ESP_IDF_PCM_READY);
   CHECK(wait_for_downlink_publications(&fixture, 2U));
+  /*
+   * Publishing content and EOS is not enough for a bounded userspace sender:
+   * workerd cannot inspect bytes hidden below send(). The same production
+   * owner must return cumulative credit for both ordered items, including the
+   * zero-byte marker, without depending on microphone traffic to wake it.
+   */
+  CHECK(wait_for_downlink_acknowledgement(&fixture, 2U));
 
   CHECK(iterate_kit_pcm_lane_downlink_acquire_at(
       &fixture.lane,
@@ -516,6 +539,17 @@ static void content_and_eos_remain_ordered_across_the_transport_task(void) {
   CHECK(metrics.downlink_end_markers_accepted == 1U);
   CHECK(metrics.downlink_frames_discarded == 0U);
   CHECK(metrics.downlink_end_markers_discarded == 0U);
+  {
+    struct iterate_kit_esp_idf_pcm_transport_metrics
+        transport_metrics;
+    iterate_kit_esp_idf_pcm_transport_metrics(
+        &fixture.transport, &transport_metrics);
+    CHECK(transport_metrics.downlink_items_received == 2U);
+    CHECK(
+        transport_metrics.downlink_items_acknowledged == 2U);
+    CHECK(transport_metrics.downlink_receipts_sent >= 1U);
+    CHECK(transport_metrics.downlink_receipt_failures == 0U);
+  }
   CHECK(iterate_kit_esp_idf_pcm_transport_stop(
       &fixture.transport) == ITERATE_KIT_OK);
   CHECK(iterate_kit_fake_platform_finish() == ESP_OK);

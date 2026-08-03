@@ -3,6 +3,7 @@
 
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/pcm_uplink_sender.h"
+#include "iterate/kit/pcm_websocket.h"
 #include "iterate/kit/status.h"
 #include "iterate/kit/websocket_tx.h"
 
@@ -64,6 +65,10 @@ struct iterate_kit_pcm_uplink_conductor_metrics {
   uint32_t policy_time_normalizations;
   uint32_t maximum_policy_time_adjustment_ms;
   uint32_t owner_clock_regressions;
+  uint32_t downlink_items_received;
+  uint32_t downlink_items_acknowledged;
+  uint32_t downlink_receipts_sent;
+  uint32_t downlink_receipt_send_deferrals;
 };
 
 /**
@@ -89,9 +94,11 @@ struct iterate_kit_pcm_uplink_conductor_metrics {
  *
  * This object deliberately does not interpret WebSocket PONG as PCM delivery
  * credit. A PONG proves only hop-level ordered parsing, not userspace proxy or
- * provider receipt. Fresh PCM therefore continues without client-originated
- * PING/PONG; bounded ring capacity, capture age, send-progress deadlines, and
- * generation purge are the mechanisms that prevent stale application backlog.
+ * provider receipt. The inverse speaker direction uses one explicit cumulative
+ * application receipt: workerd has no server-side bufferedAmount, so only the
+ * device can bound bytes hidden after userspace send(). Receipt writes share
+ * this owner and transmitter with microphone PCM and can therefore be proved
+ * non-interleaving under partial writes without a second task or mutex.
  */
 struct iterate_kit_pcm_uplink_conductor {
   struct iterate_kit_pcm_uplink_sender sender;
@@ -106,9 +113,18 @@ struct iterate_kit_pcm_uplink_conductor {
   uint32_t policy_time_normalizations;
   uint32_t maximum_policy_time_adjustment_ms;
   uint32_t owner_clock_regressions;
+  uint8_t downlink_receipt_payload[
+      ITERATE_KIT_PCM_V1_DOWNLINK_RECEIPT_BYTES];
+  uint32_t downlink_items_received;
+  uint32_t downlink_items_acknowledged;
+  uint32_t downlink_receipt_inflight_items;
+  uint32_t downlink_receipts_sent;
+  uint32_t downlink_receipt_send_deferrals;
   bool has_last_sample;
   bool in_place_recovery_active;
   bool generation_active;
+  bool downlink_receipt_pending;
+  bool downlink_receipt_active;
   bool initialized;
 };
 
@@ -158,6 +174,19 @@ enum iterate_kit_status
 iterate_kit_pcm_uplink_conductor_discard_pending(
     struct iterate_kit_pcm_uplink_conductor *conductor,
     uint32_t *discarded_frames);
+
+/**
+ * Records one complete server-to-device PCM frame or response-end marker after
+ * it has been published to the playback lane.
+ *
+ * The next poll emits a cumulative fixed-size receipt before acquiring a new
+ * microphone frame. Repeated calls coalesce while a prior receipt is queued;
+ * an already partially written receipt remains immutable and is followed by a
+ * newer cumulative receipt. Only the connection-owner task may call this.
+ */
+enum iterate_kit_status
+iterate_kit_pcm_uplink_conductor_note_downlink_item(
+    struct iterate_kit_pcm_uplink_conductor *conductor);
 
 enum iterate_kit_pcm_uplink_conductor_poll_result
 iterate_kit_pcm_uplink_conductor_poll(

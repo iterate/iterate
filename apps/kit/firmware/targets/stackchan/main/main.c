@@ -361,7 +361,7 @@ static enum iterate_kit_status sample_runtime_metrics(
   sample->has_playback_detail = false;
 
   sample->has_aec_detail = true;
-  sample->aec_detail.schema_version = 2U;
+  sample->aec_detail.schema_version = 3U;
   sample->aec_detail.sequence = aec_signal.sequence;
   sample->aec_detail.window_started_at_ms =
       aec_signal.window_started_at_us >= (uint64_t)state->booted_at_us
@@ -381,11 +381,14 @@ static enum iterate_kit_status sample_runtime_metrics(
   sample->aec_detail.near_peak = aec_signal.signal.near_peak;
   sample->aec_detail.reference_peak =
       aec_signal.signal.reference_peak;
+  sample->aec_detail.linear_peak = aec_signal.signal.linear_peak;
   sample->aec_detail.clean_peak = aec_signal.signal.clean_peak;
   sample->aec_detail.near_mean_absolute =
       aec_signal.signal.near_mean_absolute;
   sample->aec_detail.reference_mean_absolute =
       aec_signal.signal.reference_mean_absolute;
+  sample->aec_detail.linear_mean_absolute =
+      aec_signal.signal.linear_mean_absolute;
   sample->aec_detail.clean_mean_absolute =
       aec_signal.signal.clean_mean_absolute;
   sample->aec_detail.lifetime_frames_processed = owner.aec_frames;
@@ -432,6 +435,12 @@ static enum iterate_kit_status sample_runtime_metrics(
   sample->aec_detail.playback_health.lifetime_reset_failures = 0U;
   sample->aec_detail.playback_health.lifetime_observation_failures =
       owner.playout_observer_shape_errors;
+  sample->aec_detail.playback_health.lifetime_underrun_incidents =
+      owner.playback_underrun_incidents;
+  sample->aec_detail.playback_health.lifetime_underrun_silence_samples =
+      owner.playback_underrun_silence_samples;
+  sample->aec_detail.playback_health.lifetime_stale_frames_discarded =
+      owner.playback_stale_frames_discarded;
   sample->aec_detail.playback_health.last_write_us =
       owner.last_codec_write_us;
   sample->aec_detail.playback_health.maximum_write_us =
@@ -982,6 +991,17 @@ void app_main(void) {
   audio_options.maximum_lane_items_per_dma_chunk = 4U;
   audio_options.speaker_volume_percent = 100;
   audio_options.microphone_gain_db = 24;
+  /*
+   * The measured electrical-reference slot is roughly 20 dB below the same
+   * echo at the near microphone. That forced the fixed-point adaptive filter
+   * to learn large coefficients: a steady tone converged, while speech and
+   * PRBS made the output unstable. Start 2 dB below the measured ratio so the
+   * reference retains int16 headroom. The platform deliberately applies this
+   * to both non-near ES7210 candidates because measurement proves the TDM slot,
+   * not its physical codec-input label. This remains a StackChan hardware
+   * calibration; the physical oracle must justify any subsequent retuning.
+   */
+  audio_options.reference_gain_db = 18;
   audio_options.notify_uplink = notify_uplink;
   audio_options.notify_uplink_context = &runtime;
   audio_options.observe_playout =

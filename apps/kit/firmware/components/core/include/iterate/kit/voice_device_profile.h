@@ -89,14 +89,34 @@ enum {
   ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES = 300 * 32 + 2880,
   ITERATE_KIT_VOICE_SPEAKER_CONCEAL_LIMIT_MS = 400,
   /*
-   * Backlog beyond which a frame is skipped to catch up — now effectively
-   * never. Catching up made sense when a deep buffer meant the sender was
-   * running ahead of realtime. With a whole answer arriving at once a deep
-   * buffer is the NORMAL state, and skipping then is deleting speech from
-   * the middle of a sentence at a steady rate. Just under the ring, so it
-   * can only fire if something has gone truly wrong.
+   * Backlog beyond which a frame is skipped to catch up — effectively never,
+   * and deliberately so. Catching up on DEPTH made sense when a deep buffer
+   * meant the sender was running ahead of realtime. With a whole answer
+   * arriving at once a deep buffer is the NORMAL state, and skipping then
+   * deletes speech from the middle of a sentence at a steady rate. Just under
+   * the ring, so it can only fire if something has gone truly wrong.
+   *
+   * Lateness is measured against the audio timeline instead — see
+   * ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS, which is the signal this one
+   * was standing in for and getting wrong.
    */
   ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS = 29000,
+  /*
+   * How far behind its own timeline playback may fall before a frame is
+   * dropped to recover.
+   *
+   * THE SIGNAL, AND WHY IT IS NOT QUEUE DEPTH. Frame N of an answer belongs
+   * 20N ms after the first one played; the gap between that and the wall
+   * clock is lag. It grows only when playback stalls, never when the sender
+   * runs ahead — which is exactly the distinction depth cannot make, and the
+   * reason the depth trigger had to be set so high it never fired.
+   *
+   * Measured on hardware with no trigger at all: playback drifted 2772 ms
+   * behind its own timeline in three turns. Half a second is past the point
+   * where a listener hears a reply as slow, and far short of the ~1.5 s where
+   * they would notice a single 20 ms frame missing.
+   */
+  ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS = 500,
   ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY = 50,
   ITERATE_KIT_VOICE_SPEAKER_IDLE_POWERDOWN_MS = 1500,
 

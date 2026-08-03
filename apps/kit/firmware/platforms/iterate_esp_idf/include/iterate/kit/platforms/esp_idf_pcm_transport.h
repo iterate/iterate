@@ -167,6 +167,18 @@ struct iterate_kit_esp_idf_pcm_transport_metrics {
   uint32_t uplink_owner_clock_regressions;
   uint32_t downlink_receive_failures;
   uint32_t downlink_ordered_item_losses;
+  /*
+   * Receipt counts describe the application boundary on this exact PCM hop.
+   * `received` means a whole ordered item reached the playback lane;
+   * `acknowledged` means its cumulative receipt finished the socket write. A
+   * receipt is not an audible-playback acknowledgement, but it gives workerd
+   * the finite credit boundary that its server-side WebSocket API lacks.
+   */
+  uint32_t downlink_receipt_failures;
+  uint32_t downlink_items_received;
+  uint32_t downlink_items_acknowledged;
+  uint32_t downlink_receipts_sent;
+  uint32_t downlink_receipt_send_deferrals;
   uint32_t network_task_stack_high_water_bytes;
   uint32_t network_task_stack_exhaustions;
   uint32_t network_task_work_cycles;
@@ -239,6 +251,7 @@ struct iterate_kit_esp_idf_pcm_transport {
   uint32_t protocol_failures;
   uint32_t downlink_receive_failures;
   uint32_t downlink_ordered_item_losses;
+  uint32_t downlink_receipt_failures;
   uint32_t network_task_stack_exhaustions;
   uint32_t network_task_work_cycles;
   uint32_t network_task_max_work_cycles;

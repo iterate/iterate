@@ -332,6 +332,101 @@ static void end_of_turn_marker_follows_final_pcm_on_the_wire(void) {
 }
 
 /*
+ * Workerd cannot tell the proxy how many server-side WebSocket bytes remain
+ * below send(). The connection owner therefore acknowledges complete device
+ * downlink items on this same ordered socket. The receipt is audio flow
+ * control, so one tiny coalesced write must precede acquiring a new microphone
+ * slot; otherwise a permanently busy PTT stream could starve receipts and let
+ * the server rebuild the exact opaque backlog this protocol removes.
+ */
+static void downlink_receipt_preempts_a_new_microphone_frame(void) {
+  struct fixture fixture;
+  struct parsed_frame frame;
+  size_t offset = 0U;
+  uint32_t accepted_items = 0U;
+  fixture_init(&fixture);
+  begin_generation(&fixture, 1U);
+  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item(
+            &fixture.conductor) == ITERATE_KIT_OK);
+  submit_frame(&fixture, 0x4cU, 20U);
+
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 20U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+  CHECK(parse_frame(&fixture.raw, &offset, &frame));
+  CHECK(frame.opcode == ITERATE_KIT_WEBSOCKET_BINARY);
+  CHECK(frame.payload_size ==
+      ITERATE_KIT_PCM_V1_DOWNLINK_RECEIPT_BYTES);
+  CHECK(iterate_kit_pcm_websocket_decode_downlink_receipt(
+            frame.payload,
+            frame.payload_size,
+            &accepted_items) == ITERATE_KIT_OK);
+  CHECK(accepted_items == 1U);
+  CHECK(parse_frame(&fixture.raw, &offset, &frame));
+  CHECK(frame.payload_size == ITERATE_KIT_PCM_V1_FRAME_BYTES);
+  CHECK(frame.payload[0] == 0x4cU);
+  CHECK(!parse_frame(&fixture.raw, &offset, &frame));
+}
+
+/*
+ * A short socket write owns its masked WebSocket frame until completion. If
+ * more speaker frames arrive meanwhile, rewriting the cumulative value would
+ * corrupt the frame already partly accepted by TLS; abandoning it would break
+ * RFC framing. Preserve that immutable receipt, then emit one coalesced latest
+ * receipt before microphone PCM. This is the awkward network condition the
+ * production device must handle, not merely a happy-path encoding check.
+ */
+static void partial_receipt_is_immutable_and_later_progress_coalesces(void) {
+  struct fixture fixture;
+  struct parsed_frame frame;
+  size_t offset = 0U;
+  uint32_t accepted_items = 0U;
+  uint32_t polls;
+  fixture_init(&fixture);
+  fixture.raw.maximum_write = 3U;
+  fixture.conductor.maximum_work_steps = 1U;
+  begin_generation(&fixture, 1U);
+  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item(
+            &fixture.conductor) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 0U) ==
+      ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
+  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item(
+            &fixture.conductor) == ITERATE_KIT_OK);
+  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item(
+            &fixture.conductor) == ITERATE_KIT_OK);
+  submit_frame(&fixture, 0x5cU, 20U);
+
+  for (polls = 0U; polls < 256U; ++polls) {
+    const enum iterate_kit_pcm_uplink_conductor_poll_result result =
+        iterate_kit_pcm_uplink_conductor_poll(
+            &fixture.conductor, 20U);
+    CHECK(
+        result == ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS ||
+        result == ITERATE_KIT_PCM_UPLINK_CONDUCTOR_IDLE);
+    if (result == ITERATE_KIT_PCM_UPLINK_CONDUCTOR_IDLE) break;
+  }
+  CHECK(polls < 256U);
+
+  CHECK(parse_frame(&fixture.raw, &offset, &frame));
+  CHECK(iterate_kit_pcm_websocket_decode_downlink_receipt(
+            frame.payload,
+            frame.payload_size,
+            &accepted_items) == ITERATE_KIT_OK);
+  CHECK(accepted_items == 1U);
+  CHECK(parse_frame(&fixture.raw, &offset, &frame));
+  CHECK(iterate_kit_pcm_websocket_decode_downlink_receipt(
+            frame.payload,
+            frame.payload_size,
+            &accepted_items) == ITERATE_KIT_OK);
+  CHECK(accepted_items == 3U);
+  CHECK(parse_frame(&fixture.raw, &offset, &frame));
+  CHECK(frame.payload_size == ITERATE_KIT_PCM_V1_FRAME_BYTES);
+  CHECK(frame.payload[0] == 0x5cU);
+  CHECK(!parse_frame(&fixture.raw, &offset, &frame));
+}
+
+/*
  * The microphone and network tasks run on different cores. The network task
  * can sample 100 ms and then acquire a frame the producer completed at 101 ms.
  * That ordinary scheduling race is zero known age, not a broken clock. The
@@ -1024,6 +1119,8 @@ static void legal_tunnel_faults_never_latch_local_failure(void) {
 int main(void) {
   continuous_fresh_audio_needs_no_peer_pong();
   end_of_turn_marker_follows_final_pcm_on_the_wire();
+  downlink_receipt_preempts_a_new_microphone_frame();
+  partial_receipt_is_immutable_and_later_progress_coalesces();
   newer_capture_timestamp_does_not_poison_conductor();
   true_owner_clock_regression_is_not_normalized();
   mandatory_pong_waits_for_partial_pcm_then_preempts_later_audio();

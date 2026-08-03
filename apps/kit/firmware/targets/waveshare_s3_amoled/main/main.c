@@ -419,6 +419,22 @@ static struct {
   /* Release pressed, but the capture queue is not yet on the wire. */
   bool flushing_turn;
   volatile bool speaker_reprime;
+  /**
+   * When the current answer's playout began, and how much of it has played.
+   *
+   * Together these ARE the audio timeline: frame N of an answer should reach
+   * the speaker 20N ms after the first one did. The difference between that
+   * and the wall clock is how far behind realtime this device is, and it is
+   * the only honest measure of "behind" — queue depth is not, because a whole
+   * answer legitimately arrives at once and a deep queue then means the
+   * sender was fast, not that playback is late.
+   *
+   * Needs no clock agreement with the server: both terms are local, and the
+   * answer's own first frame is the origin.
+   */
+  volatile uint64_t answer_started_ms;
+  volatile uint32_t answer_frames_played;
+  uint32_t speaker_lag_max_ms;
   volatile bool speaker_answer_done;
   uint32_t flush_frames_left;
   uint64_t flush_deadline_ms;
@@ -506,6 +522,9 @@ static void on_speaker_pcm(
     runtime.speaker_discard_bytes =
         (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
     runtime.speaker_reprime = true;
+    /* A new answer is a new timeline: lag does not carry across answers. */
+    runtime.answer_started_ms = 0U;
+    runtime.answer_frames_played = 0U;
   }
   if (xStreamBufferSpacesAvailable(runtime.speaker_buffer) < pcm_length) {
     ++runtime.speaker_overflow_drops;
@@ -766,6 +785,10 @@ static void playback_task(void *argument) {
               &playout_clock,
               (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer),
               runtime.speaker_frames_played,
+              iterate_kit_voice_playout_lag_ms(
+                  runtime.answer_started_ms,
+                  runtime.answer_frames_played,
+                  now_ms(NULL)),
               now_ms(NULL));
       if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
       /*
@@ -794,6 +817,35 @@ static void playback_task(void *argument) {
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
       waveshare_recorder_write_speaker(chunk, received);
+      /*
+       * HOW FAR BEHIND REALTIME THIS ANSWER HAS FALLEN.
+       *
+       * Frame N of an answer belongs 20N ms after the first one played. The
+       * gap between that and the wall clock is lag, and it only grows when
+       * playback stalls — never from the sender running ahead, which is why
+       * this is measured against the audio timeline rather than queue depth.
+       *
+       * Recorded rather than acted on. Paying it back means deleting speech,
+       * and this device has already shipped one mechanism that did exactly
+       * that; the number has to exist before anyone can argue about whether
+       * being late is worse than being clipped.
+       */
+      {
+        const uint64_t played_at = now_ms(NULL);
+        if (runtime.answer_started_ms == 0U) {
+          runtime.answer_started_ms = played_at;
+          runtime.answer_frames_played = 0U;
+        }
+        {
+          const uint32_t lag = iterate_kit_voice_playout_lag_ms(
+              runtime.answer_started_ms, runtime.answer_frames_played,
+              played_at);
+          if (lag > runtime.speaker_lag_max_ms) {
+            runtime.speaker_lag_max_ms = lag;
+          }
+        }
+        ++runtime.answer_frames_played;
+      }
     } else {
       ++runtime.speaker_write_failures;
     }
@@ -980,6 +1032,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkWriteFailures", runtime.speaker_write_failures},
     {"talkReadFailures", waveshare_buttons_talk_read_failures()},
     {"spkMarginMaxMs", runtime.speaker_margin_max_ms},
+    {"spkLagMaxMs", runtime.speaker_lag_max_ms},
     {"spkMarginMinMs", runtime.speaker_margin_min_ms},
     {"spkMarginP10Ms", runtime.speaker_margin_p10_ms},
     {"spkWrites", runtime.speaker_writes},

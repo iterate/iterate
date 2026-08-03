@@ -56,6 +56,15 @@ struct iterate_kit_core_s3_audio_owner_options {
   size_t maximum_lane_items_per_dma_chunk;
   int speaker_volume_percent;
   int microphone_gain_db;
+  /*
+   * Gain for the selected non-near codec inputs, one of which carries the
+   * board's physical speaker reference. Physical captures prove the output-slot
+   * mapping but not the ES7210 input number behind it, so the platform applies
+   * this value to both selected candidates and consumes only the proven slot.
+   * Keeping the value in target options makes the analogue calibration explicit
+   * without pretending every carrier has the same divider and headroom.
+   */
+  int reference_gain_db;
 
   /*
    * Optional nonblocking wake for the PCM connection owner. The audio task
@@ -112,6 +121,9 @@ struct iterate_kit_core_s3_audio_owner_metrics {
   uint32_t maximum_codec_read_us;
   uint32_t last_receive_to_render_ms;
   uint32_t maximum_receive_to_render_ms;
+  uint32_t playback_underrun_incidents;
+  uint32_t playback_underrun_silence_samples;
+  uint32_t playback_stale_frames_discarded;
   uint32_t playout_observer_frames;
   uint32_t playout_observer_shape_errors;
 
@@ -231,11 +243,11 @@ void iterate_kit_core_s3_audio_owner_metrics_snapshot(
     struct iterate_kit_core_s3_audio_owner_metrics *snapshot);
 
 /**
- * Copies the newest exact near/reference/clean signal window.
+ * Copies the newest exact near/reference/linear/final signal window.
  *
  * The implementation holds its cross-core critical section only while copying
- * fixed metadata and seven scalars. Sample walking and integer division happen
- * outside that section, so a diagnostics callback cannot stretch an audio
+ * fixed metadata and nine accumulator scalars. Sample walking and integer
+ * division happen outside that section, so a diagnostics callback cannot stretch an audio
  * deadline. The audio owner rotates windows on its own one-second clock; an
  * unrelated getDiagnostics() call therefore cannot consume the interval that
  * an AEC subscriber was waiting to observe.

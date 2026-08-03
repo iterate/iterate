@@ -146,8 +146,8 @@ _Static_assert(
 enum {
   PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT = 35,
   PLAYBACK_VIEW_RUNTIME_FIELD_COUNT = 19,
-  AEC_VIEW_FIELD_COUNT = 36,
-  RAW_CLEAN_AEC_VIEW_FIELD_COUNT = 33,
+  AEC_VIEW_FIELD_COUNT = 41,
+  RAW_CLEAN_AEC_VIEW_FIELD_COUNT = 36,
   AVATAR_VIEW_FIELD_COUNT = 24,
 };
 
@@ -1003,7 +1003,7 @@ static bool build_aec_metrics_expression(
   const struct iterate_kit_aec_metrics_sample *const detail =
       &sample->aec_detail;
   size_t count = 0U;
-  if (!sample->has_aec_detail || detail->schema_version != 2U ||
+  if (!sample->has_aec_detail || detail->schema_version != 3U ||
       detail->sample_stride == 0U ||
       detail->window_started_at_ms > detail->produced_at_ms) {
     /*
@@ -1037,9 +1037,11 @@ static bool build_aec_metrics_expression(
   SET_AEC_INTEGER("sampledSamples", sampled_samples);
   SET_AEC_INTEGER("nearPeak", near_peak);
   SET_AEC_INTEGER("referencePeak", reference_peak);
+  SET_AEC_INTEGER("linearPeak", linear_peak);
   SET_AEC_INTEGER("cleanPeak", clean_peak);
   SET_AEC_INTEGER("nearMeanAbsolute", near_mean_absolute);
   SET_AEC_INTEGER("referenceMeanAbsolute", reference_mean_absolute);
+  SET_AEC_INTEGER("linearMeanAbsolute", linear_mean_absolute);
   SET_AEC_INTEGER("cleanMeanAbsolute", clean_mean_absolute);
   SET_AEC_INTEGER(
       "lifetimeFramesProcessed", lifetime_frames_processed);
@@ -1084,6 +1086,15 @@ static bool build_aec_metrics_expression(
   SET_AEC_INTEGER(
       "lifetimePlaybackObservationFailures",
       playback_health.lifetime_observation_failures);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackUnderrunIncidents",
+      playback_health.lifetime_underrun_incidents);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackUnderrunSilenceSamples",
+      playback_health.lifetime_underrun_silence_samples);
+  SET_AEC_INTEGER(
+      "lifetimePlaybackStaleFramesDiscarded",
+      playback_health.lifetime_stale_frames_discarded);
   SET_AEC_INTEGER(
       "lastPlaybackWriteUs", playback_health.last_write_us);
   SET_AEC_INTEGER(
@@ -1194,6 +1205,15 @@ static bool build_raw_clean_aec_metrics_expression(
   SET_RAW_CLEAN_AEC_INTEGER(
       "lifetimePlaybackObservationFailures",
       playback_health.lifetime_observation_failures);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackUnderrunIncidents",
+      playback_health.lifetime_underrun_incidents);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackUnderrunSilenceSamples",
+      playback_health.lifetime_underrun_silence_samples);
+  SET_RAW_CLEAN_AEC_INTEGER(
+      "lifetimePlaybackStaleFramesDiscarded",
+      playback_health.lifetime_stale_frames_discarded);
   SET_RAW_CLEAN_AEC_INTEGER(
       "lastPlaybackWriteUs", playback_health.last_write_us);
   SET_RAW_CLEAN_AEC_INTEGER(

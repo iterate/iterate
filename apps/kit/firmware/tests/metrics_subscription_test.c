@@ -347,7 +347,7 @@ static enum iterate_kit_status sample_metrics(
   sample->playback_detail.runtime.pcm_network_max_work_cycles =
       fixture->maximum_metrics ? UINT32_MAX : 72U;
   sample->has_aec_detail = fixture->include_aec;
-  sample->aec_detail.schema_version = 2U;
+  sample->aec_detail.schema_version = 3U;
   sample->aec_detail.sequence =
       fixture->maximum_metrics ? UINT32_MAX : 73U;
   sample->aec_detail.window_started_at_ms =
@@ -362,12 +362,16 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 12000U;
   sample->aec_detail.reference_peak =
       fixture->maximum_metrics ? UINT32_MAX : 9000U;
+  sample->aec_detail.linear_peak =
+      fixture->maximum_metrics ? UINT32_MAX : 4000U;
   sample->aec_detail.clean_peak =
       fixture->maximum_metrics ? UINT32_MAX : 5000U;
   sample->aec_detail.near_mean_absolute =
       fixture->maximum_metrics ? UINT32_MAX : 1100U;
   sample->aec_detail.reference_mean_absolute =
       fixture->maximum_metrics ? UINT32_MAX : 800U;
+  sample->aec_detail.linear_mean_absolute =
+      fixture->maximum_metrics ? UINT32_MAX : 500U;
   sample->aec_detail.clean_mean_absolute =
       fixture->maximum_metrics ? UINT32_MAX : 250U;
   sample->aec_detail.lifetime_frames_processed =
@@ -411,14 +415,20 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 94U;
   sample->aec_detail.playback_health.lifetime_observation_failures =
       fixture->maximum_metrics ? UINT32_MAX : 95U;
-  sample->aec_detail.playback_health.last_write_us =
+  sample->aec_detail.playback_health.lifetime_underrun_incidents =
       fixture->maximum_metrics ? UINT32_MAX : 96U;
-  sample->aec_detail.playback_health.maximum_write_us =
+  sample->aec_detail.playback_health.lifetime_underrun_silence_samples =
       fixture->maximum_metrics ? UINT32_MAX : 97U;
-  sample->aec_detail.playback_health.last_receive_to_render_ms =
+  sample->aec_detail.playback_health.lifetime_stale_frames_discarded =
       fixture->maximum_metrics ? UINT32_MAX : 98U;
-  sample->aec_detail.playback_health.maximum_receive_to_render_ms =
+  sample->aec_detail.playback_health.last_write_us =
       fixture->maximum_metrics ? UINT32_MAX : 99U;
+  sample->aec_detail.playback_health.maximum_write_us =
+      fixture->maximum_metrics ? UINT32_MAX : 100U;
+  sample->aec_detail.playback_health.last_receive_to_render_ms =
+      fixture->maximum_metrics ? UINT32_MAX : 101U;
+  sample->aec_detail.playback_health.maximum_receive_to_render_ms =
+      fixture->maximum_metrics ? UINT32_MAX : 102U;
   sample->has_avatar_detail = fixture->include_avatar;
   sample->avatar_detail.schema_version = 1U;
   sample->avatar_detail.produced_at_ms =
@@ -1111,7 +1121,7 @@ static void aec_metrics_are_mounted_as_a_dedicated_view(void) {
   assert(
       strstr(
           fixture.captured[1],
-          "\"schemaVersion\":2,"
+          "\"schemaVersion\":3,"
           "\"sequence\":4294967295,"
           "\"windowStartedAtMs\":9223372036854775807,"
           "\"producedAtMs\":9223372036854775807,"
@@ -1122,9 +1132,11 @@ static void aec_metrics_are_mounted_as_a_dedicated_view(void) {
           fixture.captured[1],
           "\"nearPeak\":4294967295,"
           "\"referencePeak\":4294967295,"
+          "\"linearPeak\":4294967295,"
           "\"cleanPeak\":4294967295,"
           "\"nearMeanAbsolute\":4294967295,"
           "\"referenceMeanAbsolute\":4294967295,"
+          "\"linearMeanAbsolute\":4294967295,"
           "\"cleanMeanAbsolute\":4294967295") != NULL);
   assert(
       strstr(
@@ -1155,7 +1167,10 @@ static void aec_metrics_are_mounted_as_a_dedicated_view(void) {
           "\"lifetimePlaybackQueueOverflows\":4294967295,"
           "\"lifetimePlaybackPolicyErrors\":4294967295,"
           "\"lifetimePlaybackResetFailures\":4294967295,"
-          "\"lifetimePlaybackObservationFailures\":4294967295") !=
+          "\"lifetimePlaybackObservationFailures\":4294967295,"
+          "\"lifetimePlaybackUnderrunIncidents\":4294967295,"
+          "\"lifetimePlaybackUnderrunSilenceSamples\":4294967295,"
+          "\"lifetimePlaybackStaleFramesDiscarded\":4294967295") !=
       NULL);
   assert(
       strstr(
@@ -1307,7 +1322,10 @@ static void raw_clean_aec_metrics_preserve_the_truthful_topology(void) {
           "\"lifetimePlaybackQueueOverflows\":4294967295,"
           "\"lifetimePlaybackPolicyErrors\":4294967295,"
           "\"lifetimePlaybackResetFailures\":4294967295,"
-          "\"lifetimePlaybackObservationFailures\":4294967295") !=
+          "\"lifetimePlaybackObservationFailures\":4294967295,"
+          "\"lifetimePlaybackUnderrunIncidents\":4294967295,"
+          "\"lifetimePlaybackUnderrunSilenceSamples\":4294967295,"
+          "\"lifetimePlaybackStaleFramesDiscarded\":4294967295") !=
       NULL);
   assert(
       strstr(

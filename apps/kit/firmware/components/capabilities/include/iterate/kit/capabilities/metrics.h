@@ -162,6 +162,21 @@ struct iterate_kit_synchronous_playback_health_sample {
   uint32_t lifetime_policy_errors;
   uint32_t lifetime_reset_failures;
   uint32_t lifetime_observation_failures;
+  /*
+   * Successful codec writes do not prove continuous sound: the hardware clock
+   * can consume the bounded lane before the next WebSocket frame arrives. The
+   * playback clock deliberately fills that edge with silence so time remains
+   * monotonic. Publishing both affected refill edges and inserted samples lets
+   * the harness distinguish a tiny scheduling miss from an audible hole.
+   */
+  uint32_t lifetime_underrun_incidents;
+  uint32_t lifetime_underrun_silence_samples;
+  /*
+   * A late frame discarded by the freshness policy is transport loss even
+   * though it never reaches the codec queue. Keep it separate from generation
+   * reset loss so a network-invalid run cannot masquerade as clean playback.
+   */
+  uint32_t lifetime_stale_frames_discarded;
   uint32_t last_write_us;
   uint32_t maximum_write_us;
   uint32_t last_receive_to_render_ms;
@@ -177,9 +192,11 @@ struct iterate_kit_aec_metrics_sample {
   uint32_t sampled_samples;
   uint32_t near_peak;
   uint32_t reference_peak;
+  uint32_t linear_peak;
   uint32_t clean_peak;
   uint32_t near_mean_absolute;
   uint32_t reference_mean_absolute;
+  uint32_t linear_mean_absolute;
   uint32_t clean_mean_absolute;
   uint32_t lifetime_frames_processed;
   uint32_t lifetime_recreates;

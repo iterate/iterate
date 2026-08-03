@@ -391,6 +391,28 @@ static bool receive_websocket_data(
     protocol_failure(transport);
     return false;
   }
+  status = iterate_kit_pcm_uplink_conductor_note_downlink_item(
+      &transport->uplink);
+  if (status != ITERATE_KIT_OK) {
+    atomic_saturating_increment(
+        &transport->downlink_receipt_failures);
+    /*
+     * The ordered item is already published, so silently omitting its receipt
+     * would leave userspace permanently out of credit while this socket still
+     * appears healthy. Cumulative-count exhaustion is an intentionally
+     * recoverable multi-year generation boundary; every other result means
+     * this owner violated its own lifecycle invariant and must latch fatal
+     * instead of reconnect-looping an implementation defect.
+     */
+    remember_platform_error(transport, ESP_ERR_INVALID_STATE);
+    if (status == ITERATE_KIT_LIMIT) {
+      mark_socket_disconnected(transport);
+      request_restart(transport);
+    } else {
+      latch_fatal_failure(transport);
+    }
+    return false;
+  }
   if (transport->options.downlink_ready != NULL) {
     transport->options.downlink_ready(
         transport->options.downlink_ready_context);
@@ -1127,6 +1149,17 @@ void iterate_kit_esp_idf_pcm_transport_metrics(
   metrics->downlink_ordered_item_losses =
       atomic_load_u32(
           &transport->downlink_ordered_item_losses);
+  metrics->downlink_receipt_failures =
+      atomic_load_u32(
+          &transport->downlink_receipt_failures);
+  metrics->downlink_items_received =
+      uplink.downlink_items_received;
+  metrics->downlink_items_acknowledged =
+      uplink.downlink_items_acknowledged;
+  metrics->downlink_receipts_sent =
+      uplink.downlink_receipts_sent;
+  metrics->downlink_receipt_send_deferrals =
+      uplink.downlink_receipt_send_deferrals;
   metrics->network_task_stack_exhaustions =
       atomic_load_u32(
           &transport->network_task_stack_exhaustions);

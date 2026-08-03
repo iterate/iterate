@@ -1,6 +1,7 @@
 idf_component_register(
   SRCS
     "src/aec_capture_bridge.c"
+    "src/aec_diagnostic_trace.c"
     "src/aec_signal_window.c"
     "src/audio_intent_reconciler.c"
     "src/audio_playout.c"

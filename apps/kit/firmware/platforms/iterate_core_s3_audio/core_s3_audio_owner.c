@@ -33,7 +33,6 @@
 #define CORE_S3_RX_STARTUP_DRAIN_CHUNKS CORE_S3_DMA_DESCRIPTOR_COUNT
 #define CORE_S3_IO_FAILURE_LIMIT 3U
 #define CORE_S3_AEC_FILTER_LENGTH 4
-#define CORE_S3_AEC_REFERENCE_GAIN_DB 0.0F
 /*
  * The nonlinear processor is deliberately not set to VERYAGGR. That setting
  * produced excellent far-only numbers on physical StackChan, but a measured
@@ -81,6 +80,9 @@ struct core_s3_atomic_metrics {
   volatile uint32_t maximum_codec_read_us;
   volatile uint32_t last_receive_to_render_ms;
   volatile uint32_t maximum_receive_to_render_ms;
+  volatile uint32_t playback_underrun_incidents;
+  volatile uint32_t playback_underrun_silence_samples;
+  volatile uint32_t playback_stale_frames_discarded;
   volatile uint32_t playout_observer_frames;
   volatile uint32_t playout_observer_shape_errors;
 
@@ -132,6 +134,15 @@ struct core_s3_audio_owner {
       __attribute__((aligned(16)));
   int16_t aec_reference[ITERATE_KIT_CORE_S3_AEC_FRAME_SAMPLES]
       __attribute__((aligned(16)));
+  /*
+   * ESP-SR's nonlinear processor mutates the linear result in place. Preserve
+   * one 1 KiB frame so interval telemetry can attribute distortion to the
+   * adaptive filter or NLP. That fixed internal-DRAM cost replaces repeated
+   * physical reflashes based on ambiguous final-output amplitudes and adds no
+   * allocation or queue to the realtime path.
+   */
+  int16_t aec_linear[ITERATE_KIT_CORE_S3_AEC_FRAME_SAMPLES]
+      __attribute__((aligned(16)));
   int16_t aec_clean[ITERATE_KIT_CORE_S3_AEC_FRAME_SAMPLES]
       __attribute__((aligned(16)));
   int16_t clean_egress[ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME]
@@ -163,6 +174,7 @@ struct core_s3_audio_owner {
   uint32_t last_rx_queue_overflows;
   int speaker_volume_percent;
   int microphone_gain_db;
+  int reference_gain_db;
 };
 
 /*
@@ -360,10 +372,17 @@ static esp_err_t configure_speaker_for_shared_tdm_clock(void) {
 static esp_err_t initialize_codecs(void) {
   /*
    * TX remains ordinary Philips stereo for AW88298. RX is four-slot TDM for
-   * ES7210: measured slot 0 is MIC1 (near), measured slot 1 is MIC3 (the
-   * analogue divider across actual speaker output). Using the latter—not a
+   * ES7210: measured slot 0 is the near microphone and measured slot 1 is the
+   * analogue divider across actual speaker output. Using the latter—not a
    * software copy of intended playback—keeps the AEC reference aligned with
    * what the amplifier really emitted, including mute/gain/clock effects.
+   *
+   * Interval telemetry establishes those output slots, but neither M5Stack's
+   * public schematic nor the codec API establishes whether slot 1 originated
+   * as ES7210 input 2 or input 3 when MIC1|MIC2|MIC3 are selected. Gain both
+   * non-near candidates equally below; slot 2 is diagnostics-only and never
+   * enters the AEC. This avoids making an unproved physical-input label affect
+   * the signal path while retaining the lower-latency hardware reference.
    */
   const i2s_std_config_t tx = {
       .clk_cfg = I2S_STD_CLK_DEFAULT_CONFIG(
@@ -482,8 +501,9 @@ static esp_err_t initialize_codecs(void) {
           (float)owner.microphone_gain_db) != ESP_CODEC_DEV_OK ||
       esp_codec_dev_set_in_channel_gain(
           owner.microphone,
-          ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2),
-          CORE_S3_AEC_REFERENCE_GAIN_DB) != ESP_CODEC_DEV_OK) {
+          ESP_CODEC_DEV_MAKE_CHANNEL_MASK(1) |
+              ESP_CODEC_DEV_MAKE_CHANNEL_MASK(2),
+          (float)owner.reference_gain_db) != ESP_CODEC_DEV_OK) {
     return ESP_FAIL;
   }
   return ESP_OK;
@@ -562,9 +582,13 @@ static enum iterate_kit_status process_aec(
       state->aec,
       (int16_t *)near_samples,
       (int16_t *)reference_samples,
-      clean_samples);
+      state->aec_linear);
   const uint32_t linear_us =
       monotonic_us_since(linear_started_at_us);
+  memcpy(
+      clean_samples,
+      state->aec_linear,
+      sample_count * sizeof(*clean_samples));
   const int64_t nlp_started_at_us = esp_timer_get_time();
   (void)aec_nlp_process(state->aec, clean_samples);
   const uint32_t nlp_us = monotonic_us_since(nlp_started_at_us);
@@ -574,6 +598,7 @@ static enum iterate_kit_status process_aec(
       iterate_kit_aec_signal_window_measure(
           near_samples,
           reference_samples,
+          state->aec_linear,
           clean_samples,
           sample_count,
           CORE_S3_AEC_SIGNAL_SAMPLE_STRIDE,
@@ -937,6 +962,26 @@ static void io_task_main(void *context) {
       const struct iterate_kit_pcm_clock_playback_metrics *playback_metrics =
           iterate_kit_pcm_clock_playback_metrics(&owner.playback);
       if (playback_metrics != NULL) {
+        /*
+         * Only this high-priority task may inspect the non-atomic playback
+         * clock. Mirror its cumulative integrity counters for the low-rate
+         * diagnostics sampler instead of adding a second owner or a queue to
+         * the audio path.
+         */
+        __atomic_store_n(
+            &owner.metrics.playback_underrun_incidents,
+            playback_metrics->underrun_incidents,
+            __ATOMIC_RELAXED);
+        __atomic_store_n(
+            &owner.metrics.playback_underrun_silence_samples,
+            playback_metrics->underrun_silence_samples > UINT32_MAX
+                ? UINT32_MAX
+                : (uint32_t)playback_metrics->underrun_silence_samples,
+            __ATOMIC_RELAXED);
+        __atomic_store_n(
+            &owner.metrics.playback_stale_frames_discarded,
+            playback_metrics->stale_frames_discarded,
+            __ATOMIC_RELAXED);
         __atomic_store_n(
             &owner.metrics.last_receive_to_render_ms,
             playback_metrics->last_receive_to_render_ms,
@@ -1032,7 +1077,9 @@ static bool valid_options(
       options->speaker_volume_percent >= 0 &&
       options->speaker_volume_percent <= 100 &&
       options->microphone_gain_db >= 0 &&
-      options->microphone_gain_db <= 37;
+      options->microphone_gain_db <= 37 &&
+      options->reference_gain_db >= 0 &&
+      options->reference_gain_db <= 37;
 }
 
 esp_err_t iterate_kit_core_s3_audio_owner_start(
@@ -1056,6 +1103,7 @@ esp_err_t iterate_kit_core_s3_audio_owner_start(
   owner.observe_playout_context = options->observe_playout_context;
   owner.speaker_volume_percent = options->speaker_volume_percent;
   owner.microphone_gain_db = options->microphone_gain_db;
+  owner.reference_gain_db = options->reference_gain_db;
   if (iterate_kit_core_s3_capture_reserve_init(
           &owner.capture_reserve) != ITERATE_KIT_OK) {
     return ESP_ERR_INVALID_STATE;
@@ -1203,9 +1251,10 @@ esp_err_t iterate_kit_core_s3_audio_owner_start(
       (unsigned)sizeof(owner));
   ESP_LOGI(
       TAG,
-      "measured TDM mapping: slot0=MIC1 near %d dB, "
-      "slot1=MIC3 actual-speaker reference 0 dB",
-      owner.microphone_gain_db);
+      "measured TDM mapping: slot0=near %d dB, "
+      "slot1=actual-speaker reference %d dB",
+      owner.microphone_gain_db,
+      owner.reference_gain_db);
   return ESP_OK;
 }
 
@@ -1331,6 +1380,9 @@ void iterate_kit_core_s3_audio_owner_metrics_snapshot(
   COPY_ATOMIC_METRIC(maximum_codec_read_us);
   COPY_ATOMIC_METRIC(last_receive_to_render_ms);
   COPY_ATOMIC_METRIC(maximum_receive_to_render_ms);
+  COPY_ATOMIC_METRIC(playback_underrun_incidents);
+  COPY_ATOMIC_METRIC(playback_underrun_silence_samples);
+  COPY_ATOMIC_METRIC(playback_stale_frames_discarded);
   COPY_ATOMIC_METRIC(playout_observer_frames);
   COPY_ATOMIC_METRIC(playout_observer_shape_errors);
   COPY_ATOMIC_METRIC(capture_chunks_deinterleaved);

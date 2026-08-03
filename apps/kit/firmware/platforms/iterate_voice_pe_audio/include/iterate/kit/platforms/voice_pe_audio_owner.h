@@ -111,6 +111,9 @@ struct iterate_kit_voice_pe_audio_owner_metrics {
   uint32_t maximum_playback_write_us;
   uint32_t last_receive_to_render_ms;
   uint32_t maximum_receive_to_render_ms;
+  uint32_t playback_underrun_incidents;
+  uint32_t playback_underrun_silence_samples;
+  uint32_t playback_stale_frames_discarded;
 
   uint32_t capture_frames;
   uint32_t capture_read_errors;

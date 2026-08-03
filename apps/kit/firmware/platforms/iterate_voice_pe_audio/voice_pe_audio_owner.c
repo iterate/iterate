@@ -92,6 +92,9 @@ struct voice_pe_atomic_metrics {
   volatile uint32_t maximum_playback_write_us;
   volatile uint32_t last_receive_to_render_ms;
   volatile uint32_t maximum_receive_to_render_ms;
+  volatile uint32_t playback_underrun_incidents;
+  volatile uint32_t playback_underrun_silence_samples;
+  volatile uint32_t playback_stale_frames_discarded;
 
   volatile uint32_t capture_frames;
   volatile uint32_t capture_read_errors;
@@ -888,6 +891,26 @@ static void playback_task_main(void *context) {
     const struct iterate_kit_pcm_clock_playback_metrics *clock_metrics =
         iterate_kit_pcm_clock_playback_metrics(&owner.playback);
     if (clock_metrics != NULL) {
+      /*
+       * The playback object has one realtime owner. The one-second Cap'n Web
+       * sampler runs elsewhere, so exposing its plain counters directly would
+       * introduce a C data race. Mirror only the three cumulative integrity
+       * scalars here; this adds no queue, allocation, logging, or sample walk.
+       */
+      __atomic_store_n(
+          &owner.metrics.playback_underrun_incidents,
+          clock_metrics->underrun_incidents,
+          __ATOMIC_RELAXED);
+      __atomic_store_n(
+          &owner.metrics.playback_underrun_silence_samples,
+          clock_metrics->underrun_silence_samples > UINT32_MAX
+              ? UINT32_MAX
+              : (uint32_t)clock_metrics->underrun_silence_samples,
+          __ATOMIC_RELAXED);
+      __atomic_store_n(
+          &owner.metrics.playback_stale_frames_discarded,
+          clock_metrics->stale_frames_discarded,
+          __ATOMIC_RELAXED);
       __atomic_store_n(
           &owner.metrics.last_receive_to_render_ms,
           clock_metrics->last_receive_to_render_ms,
@@ -1383,6 +1406,9 @@ void iterate_kit_voice_pe_audio_owner_metrics_snapshot(
   COPY_ATOMIC_METRIC(maximum_playback_write_us);
   COPY_ATOMIC_METRIC(last_receive_to_render_ms);
   COPY_ATOMIC_METRIC(maximum_receive_to_render_ms);
+  COPY_ATOMIC_METRIC(playback_underrun_incidents);
+  COPY_ATOMIC_METRIC(playback_underrun_silence_samples);
+  COPY_ATOMIC_METRIC(playback_stale_frames_discarded);
   COPY_ATOMIC_METRIC(capture_frames);
   COPY_ATOMIC_METRIC(capture_read_errors);
   COPY_ATOMIC_METRIC(capture_partial_reads);

@@ -26,6 +26,11 @@ static uint32_t atomic_load_u32(const uint32_t *value) {
   return __atomic_load_n(value, __ATOMIC_RELAXED);
 }
 
+static void atomic_store_u32(
+    uint32_t *destination, uint32_t value) {
+  __atomic_store_n(destination, value, __ATOMIC_RELAXED);
+}
+
 static void atomic_saturating_increment(uint32_t *value) {
   uint32_t current = atomic_load_u32(value);
   while (current != UINT32_MAX &&
@@ -55,6 +60,71 @@ static void atomic_update_max(
 
 static uint32_t saturating_u64_to_u32(uint64_t value) {
   return value > UINT32_MAX ? UINT32_MAX : (uint32_t)value;
+}
+
+static void reset_downlink_receipt_generation(
+    struct iterate_kit_pcm_uplink_conductor *conductor) {
+  memset(
+      conductor->downlink_receipt_payload,
+      0,
+      sizeof(conductor->downlink_receipt_payload));
+  atomic_store_u32(&conductor->downlink_items_received, 0U);
+  atomic_store_u32(
+      &conductor->downlink_items_acknowledged, 0U);
+  conductor->downlink_receipt_inflight_items = 0U;
+  conductor->downlink_receipt_pending = false;
+  conductor->downlink_receipt_active = false;
+}
+
+/*
+ * One coalescing receipt is a bounded application-control obligation. It uses
+ * the ordinary data-frame writer because RFC control opcodes cannot carry an
+ * application acknowledgement. The conductor is the only layer that can
+ * safely arbitrate this frame against a partially written microphone frame and
+ * mandatory PONG/CLOSE work; putting it in ESP glue would recreate an untested
+ * second owner of the same WebSocket byte stream.
+ */
+static enum iterate_kit_websocket_tx_result
+poll_downlink_receipt(
+    struct iterate_kit_pcm_uplink_conductor *conductor) {
+  enum iterate_kit_websocket_tx_result result;
+  if (!conductor->downlink_receipt_active) {
+    if (!conductor->downlink_receipt_pending) {
+      return ITERATE_KIT_WEBSOCKET_TX_IDLE;
+    }
+    conductor->downlink_receipt_inflight_items =
+        atomic_load_u32(&conductor->downlink_items_received);
+    if (iterate_kit_pcm_websocket_encode_downlink_receipt(
+            conductor->downlink_receipt_inflight_items,
+            conductor->downlink_receipt_payload,
+            sizeof(conductor->downlink_receipt_payload)) !=
+        ITERATE_KIT_OK) {
+      return ITERATE_KIT_WEBSOCKET_TX_FAILED;
+    }
+    conductor->downlink_receipt_pending = false;
+    conductor->downlink_receipt_active = true;
+  }
+
+  result = iterate_kit_websocket_tx_send(
+      conductor->tx,
+      ITERATE_KIT_WEBSOCKET_BINARY,
+      conductor->downlink_receipt_payload,
+      sizeof(conductor->downlink_receipt_payload));
+  if (result == ITERATE_KIT_WEBSOCKET_TX_SENT) {
+    atomic_store_u32(
+        &conductor->downlink_items_acknowledged,
+        conductor->downlink_receipt_inflight_items);
+    atomic_saturating_increment(
+        &conductor->downlink_receipts_sent);
+    conductor->downlink_receipt_active = false;
+    conductor->downlink_receipt_pending =
+        atomic_load_u32(&conductor->downlink_items_received) >
+        conductor->downlink_receipt_inflight_items;
+  } else if (result == ITERATE_KIT_WEBSOCKET_TX_DEFERRED) {
+    atomic_saturating_increment(
+        &conductor->downlink_receipt_send_deferrals);
+  }
+  return result;
 }
 
 /*
@@ -217,6 +287,7 @@ iterate_kit_pcm_uplink_conductor_abandon_generation(
   status = iterate_kit_pcm_uplink_sender_discard_pending(
       &conductor->sender, discarded_frames);
   iterate_kit_websocket_tx_reset(conductor->tx);
+  reset_downlink_receipt_generation(conductor);
   conductor->in_place_recovery_active = false;
   conductor->generation_active = false;
   return status;
@@ -250,8 +321,34 @@ iterate_kit_pcm_uplink_conductor_begin_generation(
     return status;
   }
   conductor->connection_generation = connection_generation;
+  reset_downlink_receipt_generation(conductor);
   conductor->in_place_recovery_active = false;
   conductor->generation_active = true;
+  return ITERATE_KIT_OK;
+}
+
+enum iterate_kit_status
+iterate_kit_pcm_uplink_conductor_note_downlink_item(
+    struct iterate_kit_pcm_uplink_conductor *conductor) {
+  uint32_t received;
+  if (conductor == NULL ||
+      !conductor->initialized ||
+      !conductor->generation_active) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  received = atomic_load_u32(
+      &conductor->downlink_items_received);
+  if (received == UINT32_MAX) {
+    /*
+     * Wrapping would make a newer cumulative receipt look older and grant the
+     * server arbitrary credit. A generation lasting over two years at 50 fps
+     * may reconnect once instead of weakening that ordering invariant.
+     */
+    return ITERATE_KIT_LIMIT;
+  }
+  atomic_store_u32(
+      &conductor->downlink_items_received, received + 1U);
+  conductor->downlink_receipt_pending = true;
   return ITERATE_KIT_OK;
 }
 
@@ -347,6 +444,34 @@ iterate_kit_pcm_uplink_conductor_poll(
       return made_progress
           ? ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS
           : ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED;
+    }
+
+    if (conductor->downlink_receipt_active ||
+        (!data_frame_active &&
+         conductor->downlink_receipt_pending)) {
+      const enum iterate_kit_websocket_tx_result
+          receipt_result = poll_downlink_receipt(conductor);
+      if (receipt_result == ITERATE_KIT_WEBSOCKET_TX_SENT ||
+          receipt_result ==
+              ITERATE_KIT_WEBSOCKET_TX_PROGRESS) {
+        made_progress = true;
+        continue;
+      }
+      if (receipt_result ==
+          ITERATE_KIT_WEBSOCKET_TX_DEFERRED) {
+        return made_progress
+            ? ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS
+            : ITERATE_KIT_PCM_UPLINK_CONDUCTOR_DEFERRED;
+      }
+      if (receipt_result ==
+          ITERATE_KIT_WEBSOCKET_TX_DISCONNECTED) {
+        return finish_generation(
+            conductor,
+            ITERATE_KIT_PCM_UPLINK_CONDUCTOR_RESTART);
+      }
+      return finish_generation(
+          conductor,
+          ITERATE_KIT_PCM_UPLINK_CONDUCTOR_FAILED);
     }
     sender_result = iterate_kit_pcm_uplink_sender_poll(
         &conductor->sender, policy_now_ms, &event);
@@ -530,4 +655,14 @@ void iterate_kit_pcm_uplink_conductor_metrics(
           &conductor->maximum_policy_time_adjustment_ms);
   metrics->owner_clock_regressions =
       atomic_load_u32(&conductor->owner_clock_regressions);
+  metrics->downlink_items_received =
+      atomic_load_u32(&conductor->downlink_items_received);
+  metrics->downlink_items_acknowledged =
+      atomic_load_u32(
+          &conductor->downlink_items_acknowledged);
+  metrics->downlink_receipts_sent =
+      atomic_load_u32(&conductor->downlink_receipts_sent);
+  metrics->downlink_receipt_send_deferrals =
+      atomic_load_u32(
+          &conductor->downlink_receipt_send_deferrals);
 }

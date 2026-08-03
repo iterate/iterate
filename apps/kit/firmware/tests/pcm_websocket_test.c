@@ -128,9 +128,69 @@ static void invalid_or_unrepresentable_formats_are_rejected(void) {
       ITERATE_KIT_INVALID_ARGUMENT);
 }
 
+/*
+ * A successful Worker `send()` is only local runtime admission: production
+ * workerd exposes no server-side bufferedAmount and a failed HAVPE run proved
+ * that 83 accepted frames could disappear behind that boundary. The device
+ * therefore returns one cumulative receipt after parsing complete downlink
+ * items. A fixed eight-byte binary shape keeps the PCM socket allocation-free,
+ * lets intermediate receipts coalesce, and cannot be confused with either a
+ * 640-byte microphone frame or the zero-byte manual-turn marker.
+ */
+static void downlink_receipts_are_fixed_and_cumulative(void) {
+  uint8_t receipt[ITERATE_KIT_PCM_V1_DOWNLINK_RECEIPT_BYTES] = {0};
+  uint32_t accepted_items = 0U;
+
+  assert(
+      iterate_kit_pcm_websocket_encode_downlink_receipt(
+          0x78563412U, receipt, sizeof(receipt)) == ITERATE_KIT_OK);
+  assert(receipt[0] == 'I');
+  assert(receipt[1] == 'K');
+  assert(receipt[2] == 'A');
+  assert(receipt[3] == 1U);
+  assert(receipt[4] == 0x12U);
+  assert(receipt[5] == 0x34U);
+  assert(receipt[6] == 0x56U);
+  assert(receipt[7] == 0x78U);
+  assert(
+      iterate_kit_pcm_websocket_decode_downlink_receipt(
+          receipt, sizeof(receipt), &accepted_items) == ITERATE_KIT_OK);
+  assert(accepted_items == 0x78563412U);
+}
+
+/*
+ * Receipt parsing is a transport safety boundary, not a heuristic. Accepting a
+ * wrong magic/version/length could grant new downlink credit for microphone
+ * bytes or future protocol data and recreate the unbounded opaque backlog the
+ * receipt exists to remove.
+ */
+static void malformed_downlink_receipts_never_grant_credit(void) {
+  uint8_t receipt[ITERATE_KIT_PCM_V1_DOWNLINK_RECEIPT_BYTES] = {0};
+  uint32_t accepted_items = 123U;
+
+  assert(
+      iterate_kit_pcm_websocket_encode_downlink_receipt(
+          7U, receipt, sizeof(receipt)) == ITERATE_KIT_OK);
+  receipt[0] = 'X';
+  assert(
+      iterate_kit_pcm_websocket_decode_downlink_receipt(
+          receipt, sizeof(receipt), &accepted_items) ==
+      ITERATE_KIT_INVALID_ARGUMENT);
+  assert(accepted_items == 0U);
+  assert(
+      iterate_kit_pcm_websocket_decode_downlink_receipt(
+          receipt, sizeof(receipt) - 1U, &accepted_items) ==
+      ITERATE_KIT_INVALID_ARGUMENT);
+  assert(
+      iterate_kit_pcm_websocket_encode_downlink_receipt(
+          1U, receipt, sizeof(receipt) - 1U) == ITERATE_KIT_LIMIT);
+}
+
 int main(void) {
   one_binary_message_is_one_headerless_pcm_frame();
   the_negotiated_frame_shape_is_exact();
   invalid_or_unrepresentable_formats_are_rejected();
+  downlink_receipts_are_fixed_and_cumulative();
+  malformed_downlink_receipts_never_grant_credit();
   return 0;
 }

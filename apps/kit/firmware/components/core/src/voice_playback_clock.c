@@ -127,9 +127,28 @@ iterate_kit_voice_playback_clock_frame(
     struct iterate_kit_voice_playback_clock *clock,
     uint32_t queued_bytes,
     uint32_t frames_played,
+    uint32_t lag_ms,
     uint64_t now_ms) {
   const uint32_t queued_ms = queued_bytes / 32U;
   if (clock == NULL) return ITERATE_KIT_VOICE_PLAYBACK_WAIT;
+  /*
+   * BEHIND ITS OWN TIMELINE, so give a frame back to get level again.
+   *
+   * Dropping one frame in fifty recovers 20 ms per second — inaudible as a
+   * defect, and enough to walk out half a second of lag in about half a
+   * minute of speech. The alternative is staying late forever: nothing else
+   * in this design ever returns to realtime, because a listener who is behind
+   * has no way to catch up except by playing less than arrives.
+   *
+   * Rate-limited by the same counter as the depth rule below, so the two can
+   * never compound into audible decimation.
+   */
+  if (lag_ms > ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS &&
+      frames_played >= clock->next_catchup_at_frame) {
+    clock->next_catchup_at_frame =
+        frames_played + ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY;
+    return ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP;
+  }
   if (queued_ms > ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS &&
       frames_played >= clock->next_catchup_at_frame) {
     clock->next_catchup_at_frame =
