@@ -3,6 +3,7 @@ import {
   StreamPath,
   streamPathAncestors,
   streamPathFromSplat,
+  streamPathFromSplatOrRoot,
   streamPathParent,
   streamPathToSplat,
 } from "./stream-links.ts";
@@ -31,5 +32,11 @@ describe("StreamPath", () => {
     expect(() => StreamPath.parse("/agents/Upper")).toThrow();
     expect(() => StreamPath.parse("/agents/has.dot")).toThrow();
     expect(() => StreamPath.parse("/agents/repos/bad~identity/pr/7")).toThrow();
+  });
+
+  it("lets a parent layout fall back to root for malformed child splats", () => {
+    expect(streamPathFromSplatOrRoot("agents/slack/c123")).toBe("/agents/slack/c123");
+    expect(streamPathFromSplatOrRoot("Agents/Bad")).toBe("/");
+    expect(streamPathFromSplatOrRoot("agents/with%20space")).toBe("/");
   });
 });

@@ -7,12 +7,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@iterate-com/ui/components/dialog";
-import { connectItx, connectIterateSession, useIterateSessionQuery } from "iterate/sdk/itx/react";
+import { useIterateSessionQuery } from "iterate/sdk/itx/react";
 import { OPEN_GLOBAL_COMMAND_PALETTE_EVENT } from "~/components/global-command-palette-events.ts";
-import { NULL_DURABLE_OBJECT_PROJECT_ID } from "~/lib/stream-navigation.ts";
 import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { projectsListStaleTime } from "~/lib/projects-query.ts";
-import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
+import { streamPathFromSplatOrRoot } from "~/lib/stream-links.ts";
+import { linkOptionsForAdminStreamPath, linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 
 const CommandPaletteDialog = lazy(() =>
@@ -107,22 +107,9 @@ export function GlobalCommandPalette() {
       // Admin addresses arbitrary projects through platform-wide operator
       // authority and stays within the admin explorer routes.
       return {
-        remoteTreeSource: (path) => ({
-          async openConnection(args) {
-            const stream =
-              adminStream.adminProjectId === NULL_DURABLE_OBJECT_PROJECT_ID
-                ? (await connectIterateSession()).streams.get(path)
-                : (await connectItx(adminStream.adminProjectId)).streams.get(path);
-            return stream.openConnection(args);
-          },
-        }),
         onOpenPath(path) {
           setOpen(false);
-          void navigate({
-            to: "/admin/streams/$projectId/$",
-            params: { projectId: adminStream.adminProjectId, _splat: path },
-            search: {},
-          });
+          void navigate(linkOptionsForAdminStreamPath(adminStream.adminProjectId, path));
         },
       };
     }
@@ -164,11 +151,7 @@ export function GlobalCommandPalette() {
         currentPath={activeStream.streamPath}
         navigator={streamNavigator}
         scope={activeStream.projectId}
-        // The admin lane browses through platform-wide operator authority, and its
-        // `__null__` deployment namespace has no project DO to index — dialing
-        // `projects.get("__null__")` would just retry forever. Admin gets the
-        // tree; the live index is the app lane's.
-        liveIndex={adminStream == null}
+        admin={adminStream != null}
       />
     </Suspense>
   ) : null;
@@ -242,6 +225,6 @@ function getAdminStreamContext(matches: ReturnType<typeof useMatches>) {
     adminProjectId: params.projectId,
     projectId: params.projectId,
     projectSlug: params.projectId,
-    streamPath: deepest?._splat ?? "/",
+    streamPath: streamPathFromSplatOrRoot(deepest?._splat),
   };
 }

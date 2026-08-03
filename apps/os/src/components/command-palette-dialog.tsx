@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useReducer, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { ChevronRight, Plus } from "lucide-react";
+import { Plus } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import {
   Command,
@@ -14,10 +14,7 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useLiveState } from "iterate/sdk/itx/react";
 import {
-  buildStreamForest,
   defaultPaletteTab,
-  flattenStreamRows,
-  formatEventCount,
   hasPathDescendant,
   initialPaletteDialogState,
   isPaletteResultKeyboardTarget,
@@ -25,19 +22,23 @@ import {
   paletteKeyboardAction,
   paletteKeyboardTarget,
   reducePaletteDialogState,
-  streamTreeLabel,
   type PaletteTab,
 } from "./command-palette-model.ts";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
 import { normalizePath } from "~/domains/durable-object-names.ts";
 import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
-import type { StreamNavigator } from "~/lib/stream-navigation.ts";
+import { NULL_DURABLE_OBJECT_PROJECT_ID, type StreamNavigator } from "~/lib/stream-navigation.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 import { updateAgentSummary } from "~/components/agents/agent-summary.ts";
 import { useAgentTreeTable } from "~/components/agents/agent-tree-table.ts";
 import { AgentCommandHeader, AgentCommandItem } from "~/components/agents/agent.tsx";
-import { AdminRemoteStreamTree } from "~/components/admin-remote-stream-tree.tsx";
+import { StreamIndexTablePanel } from "~/components/streams/stream-index-table.tsx";
+import { StreamTreeHeader, StreamTreeRowContent } from "~/components/streams/stream-tree-row.tsx";
+import {
+  formatEventCount,
+  useIndexedStreamTreeTable,
+} from "~/components/streams/stream-tree-table.ts";
 
 const CLOCK_TICK_MS = 5_000;
 const MAX_AGENT_RESULTS = 100;
@@ -56,15 +57,14 @@ export function CommandPaletteDialog({
   currentPath,
   navigator,
   scope,
-  liveIndex = true,
+  admin = false,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   currentPath: string;
   navigator: StreamNavigator;
   scope: string;
-  /** Admin has remote operator authority but no project live-state projection. */
-  liveIndex?: boolean;
+  admin?: boolean;
 }) {
   const [palette, dispatchPalette] = useReducer(
     reducePaletteDialogState,
@@ -72,19 +72,20 @@ export function CommandPaletteDialog({
     initialPaletteDialogState,
   );
   const { tab, query, selectedValue, expandedAgentPaths, collapsedStreamPaths } = palette;
-  const enabled = open && liveIndex;
-  const nowMs = useTickingNowMs(CLOCK_TICK_MS, open);
+  const streamIndexAvailable = scope !== NULL_DURABLE_OBJECT_PROJECT_ID;
+  const streamsEnabled = open && streamIndexAvailable;
+  const nowMs = useTickingNowMs(CLOCK_TICK_MS, open && !admin);
   const streamsState = useLiveState(
     (itx) => itx.liveState,
     (state) => state.streamsIndex,
     [scope],
-    { slug: scope, enabled },
+    { slug: scope, enabled: streamsEnabled },
   );
   const agentsState = useLiveState(
     (itx) => itx.agents.liveState,
     (state) => state.agents,
     [scope],
-    { slug: scope, enabled },
+    { slug: scope, enabled: open && !admin },
   );
 
   useEffect(() => {
@@ -94,9 +95,9 @@ export function CommandPaletteDialog({
     }
     dispatchPalette({
       type: "opened",
-      tab: defaultPaletteTab(currentPath, liveIndex),
+      tab: defaultPaletteTab(currentPath, !admin),
     });
-  }, [currentPath, liveIndex, open]);
+  }, [admin, currentPath, open]);
 
   function openStream(path: string) {
     onOpenChange(false);
@@ -107,16 +108,15 @@ export function CommandPaletteDialog({
     await updateAgentSummary(scope, agent.path, { pinned: !agent.summary.pinned });
   }
 
-  if (!liveIndex) {
-    if (navigator.remoteTreeSource === undefined) {
-      throw new Error("Admin project navigation requires a remote stream source");
-    }
+  const streamsLoading = streamsState.value === undefined;
+
+  if (admin) {
     return (
       <CommandDialog
         open={open}
         onOpenChange={onOpenChange}
         title="Stream tree"
-        description="Browse remote admin streams"
+        description="Browse streams from the project stream index"
         className="flex h-[calc(100svh-2rem)] w-[calc(100vw-1rem)] max-w-none flex-col sm:h-[66svh] sm:w-[66vw] sm:max-w-[66vw]"
       >
         <div className="flex min-h-0 flex-1 flex-col">
@@ -124,12 +124,13 @@ export function CommandPaletteDialog({
             <p className="truncate font-mono text-xs text-muted-foreground">{currentPath}</p>
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto">
-            <AdminRemoteStreamTree
-              key={`${scope}:${currentPath}:${open ? "open" : "closed"}`}
+            <StreamIndexTablePanel
+              key={scope}
+              available={streamIndexAvailable}
               currentPath={currentPath}
+              error={streamsState.status === "error"}
               onOpenPath={openStream}
-              scope={scope}
-              source={navigator.remoteTreeSource}
+              streams={streamsState.value}
             />
           </div>
         </div>
@@ -141,7 +142,6 @@ export function CommandPaletteDialog({
   // render that window as loading, not as an empty project.
   const streams = streamsState.value ?? {};
   const agents = agentsState.value ?? {};
-  const streamsLoading = streamsState.value === undefined;
   const agentsLoading = agentsState.value === undefined;
   const normalizedCreatePath = normalizeDestination(query);
 
@@ -348,31 +348,31 @@ function StreamTreeResults({
   onOpen: (path: string) => void;
   onToggleExpanded: (path: string) => void;
 }) {
-  const forest = useMemo(() => buildStreamForest(streams), [streams]);
-  const rows = useMemo(
-    () => flattenStreamRows(forest, collapsedPaths, query).slice(0, MAX_STREAM_TREE_RESULTS),
-    [collapsedPaths, forest, query],
-  );
+  const table = useIndexedStreamTreeTable({ streams, collapsedPaths, query });
+  const rows = table.getRowModel().rows.slice(0, MAX_STREAM_TREE_RESULTS);
   if (rows.length === 0) {
     return <CommandEmpty>{loading ? "Loading streams…" : "No matching streams."}</CommandEmpty>;
   }
   return (
-    <CommandGroup className="p-0">
-      {rows.map(({ node, depth, expanded }) => {
-        const hasChildren = node.children.length > 0;
+    <CommandGroup className="overflow-visible p-0">
+      <StreamTreeHeader className="sticky top-0 z-10 bg-popover" />
+      {rows.map((row) => {
+        const path = row.original.path;
         return (
           <CommandItem
-            key={node.row.path}
-            value={node.row.path}
-            onSelect={() => onOpen(node.row.path)}
+            key={row.id}
+            value={path}
+            onSelect={() => {
+              if (row.original.indexed) onOpen(path);
+              else onToggleExpanded(path);
+            }}
             className={cn(
               "gap-1.5 border-b border-border/40 py-1.5 font-mono text-xs last:border-b-0",
-              currentPath === node.row.path && "bg-accent",
+              currentPath === path && "bg-accent",
             )}
-            aria-expanded={hasChildren ? expanded : undefined}
             onClickCapture={(event) => {
               if (
-                !hasChildren ||
+                !row.getCanExpand() ||
                 !(event.target instanceof Element) ||
                 !event.target.closest("[data-stream-disclosure]")
               ) {
@@ -380,33 +380,10 @@ function StreamTreeResults({
               }
               event.preventDefault();
               event.stopPropagation();
-              onToggleExpanded(node.row.path);
+              onToggleExpanded(path);
             }}
           >
-            <span
-              style={{ width: `${Math.min(depth, 8) * 12}px` }}
-              className="shrink-0"
-              aria-hidden
-            />
-            <span className="flex w-4 shrink-0 justify-center" aria-hidden>
-              {hasChildren ? (
-                <span
-                  data-stream-disclosure
-                  className="-m-1 flex size-4 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted"
-                  title={expanded ? "Collapse" : "Expand"}
-                >
-                  <ChevronRight
-                    className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
-                  />
-                </span>
-              ) : null}
-            </span>
-            <span className="min-w-0 flex-1 truncate" title={node.row.path}>
-              {streamTreeLabel(node.row.path)}
-            </span>
-            <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
-              {formatEventCount(node.row.eventCount)}
-            </span>
+            <StreamTreeRowContent row={row} />
           </CommandItem>
         );
       })}

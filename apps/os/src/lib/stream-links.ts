@@ -30,10 +30,20 @@ export function streamPathToSplat(path: StreamPath) {
   return path.slice(1);
 }
 
-export function streamPathFromSplat(value: string | undefined) {
-  if (value == null || value === "" || value === ROOT_SPLAT) return StreamPath.parse("/");
+function streamPathCandidateFromSplat(value: string | undefined) {
+  if (value == null || value === "" || value === ROOT_SPLAT) return "/";
   const normalized = value.replace(/^\/+/, "");
-  return StreamPath.parse(normalized ? `/${normalized}` : "/");
+  return normalized ? `/${normalized}` : "/";
+}
+
+export function streamPathFromSplat(value: string | undefined) {
+  return StreamPath.parse(streamPathCandidateFromSplat(value));
+}
+
+/** Keep parent layouts usable while a malformed child splat renders its route error boundary. */
+export function streamPathFromSplatOrRoot(value: string | undefined) {
+  const parsed = StreamPath.safeParse(streamPathCandidateFromSplat(value));
+  return parsed.success ? parsed.data : StreamPath.parse("/");
 }
 
 export function streamPathParent(path: StreamPath) {
