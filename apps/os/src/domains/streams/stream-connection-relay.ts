@@ -386,10 +386,14 @@ export function openRelayedLiveState(input: {
   // materializing state for.
   let socketOpening: Promise<void> | undefined;
 
-  const ensureSocket = (): Promise<void> =>
+  const ensureSocket = () =>
     (socketOpening ??= (async () => {
-      if (socket !== undefined) return;
       try {
+        // Inside the try so EVERY completion clears the memo below — an
+        // early return that skipped the finally would leave a resolved
+        // promise memoized forever, and a later re-dial after the socket
+        // closed would never start (liveState stuck snapshot-only).
+        if (socket !== undefined) return;
         const upgrade = await input.stub().fetch("https://stream-wake.internal/", {
           headers: {
             Upgrade: "websocket",
