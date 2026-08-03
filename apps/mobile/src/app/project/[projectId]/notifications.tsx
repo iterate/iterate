@@ -343,6 +343,11 @@ function ApprovalNotificationDetail({
           >
             {resolved.decisionSummary}
           </Text>
+        ) : expired ? (
+          // The door's expiry decision usually lands moments later and flips
+          // this to a real Expired resolution — but never advertise a hold
+          // nobody can answer in the interim.
+          <Text style={styles.detailMuted}>Expired</Text>
         ) : (
           <Text style={styles.detailMuted}>Awaiting decision</Text>
         )}
