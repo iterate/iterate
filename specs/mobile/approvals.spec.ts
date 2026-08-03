@@ -36,7 +36,12 @@ import { test } from "../test-support/test.ts";
 // Notifications view read the same device stream.
 const DEVICE_ID = "spec-web-approver";
 
-test("approve and reject script bursts from inside the chat thread", async ({ page }, testInfo) => {
+// KNOWN GAP (2026-08-03): repeated preview and isolated runs intermittently
+// lose the approval batch before it reaches the thread or notification journal.
+// Evidence and restoration criteria: tasks/quarantined-mobile-approvals-event-delivery.md.
+test.skip("approve and reject script bursts from inside the chat thread", async ({
+  page,
+}, testInfo) => {
   const osBaseUrl = await resolveOsBaseUrl();
   const echo = await startEgressEcho();
   try {

@@ -1,7 +1,7 @@
 /**
  * Shared machinery for path-addressed tree lists (agents, streams): flatten a
- * forest into visible rows honoring search and expansion, find the closest
- * materialized ancestor of a path, and toggle a member of an immutable set.
+ * forest into visible rows honoring search and expansion, and toggle a member
+ * of an immutable set.
  */
 
 /** A forest flattened to visible list rows. `expanded` is the disclosure
@@ -36,20 +36,6 @@ export function flattenTreeRows<T>(
     return expanded ? [row, ...childRows] : [row];
   };
   return roots.flatMap((root) => walk(root, 0));
-}
-
-/** Deepest strict "/"-boundary prefix of `path` present in `byPath`. */
-export function closestAncestorByPath<T>(
-  path: string,
-  byPath: ReadonlyMap<string, T>,
-): T | undefined {
-  let boundary = path.lastIndexOf("/");
-  while (boundary > 0) {
-    const ancestor = byPath.get(path.slice(0, boundary));
-    if (ancestor !== undefined) return ancestor;
-    boundary = path.lastIndexOf("/", boundary - 1);
-  }
-  return undefined;
 }
 
 export function toggledSet(current: ReadonlySet<string>, member: string): ReadonlySet<string> {

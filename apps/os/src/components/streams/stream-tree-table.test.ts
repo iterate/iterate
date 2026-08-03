@@ -23,21 +23,20 @@ describe("stream tree table model", () => {
     const rows = [stream("/agents/slack/c123/ts12313/child"), stream("/outside/worker", 3)];
     const [root] = buildIndexedStreamForest(Object.fromEntries(rows.map((row) => [row.path, row])));
 
-    expect(root).toMatchObject({ path: "/", indexed: false });
-    expect(root?.eventCount).toBeUndefined();
+    expect(root).toMatchObject({ path: "/" });
+    expect(root?.indexRow).toBeUndefined();
     expect(root?.children.map((node) => node.path)).toEqual(["/agents", "/outside"]);
 
     const agents = root?.children[0];
-    expect(agents).toMatchObject({ path: "/agents", indexed: false });
+    expect(agents).toMatchObject({ path: "/agents" });
+    expect(agents?.indexRow).toBeUndefined();
     expect(agents?.children[0]?.children[0]?.children[0]?.children[0]).toMatchObject({
       path: "/agents/slack/c123/ts12313/child",
-      indexed: true,
-      eventCount: 1,
+      indexRow: expect.objectContaining({ eventCount: 1 }),
     });
     expect(root?.children[1]?.children[0]).toMatchObject({
       path: "/outside/worker",
-      indexed: true,
-      eventCount: 3,
+      indexRow: expect.objectContaining({ eventCount: 3 }),
     });
   });
 
@@ -45,16 +44,16 @@ describe("stream tree table model", () => {
     const rows = [stream("/agents", 2), stream("/agents/a/deep", 4)];
     const [root] = buildIndexedStreamForest(Object.fromEntries(rows.map((row) => [row.path, row])));
 
-    expect(root).toMatchObject({ path: "/", indexed: false });
-    expect(root?.children[0]).toMatchObject({ path: "/agents", indexed: true, eventCount: 2 });
-    expect(root?.children[0]?.children[0]).toMatchObject({
-      path: "/agents/a",
-      indexed: false,
+    expect(root).toMatchObject({ path: "/" });
+    expect(root?.children[0]).toMatchObject({
+      path: "/agents",
+      indexRow: expect.objectContaining({ eventCount: 2 }),
     });
+    expect(root?.children[0]?.children[0]).toMatchObject({ path: "/agents/a" });
+    expect(root?.children[0]?.children[0]?.indexRow).toBeUndefined();
     expect(root?.children[0]?.children[0]?.children[0]).toMatchObject({
       path: "/agents/a/deep",
-      indexed: true,
-      eventCount: 4,
+      indexRow: expect.objectContaining({ eventCount: 4 }),
     });
   });
 
@@ -70,8 +69,8 @@ describe("stream tree table model", () => {
     };
     visit(forest);
 
-    expect(byPath.get("/a/b/")).toMatchObject({ indexed: true, eventCount: 2 });
-    expect(byPath.get("/a//c")).toMatchObject({ indexed: true, eventCount: 3 });
+    expect(byPath.get("/a/b/")?.indexRow).toMatchObject({ eventCount: 2 });
+    expect(byPath.get("/a//c")?.indexRow).toMatchObject({ eventCount: 3 });
   });
 
   test("labels leaf paths and formats event counts", () => {

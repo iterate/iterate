@@ -1,3 +1,9 @@
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+} from "@tanstack/react-router";
 import { describe, expect, it } from "vitest";
 import {
   StreamPath,
@@ -7,6 +13,21 @@ import {
   streamPathParent,
   streamPathToSplat,
 } from "./stream-links.ts";
+import { linkOptionsForStreamPath } from "./stream-routes.ts";
+
+const rootRoute = createRootRoute();
+const streamRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/projects/$projectSlug/streams/$",
+  params: {
+    parse: (raw) => ({ ...raw, _splat: streamPathFromSplat(raw._splat) }),
+    stringify: (parsed) => ({ ...parsed, _splat: streamPathToSplat(parsed._splat) }),
+  },
+});
+const streamRouter = createRouter({
+  routeTree: rootRoute.addChildren([streamRoute]),
+  history: createMemoryHistory(),
+});
 
 describe("StreamPath", () => {
   it("accepts the empty root and ordinary kebab segments", () => {
@@ -39,4 +60,15 @@ describe("StreamPath", () => {
     expect(streamPathFromSplatOrRoot("Agents/Bad")).toBe("/");
     expect(streamPathFromSplatOrRoot("agents/with%20space")).toBe("/");
   });
+
+  it.each(["/a//c", "/a/b/"])(
+    "keeps malformed indexed path %s invalid through router normalization",
+    (path) => {
+      const location = streamRouter.buildLocation(linkOptionsForStreamPath("example", path));
+      const streamMatch = streamRouter.matchRoutes(location.href).at(-1);
+
+      expect(streamMatch?.routeId).toBe("/projects/$projectSlug/streams/$");
+      expect(streamMatch?.paramsError).toBeDefined();
+    },
+  );
 });

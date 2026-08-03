@@ -44,7 +44,7 @@ export function StreamTreeRowContent({
       <span
         className={cn("ml-auto text-[11px] tabular-nums text-foreground/70", EVENTS_COLUMN_CLASS)}
       >
-        {node.eventCount === undefined ? null : formatEventCount(node.eventCount)}
+        {node.indexRow === undefined ? null : formatEventCount(node.indexRow.eventCount)}
       </span>
     </>
   );

@@ -13,6 +13,7 @@ type StreamIndexTableProps = Parameters<typeof StreamIndexTablePanel>[0];
 
 const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
+  projectId: "project-1",
   streamIndexTableProps: undefined as StreamIndexTableProps | undefined,
   routeComponent: undefined as ComponentType | undefined,
   useLiveState: vi.fn(() => ({
@@ -34,13 +35,13 @@ vi.mock("@tanstack/react-router", () => ({
   createFileRoute: () => (options: { component: ComponentType }) => {
     mocks.routeComponent = options.component;
     return {
-      useParams: () => ({ projectId: "project-1" }),
+      useParams: () => ({ projectId: mocks.projectId }),
     };
   },
   linkOptions: <Options,>(options: Options) => options,
   Outlet: () => null,
+  useMatch: () => undefined,
   useNavigate: () => mocks.navigate,
-  useParams: () => ({}),
 }));
 
 vi.mock("iterate/sdk/itx/react", () => ({
@@ -60,6 +61,7 @@ vi.mock("~/lib/stream-navigation.ts", () => ({
 }));
 
 beforeEach(() => {
+  mocks.projectId = "project-1";
   mocks.navigate.mockReset();
   mocks.streamIndexTableProps = undefined;
   mocks.useLiveState.mockClear();
@@ -69,7 +71,7 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-test("the root table row returns to the admin project index", async () => {
+test("subscribes once to the project index and navigates root and deep rows", async () => {
   await import("./route.tsx");
   const Layout = mocks.routeComponent;
   expect(Layout).toBeDefined();
@@ -101,6 +103,29 @@ test("the root table row returns to the admin project index", async () => {
     params: { projectId: "project-1", _splat: "/agents/slack" },
     search: {},
   });
+
+  await act(async () => root.unmount());
+});
+
+test("keeps the global namespace inert because it has no project index", async () => {
+  mocks.projectId = "__null__";
+  await import("./route.tsx");
+  const Layout = mocks.routeComponent;
+  expect(Layout).toBeDefined();
+
+  const container = document.createElement("div");
+  document.body.appendChild(container);
+  const root = createRoot(container);
+  await act(async () => root.render(Layout === undefined ? null : <Layout />));
+
+  expect(mocks.useLiveState).toHaveBeenCalledWith(
+    expect.any(Function),
+    expect.any(Function),
+    ["__null__"],
+    { slug: "__null__", enabled: false },
+  );
+  expect(mocks.useLiveState).toHaveBeenCalledTimes(1);
+  expect(mocks.streamIndexTableProps?.available).toBe(false);
 
   await act(async () => root.unmount());
 });
