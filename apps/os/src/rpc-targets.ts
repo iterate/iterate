@@ -1160,6 +1160,18 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
       void (async () => {
         try {
           const previous = currentHandle;
+          if (previous !== undefined) {
+            // A wake while a leg exists is either stale — sent in the gap
+            // between socket accept and openConnection binding it, when the
+            // DO saw an unstamped, connection-absent socket, and delivered
+            // after the dial resolved — or the leg died without an idle
+            // frame (DO eviction). Probing distinguishes them: a healthy leg
+            // makes the frame a no-op instead of a spurious replace.
+            const live = await Promise.resolve()
+              .then(() => previous.ping())
+              .catch(() => false);
+            if (live === true || currentHandle !== previous) return;
+          }
           currentHandle = undefined;
           disposeStub(previous);
           currentHandle = await dial(deliveredThroughOffset, true);
