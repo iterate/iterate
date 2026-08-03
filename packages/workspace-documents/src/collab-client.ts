@@ -175,7 +175,10 @@ export class CollabConnection {
     this.dead = false;
     // Fresh dedupe identity: same-epoch recovery restarts clientSeq at 0, and
     // the server has already acked the old (clientId, seq) pairs — reusing
-    // them would silently drop every carried edit.
+    // them would silently drop every carried edit. Leave under the OLD id
+    // first (best-effort): otherwise its caret lingers server-side for the
+    // 45s staleness window and the strip shows a ghost second self.
+    this.present(null);
     this.clientId = freshClientId(this.displayName);
   }
 }

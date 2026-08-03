@@ -37,8 +37,9 @@ export function useCollabEditor(input: {
   onLiveContent?: (path: string, content: string) => void;
   /** Everyone with a live caret on this document (self included), whenever
    * the presence generation advances — host chrome renders it (an avatar
-   * strip); the in-editor cursor layer is separate and always on. */
-  onPeers?: (input: { self: string; clientIds: string[] }) => void;
+   * strip); the in-editor cursor layer is separate and always on. Null when
+   * the session has no presence at all (ended) — hide the strip. */
+  onPeers?: (input: { self: string; clientIds: string[] } | null) => void;
   onStatus?: (status: string) => void;
   /** Filled with the live-doc API while the editor is mounted (see
    * CollabEditorApi — the board mutates open files through this). */
@@ -82,11 +83,17 @@ export function useCollabEditor(input: {
     const connection = new CollabConnection(transport, workspacePath, displayName);
     connection.onStatus = setStatus;
     connection.onPeers = (clients) => {
-      // self at call time: the connection rotates its clientId on reseed.
-      input.onPeers?.({
-        self: connection.clientId,
-        clientIds: [...new Set(clients.map((client) => client.clientId))],
-      });
+      // Empty delivery = a dead session (the client fires [] on ended):
+      // clear the strip rather than re-injecting a self that is not live.
+      // Otherwise self at call time — the clientId rotates on reseed.
+      input.onPeers?.(
+        clients.length === 0
+          ? null
+          : {
+              self: connection.clientId,
+              clientIds: [...new Set(clients.map((client) => client.clientId))],
+            },
+      );
     };
     const redlineLayer = new Compartment();
     let view: EditorView | null = null;

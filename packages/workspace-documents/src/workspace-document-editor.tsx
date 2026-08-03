@@ -39,8 +39,8 @@ export function WorkspaceDocumentEditor({
   apiRef?: { current: CollabEditorApi | null };
   onLiveContent: (path: string, content: string) => void;
   /** Everyone with a live caret on this document (self included) — for host
-   * chrome such as a presence avatar strip. */
-  onPeers?: (input: { self: string; clientIds: string[] }) => void;
+   * chrome such as a presence avatar strip. Null when the session ended. */
+  onPeers?: (input: { self: string; clientIds: string[] } | null) => void;
   onStatus?: (status: string) => void;
   /** Cmd/Ctrl+Enter: done editing — close the sheet. */
   onRequestClose?: () => void;
