@@ -54,7 +54,6 @@ test("template ships packaged apps behind a thin router", () => {
   // app removes their WAKE subscription.
   expect(templatePackageJson.dependencies).toMatchObject({
     "@iterate-com/docs": expect.any(String),
-    "@iterate-com/tasks": expect.any(String),
     iterate: expect.any(String),
     react: expect.any(String),
     zod: expect.any(String),
@@ -204,41 +203,6 @@ test.each([null, ""])(
   },
 );
 
-test.each([null, ""])(
-  "the Tasks proxy uses its production origin when the stored override is %j",
-  async (configuredOrigin) => {
-    const outboundFetch = vi.fn(async (request: Request) => new Response(request.url));
-    vi.stubGlobal("fetch", outboundFetch);
-    const project = {
-      auth: {
-        get: vi.fn(() => ({ fetch: vi.fn(async () => null) })),
-      },
-      kv: {
-        get: vi.fn(async () => configuredOrigin),
-      },
-      [Symbol.dispose]: vi.fn(),
-    };
-    const worker = new ProjectWorker(
-      {} as never,
-      {
-        ITERATE_WORKER_VERSION: "test",
-        ITX: { get: vi.fn(async () => project) },
-      } as never,
-    );
-
-    await worker.fetch(
-      new Request("https://tasks--example.iterate.app/w?workspace=%2Fworkspaces%2Fagents%2Fyou", {
-        headers: { "x-iterate-app": "tasks" },
-      }),
-    );
-
-    expect(outboundFetch).toHaveBeenCalledOnce();
-    expect(outboundFetch.mock.calls[0]![0].url).toBe(
-      "https://tasks.iterate.workers.dev/w?workspace=%2Fworkspaces%2Fagents%2Fyou",
-    );
-  },
-);
-
 test("template gets the platform sdk from iterate/sdk, not a committed snapshot", () => {
   // Seeded repos used to carry a 2000-line sdk.ts frozen at seed time. Now
   // worker.ts imports straight from `iterate/sdk` and worker builds
@@ -252,16 +216,17 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   expect(templateFile("worker.ts")).toContain('from "@iterate-com/docs"');
   expect(templateFile("worker.ts")).toContain("get docs()");
   expect(templateFile("worker.ts")).toContain("return this.#docsApp.rpc");
-  expect(templateFile("worker.ts")).toContain('from "@iterate-com/tasks"');
+  // The tasks board is the docs app's /w view: the tasks capability mints
+  // links there and there is no tasks host branch or proxy.
   expect(templateFile("worker.ts")).toContain("get tasks()");
   expect(templateFile("worker.ts")).toContain("return this.#tasksApp.rpc");
+  expect(templateFile("worker.ts")).not.toContain('if (app === "tasks")');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {
     dependencies: Record<string, string>;
   };
   expect(templatePackageJson.dependencies).toMatchObject({
     "@iterate-com/docs": "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main",
-    "@iterate-com/tasks": "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main",
     iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
   });
 });

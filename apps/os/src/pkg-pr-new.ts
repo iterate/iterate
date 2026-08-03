@@ -10,7 +10,7 @@
  *
  * Recognized shapes (both verified resolving):
  *
- *   https://pkg.pr.new/iterate/iterate/<name>@<ref>   e.g. iterate, @iterate-com/tasks
+ *   https://pkg.pr.new/iterate/iterate/<name>@<ref>   e.g. iterate, @iterate-com/docs
  *   https://pkg.pr.new/iterate/iterate@<ref>          compact form of the repo-named package
  *
  * `<ref>` is a branch (`main`), a 40-char commit SHA, or a PR number. Scoped

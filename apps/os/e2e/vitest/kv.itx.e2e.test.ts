@@ -12,29 +12,29 @@ test("itx.kv round-trips small values, lists by prefix, and is project-scoped", 
   await project.projectId;
   using other = await admin.projects.get(`kv-other-${crypto.randomUUID().slice(0, 8)}`).create({});
 
-  expect(await project.kv.get("tasks-app-origin")).toBeNull();
+  expect(await project.kv.get("docs-app-origin")).toBeNull();
 
-  await project.kv.set("tasks-app-origin", "jonas-tasks.tunnels.iterate.com");
-  expect(await project.kv.get("tasks-app-origin")).toBe("jonas-tasks.tunnels.iterate.com");
+  await project.kv.set("docs-app-origin", "jonas-docs.tunnels.iterate.com");
+  expect(await project.kv.get("docs-app-origin")).toBe("jonas-docs.tunnels.iterate.com");
 
   // Values are structured, not just strings.
-  await project.kv.set("routing/tasks", { canaryUserIds: ["usr_1"], target: "dev" });
-  expect(await project.kv.get("routing/tasks")).toEqual({
+  await project.kv.set("routing/docs", { canaryUserIds: ["usr_1"], target: "dev" });
+  expect(await project.kv.get("routing/docs")).toEqual({
     canaryUserIds: ["usr_1"],
     target: "dev",
   });
 
-  expect((await project.kv.list()).sort()).toEqual(["routing/tasks", "tasks-app-origin"]);
-  expect(await project.kv.list({ prefix: "routing/" })).toEqual(["routing/tasks"]);
+  expect((await project.kv.list()).sort()).toEqual(["routing/docs", "docs-app-origin"]);
+  expect(await project.kv.list({ prefix: "routing/" })).toEqual(["routing/docs"]);
 
   // Another project sees none of it.
-  expect(await other.kv.get("tasks-app-origin")).toBeNull();
+  expect(await other.kv.get("docs-app-origin")).toBeNull();
   expect(await other.kv.list()).toEqual([]);
 
-  await project.kv.delete("tasks-app-origin");
-  expect(await project.kv.get("tasks-app-origin")).toBeNull();
+  await project.kv.delete("docs-app-origin");
+  expect(await project.kv.get("docs-app-origin")).toBeNull();
   // Deleting an absent key is a no-op, not an error.
-  await project.kv.delete("tasks-app-origin");
+  await project.kv.delete("docs-app-origin");
 
   // Guards: empty keys and oversized values refuse. (Async closures: a bare
   // expect(stub).rejects can vacuously pass — see capnweb notes.)

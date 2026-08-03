@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useRef, useState } from "react";
 import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
   ArrowLeft,
@@ -37,10 +37,9 @@ import { withDocsProject } from "../lib/docs-client.ts";
 import { CloseMobileSidebarOnNavigate } from "./close-mobile-sidebar-on-navigate.tsx";
 
 /**
- * The VIEWS a workspace can be seen through — the docs and tasks apps are
- * sibling lenses over the same workspace, so the sidebar switches between
- * them. Docs is this app; Tasks lives on the sibling project host
- * (`docs--<slug>` ↔ `tasks--<slug>`), carrying the current workspace along.
+ * The VIEWS a workspace can be seen through — documents and the task board
+ * are two lenses of THIS one app (the board is the /w route), so switching
+ * views is plain navigation carrying the workspace along.
  * Composition follows the apps/os AppSidebar (shadcn sidebar blocks 07/08):
  * workspace-switcher dropdown in the header (the os project switcher, with
  * workspaces for projects), icon collapse, footer collapse button, rail.
@@ -48,30 +47,11 @@ import { CloseMobileSidebarOnNavigate } from "./close-mobile-sidebar-on-navigate
 export function AppSidebar() {
   // The sidebar renders OUTSIDE any one route, so the router cannot type
   // this search value; the loose view is safe because `workspace` is read
-  // as optional and only seeds the switcher + tasks-view link — absent (or
-  // any other shape), both fall back to their home targets.
+  // as optional and only seeds the switcher + view links — absent (or any
+  // other shape), both fall back to their home targets.
   const location = useRouterState({ select: (state) => state.location });
   const workspacePath = (location.search as { workspace?: string }).workspace;
-  // The sibling tasks host exists only on project hosts, and only the
-  // BROWSER knows that host (the config-worker proxy rewrites Host before
-  // the vessel sees it) — so the link resolves after mount, never in SSR.
-  const [tasksHref, setTasksHref] = useState<string | null>(null);
-  useEffect(() => {
-    const sibling = siblingTasksOrigin(window.location.hostname);
-    if (sibling === null) {
-      setTasksHref(null);
-      return;
-    }
-    // Carry the port: local project hosts are `docs--<slug>.localhost:<port>`
-    // and the sibling serves from the same one.
-    const port = window.location.port === "" ? "" : `:${window.location.port}`;
-    const url = new URL(`${window.location.protocol}//${sibling}${port}/w`);
-    if (workspacePath !== undefined) {
-      url.searchParams.set("workspace", workspacePath);
-      url.searchParams.set("repo", "/repos/config");
-    }
-    setTasksHref(workspacePath === undefined ? `${url.origin}/` : url.href);
-  }, [workspacePath]);
+  const boardView = location.pathname.startsWith("/w");
 
   return (
     <>
@@ -82,7 +62,7 @@ export function AppSidebar() {
         {/* Collapsed: nudge the logo down so its center lines up with the page
           header row — the same transition the os and tasks sidebars use. */}
         <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
-          <WorkspaceSwitcher workspacePath={workspacePath} />
+          <WorkspaceSwitcher workspacePath={workspacePath} boardView={boardView} />
         </SidebarHeader>
         <SidebarContent>
           <SidebarGroup>
@@ -90,30 +70,40 @@ export function AppSidebar() {
             <SidebarGroupContent>
               <SidebarMenu>
                 <SidebarMenuItem>
-                  <SidebarMenuButton isActive tooltip="Docs — this document">
+                  <SidebarMenuButton
+                    isActive={!boardView}
+                    tooltip="Docs — the document view of this workspace"
+                    render={
+                      <Link
+                        to="/"
+                        search={workspacePath === undefined ? {} : { workspace: workspacePath }}
+                      />
+                    }
+                  >
                     <FileTextIcon aria-hidden />
                     <span>Docs</span>
                   </SidebarMenuButton>
                 </SidebarMenuItem>
                 <SidebarMenuItem>
-                  {tasksHref === null ? (
-                    <SidebarMenuButton
-                      disabled
-                      tooltip="Tasks — available on the project's own host"
-                      className="opacity-50"
-                    >
-                      <SquareKanbanIcon aria-hidden />
-                      <span>Tasks</span>
-                    </SidebarMenuButton>
-                  ) : (
-                    <SidebarMenuButton
-                      tooltip="Tasks — the board view of this workspace"
-                      render={<a href={tasksHref} aria-label="Tasks" />}
-                    >
-                      <SquareKanbanIcon aria-hidden />
-                      <span>Tasks</span>
-                    </SidebarMenuButton>
-                  )}
+                  <SidebarMenuButton
+                    isActive={boardView}
+                    tooltip="Tasks — the board view of this workspace"
+                    render={
+                      <Link
+                        to="/w"
+                        search={{
+                          group: "folder",
+                          q: "",
+                          repo: "",
+                          task: "",
+                          workspace: workspacePath ?? "",
+                        }}
+                      />
+                    }
+                  >
+                    <SquareKanbanIcon aria-hidden />
+                    <span>Tasks</span>
+                  </SidebarMenuButton>
                 </SidebarMenuItem>
               </SidebarMenu>
             </SidebarGroupContent>
@@ -130,12 +120,18 @@ export function AppSidebar() {
 
 /**
  * The os project switcher, one level down: the header dropdown names the
- * current workspace and switches between them. Workspace items land on the
- * home picker scoped to that workspace (picking a document is the next
- * step); New workspace mints an ephemeral scratch one and jumps straight
- * into its starter document.
+ * current workspace and switches between them. Workspace items stay in the
+ * CURRENT view — the docs picker scoped to that workspace, or the board on
+ * it; New workspace mints an ephemeral scratch one and jumps straight into
+ * its starter document.
  */
-function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefined }) {
+function WorkspaceSwitcher({
+  workspacePath,
+  boardView,
+}: {
+  workspacePath: string | undefined;
+  boardView: boolean;
+}) {
   const navigate = useNavigate();
   const { isMobile } = useSidebar();
   const [workspaces, setWorkspaces] = useState<{ path: string; createdAt: string }[] | null>(null);
@@ -234,7 +230,22 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
                   <DropdownMenuItem
                     key={entry.path}
                     className="gap-2 p-2"
-                    render={<Link to="/" search={{ workspace: entry.path }} />}
+                    render={
+                      boardView ? (
+                        <Link
+                          to="/w"
+                          search={{
+                            group: "folder",
+                            q: "",
+                            repo: "",
+                            task: "",
+                            workspace: entry.path,
+                          }}
+                        />
+                      ) : (
+                        <Link to="/" search={{ workspace: entry.path }} />
+                      )
+                    }
                   >
                     <span className="flex size-6 shrink-0 items-center justify-center rounded-md border text-xs font-medium text-muted-foreground">
                       {(entry.path.split("/").filter(Boolean).at(-1) ?? "?").slice(0, 1)}
@@ -266,18 +277,6 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
       </SidebarMenuItem>
     </SidebarMenu>
   );
-}
-
-/** `docs--<slug>.<base>` proxy hosts and `docs.<name>.<base>` custom domains
- * both have a tasks sibling; anything else (a dev tunnel, a direct vessel
- * hit) has none. */
-function siblingTasksOrigin(hostname: string): string | null {
-  // The shared vessel host (docs.iterate.workers.dev) is NOT a project
-  // custom domain — its tasks twin serves only a landing page.
-  if (hostname.endsWith(".workers.dev")) return null;
-  if (/^docs--[^.]+\./.test(hostname)) return hostname.replace(/^docs--/, "tasks--");
-  if (/^docs\.[^.]+\./.test(hostname)) return hostname.replace(/^docs\./, "tasks.");
-  return null;
 }
 
 function AppSidebarCollapseButton() {
