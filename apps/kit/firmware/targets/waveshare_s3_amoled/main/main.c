@@ -821,6 +821,7 @@ static void playback_task(void *argument) {
       }
     }
 
+    const uint64_t write_started_ms = now_ms(NULL);
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
       waveshare_recorder_write_speaker(chunk, received);
@@ -838,7 +839,19 @@ static void playback_task(void *argument) {
        * being late is worse than being clipped.
        */
       {
-        const uint64_t played_at = now_ms(NULL);
+        /*
+         * STAMPED BEFORE THE WRITE, NOT AFTER.
+         *
+         * waveshare_audio_write blocks until the I2S driver accepts the
+         * frame, which is the DMA's own pacing — up to a frame period on
+         * every call. Stamping after it folds that wait into the measurement,
+         * so a perfectly punctual loop reports itself progressively later and
+         * the catch-up rule then deletes speech to fix a delay that only
+         * existed in the metric. Measured that way: 1089 ms of "lag" while
+         * the ring held 1620 ms of audio, which is the signature of a
+         * consumer that is keeping up.
+         */
+        const uint64_t played_at = write_started_ms;
         if (runtime.answer_started_ms == 0U) {
           runtime.answer_started_ms = played_at;
           runtime.answer_frames_played = 0U;
