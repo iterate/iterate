@@ -9,6 +9,7 @@ import {
   SparklesIcon,
 } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { DocumentComments } from "@iterate-com/workspace-documents/comments";
@@ -143,66 +144,78 @@ export function WorkspaceDocumentPage({
   const displayName =
     loaded.user.name ?? loaded.user.email ?? loaded.user.userId ?? identity.authorDisplay;
   const busy = status === "connecting…";
-  const title = documentTitle(source, loaded.snapshot.format, path);
   const commentsSource =
     loaded.snapshot.format === "html" ? annotationsSourceForHtmlDocument(source) : source;
 
   // div, not main: SidebarInset already renders the main landmark.
   return (
     <div className="flex min-h-svh flex-col bg-background lg:h-svh lg:overflow-hidden">
-      <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur">
+      {/* The tasks bar's language: one slim h-11 strip, the document path as
+          the only text (sidebar carries workspace + view), icon-only
+          controls with tooltips, status shown only while it is news. */}
+      <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
         <SidebarTrigger className="-ml-1 md:hidden" />
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
-          <FileTextIcon aria-hidden className="size-4" />
-        </div>
-        <div className="min-w-0">
-          <div className="flex items-center gap-2">
-            <h1 className="truncate text-sm font-semibold">{title}</h1>
-            <span className="hidden rounded-full border px-1.5 py-0.5 font-mono text-[10px] text-muted-foreground sm:inline">
-              {loaded.snapshot.format}
-            </span>
-          </div>
-          {/* Just the document: the sidebar names the workspace and the
-              view, so the header repeats neither — relative when the file
-              lives in the workspace's own directory, the full mount path
-              otherwise. */}
-          <p className="truncate font-mono text-[11px] text-muted-foreground">
-            {loaded.snapshot.path.startsWith(`${workspacePath}/`)
-              ? loaded.snapshot.path.slice(workspacePath.length + 1)
-              : loaded.snapshot.path}
-          </p>
-        </div>
-        <div className="ml-auto flex items-center gap-1.5">
+        <FileTextIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
+        <h1 className="min-w-0 truncate font-mono text-xs">
+          {loaded.snapshot.path.startsWith(`${workspacePath}/`)
+            ? loaded.snapshot.path.slice(workspacePath.length + 1)
+            : loaded.snapshot.path}
+        </h1>
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <DocumentPresence peers={peers} />
-          <span className="hidden max-w-40 truncate text-[11px] text-muted-foreground md:block">
-            {status}
-          </span>
-          <Button size="sm" onClick={() => commentsRef.current?.focusDocumentComment()}>
-            <MessageSquarePlusIcon aria-hidden />
-            <span className="hidden sm:inline">Comment on document</span>
-            <span className="sm:hidden">Comment</span>
-          </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() => setShowChanges((value) => !value)}
-            aria-pressed={showChanges}
-            className={showChanges ? "bg-muted" : undefined}
-          >
-            <SparklesIcon aria-hidden />
-            <span className="hidden sm:inline">Changes</span>
-          </Button>
-          <Button variant="ghost" size="sm" onClick={copyLink}>
-            {copied ? <CheckIcon aria-hidden /> : <CopyIcon aria-hidden />}
-            <span className="hidden sm:inline">{copied ? "Copied" : "Copy link"}</span>
-          </Button>
-          <div className="ml-1 flex rounded-lg border bg-muted/30 p-0.5">
-            <ViewButton active={view === "preview"} onClick={() => setView("preview")}>
-              <EyeIcon aria-hidden /> Preview
-            </ViewButton>
-            <ViewButton active={view === "source"} onClick={() => setView("source")}>
-              <Code2Icon aria-hidden /> Source
-            </ViewButton>
+          {!status.startsWith("live") && (
+            <span className="hidden max-w-40 truncate text-[11px] text-muted-foreground md:block">
+              {status}
+            </span>
+          )}
+          <WithTooltip label="Comment on document">
+            <Button
+              size="sm"
+              className="h-8 w-8 px-0"
+              aria-label="Comment on document"
+              onClick={() => commentsRef.current?.focusDocumentComment()}
+            >
+              <MessageSquarePlusIcon aria-hidden className="size-3.5" />
+            </Button>
+          </WithTooltip>
+          <WithTooltip label={showChanges ? "Hide changes" : "Track changes"}>
+            <Button
+              variant={showChanges ? "secondary" : "outline"}
+              size="sm"
+              className="h-8 w-8 px-0"
+              aria-label="Track changes"
+              aria-pressed={showChanges}
+              onClick={() => setShowChanges((value) => !value)}
+            >
+              <SparklesIcon aria-hidden className="size-3.5" />
+            </Button>
+          </WithTooltip>
+          <WithTooltip label={copied ? "Copied!" : "Copy share link"}>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 w-8 px-0"
+              aria-label="Copy share link"
+              onClick={copyLink}
+            >
+              {copied ? (
+                <CheckIcon aria-hidden className="size-3.5" />
+              ) : (
+                <CopyIcon aria-hidden className="size-3.5" />
+              )}
+            </Button>
+          </WithTooltip>
+          <div className="flex rounded-lg border bg-muted/30 p-0.5">
+            <WithTooltip label="Preview">
+              <ViewButton active={view === "preview"} onClick={() => setView("preview")}>
+                <EyeIcon aria-hidden className="size-3.5" />
+              </ViewButton>
+            </WithTooltip>
+            <WithTooltip label={`Source (${loaded.snapshot.format})`}>
+              <ViewButton active={view === "source"} onClick={() => setView("source")}>
+                <Code2Icon aria-hidden className="size-3.5" />
+              </ViewButton>
+            </WithTooltip>
           </div>
         </div>
       </header>
@@ -271,25 +284,6 @@ export function WorkspaceDocumentPage({
   );
 }
 
-function documentTitle(source: string, format: "html" | "markdown", path: string): string {
-  const parsed = parseAnnotatedMarkdown(source);
-  const body = parsed.kind === "structured" ? parsed.body : source;
-  if (format === "html") {
-    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(body)?.[1];
-    if (title !== undefined) {
-      const plain = title
-        .replace(/<[^>]+>/g, "")
-        .replace(/\s+/g, " ")
-        .trim();
-      if (plain !== "") return plain;
-    }
-  } else {
-    const heading = /^#\s+(.+?)\s*#*\s*$/m.exec(body)?.[1]?.trim();
-    if (heading !== undefined && heading !== "") return heading;
-  }
-  return path.split("/").at(-1) ?? path;
-}
-
 /**
  * The presence avatar strip, ported from the tasks board: everyone with a
  * live caret on this document — yourself included, first, ringed in your own
@@ -314,5 +308,16 @@ function DocumentPresence({ peers }: { peers: { self: string; clientIds: string[
         <span className="pl-2 text-xs text-muted-foreground">+{everyone.length - 6}</span>
       ) : null}
     </div>
+  );
+}
+
+/** Icon-only controls get their labels back as hover tooltips — the same
+ * pattern as the tasks bar; shared properly when the apps combine. */
+function WithTooltip({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger render={<span className="inline-flex" />}>{children}</TooltipTrigger>
+      <TooltipContent side="bottom">{label}</TooltipContent>
+    </Tooltip>
   );
 }
