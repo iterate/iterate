@@ -34,6 +34,12 @@ import {
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
 import { withDocsProject } from "../lib/docs-client.ts";
+import {
+  DEFAULT_REPO_PATH,
+  checkoutWorkspacePath,
+  isCheckoutId,
+  normalizeRepoPath,
+} from "../lib/checkout-shared.ts";
 import { CloseMobileSidebarOnNavigate } from "./close-mobile-sidebar-on-navigate.tsx";
 
 /**
@@ -46,12 +52,22 @@ import { CloseMobileSidebarOnNavigate } from "./close-mobile-sidebar-on-navigate
  */
 export function AppSidebar() {
   // The sidebar renders OUTSIDE any one route, so the router cannot type
-  // this search value; the loose view is safe because `workspace` is read
-  // as optional and only seeds the switcher + view links — absent (or any
-  // other shape), both fall back to their home targets.
+  // this search value; the loose view is safe because both fields are read
+  // as optional and only seed the switcher + view links — absent (or any
+  // other shape), everything falls back to its home target.
   const location = useRouterState({ select: (state) => state.location });
-  const workspacePath = (location.search as { workspace?: string }).workspace;
+  const search = location.search as { repo?: string; workspace?: string };
   const boardView = location.pathname.startsWith("/w");
+  // An owned board (/w/<checkoutId>) carries no ?workspace= — its workspace
+  // path is DERIVED from the id + repo, so derive it here too or the
+  // switcher (and the Docs view link) would lose the workspace on the
+  // board's main route.
+  const checkoutId = decodeURIComponent(/^\/w\/([^/]+)/.exec(location.pathname)?.[1] ?? "");
+  const workspacePath =
+    search.workspace ??
+    (isCheckoutId(checkoutId)
+      ? checkoutWorkspacePath(checkoutId, normalizeRepoPath(search.repo) ?? DEFAULT_REPO_PATH)
+      : undefined);
 
   return (
     <>
