@@ -129,12 +129,13 @@ export function WorkspaceDocumentPage({
   }
   if (loaded === null) {
     return (
-      <main className="grid min-h-svh place-items-center bg-muted/20">
+      <div className="relative grid min-h-svh place-items-center bg-muted/20">
+        <SidebarTrigger className="absolute top-3 left-3 md:hidden" />
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
           <Spinner className="size-4" />
           Opening document…
         </div>
-      </main>
+      </div>
     );
   }
 
@@ -146,8 +147,9 @@ export function WorkspaceDocumentPage({
   const commentsSource =
     loaded.snapshot.format === "html" ? annotationsSourceForHtmlDocument(source) : source;
 
+  // div, not main: SidebarInset already renders the main landmark.
   return (
-    <main className="flex min-h-svh flex-col bg-background lg:h-svh lg:overflow-hidden">
+    <div className="flex min-h-svh flex-col bg-background lg:h-svh lg:overflow-hidden">
       <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur">
         <SidebarTrigger className="-ml-1 md:hidden" />
         <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
@@ -268,7 +270,7 @@ export function WorkspaceDocumentPage({
           />
         </aside>
       </div>
-    </main>
+    </div>
   );
 }
 

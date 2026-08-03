@@ -20,6 +20,7 @@ export function DeepLinkEmptyState() {
   const [documents, setDocuments] = useState<string[] | null>(null);
   const [documentsError, setDocumentsError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -61,16 +62,17 @@ export function DeepLinkEmptyState() {
 
   const createScratch = () => {
     setCreating(true);
+    setCreateError(null);
     void withDocsProject((project) => project.createWorkspace())
       .then(({ workspacePath, path }) => open(workspacePath, path))
       .catch((error: unknown) => {
-        setListError(error instanceof Error ? error.message : String(error));
+        setCreateError(error instanceof Error ? error.message : String(error));
         setCreating(false);
       });
   };
 
   return (
-    <main className="relative min-h-svh bg-muted/20 px-6 py-10">
+    <div className="relative min-h-svh bg-muted/20 px-6 py-10">
       <SidebarTrigger className="absolute top-3 left-3 md:hidden" />
       <div className="mx-auto flex w-full max-w-2xl flex-col gap-6">
         <div className="flex items-start justify-between gap-4">
@@ -84,10 +86,15 @@ export function DeepLinkEmptyState() {
               links; yours start as scratch workspaces.
             </p>
           </div>
-          <Button onClick={createScratch} disabled={creating}>
-            <PlusIcon aria-hidden className="size-4" />
-            {creating ? "Creating…" : "New scratch workspace"}
-          </Button>
+          <div className="flex flex-col items-end gap-1">
+            <Button onClick={createScratch} disabled={creating}>
+              <PlusIcon aria-hidden className="size-4" />
+              {creating ? "Creating…" : "New scratch workspace"}
+            </Button>
+            {createError !== null && (
+              <p className="max-w-56 text-right text-xs text-red-700">{createError}</p>
+            )}
+          </div>
         </div>
 
         <div>
@@ -159,6 +166,6 @@ export function DeepLinkEmptyState() {
           )}
         </section>
       </div>
-    </main>
+    </div>
   );
 }

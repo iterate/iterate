@@ -105,6 +105,9 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
   }
 
   async workspaces(): Promise<{ path: string; createdAt: string }[]> {
+    // The pinned iterate client types predate this surface; capnweb stubs
+    // are Proxies, so the locally asserted members resolve at runtime — the
+    // same convention as #withWorkspace below.
     const streams = (await this.#dial.withProject((project) => {
       const catalog = (
         project as unknown as {
@@ -112,6 +115,8 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
         }
       ).streams;
       return catalog.list();
+      // The platform's StreamListItem shape ({ path, createdAt }) — asserted
+      // for the same pinned-client reason.
     })) as { createdAt: string; path: string }[];
     // Ancestor pruning, same as the tasks picker: every stream announces to
     // every ancestor path, so a nested workspace drags phantom ancestor
@@ -127,6 +132,8 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
   async documents(workspacePath: string): Promise<string[]> {
     const workspace = requireWorkspacePath(workspacePath);
     return this.#dial.withProject(async (project) => {
+      // Same pinned-client caveat as workspaces(): the glob member is part
+      // of the platform workspace surface, asserted locally.
       const stub = (
         project as unknown as {
           workspaces: { get(path: string): { glob(pattern: string): Promise<string[]> } };
@@ -151,6 +158,9 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     const workspacePath = `/workspaces/docs/${stamp}-${Math.random().toString(36).slice(2, 6)}`;
     const path = "notes.md";
     await this.#dial.withProject(async (project) => {
+      // Same pinned-client caveat as workspaces(): create/writeFile are the
+      // platform workspace surface, asserted locally; birth stays explicit
+      // (this is the app's ONE create door).
       const stub = (
         project as unknown as {
           workspaces: {

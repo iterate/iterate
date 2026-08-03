@@ -139,6 +139,9 @@ export class CollabConnection {
       this.onPresence?.(result.presence.clients);
       this.onPeers?.(result.presence.clients);
     }
+    // A dead session has no peers: clear the host strip instead of freezing
+    // the last delivered avatars.
+    if (result.status === "ended") this.onPeers?.([]);
     return result;
   }
 
