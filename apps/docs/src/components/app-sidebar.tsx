@@ -149,6 +149,9 @@ export function AppSidebar() {
  * both have a tasks sibling; anything else (a dev tunnel, a direct vessel
  * hit) has none. */
 function siblingTasksOrigin(hostname: string): string | null {
+  // The shared vessel host (docs.iterate.workers.dev) is NOT a project
+  // custom domain — its tasks twin serves only a landing page.
+  if (hostname.endsWith(".workers.dev")) return null;
   if (/^docs--[^.]+\./.test(hostname)) return hostname.replace(/^docs--/, "tasks--");
   if (/^docs\.[^.]+\./.test(hostname)) return hostname.replace(/^docs\./, "tasks.");
   return null;
