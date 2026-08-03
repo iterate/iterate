@@ -19,6 +19,9 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useItx, useLiveState } from "iterate/sdk/itx/react";
+// The Stream DO's real pushed shape; itx-api.generated.ts still carries the
+// pre-redesign types until rpc-targets is renamed and regenerated.
+import type { StreamRuntimeDebugState } from "../domains/streams/stream-runtime-state.ts";
 import {
   buildRedriveEvents,
   selectStrugglingSubscriptions,
@@ -27,15 +30,16 @@ import {
 
 /**
  * Loud sidebar warning when a subscription on the project's ROOT (`/`) stream
- * is unhealthy: HALTED (delivery gave up after sustained failure and stopped,
- * so its receiver stops seeing events until someone resumes it) or in
- * BACKOFF (delivery is failing and retrying — not stopped yet, but may halt).
- * Either way events pile up undelivered — a project-level
- * "something is wrong".
+ * is not delivering: HALTED (delivery gave up after sustained failure and
+ * stopped, so its receiver stops seeing events until someone resumes it),
+ * PARKED (the receiver is legitimately absent — not a failure, but events
+ * still accumulate undelivered until it resumes), or in BACKOFF (delivery is
+ * failing and retrying — not stopped yet, but may halt). Either way events
+ * pile up undelivered — a project-level "something is wrong".
  *
  * Read-side only. It reads the `/` stream's own `liveState`, which is
- * authoritative about each subscription's durable `deliveryHalted` fact and runtime retry
- * time. Nothing pushes into the project DO — the stream stays
+ * authoritative about each subscription's durable halt/park facts and runtime
+ * retry time. Nothing pushes into the project DO — the stream stays
  * ignorant of the sidebar.
  *
  * Scope for now: `/` only. A userspace processor that struggles on a CHILD
@@ -46,10 +50,16 @@ export function ProjectWorkerHealthWarning({ projectId }: { projectId: string | 
   const [open, setOpen] = useState(false);
   const subscriptionState = useLiveState(
     (itx) => itx.streams.get("/").liveState,
-    (state) => ({
-      configured: state.coreProcessorState.subscriptions.outbound.byKey,
-      runtime: state.runtime.subscriptions,
-    }),
+    (state) => {
+      // TODO(stream-subscriptions): drop this retype once the rpc-targets
+      // rename lands and itx-api.generated.ts is regenerated with the new
+      // byName/confirmedOffset shape.
+      const runtime = state as unknown as StreamRuntimeDebugState;
+      return {
+        configured: runtime.coreProcessorState.subscriptions.outbound.byName,
+        runtime: runtime.runtime.subscriptions,
+      };
+    },
     [projectId],
     { slug: projectId ?? "", enabled: projectId !== null },
   ).value;
@@ -61,15 +71,21 @@ export function ProjectWorkerHealthWarning({ projectId }: { projectId: string | 
   if (struggling.length === 0) return null;
 
   const haltedCount = struggling.filter((subscription) => subscription.status === "halted").length;
-  // Halted is the loud, red state; backoff-only is an amber "still trying" heads-up.
+  const parkedCount = struggling.filter((subscription) => subscription.status === "parked").length;
+  // Halted is the loud, red state; parked and backoff-only are an amber
+  // "events are piling up" heads-up.
   const severe = haltedCount > 0;
   const label = severe
     ? haltedCount === 1
       ? "Event delivery stopped"
       : `${haltedCount} event deliveries stopped`
-    : struggling.length === 1
-      ? "Event delivery retrying"
-      : `${struggling.length} event deliveries retrying`;
+    : parkedCount === struggling.length
+      ? parkedCount === 1
+        ? "Event delivery parked"
+        : `${parkedCount} event deliveries parked`
+      : struggling.length === 1
+        ? "Event delivery retrying"
+        : `${struggling.length} event deliveries struggling`;
 
   return (
     <>
@@ -123,12 +139,12 @@ function StrugglingSubscriptionsSheet({
   severe: boolean;
 }) {
   const itx = useItx(projectId ?? undefined);
-  // Keyed `${subscriptionKey}:${action}` so a single row's button shows pending
-  // while every other button disables — no two redrives race the same stream.
+  // Keyed `${name}:${action}` so a single row's button shows pending while
+  // every other button disables — no two redrives race the same stream.
   const [pending, setPending] = useState<string | null>(null);
 
   async function run(action: "resume" | "skip", subscription: SubscriptionHealth) {
-    setPending(`${subscription.subscriptionKey}:${action}`);
+    setPending(`${subscription.name}:${action}`);
     try {
       await itx.streams.get("/").append(...buildRedriveEvents(action, subscription));
       toast.success(
@@ -152,12 +168,12 @@ function StrugglingSubscriptionsSheet({
             )}
           >
             <TriangleAlert className="size-4" />
-            {severe ? "Event delivery stopped" : "Event delivery failing"}
+            {severe ? "Event delivery stopped" : "Event delivery not flowing"}
           </SheetTitle>
           <SheetDescription>
             {severe
               ? "A subscription on this project's root stream halted after repeated failures. New events pile up undelivered until you resume it."
-              : "A subscription on this project's root stream keeps failing and is retrying with backoff. It has not stopped yet, but the same event can eventually halt it."}{" "}
+              : "A subscription on this project's root stream is parked (its receiver is away) or keeps failing and is retrying with backoff. Events pile up undelivered until delivery resumes."}{" "}
             Resume retries from where it stopped; if one event keeps breaking delivery, skip past
             it.
           </SheetDescription>
@@ -166,64 +182,84 @@ function StrugglingSubscriptionsSheet({
           <div className="divide-y">
             {struggling.map((subscription) => {
               const halted = subscription.status === "halted";
+              const parked = subscription.status === "parked";
               return (
-                <div key={subscription.subscriptionKey} className="flex flex-col gap-2 px-4 py-3">
+                <div key={subscription.name} className="flex flex-col gap-2 px-4 py-3">
                   <div className="flex items-center gap-2">
                     <span
                       className={cn(
                         "shrink-0 text-[10px] font-medium tracking-wide uppercase",
-                        halted ? "text-destructive" : "text-amber-600 dark:text-amber-500",
+                        halted
+                          ? "text-destructive"
+                          : parked
+                            ? "text-sky-600 dark:text-sky-400"
+                            : "text-amber-600 dark:text-amber-500",
                       )}
                     >
-                      {halted ? "Halted" : "Retrying"}
+                      {halted ? "Halted" : parked ? "Parked" : "Retrying"}
                     </span>
                     <span className="min-w-0 flex-1 truncate font-mono text-xs">
-                      {subscription.subscriptionKey}
+                      {subscription.name}
                     </span>
                   </div>
+                  {parked ? (
+                    <p className="text-xs text-muted-foreground">
+                      The receiver is legitimately absent (for example, a live capability whose
+                      providing session closed). Nothing is failing — but events accumulate until
+                      delivery resumes.
+                    </p>
+                  ) : null}
                   <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
-                    <dt>{halted ? "Halted after" : "Stuck after"}</dt>
+                    <dt>{halted ? "Halted after" : parked ? "Parked at" : "Stuck after"}</dt>
                     <dd className="tabular-nums">
                       offset{" "}
-                      {halted ? subscription.haltedAfterOffset : subscription.acknowledgedOffset}
+                      {halted ? subscription.haltedAfterOffset : subscription.confirmedOffset}
                     </dd>
                     <dt>Behind</dt>
                     <dd className="tabular-nums">
                       {subscription.lag} event{subscription.lag === 1 ? "" : "s"}
                     </dd>
-                    <dt>Attempts</dt>
-                    <dd className="tabular-nums">{subscription.attempt}</dd>
+                    {parked ? null : (
+                      <>
+                        <dt>Attempts</dt>
+                        <dd className="tabular-nums">{subscription.attempt}</dd>
+                      </>
+                    )}
                   </dl>
                   {subscription.lastError ? (
                     <div
                       className={cn(
                         "text-xs break-words whitespace-pre-wrap",
-                        halted ? "text-destructive" : "text-amber-600 dark:text-amber-500",
+                        halted
+                          ? "text-destructive"
+                          : parked
+                            ? "text-sky-600 dark:text-sky-400"
+                            : "text-amber-600 dark:text-amber-500",
                       )}
                     >
                       {subscription.lastError}
                     </div>
                   ) : null}
                   <div className="flex gap-2 pt-1">
-                    {halted ? (
+                    {halted || parked ? (
                       <Button
                         size="sm"
                         onClick={() => run("resume", subscription)}
                         disabled={pending !== null}
                       >
-                        {pending === `${subscription.subscriptionKey}:resume`
+                        {pending === `${subscription.name}:resume`
                           ? "Resuming…"
                           : "Resume delivery"}
                       </Button>
                     ) : null}
-                    {subscription.canSetCursor ? (
+                    {subscription.canSetCursor && !parked ? (
                       <Button
                         size="sm"
                         variant="outline"
                         onClick={() => run("skip", subscription)}
                         disabled={pending !== null}
                       >
-                        {pending === `${subscription.subscriptionKey}:skip`
+                        {pending === `${subscription.name}:skip`
                           ? "Skipping…"
                           : "Skip stuck event & resume"}
                       </Button>

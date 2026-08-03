@@ -754,8 +754,9 @@ function StreamEventsSheet({
 
 /**
  * The processors sheet's one on-demand debug accessor: reduced state for the
- * focused processor. Stream runtime diagnostics arrive separately through
- * the LiveState listener, including the head offset used for lag math.
+ * focused processor subscription, addressed by its name. Stream runtime
+ * diagnostics arrive separately through the LiveState listener, including the
+ * head offset used for lag math.
  */
 function useProcessorsPanelDebugState(args: {
   resolvedStreamSource: ItxStreamSource;
@@ -763,9 +764,15 @@ function useProcessorsPanelDebugState(args: {
 }) {
   const { resolvedStreamSource, streamPath } = args;
   const getProcessorRuntimeState = useCallback(
-    async (subscriptionKey: string) => {
+    async (name: string) => {
       const stream = await resolvedStreamSource(streamPath);
-      return stream.getProcessorRuntimeState({ subscriptionKey });
+      // TODO(stream-subscriptions): the Stream DO door already takes `{ name }`
+      // but itx-api.generated.ts still types this input as `{ subscriptionKey }`
+      // until rpc-targets is renamed and regenerated. The retype keeps the wire
+      // payload on the new field; drop it with the regeneration.
+      return stream.getProcessorRuntimeState({ name } as unknown as Parameters<
+        typeof stream.getProcessorRuntimeState
+      >[0]);
     },
     [resolvedStreamSource, streamPath],
   );

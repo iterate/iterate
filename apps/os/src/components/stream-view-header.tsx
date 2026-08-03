@@ -321,7 +321,7 @@ function StreamOverflowMenu({
   };
   latencyLabel: string;
   metrics: BrowserStreamMetricsView;
-  onFocusPresence: (subscriptionKey: string) => void;
+  onFocusPresence: (connectionKey: string) => void;
   /** Present only on agent streams — opens the agent details sheet. */
   onOpenAgentDetails?: () => void;
   onOpenStreamState: () => void;

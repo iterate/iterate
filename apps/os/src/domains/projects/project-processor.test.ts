@@ -268,7 +268,7 @@ describe("ProjectProcessor bootstrap", () => {
     ]);
     expect(h.network.eventsAt("/repos/config")[2]).toMatchObject({
       payload: {
-        subscriptionKey: "project-config-to-root",
+        name: "project-config-to-root",
         receiver: {
           action: "copy-to-stream",
           receivingStreamPath: "/",
@@ -390,7 +390,7 @@ describe("ProjectProcessor bootstrap", () => {
     expect(
       h
         .events("events.iterate.com/stream/subscription-configured")
-        .filter((event) => event.payload.subscriptionKey === "project-worker"),
+        .filter((event) => event.payload.name === "project-worker"),
     ).toMatchObject([
       {
         idempotencyKey: "project-worker-subscription:prj_test",

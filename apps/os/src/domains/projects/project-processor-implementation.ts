@@ -248,7 +248,7 @@ export class ProjectProcessor extends StreamProcessor<
                   type: "events.iterate.com/stream/subscription-configured",
                   idempotencyKey: `project-worker-subscription:${this.deps.itx.projectId}`,
                   payload: {
-                    subscriptionKey: "project-worker",
+                    name: "project-worker",
                     description:
                       "Default project worker: every later root event; project creation remains platform-owned.",
                     receiver: {
@@ -467,7 +467,7 @@ export class ProjectProcessor extends StreamProcessor<
             type: "events.iterate.com/stream/subscription-configured",
             idempotencyKey: `config-repo-subscription:${this.deps.itx.projectId}`,
             payload: {
-              subscriptionKey: "project-config-to-root",
+              name: "project-config-to-root",
               description:
                 "Sends every config-repo event after the birth batch to the project root so the project processor can react when configuration changes.",
               receiver: {

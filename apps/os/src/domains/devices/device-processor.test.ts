@@ -190,7 +190,7 @@ describe("DeviceProcessor enrollment", () => {
       {
         type: "events.iterate.com/stream/subscription-configured",
         payload: {
-          subscriptionKey: "notification-intent:/devices/phone",
+          name: "notification-intent:/devices/phone",
           filter: {
             eventTypes: [
               "events.iterate.com/notification/requested",
@@ -398,7 +398,7 @@ describe("DeviceProcessor settlements", () => {
     });
     expect(h.rootEvents().at(-1)).toMatchObject({
       type: "events.iterate.com/stream/subscription-removed",
-      payload: { subscriptionKey: "notification-intent:/devices/phone" },
+      payload: { name: "notification-intent:/devices/phone" },
     });
   });
 
