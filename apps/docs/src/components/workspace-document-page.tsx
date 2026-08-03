@@ -162,11 +162,17 @@ export function WorkspaceDocumentPage({
         </h1>
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
           <DocumentPresence peers={peers} />
-          {!status.startsWith("live") && (
-            <span className="hidden max-w-40 truncate text-[11px] text-muted-foreground md:block">
-              {status}
-            </span>
-          )}
+          {/* live is the expected state — visually silent, but kept in the
+              accessibility tree (it is the only place the sync state lives). */}
+          <span
+            className={
+              status.startsWith("live")
+                ? "sr-only"
+                : "hidden max-w-40 truncate text-[11px] text-muted-foreground md:block"
+            }
+          >
+            {status}
+          </span>
           <WithTooltip label="Comment on document">
             <Button
               size="sm"
@@ -206,12 +212,20 @@ export function WorkspaceDocumentPage({
           </WithTooltip>
           <div className="flex rounded-lg border bg-muted/30 p-0.5">
             <WithTooltip label="Preview">
-              <ViewButton active={view === "preview"} onClick={() => setView("preview")}>
+              <ViewButton
+                active={view === "preview"}
+                label="Preview"
+                onClick={() => setView("preview")}
+              >
                 <EyeIcon aria-hidden className="size-3.5" />
               </ViewButton>
             </WithTooltip>
             <WithTooltip label={`Source (${loaded.snapshot.format})`}>
-              <ViewButton active={view === "source"} onClick={() => setView("source")}>
+              <ViewButton
+                active={view === "source"}
+                label="Source"
+                onClick={() => setView("source")}
+              >
                 <Code2Icon aria-hidden className="size-3.5" />
               </ViewButton>
             </WithTooltip>
