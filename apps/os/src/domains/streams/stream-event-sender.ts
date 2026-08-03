@@ -296,18 +296,25 @@ type StreamEventSenderHooks = {
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
   /**
-   * Whether a live hibernatable wake socket is bound for this session
-   * connectionKey (see wake-socket.ts). Only such session connections are
-   * idle-teardown-eligible: severing a session callback with no wake channel
-   * would strand the subscriber with no way to learn about new events.
+   * connectionKeys with a live hibernatable wake channel (wake-socket.ts).
+   * Only such session connections are idle-teardown-eligible: severing a
+   * session callback with no wake channel would strand the subscriber with
+   * no way to learn about new events.
    */
-  hasWakeChannel(connectionKey: string): boolean;
+  wakeChannelKeys(): ReadonlySet<string>;
   /**
-   * Idle teardown just closed these session connections. Stamp their wake
-   * sockets' attachments with the current (post-close-facts) max offset so
-   * the close facts themselves can never wake the subscriber back up.
+   * Idle teardown just closed these session connections; ensure this
+   * teardown's own close facts can never wake the subscribers they closed.
+   * Called AFTER the close-fact appends, mirroring the hosted cursor ack.
    */
-  recordSessionIdleClosed(connectionKeys: readonly string[]): void;
+  onSessionsIdleClosed(connectionKeys: readonly string[]): void;
+  /**
+   * Post-commit: offer just-committed events to dormant wake-channel
+   * subscribers (wake-socket.ts). Edge-triggered by design — a frame lost to
+   * a crash between commit and send is repaired by the next qualifying
+   * append (or the relay's liveness probe), never by the repair alarm.
+   */
+  wakeDormantSubscribers(justCommitted: SizedStreamEvent[]): void;
 };
 
 export class StreamEventSender {
@@ -404,9 +411,14 @@ export class StreamEventSender {
       );
       this.connections.sendQueued();
       if (this.connections.isTearingDown) {
+        // Also guards the dormant-wake offer below: close-fact appends during
+        // teardown must not fan back out to the subscribers they closed.
         this.#armAlarmFromStore();
         this.#consecutiveSendStartFailures = 0;
         return true;
+      }
+      if (justCommittedEvents !== undefined && justCommittedEvents.length > 0) {
+        this.#hooks.wakeDormantSubscribers(justCommittedEvents);
       }
       this.#sendDueSubscriptions();
       // A new Durable Object incarnation cannot trust an in-memory notion of
@@ -1551,8 +1563,8 @@ type StreamConnectionsHooks = Pick<
   | "now"
   | "armAlarm"
   | "keepAlive"
-  | "hasWakeChannel"
-  | "recordSessionIdleClosed"
+  | "wakeChannelKeys"
+  | "onSessionsIdleClosed"
 > & {
   readBatch(afterOffset: number, beforeOffset: number, limit: number): SizedStreamEvent[];
   hostedDeliveryStillMatches(
@@ -1880,12 +1892,34 @@ export class StreamConnections {
 
   armOrClearIdleAlarm(): void {
     const eligible = this.#idleEligibleConnectionKeys();
-    if (eligible.hosted.length === 0 && eligible.session.length === 0) {
+    // Wedged connections are skipped by teardown and their in-flight watchdog
+    // owns their future; letting their stale lastDeliveredAt drive a past-due
+    // idle deadline would arm an immediate alarm every turn.
+    const idleCandidates = [...eligible.hosted, ...eligible.session].filter(
+      (key) => this.#connections.get(key)?.hasPendingDelivery() !== true,
+    );
+    if (idleCandidates.length === 0) {
       this.#idleTeardownAtMs = null;
       return;
     }
-    this.#idleTeardownAtMs = this.#hooks.now() + this.#idleTeardownMs;
-    this.#hooks.armAlarm(this.#idleTeardownAtMs);
+    // Level-triggered, derived from observable state: the deadline is "idle
+    // window after the newest delivery activity", never "idle window after
+    // this reconcile". The old now+window reset slid the deadline forward on
+    // the idle alarm's OWN turn, so a fire landing moments before the freshly
+    // pushed deadline missed it and rearmed a whole window out — real-clock
+    // idle teardown could take 2× the window (proven against a deployed
+    // preview). Deriving from lastDeliveredAt makes a fire always find the
+    // same due deadline it was armed for.
+    let lastActivityMs = 0;
+    for (const connectionKey of idleCandidates) {
+      const connection = this.#connections.get(connectionKey);
+      if (connection === undefined) continue;
+      const activityMs = Date.parse(connection.lastDeliveredAt ?? connection.startedAt);
+      if (Number.isFinite(activityMs) && activityMs > lastActivityMs) lastActivityMs = activityMs;
+    }
+    this.#idleTeardownAtMs =
+      (lastActivityMs === 0 ? this.#hooks.now() : lastActivityMs) + this.#idleTeardownMs;
+    this.#hooks.armAlarm(Math.max(this.#hooks.now(), this.#idleTeardownAtMs));
   }
 
   runIdleTeardownNow(): string[] {
@@ -1917,7 +1951,7 @@ export class StreamConnections {
     // Session connections have no cursor row; their equivalent of the ack
     // above is the wake-socket attachment stamp, which must likewise land
     // AFTER the close facts so those facts can never wake the subscriber.
-    if (session.length > 0) this.#hooks.recordSessionIdleClosed(session);
+    if (session.length > 0) this.#hooks.onSessionsIdleClosed(session);
     this.#idleTeardownAtMs = null;
     if (wedgedKeys.size > 0) queueMicrotask(() => this.#hooks.sendDueSubscriptions());
     return keys.filter((connectionKey) => !wedgedKeys.has(connectionKey));
@@ -1932,9 +1966,12 @@ export class StreamConnections {
   #idleEligibleConnectionKeys(): { hosted: string[]; session: string[] } {
     const hosted: string[] = [];
     const session: string[] = [];
+    let wakeKeys: ReadonlySet<string> | undefined;
     for (const [connectionKey, connection] of this.#connections) {
       if (connection.kind === "hosted") hosted.push(connectionKey);
-      else if (this.#hooks.hasWakeChannel(connectionKey)) session.push(connectionKey);
+      else if ((wakeKeys ??= this.#hooks.wakeChannelKeys()).has(connectionKey)) {
+        session.push(connectionKey);
+      }
     }
     return { hosted, session };
   }
