@@ -314,6 +314,49 @@ until expiry.
       orphan (decided last) can't expire mid-spec. 3x consecutive passes;
       approvals.spec.ts (chat.tsx shares the new constant) also 3x_
 
+## Timeout experiment: one 1s action timeout everywhere (Misha, 2026-08-03)
+
+Directive: "make the global action timeout 1s and stick with that always",
+plus option 3 (a Suspense spinner for Metro's lazy compiles) if there's a
+clear seam, else option 2 (a dev-bundler network waiter).
+
+- [x] SPEC_ACTION_TIMEOUT_MS 750 → 1_000; the `videoMode ? 10_000` global
+      conditional and the mobile project's 5_000 override both deleted
+      _one number, every project, video mode included; the reassurance
+      comment for future agents lives at the constant in
+      packages/shared/src/test-support/e2e-policy/budgets.ts_
+- [x] Metro compile coverage — option 2, the dev-bundler network waiter
+      _CHOICE and why: option 3 has NO clean seam in this app. expo-router
+      wraps every screen in Suspense but hard-codes its fallback
+      (build/views/SuspenseFallback.js, "TODO: Support user's customizing")
+      — no user hook to render our labeled ActivityIndicator; AND async
+      routes are disabled here (app.json extra.router has no asyncRoutes),
+      so route chunks don't exist — the real mid-spec compiles are
+      component-level dynamic imports (e.g. react-native-enriched-markdown's
+      wasm), which a route Suspense boundary would never cover. So:
+      specs/test-support/metro-bundle-spinner.ts holds a
+      `[data-spinner="true"]` marker while any Metro `.bundle` request is in
+      flight (wired for every page in test.ts). Dev-spec-only by
+      construction: `.bundle` is Metro's dev-server compile endpoint;
+      production builds and the OS app never match_
+- [x] The one thing that genuinely needed >1s, with trace evidence
+      _both mobile specs' `page.waitForEvent("popup")` inherited the global
+      default and failed at 1s. Trace: click "Sign in" completed in 26ms,
+      popup still absent 966ms later — signIn makes THREE sequential auth
+      round trips (issuer discovery → OIDC config → dynamic client
+      registration) before window.open, >1s against a cold local dev
+      worker. Not a UI action (spinner-waiter never wraps waitForEvent) —
+      an event wait; both call sites now pass an explicit
+      `{ timeout: 15_000 }` (the repo's cross-server tier) with a comment.
+      The global 1s stands_
+- [x] Verification at 1s (dev restart before every run)
+      _notifications 5/5 after the popup fix (before it: 2 failures, both
+      that popup wait); approvals 5/5 spec passes with one mid-series
+      "webServer exited early" dev-server OOM excluded (the known miniflare
+      heap death, not a spec result); signup (web project) 1/1 at 9.6s;
+      VIDEO_MODE mobile approvals 1/1 at 40.4s — 1s survives the
+      click-moment screenshot overhead_
+
 Review round (tabbed-cards screenshot feedback):
 
 - [x] Self-referential provenance block hidden inside activity cards

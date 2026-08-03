@@ -54,7 +54,13 @@ test("the approval push is suppressed in the watched thread and sent when you're
     const projectSlug = `mobile-notifs-${Date.now().toString(36)}`;
     await page.goto("/");
     await page.getByPlaceholder("https://os.iterate.com").fill(osBaseUrl);
-    const popupPromise = page.waitForEvent("popup");
+    // Explicit timeout: without one, waitForEvent inherits the global 1s
+    // actionTimeout — but this is an EVENT wait, not a UI action (the
+    // spinner-waiter never sees it), and the popup only opens after signIn's
+    // three sequential auth round trips (issuer discovery -> OIDC config ->
+    // client registration; measured >1s against a cold local dev worker).
+    // Cross-server waits get 15s in this repo's timeout taxonomy.
+    const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
     await page.getByRole("button", { name: "Sign in" }).click();
     const popup = await popupPromise;
     await popup.getByTestId("email-login-button").click();
