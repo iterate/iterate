@@ -2552,9 +2552,14 @@ describe("StreamConnections hosted delivery watchdog", () => {
       connectionKey: "session",
       processEventBatch: () => undefined,
     });
+    // Publication itself arms the deadline: the opened-fact reconcile runs
+    // before the connection is in the map, and with quiet-alarm deletion no
+    // stray later fire exists to paper over a missed arming (Bugbot 3705177939).
+    const armedAtPublication = h.alarmTimes.at(-1);
+    expect(armedAtPublication).toBeDefined();
     h.connections.armOrClearIdleAlarm();
     const firstDeadline = h.alarmTimes.at(-1);
-    expect(firstDeadline).toBeDefined();
+    expect(firstDeadline).toBe(armedAtPublication);
 
     // Re-running the check with no new delivery activity must keep the SAME
     // deadline: the old now+window reset slid it forward on the idle alarm's

@@ -1400,6 +1400,12 @@ export class StreamEventSender {
   /** Recompute (and possibly clear) the alarm after an asynchronous settlement. */
   reconcileAlarmAfterSettlement(): void {
     try {
+      // Re-derive idle eligibility from the CURRENT connection map first: a
+      // settlement may be the first reconciliation that can see a connection
+      // published after its opened-fact reconcile, and the quiet deletion
+      // below must observe that pending idle deadline, not clear the alarm
+      // out from under it.
+      this.connections.armOrClearIdleAlarm();
       this.#armAlarmFromStore();
     } catch (error) {
       console.error("post-settlement alarm reconciliation failed", error);
@@ -2369,6 +2375,13 @@ export class StreamConnections {
     // wake path records the processor's reported checkpoint.
     this.#connections.set(connectionKey, connection);
     this.#hooks.runtimeChanged();
+    // Idle eligibility changed exactly here, so (re)derive the deadline here.
+    // The connection-opened append's nested reconcile ran BEFORE this
+    // publication and could not see the connection; on main the stray
+    // in-flight watchdog alarm papered over that gap by re-running the
+    // reconcile later, but with quiet-alarm deletion there may be no later
+    // fire — an unarmmed idle deadline would pin this connection forever.
+    this.armOrClearIdleAlarm();
     processEventBatch.onRpcBroken?.((error) => {
       if (kind === "hosted" && args.expectedHostedDelivery !== undefined) {
         this.onHostedDeliveryError(connectionKey, error, args.expectedHostedDelivery, "rpc-broken");
