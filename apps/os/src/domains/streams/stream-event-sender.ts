@@ -1344,6 +1344,7 @@ export class StreamEventSender {
     // from either spins the alarm at zero delay.
     const state = this.#hooks.coreState();
     let next: number | null = null;
+    let lagWithoutSchedule = false;
     for (const row of this.#hooks.store.list()) {
       const key = row.subscriptionKey;
       const configured = state.subscriptions.outbound.byKey[key];
@@ -1365,7 +1366,15 @@ export class StreamEventSender {
         if (next === null || watchdogAt < next) next = watchdogAt;
         continue;
       }
-      if (row.nextAttemptAt === null) continue;
+      if (row.nextAttemptAt === null) {
+        // A non-halted row lagging the head with NOTHING scheduled is the
+        // lifecycle-retry state: an interrupted audit/settlement append armed
+        // a bare short-delay alarm without touching the row (deliberately —
+        // the cursor must not move past unexplained work). That armed wake is
+        // this row's only future, so it must veto the quiet deletion below.
+        if (row.acknowledgedOffset < state.maxOffset) lagWithoutSchedule = true;
+        continue;
+      }
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
     if (next !== null) this.#hooks.armAlarm(next);
@@ -1379,6 +1388,7 @@ export class StreamEventSender {
     // the same turn re-arms after the delete.
     if (
       next === null &&
+      !lagWithoutSchedule &&
       !this.connections.hasPendingIdleDeadline &&
       this.#sourceOwnedSendsInFlight.size === 0 &&
       this.#hostedWakesInFlight.size === 0

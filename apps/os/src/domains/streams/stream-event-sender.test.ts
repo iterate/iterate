@@ -685,6 +685,41 @@ describe("StreamEventSender stream delivery", () => {
     expect(failing.alarmClears).toEqual([]);
   });
 
+  it("never clears the alarm while un-acked lag has no scheduled retry (lifecycle-retry state)", async () => {
+    // Model the lifecycle-retry state directly: a non-halted row lagging the
+    // head with nothing scheduled (an interrupted audit append leaves the
+    // cursor untouched and arms only a bare short-delay alarm). The quiet
+    // deletion must see that lag as pending work.
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: {
+        subscriptionKey: PROCESSOR_KEY,
+        filter: { jsonataCondition: "$notAFunction(payload)" },
+        receiver: {
+          action: "itx-call",
+          expression: ["worker", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      // The audit append for the filter failure is interrupted (false): the
+      // loop arms the lifecycle retry, leaves the row un-acked, and returns.
+      appendDeliveryEvent: (entry) =>
+        entry.type === "events.iterate.com/stream/error-occurred" ? false : true,
+      deliverToItx: async () => undefined,
+      wakeProcessor: async () => {
+        throw new Error("an ITX receiver must not wake a hosted processor");
+      },
+    });
+    h.eventSender.sendDue();
+    await h.settle();
+
+    const row = h.store.get(PROCESSOR_KEY)!;
+    expect(row.acknowledgedOffset).toBeLessThan(h.state.maxOffset);
+    expect(row.nextAttemptAt).toBeNull();
+    // The bare lifecycle retry was armed and, critically, never cleared.
+    expect(h.alarmClears).toEqual([]);
+  });
+
   it("an ITX transform shapes each delivered event while the batch keeps the source coordinates", async () => {
     const batches: StreamDeliveryBatch[] = [];
     const deliverToItx = vi.fn<SubscriptionReceiverCalls["deliverToItx"]>(
