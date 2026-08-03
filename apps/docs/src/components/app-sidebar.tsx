@@ -61,7 +61,10 @@ export function AppSidebar() {
       setTasksHref(null);
       return;
     }
-    const url = new URL(`${window.location.protocol}//${sibling}/w`);
+    // Carry the port: local project hosts are `docs--<slug>.localhost:<port>`
+    // and the sibling serves from the same one.
+    const port = window.location.port === "" ? "" : `:${window.location.port}`;
+    const url = new URL(`${window.location.protocol}//${sibling}${port}/w`);
     if (workspacePath !== undefined) {
       url.searchParams.set("workspace", workspacePath);
       url.searchParams.set("repo", "/repos/config");
@@ -131,6 +134,7 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
   const { isMobile } = useSidebar();
   const [workspaces, setWorkspaces] = useState<{ path: string; createdAt: string }[] | null>(null);
   const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -148,10 +152,16 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
 
   const createScratch = () => {
     setCreating(true);
+    setCreateError(null);
     void withDocsProject((project) => project.createWorkspace())
       .then(({ workspacePath: created, path }) =>
         navigate({ to: "/", search: { workspace: created, path } }),
       )
+      // The menu has closed by the time this settles — surface the failure
+      // under the trigger, where the eye already is.
+      .catch((error: unknown) => {
+        setCreateError(error instanceof Error ? error.message : String(error));
+      })
       .finally(() => setCreating(false));
   };
 
@@ -225,6 +235,11 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
             </DropdownMenuGroup>
           </DropdownMenuContent>
         </DropdownMenu>
+        {createError !== null && (
+          <p className="px-2 pt-1 text-xs text-red-700 group-data-[collapsible=icon]:hidden">
+            {createError}
+          </p>
+        )}
       </SidebarMenuItem>
     </SidebarMenu>
   );

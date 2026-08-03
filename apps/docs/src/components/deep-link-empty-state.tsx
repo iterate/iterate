@@ -18,10 +18,11 @@ export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }
   const [listError, setListError] = useState<string | null>(null);
   const [chosen, setChosen] = useState(workspacePath ?? "");
 
-  // The sidebar switcher navigates here with `?workspace=` while this page
-  // is already mounted — follow the address, don't keep the stale choice.
+  // The sidebar switcher navigates here with `?workspace=` (or clears it via
+  // View all workspaces) while this page is already mounted — follow the
+  // address both ways, don't keep the stale choice.
   useEffect(() => {
-    if (workspacePath !== undefined) setChosen(workspacePath);
+    setChosen(workspacePath ?? "");
   }, [workspacePath]);
   const [documents, setDocuments] = useState<string[] | null>(null);
   const [documentsError, setDocumentsError] = useState<string | null>(null);
