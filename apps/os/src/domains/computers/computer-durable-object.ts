@@ -96,6 +96,11 @@ export class ComputerDurableObject extends DurableObject<Env> {
     return `computer ${this.#name.projectId}:${this.#name.path} (agent-owned Cloudflare Computer)`;
   }
 
+  /** Read the upstream flag inside its owning isolate instead of forwarding a promise capability. */
+  workspaceUseThink(): boolean {
+    return this.#workspace.useThink;
+  }
+
   kill(): void {
     this.ctx.abort("kill requested");
   }

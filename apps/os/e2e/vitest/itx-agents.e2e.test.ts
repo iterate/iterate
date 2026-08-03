@@ -665,7 +665,16 @@ test("agents.get(path).create explicitly appends and processes the complete birt
       (event.payload as { key?: string } | undefined)?.key === "agent/system-prompt",
   );
   const workspaceMount = birthEvents.find(
-    (event) => event.type === "events.iterate.com/capability-host/capability-provided",
+    (event) =>
+      event.type === "events.iterate.com/capability-host/capability-provided" &&
+      Array.isArray(event.payload?.path) &&
+      event.payload?.path?.join(".") === "workspace",
+  );
+  const computerMount = birthEvents.find(
+    (event) =>
+      event.type === "events.iterate.com/capability-host/capability-provided" &&
+      Array.isArray(event.payload?.path) &&
+      event.payload?.path?.join(".") === "computer",
   );
   expect(birthEvent).toMatchObject({ payload: {} });
   expect(configured?.payload).toMatchObject({
@@ -677,6 +686,11 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     content: expect.stringContaining("async (itx)"),
   });
   expect(workspaceMount?.payload).toMatchObject({ path: ["workspace"] });
+  expect(computerMount?.payload).toMatchObject({
+    path: ["computer"],
+    type: "itx-call",
+    expression: ["agentComputer"],
+  });
 
   // Birth mechanics: project-worker (every project stream) + agent processor +
   // capability-host. One agent processor owns history, scheduling, and the

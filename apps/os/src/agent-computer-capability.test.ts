@@ -1,7 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
 
+const computerMocks = vi.hoisted(() => ({
+  getComputer: vi.fn(),
+  workspaceUseThink: vi.fn(),
+}));
+
 vi.mock("./env.ts", () => ({
-  itxEnv: {},
+  itxEnv: {
+    COMPUTER: {
+      getByName: computerMocks.getComputer,
+    },
+  },
   workerVersion: () => "test-version",
 }));
 
@@ -18,6 +27,18 @@ function projectAt(scopePath: string): InstanceType<typeof ProjectRpcTarget> {
 }
 
 describe("agent Computer capability boundary", () => {
+  it("reads useThink as a scalar inside the Computer Durable Object", async () => {
+    computerMocks.workspaceUseThink.mockResolvedValue(false);
+    computerMocks.getComputer.mockReturnValue({
+      workspaceUseThink: computerMocks.workspaceUseThink,
+    });
+
+    const itx = projectAt("/agents/alice");
+
+    await expect(itx.agentComputer.useThink).resolves.toBe(false);
+    expect(computerMocks.workspaceUseThink).toHaveBeenCalledOnce();
+  });
+
   it("trusts an agent scope with the full Computer catalog", () => {
     const itx = projectAt("/agents/alice");
 

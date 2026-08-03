@@ -2600,16 +2600,10 @@ class ComputerRpcTarget extends IterateRpcTarget<"Computer"> {
    * filesystem adapter. OS leaves this false; callers should use `fs`.
    */
   get useThink(): Promise<boolean> {
-    return this.#readUseThink();
-  }
-
-  async #readUseThink(): Promise<boolean> {
-    const workspace = await this.durableObjectStub.__getWorkspaceStub();
-    try {
-      return workspace.useThink;
-    } finally {
-      workspace[Symbol.dispose]();
-    }
+    // Reading WorkspaceStub.useThink through two RPC layers forwards its
+    // property promise as a capability. Read it locally in the owning DO so
+    // Cap'n Web receives the scalar boolean promised by this public getter.
+    return this.durableObjectStub.workspaceUseThink();
   }
 
   get durableObjectStub() {
