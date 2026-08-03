@@ -1,6 +1,12 @@
 import { useEffect, useState } from "react";
-import { useRouterState } from "@tanstack/react-router";
-import { ChevronsLeft, FileTextIcon, SquareKanbanIcon } from "lucide-react";
+import { Link, useRouterState } from "@tanstack/react-router";
+import {
+  ChevronsLeft,
+  FileTextIcon,
+  HomeIcon,
+  SquareKanbanIcon,
+  TelescopeIcon,
+} from "lucide-react";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
 import {
   Sidebar,
@@ -70,6 +76,33 @@ export function AppSidebar() {
         </SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
+        {/* WHERE we are: the workspace is the first level of the hierarchy,
+            so the sidebar names it — the header shows only the document. */}
+        <SidebarGroup>
+          <SidebarGroupLabel>workspace</SidebarGroupLabel>
+          <SidebarGroupContent>
+            <SidebarMenu>
+              {workspacePath !== undefined && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton isActive tooltip={workspacePath} className="font-mono text-xs">
+                    <TelescopeIcon aria-hidden />
+                    <span className="truncate">{workspacePath}</span>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  isActive={workspacePath === undefined}
+                  tooltip="All workspaces — switch or create"
+                  render={<Link to="/" search={{}} />}
+                >
+                  <HomeIcon aria-hidden />
+                  <span>{workspacePath === undefined ? "All workspaces" : "Switch workspace"}</span>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </SidebarGroupContent>
+        </SidebarGroup>
         <SidebarGroup>
           <SidebarGroupLabel>views</SidebarGroupLabel>
           <SidebarGroupContent>

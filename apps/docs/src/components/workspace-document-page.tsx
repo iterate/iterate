@@ -162,14 +162,11 @@ export function WorkspaceDocumentPage({
               {loaded.snapshot.format}
             </span>
           </div>
-          {/* HIERARCHY order, full paths (always leading-slashed): which
-              workspace › which view › the file — relative when it lives in
-              the workspace's own directory, the full mount path otherwise. */}
+          {/* Just the document: the sidebar names the workspace and the
+              view, so the header repeats neither — relative when the file
+              lives in the workspace's own directory, the full mount path
+              otherwise. */}
           <p className="truncate font-mono text-[11px] text-muted-foreground">
-            {workspacePath}
-            <span className="px-1.5 text-border">›</span>
-            docs
-            <span className="px-1.5 text-border">›</span>
             {loaded.snapshot.path.startsWith(`${workspacePath}/`)
               ? loaded.snapshot.path.slice(workspacePath.length + 1)
               : loaded.snapshot.path}
