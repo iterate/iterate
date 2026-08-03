@@ -108,13 +108,13 @@ export class ComputerDurableObject extends DurableObject<Env> {
   /** Called by Cloudflare Computer's same-worker WorkspaceServiceProxy. */
   async __getWorkspaceStub(): Promise<WorkspaceStub> {
     await this.#assertCreated();
-    await this.#workspace.ready("worker-shell");
+    await this.#workspace.ready();
     return this.#workspace.stub();
   }
 
   async prepare(): Promise<void> {
     await this.#assertCreated();
-    await this.#workspace.ready("worker-shell");
+    await this.#workspace.ready();
     await this.#workspace.fs.mkdir(this.#reads.currentState.config.workingDirectory, {
       recursive: true,
     });
