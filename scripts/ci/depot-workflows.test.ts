@@ -77,14 +77,6 @@ const deploymentWorkflows = [
     },
   },
   {
-    file: ".depot/workflows/deploy-tasks.yml",
-    group: "deploy-tasks-production",
-    jobs: {
-      deploy: { size: "2x8", timeoutMinutes: 20 },
-      notify: { size: "2x8", timeoutMinutes: 10 },
-    },
-  },
-  {
     file: ".depot/workflows/deploy-tunnels.yml",
     group: "deploy-tunnels-production",
     jobs: {

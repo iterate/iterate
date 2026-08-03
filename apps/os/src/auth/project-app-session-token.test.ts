@@ -20,7 +20,7 @@ async function sign(
 }
 
 const CLAIMS = {
-  audience: "https://tasks--demo.iterate.app",
+  audience: "https://docs--demo.iterate.app",
   projectId: "prj_one",
   type: "project-app-session",
   userId: "usr_1",
