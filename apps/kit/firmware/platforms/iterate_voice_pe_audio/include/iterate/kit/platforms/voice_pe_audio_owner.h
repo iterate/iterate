@@ -41,9 +41,10 @@ struct iterate_kit_voice_pe_audio_owner_options {
 /**
  * One low-rate view over the board's two exact same-time XMOS output taps.
  *
- * `raw` is pipeline stage NONE (the original microphone); `clean` is pipeline
- * stage NS, after AEC/IC/NS but before AGC. This intentionally does not manufacture an
- * aligned speaker-reference channel: the board does not expose the XMOS
+ * `raw` is pipeline stage NONE (the original microphone); `clean` is the
+ * hardware policy's selected cumulative tap (currently AEC, before IC/NS/AGC).
+ * This intentionally does not manufacture an aligned speaker-reference
+ * channel: the board does not expose the XMOS
  * reference on its capture I2S bus. A speaker-only physical interval can
  * still measure raw-to-clean echo suppression honestly. A later calibrated
  * reference alignment may extend the public schema, but zero or scheduler-

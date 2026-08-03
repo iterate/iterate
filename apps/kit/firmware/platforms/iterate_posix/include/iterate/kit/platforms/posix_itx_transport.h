@@ -47,6 +47,21 @@ struct iterate_kit_posix_itx_transport_options {
   struct iterate_kit_spsc_ring *control_inbox;
   struct iterate_kit_spsc_ring *control_outbox;
   bool DANGEROUS_disable_certificate_verification;
+  /**
+   * Monotonic microseconds, or NULL for this platform's own clock.
+   *
+   * The transport samples time ONCE per poll and passes it down, so this one
+   * pointer is the whole of its dependence on a clock. It exists so a sealed
+   * run — one whose every stamp comes from a counter, and which therefore
+   * replays a seed bit for bit — is genuinely sealed: until this was here,
+   * the loop's stamps were virtual while the transport's reconnect and
+   * handshake deadlines quietly ran on the wall clock, and a replay drifted
+   * from the run it claimed to reproduce.
+   *
+   * `context` is handed back unexamined.
+   */
+  int64_t (*now_us)(void *context);
+  void *now_us_context;
 };
 
 struct iterate_kit_posix_itx_transport_metrics {

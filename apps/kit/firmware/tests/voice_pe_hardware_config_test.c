@@ -46,13 +46,17 @@ static void preserves_the_first_party_codec_sequence(void) {
  * The first production server-VAD run at the AGC tap transported audio
  * perfectly but then transcribed the device's own reply as a fresh user turn.
  * Its simultaneous NONE/AGC windows showed roughly 100x gain on both near-end
- * speech and far-end residue. A later physical double-talk run used the exact
- * same retained spoken WAVE with and without far-end playback: the NS tap
- * retained the words but changed them enough to reach only 0.746 similarity
- * and -5.07 dB residual against the near-only recording. Far-only residue was
- * already nearly empty before that comparison. The IC tap is therefore the
- * smallest experiment that preserves XMOS AEC and interference cancellation
- * while removing the nonlinear noise suppressor implicated by that evidence.
+ * speech and far-end residue. Early NS/IC comparisons were underpowered and
+ * let XMOS change DSP paths between the near-only and double-talk captures.
+ * The corrected NS experiment measured its own matched-path room
+ * repeatability: two Mac-only passes reached 0.982 similarity / -15.46 dB
+ * residual, while double-talk fell to 0.901 / -8.69 dB despite negligible
+ * far-end residue. That isolates real downstream near-speech damage rather
+ * than transport, network, or room variation. Select the AEC tap as the
+ * smallest remaining production candidate: it keeps the hardware echo
+ * canceller and removes IC/NS transforms that cannot improve cancellation
+ * already performed upstream. The same physical oracle must still prove that
+ * speaker-only audio is empty and nearby speech survives.
  *
  * Keep this selection in the pure hardware-policy module rather than burying
  * an enum literal in the owner: a physical regression then changes one
@@ -62,7 +66,7 @@ static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
   uint8_t command[4] = {0xffU, 0xffU, 0xffU, 0xffU};
   assert(
       iterate_kit_voice_pe_xmos_uplink_stage() ==
-      ITERATE_KIT_VOICE_PE_XMOS_STAGE_IC);
+      ITERATE_KIT_VOICE_PE_XMOS_STAGE_AEC);
   assert(
       iterate_kit_voice_pe_xmos_pipeline_command(
           0U,
@@ -72,7 +76,7 @@ static void selects_a_truthful_raw_and_server_vad_xmos_pair(void) {
   assert(command[0] == 241U);
   assert(command[1] == 0x30U);
   assert(command[2] == 1U);
-  assert(command[3] == 2U);
+  assert(command[3] == 1U);
 
   assert(
       iterate_kit_voice_pe_xmos_pipeline_command(

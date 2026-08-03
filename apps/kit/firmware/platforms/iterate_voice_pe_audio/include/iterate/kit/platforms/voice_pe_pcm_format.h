@@ -54,14 +54,16 @@ enum iterate_kit_status iterate_kit_voice_pe_expand_playback(
 /**
  * Splits XMOS stereo capture into portable PCM16 and an AEC comparison lane.
  *
- * Channel zero is configured through NS, which includes AEC and IC while
- * deliberately excluding final AGC. Channel one is configured as NONE: the
- * XMOS source defines that as its original microphone tap, before AEC or any
- * later DSP stage. This same-time raw observation lets the acceptance harness
- * calibrate channel-zero's intentional DSP transfer on near-end speech before
- * comparing a far-end interval; directly dividing unequal channels would not be
- * an honest AEC metric. Only channel zero is eligible for `/pcm`; channel one
- * is diagnostic data and must remain local.
+ * Channel zero uses the cumulative uplink stage selected by the hardware
+ * policy (currently AEC, excluding the downstream IC/NS/AGC transforms).
+ * Channel one is
+ * configured as NONE: the XMOS source defines that as its original
+ * microphone tap, before AEC or any later DSP stage. This same-time raw
+ * observation lets the acceptance harness establish that physical speech and
+ * speaker energy really reached the microphones; it must not be treated as a
+ * waveform-equivalent control because XMOS intentionally transforms channel
+ * zero. Only channel zero is eligible for `/pcm`; channel one is diagnostic
+ * data and must remain local.
  * Both source words are Q31-aligned little-endian signed samples supplied by
  * ESP-IDF's 32-bit stereo I2S read.
  */

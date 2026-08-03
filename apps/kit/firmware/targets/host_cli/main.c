@@ -318,6 +318,12 @@ uint64_t cli_runtime_now_ms(void *context)
   return cli_virtual_clock_now_ms(&cli_main_clock);
 }
 
+int64_t cli_runtime_transport_now_us(void *context)
+{
+  (void)context;
+  return (int64_t)cli_virtual_clock_now_us(&cli_main_clock);
+}
+
 uint64_t cli_runtime_now_us(void)
 {
   return cli_virtual_clock_now_us(&cli_main_clock);
@@ -522,6 +528,13 @@ static bool cli_main_init_transport(struct cli_runtime *runtime)
     .control_inbox = &runtime->control_inbox,
     .control_outbox = &runtime->control_outbox,
     .DANGEROUS_disable_certificate_verification = runtime->options.insecure,
+    /*
+     * The same clock everything else reads. Without this the loop's stamps
+     * were virtual while the transport's reconnect and handshake deadlines
+     * ran on the wall clock, so a sealed run was only mostly sealed.
+     */
+    .now_us = cli_runtime_transport_now_us,
+    .now_us_context = NULL,
   };
   if (iterate_kit_posix_itx_transport_prepare(
           &runtime->transport, &options) != ITERATE_KIT_OK) {

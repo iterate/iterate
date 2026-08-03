@@ -168,6 +168,9 @@ struct cli_runtime {
  */
 struct cli_virtual_clock *cli_runtime_clock(void);
 
+/** The transport's clock hook, so its deadlines share the process's clock. */
+int64_t cli_runtime_transport_now_us(void *context);
+
 /** Monotonic milliseconds used by the runtime and voicelab callbacks. */
 uint64_t cli_runtime_now_ms(void *context);
 

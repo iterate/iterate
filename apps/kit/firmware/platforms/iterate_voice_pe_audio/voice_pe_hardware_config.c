@@ -68,23 +68,27 @@ enum iterate_kit_voice_pe_xmos_stage
 iterate_kit_voice_pe_xmos_uplink_stage(void) {
   /*
    * XMOS exposes cumulative taps in the order AEC -> IC -> NS -> AGC. AGC is
-   * already excluded because a production full-duplex run showed it expanding
-   * quiet speaker residue by roughly two orders of magnitude and retriggering
-   * server VAD. The retained spoken double-talk oracle then isolated the next
-   * boundary: the identical nearby phrase was intelligible at NS but reached
-   * only 0.746 similarity and -5.07 dB residual against its near-only capture,
-   * while far-only NS output was nearly empty. Select IC so the device still
-   * performs XMOS's adaptive echo cancellation and two-microphone interference
-   * cancellation, but does not nonlinearly suppress the near speaker we need
-   * to preserve during interruption.
+   * excluded because a production full-duplex run showed it expanding quiet
+   * speaker residue by roughly two orders of magnitude and retriggering server
+   * VAD. The corrected IC experiment held the control and double-talk captures
+   * on the same AEC path, supplied adequate spoken SNR, and kept transport and
+   * network valid; it still reached only 0.888 similarity and -7.50 dB
+   * residual. A corrected NS run then measured two identical matched-path
+   * Mac-only captures at 0.982 similarity / -15.46 dB residual, but the same
+   * speech during double-talk fell to 0.901 / -8.69 dB while far-end residue
+   * remained negligible. The difference is therefore downstream speech damage,
+   * not room repeatability or echo leakage. Select the AEC tap: it preserves
+   * the hardware canceller while removing the IC and NS transforms implicated
+   * by that controlled result.
    *
    * This is deliberately guarded by the physical oracle rather than assumed
-   * from the tap name. Removing NS may expose more far-end residue; the same
-   * run must reject this policy if tone, PRBS, or spoken far-only leakage is no
-   * longer near-empty. Userspace may apply one fixed post-transport gain for
-   * provider VAD, but it must never substitute adaptive AGC or hide that gate.
+   * from the tap name. The same run must reject this policy if AEC erases or
+   * materially changes nearby speech, or if tone, PRBS, or spoken far-only
+   * leakage is no longer near-empty. Userspace may apply one fixed
+   * post-transport gain for provider VAD, but it must never substitute
+   * adaptive AGC or hide that gate.
    */
-  return ITERATE_KIT_VOICE_PE_XMOS_STAGE_IC;
+  return ITERATE_KIT_VOICE_PE_XMOS_STAGE_AEC;
 }
 
 enum iterate_kit_status iterate_kit_voice_pe_xmos_pipeline_command(

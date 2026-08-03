@@ -21,7 +21,7 @@ enum {
  * succeeds, so an incompatible peer cannot collapse reconnect backoff.
  */
 
-static int64_t monotonic_microseconds(void) {
+static int64_t platform_monotonic_microseconds(void) {
   struct timespec now;
   if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
     return 0;
@@ -464,11 +464,20 @@ enum capnweb_status iterate_kit_posix_itx_transport_send_text(
       &transport->control_outbox, kind, data, length);
 }
 
+/** This transport's only clock read: the injected one, or the platform's. */
+static int64_t transport_now_us(
+    const struct iterate_kit_posix_itx_transport *transport) {
+  if (transport == NULL || transport->options.now_us == NULL) {
+    return platform_monotonic_microseconds();
+  }
+  return transport->options.now_us(transport->options.now_us_context);
+}
+
 enum iterate_kit_status iterate_kit_posix_itx_transport_poll(
     struct iterate_kit_posix_itx_transport *transport,
     size_t max_control_messages) {
   enum iterate_kit_status status;
-  const int64_t now_us = monotonic_microseconds();
+  const int64_t now_us = transport_now_us(transport);
   if (transport == NULL || !transport->initialized ||
       !transport->started || max_control_messages == 0U) {
     return ITERATE_KIT_INVALID_ARGUMENT;
