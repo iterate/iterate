@@ -209,7 +209,7 @@ import {
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
 } from "./domains/streams/retained-event-callbacks.ts";
-import { STREAM_WAKE_SOCKET_HEADER } from "./domains/streams/wake-socket.ts";
+import { STREAM_WAKE_SOCKET_HEADER, WakeSocketFrame } from "./domains/streams/wake-socket.ts";
 import {
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
@@ -1046,9 +1046,11 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         }
       }
     };
-    const disposeStub = (value: unknown) => {
+    // `StreamConnectionHandle` includes `Disposable`, and over Workers RPC the
+    // received stub implements it natively (releasing the remote reference).
+    const disposeStub = (value: Disposable | undefined) => {
       try {
-        (value as Partial<Disposable>)[Symbol.dispose]?.();
+        value?.[Symbol.dispose]();
       } catch {
         // A broken stub has nothing left to release.
       }
@@ -1133,13 +1135,16 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     }
     wakeSocket?.addEventListener("message", (event) => {
       if (!active) return;
-      let frame: unknown;
+      let parsed: ReturnType<typeof WakeSocketFrame.safeParse>;
       try {
-        frame = JSON.parse(typeof event.data === "string" ? event.data : "");
+        parsed = WakeSocketFrame.safeParse(
+          JSON.parse(typeof event.data === "string" ? event.data : ""),
+        );
       } catch {
         return;
       }
-      const frameType = (frame as { type?: unknown } | null)?.type;
+      if (!parsed.success) return;
+      const frameType = parsed.data.type;
       if (frameType === "idle") {
         // The DO idle-closed the RPC leg. Dropping this handle stub releases
         // the relay's last live reference into the DO's isolate, which is

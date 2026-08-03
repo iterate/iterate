@@ -2258,6 +2258,74 @@ test("an idle-torn session connection resumes on the next matching append withou
   }
 });
 
+// The resurrection-loop regression (Bugbot 9d27eb22): a subscriber whose
+// filter explicitly names connection-closed must NOT be woken by its own idle
+// close fact — the teardown's nested reconcile runs before the dormancy stamp
+// lands, so without the isTearingDown gate the close would wake the relay,
+// re-dial, idle again, and cycle forever. The deferred close fact still
+// arrives on the next real wake.
+test("an idle close never wakes the subscriber it closed, even when its filter names connection-closed", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/subscriptions/session/wake-loop/${marker}`;
+  const connectionKey = `wake-loop-${marker.slice(0, 8)}`;
+  const CLOSED_EVENT_TYPE = "events.iterate.com/stream/connection-closed";
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using stream = project.streams.get(streamPath);
+
+  const received: StreamEvent[] = [];
+  const handle = await stream.openConnection({
+    connectionKey,
+    eventTypes: [MATCHING_EVENT_TYPE, CLOSED_EVENT_TYPE],
+    processEventBatch: ({ events }) => {
+      received.push(...events);
+    },
+  });
+  try {
+    await forceStreamIdleTeardown(stream);
+    await waitForCondition(
+      async () =>
+        runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
+      { description: "idle teardown to sever the lifecycle-filtered session connection" },
+    );
+
+    // The loop would re-open within one wake round trip; give it ample time
+    // to manifest, then require the connection stayed dormant with exactly
+    // one idle close on the record.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(
+      runtimeState(await stream.runtimeState()).runtime.connections[connectionKey],
+    ).toBeUndefined();
+    const idleCloses = (
+      await stream.getEvents({ eventTypes: [CLOSED_EVENT_TYPE], limit: 100 })
+    ).filter(
+      (event) => event.payload?.connectionKey === connectionKey && event.payload?.reason === "idle",
+    );
+    expect(idleCloses).toHaveLength(1);
+
+    // A real matching append wakes the relay, and the replay delivers the
+    // deferred close fact along with the new event.
+    const [fresh] = await stream.append({
+      type: MATCHING_EVENT_TYPE,
+      payload: { round: "after-idle" },
+    });
+    await waitForCondition(async () => received.some((event) => event.offset === fresh!.offset), {
+      description: "the wake re-dial to deliver the post-idle append",
+      timeoutMs: 30_000,
+    });
+    expect(
+      received.some(
+        (event) =>
+          event.type === CLOSED_EVENT_TYPE && event.payload?.connectionKey === connectionKey,
+      ),
+    ).toBe(true);
+  } finally {
+    await handle.close();
+    disposeRpc(handle);
+  }
+});
+
 // Reset ends one source-stream lifetime and starts another at the same path.
 // Wrangler cannot model the required ctx.abort(), so this host-survival proof
 // runs only against a real preview deployment.

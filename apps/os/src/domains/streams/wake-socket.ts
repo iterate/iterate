@@ -72,6 +72,18 @@ export const WakeSocketAttachment = z.object({
 export type WakeSocketAttachment = z.infer<typeof WakeSocketAttachment>;
 
 /**
+ * A frame sent DO → relay on the wake socket. Loose objects on purpose: a
+ * newer DO may add fields the relay's deploy does not know yet, and the relay
+ * must keep honoring the `type` it does understand.
+ */
+export const WakeSocketFrame = z.union([
+  z.object({ type: z.literal("wake") }),
+  z.object({ type: z.literal("idle") }),
+]);
+
+export type WakeSocketFrame = z.infer<typeof WakeSocketFrame>;
+
+/**
  * Stream lifecycle bookkeeping never wakes a dormant subscriber. The idle
  * close itself appends `connection-closed`, every cold boot appends `woken`,
  * and a wake re-dial appends `connection-opened` — waking on any of those

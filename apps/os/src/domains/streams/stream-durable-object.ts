@@ -1817,6 +1817,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     justCommittedEvents?: { event: StreamEvent; byteLength: number }[],
   ): void {
     if (justCommittedEvents === undefined || justCommittedEvents.length === 0) return;
+    // Idle teardown's own close-fact appends reconcile through here BEFORE
+    // recordSessionIdleClosed stamps the sockets, so a just-closed connection
+    // looks unstamped-and-absent — wake-eligible — and a filter that names
+    // connection-closed would be woken by its own close, re-dial, and cycle
+    // forever. Same guard as the hosted path's sendDue short-circuit; the
+    // post-teardown stamp then covers these offsets.
+    if (this.#eventSender.connections.isTearingDown) return;
     const sockets = this.#wakeSockets();
     if (sockets.length === 0) return;
     const news = justCommittedEvents
