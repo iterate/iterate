@@ -33,14 +33,21 @@ import type {
   StreamConnectionHandle,
   StreamPingInput,
 } from "iterate/processors";
+import { disposeIgnoredRpcResult, LiveState } from "iterate/sdk/capnweb";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
+import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
 import {
   retainConnectionPing,
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
 } from "./retained-event-callbacks.ts";
-import { parseWakeSocketFrame, STREAM_WAKE_SOCKET_HEADER } from "./wake-socket.ts";
+import {
+  parseStateSocketFrame,
+  parseWakeSocketFrame,
+  STATE_SOCKET_HEADER_BODY,
+  STREAM_WAKE_SOCKET_HEADER,
+} from "./wake-socket.ts";
 
 /** What StreamConnectionRpcTarget's constructor needs; built here so rpc-targets.ts keeps owning the published target class. */
 type RelayedStreamConnection = {
@@ -320,6 +327,78 @@ export async function openRelayedStreamConnection(input: {
       if (closedByOwner) return;
       closedByOwner = true;
       teardown({ reason: "closed-by-owner", socketCode: 1000 });
+    },
+  };
+}
+
+/**
+ * A worker-local liveState source for one stream, fed by the hibernatable
+ * STATE socket instead of a retained subscription into the Stream DO.
+ *
+ * liveState is latest-wins snapshot+diff — no cursor, no replay, reconnect =
+ * fresh snapshot — which is exactly raw hibernatable-socket semantics, so
+ * state rides the socket outright: the DO holds no callback, the relay holds
+ * no DO-side stub, and a watched idle stream hibernates at zero duration.
+ * Every read path re-seeds from one transient `runtimeState()` call (a plain
+ * RPC that pins nothing beyond itself), so a dropped socket degrades to
+ * stale-until-next-read, never to wrongness.
+ */
+export function openRelayedLiveState(input: {
+  stub: () => DurableObjectStub<StreamDurableObject>;
+}): {
+  live: LiveState<StreamRuntimeDebugState>;
+  loadAndRefreshLive: () => Promise<void>;
+} {
+  // Placeholder until the first loadAndRefreshLive; LiveStateRpcTarget awaits
+  // that refresh before every get/subscribe, so the placeholder is never read.
+  const live = new LiveState<StreamRuntimeDebugState>({} as StreamRuntimeDebugState);
+  let socket: WebSocket | undefined;
+
+  const ensureSocket = async () => {
+    if (socket !== undefined) return;
+    try {
+      const upgrade = await input.stub().fetch("https://stream-wake.internal/", {
+        headers: {
+          Upgrade: "websocket",
+          [STREAM_WAKE_SOCKET_HEADER]: STATE_SOCKET_HEADER_BODY,
+        },
+      });
+      const ws = upgrade.webSocket ?? undefined;
+      if (ws === undefined) return;
+      ws.accept();
+      ws.addEventListener("message", (event) => {
+        const frame = parseStateSocketFrame(event.data);
+        if (frame === undefined) return;
+        live.setState(frame.state as StreamRuntimeDebugState);
+      });
+      ws.addEventListener("close", () => {
+        // Stale-until-next-read: the next get/subscribe re-opens and re-seeds.
+        if (socket === ws) socket = undefined;
+      });
+      socket = ws;
+    } catch (error) {
+      console.warn("stream state socket unavailable; liveState reads stay snapshot-only", {
+        error,
+      });
+    }
+  };
+
+  return {
+    live,
+    loadAndRefreshLive: async () => {
+      const opening = ensureSocket();
+      // Seed/refresh from a transient snapshot read; the socket then carries
+      // every later change. Ordered after the socket open starts so a change
+      // landing between snapshot and socket-attach still arrives as a frame.
+      const stub = input.stub();
+      try {
+        live.setState((await stub.runtimeState()) as StreamRuntimeDebugState);
+      } finally {
+        // Release the invocation so this read cannot pin the DO (same
+        // pattern as StreamRpcTarget.runtimeState).
+        disposeIgnoredRpcResult(stub);
+      }
+      await opening;
     },
   };
 }

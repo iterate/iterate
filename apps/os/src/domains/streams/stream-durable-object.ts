@@ -1715,11 +1715,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     // Cursor cleanup can reach this before the constructor assigns
     // #liveState; the optional read is therefore intentional.
     const liveState = this.#liveState;
-    if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
+    const wantsStatePush = this.#wakeSockets.hasStateSockets();
+    if ((liveState?.observed !== true && !wantsStatePush) || this.#liveStateRefreshScheduled) {
+      return;
+    }
     this.#liveStateRefreshScheduled = true;
     queueMicrotask(() => {
       this.#liveStateRefreshScheduled = false;
-      if (liveState.observed) liveState.setState(this.#readRuntimeState());
+      const state = this.#readRuntimeState();
+      if (liveState?.observed === true) liveState.setState(state);
+      // liveState watchers on the hibernatable state lane: state only
+      // changes while this DO is awake, so pushing here — the one
+      // materialization point — is complete coverage, and sends are free.
+      this.#wakeSockets.pushState(state);
     });
   }
 
