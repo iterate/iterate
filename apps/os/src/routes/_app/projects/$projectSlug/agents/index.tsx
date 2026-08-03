@@ -8,7 +8,7 @@ import {
   streamBreadcrumb,
   streamPageStaticData,
 } from "~/lib/route-breadcrumbs.ts";
-import { AgentCatalogSearch, type AgentCatalogView } from "~/lib/agent-catalog-search.ts";
+import { AgentCatalogSearch } from "~/lib/agent-catalog-search.ts";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 
 const AGENTS_ROOT = "/agents";
@@ -36,15 +36,6 @@ function ProjectAgentsIndexContent() {
     [],
   ).value;
 
-  function setView(view: AgentCatalogView) {
-    void navigate({
-      to: "/projects/$projectSlug/agents",
-      params,
-      search: (previous) => ({ ...previous, view }),
-      replace: true,
-    });
-  }
-
   return (
     <ProjectStreamView
       layout="fullPanel"
@@ -53,8 +44,15 @@ function ProjectAgentsIndexContent() {
           agents={agents}
           projectId={project.id}
           projectSlug={params.projectSlug}
-          view={search.view ?? "list"}
-          onViewChange={setView}
+          view={search.view}
+          onViewChange={(view) =>
+            void navigate({
+              to: "/projects/$projectSlug/agents",
+              params,
+              search: (previous) => ({ ...previous, view }),
+              replace: true,
+            })
+          }
           onOpen={(path) => void navigate(linkOptionsForStreamPath(params.projectSlug, path))}
           onTogglePinned={(agent) =>
             updateAgentSummary(project.id, agent.path, { pinned: !agent.summary.pinned })

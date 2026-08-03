@@ -14,7 +14,6 @@ import { Tabs, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useLiveState } from "iterate/sdk/itx/react";
 import {
-  agentCommandValue,
   buildStreamForest,
   defaultPaletteTab,
   flattenStreamRows,
@@ -36,10 +35,8 @@ import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 import { updateAgentSummary } from "~/components/agents/agent-summary.ts";
-import { type AgentTreeNode } from "~/components/agents/agent-tree.ts";
 import { useAgentTreeTable } from "~/components/agents/agent-tree-table.ts";
-import { agentCommandAccessibleLabel } from "~/components/agents/agent-presentation.ts";
-import { AGENT_COMMAND_GRID, AgentCommandPresentation } from "~/components/agents/agent.tsx";
+import { AgentCommandHeader, AgentCommandItem } from "~/components/agents/agent.tsx";
 import { AdminRemoteStreamTree } from "~/components/admin-remote-stream-tree.tsx";
 
 const CLOCK_TICK_MS = 5_000;
@@ -317,19 +314,7 @@ function AgentResults({
   }
   return (
     <CommandGroup className="p-0">
-      <div
-        className={cn(
-          "sticky top-0 z-10 grid gap-2 border-b bg-background px-3 py-2 text-xs font-medium text-muted-foreground",
-          AGENT_COMMAND_GRID,
-        )}
-        aria-hidden
-      >
-        <span>Agent</span>
-        <span>Status</span>
-        <span className="hidden sm:block">Activity</span>
-        <span className="hidden lg:block">Last work</span>
-        <span />
-      </div>
+      <AgentCommandHeader />
       {visibleRows.map((row) => (
         <AgentCommandItem
           key={row.id}
@@ -343,53 +328,6 @@ function AgentResults({
         />
       ))}
     </CommandGroup>
-  );
-}
-
-function AgentCommandItem({
-  node,
-  depth = 0,
-  expanded = false,
-  nowMs,
-  onOpen,
-  onToggleExpanded,
-  onTogglePinned,
-}: {
-  node: AgentTreeNode;
-  depth?: number;
-  expanded?: boolean;
-  nowMs: number;
-  onOpen: (path: string) => void;
-  onToggleExpanded: (path: string) => void;
-  onTogglePinned: (agent: AgentRecord) => void | Promise<void>;
-}) {
-  const hasChildren = node.children.length > 0;
-  return (
-    <CommandItem
-      value={agentCommandValue(node.agent.path)}
-      onSelect={() => onOpen(node.agent.path)}
-      className={cn(
-        "grid items-start gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0",
-        AGENT_COMMAND_GRID,
-      )}
-      aria-label={agentCommandAccessibleLabel(node, expanded)}
-      aria-expanded={hasChildren ? expanded : undefined}
-      aria-keyshortcuts="Shift+P"
-      onClickCapture={(event) => {
-        const target = event.target as Element;
-        if (target.closest("[data-agent-pin]")) {
-          event.preventDefault();
-          event.stopPropagation();
-          void onTogglePinned(node.agent);
-        } else if (hasChildren && target.closest("[data-agent-disclosure]")) {
-          event.preventDefault();
-          event.stopPropagation();
-          onToggleExpanded(node.agent.path);
-        }
-      }}
-    >
-      <AgentCommandPresentation depth={depth} expanded={expanded} node={node} nowMs={nowMs} />
-    </CommandItem>
   );
 }
 
@@ -433,7 +371,11 @@ function StreamTreeResults({
             )}
             aria-expanded={hasChildren ? expanded : undefined}
             onClickCapture={(event) => {
-              if (!hasChildren || !(event.target as Element).closest("[data-stream-disclosure]")) {
+              if (
+                !hasChildren ||
+                !(event.target instanceof Element) ||
+                !event.target.closest("[data-stream-disclosure]")
+              ) {
                 return;
               }
               event.preventDefault();

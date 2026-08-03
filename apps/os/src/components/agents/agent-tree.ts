@@ -1,21 +1,10 @@
-import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
+import { buildAgentPathForest, type AgentPathTreeNode } from "./agent-path-tree.ts";
 import { deriveAgentDisplayState, type AgentRecord } from "~/domains/agents/agent-presence.ts";
-import { closestAncestorByPath, flattenTreeRows, type TreeRow } from "~/lib/tree-rows.ts";
+import { flattenTreeRows, type TreeRow } from "~/lib/tree-rows.ts";
 
-type AgentWaitingAggregate = {
-  userInput: number;
-  externalEvent: number;
-  timer: number;
-};
-
-export type AgentTreeNode = {
+export type AgentTreeNode = Omit<AgentPathTreeNode, "agent" | "children"> & {
   agent: AgentRecord;
   children: AgentTreeNode[];
-  aggregateRuntime: AgentRuntime;
-  aggregateWaiting: AgentWaitingAggregate;
-  aggregateLastWorkAt: string;
-  aggregateAgentCount: number;
-  aggregateActiveCount: number;
 };
 
 /** One forest build per live-state push: every mounted consumer (sidebar,
@@ -27,30 +16,30 @@ export function buildAgentForest(records: Record<string, AgentRecord>): AgentTre
   const cached = forestCache.get(records);
   if (cached !== undefined) return cached;
 
-  const nodes = new Map<string, AgentTreeNode>();
-  for (const agent of Object.values(records)) {
-    nodes.set(agent.path, {
-      agent,
-      children: [],
-      aggregateRuntime: ZERO_AGENT_RUNTIME,
-      aggregateWaiting: emptyWaitingAggregate(),
-      aggregateLastWorkAt: agent.timestamps.lastWorkAt,
-      aggregateAgentCount: 1,
-      aggregateActiveCount: 0,
-    });
-  }
-
-  const roots: AgentTreeNode[] = [];
-  for (const node of nodes.values()) {
-    const parent = closestAncestorByPath(node.agent.path, nodes);
-    if (parent === undefined) roots.push(node);
-    else parent.children.push(node);
-  }
-
-  for (const root of roots) finalizeNode(root);
+  const roots = contractPathNodes(buildAgentPathForest(records));
   roots.sort(compareStructuralNodes);
   forestCache.set(records, roots);
   return roots;
+}
+
+/** Remove inferred path containers while preserving their materialized agent
+ * descendants and the aggregates computed by the canonical path-tree fold. */
+function contractPathNodes(nodes: readonly AgentPathTreeNode[]): AgentTreeNode[] {
+  const contracted: AgentTreeNode[] = [];
+  for (const node of nodes) {
+    const children = contractPathNodes(node.children);
+    if (node.agent === undefined) {
+      contracted.push(...children);
+      continue;
+    }
+    children.sort(compareStructuralNodes);
+    contracted.push({
+      ...node,
+      agent: node.agent,
+      children,
+    });
+  }
+  return contracted;
 }
 
 export function pinnedAgentShortcuts(forest: readonly AgentTreeNode[]): AgentTreeNode[] {
@@ -80,7 +69,7 @@ export function sidebarAgentShortcuts(
 const AGENT_TREE_SHAPE = {
   children: (node: AgentTreeNode) => node.children,
   key: (node: AgentTreeNode) => node.agent.path,
-  matches: (node: AgentTreeNode, query: string) => agentSearchText(node.agent).includes(query),
+  matches: (node: AgentTreeNode, query: string) => agentMatchesSearch(node.agent, query),
 };
 
 /** Normalized text projected into TanStack Table's hidden search column. */
@@ -98,6 +87,10 @@ export function agentSearchText(agent: AgentRecord): string {
     )
     .join(" ")
     .toLowerCase();
+}
+
+export function agentMatchesSearch(agent: AgentRecord, normalizedQuery: string): boolean {
+  return agentSearchText(agent).includes(normalizedQuery);
 }
 
 export function flattenVisibleAgentRows(
@@ -168,33 +161,6 @@ export function agentNodeWaitingFor(
   return undefined;
 }
 
-function finalizeNode(node: AgentTreeNode): void {
-  let runtime = node.agent.runtime ?? ZERO_AGENT_RUNTIME;
-  const waiting = emptyWaitingAggregate();
-  addWaiting(waiting, node.agent.summary.waitingFor);
-  let lastWorkAt = node.agent.timestamps.lastWorkAt;
-  let agentCount = 1;
-  let activeCount = deriveAgentDisplayState(node.agent.runtime) === "idle" ? 0 : 1;
-
-  for (const child of node.children) {
-    finalizeNode(child);
-    runtime = addRuntime(runtime, child.aggregateRuntime);
-    waiting.userInput += child.aggregateWaiting.userInput;
-    waiting.externalEvent += child.aggregateWaiting.externalEvent;
-    waiting.timer += child.aggregateWaiting.timer;
-    if (child.aggregateLastWorkAt > lastWorkAt) lastWorkAt = child.aggregateLastWorkAt;
-    agentCount += child.aggregateAgentCount;
-    activeCount += child.aggregateActiveCount;
-  }
-
-  node.aggregateRuntime = runtime;
-  node.aggregateWaiting = waiting;
-  node.aggregateLastWorkAt = lastWorkAt;
-  node.aggregateAgentCount = agentCount;
-  node.aggregateActiveCount = activeCount;
-  node.children.sort(compareStructuralNodes);
-}
-
 function compareStructuralNodes(left: AgentTreeNode, right: AgentTreeNode): number {
   return (
     displayPriority(left) - displayPriority(right) ||
@@ -224,32 +190,4 @@ function displayPriority(node: AgentTreeNode): number {
     case "idle":
       return 3;
   }
-}
-
-function addRuntime(left: AgentRuntime, right: AgentRuntime): AgentRuntime {
-  return {
-    triggers: {
-      pending: left.triggers.pending + right.triggers.pending,
-      runnable: left.triggers.runnable + right.triggers.runnable,
-    },
-    llmRequests: {
-      scheduled: left.llmRequests.scheduled + right.llmRequests.scheduled,
-      requested: left.llmRequests.requested + right.llmRequests.requested,
-      started: left.llmRequests.started + right.llmRequests.started,
-    },
-    runningScripts: left.runningScripts + right.runningScripts,
-  };
-}
-
-function emptyWaitingAggregate(): AgentWaitingAggregate {
-  return { userInput: 0, externalEvent: 0, timer: 0 };
-}
-
-function addWaiting(
-  aggregate: AgentWaitingAggregate,
-  waitingFor: AgentRecord["summary"]["waitingFor"],
-): void {
-  if (waitingFor === "user_input") aggregate.userInput += 1;
-  if (waitingFor === "external_event") aggregate.externalEvent += 1;
-  if (waitingFor === "timer") aggregate.timer += 1;
 }

@@ -1,5 +1,14 @@
-import { useRef } from "react";
-import type { Row } from "@tanstack/react-table";
+import { createContext, useContext, useMemo, useRef } from "react";
+import {
+  flexRender,
+  getCoreRowModel,
+  getExpandedRowModel,
+  getFilteredRowModel,
+  useReactTable,
+  type ColumnDef,
+  type ExpandedState,
+  type Row,
+} from "@tanstack/react-table";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { ChevronRight, Folder, FolderOpen } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
@@ -14,40 +23,120 @@ import {
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useLiveState } from "iterate/sdk/itx/react";
 import { BindingLink, PinButton, StateDot } from "./agent.tsx";
-import { AGENT_DISPLAY_STATE_PRESENTATION } from "./agent-presentation.ts";
+import { AGENT_DISPLAY_STATE_PRESENTATION, runtimeCountFragments } from "./agent-presentation.ts";
 import {
   agentPathNodeRuntime,
-  agentPathNodeWaitingFor,
+  buildAgentPathForest,
   type AgentPathTreeNode,
 } from "./agent-path-tree.ts";
-import { agentTitle } from "./agent-tree.ts";
+import { agentNodeWaitingFor, agentSearchText, agentTitle } from "./agent-tree.ts";
 import type { AgentRuntimeTransition } from "~/domains/agents/agent-processor-contract.ts";
 import {
   deriveAgentDisplayState,
   deriveAgentRuntimeDisplayState,
+  type AgentDisplayState,
+  type AgentRecord,
 } from "~/domains/agents/agent-presence.ts";
 import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 
 const TABLE_GRID =
   "grid-cols-[minmax(20rem,2.3fr)_minmax(11rem,1fr)_minmax(17rem,2fr)_minmax(12rem,1.2fr)_8rem_7rem_7rem_7rem_3rem]";
 
+const AGENT_COLUMN_ID = {
+  agent: "agent",
+  status: "status",
+  activity: "activity",
+  source: "source",
+  subagents: "subagents",
+  lastWork: "lastWork",
+  updated: "updated",
+  created: "created",
+  pin: "pin",
+} as const;
+
+const COLUMN_CLASS_NAMES: Record<string, string> = {
+  agent: "min-w-0 whitespace-normal",
+  status: "whitespace-normal",
+  activity: "min-w-0 whitespace-normal",
+  source: "min-w-0 whitespace-normal text-muted-foreground",
+  subagents: "whitespace-normal tabular-nums",
+  lastWork: "text-xs tabular-nums text-muted-foreground",
+  updated: "text-xs tabular-nums text-muted-foreground",
+  created: "text-xs tabular-nums text-muted-foreground",
+  pin: "",
+} satisfies Record<(typeof AGENT_COLUMN_ID)[keyof typeof AGENT_COLUMN_ID], string>;
+
+const AGENT_COLUMNS: ColumnDef<AgentPathTreeNode>[] = [
+  {
+    id: AGENT_COLUMN_ID.agent,
+    header: "Agent",
+    accessorFn: (node) =>
+      node.agent === undefined ? node.path.toLowerCase() : agentSearchText(node.agent),
+    cell: AgentCell,
+  },
+  { id: AGENT_COLUMN_ID.status, header: "Status", cell: StatusCell },
+  { id: AGENT_COLUMN_ID.activity, header: "Activity", cell: ActivityCell },
+  { id: AGENT_COLUMN_ID.source, header: "Source", cell: SourceCell },
+  { id: AGENT_COLUMN_ID.subagents, header: "Subagents", cell: SubagentsCell },
+  { id: AGENT_COLUMN_ID.lastWork, header: "Last work", cell: LastWorkCell },
+  { id: AGENT_COLUMN_ID.updated, header: "Updated", cell: UpdatedCell },
+  { id: AGENT_COLUMN_ID.created, header: "Created", cell: CreatedCell },
+  {
+    id: AGENT_COLUMN_ID.pin,
+    header: () => <span className="sr-only">Pin</span>,
+    cell: PinCell,
+  },
+];
+
+/** Data and interactions required by the path-derived agents table. */
+type AgentTableProps = {
+  agents: Record<string, AgentRecord>;
+  collapsedPaths: ReadonlySet<string>;
+  nowMs: number;
+  projectId: string;
+  query: string;
+  onOpen: (path: string) => void;
+  onToggleExpanded: (path: string) => void;
+  onTogglePinned: (agent: AgentRecord) => void | Promise<unknown>;
+};
+
 export function AgentTable({
-  rows,
+  agents,
+  collapsedPaths,
   nowMs,
   projectId,
-  searching,
+  query,
   onOpen,
   onToggleExpanded,
   onTogglePinned,
-}: {
-  rows: Row<AgentPathTreeNode>[];
-  nowMs: number;
-  projectId: string;
-  searching: boolean;
-  onOpen: (path: string) => void;
-  onToggleExpanded: (path: string) => void;
-  onTogglePinned: (agent: NonNullable<AgentPathTreeNode["agent"]>) => void | Promise<unknown>;
-}) {
+}: AgentTableProps) {
+  const forest = useMemo(() => buildAgentPathForest(agents), [agents]);
+  const normalizedQuery = query.trim();
+  const searching = normalizedQuery !== "";
+  const expanded = useMemo<ExpandedState>(() => {
+    if (searching) return true;
+    const entries: [string, boolean][] = [];
+    const visit = (node: AgentPathTreeNode) => {
+      if (node.children.length > 0 && !collapsedPaths.has(node.path)) {
+        entries.push([node.path, true]);
+      }
+      for (const child of node.children) visit(child);
+    };
+    for (const root of forest) visit(root);
+    return Object.fromEntries(entries);
+  }, [collapsedPaths, forest, searching]);
+  const table = useReactTable({
+    data: forest,
+    columns: AGENT_COLUMNS,
+    state: { expanded, globalFilter: normalizedQuery },
+    getRowId: (node) => node.path,
+    getSubRows: (node) => node.children,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+    getExpandedRowModel: getExpandedRowModel(),
+    filterFromLeafRows: true,
+  });
+  const rows = table.getRowModel().rows;
   const scrollRef = useRef<HTMLDivElement>(null);
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -60,30 +149,28 @@ export function AgentTable({
     <Table
       containerRef={scrollRef}
       containerClassName="h-full overflow-auto"
-      className="grid min-w-[104rem]"
+      className="grid"
       aria-label="Agents table"
       aria-rowcount={rows.length + 1}
     >
       <TableHeader className="sticky top-0 z-10 grid bg-background">
-        <TableRow className={cn("grid hover:bg-background", TABLE_GRID)}>
-          <TableHead>Agent</TableHead>
-          <TableHead>Status</TableHead>
-          <TableHead>Activity</TableHead>
-          <TableHead>Source</TableHead>
-          <TableHead>Subagents</TableHead>
-          <TableHead>Last work</TableHead>
-          <TableHead>Updated</TableHead>
-          <TableHead>Created</TableHead>
-          <TableHead>
-            <span className="sr-only">Pin</span>
-          </TableHead>
-        </TableRow>
+        {table.getHeaderGroups().map((headerGroup) => (
+          <TableRow key={headerGroup.id} className={cn("grid hover:bg-background", TABLE_GRID)}>
+            {headerGroup.headers.map((header) => (
+              <TableHead key={header.id} className={COLUMN_CLASS_NAMES[header.column.id]}>
+                {header.isPlaceholder
+                  ? null
+                  : flexRender(header.column.columnDef.header, header.getContext())}
+              </TableHead>
+            ))}
+          </TableRow>
+        ))}
       </TableHeader>
       <TableBody className="relative grid" style={{ height: virtualizer.getTotalSize() }}>
         {virtualizer.getVirtualItems().map((virtualRow) => {
           const row = rows[virtualRow.index];
           if (row === undefined) return null;
-          const props = {
+          const rowProps: VirtualAgentRowProps = {
             ref: virtualizer.measureElement,
             dataIndex: virtualRow.index,
             row,
@@ -94,10 +181,11 @@ export function AgentTable({
             onToggleExpanded,
             onTogglePinned,
           };
-          return row.original.agent === undefined ? (
-            <AgentTableRow key={row.id} {...props} />
+          const agent = row.original.agent;
+          return agent === undefined ? (
+            <AgentTableRow key={row.id} {...rowProps} />
           ) : (
-            <LiveAgentTableRow key={row.id} {...props} projectId={projectId} />
+            <LiveAgentTableRow key={row.id} {...rowProps} agent={agent} projectId={projectId} />
           );
         })}
       </TableBody>
@@ -105,52 +193,45 @@ export function AgentTable({
   );
 }
 
-function LiveAgentTableRow({
-  ref,
-  dataIndex,
-  row,
-  nowMs,
-  searching,
-  projectId,
-  style,
-  onOpen,
-  onToggleExpanded,
-  onTogglePinned,
-}: {
+/** Stable props shared by inferred-container and live-agent virtual rows. */
+type VirtualAgentRowProps = {
   ref: (node: Element | null) => void;
   dataIndex: number;
   row: Row<AgentPathTreeNode>;
   nowMs: number;
   searching: boolean;
-  projectId: string;
   style: React.CSSProperties;
-  onOpen: (path: string) => void;
-  onToggleExpanded: (path: string) => void;
-  onTogglePinned: (agent: NonNullable<AgentPathTreeNode["agent"]>) => void | Promise<unknown>;
-}) {
-  const agent = row.original.agent;
-  if (agent === undefined) throw new Error("live agent table row requires an agent");
+  onOpen: AgentTableProps["onOpen"];
+  onToggleExpanded: AgentTableProps["onToggleExpanded"];
+  onTogglePinned: AgentTableProps["onTogglePinned"];
+};
+
+function LiveAgentTableRow({
+  agent,
+  projectId,
+  ...props
+}: VirtualAgentRowProps & { agent: AgentRecord; projectId: string }) {
   const runtimeTransition = useLiveState(
     (itx) => itx.agents.get(agent.path).liveState,
     (state) => state.runtimeChange,
     [agent.path],
     { slug: projectId },
   ).value;
-  return (
-    <AgentTableRow
-      ref={ref}
-      dataIndex={dataIndex}
-      row={row}
-      nowMs={nowMs}
-      searching={searching}
-      runtimeTransition={runtimeTransition}
-      style={style}
-      onOpen={onOpen}
-      onToggleExpanded={onToggleExpanded}
-      onTogglePinned={onTogglePinned}
-    />
-  );
+  return <AgentTableRow {...props} runtimeTransition={runtimeTransition} />;
 }
+
+/** Derived presentation shared by the TanStack cells in one mounted row. */
+type AgentTableRowContextValue = Omit<VirtualAgentRowProps, "ref" | "dataIndex" | "style"> & {
+  node: AgentPathTreeNode;
+  agent: AgentRecord | undefined;
+  state: (typeof AGENT_DISPLAY_STATE_PRESENTATION)[AgentDisplayState];
+  runtimeCounts: string[];
+  descendantCount: number;
+  activeCount: number;
+  updated: string | undefined;
+};
+
+const AgentTableRowContext = createContext<AgentTableRowContextValue | undefined>(undefined);
 
 function AgentTableRow({
   ref,
@@ -163,212 +244,240 @@ function AgentTableRow({
   onOpen,
   onToggleExpanded,
   onTogglePinned,
-}: {
-  ref: (node: Element | null) => void;
-  dataIndex: number;
-  row: Row<AgentPathTreeNode>;
-  nowMs: number;
-  searching: boolean;
-  runtimeTransition?: AgentRuntimeTransition;
-  style: React.CSSProperties;
-  onOpen: (path: string) => void;
-  onToggleExpanded: (path: string) => void;
-  onTogglePinned: (agent: NonNullable<AgentPathTreeNode["agent"]>) => void | Promise<unknown>;
-}) {
+}: VirtualAgentRowProps & { runtimeTransition?: AgentRuntimeTransition }) {
   const node = row.original;
   const agent = node.agent;
   const runtime = agentPathNodeRuntime(node, runtimeTransition?.runtime);
   const waitingFor =
     agent !== undefined && row.getIsExpanded()
       ? agent.summary.waitingFor
-      : agentPathNodeWaitingFor(node);
+      : agentNodeWaitingFor(node);
   const displayState = deriveAgentDisplayState(runtime, waitingFor);
-  const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
-  const runtimeCounts = runtimeCountLabels(runtime);
-  const descendantCount = node.aggregateAgentCount - (agent === undefined ? 0 : 1);
-  const activeCount =
-    node.aggregateActiveCount -
-    (agent === undefined || deriveAgentRuntimeDisplayState(agent.runtime) === "idle" ? 0 : 1);
-  const updated = agent === undefined ? undefined : latestAgentUpdate(agent.timestamps);
-
-  return (
-    <TableRow
-      ref={ref}
-      data-index={dataIndex}
-      data-agent-table-row
-      data-agent-path={node.path}
-      data-agent-row-kind={agent === undefined ? "container" : "agent"}
-      data-agent-state={displayState}
-      className={cn("absolute left-0 top-0 grid w-full items-center", TABLE_GRID)}
-      style={style}
-    >
-      <TableCell className="min-w-0 whitespace-normal">
-        <div className="flex min-w-0 items-start gap-2" style={{ paddingLeft: row.depth * 16 }}>
-          <span className="flex size-5 shrink-0 items-center justify-center">
-            {row.getCanExpand() && !searching ? (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon-xs"
-                aria-label={row.getIsExpanded() ? "Collapse child agents" : "Expand child agents"}
-                aria-expanded={row.getIsExpanded()}
-                onClick={() => onToggleExpanded(node.path)}
-              >
-                <ChevronRight
-                  className={cn(
-                    "size-3.5 transition-transform",
-                    row.getIsExpanded() && "rotate-90",
-                  )}
-                />
-              </Button>
-            ) : null}
-          </span>
-          {agent === undefined ? (
-            <>
-              {row.getIsExpanded() ? (
-                <FolderOpen className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              ) : (
-                <Folder className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
-              )}
-              {searching ? (
-                <code className="min-w-0 truncate font-mono text-sm font-medium" title={node.path}>
-                  {node.path}
-                </code>
-              ) : (
-                <button
-                  type="button"
-                  className="min-w-0 truncate text-left font-mono text-sm font-medium hover:underline"
-                  title={node.path}
-                  onClick={() => onToggleExpanded(node.path)}
-                >
-                  {node.path}
-                </button>
-              )}
-            </>
-          ) : (
-            <>
-              <StateDot state={state} className="mt-1.5" />
-              <span className="min-w-0">
-                <button
-                  type="button"
-                  className="block max-w-full truncate text-left font-medium hover:underline"
-                  title={agent.path}
-                  onClick={() => onOpen(agent.path)}
-                >
-                  {agentTitle(agent)}
-                </button>
-                <code
-                  className="block truncate font-mono text-[11px] text-muted-foreground"
-                  title={agent.path}
-                >
-                  {agent.path}
-                </code>
-              </span>
-            </>
-          )}
-        </div>
-      </TableCell>
-      <TableCell className="whitespace-normal">
-        <span className="block">{state.label}</span>
-        <span className="block truncate text-xs text-muted-foreground">
-          {runtimeCounts.length > 0
-            ? runtimeCounts.join(" · ")
-            : waitingFor === undefined
-              ? "No active work"
-              : waitingLabel(waitingFor)}
-        </span>
-      </TableCell>
-      <TableCell className="min-w-0 whitespace-normal">
-        <span className="block truncate">
-          {agent === undefined
-            ? `${node.aggregateAgentCount} descendant ${node.aggregateAgentCount === 1 ? "agent" : "agents"}`
-            : (agent.summary.activity ?? "—")}
-        </span>
-        {agent?.summary.description === undefined ? null : (
-          <span className="block truncate text-xs text-muted-foreground">
-            {agent.summary.description}
-          </span>
-        )}
-      </TableCell>
-      <TableCell className="min-w-0 whitespace-normal text-muted-foreground">
-        {agent?.binding === undefined ? (
-          "—"
-        ) : (
-          <BindingLink binding={agent.binding} className="block max-w-full" />
-        )}
-      </TableCell>
-      <TableCell className="whitespace-normal tabular-nums">
-        <span className="block">{descendantCount}</span>
-        {activeCount === 0 ? null : (
-          <span className="block text-xs text-muted-foreground">{activeCount} active</span>
-        )}
-      </TableCell>
-      <TimeCell value={node.aggregateLastWorkAt} nowMs={nowMs} />
-      <TimeCell value={updated} nowMs={nowMs} />
-      <TimeCell value={agent?.timestamps.createdAt} nowMs={nowMs} />
-      <TableCell>
-        {agent === undefined ? null : (
-          <PinButton
-            pinned={agent.summary.pinned}
-            onToggle={() => onTogglePinned(agent)}
-            size="icon-sm"
-          />
-        )}
-      </TableCell>
-    </TableRow>
-  );
-}
-
-function TimeCell({ value, nowMs }: { value?: string; nowMs: number }) {
-  return (
-    <TableCell className="text-xs tabular-nums text-muted-foreground">
-      {value === undefined ? (
-        "—"
-      ) : (
-        <time dateTime={value} title={value}>
-          {formatTimeAgo(value, nowMs)}
-        </time>
-      )}
-    </TableCell>
-  );
-}
-
-function runtimeCountLabels(runtime: AgentPathTreeNode["aggregateRuntime"]): string[] {
-  const unreadyTriggers = Math.max(0, runtime.triggers.pending - runtime.triggers.runnable);
-  const modelRequests = runtime.llmRequests.started + runtime.llmRequests.requested;
-  const queued = runtime.llmRequests.scheduled + runtime.triggers.runnable;
-  return [
-    runtime.runningScripts > 0 ? pluralCount(runtime.runningScripts, "script") : null,
-    modelRequests > 0 ? pluralCount(modelRequests, "model request") : null,
-    queued > 0 ? `${queued} queued` : null,
-    unreadyTriggers > 0 ? pluralCount(unreadyTriggers, "pending trigger") : null,
-  ].filter((value): value is string => value !== null);
-}
-
-function pluralCount(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
-function waitingLabel(
-  waitingFor: NonNullable<NonNullable<AgentPathTreeNode["agent"]>["summary"]["waitingFor"]>,
-) {
-  if (waitingFor === "user_input") return "Needs input";
-  if (waitingFor === "external_event") return "Waiting externally";
-  return "Waiting for timer";
-}
-
-function latestAgentUpdate(
-  timestamps: NonNullable<AgentPathTreeNode["agent"]>["timestamps"],
-): string {
-  return (
+  const context = useMemo<AgentTableRowContextValue>(
+    () => ({
+      row,
+      node,
+      agent,
+      nowMs,
+      searching,
+      onOpen,
+      onToggleExpanded,
+      onTogglePinned,
+      state: AGENT_DISPLAY_STATE_PRESENTATION[displayState],
+      runtimeCounts: runtimeCountFragments(runtime),
+      descendantCount: node.aggregateAgentCount - (agent === undefined ? 0 : 1),
+      activeCount:
+        node.aggregateActiveCount -
+        (agent === undefined || deriveAgentRuntimeDisplayState(agent.runtime) === "idle" ? 0 : 1),
+      updated: agent === undefined ? undefined : latestAgentUpdate(agent.timestamps),
+    }),
     [
-      timestamps.runtimeUpdatedAt,
-      timestamps.activityUpdatedAt,
-      timestamps.summaryUpdatedAt,
-      timestamps.lastWorkAt,
-    ]
-      .filter((value): value is string => value !== undefined)
-      .toSorted()
-      .at(-1) ?? timestamps.lastWorkAt
+      agent,
+      displayState,
+      node,
+      nowMs,
+      onOpen,
+      onToggleExpanded,
+      onTogglePinned,
+      row,
+      runtime,
+      searching,
+    ],
   );
+
+  return (
+    <AgentTableRowContext value={context}>
+      <TableRow
+        ref={ref}
+        aria-rowindex={dataIndex + 2}
+        data-index={dataIndex}
+        data-agent-table-row
+        data-agent-path={node.path}
+        data-agent-row-kind={agent === undefined ? "container" : "agent"}
+        data-agent-state={displayState}
+        className={cn("absolute left-0 top-0 grid w-full items-center", TABLE_GRID)}
+        style={style}
+      >
+        {row.getVisibleCells().map((cell) => (
+          <TableCell key={cell.id} className={COLUMN_CLASS_NAMES[cell.column.id]}>
+            {flexRender(cell.column.columnDef.cell, cell.getContext())}
+          </TableCell>
+        ))}
+      </TableRow>
+    </AgentTableRowContext>
+  );
+}
+
+function useAgentTableRow() {
+  const context = useContext(AgentTableRowContext);
+  if (context === undefined) throw new Error("agent table cells require an agent table row");
+  return context;
+}
+
+function AgentCell() {
+  const { row, node, agent, searching, state, onOpen, onToggleExpanded } = useAgentTableRow();
+  return (
+    <div className="flex min-w-0 items-start gap-2" style={{ paddingLeft: row.depth * 16 }}>
+      <span className="flex size-5 shrink-0 items-center justify-center">
+        {row.getCanExpand() && !searching ? (
+          <Button
+            type="button"
+            variant="ghost"
+            size="icon-xs"
+            aria-label={row.getIsExpanded() ? "Collapse child agents" : "Expand child agents"}
+            aria-expanded={row.getIsExpanded()}
+            onClick={() => onToggleExpanded(node.path)}
+          >
+            <ChevronRight
+              className={cn("size-3.5 transition-transform", row.getIsExpanded() && "rotate-90")}
+            />
+          </Button>
+        ) : null}
+      </span>
+      {agent === undefined ? (
+        <>
+          {row.getIsExpanded() ? (
+            <FolderOpen className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <Folder className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
+          )}
+          {searching ? (
+            <code className="min-w-0 truncate font-mono text-sm font-medium" title={node.path}>
+              {node.path}
+            </code>
+          ) : (
+            <button
+              type="button"
+              className="min-w-0 truncate text-left font-mono text-sm font-medium hover:underline"
+              title={node.path}
+              onClick={() => onToggleExpanded(node.path)}
+            >
+              {node.path}
+            </button>
+          )}
+        </>
+      ) : (
+        <>
+          <StateDot state={state} className="mt-1.5" />
+          <span className="min-w-0">
+            <button
+              type="button"
+              className="block max-w-full truncate text-left font-medium hover:underline"
+              title={agent.path}
+              onClick={() => onOpen(agent.path)}
+            >
+              {agentTitle(agent)}
+            </button>
+            <code
+              className="block truncate font-mono text-[11px] text-muted-foreground"
+              title={agent.path}
+            >
+              {agent.path}
+            </code>
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+function StatusCell() {
+  const { state, runtimeCounts } = useAgentTableRow();
+  return (
+    <>
+      <span className="block">{state.label}</span>
+      {runtimeCounts.length === 0 ? null : (
+        <span className="block truncate text-xs text-muted-foreground">
+          {runtimeCounts.join(" · ")}
+        </span>
+      )}
+    </>
+  );
+}
+
+function ActivityCell() {
+  const { node, agent } = useAgentTableRow();
+  return (
+    <>
+      <span className="block truncate">
+        {agent === undefined
+          ? `${node.aggregateAgentCount} descendant ${node.aggregateAgentCount === 1 ? "agent" : "agents"}`
+          : (agent.summary.activity ?? "—")}
+      </span>
+      {agent?.summary.description === undefined ? null : (
+        <span className="block truncate text-xs text-muted-foreground">
+          {agent.summary.description}
+        </span>
+      )}
+    </>
+  );
+}
+
+function SourceCell() {
+  const { agent } = useAgentTableRow();
+  return agent?.binding === undefined ? (
+    "—"
+  ) : (
+    <BindingLink binding={agent.binding} className="block max-w-full" />
+  );
+}
+
+function SubagentsCell() {
+  const { descendantCount, activeCount } = useAgentTableRow();
+  return (
+    <>
+      <span className="block">{descendantCount}</span>
+      {activeCount === 0 ? null : (
+        <span className="block text-xs text-muted-foreground">{activeCount} active</span>
+      )}
+    </>
+  );
+}
+
+function LastWorkCell() {
+  const { node, nowMs } = useAgentTableRow();
+  return <TimeValue value={node.aggregateLastWorkAt} nowMs={nowMs} />;
+}
+
+function UpdatedCell() {
+  const { updated, nowMs } = useAgentTableRow();
+  return <TimeValue value={updated} nowMs={nowMs} />;
+}
+
+function CreatedCell() {
+  const { agent, nowMs } = useAgentTableRow();
+  return <TimeValue value={agent?.timestamps.createdAt} nowMs={nowMs} />;
+}
+
+function PinCell() {
+  const { agent, onTogglePinned } = useAgentTableRow();
+  return agent === undefined ? null : (
+    <PinButton
+      pinned={agent.summary.pinned}
+      onToggle={() => onTogglePinned(agent)}
+      size="icon-sm"
+    />
+  );
+}
+
+function TimeValue({ value, nowMs }: { value?: string; nowMs: number }) {
+  return !value ? (
+    "—"
+  ) : (
+    <time dateTime={value} title={value}>
+      {formatTimeAgo(value, nowMs)}
+    </time>
+  );
+}
+
+function latestAgentUpdate(timestamps: AgentRecord["timestamps"]): string {
+  let latest = timestamps.lastWorkAt;
+  for (const timestamp of [
+    timestamps.runtimeUpdatedAt,
+    timestamps.activityUpdatedAt,
+    timestamps.summaryUpdatedAt,
+  ]) {
+    if (timestamp !== undefined && timestamp > latest) latest = timestamp;
+  }
+  return latest;
 }

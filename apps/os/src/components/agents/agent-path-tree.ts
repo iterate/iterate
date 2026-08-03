@@ -1,8 +1,8 @@
 import { ZERO_AGENT_RUNTIME, type AgentRuntime } from "@iterate-com/shared/agent-events";
-import { agentSearchText } from "./agent-tree.ts";
 import { deriveAgentDisplayState, type AgentRecord } from "~/domains/agents/agent-presence.ts";
 
-type AgentWaitingAggregate = {
+/** Descendant wait reasons summarized for inferred container rows. */
+export type AgentWaitingAggregate = {
   userInput: number;
   externalEvent: number;
   timer: number;
@@ -16,7 +16,8 @@ export type AgentPathTreeNode = {
   children: AgentPathTreeNode[];
   aggregateRuntime: AgentRuntime;
   aggregateWaiting: AgentWaitingAggregate;
-  aggregateLastWorkAt?: string;
+  /** Latest descendant work timestamp; non-empty after the forest is built. */
+  aggregateLastWorkAt: string;
   aggregateAgentCount: number;
   aggregateActiveCount: number;
 };
@@ -54,19 +55,6 @@ export function buildAgentPathForest(records: Record<string, AgentRecord>): Agen
   return roots;
 }
 
-export function agentPathSearchText(node: AgentPathTreeNode): string {
-  return node.agent === undefined ? node.path.toLowerCase() : agentSearchText(node.agent);
-}
-
-export function agentPathNodeWaitingFor(
-  node: Pick<AgentPathTreeNode, "aggregateWaiting">,
-): AgentRecord["summary"]["waitingFor"] {
-  if (node.aggregateWaiting.userInput > 0) return "user_input";
-  if (node.aggregateWaiting.externalEvent > 0) return "external_event";
-  if (node.aggregateWaiting.timer > 0) return "timer";
-  return undefined;
-}
-
 /** Replace a materialized agent's catalog runtime with its live runtime while
  * preserving the aggregate runtime of every descendant. */
 export function agentPathNodeRuntime(
@@ -96,6 +84,7 @@ function emptyPathNode(path: string): AgentPathTreeNode {
     children: [],
     aggregateRuntime: ZERO_AGENT_RUNTIME,
     aggregateWaiting: emptyWaitingAggregate(),
+    aggregateLastWorkAt: "",
     aggregateAgentCount: 0,
     aggregateActiveCount: 0,
   };
@@ -105,7 +94,7 @@ function finalizePathNode(node: AgentPathTreeNode): void {
   let runtime = node.agent?.runtime ?? ZERO_AGENT_RUNTIME;
   const waiting = emptyWaitingAggregate();
   addWaiting(waiting, node.agent?.summary.waitingFor);
-  let lastWorkAt = node.agent?.timestamps.lastWorkAt;
+  let lastWorkAt = node.agent?.timestamps.lastWorkAt ?? "";
   let agentCount = node.agent === undefined ? 0 : 1;
   let activeCount =
     node.agent === undefined || deriveAgentDisplayState(node.agent.runtime) === "idle" ? 0 : 1;
@@ -116,10 +105,7 @@ function finalizePathNode(node: AgentPathTreeNode): void {
     waiting.userInput += child.aggregateWaiting.userInput;
     waiting.externalEvent += child.aggregateWaiting.externalEvent;
     waiting.timer += child.aggregateWaiting.timer;
-    if (
-      child.aggregateLastWorkAt !== undefined &&
-      (lastWorkAt === undefined || child.aggregateLastWorkAt > lastWorkAt)
-    ) {
+    if (child.aggregateLastWorkAt > lastWorkAt) {
       lastWorkAt = child.aggregateLastWorkAt;
     }
     agentCount += child.aggregateAgentCount;

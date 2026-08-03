@@ -6,6 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import { ZERO_AGENT_RUNTIME } from "@iterate-com/shared/agent-events";
 import { AgentCatalog } from "./agent-catalog.tsx";
 import type { AgentRecord } from "~/domains/agents/agent-presence.ts";
+import type { AgentCatalogView } from "~/lib/agent-catalog-search.ts";
 
 const { runtimeTransitions } = vi.hoisted(() => ({
   runtimeTransitions: new Map<string, unknown>(),
@@ -117,6 +118,18 @@ function record(index: number): AgentRecord {
   };
 }
 
+async function setSearch(container: HTMLElement, value: string) {
+  const input = container.querySelector('input[aria-label="Search agents"]');
+  if (!(input instanceof HTMLInputElement)) throw new Error("missing agent search input");
+  const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+  if (setInputValue === undefined) throw new Error("missing native input value setter");
+
+  await act(async () => {
+    setInputValue.call(input, value);
+    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: value || null }));
+  });
+}
+
 test("a 5,000-agent catalog mounts bounded rows and patches one visible row", async () => {
   runtimeTransitions.set("/agents/load-0000", {
     runtime: { ...ZERO_AGENT_RUNTIME, runningScripts: 1 },
@@ -209,29 +222,55 @@ test("search reveals matching descendants without changing the collapsed tree", 
   expect(container.textContent).not.toContain("Bath cattle survey");
   expect(container.querySelector('button[aria-label="Expand child agents"]')).not.toBeNull();
 
-  const input = container.querySelector('input[aria-label="Search agents"]');
-  if (!(input instanceof HTMLInputElement)) throw new Error("missing agent search input");
-  const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  if (setInputValue === undefined) throw new Error("missing native input value setter");
-
-  await act(async () => {
-    setInputValue.call(input, " cattle ");
-    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: " cattle " }));
-  });
+  await setSearch(container, " cattle ");
 
   expect(container.textContent).toContain("Bath cattle survey");
   expect(container.querySelector('button[aria-label="Collapse child agents"]')).toBeNull();
 
-  await act(async () => {
-    setInputValue.call(input, "");
-    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: null }));
-  });
+  await setSearch(container, "");
 
   expect(container.textContent).not.toContain("Bath cattle survey");
   expect(container.querySelector('button[aria-label="Expand child agents"]')).not.toBeNull();
 
   await act(async () => root.unmount());
 });
+
+for (const view of ["list", "table"] satisfies AgentCatalogView[]) {
+  test(`${view} search keeps the empty-state gate aligned with its TanStack rows`, async () => {
+    const agent = {
+      ...record(0),
+      path: "/agents/research/bath",
+      summary: { pinned: false, title: "Bath cattle survey" },
+    };
+    const container = document.createElement("div");
+    Object.assign(container.style, { height: "800px", width: "1000px" });
+    document.body.appendChild(container);
+    const root = createRoot(container);
+
+    await act(async () =>
+      root.render(
+        <AgentCatalog
+          agents={{ [agent.path]: agent }}
+          onOpen={() => undefined}
+          onTogglePinned={() => undefined}
+          projectId={`prj_${view}_search_contract`}
+          projectSlug={`${view}-search-contract`}
+          view={view}
+        />,
+      ),
+    );
+
+    await setSearch(container, "BATH CATTLE");
+    expect(container.textContent).toContain("Bath cattle survey");
+    expect(container.textContent).toContain("1 match");
+
+    await setSearch(container, "missing search value");
+    expect(container.textContent).toContain("No matches");
+    expect(container.querySelector(`[data-agent-path="${agent.path}"]`)).toBeNull();
+
+    await act(async () => root.unmount());
+  });
+}
 
 test("table leaves a real agent's missing activity blank", async () => {
   const idleAgent = {
@@ -257,15 +296,7 @@ test("table leaves a real agent's missing activity blank", async () => {
     ),
   );
 
-  const input = container.querySelector('input[aria-label="Search agents"]');
-  if (!(input instanceof HTMLInputElement)) throw new Error("missing agent search input");
-  const setInputValue = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
-  if (setInputValue === undefined) throw new Error("missing native input value setter");
-
-  await act(async () => {
-    setInputValue.call(input, " Idle agent ");
-    input.dispatchEvent(new InputEvent("input", { bubbles: true, data: " Idle agent " }));
-  });
+  await setSearch(container, " Idle agent ");
 
   const row = container.querySelector('[data-agent-path="/agents/idle"]');
   expect(row?.querySelectorAll("td")[2]?.textContent).toBe("—");
@@ -320,7 +351,7 @@ test("table subagent aggregates exclude self and use singular folder labels", as
   await act(async () => root.unmount());
 });
 
-test("table keeps an expanded parent's waiting status consistent with its subtitle", async () => {
+test("table does not repeat the primary state in a redundant subtitle", async () => {
   const parent = {
     ...record(0),
     path: "/agents/release",
@@ -354,8 +385,8 @@ test("table keeps an expanded parent's waiting status consistent with its subtit
   const childStatus = container
     .querySelector('[data-agent-path="/agents/release/approval"]')
     ?.querySelectorAll("td")[1]?.textContent;
-  expect(parentStatus).toBe("IdleNo active work");
-  expect(childStatus).toBe("Needs inputNeeds input");
+  expect(parentStatus).toBe("Idle");
+  expect(childStatus).toBe("Needs input");
 
   await act(async () => root.unmount());
 });
