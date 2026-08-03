@@ -1963,6 +1963,77 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(h.durableDeliveryWakes).toHaveBeenCalledOnce();
   });
 
+  it("caps session batches without skipping events and can omit reduced state", async () => {
+    const events = Array.from({ length: 5 }, (_, index) => streamEvent(index + 1));
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+
+    h.connections.openSession({
+      connectionKey: "capped-session",
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      maxDeliveryEvents: 2,
+      includeState: false,
+    });
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(calls.map(({ batch }) => batch.events.map(({ offset }) => offset))).toEqual([
+      [1, 2],
+      [3, 4],
+      [5],
+    ]);
+    expect(calls.every(({ batch }) => batch.state === null)).toBe(true);
+    expect(h.connections.runtimeState()["capped-session"]).toMatchObject({
+      deliveredThroughOffset: 5,
+      batchesSent: 3,
+      eventsSent: 5,
+    });
+  });
+
+  it("advances past filter-rejected appends without pushing empty live batches", async () => {
+    const events = [streamEvent(1, "events.example.com/ignored")];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openSession({
+      connectionKey: "filtered-session",
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+    });
+    await flushMicrotasks();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.batch.events).toEqual([]);
+    expect(calls[0]!.batch.scannedThroughOffset).toBe(1);
+
+    events.push(streamEvent(2, "events.example.com/ignored"));
+    h.state.maxOffset = 2;
+    connection.sendQueued();
+    await flushMicrotasks();
+
+    expect(calls).toHaveLength(1);
+    expect(h.connections.runtimeState()["filtered-session"]).toMatchObject({
+      deliveredThroughOffset: 2,
+      batchesSent: 1,
+      eventsSent: 0,
+    });
+  });
+
   it("classifies a broken hosted callback capability as lifecycle unavailability", () => {
     const h = connectionsHarness();
     const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
