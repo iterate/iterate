@@ -142,6 +142,10 @@ test("the index table has no row-loading UI and reveals the current path", async
   await act(async () => collapseCurrentParent?.click());
   expect(visiblePaths(container)).toEqual(["/", "/agents"]);
 
+  await act(async () => render("/"));
+  await act(async () => render("/agents/cows"));
+  expect(visiblePaths(container)).toEqual(["/", "/agents", "/agents/cows"]);
+
   await act(async () => root.unmount());
 });
 

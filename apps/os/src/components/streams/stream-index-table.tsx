@@ -50,21 +50,42 @@ export function StreamIndexTable({
   onOpenPath: (streamPath: string) => void;
   streams: Record<string, StreamIndexRow>;
 }) {
-  const [expansion, setExpansion] = useState<{
-    currentPath: string;
-    collapsedPaths: ReadonlySet<string>;
-  }>({ currentPath, collapsedPaths: new Set() });
+  const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(new Set());
   const currentParentPaths = useMemo(() => {
     if (currentPath === "/") return new Set<string>();
     return new Set(["/", ...streamPathAncestors(currentPath).slice(0, -1)]);
   }, [currentPath]);
-  const visibleCollapsedPaths = useMemo(
-    () =>
-      expansion.currentPath === currentPath
-        ? expansion.collapsedPaths
-        : new Set([...expansion.collapsedPaths].filter((path) => !currentParentPaths.has(path))),
-    [currentParentPaths, currentPath, expansion],
+  const initialCollapsedPaths = useMemo(
+    () => new Set([...collapsedPaths].filter((path) => !currentParentPaths.has(path))),
+    [collapsedPaths, currentParentPaths],
   );
+
+  return (
+    <StreamIndexTableRows
+      key={currentPath}
+      currentPath={currentPath}
+      initialCollapsedPaths={initialCollapsedPaths}
+      onCollapsedPathsChange={setCollapsedPaths}
+      onOpenPath={onOpenPath}
+      streams={streams}
+    />
+  );
+}
+
+function StreamIndexTableRows({
+  currentPath,
+  initialCollapsedPaths,
+  onCollapsedPathsChange,
+  onOpenPath,
+  streams,
+}: {
+  currentPath: string;
+  initialCollapsedPaths: ReadonlySet<string>;
+  onCollapsedPathsChange: (paths: ReadonlySet<string>) => void;
+  onOpenPath: (streamPath: string) => void;
+  streams: Record<string, StreamIndexRow>;
+}) {
+  const [visibleCollapsedPaths, setVisibleCollapsedPaths] = useState(initialCollapsedPaths);
   const table = useIndexedStreamTreeTable({
     streams,
     collapsedPaths: visibleCollapsedPaths,
@@ -95,12 +116,11 @@ export function StreamIndexTable({
                 row={row}
                 onOpen={row.original.indexed ? onOpenPath : undefined}
                 selected={selected}
-                onToggleExpanded={(path) =>
-                  setExpansion({
-                    currentPath,
-                    collapsedPaths: toggledSet(visibleCollapsedPaths, path),
-                  })
-                }
+                onToggleExpanded={(path) => {
+                  const nextCollapsedPaths = toggledSet(visibleCollapsedPaths, path);
+                  setVisibleCollapsedPaths(nextCollapsedPaths);
+                  onCollapsedPathsChange(nextCollapsedPaths);
+                }}
               />
             </li>
           );
