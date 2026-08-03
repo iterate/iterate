@@ -140,12 +140,17 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
   // app's whole life, so a mount-time list goes stale the moment a scratch
   // workspace is minted or an agent births one): the previous list stays
   // rendered while the refresh is in flight, so only the first open shows
-  // the loading row. Errors keep the last list — the home picker is the
-  // surface that explains a broken listing.
+  // the loading row. A refresh failure keeps the last list; a FIRST-open
+  // failure has no list to keep, so the error itself becomes the row —
+  // never an eternal "Loading…".
+  const [listError, setListError] = useState<string | null>(null);
   const loadWorkspaces = () => {
+    setListError(null);
     void withDocsProject((project) => project.workspaces())
       .then(setWorkspaces)
-      .catch(() => {});
+      .catch((error: unknown) => {
+        setListError(error instanceof Error ? error.message : String(error));
+      });
   };
 
   const createScratch = () => {
@@ -202,7 +207,9 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
               </DropdownMenuLabel>
               {workspaces === null ? (
                 <DropdownMenuItem disabled className="p-2">
-                  <span className="truncate">Loading…</span>
+                  <span className={listError === null ? "truncate" : "truncate text-red-700"}>
+                    {listError ?? "Loading…"}
+                  </span>
                 </DropdownMenuItem>
               ) : workspaces.length === 0 ? (
                 <DropdownMenuItem disabled className="p-2">
