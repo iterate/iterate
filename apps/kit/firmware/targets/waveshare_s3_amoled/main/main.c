@@ -63,6 +63,7 @@
 #include "iterate/kit/voice_playback_clock.h"
 #include "waveshare_audio.h"
 #include "waveshare_buttons.h"
+#include "waveshare_conversation_store.h"
 #include "waveshare_display.h"
 #include "waveshare_recorder.h"
 #include "waveshare_tools.h"
@@ -622,11 +623,11 @@ static void on_control(
     waveshare_recorder_log("answer complete");
     /* The answer is complete: back to waiting for the next turn. */
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
-    waveshare_display_set_status("hold the lower button to talk");
+    waveshare_display_set_status("hold the upper button to talk");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
     waveshare_display_set_call_active(true);
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
-    waveshare_display_set_status("hold the lower button to talk");
+    waveshare_display_set_status("hold the upper button to talk");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
     /*
      * Drop whatever is still queued. The ring holds thirty seconds, so a call
@@ -1142,7 +1143,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkCatchup", runtime.speaker_catchup_frames},
     {"spkDebtPaid", runtime.speaker_debt_paid},
     {"spkWriteFailures", runtime.speaker_write_failures},
-    {"talkReadFailures", waveshare_buttons_talk_read_failures()},
+    {"talkReadFailures", waveshare_buttons_lower_read_failures()},
     {"spkMarginMaxMs", runtime.speaker_margin_max_ms},
     {"spkLagMaxMs", runtime.speaker_lag_max_ms},
     {"spkMarginMinMs", runtime.speaker_margin_min_ms},
@@ -1435,6 +1436,20 @@ void app_main(void) {
   }
   (void)waveshare_buttons_init();
   (void)waveshare_recorder_init();
+  /*
+   * Resume the conversation this device was last put on. Choosing a new one
+   * is deliberate, so forgetting it at the next power cut would silently drop
+   * the user back onto a conversation they had moved on from — and the screen
+   * would show a path they did not pick. Anything unreadable leaves the
+   * compiled-in default in place.
+   */
+  {
+    char remembered[sizeof(stream_path)];
+    if (waveshare_conversation_load(remembered, sizeof(remembered))) {
+      (void)snprintf(stream_path, sizeof(stream_path), "%s", remembered);
+      ESP_LOGI(tag, "resuming remembered conversation: %s", stream_path);
+    }
+  }
   waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
   waveshare_display_set_status("connecting to iterate");
   ESP_LOGI(
@@ -1510,7 +1525,6 @@ void app_main(void) {
   uint64_t next_stats_at = 0;
   uint64_t next_ping_at = 0;
   uint64_t next_button_poll_at = 0;
-  uint64_t talk_idle_since = 0;
 
   for (;;) {
     (void)esp_task_wdt_reset();
@@ -1525,70 +1539,51 @@ void app_main(void) {
       next_button_poll_at = now_ms(NULL) + BUTTON_POLL_MS;
       waveshare_buttons_poll();
     }
-    if (waveshare_buttons_take_call_long_press()) {
-      ESP_LOGW(tag, "call button held — restarting");
-      waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
-      waveshare_display_set_status("restarting…");
-      waveshare_recorder_end_call("user restart");
-      DELAY_MS(400); /* let the screen show it */
-      esp_restart();
-    }
-    {
-      /* Show the hold progressing, so it is discoverable rather than folklore. */
-      static bool showing_hold;
-      const uint32_t held = waveshare_buttons_call_held_ms();
-      if (held > 600U) {
-        showing_hold = true;
-        waveshare_display_set_status("keep holding to restart…");
-      } else if (showing_hold) {
-        showing_hold = false;
-        waveshare_display_set_status(
-            runtime.voicelab.call_active
-                ? "hold the lower button to talk"
-                : "upper: call   ·   lower: restart");
-      }
-    }
     /*
-     * BETWEEN CALLS THE TWO BUTTONS DRIVE A MENU.
+     * WHICH BUTTON MEANS WHAT, AND WHY IT IS THIS WAY ROUND.
      *
-     * During a call both are spoken for — hold the lower one to talk, press
-     * the upper one to hang up — and between calls they did almost nothing,
-     * while the things a person actually wants there (which stream is this?
-     * start a fresh conversation, reboot a wedged device) needed a laptop.
+     * The lower button is PWR, wired into the board's power path: hold it and
+     * the hardware powers the device off, which firmware cannot intercept.
+     * It had push-to-talk on it, so talking meant holding down the one button
+     * that kills the device — and it did kill it, mid-conversation. So the
+     * held gesture belongs to the upper button, and the lower one is only
+     * ever tapped.
      *
-     * The menu decides nothing itself; iterate_kit_menu does, and it is
-     * tested on the host. This is only the wiring between two buttons and
-     * three actions.
+     * LOWER, tap:  no call -> move the menu cursor;  call up -> hang up.
+     * UPPER, tap:  menu open -> take the option;     otherwise -> call.
+     * UPPER, held: the microphone. Read further down, where the turn is.
      */
-    if (runtime.voicelab.call_active || waveshare_display_call_requested()) {
-      /*
-       * During a call the lower button means "talk", and the presses it
-       * latches are not menu presses. Draining the latch here is what stops
-       * the menu opening by itself the moment a call ends — every press made
-       * while talking would otherwise still be sitting there, waiting.
-       */
-      if (waveshare_buttons_take_talk_press()) {
-        ESP_LOGI(tag, "lower button ignored: a call is up, so it means talk");
-      }
-    } else if (waveshare_buttons_take_talk_press()) {
-      iterate_kit_menu_cycle(&runtime.menu);
-      ESP_LOGI(
-          tag, "menu: %s",
-          iterate_kit_menu_item_name(
-              (enum iterate_kit_menu_item)runtime.menu.selected));
-      show_menu();
-    }
-    if (waveshare_buttons_take_call_press()) {
-      const enum iterate_kit_menu_action action =
-          iterate_kit_menu_activate(&runtime.menu);
-      if (action == ITERATE_KIT_MENU_ACTION_NONE) {
-        /* No menu open: the upper button means what it always meant. */
-        const bool wanted = !waveshare_display_call_requested();
-        ESP_LOGI(tag, "BOOT pressed: call %s", wanted ? "requested" : "ended");
-        waveshare_display_request_call(wanted);
+    if (waveshare_buttons_take_lower_press()) {
+      if (runtime.voicelab.call_active || waveshare_display_call_requested()) {
+        ESP_LOGI(tag, "lower button: ending the call");
+        waveshare_display_request_call(false);
       } else {
-        ESP_LOGI(tag, "menu: chose option %d", (int)action);
-        take_menu_action(action);
+        iterate_kit_menu_cycle(&runtime.menu);
+        ESP_LOGI(
+            tag, "menu: %s",
+            iterate_kit_menu_item_name(
+                (enum iterate_kit_menu_item)runtime.menu.selected));
+        show_menu();
+      }
+    }
+    if (waveshare_buttons_take_upper_press()) {
+      if (runtime.voicelab.call_active || waveshare_display_call_requested()) {
+        /*
+         * Drained on purpose. Every push-to-talk press puts a press here, and
+         * one left waiting would fire the moment the call ended — opening the
+         * menu, or starting a call, that nobody asked for.
+         */
+        ESP_LOGD(tag, "upper press while a call is up: that press meant talk");
+      } else {
+        const enum iterate_kit_menu_action action =
+            iterate_kit_menu_activate(&runtime.menu);
+        if (action == ITERATE_KIT_MENU_ACTION_NONE) {
+          ESP_LOGI(tag, "upper button: calling");
+          waveshare_display_request_call(true);
+        } else {
+          ESP_LOGI(tag, "menu: chose option %d", (int)action);
+          take_menu_action(action);
+        }
       }
     }
     /* A call takes the buttons back; the menu has no business being open. */
@@ -1596,10 +1591,9 @@ void app_main(void) {
       iterate_kit_menu_close(&runtime.menu);
       waveshare_display_set_state(WAVESHARE_UI_LISTENING);
     }
-    (void)talk_idle_since;
     {
       static bool talk_logged;
-      const bool talk = waveshare_buttons_talk_held();
+      const bool talk = waveshare_buttons_upper_held();
       if (talk != talk_logged) {
         talk_logged = talk;
         ESP_LOGI(tag, "PWR %s", talk ? "down (talking)" : "up (commit)");
@@ -1773,6 +1767,15 @@ void app_main(void) {
         (void)snprintf(
             stream_path, sizeof(stream_path), "%s", pending_stream_path);
         ESP_LOGI(tag, "new conversation ready: %s", stream_path);
+        /*
+         * Remembered here and nowhere else: this is the one moment the server
+         * has confirmed the conversation exists. Storing it when the button
+         * was pressed would leave the device pointing at a stream that was
+         * never set up, across every future boot.
+         */
+        if (!waveshare_conversation_store(stream_path)) {
+          ESP_LOGW(tag, "could not remember %s; it lasts until reboot", stream_path);
+        }
         waveshare_display_set_status(stream_path);
         /* Remount: the mount is bound to the path it was made with. */
         runtime.voicelab_generation = 0U;
@@ -1922,7 +1925,7 @@ void app_main(void) {
        */
       const bool wants_call = waveshare_display_call_requested();
       const bool wants_talk = wants_call &&
-          (waveshare_buttons_talk_held() || waveshare_display_talk_held());
+          (waveshare_buttons_upper_held() || waveshare_display_talk_held());
 
       /*
        * The bridge holds the call in a Durable Object this device cannot
@@ -2072,7 +2075,7 @@ void app_main(void) {
         waveshare_display_set_call_active(call_active_shown);
         if (call_active_shown) {
           waveshare_display_set_state(WAVESHARE_UI_IDLE);
-          waveshare_display_set_status("hold the lower button to talk");
+          waveshare_display_set_status("hold the upper button to talk");
         }
       }
 

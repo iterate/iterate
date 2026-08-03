@@ -1,10 +1,13 @@
 /*
- * BOOT and PWR, debounced. BOOT is an ordinary ESP pin; PWR is EXIO4 on the
- * board's TCA9554, so reading it is an I2C transaction — cheap at the 20ms
- * poll the app loop already runs, and worth it because push-to-talk wants a
- * button the user can hold without covering the screen.
+ * The two buttons described in waveshare_buttons.h, debounced.
+ *
+ * UPPER is BOOT, an ordinary ESP pin. LOWER is PWR on the board's TCA9554, so
+ * reading it is an I2C transaction — cheap at the 25ms poll the app loop
+ * already runs, and unavoidable because that is where the button is wired.
  */
 #include "waveshare_buttons.h"
+
+#include <assert.h>
 
 #include "bsp/esp-bsp.h"
 #include "driver/gpio.h"
@@ -14,27 +17,22 @@
 static const char tag[] = "waveshare-buttons";
 
 enum {
-  PIN_BOOT = 0,
-  /* PWR sits on the expander, and reads HIGH while pressed. */
-  EXPANDER_PIN_TALK = IO_EXPANDER_PIN_NUM_4,
+  PIN_UPPER = 0,
+  /* The lower button sits on the expander, and reads HIGH while pressed. */
+  EXPANDER_PIN_LOWER = IO_EXPANDER_PIN_NUM_4,
   DEBOUNCE_MS = 30,
-  /* Hold the call button this long to reboot. */
-  REBOOT_HOLD_MS = 3000,
 };
 
 static struct {
   esp_io_expander_handle_t expander;
-  bool call_down;
-  bool talk_down;
-  bool call_press_pending;
-  bool talk_press_pending;
-  bool call_long_press_pending;
-  bool call_long_press_fired;
-  uint64_t call_down_since_ms;
-  uint64_t call_changed_at_ms;
-  uint64_t talk_changed_at_ms;
+  bool upper_down;
+  bool lower_down;
+  bool upper_press_pending;
+  bool lower_press_pending;
+  uint64_t upper_changed_at_ms;
+  uint64_t lower_changed_at_ms;
   bool initialized;
-  uint32_t talk_read_failures;
+  uint32_t lower_read_failures;
 } buttons;
 
 static uint64_t now_ms(void) {
@@ -42,15 +40,15 @@ static uint64_t now_ms(void) {
 }
 
 bool waveshare_buttons_init(void) {
-  const gpio_config_t boot_config = {
-    .pin_bit_mask = 1ULL << PIN_BOOT,
+  const gpio_config_t upper_config = {
+    .pin_bit_mask = 1ULL << PIN_UPPER,
     .mode = GPIO_MODE_INPUT,
     .pull_up_en = GPIO_PULLUP_ENABLE,
     .pull_down_en = GPIO_PULLDOWN_DISABLE,
     .intr_type = GPIO_INTR_DISABLE,
   };
-  if (gpio_config(&boot_config) != ESP_OK) {
-    ESP_LOGE(tag, "boot button config failed");
+  if (gpio_config(&upper_config) != ESP_OK) {
+    ESP_LOGE(tag, "upper button config failed");
     return false;
   }
   /*
@@ -59,105 +57,89 @@ bool waveshare_buttons_init(void) {
    */
   buttons.expander = bsp_io_expander_init();
   if (buttons.expander == NULL) {
-    ESP_LOGW(tag, "no expander: push-to-talk button unavailable");
+    ESP_LOGW(tag, "no expander: the lower button is unavailable");
   } else {
     (void)esp_io_expander_set_dir(
-        buttons.expander, EXPANDER_PIN_TALK, IO_EXPANDER_INPUT);
+        buttons.expander, EXPANDER_PIN_LOWER, IO_EXPANDER_INPUT);
   }
   buttons.initialized = true;
   return true;
 }
 
-void waveshare_buttons_poll(void) {
-  const uint64_t now = now_ms();
-  bool call_down;
-  bool talk_down = buttons.talk_down;
+/** Read the lower button, treating a failed I2C read as "not pressed". */
+static bool read_lower_pressed(void) {
+  uint32_t levels = 0U;
 
+  if (buttons.expander == NULL) {
+    return false;
+  }
+  if (esp_io_expander_get_level(
+          buttons.expander, EXPANDER_PIN_LOWER, &levels) != ESP_OK) {
+    /*
+     * FAIL RELEASED, never "keep the last value". This read shares a bus with
+     * the codec, the touch controller and the PMIC, so it can and does fail —
+     * and retaining the previous state meant a single failed read while the
+     * button was down latched it held FOREVER. A dropped release costs one
+     * repeated press; a stuck one costs the whole device.
+     */
+    ++buttons.lower_read_failures;
+    return false;
+  }
+  return (levels & EXPANDER_PIN_LOWER) != 0U;
+}
+
+/**
+ * Commit a debounced down edge.
+ *
+ * Both buttons want the same thing — the press registers when it goes down,
+ * not when it is released — so the rule lives in one place rather than being
+ * written out twice and drifting.
+ */
+static void settle(
+    bool pressed, bool *down, uint64_t *changed_at_ms, bool *press_pending) {
+  const uint64_t now = now_ms();
+
+  assert(down != NULL && changed_at_ms != NULL && press_pending != NULL);
+  if (pressed == *down) {
+    return;
+  }
+  if (now - *changed_at_ms < (uint64_t)DEBOUNCE_MS) {
+    return;
+  }
+  *changed_at_ms = now;
+  *down = pressed;
+  if (pressed) {
+    *press_pending = true;
+  }
+}
+
+void waveshare_buttons_poll(void) {
   if (!buttons.initialized) return;
 
-  call_down = gpio_get_level(PIN_BOOT) == 0;
-  if (call_down != buttons.call_down &&
-      now - buttons.call_changed_at_ms >= DEBOUNCE_MS) {
-    buttons.call_changed_at_ms = now;
-    buttons.call_down = call_down;
-    if (call_down) {
-      buttons.call_down_since_ms = now;
-      buttons.call_long_press_fired = false;
-    } else if (!buttons.call_long_press_fired) {
-      /*
-       * The short press is only committed on RELEASE, so a hold that is on
-       * its way to a reboot does not also toggle the call.
-       */
-      buttons.call_press_pending = true;
-    }
-  }
-  if (buttons.call_down && !buttons.call_long_press_fired &&
-      buttons.call_down_since_ms != 0U &&
-      now - buttons.call_down_since_ms >= REBOOT_HOLD_MS) {
-    buttons.call_long_press_fired = true;
-    buttons.call_long_press_pending = true;
-  }
-
-  if (buttons.expander != NULL) {
-    uint32_t levels = 0U;
-    if (esp_io_expander_get_level(
-            buttons.expander, EXPANDER_PIN_TALK, &levels) == ESP_OK) {
-      talk_down = (levels & EXPANDER_PIN_TALK) != 0U;
-    } else {
-      /*
-       * FAIL RELEASED, never "keep the last value". This read is I2C on a
-       * bus shared with the codec, the touch controller and the PMIC, so it
-       * can and does fail — and retaining the previous state meant a single
-       * failed read while the button was down latched it held FOREVER. The
-       * turn then never ends: the screen sits on "listening" and nothing is
-       * ever sent for an answer. A dropped release costs one repeated press;
-       * a stuck one costs the whole device.
-       */
-      ++buttons.talk_read_failures;
-      talk_down = false;
-    }
-  }
-  if (talk_down != buttons.talk_down &&
-      now - buttons.talk_changed_at_ms >= DEBOUNCE_MS) {
-    buttons.talk_changed_at_ms = now;
-    buttons.talk_down = talk_down;
-    /*
-     * Committed on the DOWN edge, unlike the call button, which waits for
-     * release so a hold on its way to a reboot does not also toggle a call.
-     * The talk button has no such second meaning between calls, and a menu
-     * that only moved when you let go would feel broken.
-     */
-    if (talk_down) buttons.talk_press_pending = true;
-  }
+  settle(
+      gpio_get_level(PIN_UPPER) == 0, &buttons.upper_down,
+      &buttons.upper_changed_at_ms, &buttons.upper_press_pending);
+  settle(
+      read_lower_pressed(), &buttons.lower_down, &buttons.lower_changed_at_ms,
+      &buttons.lower_press_pending);
 }
 
-bool waveshare_buttons_take_call_press(void) {
-  const bool pressed = buttons.call_press_pending;
-  buttons.call_press_pending = false;
+bool waveshare_buttons_take_upper_press(void) {
+  const bool pressed = buttons.upper_press_pending;
+  buttons.upper_press_pending = false;
   return pressed;
 }
 
-bool waveshare_buttons_take_call_long_press(void) {
-  const bool fired = buttons.call_long_press_pending;
-  buttons.call_long_press_pending = false;
-  return fired;
+bool waveshare_buttons_upper_held(void) {
+  return buttons.upper_down;
 }
 
-uint32_t waveshare_buttons_talk_read_failures(void) {
-  return buttons.talk_read_failures;
-}
-
-uint32_t waveshare_buttons_call_held_ms(void) {
-  if (!buttons.call_down || buttons.call_down_since_ms == 0U) return 0U;
-  return (uint32_t)(now_ms() - buttons.call_down_since_ms);
-}
-
-bool waveshare_buttons_take_talk_press(void) {
-  const bool pressed = buttons.talk_press_pending;
-  buttons.talk_press_pending = false;
+bool waveshare_buttons_take_lower_press(void) {
+  const bool pressed = buttons.lower_press_pending;
+  buttons.lower_press_pending = false;
   return pressed;
 }
 
-bool waveshare_buttons_talk_held(void) {
-  return buttons.talk_down;
+uint32_t waveshare_buttons_lower_read_failures(void) {
+  return buttons.lower_read_failures;
 }

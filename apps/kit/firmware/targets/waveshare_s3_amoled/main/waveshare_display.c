@@ -580,16 +580,26 @@ static void paint_menu(const struct menu_snapshot *menu) {
  * two verbs — cycle and choose — and a label still offering "call" there
  * describes a button that would do something else entirely.
  */
+/*
+ * The upper button owns the microphone, because it is the only one of the two
+ * that can be held without the board powering itself off. So it reads "talk"
+ * during a call and "call" between them.
+ */
 static const char *top_button_text(
-    enum waveshare_ui_state state, bool call_requested) {
+    enum waveshare_ui_state state, bool talk_held) {
   if (state == WAVESHARE_UI_MENU) return "select  >";
-  return call_requested ? "end call  >" : "call  >";
+  if (!talk_held && state != WAVESHARE_UI_LISTENING &&
+      state != WAVESHARE_UI_SPEAKING) {
+    return "call  >";
+  }
+  return talk_held ? "talking  >" : "talk  >";
 }
 
+/* The lower button is tapped, never held: menu cursor, or hang up. */
 static const char *bottom_button_text(
-    enum waveshare_ui_state state, bool talk_held) {
+    enum waveshare_ui_state state, bool call_requested) {
   if (state == WAVESHARE_UI_MENU) return "next  >";
-  return talk_held ? "talking  >" : "talk  >";
+  return call_requested ? "end call  >" : "menu  >";
 }
 
 static void build_ui(void) {
@@ -715,9 +725,9 @@ static void refresh_ui(void) {
     lv_label_set_text(status_label, status);
     lv_label_set_text(transcript_label, transcript);
     paint_menu(&menu);
-    lv_label_set_text(top_button_label, top_button_text(state, call_requested));
+    lv_label_set_text(top_button_label, top_button_text(state, talk_held));
     lv_label_set_text(
-        bottom_button_label, bottom_button_text(state, talk_held));
+        bottom_button_label, bottom_button_text(state, call_requested));
     if (talk_held != shown_talk_held || call_active != shown_call_active ||
         call_requested != shown_call_requested) {
       shown_talk_held = talk_held;

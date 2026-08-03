@@ -11,45 +11,55 @@ extern "C" {
 /**
  * The board's two physical buttons, debounced and polled.
  *
- *   BOOT  (GPIO0, low = pressed)   -> call: press toggles the call
- *   PWR   (EXIO4, high = pressed)  -> talk: HELD while speaking
+ *   UPPER = BOOT (GPIO0, low = pressed)
+ *   LOWER = PWR  (EXIO4 on the TCA9554, high = pressed)
  *
- * Same division as the M5StickS3: one button owns the call, the other owns
- * the microphone turn. PWR is on the TCA9554 expander rather than an ESP pin,
- * so reads go over I2C; holding it past ~6s powers the board down, which is
- * the hardware's own behaviour and not something firmware can intercept.
+ * NAMED FOR WHERE THEY ARE, NOT FOR WHAT THEY DO. They used to be called
+ * "call" and "talk"; when those meanings moved between the buttons, every
+ * name in the file became a lie and the code read as though it did the
+ * opposite of what it did. Position is the one thing about a button that
+ * cannot change underneath you.
+ *
+ * ONLY THE UPPER BUTTON MAY BE HELD. PWR sits in the board's power path, and
+ * holding it powers the device down in hardware — no firmware involved, and
+ * none of it interceptable. Push-to-talk therefore lives on BOOT, an ordinary
+ * pin that can be held all day; the lower button is only ever tapped.
+ *
+ * Reading the lower button is an I2C transaction on the bus the codec and the
+ * touch controller share, so both are polled at a human cadence rather than
+ * the app loop's.
  */
 bool waveshare_buttons_init(void);
 
-/** True for one poll after the call button goes down (short press). */
-bool waveshare_buttons_take_call_press(void);
-
 /**
- * True once when the call button has been held past the reboot threshold.
- * A long hold is the device's escape hatch: firmware can wedge in ways only
- * a power cycle clears, and this board's power button is awkward to reach.
- */
-bool waveshare_buttons_take_call_long_press(void);
-
-/** Milliseconds the call button has been held, 0 when it is up. */
-uint32_t waveshare_buttons_call_held_ms(void);
-
-/** I2C reads of the talk button that failed; a stuck button would show here. */
-uint32_t waveshare_buttons_talk_read_failures(void);
-
-/** True while the talk button is held. */
-/**
- * One press of the talk button, taken on the DOWN edge and consumed by the
- * reader.
+ * One press of the UPPER button, taken on the down edge and consumed here.
  *
- * Separate from `talk_held` because during a call the button is a level — the
- * microphone is open while it is down — and between calls it is an event that
- * moves a menu cursor. Reading the level for the cursor would advance it
- * hundreds of times a second.
+ * The down edge rather than the release, because nothing on this button now
+ * waits to discover whether a press was really a hold, and a menu that only
+ * moved once you let go feels broken.
  */
-bool waveshare_buttons_take_talk_press(void);
+bool waveshare_buttons_take_upper_press(void);
 
-bool waveshare_buttons_talk_held(void);
+/**
+ * True while the UPPER button is held. This is the microphone.
+ *
+ * A level rather than an event: during a call the microphone is open exactly
+ * while the button is down, so the caller needs this on every pass rather
+ * than once.
+ */
+bool waveshare_buttons_upper_held(void);
+
+/** One press of the LOWER button, taken on the down edge and consumed here. */
+bool waveshare_buttons_take_lower_press(void);
+
+/**
+ * I2C reads of the lower button that failed.
+ *
+ * Worth publishing because the read deliberately fails RELEASED, which makes
+ * a lower button that has quietly stopped working look exactly like a user
+ * who has stopped pressing it. This counter is the only difference.
+ */
+uint32_t waveshare_buttons_lower_read_failures(void);
 
 /** Poll both buttons; call from the app loop. */
 void waveshare_buttons_poll(void);
