@@ -1567,9 +1567,15 @@ void app_main(void) {
        * the menu opening by itself the moment a call ends — every press made
        * while talking would otherwise still be sitting there, waiting.
        */
-      (void)waveshare_buttons_take_talk_press();
+      if (waveshare_buttons_take_talk_press()) {
+        ESP_LOGI(tag, "lower button ignored: a call is up, so it means talk");
+      }
     } else if (waveshare_buttons_take_talk_press()) {
       iterate_kit_menu_cycle(&runtime.menu);
+      ESP_LOGI(
+          tag, "menu: %s",
+          iterate_kit_menu_item_name(
+              (enum iterate_kit_menu_item)runtime.menu.selected));
       show_menu();
     }
     if (waveshare_buttons_take_call_press()) {
@@ -1581,6 +1587,7 @@ void app_main(void) {
         ESP_LOGI(tag, "BOOT pressed: call %s", wanted ? "requested" : "ended");
         waveshare_display_request_call(wanted);
       } else {
+        ESP_LOGI(tag, "menu: chose option %d", (int)action);
         take_menu_action(action);
       }
     }
