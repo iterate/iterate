@@ -435,7 +435,7 @@ static struct {
    * answer's own first frame is the origin.
    */
   volatile uint64_t answer_started_ms;
-  volatile uint32_t answer_frames_played;
+  volatile uint32_t answer_emitted_ms;
   uint32_t speaker_lag_max_ms;
   volatile bool speaker_answer_done;
   uint32_t flush_frames_left;
@@ -526,7 +526,7 @@ static void on_speaker_pcm(
     runtime.speaker_reprime = true;
     /* A new answer is a new timeline: lag does not carry across answers. */
     runtime.answer_started_ms = 0U;
-    runtime.answer_frames_played = 0U;
+    runtime.answer_emitted_ms = 0U;
   }
   if (xStreamBufferSpacesAvailable(runtime.speaker_buffer) < pcm_length) {
     ++runtime.speaker_overflow_drops;
@@ -772,6 +772,8 @@ static void playback_task(void *argument) {
        * This is what xiaozhi-esp32, ESPHome's speaker and esp-adf all do:
        * when the source is dry, stop calling write. None of them conceals.
        */
+      /* Nothing to play: the zeros the DAC now sends are correct. */
+      waveshare_audio_dma_watch(false);
       ++runtime.speaker_waits_dry;
       if (iterate_kit_voice_playback_clock_empty(
               &playout_clock, now_ms(NULL)) ==
@@ -817,7 +819,7 @@ static void playback_task(void *argument) {
               runtime.speaker_frames_played,
               iterate_kit_voice_playout_lag_ms(
                   runtime.answer_started_ms,
-                  runtime.answer_frames_played,
+                  runtime.answer_emitted_ms,
                   now_ms(NULL)),
               now_ms(NULL));
       if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
@@ -834,7 +836,8 @@ static void playback_task(void *argument) {
          * point it is level, which is the entire safety of the mechanism.
          */
         ++runtime.speaker_catchup_frames;
-        ++runtime.answer_frames_played;
+        runtime.answer_emitted_ms +=
+            (uint32_t)(received / (FRAME_BYTES / FRAME_MS));
         continue;
       }
 
@@ -850,6 +853,7 @@ static void playback_task(void *argument) {
     }
 
     const uint64_t write_started_ms = now_ms(NULL);
+    waveshare_audio_dma_watch(true);
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
       waveshare_recorder_write_speaker(chunk, received);
@@ -882,17 +886,20 @@ static void playback_task(void *argument) {
         const uint64_t played_at = write_started_ms;
         if (runtime.answer_started_ms == 0U) {
           runtime.answer_started_ms = played_at;
-          runtime.answer_frames_played = 0U;
+          runtime.answer_emitted_ms = 0U;
         }
         {
           const uint32_t lag = iterate_kit_voice_playout_lag_ms(
-              runtime.answer_started_ms, runtime.answer_frames_played,
+              runtime.answer_started_ms, runtime.answer_emitted_ms,
               played_at);
           if (lag > runtime.speaker_lag_max_ms) {
             runtime.speaker_lag_max_ms = lag;
           }
         }
-        ++runtime.answer_frames_played;
+        /* Milliseconds actually emitted, so a short read advances the
+         * timeline by what it played and not by a whole frame. */
+        runtime.answer_emitted_ms +=
+            (uint32_t)(received / (FRAME_BYTES / FRAME_MS));
       }
     } else {
       ++runtime.speaker_write_failures;
@@ -1097,6 +1104,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkPlayed", runtime.speaker_frames_played},
     {"spkOverflow", runtime.speaker_overflow_drops},
     {"spkUnderruns", runtime.speaker_underruns},
+    {"dmaUnderruns", waveshare_audio_dma_underruns()},
     {"spkConceal", runtime.speaker_conceal_frames},
     {"spkCatchup", runtime.speaker_catchup_frames},
     {"spkDebtPaid", runtime.speaker_debt_paid},
@@ -1313,8 +1321,20 @@ void app_main(void) {
    * claim on it — it is read by a task, never by an ISR, and the I2S driver
    * copies into its own DMA ring on the way out.
    */
+  /*
+   * TRIGGER ON A WHOLE FRAME, NOT ON A SINGLE BYTE.
+   *
+   * At a trigger level of 1 the receive returns the moment any byte is
+   * available — commonly 160 or 320 bytes when the source is behind. The loop
+   * then counted that partial read as one whole 20 ms frame in both
+   * speaker_frames_played and the playout timeline, so `due` ran ahead of the
+   * audio actually emitted: lag read LOW exactly when playback was starving,
+   * which is when it most needed to read high. A whole-frame trigger makes
+   * every read either a frame or a timeout, and the timeout path is already
+   * the one that waits.
+   */
   runtime.speaker_buffer = xStreamBufferCreateWithCaps(
-      SPEAKER_BUFFER_BYTES, 1U, MALLOC_CAP_SPIRAM);
+      SPEAKER_BUFFER_BYTES, (size_t)FRAME_BYTES, MALLOC_CAP_SPIRAM);
   if (runtime.mic_queue == NULL || runtime.speaker_buffer == NULL) {
     ESP_LOGE(tag, "audio buffer allocation failed");
     return;

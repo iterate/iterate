@@ -32,12 +32,25 @@ static bool storage_is_distinct(
    * realistic configuration failure without risky pointer-range arithmetic.
    * Target arrays are link-visible fixed objects rather than arbitrary slices.
    */
-  return options->near_samples != options->reference_samples &&
-      options->near_samples != options->linear_samples &&
-      options->near_samples != options->clean_samples &&
-      options->reference_samples != options->linear_samples &&
-      options->reference_samples != options->clean_samples &&
-      options->linear_samples != options->clean_samples;
+  int16_t *const storage[] = {
+    options->near_samples,
+    options->reference_samples,
+    options->playout_samples,
+    options->linear_samples,
+    options->clean_samples,
+  };
+  for (size_t left = 0U;
+       left < sizeof(storage) / sizeof(storage[0]);
+       ++left) {
+    for (size_t right = left + 1U;
+         right < sizeof(storage) / sizeof(storage[0]);
+         ++right) {
+      if (storage[left] == storage[right]) {
+        return false;
+      }
+    }
+  }
+  return true;
 }
 
 enum iterate_kit_status iterate_kit_aec_diagnostic_trace_init(
@@ -51,6 +64,7 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_init(
       options->capture_samples > UINT32_MAX ||
       options->near_samples == NULL ||
       options->reference_samples == NULL ||
+      options->playout_samples == NULL ||
       options->linear_samples == NULL ||
       options->clean_samples == NULL ||
       !storage_is_distinct(options)) {
@@ -108,12 +122,14 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_record(
     uint32_t frame_sequence,
     const int16_t *near_samples,
     const int16_t *reference_samples,
+    const int16_t *playout_samples,
     const int16_t *linear_samples,
     const int16_t *clean_samples,
     size_t sample_count) {
   if (trace == NULL || trace->initialized == 0U ||
       near_samples == NULL || reference_samples == NULL ||
-      linear_samples == NULL || clean_samples == NULL ||
+      playout_samples == NULL || linear_samples == NULL ||
+      clean_samples == NULL ||
       sample_count != trace->options.frame_samples) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -167,6 +183,10 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_record(
       trace->options.reference_samples + captured,
       reference_samples,
       sample_count * sizeof(*reference_samples));
+  memcpy(
+      trace->options.playout_samples + captured,
+      playout_samples,
+      sample_count * sizeof(*playout_samples));
   memcpy(
       trace->options.linear_samples + captured,
       linear_samples,
@@ -264,8 +284,8 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_read_planar(
       destination == NULL || sample_count == 0U ||
       sample_offset > trace->options.capture_samples ||
       sample_count > trace->options.capture_samples - sample_offset ||
-      sample_count > SIZE_MAX / 4U ||
-      destination_values < sample_count * 4U) {
+      sample_count > SIZE_MAX / 5U ||
+      destination_values < sample_count * 5U) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   if (__atomic_load_n(&trace->state, __ATOMIC_ACQUIRE) !=
@@ -275,7 +295,7 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_read_planar(
 
   /*
    * READY sample storage is immutable until this same control owner calls
-   * release. Four planar copies are substantially cheaper than interleaving
+   * release. Five planar copies are substantially cheaper than interleaving
    * on-device and preserve direct FFT-friendly layout for the host oracle.
    */
   memcpy(
@@ -288,10 +308,14 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_read_planar(
       sample_count * sizeof(*destination));
   memcpy(
       destination + sample_count * 2U,
-      trace->options.linear_samples + sample_offset,
+      trace->options.playout_samples + sample_offset,
       sample_count * sizeof(*destination));
   memcpy(
       destination + sample_count * 3U,
+      trace->options.linear_samples + sample_offset,
+      sample_count * sizeof(*destination));
+  memcpy(
+      destination + sample_count * 4U,
       trace->options.clean_samples + sample_offset,
       sample_count * sizeof(*destination));
   atomic_saturating_increment(&trace->read_calls);

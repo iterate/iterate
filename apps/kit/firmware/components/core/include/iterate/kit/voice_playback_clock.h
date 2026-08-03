@@ -56,18 +56,22 @@ bool iterate_kit_voice_playback_clock_audio_arrived(
 /**
  * How far behind its own timeline an answer has fallen.
  *
- * Frame N belongs `ITERATE_KIT_VOICE_FRAME_MS * N` after the answer's first
- * frame reached the speaker. `started_ms` of zero means this is that first
- * frame, and the answer is by definition on time.
+ * `emitted_ms` is the audio actually handed to the speaker so far, which is
+ * what the timeline is made of. Counting CALLS instead of milliseconds made a
+ * short read — the tail of an answer, or any partial the ring hands back —
+ * advance the timeline by a full frame it had not played, so `due` ran ahead
+ * of the audio and lag read LOW exactly when playback was starving.
+ *
+ * `started_ms` of zero means this is the first frame, and the answer is by
+ * definition on time.
  *
  * Shared rather than written twice because both targets need exactly this
  * arithmetic and one of them getting it subtly different is how a metric ends
  * up meaning two things — which has already cost this project a night.
  */
 static inline uint32_t iterate_kit_voice_playout_lag_ms(
-    uint64_t started_ms, uint32_t frames_played, uint64_t now_ms) {
-  const uint64_t due =
-      started_ms + (uint64_t)frames_played * ITERATE_KIT_VOICE_FRAME_MS;
+    uint64_t started_ms, uint32_t emitted_ms, uint64_t now_ms) {
+  const uint64_t due = started_ms + emitted_ms;
   if (started_ms == 0U || now_ms <= due) return 0U;
   return (uint32_t)(now_ms - due);
 }

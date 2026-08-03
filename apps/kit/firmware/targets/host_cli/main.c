@@ -953,7 +953,7 @@ static void cli_main_accept_speaker_frame(
     iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
     /* A new answer is a new timeline: lag does not carry across answers. */
     runtime->answer_started_ms = 0U;
-    runtime->answer_frames_played = 0U;
+    runtime->answer_emitted_ms = 0U;
   }
   if (length > cli_speaker_space(&runtime->speaker)) {
     ++runtime->speaker_overflow_drops;
@@ -1199,7 +1199,7 @@ static void cli_main_play_frame(
           &runtime->playback_clock, (uint32_t)runtime->speaker.used,
           runtime->speaker_frames_played,
           iterate_kit_voice_playout_lag_ms(
-              runtime->answer_started_ms, runtime->answer_frames_played,
+              runtime->answer_started_ms, runtime->answer_emitted_ms,
               now_ms),
           now_ms);
   if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
@@ -1207,7 +1207,7 @@ static void cli_main_play_frame(
      * device's copy of this branch for why leaving it makes skipping run
      * away and delete half an answer. */
     ++runtime->speaker_catchup_frames;
-    ++runtime->answer_frames_played;
+    runtime->answer_emitted_ms += ITERATE_KIT_VOICE_FRAME_MS;
     return;
   }
   if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_DEBT) {
@@ -1221,16 +1221,16 @@ static void cli_main_play_frame(
   {
     if (runtime->answer_started_ms == 0U) {
       runtime->answer_started_ms = now_ms;
-      runtime->answer_frames_played = 0U;
+      runtime->answer_emitted_ms = 0U;
     }
     {
       const uint32_t lag = iterate_kit_voice_playout_lag_ms(
-          runtime->answer_started_ms, runtime->answer_frames_played, now_ms);
+          runtime->answer_started_ms, runtime->answer_emitted_ms, now_ms);
       if (lag > runtime->speaker_lag_max_ms) {
         runtime->speaker_lag_max_ms = lag;
       }
     }
-    ++runtime->answer_frames_played;
+    runtime->answer_emitted_ms += ITERATE_KIT_VOICE_FRAME_MS;
   }
   const uint32_t margin = cli_speaker_queued_ms(&runtime->speaker);
   if (runtime->speaker_writes == 1U ||

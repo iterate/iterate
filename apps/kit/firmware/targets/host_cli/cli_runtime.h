@@ -122,11 +122,11 @@ struct cli_runtime {
   uint64_t turn_progress_ms;
   /**
    * The current answer's playout timeline: when its first frame reached the
-   * speaker, and how many have since. See iterate_kit_voice_playout_lag_ms —
+   * speaker, and how many MILLISECONDS have been emitted since. See iterate_kit_voice_playout_lag_ms —
    * both targets measure lateness the same way, from the same helper.
    */
   uint64_t answer_started_ms;
-  uint32_t answer_frames_played;
+  uint32_t answer_emitted_ms;
   uint32_t speaker_lag_max_ms;
   uint64_t next_mic_at_ms;
   uint64_t next_playback_at_ms;

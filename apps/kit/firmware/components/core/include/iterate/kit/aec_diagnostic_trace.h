@@ -24,13 +24,17 @@ struct iterate_kit_aec_diagnostic_trace_options {
   size_t capture_samples;
 
   /*
-   * The platform supplies four non-overlapping, capture_samples-long arrays.
+   * The platform supplies five non-overlapping, capture_samples-long arrays.
    * Rich devices should place them in external RAM. Keeping storage outside
-   * this portable object makes the 4 * duration * sample-rate * 2-byte cost
+   * this portable object makes the 5 * duration * sample-rate * 2-byte cost
    * visible in each target's map instead of hiding it in a heap allocation.
+   * `reference_samples` is the physical/electrical AEC input;
+   * `playout_samples` is the exact PCM observed after speaker DMA completion.
+   * They are deliberately separate because one is not evidence of the other.
    */
   int16_t *near_samples;
   int16_t *reference_samples;
+  int16_t *playout_samples;
   int16_t *linear_samples;
   int16_t *clean_samples;
 };
@@ -49,12 +53,13 @@ struct iterate_kit_aec_diagnostic_trace_snapshot {
 };
 
 /**
- * A finite, synchronized four-tap AEC evidence capture.
+ * A finite, synchronized five-tap AEC evidence capture.
  *
  * Metrics alone can say that the final signal is loud, but they cannot prove
- * whether the electrical reference is delayed, inverted, clipped, or mapped
- * to the wrong channel. This object preserves the exact near/reference/linear/
- * final samples needed for lag, polarity, ERLE, and double-talk analysis.
+ * whether the electrical reference is delayed, inverted, clipped, mapped to
+ * the wrong channel, or simply differs from what physically left speaker DMA.
+ * This object preserves exact near/electrical-reference/playout/linear/final
+ * samples needed for lag, polarity, ERLE, and double-talk analysis.
  *
  * There is intentionally no producer/consumer queue. One control owner arms
  * a fixed capture; the realtime audio owner copies each already-produced DSP
@@ -90,7 +95,7 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_start(
  *
  * In the common IDLE/READY states this performs one atomic state load and
  * returns UNAVAILABLE without touching sample memory. During a capture it
- * performs exactly four bounded memcpy calls and no allocation, lock, log,
+ * performs exactly five bounded memcpy calls and no allocation, lock, log,
  * wait, callback, or I/O. frame_sequence must remain contiguous, including
  * uint32 wrap; a discontinuity aborts rather than fabricating one waveform.
  */
@@ -99,6 +104,7 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_record(
     uint32_t frame_sequence,
     const int16_t *near_samples,
     const int16_t *reference_samples,
+    const int16_t *playout_samples,
     const int16_t *linear_samples,
     const int16_t *clean_samples,
     size_t sample_count);
@@ -119,9 +125,10 @@ void iterate_kit_aec_diagnostic_trace_snapshot(
     struct iterate_kit_aec_diagnostic_trace_snapshot *snapshot);
 
 /**
- * Copies a completed slice as four native int16 planes in this exact order:
- * near, reference, linear, clean. The capability adapter defines wire byte
- * order separately; this portable module does not smuggle a protocol into DSP.
+ * Copies a completed slice as five native int16 planes in this exact order:
+ * near, electrical reference, completed-DMA playout, linear, clean. The
+ * capability adapter defines wire byte order separately; this portable module
+ * does not smuggle a protocol into DSP.
  */
 enum iterate_kit_status iterate_kit_aec_diagnostic_trace_read_planar(
     struct iterate_kit_aec_diagnostic_trace *trace,

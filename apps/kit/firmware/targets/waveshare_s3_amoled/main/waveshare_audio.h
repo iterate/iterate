@@ -39,6 +39,23 @@ void waveshare_audio_amplifier(bool on);
 bool waveshare_audio_write(const int16_t *pcm, size_t samples);
 
 /** Speaker volume, 0-100. 100 is the DAC at full scale. */
+/**
+ * DMA buffers the hardware sent with nothing in them.
+ *
+ * The one starvation measure taken from the hardware rather than inferred
+ * from the software queue. See the callback for why that distinction is the
+ * whole point.
+ */
+uint32_t waveshare_audio_dma_underruns(void);
+
+/**
+ * Count underruns only while an answer is playing.
+ *
+ * An idle DAC clocks out zeros by design, so counting them measures silence
+ * rather than starvation — 23471 of them in six turns, before this existed.
+ */
+void waveshare_audio_dma_watch(bool active);
+
 void waveshare_audio_set_volume(int percent);
 
 /** Microphone PGA in dB; the driver quantises to 6 dB steps. */

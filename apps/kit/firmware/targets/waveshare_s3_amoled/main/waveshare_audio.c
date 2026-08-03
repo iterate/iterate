@@ -116,6 +116,57 @@ static bool power_rails_up(void) {
   return true;
 }
 
+/*
+ * DMA BUFFERS THE HARDWARE SENT WITH NOTHING IN THEM.
+ *
+ * Every "starvation" number this device reports is inferred from the stream
+ * buffer, which sits one hop upstream of the DMA — so it says the software
+ * queue was empty, not that the DAC ever wanted for audio. With a 90 ms ring
+ * in front of it those are very different claims, and the whole playout
+ * policy has been tuned against the weaker one.
+ *
+ * This is the strong one: the driver hands each finished descriptor to this
+ * callback and, because auto_clear zeroes AFTER it runs, a buffer we never
+ * filled arrives here still holding the zeros of its last send. A run where
+ * this stays at zero is a run where the listener heard every sample the
+ * hardware was asked for, whatever the software counters say.
+ *
+ * ISR context: no logging, no locks, one increment.
+ */
+static volatile uint32_t dma_underruns;
+/*
+ * Only while somebody is speaking. Between answers the ring is CORRECTLY
+ * full of zeros — that is an idle DAC, not a starved one — and counting
+ * those produced 23471 "underruns" in six turns, which is the sound of a
+ * metric measuring silence rather than a fault.
+ */
+static volatile bool dma_watch;
+
+static bool IRAM_ATTR on_dma_sent(
+    i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
+  const uint32_t *words;
+  (void)handle;
+  (void)context;
+  if (!dma_watch) return false;
+  if (event == NULL || event->dma_buf == NULL || event->size < 4U) return false;
+  /*
+   * A cleared buffer starts with zeros. Speech does too, briefly, so this
+   * over-reports at the very start of an answer rather than missing a real
+   * underrun — which is the right way round for a diagnostic.
+   */
+  words = (const uint32_t *)event->dma_buf;
+  if (words[0] == 0U) ++dma_underruns;
+  return false;
+}
+
+uint32_t waveshare_audio_dma_underruns(void) {
+  return dma_underruns;
+}
+
+void waveshare_audio_dma_watch(bool active) {
+  dma_watch = active;
+}
+
 bool waveshare_audio_init(void) {
   i2s_chan_handle_t tx = NULL;
   i2s_chan_handle_t rx = NULL;
@@ -161,6 +212,13 @@ bool waveshare_audio_init(void) {
         .invert_flags = {0},
       },
     };
+    /*
+     * Registered before enable, so no descriptor completes unobserved. The
+     * codec layer re-initialises these channels on open, but a registered
+     * callback survives that — it lives on the channel, not the mode.
+     */
+    const i2s_event_callbacks_t tx_callbacks = {.on_sent = on_dma_sent};
+    (void)i2s_channel_register_event_callback(tx, &tx_callbacks, NULL);
     if (i2s_channel_init_std_mode(tx, &std_config) != ESP_OK ||
         i2s_channel_init_std_mode(rx, &std_config) != ESP_OK ||
         i2s_channel_enable(tx) != ESP_OK ||

@@ -29,6 +29,7 @@ struct fixture {
   struct iterate_kit_aec_diagnostic_trace trace;
   int16_t near[capture_samples];
   int16_t reference[capture_samples];
+  int16_t playout[capture_samples];
   int16_t linear[capture_samples];
   int16_t clean[capture_samples];
 };
@@ -40,12 +41,38 @@ static void initialise(struct fixture *fixture) {
     .capture_samples = capture_samples,
     .near_samples = fixture->near,
     .reference_samples = fixture->reference,
+    .playout_samples = fixture->playout,
     .linear_samples = fixture->linear,
     .clean_samples = fixture->clean,
   };
   TEST_ASSERT(
       iterate_kit_aec_diagnostic_trace_init(&fixture->trace, &options) ==
       ITERATE_KIT_OK);
+}
+
+/*
+ * Five semantic names are useful only if they own five independent planes.
+ * Accidentally pointing completed-DMA playout at the electrical-reference
+ * array would make every later comparison report perfect agreement while
+ * erasing the very hardware mismatch this trace exists to detect. Reject that
+ * configuration once at initialization, outside the realtime record path.
+ */
+static void electrical_and_playout_references_cannot_alias(void) {
+  struct fixture fixture = {0};
+  const struct iterate_kit_aec_diagnostic_trace_options options = {
+    .sample_rate_hz = 16000U,
+    .frame_samples = frame_samples,
+    .capture_samples = capture_samples,
+    .near_samples = fixture.near,
+    .reference_samples = fixture.reference,
+    .playout_samples = fixture.reference,
+    .linear_samples = fixture.linear,
+    .clean_samples = fixture.clean,
+  };
+
+  TEST_ASSERT(
+      iterate_kit_aec_diagnostic_trace_init(
+          &fixture.trace, &options) == ITERATE_KIT_INVALID_ARGUMENT);
 }
 
 /*
@@ -58,6 +85,7 @@ static void idle_trace_does_not_touch_audio_or_storage(void) {
   struct fixture fixture = {0};
   const int16_t near[frame_samples] = {1, 2, 3, 4};
   const int16_t reference[frame_samples] = {5, 6, 7, 8};
+  const int16_t playout[frame_samples] = {17, 18, 19, 20};
   const int16_t linear[frame_samples] = {9, 10, 11, 12};
   const int16_t clean[frame_samples] = {13, 14, 15, 16};
   struct iterate_kit_aec_diagnostic_trace_snapshot snapshot;
@@ -69,6 +97,7 @@ static void idle_trace_does_not_touch_audio_or_storage(void) {
           7U,
           near,
           reference,
+          playout,
           linear,
           clean,
           frame_samples) == ITERATE_KIT_UNAVAILABLE);
@@ -78,30 +107,36 @@ static void idle_trace_does_not_touch_audio_or_storage(void) {
   for (size_t index = 0U; index < capture_samples; ++index) {
     TEST_ASSERT(fixture.near[index] == 0);
     TEST_ASSERT(fixture.reference[index] == 0);
+    TEST_ASSERT(fixture.playout[index] == 0);
     TEST_ASSERT(fixture.linear[index] == 0);
     TEST_ASSERT(fixture.clean[index] == 0);
   }
 }
 
 /*
- * The diagnostic oracle is useful only if all four taps describe the same DSP
- * instants. Complete two small frames and assert a literal planar payload so a
- * future refactor cannot accidentally rotate channels, overwrite the first
- * frame, or expose READY before the final copies are visible to the reader.
+ * The diagnostic oracle is useful only if all five taps describe the same DSP
+ * instants. In particular, confusing the electrical divider with the exact
+ * PCM which completed speaker DMA would make a lag or gain diagnosis look
+ * plausible while tuning the wrong signal. Complete two small frames and
+ * assert a literal planar payload so a future refactor cannot rotate channels,
+ * overwrite the first frame, or publish READY before every copy is visible.
  */
 static void armed_trace_publishes_one_exact_read_only_generation(void) {
   struct fixture fixture = {0};
   const int16_t near_a[frame_samples] = {1, 2, 3, 4};
   const int16_t reference_a[frame_samples] = {11, 12, 13, 14};
+  const int16_t playout_a[frame_samples] = {41, 42, 43, 44};
   const int16_t linear_a[frame_samples] = {21, 22, 23, 24};
   const int16_t clean_a[frame_samples] = {31, 32, 33, 34};
   const int16_t near_b[frame_samples] = {5, 6, 7, 8};
   const int16_t reference_b[frame_samples] = {15, 16, 17, 18};
+  const int16_t playout_b[frame_samples] = {45, 46, 47, 48};
   const int16_t linear_b[frame_samples] = {25, 26, 27, 28};
   const int16_t clean_b[frame_samples] = {35, 36, 37, 38};
   const int16_t expected[] = {
     1, 2, 3, 4, 5, 6, 7, 8,
     11, 12, 13, 14, 15, 16, 17, 18,
+    41, 42, 43, 44, 45, 46, 47, 48,
     21, 22, 23, 24, 25, 26, 27, 28,
     31, 32, 33, 34, 35, 36, 37, 38,
   };
@@ -120,6 +155,7 @@ static void armed_trace_publishes_one_exact_read_only_generation(void) {
           41U,
           near_a,
           reference_a,
+          playout_a,
           linear_a,
           clean_a,
           frame_samples) == ITERATE_KIT_OK);
@@ -134,6 +170,7 @@ static void armed_trace_publishes_one_exact_read_only_generation(void) {
           42U,
           near_b,
           reference_b,
+          playout_b,
           linear_b,
           clean_b,
           frame_samples) == ITERATE_KIT_OK);
@@ -172,9 +209,10 @@ static void discontinuity_aborts_without_reusing_a_partial_generation(void) {
   struct fixture fixture = {0};
   const int16_t near[frame_samples] = {1, 2, 3, 4};
   const int16_t reference[frame_samples] = {5, 6, 7, 8};
+  const int16_t playout[frame_samples] = {17, 18, 19, 20};
   const int16_t linear[frame_samples] = {9, 10, 11, 12};
   const int16_t clean[frame_samples] = {13, 14, 15, 16};
-  int16_t destination[frame_samples * 4U] = {0};
+  int16_t destination[frame_samples * 5U] = {0};
   struct iterate_kit_aec_diagnostic_trace_snapshot snapshot;
   uint32_t generation = 0U;
   initialise(&fixture);
@@ -188,6 +226,7 @@ static void discontinuity_aborts_without_reusing_a_partial_generation(void) {
           100U,
           near,
           reference,
+          playout,
           linear,
           clean,
           frame_samples) == ITERATE_KIT_OK);
@@ -222,6 +261,7 @@ static void discontinuity_aborts_without_reusing_a_partial_generation(void) {
 }
 
 int main(void) {
+  electrical_and_playout_references_cannot_alias();
   idle_trace_does_not_touch_audio_or_storage();
   armed_trace_publishes_one_exact_read_only_generation();
   discontinuity_aborts_without_reusing_a_partial_generation();
