@@ -64,8 +64,12 @@ test("approve and reject script bursts from inside the chat thread", async ({ pa
       projectSlug,
       testInfo,
     });
-    await popup.getByRole("button", { name: "Continue" }).click();
-    await popup.getByRole("button", { name: "Allow access" }).click();
+    // Cross-server tier, like waitForEvent("popup") above: the popup is a
+    // separate Page outside the plugged middleware (no spinner-waiter to
+    // extend), and these clicks land after auth-worker navigations that run
+    // cold on fresh preview deploys — CI-proven >1s.
+    await popup.getByRole("button", { name: "Continue" }).click({ timeout: 15_000 });
+    await popup.getByRole("button", { name: "Allow access" }).click({ timeout: 15_000 });
 
     // Opening the project auto-enrolls this browser's approval key — no
     // manual enroll step anywhere below. The first project list rides a COLD
