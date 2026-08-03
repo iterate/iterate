@@ -213,7 +213,7 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
             align="start"
             side={isMobile ? "bottom" : "right"}
             sideOffset={4}
-            className="min-w-56 rounded-lg"
+            className="min-w-72 rounded-lg"
           >
             <DropdownMenuGroup className="max-h-80 overflow-y-auto">
               <DropdownMenuLabel className="text-xs text-muted-foreground">
