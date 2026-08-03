@@ -50,6 +50,10 @@ export function useCollabEditor(input: {
   const [recovery, setRecovery] = useState<string | null>(null);
   const redlineRef = useRef(input.redline);
   const toggleRef = useRef<((on: boolean) => void) | null>(null);
+  // Same ref discipline as redline: the session effect must NOT depend on
+  // the callback's identity (an unstable prop would remount the editor),
+  // but the adapter must still call the LATEST one.
+  const onPeersRef = useRef(input.onPeers);
   const {
     transport,
     displayName,
@@ -66,6 +70,9 @@ export function useCollabEditor(input: {
     redlineRef.current = input.redline;
     toggleRef.current?.(input.redline);
   }, [input.redline]);
+  useEffect(() => {
+    onPeersRef.current = input.onPeers;
+  }, [input.onPeers]);
   const setStatus = useCallback(
     (next: string) => {
       setStatusState(next);
@@ -86,7 +93,7 @@ export function useCollabEditor(input: {
       // Empty delivery = a dead session (the client fires [] on ended):
       // clear the strip rather than re-injecting a self that is not live.
       // Otherwise self at call time — the clientId rotates on reseed.
-      input.onPeers?.(
+      onPeersRef.current?.(
         clients.length === 0
           ? null
           : {

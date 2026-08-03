@@ -248,6 +248,10 @@ export function peerExtension(connection: CollabConnection, startVersion: number
       async pull(): Promise<void> {
         while (!this.done) {
           try {
+            // Every this.view.state read here MUST be fresh: wait() parks for
+            // minutes and dispatches advance the state between reads — caching
+            // it across an await would rebase onto a stale document.
+            // react-doctor-disable-next-line react-doctor/js-cache-property-access
             const result = await connection.wait(getSyncedVersion(this.view.state));
             if (this.done) break;
             this.failures = 0;

@@ -123,10 +123,12 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     // streams into the catalog that were never created as workspaces.
     const candidates = streams.filter((stream) => stream.path.startsWith("/workspaces/"));
     const paths = candidates.map((stream) => stream.path);
-    return candidates
-      .filter((stream) => !paths.some((other) => other.startsWith(`${stream.path}/`)))
-      .map((stream) => ({ path: stream.path, createdAt: stream.createdAt }))
-      .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    const workspaces: { path: string; createdAt: string }[] = [];
+    for (const stream of candidates) {
+      if (paths.some((other) => other.startsWith(`${stream.path}/`))) continue;
+      workspaces.push({ path: stream.path, createdAt: stream.createdAt });
+    }
+    return workspaces.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }
 
   async documents(workspacePath: string): Promise<string[]> {

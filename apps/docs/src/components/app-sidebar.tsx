@@ -136,19 +136,17 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
 
-  useEffect(() => {
-    let cancelled = false;
+  // Fetched fresh on every menu open (the sidebar stays mounted for the
+  // app's whole life, so a mount-time list goes stale the moment a scratch
+  // workspace is minted or an agent births one): the previous list stays
+  // rendered while the refresh is in flight, so only the first open shows
+  // the loading row. Errors keep the last list — the home picker is the
+  // surface that explains a broken listing.
+  const loadWorkspaces = () => {
     void withDocsProject((project) => project.workspaces())
-      .then((list) => {
-        if (!cancelled) setWorkspaces(list);
-      })
-      // The header stays useful without the list (the home picker surfaces
-      // the error); the dropdown just shows its loading row.
+      .then(setWorkspaces)
       .catch(() => {});
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  };
 
   const createScratch = () => {
     setCreating(true);
@@ -168,7 +166,11 @@ function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefine
   return (
     <SidebarMenu>
       <SidebarMenuItem>
-        <DropdownMenu>
+        <DropdownMenu
+          onOpenChange={(open) => {
+            if (open) loadWorkspaces();
+          }}
+        >
           <DropdownMenuTrigger
             render={
               <SidebarMenuButton
