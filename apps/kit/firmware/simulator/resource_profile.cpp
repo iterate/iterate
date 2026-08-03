@@ -175,8 +175,8 @@ iterate_kit_status render_png(
   return ITERATE_KIT_OK;
 }
 
-iterate_kit_status change_colour(
-    void *, iterate_kit_screen_colour) {
+iterate_kit_status change_sprite_set(
+    void *, const char *, std::size_t) {
   return ITERATE_KIT_OK;
 }
 
@@ -305,6 +305,7 @@ int main() {
   capnweb_json_token tokens[token_capacity]{};
   char output_buffer[output_capacity]{};
   char screen_url_scratch[screen_url_capacity]{};
+  char avatar_slug_scratch[32]{};
   iterate_kit_metrics_subscription subscriptions[subscription_capacity]{};
   CountingTransport transport{};
   BenchmarkHardware hardware{};
@@ -318,9 +319,12 @@ int main() {
    * explicitly creates one.
    */
   const iterate_kit_stackchan_options stackchan_options{
-    {&hardware, render_png, change_colour},
+    {&hardware, render_png, nullptr},
     screen_url_scratch,
     sizeof(screen_url_scratch),
+    {&hardware, change_sprite_set},
+    avatar_slug_scratch,
+    sizeof(avatar_slug_scratch),
     {&hardware, move_servos},
     {&hardware, set_led, fill_leds},
     {&hardware, take_photo},

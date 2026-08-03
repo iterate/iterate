@@ -330,7 +330,7 @@ target_compile_options(iterate-stackchan-resource-profile PRIVATE
 )
 target_link_libraries(
   iterate-stackchan-resource-profile
-  PRIVATE iterate-kit-stackchan iterate-kit-m5sticks3
+  PRIVATE iterate-kit-avatar iterate-kit-stackchan iterate-kit-m5sticks3
 )
 
 # The host profile uses MinSizeRel to measure optimized code, whose default

@@ -138,7 +138,7 @@ class M5UnifiedHalfDuplex {
       std::uint64_t capturedFrames,
       std::uint64_t droppedFrames);
   /**
-   * Repaints only on a semantic transition (or a background-colour change).
+   * Repaints only on a semantic transition (or a sprite-set change).
    * Calling this from every application-owner pass is therefore cheap and
    * cannot turn the 10 ms control cadence into continuous display/SPI work.
    */

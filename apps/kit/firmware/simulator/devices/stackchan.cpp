@@ -28,6 +28,7 @@ constexpr std::size_t subscriptionCapacity = 2U;
  * Exhaustion is expected to surface through the real capability module.
  */
 constexpr std::size_t screenUrlCapacity = 513U;
+constexpr std::size_t avatarSlugCapacity = 32U;
 
 /*
  * The camera fixture is only a bounded JPEG-shaped payload with explicit
@@ -67,6 +68,7 @@ struct Simulation {
   /* All following storage is caller-owned for the full profile lifetime,
    * matching the allocation-free device contract. */
   char screenUrlScratch[screenUrlCapacity]{};
+  char avatarSlugScratch[avatarSlugCapacity]{};
   char diagnosticsExpression
       [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY]{};
   iterate_kit_metrics_subscription subscriptions[subscriptionCapacity]{};
@@ -268,9 +270,12 @@ capnweb_status initialize(
   const iterate_kit_stackchan_options options{
     {&simulation.common,
      iterate::kit::simulator::renderPng,
-     iterate::kit::simulator::changeColour},
+     nullptr},
     simulation.screenUrlScratch,
     sizeof(simulation.screenUrlScratch),
+    {&simulation.common, iterate::kit::simulator::changeSpriteSet},
+    simulation.avatarSlugScratch,
+    sizeof(simulation.avatarSlugScratch),
     {&simulation, moveServos},
     {&simulation, setLed, fillLeds},
     {&simulation, takePhoto},

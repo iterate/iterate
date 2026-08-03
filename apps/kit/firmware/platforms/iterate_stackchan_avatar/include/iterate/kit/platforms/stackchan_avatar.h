@@ -64,6 +64,19 @@ struct iterate_kit_stackchan_avatar_metrics {
 esp_err_t iterate_kit_stackchan_avatar_start(void);
 
 /**
+ * Requests an exact compiled sprite-set slug from the control-plane owner.
+ *
+ * The Cap'n Web task must not mutate the registry while the low-priority
+ * display task is rendering it. This call therefore validates the immutable
+ * catalogue and publishes one latest-only selection; it never allocates,
+ * waits for SPI, or touches the framebuffer. Success means the request was
+ * admitted, and the display owner applies it within one 66 ms visual tick.
+ * Several requests in that interval deliberately coalesce to the newest one.
+ */
+esp_err_t iterate_kit_stackchan_avatar_request_sprite_set(
+    const char *slug, size_t slug_length);
+
+/**
  * Accepts one 128-sample frame which has completed speaker DMA.
  *
  * This function runs in I2S interrupt context. It performs one fixed-size copy

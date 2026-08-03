@@ -50,23 +50,28 @@ enum {
   ITERATE_KIT_VOICE_FRAME_BYTES = 640,
   ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH = 32,
   /*
-   * TWELVE, which is what the documentation beside it has always said.
+   * FOUR, and the argument for twelve is written down because it is a good
+   * argument that loses to a measurement.
    *
-   * Every append costs TWO WebSocket messages — a push and a release — and
-   * this socket sustains roughly 25-50 messages a second. At four frames that
-   * is 12.5 appends/s = 25 messages/s: pinned to the floor of the measured
-   * ceiling while talking, with nothing left for pings or stats. At twelve it
-   * is 8.3 messages/s.
+   * Every append costs two WebSocket messages against a socket that sustains
+   * roughly 25-50 a second, so four frames per append (25 messages/s) sits on
+   * the floor of that ceiling while twelve would sit comfortably under it.
+   * The constant's own documentation said twelve. Both were true and it still
+   * broke the device.
    *
-   * Four was correct when a mic append was 5.2 KiB of PCM16 base64 against a
-   * 5760-byte socket buffer, where one write nearly filled the buffer and the
-   * next blocked — the failure that killed every push-to-talk turn. Both of
-   * those changed in the same commit that set this to 4: the uplink became
-   * mu-law (half the bytes) and the send buffer became 32 KiB. Twelve mu-law
-   * frames measure 6672 bytes against a 7600-byte args buffer and an 8192
-   * slot, so the constraint that forced 4 has not existed for some time.
+   * Measured at twelve: fifteen turns answered, then the uplink stopped dead
+   * — frames=0 for the rest of a 26-minute soak while the downlink stayed
+   * perfect at rx=7721 played=7721. Twelve frames is 240 ms of speech against
+   * a 32-frame (640 ms) queue, and the catch-up rule only calls the sender
+   * "behind" at twice the batch, which is 480 ms: three quarters of the whole
+   * queue. A turn that never accumulates 480 ms never triggers catch-up, and
+   * a queue that fills meanwhile drops its oldest frames forever.
+   *
+   * Fixing that properly means sizing the queue and the catch-up threshold
+   * together with the batch, not raising one of the three. Until somebody
+   * does that with a measurement in hand, this stays where it was proven.
    */
-  ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND = 12,
+  ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND = 4,
 
   /*
    * The speaker ring is 1.5 s of jitter, not an answer store. Playback starts

@@ -115,6 +115,7 @@ struct stackchan_avatar_atomic_metrics {
   volatile uint32_t last_display_transfer_us;
   volatile uint32_t maximum_display_transfer_us;
   volatile uint32_t physical_playout_sample_clock;
+  volatile uint32_t current_avatar_index;
 };
 
 struct stackchan_avatar_owner {
@@ -140,6 +141,13 @@ struct stackchan_avatar_owner {
   TaskHandle_t analyzer_task;
 
   struct stackchan_avatar_atomic_metrics metrics;
+  /*
+   * Zero means no request; otherwise this is catalogue index + 1. An atomic
+   * latest-only slot is intentional. Avatar changes are state, not commands,
+   * so replaying every intermediate choice would waste display bandwidth and
+   * could make an RPC burst visible as delayed UI work beside realtime audio.
+   */
+  volatile uint32_t pending_avatar_index_plus_one;
   volatile uint32_t started;
   volatile uint32_t ready;
   volatile uint32_t display_active;
@@ -440,6 +448,36 @@ static void analyzer_task_main(void *context) {
       analyze_frame(&frame, &previous_sequence);
     }
 
+    const uint32_t requested_index_plus_one = __atomic_exchange_n(
+        &owner.pending_avatar_index_plus_one, 0U, __ATOMIC_ACQ_REL);
+    if (requested_index_plus_one != 0U) {
+      const size_t requested_index =
+          (size_t)(requested_index_plus_one - 1U);
+      /*
+       * Only this task owns the mutable registry/player state. Moving the
+       * catalogue change across this boundary avoids a lock around rendering,
+       * and therefore avoids letting a low-rate RPC ever block behind LCD DMA.
+       * The request path already validated this immutable catalogue index; a
+       * failure here means internal registry corruption, so stop the visual
+       * sidecar visibly instead of acknowledging further phantom changes.
+       */
+      if (!face_avatar_registry_select(&owner.registry, requested_index)) {
+        atomic_saturating_increment(&owner.metrics.render_failures);
+        __atomic_store_n(&owner.display_active, 0U, __ATOMIC_RELEASE);
+        ESP_LOGE(
+            TAG,
+            "validated avatar index %u could not be selected",
+            (unsigned)requested_index);
+        vTaskSuspend(NULL);
+      }
+      __atomic_store_n(
+          &owner.metrics.current_avatar_index,
+          (uint32_t)requested_index,
+          __ATOMIC_RELEASE);
+      /* A requested visual state should not wait behind the old 15 Hz phase. */
+      next_render_at_us = 0U;
+    }
+
     const uint64_t now_us = now_us_wide();
     if (now_us >= next_render_at_us) {
       if (!render_avatar()) {
@@ -481,6 +519,10 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
       !face_avatar_registry_init(&owner.registry)) {
     return ESP_ERR_INVALID_STATE;
   }
+  __atomic_store_n(
+      &owner.metrics.current_avatar_index,
+      (uint32_t)face_avatar_registry_current_index(&owner.registry),
+      __ATOMIC_RELAXED);
 
   owner.mailbox = xQueueCreateStatic(
       1U,
@@ -594,6 +636,38 @@ esp_err_t iterate_kit_stackchan_avatar_start(void) {
   return ESP_OK;
 }
 
+esp_err_t iterate_kit_stackchan_avatar_request_sprite_set(
+    const char *slug, size_t slug_length) {
+  if (slug == NULL || slug_length == 0U) {
+    return ESP_ERR_INVALID_ARG;
+  }
+  if (__atomic_load_n(&owner.ready, __ATOMIC_ACQUIRE) == 0U ||
+      __atomic_load_n(&owner.display_active, __ATOMIC_ACQUIRE) == 0U) {
+    return ESP_ERR_INVALID_STATE;
+  }
+
+  const size_t avatar_count = face_avatar_registry_count();
+  for (size_t index = 0U; index < avatar_count; ++index) {
+    const char *const candidate = face_avatar_registry_slug_at(index);
+    if (candidate == NULL) {
+      continue;
+    }
+    const size_t candidate_length = strlen(candidate);
+    if (candidate_length == slug_length &&
+        memcmp(candidate, slug, slug_length) == 0) {
+      if (index >= UINT32_MAX) {
+        return ESP_ERR_INVALID_SIZE;
+      }
+      __atomic_store_n(
+          &owner.pending_avatar_index_plus_one,
+          (uint32_t)index + 1U,
+          __ATOMIC_RELEASE);
+      return ESP_OK;
+    }
+  }
+  return ESP_ERR_INVALID_ARG;
+}
+
 bool IRAM_ATTR iterate_kit_stackchan_avatar_observe_playout(
     uint32_t sequence,
     uint64_t completed_at_us,
@@ -672,6 +746,7 @@ void iterate_kit_stackchan_avatar_metrics_snapshot(
   COPY_ATOMIC_METRIC(last_display_transfer_us);
   COPY_ATOMIC_METRIC(maximum_display_transfer_us);
   COPY_ATOMIC_METRIC(physical_playout_sample_clock);
+  COPY_ATOMIC_METRIC(current_avatar_index);
 #undef COPY_ATOMIC_METRIC
 
   snapshot->analyzer_stack_minimum_free_bytes =
@@ -679,9 +754,4 @@ void iterate_kit_stackchan_avatar_metrics_snapshot(
       ? 0U
       : (uint32_t)uxTaskGetStackHighWaterMark(owner.analyzer_task) *
           sizeof(StackType_t);
-  const size_t avatar_index =
-      face_avatar_registry_current_index(&owner.registry);
-  snapshot->current_avatar_index = avatar_index > UINT32_MAX
-      ? UINT32_MAX
-      : (uint32_t)avatar_index;
 }

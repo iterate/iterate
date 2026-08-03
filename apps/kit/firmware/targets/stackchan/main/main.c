@@ -66,6 +66,7 @@
 #define STACKCHAN_OUTPUT_CAPACITY 128U
 #define STACKCHAN_METRICS_SUBSCRIPTION_CAPACITY 3U
 #define STACKCHAN_SCREEN_URL_CAPACITY 513U
+#define STACKCHAN_AVATAR_SLUG_CAPACITY 32U
 #define STACKCHAN_MAXIMUM_PHOTO_BYTES (512U * 1024U)
 #define STACKCHAN_PLAYBACK_INTERRUPTION_ACK_TIMEOUT_MS 50U
 
@@ -148,6 +149,7 @@ struct stackchan_runtime {
   struct capnweb_json_token tokens[STACKCHAN_TOKEN_CAPACITY];
   char output_buffer[STACKCHAN_OUTPUT_CAPACITY];
   char screen_url_scratch[STACKCHAN_SCREEN_URL_CAPACITY];
+  char avatar_slug_scratch[STACKCHAN_AVATAR_SLUG_CAPACITY];
   char diagnostics_expression
       [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY];
   struct iterate_kit_metrics_subscription
@@ -651,6 +653,23 @@ static void device_session_ended(void *context) {
   }
 }
 
+static enum iterate_kit_status change_avatar_sprite_set(
+    void *context, const char *slug, size_t slug_length) {
+  (void)context;
+  const esp_err_t status =
+      iterate_kit_stackchan_avatar_request_sprite_set(slug, slug_length);
+  if (status == ESP_OK) {
+    return ITERATE_KIT_OK;
+  }
+  if (status == ESP_ERR_INVALID_ARG || status == ESP_ERR_INVALID_SIZE) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  if (status == ESP_ERR_INVALID_STATE) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  return ITERATE_KIT_IO_ERROR;
+}
+
 static bool initialise_rings(struct stackchan_runtime *state) {
   return iterate_kit_spsc_ring_init(
              &state->control_inbox,
@@ -703,9 +722,22 @@ static bool initialise_device(struct stackchan_runtime *state) {
   memset(&device_options, 0, sizeof(device_options));
   device_options.screen =
       iterate_kit_stackchan_screen_driver(&state->hardware);
+  /*
+   * Background-colour mutation was scaffolding for the first control proof.
+   * The product surface now selects a complete sprite set. Keep PNG rendering
+   * available, but do not advertise two overlapping ways to own the display.
+   */
+  device_options.screen.change_colour = NULL;
   device_options.screen_url_scratch = state->screen_url_scratch;
   device_options.screen_url_scratch_size =
       sizeof(state->screen_url_scratch);
+  device_options.avatar = (struct iterate_kit_avatar_driver){
+    .context = NULL,
+    .change_sprite_set = change_avatar_sprite_set,
+  };
+  device_options.avatar_slug_scratch = state->avatar_slug_scratch;
+  device_options.avatar_slug_scratch_size =
+      sizeof(state->avatar_slug_scratch);
   device_options.servos =
       iterate_kit_stackchan_servo_driver(&state->hardware);
   device_options.leds =
