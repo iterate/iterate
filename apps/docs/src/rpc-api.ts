@@ -16,6 +16,15 @@ import type {
 } from "@iterate-com/workspace-documents/types";
 import { requireDocumentPath, requireWorkspacePath } from "./config-bridge.ts";
 import type { AppEnv } from "./env.ts";
+import { TasksWorkspaceApi } from "./tasks-rpc-api.ts";
+import {
+  DEFAULT_REPO_PATH,
+  boardAddressFor,
+  checkoutWorkspacePath,
+  isCheckoutId,
+  normalizeRepoPath,
+} from "./lib/checkout-shared.ts";
+import type { TasksWorkspace, WorkspaceListEntry } from "./lib/tasks-api.ts";
 import type {
   DocsApi,
   DocsProject,
@@ -43,15 +52,18 @@ export class DocsApiRoot extends RpcTarget implements DocsApi {
       projectCredentialAddress(resolved),
       resolved,
     );
+    let projectId: string;
     try {
-      await dial.withProject((project) => project.identity());
+      // Verify by use, and keep the canonical id: the cheap authenticated
+      // identity read against the claimed project is the whole check.
+      projectId = (await dial.withProject((project) => project.identity())).projectId;
     } catch (error) {
       dial.close();
       throw new Error(
         `authentication failed: ${error instanceof Error ? error.message : String(error)}`,
       );
     }
-    return new DocsProjectApi(dial, resolved);
+    return new DocsProjectApi(dial, projectId, resolved);
   }
 
   #resolveCredential(credential?: string | ProjectCredential): ProjectCredential {
@@ -79,12 +91,60 @@ export class DocsApiRoot extends RpcTarget implements DocsApi {
 
 class DocsProjectApi extends RpcTarget implements DocsProject {
   readonly #dial: ProjectDial;
+  readonly #projectId: string;
   readonly #credential: ProjectCredential;
 
-  constructor(dial: ProjectDial, credential: ProjectCredential) {
+  constructor(dial: ProjectDial, projectId: string, credential: ProjectCredential) {
     super();
     this.#dial = dial;
+    this.#projectId = projectId;
     this.#credential = credential;
+  }
+
+  async projectId(): Promise<string> {
+    return this.#projectId;
+  }
+
+  /** The project's repo catalog — paths a board can be opened against. */
+  async repos(): Promise<string[]> {
+    const repos = (await this.#dial.withProject((project) => project.repos.list())) as Array<{
+      path: string;
+    }>;
+    return repos.map((repo) => repo.path).sort();
+  }
+
+  /**
+   * A board on the app's own workspace naming: the workspace path is derived
+   * from (checkoutId, repoPath) and lazily created on first use — opening a
+   * fresh board id IS how a new board workspace is born.
+   */
+  board(checkoutId: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
+    const normalized = normalizeRepoPath(repoPath);
+    if (!isCheckoutId(checkoutId) || normalized === null) {
+      throw new Error("bad checkout id or repo path");
+    }
+    return new TasksWorkspaceApi(
+      this.#dial,
+      checkoutWorkspacePath(checkoutId, normalized),
+      normalized,
+      { lazyCreate: true },
+    );
+  }
+
+  /**
+   * A board lens on an EXISTING workspace, addressed by its platform path —
+   * the same plain-`get` posture as workspace(): no lazy creation, no side
+   * effects. Workspaces outside the app's own /workspaces/tasks/ namespace
+   * are someone else's (an agent's, mid-thought): the capability serves
+   * reads, comments, and edits there, but refuses the owner acts (commit,
+   * assignAgent).
+   */
+  workspaceAt(workspacePath: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
+    const normalized = normalizeRepoPath(repoPath);
+    if (normalized === null) throw new Error("bad repo path");
+    return new TasksWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath), normalized, {
+      lazyCreate: false,
+    });
   }
 
   async whoami(): Promise<DocsUser> {
@@ -104,7 +164,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     return new DocsWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath));
   }
 
-  async workspaces(): Promise<{ path: string; createdAt: string }[]> {
+  async workspaces(): Promise<WorkspaceListEntry[]> {
     // The pinned iterate client types predate this surface; capnweb stubs
     // are Proxies, so the locally asserted members resolve at runtime — the
     // same convention as #withWorkspace below.
@@ -118,15 +178,22 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
       // The platform's StreamListItem shape ({ path, createdAt }) — asserted
       // for the same pinned-client reason.
     })) as { createdAt: string; path: string }[];
-    // Ancestor pruning, same as the tasks picker: every stream announces to
-    // every ancestor path, so a nested workspace drags phantom ancestor
-    // streams into the catalog that were never created as workspaces.
+    // The project's repos resolve board paths EXACTLY (a board path is
+    // re-minted per repo and compared) — no guessing at the "--" separator.
+    const repoPaths = await this.repos();
+    // Ancestor pruning: every stream announces to every ancestor path, so a
+    // nested workspace drags phantom ancestor streams into the catalog that
+    // were never created as workspaces.
     const candidates = streams.filter((stream) => stream.path.startsWith("/workspaces/"));
     const paths = candidates.map((stream) => stream.path);
-    const workspaces: { path: string; createdAt: string }[] = [];
+    const workspaces: WorkspaceListEntry[] = [];
     for (const stream of candidates) {
       if (paths.some((other) => other.startsWith(`${stream.path}/`))) continue;
-      workspaces.push({ path: stream.path, createdAt: stream.createdAt });
+      workspaces.push({
+        path: stream.path,
+        createdAt: stream.createdAt,
+        board: boardAddressFor(stream.path, repoPaths),
+      });
     }
     return workspaces.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
   }

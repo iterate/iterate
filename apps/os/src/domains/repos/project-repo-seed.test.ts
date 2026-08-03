@@ -13,9 +13,9 @@ test("no knobs seed the template verbatim", () => {
 test("the seed keeps the root worker and hosted app proxies", () => {
   const worker = projectRepoSeedFiles({}).find((file) => file.path === "worker.ts");
   expect(worker?.content).toContain('from "@iterate-com/docs"');
-  // The tasks board is the docs app's /w view — link capability only, no
-  // tasks host branch and no tasks proxy knob.
-  expect(worker?.content).toContain("TasksApp.create(this.env)");
+  // The tasks board is the docs app's /w view of the ONE app — one
+  // capability (docs.link mints both views), no tasks getter, host, or knob.
+  expect(worker?.content).not.toContain("TasksApp");
   expect(worker?.content).not.toContain('if (app === "tasks")');
   expect(worker?.content).toContain('if (app === "docs")');
   expect(worker?.content).toContain('originOverrideKvKey: "docs-app-origin"');

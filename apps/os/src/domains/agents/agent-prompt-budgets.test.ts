@@ -41,7 +41,7 @@ const CHARS_PER_TOKEN = 4;
 // clone-your-own-source, skills discovery, and scoped commits.
 // 4100 → 4150 (2026-07-31): the tasks app became a lens on workspaces; one
 // line teaches sharing uncommitted task files as a live board via
-// itx.worker.tasks.link — the board sibling of the docs review teach.
+// The board form of the docs link teach — one app, one capability.
 const DEFAULT_PROMPT_TOKEN_CEILING = 4_150;
 
 const AGENT_PROMPTS: Record<string, string> = {
@@ -83,7 +83,7 @@ test("the default prompt teaches agents to share workspace files through Docs", 
 
 test("the default prompt teaches agents to share task boards through Tasks", () => {
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-    'itx.worker.tasks.link({ workspace: "/workspaces/agents/you", repo: "/repos/config" })',
+    'itx.worker.docs.link({ workspace: "/workspaces/agents/you", repo: "/repos/config" })',
   );
 });
 

@@ -1,7 +1,4 @@
 import type { WorkspaceDocumentLane } from "@iterate-com/workspace-documents/types";
-import type { ProjectCredential } from "@iterate-com/workspace-documents/server";
-
-export type { ProjectCredential } from "@iterate-com/workspace-documents/server";
 
 export type {
   CollabAcceptResult,
@@ -9,34 +6,6 @@ export type {
   CollabOpened,
   CollabWaitResult,
 } from "@iterate-com/workspace-documents/types";
-
-/**
- * The vessel's ONE public API: a Cap'n Web WebSocket session at `/api`.
- * Everything speaks this vocabulary — the browser UI, headless probes, and
- * platform agents reaching in via a config worker's `itx.worker.tasks` stub
- * all hold the same capabilities over the same kind of session.
- *
- * The server classes live in ../rpc-api.ts; clients consume these interfaces
- * through capnweb stubs, so a chain like
- * `api.authenticate(token).workspace(id).commit(msg)` pipelines into a single
- * round trip.
- */
-/**
- * What a caller may authenticate with. A bare string is shorthand for a
- * project-app-session token (user-attributed — the browser lane and any
- * caller forwarding a user's cookie). `project-secret` is the machine lane:
- * a config worker can obtain its own project's API key
- * (`itx.secrets.get("/secrets/project-api-key").reveal()`) without any
- * browser in the loop, at the cost of project- rather than user-attribution.
- */
-export interface TasksApi {
-  /**
-   * Prove a credential by using it against the platform and get the
-   * project-scoped API back. Omit it when the session's upgrade request
-   * carried the `iterate-project-auth` cookie (the browser lane).
-   */
-  authenticate(credential?: string | ProjectCredential): Promise<TasksProject>;
-}
 
 /**
  * One workspace stream in the project, as the picker lists them. `board` is
@@ -64,30 +33,6 @@ export type TasksUser = {
   /** Avatar URL, once the auth worker mints an `image` claim. */
   image: string | null;
 };
-
-export interface TasksProject {
-  projectId(): Promise<string>;
-  /** The verified identity behind this session's credential. */
-  whoami(): Promise<TasksUser>;
-  /** The project's repo catalog — paths a board can be opened against. */
-  repos(): Promise<string[]>;
-  /** Every workspace stream in the project, newest first (the picker). */
-  workspaces(): Promise<WorkspaceListEntry[]>;
-  /**
-   * A board on the tasks app's own workspace naming: the workspace path
-   * derives from (checkoutId, repoPath) and is lazily created on first use.
-   * Synchronous on purpose so calls pipeline through it.
-   */
-  workspace(checkoutId: string, repoPath?: string): TasksWorkspace;
-  /**
-   * A board lens on an EXISTING workspace addressed by its platform path —
-   * plain `get`: no lazy creation, no side effects; a missing workspace
-   * surfaces the platform's error. Outside /workspaces/tasks/ the lens is a
-   * guest: reads, comments, and edits work, owner acts (commit, assignAgent)
-   * are refused.
-   */
-  workspaceAt(workspacePath: string, repoPath?: string): TasksWorkspace;
-}
 
 /** One event from the workspace's platform stream (the event-sourced spine). */
 export type WorkspaceStreamEvent = {

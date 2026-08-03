@@ -8,15 +8,29 @@ export type DocsAppOptions = {
   };
 };
 
-export type DocsLinkInput = {
-  /**
-   * Document to review: relative to the workspace, or a fully qualified
-   * stream path. Must end in .md, .markdown, .html, or .htm.
-   */
-  path: string;
-  /** Absolute /workspaces/** stream path of the reviewing workspace. */
-  workspace: string;
-};
+/**
+ * One link capability, two lenses — the input shape picks the view:
+ * `path` mints the document view, `repo` (+ optional `task`) mints the
+ * task-board view. Exactly one of the two.
+ */
+export type DocsLinkInput =
+  | {
+      /**
+       * Document to review: relative to the workspace, or a fully qualified
+       * stream path. Must end in .md, .markdown, .html, or .htm.
+       */
+      path: string;
+      /** Absolute /workspaces/** stream path of the reviewing workspace. */
+      workspace: string;
+    }
+  | {
+      /** Absolute /workspaces/** stream path of the workspace the board renders. */
+      workspace: string;
+      /** Absolute /repos/** path of the repo whose task files the board shows. */
+      repo: string;
+      /** Repo-relative task file to open (a .md file under a `tasks/` folder). */
+      task?: string;
+    };
 
 type DocsProject = {
   [Symbol.dispose](): void;
@@ -42,57 +56,35 @@ export class DocsAppRpcTarget extends RpcTarget {
     this.#env = env;
   }
 
-  /** Build a review URL for one Markdown or HTML workspace file. */
+  /**
+   * Build a URL into the app for one workspace: the document view when the
+   * input carries `path`, the task-board view when it carries `repo`
+   * (+ optional `task`). Validation mirrors what each view applies on open,
+   * so a minted link can only address something the UI will accept.
+   */
   async link(input: DocsLinkInput): Promise<string> {
-    // Same validation DocsWorkspaceApi applies when the document opens, so a
-    // minted link can only address a path the review UI will accept.
     const workspace = requireWorkspacePath(input.workspace);
-    const path = requireDocumentPath(input.path);
-    const itx = await this.#env.ITX.get();
-    try {
-      const url = new URL(await itx.appUrl("docs"));
-      url.searchParams.set("workspace", workspace);
-      url.searchParams.set("path", path);
-      return url.href;
-    } finally {
-      itx[Symbol.dispose]();
+    // Discriminate by VALUE, not key presence: capnweb callers are loose
+    // JSON, and a key that exists holding undefined must not pick a lens.
+    const loose = input as { path?: string; repo?: string; task?: string };
+    const wantsDocument = typeof loose.path === "string";
+    const wantsBoard = typeof loose.repo === "string";
+    if (wantsDocument === wantsBoard) {
+      throw new Error("pass exactly one of path (document view) or repo (board view)");
     }
-  }
-}
-
-export type TasksLinkInput = {
-  /** Absolute /workspaces/** stream path of the workspace the board renders. */
-  workspace: string;
-  /** Absolute /repos/** path of the repo whose task files the board shows. */
-  repo: string;
-  /** Repo-relative task file to open (a .md file under a `tasks/` folder). */
-  task?: string;
-};
-
-/** Project-side capability exposed by config workers as `itx.worker.tasks`.
- * The board is the /w view of the SAME app that serves docs — one host,
- * two lenses — so a tasks link is a docs-app URL. */
-export class TasksAppRpcTarget extends RpcTarget {
-  readonly #env: DocsEnv;
-
-  constructor(env: DocsEnv) {
-    super();
-    this.#env = env;
-  }
-
-  /** Build a board URL for one workspace's task files under one repo. */
-  async link(input: TasksLinkInput): Promise<string> {
-    // Same validation the board applies when it opens, so a minted link can
-    // only address a workspace/repo/task the board UI will accept.
-    const workspace = requireWorkspacePath(input.workspace);
-    const repo = requireRepoPath(input.repo);
-    const task = input.task === undefined ? undefined : requireTaskPath(input.task);
+    const path = wantsDocument ? requireDocumentPath(loose.path!) : undefined;
+    const repo = wantsBoard ? requireRepoPath(loose.repo!) : undefined;
+    const task = loose.task === undefined ? undefined : requireTaskPath(loose.task);
     const itx = await this.#env.ITX.get();
     try {
       const url = new URL(await itx.appUrl("docs"));
-      url.pathname = "/w";
       url.searchParams.set("workspace", workspace);
-      url.searchParams.set("repo", repo);
+      if (path !== undefined) {
+        url.searchParams.set("path", path);
+        return url.href;
+      }
+      url.pathname = "/w";
+      url.searchParams.set("repo", repo!);
       if (task !== undefined) url.searchParams.set("task", task);
       return url.href;
     } finally {
@@ -100,14 +92,6 @@ export class TasksAppRpcTarget extends RpcTarget {
     }
   }
 }
-
-/** The board capability alone — the /w view rides DocsApp's fetch proxy, so
- * there is no tasks fetch handler and no tasks host. */
-export const TasksApp = {
-  create(env: DocsEnv) {
-    return { rpc: new TasksAppRpcTarget(env) };
-  },
-};
 
 export const DocsApp = {
   create(env: DocsEnv, options: DocsAppOptions) {

@@ -216,10 +216,9 @@ test("template gets the platform sdk from iterate/sdk, not a committed snapshot"
   expect(templateFile("worker.ts")).toContain('from "@iterate-com/docs"');
   expect(templateFile("worker.ts")).toContain("get docs()");
   expect(templateFile("worker.ts")).toContain("return this.#docsApp.rpc");
-  // The tasks board is the docs app's /w view: the tasks capability mints
-  // links there and there is no tasks host branch or proxy.
-  expect(templateFile("worker.ts")).toContain("get tasks()");
-  expect(templateFile("worker.ts")).toContain("return this.#tasksApp.rpc");
+  // The tasks board is the /w view of the ONE app: docs.link mints both
+  // views, so there is no tasks getter, host branch, or proxy.
+  expect(templateFile("worker.ts")).not.toContain("get tasks()");
   expect(templateFile("worker.ts")).not.toContain('if (app === "tasks")');
 
   const templatePackageJson = JSON.parse(templateFile("package.json")) as {

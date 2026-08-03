@@ -1,33 +1,14 @@
 import { RpcTarget } from "capnweb";
-import {
-  ProjectDial,
-  projectCredentialAddress,
-  readCookie,
-  tokenClaims,
-} from "@iterate-com/workspace-documents/server";
-import type { AppEnv } from "./env.ts";
+import type { ProjectDial } from "@iterate-com/workspace-documents/server";
 import type {
   CollabAcceptResult,
   CollabChanges,
   CollabOpened,
   CollabWaitResult,
-  ProjectCredential,
-  WorkspaceListEntry,
   WorkspaceStreamEvent,
-  TasksApi,
-  TasksProject,
-  TasksUser,
   TasksWorkspace,
 } from "./lib/tasks-api.ts";
-import {
-  DEFAULT_REPO_PATH,
-  checkoutWorkspacePath,
-  isCheckoutId,
-  isGuestWorkspacePath,
-  normalizeRepoPath,
-  boardAddressFor,
-} from "./lib/checkout-shared.ts";
-import { requireWorkspacePath } from "./config-bridge.ts";
+import { isGuestWorkspacePath } from "./lib/checkout-shared.ts";
 import {
   parseTaskCard,
   setTaskCardAgent,
@@ -36,186 +17,6 @@ import {
   taskAssignmentInstructions,
   taskColumnState,
 } from "./tasks-model.ts";
-
-const AUTH_COOKIE = "iterate-project-auth";
-
-/**
- * The capability handed to every connection on `/api` — one method,
- * `authenticate`, which proves a project-app-session token by USING it
- * against the platform and returns the project-scoped API. Browsers rely on
- * the proxy-stamped cookie; agents and other services pass the token
- * explicitly. Either way the token's own projectId claim decides which
- * project this session is — the dial fails if the claim is a lie.
- */
-export class TasksApiRoot extends RpcTarget implements TasksApi {
-  readonly #env: AppEnv;
-  readonly #cookieToken: string | undefined;
-
-  constructor(env: AppEnv, request: Request) {
-    super();
-    this.#env = env;
-    this.#cookieToken = readCookie(request, AUTH_COOKIE);
-  }
-
-  async authenticate(credential?: string | ProjectCredential): Promise<TasksProject> {
-    const resolved = this.#resolve(credential);
-    const dial = new ProjectDial(
-      this.#env.OS_BASE_URL,
-      projectCredentialAddress(resolved),
-      resolved,
-    );
-    let projectId: string;
-    try {
-      // Verify by use: the vessel keeps no secrets, so a cheap authenticated
-      // identity read against the claimed project is the whole check. Keep
-      // the canonical id for Durable Object names even when the caller used
-      // the preferred slug-addressed project-secret.
-      projectId = (await dial.withProject((project) => project.identity())).projectId;
-    } catch (error) {
-      dial.close();
-      throw new Error(`authentication failed: ${errorText(error)}`);
-    }
-    return new TasksProjectApi(dial, projectId, resolved);
-  }
-
-  #resolve(credential?: string | ProjectCredential): ProjectCredential {
-    if (typeof credential === "string" && credential.trim() !== "") {
-      return { type: "project-app-session", token: credential.trim() };
-    }
-    if (credential !== undefined && typeof credential === "object" && credential !== null) {
-      if (credential.type === "project-app-session" && credential.token) return credential;
-      if (credential.type === "project-secret" && credential.secret) {
-        projectCredentialAddress(credential);
-        return credential;
-      }
-      throw new Error("unsupported credential — expected project-app-session or project-secret");
-    }
-    if (this.#cookieToken) return { type: "project-app-session", token: this.#cookieToken };
-    throw new Error(
-      "no credential — pass authenticate(token | {type, ...}) or send the iterate-project-auth cookie",
-    );
-  }
-}
-
-class TasksProjectApi extends RpcTarget implements TasksProject {
-  readonly #dial: ProjectDial;
-  readonly #projectId: string;
-  readonly #credential: ProjectCredential;
-
-  constructor(dial: ProjectDial, projectId: string, credential: ProjectCredential) {
-    super();
-    this.#dial = dial;
-    this.#projectId = projectId;
-    this.#credential = credential;
-  }
-
-  async projectId(): Promise<string> {
-    return this.#projectId;
-  }
-
-  async whoami(): Promise<TasksUser> {
-    if (this.#credential.type !== "project-app-session") {
-      return { userId: null, email: null, name: null, image: null };
-    }
-    // The claims are trustworthy here: authenticate() already proved this
-    // exact token by using it against the platform.
-    const claims = tokenClaims(this.#credential.token);
-    return {
-      userId: typeof claims.userId === "string" ? claims.userId : null,
-      email: typeof claims.email === "string" ? claims.email : null,
-      name: typeof claims.name === "string" ? claims.name : null,
-      image: typeof claims.image === "string" ? claims.image : null,
-    };
-  }
-
-  async repos(): Promise<string[]> {
-    const repos = (await this.#dial.withProject((project) => project.repos.list())) as Array<{
-      path: string;
-    }>;
-    return repos.map((repo) => repo.path).sort();
-  }
-
-  /**
-   * Every workspace stream in the project, newest first — the picker's list.
-   * The platform's stream catalog is the source of truth (the sidebar's old
-   * checkout-index DO is retired): board workspaces resolve back to their
-   * (checkoutId, repoPath) address against the project's real repo list;
-   * everything else (agent workspaces, ...) lists as a plain path a lens can
-   * open as a guest.
-   *
-   * Ancestor pruning: every stream announces itself to every ancestor path,
-   * so a nested agent workspace (/workspaces/agents/repos/config/pr/21)
-   * drags phantom ancestor STREAMS into the catalog that were never created
-   * as workspaces. An entry that is a strict path-prefix of another entry
-   * is such an ancestor today (nothing nests real workspaces), so it is
-   * dropped rather than offered as a dead lens. The honest fix is a real
-   * platform `workspaces.list()` fed by `workspace/created` — follow-up in
-   * tasks/workspace-lenses-consolidation.md.
-   */
-  async workspaces(): Promise<WorkspaceListEntry[]> {
-    const streams = (await this.#dial.withProject(async (project) => {
-      const catalog = (
-        project as unknown as {
-          streams: { list(): Promise<{ createdAt: string; path: string }[]> };
-        }
-      ).streams;
-      return catalog.list();
-    })) as { createdAt: string; path: string }[];
-    // The project's repos resolve board paths EXACTLY (a board path is
-    // re-minted per repo and compared) — no guessing at the "--" separator.
-    const repoPaths = await this.repos();
-    const candidates = streams.filter((stream) => stream.path.startsWith("/workspaces/"));
-    const paths = candidates.map((stream) => stream.path);
-    const entries: WorkspaceListEntry[] = [];
-    for (const stream of candidates) {
-      if (paths.some((other) => other.startsWith(`${stream.path}/`))) continue;
-      entries.push({
-        path: stream.path,
-        createdAt: stream.createdAt,
-        board: boardAddressFor(stream.path, repoPaths),
-      });
-    }
-    return entries.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
-  }
-
-  /**
-   * A board on the tasks app's own workspace naming: the workspace path is
-   * derived from (checkoutId, repoPath) and lazily created on first use —
-   * opening a fresh board id IS how a new board workspace is born.
-   */
-  workspace(checkoutId: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspaceApi {
-    const normalized = normalizeRepoPath(repoPath);
-    if (!isCheckoutId(checkoutId) || normalized === null) {
-      throw new Error("bad checkout id or repo path");
-    }
-    return new TasksWorkspaceApi(
-      this.#dial,
-      checkoutWorkspacePath(checkoutId, normalized),
-      normalized,
-      { lazyCreate: true },
-    );
-  }
-
-  /**
-   * A board lens on an EXISTING workspace, addressed by its platform path —
-   * the Docs app's plain-`get` posture: no lazy creation, no side effects;
-   * a missing workspace surfaces the platform's own error. Workspaces
-   * outside the tasks app's /workspaces/tasks/ namespace are someone else's
-   * (an agent's, mid-thought): the capability serves reads, comments, and
-   * edits there, but refuses the owner acts (commit, assignAgent).
-   */
-  workspaceAt(workspacePath: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspaceApi {
-    const normalized = normalizeRepoPath(repoPath);
-    if (normalized === null) throw new Error("bad repo path");
-    return new TasksWorkspaceApi(this.#dial, requireWorkspacePath(workspacePath), normalized, {
-      lazyCreate: false,
-    });
-  }
-
-  [Symbol.dispose](): void {
-    this.#dial.close();
-  }
-}
 
 /** The platform workspace surface this vessel forwards to. The pinned
  * `iterate` client types predate it, so the shape is asserted locally —
@@ -288,7 +89,7 @@ type AgentStub = {
  * (leading slash optional); #qualified/#repoRelative are the ONLY join between
  * board keys and the mount prefix.
  */
-class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
+export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
   readonly #dial: ProjectDial;
   readonly #workspacePath: string;
   readonly #repoPath: string;
@@ -358,7 +159,9 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
         if (
           !this.#lazyCreate ||
           this.#created ||
-          !/workspace "[^"]+" does not exist/.test(errorText(error))
+          !/workspace "[^"]+" does not exist/.test(
+            error instanceof Error ? error.message : String(error),
+          )
         ) {
           throw error;
         }
@@ -613,8 +416,4 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
     });
     return { agentPath };
   }
-}
-
-function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
 }
