@@ -2,15 +2,19 @@ import { useCallback, useState, type FormEvent, type MouseEvent } from "react";
 import { ChevronRight, Copy, Pencil, Star } from "lucide-react";
 import { Badge } from "@iterate-com/ui/components/badge";
 import { Button } from "@iterate-com/ui/components/button";
+import { CommandItem } from "@iterate-com/ui/components/command";
 import { Input } from "@iterate-com/ui/components/input";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { cn } from "@iterate-com/ui/lib/utils";
+import { agentCommandValue } from "../command-palette-model.ts";
 import {
   AGENT_DISPLAY_STATE_PRESENTATION,
+  agentCommandAccessibleLabel,
   bindingIcon,
   bindingLabel,
   bindingUrl,
+  runtimeCountFragments,
 } from "./agent-presentation.ts";
 import {
   agentNodeDisplayState,
@@ -31,6 +35,9 @@ import { formatTimeAgo } from "~/lib/format-relative-time.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
 const LIVE_RUNTIME_TICK_MS = 100;
+
+const AGENT_COMMAND_GRID =
+  "grid-cols-[minmax(0,1fr)_6rem_1.75rem] sm:grid-cols-[minmax(12rem,2fr)_8rem_minmax(10rem,2fr)_1.75rem] lg:grid-cols-[minmax(12rem,2fr)_8rem_minmax(10rem,2fr)_6rem_1.75rem]";
 
 const WAITING_FOR_LABEL = {
   user_input: "Needs input",
@@ -259,7 +266,7 @@ export function AgentDetailCard({
   const [draftTitle, setDraftTitle] = useState(() => agentTitle(agent));
   const displayState = deriveAgentDisplayState(agent.runtime, agent.summary.waitingFor);
   const state = AGENT_DISPLAY_STATE_PRESENTATION[displayState];
-  const counts = runtimeCountSummaries(agent);
+  const counts = runtimeCountFragments(agent.runtime);
   const focusTitleInput = useCallback((node: HTMLInputElement | null) => node?.focus(), []);
 
   async function submitTitle(event: FormEvent<HTMLFormElement>) {
@@ -391,15 +398,82 @@ export function AgentDetailCard({
   );
 }
 
-/** Passive, cmdk-safe agent content matching the /agents catalog row layout.
- * CommandItem remains the single interactive option; pointer hit areas are
- * marked for the owning option to interpret without nesting buttons, links,
- * or another listbox option. */
+/** Column labels shared by every agent option in the Cmd+K result group. */
+export function AgentCommandHeader() {
+  return (
+    <div
+      className={cn(
+        "sticky top-0 z-10 grid gap-2 border-b bg-background px-3 py-2 text-xs font-medium text-muted-foreground",
+        AGENT_COMMAND_GRID,
+      )}
+      aria-hidden
+    >
+      <span>Agent</span>
+      <span>Status</span>
+      <span className="hidden sm:block">Activity</span>
+      <span className="hidden lg:block">Last work</span>
+      <span />
+    </div>
+  );
+}
+
+/** The sole interactive option for one Cmd+K agent result. */
+export function AgentCommandItem({
+  node,
+  depth = 0,
+  expanded = false,
+  nowMs,
+  onOpen,
+  onToggleExpanded,
+  onTogglePinned,
+}: {
+  node: AgentTreeNode;
+  depth?: number;
+  expanded?: boolean;
+  nowMs: number;
+  onOpen: (path: string) => void;
+  onToggleExpanded: (path: string) => void;
+  onTogglePinned: (agent: AgentRecord) => void | Promise<void>;
+}) {
+  const hasChildren = node.children.length > 0;
+  return (
+    <CommandItem
+      value={agentCommandValue(node.agent.path)}
+      onSelect={() => onOpen(node.agent.path)}
+      className={cn(
+        "grid items-start gap-2 border-b border-border/60 px-3 py-2.5 last:border-b-0",
+        AGENT_COMMAND_GRID,
+      )}
+      aria-label={agentCommandAccessibleLabel(node, expanded)}
+      aria-expanded={hasChildren ? expanded : undefined}
+      aria-keyshortcuts="Shift+P"
+      onClickCapture={(event) => {
+        if (!(event.target instanceof Element)) return;
+        const target = event.target;
+        if (target.closest("[data-agent-pin]")) {
+          event.preventDefault();
+          event.stopPropagation();
+          void onTogglePinned(node.agent);
+        } else if (hasChildren && target.closest("[data-agent-disclosure]")) {
+          event.preventDefault();
+          event.stopPropagation();
+          onToggleExpanded(node.agent.path);
+        }
+      }}
+    >
+      <AgentCommandPresentation depth={depth} expanded={expanded} node={node} nowMs={nowMs} />
+    </CommandItem>
+  );
+}
+
+/** Passive, cmdk-safe content matching the /agents catalog row layout. */
 export function AgentCommandPresentation({
+  depth = 0,
   expanded,
   node,
   nowMs,
 }: {
+  depth?: number;
   expanded: boolean;
   node: AgentTreeNode;
   nowMs: number;
@@ -412,56 +486,61 @@ export function AgentCommandPresentation({
   const hasChildren = node.children.length > 0;
   return (
     <>
-      <span className="flex w-4 shrink-0 justify-end pt-0.5" aria-hidden>
-        {hasChildren ? (
-          <span
-            data-agent-disclosure
-            className="-m-1 flex size-4 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted"
-            title={expanded ? "Collapse child agents" : "Expand child agents"}
-          >
-            <ChevronRight
-              className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
-            />
-          </span>
-        ) : null}
-      </span>
-      <StateDot state={state} className="mt-1.5" />
-      <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-baseline gap-2">
-          <span className="truncate text-sm font-medium">{agentTitle(agent)}</span>
-          {agent.summary.pinned ? (
-            <Star
-              className="size-3 shrink-0 self-center fill-amber-400 text-amber-500"
-              aria-hidden
-            />
-          ) : null}
-          <time
-            dateTime={node.aggregateLastWorkAt}
-            title={node.aggregateLastWorkAt}
-            className="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground"
-          >
-            {formatTimeAgo(node.aggregateLastWorkAt, nowMs)}
-          </time>
-        </span>
-        <span className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-          {activity !== undefined ? (
-            <span className="min-w-0 truncate">{activity}</span>
-          ) : (
-            <span className="min-w-0 truncate font-mono text-[11px]">{agent.path}</span>
-          )}
-          {descendantCount > 0 ? (
-            <span className="shrink-0">
-              · {descendantCount} subagent{descendantCount === 1 ? "" : "s"}
+      <span
+        className="flex min-w-0 items-start gap-2"
+        style={{ paddingLeft: `${Math.min(depth, 6) * 16}px` }}
+      >
+        <span className="flex size-4 shrink-0 justify-end pt-0.5" aria-hidden>
+          {hasChildren ? (
+            <span
+              data-agent-disclosure
+              className="-m-1 flex size-4 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted"
+              title={expanded ? "Collapse child agents" : "Expand child agents"}
+            >
+              <ChevronRight
+                className={cn("size-3.5 transition-transform", expanded && "rotate-90")}
+              />
             </span>
           ) : null}
-          <span className="ml-auto flex min-w-0 shrink-0 items-center gap-1.5">
-            {agent.binding !== undefined ? (
-              <span className="max-w-36 truncate">{bindingLabel(agent.binding)}</span>
+        </span>
+        <StateDot state={state} className="mt-1.5" />
+        <span className="min-w-0">
+          <span className="flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-sm font-medium">{agentTitle(agent)}</span>
+            {agent.summary.pinned ? (
+              <Star className="size-3 shrink-0 fill-amber-400 text-amber-500" aria-hidden />
             ) : null}
-            <span className="shrink-0">{state.label}</span>
+          </span>
+          <span className="block truncate font-mono text-[11px] text-muted-foreground">
+            {agent.path}
           </span>
         </span>
       </span>
+      <span className="min-w-0 text-xs">
+        <span className="block truncate">{state.label}</span>
+        <span className="block truncate text-muted-foreground">
+          {agent.binding === undefined
+            ? descendantCount > 0
+              ? `${descendantCount} subagent${descendantCount === 1 ? "" : "s"}`
+              : "—"
+            : bindingLabel(agent.binding)}
+        </span>
+      </span>
+      <span className="hidden min-w-0 sm:block">
+        <span className="block truncate text-xs">{activity ?? "—"}</span>
+        {agent.summary.description === undefined ? null : (
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {agent.summary.description}
+          </span>
+        )}
+      </span>
+      <time
+        dateTime={node.aggregateLastWorkAt}
+        title={node.aggregateLastWorkAt}
+        className="hidden text-xs tabular-nums text-muted-foreground lg:block"
+      >
+        {formatTimeAgo(node.aggregateLastWorkAt, nowMs)}
+      </time>
       <span
         data-agent-pin
         className="-m-1 flex size-7 shrink-0 cursor-pointer items-center justify-center rounded-sm text-muted-foreground hover:bg-muted hover:text-foreground"
@@ -474,7 +553,7 @@ export function AgentCommandPresentation({
   );
 }
 
-function StateDot({
+export function StateDot({
   state,
   className,
 }: {
@@ -494,7 +573,7 @@ function StateDot({
   );
 }
 
-function PinButton({
+export function PinButton({
   pinned,
   onToggle,
   size = "icon-xs",
@@ -569,26 +648,7 @@ function DetailTimestamps({
   );
 }
 
-/** Self-only in-flight work, phrased as short "count noun" fragments. */
-function runtimeCountSummaries(agent: AgentRecord): string[] {
-  const runtime = agent.runtime;
-  if (runtime === undefined) return [];
-  const unreadyTriggers = Math.max(0, runtime.triggers.pending - runtime.triggers.runnable);
-  const modelRequests = runtime.llmRequests.started + runtime.llmRequests.requested;
-  const queued = runtime.llmRequests.scheduled + runtime.triggers.runnable;
-  return [
-    runtime.runningScripts > 0 ? pluralCount(runtime.runningScripts, "script") : null,
-    modelRequests > 0 ? pluralCount(modelRequests, "model request") : null,
-    queued > 0 ? `${queued} queued` : null,
-    unreadyTriggers > 0 ? pluralCount(unreadyTriggers, "pending trigger") : null,
-  ].filter((value): value is string => value !== null);
-}
-
-function pluralCount(count: number, noun: string): string {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
-}
-
-function BindingLink({
+export function BindingLink({
   binding,
   className,
 }: {
