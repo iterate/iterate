@@ -134,7 +134,7 @@ test("append accepts an offset assertion on a subscription configuration event",
     type: "events.iterate.com/stream/subscription-configured",
     offset: 5,
     payload: {
-      subscriptionKey: `stream-${marker}`,
+      name: `stream-${marker}`,
       receiver: {
         action: "copy-to-stream",
         receivingStreamPath: `/e2e/security/offset-assert-target/${marker}`,

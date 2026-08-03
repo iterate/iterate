@@ -311,27 +311,32 @@ test("Agent create replays its earlier birth and setup events through its subscr
       Array.isArray(event.payload?.path) &&
       event.payload.path.join(".") === "workspace",
   );
-  // Hosted processor subscriptions are addressed by an ITX expression over
-  // the ordinary domain surface. The expression root names the host domain.
+  // Hosted processor subscriptions are facet-placed: the subscription name is
+  // the instance identity (defaulting to the contract slug) and the facet name;
+  // no itx expression names a host Durable Object.
   const wakeSubscriptionPayload = (event: { payload?: Record<string, unknown> }) =>
     event.payload as {
-      subscriptionKey?: string;
-      receiver?: { kind?: string; expression?: unknown[]; processorSlug?: string };
+      name?: string;
+      receiver?: { action?: string; placement?: string; processorSlug?: string };
     };
-  const wakeExpressionRoot = (event: { payload?: Record<string, unknown> }) =>
-    wakeSubscriptionPayload(event).receiver?.expression?.[0];
-  const agentSubscriptionOffset = requiredOffset(
+  const facetWakeSubscriptionOffset = (description: string, processorSlug: string) =>
+    requiredOffset(description, (event) => {
+      if (event.type !== "events.iterate.com/stream/subscription-configured") return false;
+      const payload = wakeSubscriptionPayload(event);
+      return (
+        payload.receiver?.action === "processor-wake" &&
+        payload.receiver.placement === "facet" &&
+        payload.receiver.processorSlug === processorSlug &&
+        payload.name === processorSlug
+      );
+    });
+  const agentSubscriptionOffset = facetWakeSubscriptionOffset(
     "agent processor subscription",
-    (event) =>
-      event.type === "events.iterate.com/stream/subscription-configured" &&
-      wakeExpressionRoot(event) === "agents" &&
-      String(wakeSubscriptionPayload(event).subscriptionKey).endsWith("#agent"),
+    "agent",
   );
-  const capabilityHostSubscriptionOffset = requiredOffset(
+  const capabilityHostSubscriptionOffset = facetWakeSubscriptionOffset(
     "capability-host processor subscription",
-    (event) =>
-      event.type === "events.iterate.com/stream/subscription-configured" &&
-      wakeExpressionRoot(event) === "capabilityHosts",
+    "capability-host",
   );
 
   // This is the supported replay case: create commits one complete birth
@@ -799,7 +804,7 @@ test("Project worker processEventBatch receives events from every project stream
     async () => {
       const runtimeState = await project.streams.get(sourcePath).runtimeState();
       const subscription = runtimeState.runtime.subscriptions["project-worker"];
-      return (subscription?.acknowledgedOffset ?? 0) >= sourceEvent.offset;
+      return (subscription?.confirmedOffset ?? 0) >= sourceEvent.offset;
     },
     {
       description: "project-worker subscription acknowledgement to reach the source event",

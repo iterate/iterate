@@ -14,10 +14,8 @@ import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized
 import { cn } from "@iterate-com/ui/lib/utils";
 import { ageStreamThroughputMetrics, type ProcessorRuntimeState } from "iterate/processors";
 import { useIterateSessionLiveState, useLiveState } from "iterate/sdk/itx/react";
-// The Stream DO's real pushed shape. itx-api.generated.ts still carries the
-// pre-redesign `byKey`/`acknowledgedOffset` types until rpc-targets is renamed
-// and the itx surface regenerated, so this panel types the LiveState value at
-// the boundary from the domain source of truth instead.
+// The Stream DO's real pushed shape, typed from the domain source of truth
+// (the generated itx surface mirrors it).
 import type { StreamRuntimeDebugState } from "../domains/streams/stream-runtime-state.ts";
 import { readAgentTokenUsageVitals } from "~/lib/agent-token-usage.ts";
 import { formatBytesPerSecond, formatFileSize } from "~/lib/feed-format.ts";

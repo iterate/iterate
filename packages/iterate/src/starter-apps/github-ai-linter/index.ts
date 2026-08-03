@@ -1,6 +1,6 @@
 import type { ItxBinding, StreamEvent } from "../../sdk.ts";
 import {
-  REVIEW_BOT_SUBSCRIPTION_KEY,
+  REVIEW_BOT_SUBSCRIPTION_NAME,
   reviewBotSubscriptionEvent,
   type GithubAiLinterConfig,
 } from "./worker-ref.ts";
@@ -46,7 +46,7 @@ export const GithubAiLinter = {
             const connectionStream = itx.streams.get(`/integrations/github/${connection}`);
             const runtime = await connectionStream.runtimeState();
             const existingCondition =
-              runtime.coreProcessorState.subscriptions.outbound.byName[REVIEW_BOT_SUBSCRIPTION_KEY]
+              runtime.coreProcessorState.subscriptions.outbound.byName[REVIEW_BOT_SUBSCRIPTION_NAME]
                 ?.configuration.filter?.jsonataCondition;
             // Both the original cutoff-only condition and the narrowed
             // condition start with this durable boundary. Keep accepting the

@@ -37,7 +37,7 @@ test("github pushes about a linked repository reach the repo stream", async () =
   await connectionStream.append({
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
-      subscriptionKey: `github-repo:${repoPath}`,
+      name: `github-repo:${repoPath}`,
       filter: {
         eventTypes: [GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE],
         jsonataCondition: 'payload.delivery.name = "push" and payload.body.repository.id = 101',

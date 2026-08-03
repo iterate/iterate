@@ -766,13 +766,7 @@ function useProcessorsPanelDebugState(args: {
   const getProcessorRuntimeState = useCallback(
     async (name: string) => {
       const stream = await resolvedStreamSource(streamPath);
-      // TODO(stream-subscriptions): the Stream DO door already takes `{ name }`
-      // but itx-api.generated.ts still types this input as `{ subscriptionKey }`
-      // until rpc-targets is renamed and regenerated. The retype keeps the wire
-      // payload on the new field; drop it with the regeneration.
-      return stream.getProcessorRuntimeState({ name } as unknown as Parameters<
-        typeof stream.getProcessorRuntimeState
-      >[0]);
+      return stream.getProcessorRuntimeState({ name });
     },
     [resolvedStreamSource, streamPath],
   );

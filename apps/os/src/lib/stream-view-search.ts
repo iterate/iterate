@@ -232,7 +232,7 @@ export function useStreamViewPanels(): {
   closeInspector: () => void;
   inspectLlmRequest: (llmRequestOffset: number) => void;
   inspectScriptExecution: (executionId: string) => void;
-  focusProcessor: (subscriptionKey: string) => void;
+  focusProcessor: (name: string) => void;
   openProcessorsOverview: () => void;
   closeProcessorsPanel: () => void;
   openAgentDetails: () => void;
@@ -288,12 +288,12 @@ export function useStreamViewPanels(): {
     [setSearch],
   );
   const focusProcessor = useCallback(
-    (subscriptionKey: string) =>
+    (name: string) =>
       setSearch({
         ...RELEASE_PANEL_EDGE,
         events: undefined,
         panel: true,
-        processor: subscriptionKey,
+        processor: name,
       }),
     [setSearch],
   );

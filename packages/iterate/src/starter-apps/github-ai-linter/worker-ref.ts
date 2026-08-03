@@ -15,7 +15,11 @@ export type GithubAiLinterConfig = {
 const configuredWorkerEntrypoint =
   "node_modules/iterate/dist/starter-apps/github-ai-linter/configured-worker.mjs";
 
-export const REVIEW_BOT_SUBSCRIPTION_KEY = "app-review-bot#review-bot";
+// Subscription names are opaque, source-local identities under the
+// subscription-model redesign — the old `app-…#slug` placement-encoding
+// convention is dead. Plain contract-slug names read as
+// `subscriptions.get("review-bot")`.
+export const REVIEW_BOT_SUBSCRIPTION_NAME = "review-bot";
 
 const REVIEW_BOT_RELEVANT_WEBHOOK_CONDITION = [
   '(payload.delivery.name = "pull_request" and',
@@ -47,7 +51,7 @@ export async function reviewBotSubscriptionEvent(
   return {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
-      name: REVIEW_BOT_SUBSCRIPTION_KEY,
+      name: REVIEW_BOT_SUBSCRIPTION_NAME,
       // A restored connection stream can contain thousands of old webhooks.
       // This cutoff gives a newly configured review bot future work only.
       // Config refreshes preserve the original cutoff in index.ts.
@@ -85,7 +89,7 @@ export async function pullRequestLinterSubscriptionEvent(
   return {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
-      name: "app-github-ai-linter#github-ai-linter",
+      name: "github-ai-linter",
       // The linter Durable Object reduces this explicit protocol, not the
       // surrounding agent's tool calls, LLM bookkeeping, or conversation.
       // Source-side filtering makes a restart proportional to analyses rather

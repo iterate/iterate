@@ -113,7 +113,7 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
         streamId: crypto.randomUUID(),
         streamMaxOffset: 2,
       },
-      subscriptionKey: "app-guestbook#guestbook",
+      name: "guestbook",
     }),
   ).rejects.toThrow("wakeStreamProcessor coordinate mismatch");
   const externalName = `External ${marker}`;
