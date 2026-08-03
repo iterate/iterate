@@ -65,12 +65,15 @@ export type ComputerRuntimeValue =
   | ComputerRuntimeValue[]
   | { [key: string]: ComputerRuntimeValue };
 
+/** Output encoding supported by Cloudflare Computer's RPC-safe runtime stub. */
+export type ComputerRuntimeEncoding = "utf8" | undefined;
+
 /** Options for starting a detached Cloudflare Computer runtime execution. */
-export type ComputerRuntimeExecOptions = {
+export type ComputerRuntimeExecOptions<E extends ComputerRuntimeEncoding = undefined> = {
   id?: string;
   backend?: string;
   cwd?: string;
-  encoding?: "utf8";
+  encoding?: E;
   input?: ComputerRuntimeValue;
   env?: Record<string, string>;
   stdin?: Uint8Array | string;
@@ -78,25 +81,24 @@ export type ComputerRuntimeExecOptions = {
 };
 
 /** Options for reconnecting to a detached Cloudflare Computer execution. */
-export type ComputerRuntimeGetOptions = {
+export type ComputerRuntimeGetOptions<E extends ComputerRuntimeEncoding = undefined> = {
   backend?: string;
-  encoding?: "utf8";
+  encoding?: E;
   resume?: "tail" | "full" | number;
 };
 
 /** Options for signalling a detached Cloudflare Computer execution. */
 export type ComputerRuntimeKillOptions = {
   backend?: string;
-  /** One of SIGTERM, SIGKILL, SIGINT, or SIGHUP. */
-  signal?: string;
+  signal?: "SIGTERM" | "SIGKILL" | "SIGINT" | "SIGHUP";
 };
 
 /** The completed process and filesystem-sync result from a Computer runtime. */
-export type ComputerRuntimeResult = {
+export type ComputerRuntimeResult<E extends ComputerRuntimeEncoding = undefined> = {
   status: "completed" | "failed" | "cancelled";
   exitCode: number;
-  stdout: string | Uint8Array;
-  stderr: string | Uint8Array;
+  stdout: E extends "utf8" ? string : Uint8Array;
+  stderr: E extends "utf8" ? string : Uint8Array;
   value?: ComputerRuntimeValue;
   pushed: number;
   pulled: number;
@@ -196,4 +198,9 @@ export type ComputerArtifactTokenList = {
 export type ComputerArtifactsCliInput = {
   argv: string[];
   env?: Record<string, string>;
+  remoteAdd?: (options: {
+    name: string;
+    url: string;
+    force?: boolean;
+  }) => Promise<{ ok: boolean; exists?: boolean; message?: string }>;
 };

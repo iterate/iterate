@@ -79,6 +79,7 @@ export class ComputerDurableObject extends DurableObject<Env> {
         workspace: {
           // WorkspaceServiceProxy indexes its environment by the Wrangler
           // namespace binding, not by the exported Durable Object class name.
+          // https://github.com/cloudflare/computer/blob/63d363632e558f7e077794988d36ed75017c2a62/packages/computer/src/proxy.ts#L148-L176
           binding: "COMPUTER",
           id: this.ctx.id.toString(),
         },
@@ -86,7 +87,7 @@ export class ComputerDurableObject extends DurableObject<Env> {
     ],
   });
 
-  #executionChain: Promise<void> = Promise.resolve();
+  #executionChain = Promise.resolve();
 
   deploymentVersion(): string {
     return workerVersion(this.env);
@@ -108,6 +109,8 @@ export class ComputerDurableObject extends DurableObject<Env> {
   /** Called by Cloudflare Computer's same-worker WorkspaceServiceProxy. */
   async __getWorkspaceStub(): Promise<WorkspaceStub> {
     await this.#assertCreated();
+    // Parameterless ready() indexes mounts without allocating an execution backend.
+    // https://github.com/cloudflare/computer/blob/63d363632e558f7e077794988d36ed75017c2a62/packages/computer/src/workspace.ts#L485-L525
     await this.#workspace.ready();
     return this.#workspace.stub();
   }
@@ -159,7 +162,7 @@ export class ComputerDurableObject extends DurableObject<Env> {
     await this.#workspace.fs.mkdir(config.workingDirectory, { recursive: true });
 
     const active = this.#reads.currentState.activeExecution;
-    if (active !== null) {
+    if (active) {
       const reason =
         active.incarnationId === this.#incarnationId
           ? "The previous execution returned without recording a terminal outcome"
@@ -312,7 +315,7 @@ export class ComputerDurableObject extends DurableObject<Env> {
 
   async #assertCreated(): Promise<void> {
     await this.#reads.catchUp();
-    if (this.#reads.currentState.birthCertificate !== null) return;
+    if (this.#reads.currentState.birthCertificate) return;
     throw new Error(`computer "${this.#name.path}" does not exist; it is born with its agent`);
   }
 

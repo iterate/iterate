@@ -3,10 +3,15 @@
 Status: executable spike, not a production migration (2026-08-03).
 
 Source reviewed: `cloudflare/computer` at
-`~/src/github.com/cloudflare/computer` (`63d363632e558f7e077794988d36ed75017c2a62`).
+`~/src/github.com/cloudflare/computer` ([`63d363632e558f7e077794988d36ed75017c2a62`](https://github.com/cloudflare/computer/tree/63d363632e558f7e077794988d36ed75017c2a62)).
 The OS package is exact-pinned to `@cloudflare/computer@0.1.1`, the release at
 that source revision. It is explicitly exempted from the repository's package-age
 gate because evaluating that same-day release is the purpose of this spike.
+
+The non-obvious integration contracts come directly from that pinned source:
+[parameterless `ready()` indexes mounts without connecting a backend](https://github.com/cloudflare/computer/blob/63d363632e558f7e077794988d36ed75017c2a62/packages/computer/src/workspace.ts#L485-L525),
+[`WorkspaceRuntimeStub` selects a backend only for execution](https://github.com/cloudflare/computer/blob/63d363632e558f7e077794988d36ed75017c2a62/packages/computer/src/stub.ts#L387-L426),
+and [`WorkspaceServiceProxy` resolves its configured Durable Object binding by name](https://github.com/cloudflare/computer/blob/63d363632e558f7e077794988d36ed75017c2a62/packages/computer/src/proxy.ts#L148-L176).
 
 ## Decision explored
 

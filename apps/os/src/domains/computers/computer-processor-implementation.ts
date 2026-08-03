@@ -14,7 +14,7 @@ export class ComputerProcessor extends StreamProcessor<ComputerProcessorContract
   }: ReduceArgs<ComputerProcessorContract>): ComputerProcessorState {
     switch (event.type) {
       case "events.iterate.com/computer/created":
-        if (state.birthCertificate !== null) return state;
+        if (state.birthCertificate) return state;
         return { ...state, birthCertificate: event.payload, config: event.payload.config };
       case "events.iterate.com/computer/configured":
         return { ...state, config: event.payload.config };

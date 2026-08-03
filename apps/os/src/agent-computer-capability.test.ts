@@ -1,4 +1,9 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, expectTypeOf, it, vi } from "vitest";
+import type {
+  ComputerArtifacts,
+  ComputerFilesystem,
+  ComputerRuntime,
+} from "./itx-api.generated.ts";
 
 const computerMocks = vi.hoisted(() => ({
   getComputer: vi.fn(),
@@ -27,6 +32,37 @@ function projectAt(scopePath: string): InstanceType<typeof ProjectRpcTarget> {
 }
 
 describe("agent Computer capability boundary", () => {
+  it("preserves upstream callback, signal, file, and runtime result precision", () => {
+    const assertContract = async (
+      artifacts: ComputerArtifacts,
+      filesystem: ComputerFilesystem,
+      runtime: ComputerRuntime,
+    ) => {
+      const bytes = await filesystem.readFile("/workspace/data.bin");
+      const text = await filesystem.readFile("/workspace/data.txt", "utf8");
+      expectTypeOf(bytes).toEqualTypeOf<ReadableStream<Uint8Array>>();
+      expectTypeOf(text).toEqualTypeOf<string>();
+
+      const byteExecution = await runtime.exec("printf data");
+      const textExecution = await runtime.exec("printf data", { encoding: "utf8" });
+      expectTypeOf((await byteExecution.result()).stdout).toEqualTypeOf<Uint8Array>();
+      expectTypeOf((await textExecution.result()).stdout).toEqualTypeOf<string>();
+      await textExecution.kill("SIGTERM");
+      // @ts-expect-error Cloudflare Computer accepts only its four KillSignal values.
+      await textExecution.kill("SIGUSR1");
+
+      await artifacts.cli({
+        argv: ["create", "repo"],
+        remoteAdd: async ({ force, name, url }) => ({
+          message: `${name}:${url}:${String(force)}`,
+          ok: true,
+        }),
+      });
+    };
+
+    expect(assertContract).toBeTypeOf("function");
+  });
+
   it("reads useThink as a scalar inside the Computer Durable Object", async () => {
     computerMocks.workspaceUseThink.mockResolvedValue(false);
     computerMocks.getComputer.mockReturnValue({

@@ -234,6 +234,39 @@ function collectClasses(rpcTargetsFile: { statements: Iterable<Node> }): ClassRe
   return { allClasses, classByPublicName, relayContracts, renameMap };
 }
 
+/**
+ * Class generics used only to carry the published-name literal through an
+ * `extends` clause are implementation branding, not public API generics. Keep
+ * only parameters referenced by an explicit member signature in the emitted
+ * interface (for example the runtime handle's result encoding).
+ */
+function publishedClassTypeParameters(cls: ClassDeclaration) {
+  const signatureText = [...cls.members]
+    .flatMap((member) => {
+      if (isConstructorDeclaration(member)) return [];
+      const parts: string[] = [];
+      if (isMethodDeclaration(member)) {
+        if (member.type) parts.push(member.type.getText());
+        for (const parameter of member.parameters) {
+          if (parameter.type) parts.push(parameter.type.getText());
+        }
+        if (member.typeParameters) {
+          parts.push(...[...member.typeParameters].map((parameter) => parameter.getText()));
+        }
+      } else if (
+        (isGetAccessorDeclaration(member) || isPropertyDeclaration(member)) &&
+        member.type
+      ) {
+        parts.push(member.type.getText());
+      }
+      return parts;
+    })
+    .join("\n");
+  return [...(cls.typeParameters ?? [])].filter((parameter) =>
+    new RegExp(`\\b${parameter.name.text}\\b`).test(signatureText),
+  );
+}
+
 export function generateItxApi(): string {
   using session = openProject();
   const { project } = session;
@@ -373,10 +406,9 @@ export function generateItxApi(): string {
     // Inline type imports are already self-resolving package references in a
     // standalone declaration (`import("octokit").Octokit`). Do not mistake
     // the qualified export name for a leaked local declaration.
-    const codeOnly = stripComments(out).replaceAll(
-      /import\(["'][^"']+["']\)\.[A-Z][A-Za-z0-9_]*/g,
-      "",
-    );
+    const codeOnly = stripComments(out)
+      .replaceAll(/import\(["'][^"']+["']\)\.[A-Z][A-Za-z0-9_]*/g, "")
+      .replaceAll(/"[^"\\]*(?:\\.[^"\\]*)*"|'[^'\\]*(?:\\.[^'\\]*)*'/g, "");
     for (const match of codeOnly.matchAll(/\b[A-Z][A-Za-z0-9_]*\b/g)) {
       const name = match[0];
       if (exclude?.has(name)) continue;
@@ -445,8 +477,13 @@ export function generateItxApi(): string {
     // roots themselves are not in renameMap, so a direct extends is no clause.)
     const baseClassName = extendsClauseOf(cls)?.expression.getText();
     const basePublicName = baseClassName ? renameMap.get(baseClassName) : undefined;
+    const classTypeParameters = publishedClassTypeParameters(cls);
+    const classTypeParamsText =
+      classTypeParameters.length > 0
+        ? `<${classTypeParameters.map((typeParameter) => typeParameter.getText()).join(", ")}>`
+        : "";
     lines.push(
-      `export interface ${publicName}${basePublicName ? ` extends ${basePublicName}` : ""} {`,
+      `export interface ${publicName}${classTypeParamsText}${basePublicName ? ` extends ${basePublicName}` : ""} {`,
     );
 
     for (const member of cls.members) {
@@ -510,7 +547,13 @@ export function generateItxApi(): string {
     }
 
     lines.push("}");
-    interfaceChunks.push(rewriteAndCollect(lines.join("\n"), `interface ${publicName}`));
+    interfaceChunks.push(
+      rewriteAndCollect(
+        lines.join("\n"),
+        `interface ${publicName}`,
+        new Set(classTypeParameters.map((typeParameter) => typeParameter.name.text)),
+      ),
+    );
   };
 
   const emitNamedDecl = (name: string, decl: TypeAliasDeclaration | InterfaceDeclaration) => {
@@ -746,16 +789,20 @@ export function verifyRpcTargetsSatisfyContract(generatedSource: string): void {
     if (!rpcTargetsFile) throw new Error("could not load src/rpc-targets.ts into the program");
     const { classByPublicName } = collectClasses(rpcTargetsFile);
     for (const [publicName, cls] of classByPublicName) {
+      const typeArguments = publishedClassTypeParameters(cls).map(
+        (typeParameter) => typeParameter.name.text,
+      );
+      const contractType = `__itxApi.${publicName}${typeArguments.length > 0 ? `<${typeArguments.join(", ")}>` : ""}`;
       const implementsClause = [...(cls.heritageClauses ?? [])].find(
         (h) => h.token === SyntaxKind.ImplementsKeyword,
       );
       if (implementsClause) {
-        edits.push({ insert: `, __itxApi.${publicName}`, position: implementsClause.end });
+        edits.push({ insert: `, ${contractType}`, position: implementsClause.end });
         continue;
       }
       const extendsClause = extendsClauseOf(cls);
       if (!extendsClause) throw new Error(`class ${cls.name?.text} has no extends clause`);
-      edits.push({ insert: ` implements __itxApi.${publicName}`, position: extendsClause.end });
+      edits.push({ insert: ` implements ${contractType}`, position: extendsClause.end });
     }
   }
 

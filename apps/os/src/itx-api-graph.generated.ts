@@ -832,7 +832,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ComputerFilesystem",
     kind: "interface",
     sourceText:
-      '/** Cloudflare Computer\'s complete RPC-safe filesystem facade. */\nexport interface ComputerFilesystem {\n  __describe(): Promise<Description>;\n  readFile(\n    path: string,\n    options?: "utf8" | ComputerReadFileOptions,\n  ): Promise<string | ReadableStream<Uint8Array>>;\n  exists(path: string): Promise<boolean>;\n  stat(path: string): Promise<ComputerStatResult>;\n  statOrNull(path: string): Promise<ComputerStatResult | null>;\n  lstat(path: string): Promise<ComputerStatResult>;\n  lstatOrNull(path: string): Promise<ComputerStatResult | null>;\n  readlink(path: string): Promise<string>;\n  readdir(path: string, options?: ComputerReaddirOptions): Promise<ComputerDirentResult[]>;\n  find(directory: string, pattern?: string): Promise<ComputerFoundEntry[]>;\n  ls(prefix: string): Promise<string[]>;\n  grep(pattern: string, path: string, options?: ComputerGrepOptions): Promise<ComputerGrepMatch[]>;\n  writeFile(\n    path: string,\n    content: string | Uint8Array | ReadableStream<Uint8Array>,\n    options?: ComputerWriteFileOptions,\n  ): Promise<void>;\n  mkdir(path: string, options?: ComputerMkdirOptions): Promise<void>;\n  rm(path: string, options?: ComputerRmOptions): Promise<void>;\n  chmod(path: string, mode: number): Promise<void>;\n  symlink(target: string, path: string): Promise<void>;\n  [Symbol.dispose](): void;\n}',
+      '/** Cloudflare Computer\'s complete RPC-safe filesystem facade. */\nexport interface ComputerFilesystem {\n  __describe(): Promise<Description>;\n  readFile(path: string): Promise<ReadableStream<Uint8Array>>;\n  readFile(path: string, options: "utf8"): Promise<string>;\n  readFile(\n    path: string,\n    options: ComputerReadFileOptions,\n  ): Promise<string | ReadableStream<Uint8Array>>;\n  exists(path: string): Promise<boolean>;\n  stat(path: string): Promise<ComputerStatResult>;\n  statOrNull(path: string): Promise<ComputerStatResult | null>;\n  lstat(path: string): Promise<ComputerStatResult>;\n  lstatOrNull(path: string): Promise<ComputerStatResult | null>;\n  readlink(path: string): Promise<string>;\n  readdir(path: string, options?: ComputerReaddirOptions): Promise<ComputerDirentResult[]>;\n  find(directory: string, pattern?: string): Promise<ComputerFoundEntry[]>;\n  ls(prefix: string): Promise<string[]>;\n  grep(pattern: string, path: string, options?: ComputerGrepOptions): Promise<ComputerGrepMatch[]>;\n  writeFile(\n    path: string,\n    content: string | Uint8Array | ReadableStream<Uint8Array>,\n    options?: ComputerWriteFileOptions,\n  ): Promise<void>;\n  mkdir(path: string, options?: ComputerMkdirOptions): Promise<void>;\n  rm(path: string, options?: ComputerRmOptions): Promise<void>;\n  chmod(path: string, mode: number): Promise<void>;\n  symlink(target: string, path: string): Promise<void>;\n  [Symbol.dispose](): void;\n}',
     summary: "Cloudflare Computer's complete RPC-safe filesystem facade.",
     memberSummaries: {},
     referencedTypeNames: [
@@ -853,13 +853,13 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ComputerRuntime",
     kind: "interface",
     sourceText:
-      "/** Cloudflare Computer's complete detached runtime facade. */\nexport interface ComputerRuntime {\n  __describe(): Promise<Description>;\n  exec(source: string, options?: ComputerRuntimeExecOptions): Promise<ComputerRuntimeExecHandle>;\n  getExec(id: string, options?: ComputerRuntimeGetOptions): Promise<ComputerRuntimeExecHandle>;\n  killExec(id: string, options?: ComputerRuntimeKillOptions): Promise<void>;\n  disposeExec(id: string, options?: { backend?: string }): Promise<void>;\n}",
+      '/** Cloudflare Computer\'s complete detached runtime facade. */\nexport interface ComputerRuntime {\n  __describe(): Promise<Description>;\n  exec(source: string): Promise<ComputerRuntimeExecHandle<undefined>>;\n  exec(\n    source: string,\n    options: ComputerRuntimeExecOptions<"utf8">,\n  ): Promise<ComputerRuntimeExecHandle<"utf8">>;\n  exec(\n    source: string,\n    options: ComputerRuntimeExecOptions<undefined>,\n  ): Promise<ComputerRuntimeExecHandle<undefined>>;\n  getExec(id: string): Promise<ComputerRuntimeExecHandle<undefined>>;\n  getExec(\n    id: string,\n    options: ComputerRuntimeGetOptions<"utf8">,\n  ): Promise<ComputerRuntimeExecHandle<"utf8">>;\n  getExec(\n    id: string,\n    options: ComputerRuntimeGetOptions<undefined>,\n  ): Promise<ComputerRuntimeExecHandle<undefined>>;\n  killExec(id: string, options?: ComputerRuntimeKillOptions): Promise<void>;\n  disposeExec(id: string, options?: { backend?: string }): Promise<void>;\n}',
     summary: "Cloudflare Computer's complete detached runtime facade.",
     memberSummaries: {},
     referencedTypeNames: [
       "Description",
-      "ComputerRuntimeExecOptions",
       "ComputerRuntimeExecHandle",
+      "ComputerRuntimeExecOptions",
       "ComputerRuntimeGetOptions",
       "ComputerRuntimeKillOptions",
     ],
@@ -1090,10 +1090,10 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ComputerRuntimeExecHandle",
     kind: "interface",
     sourceText:
-      "/** A single-consumer Cloudflare Computer runtime execution handle. */\nexport interface ComputerRuntimeExecHandle {\n  __describe(): Promise<Description>;\n  id: Promise<string>;\n  backend: Promise<string>;\n  result(): Promise<ComputerRuntimeResult>;\n  stream(): Promise<ReadableStream<Uint8Array>>;\n  kill(signal?: string): Promise<void>;\n  [Symbol.dispose](): void;\n}",
+      '/** A single-consumer Cloudflare Computer runtime execution handle. */\nexport interface ComputerRuntimeExecHandle<E extends ComputerRuntimeEncoding = undefined> {\n  __describe(): Promise<Description>;\n  id: Promise<string>;\n  backend: Promise<string>;\n  result(): Promise<ComputerRuntimeResult<E>>;\n  stream(): Promise<ReadableStream<Uint8Array>>;\n  kill(signal?: "SIGTERM" | "SIGKILL" | "SIGINT" | "SIGHUP"): Promise<void>;\n  [Symbol.dispose](): void;\n}',
     summary: "A single-consumer Cloudflare Computer runtime execution handle.",
     memberSummaries: {},
-    referencedTypeNames: ["Description", "ComputerRuntimeResult"],
+    referencedTypeNames: ["ComputerRuntimeEncoding", "Description", "ComputerRuntimeResult"],
   },
   {
     name: "CfImagesCapability",
@@ -2329,25 +2329,25 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ComputerRuntimeExecOptions",
     kind: "typeAlias",
     sourceText:
-      '/** Options for starting a detached Cloudflare Computer runtime execution. */\nexport type ComputerRuntimeExecOptions = {\n  id?: string;\n  backend?: string;\n  cwd?: string;\n  encoding?: "utf8";\n  input?: ComputerRuntimeValue;\n  env?: Record<string, string>;\n  stdin?: Uint8Array | string;\n  timeoutMs?: number;\n};',
+      "/** Options for starting a detached Cloudflare Computer runtime execution. */\nexport type ComputerRuntimeExecOptions<E extends ComputerRuntimeEncoding = undefined> = {\n  id?: string;\n  backend?: string;\n  cwd?: string;\n  encoding?: E;\n  input?: ComputerRuntimeValue;\n  env?: Record<string, string>;\n  stdin?: Uint8Array | string;\n  timeoutMs?: number;\n};",
     summary: "Options for starting a detached Cloudflare Computer runtime execution.",
     memberSummaries: {},
-    referencedTypeNames: ["ComputerRuntimeValue"],
+    referencedTypeNames: ["ComputerRuntimeEncoding", "ComputerRuntimeValue"],
   },
   {
     name: "ComputerRuntimeGetOptions",
     kind: "typeAlias",
     sourceText:
-      '/** Options for reconnecting to a detached Cloudflare Computer execution. */\nexport type ComputerRuntimeGetOptions = {\n  backend?: string;\n  encoding?: "utf8";\n  resume?: "tail" | "full" | number;\n};',
+      '/** Options for reconnecting to a detached Cloudflare Computer execution. */\nexport type ComputerRuntimeGetOptions<E extends ComputerRuntimeEncoding = undefined> = {\n  backend?: string;\n  encoding?: E;\n  resume?: "tail" | "full" | number;\n};',
     summary: "Options for reconnecting to a detached Cloudflare Computer execution.",
     memberSummaries: {},
-    referencedTypeNames: [],
+    referencedTypeNames: ["ComputerRuntimeEncoding"],
   },
   {
     name: "ComputerRuntimeKillOptions",
     kind: "typeAlias",
     sourceText:
-      "/** Options for signalling a detached Cloudflare Computer execution. */\nexport type ComputerRuntimeKillOptions = {\n  backend?: string;\n  /** One of SIGTERM, SIGKILL, SIGINT, or SIGHUP. */\n  signal?: string;\n};",
+      '/** Options for signalling a detached Cloudflare Computer execution. */\nexport type ComputerRuntimeKillOptions = {\n  backend?: string;\n  signal?: "SIGTERM" | "SIGKILL" | "SIGINT" | "SIGHUP";\n};',
     summary: "Options for signalling a detached Cloudflare Computer execution.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -2428,7 +2428,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ComputerArtifactsCliInput",
     kind: "typeAlias",
     sourceText:
-      "/** Input for invoking the Artifacts command-line interface. */\nexport type ComputerArtifactsCliInput = {\n  argv: string[];\n  env?: Record<string, string>;\n};",
+      "/** Input for invoking the Artifacts command-line interface. */\nexport type ComputerArtifactsCliInput = {\n  argv: string[];\n  env?: Record<string, string>;\n  remoteAdd?: (options: {\n    name: string;\n    url: string;\n    force?: boolean;\n  }) => Promise<{ ok: boolean; exists?: boolean; message?: string }>;\n};",
     summary: "Input for invoking the Artifacts command-line interface.",
     memberSummaries: {},
     referencedTypeNames: [],
@@ -2781,11 +2781,11 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["StreamEventInput"],
   },
   {
-    name: "ComputerRuntimeValue",
+    name: "ComputerRuntimeEncoding",
     kind: "typeAlias",
     sourceText:
-      "/** JSON-compatible value accepted and returned by Cloudflare Computer runtimes. */\nexport type ComputerRuntimeValue =\n  | null\n  | boolean\n  | number\n  | string\n  | ComputerRuntimeValue[]\n  | { [key: string]: ComputerRuntimeValue };",
-    summary: "JSON-compatible value accepted and returned by Cloudflare Computer runtimes.",
+      '/** Output encoding supported by Cloudflare Computer\'s RPC-safe runtime stub. */\nexport type ComputerRuntimeEncoding = "utf8" | undefined;',
+    summary: "Output encoding supported by Cloudflare Computer's RPC-safe runtime stub.",
     memberSummaries: {},
     referencedTypeNames: [],
   },
@@ -2793,10 +2793,19 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "ComputerRuntimeResult",
     kind: "typeAlias",
     sourceText:
-      '/** The completed process and filesystem-sync result from a Computer runtime. */\nexport type ComputerRuntimeResult = {\n  status: "completed" | "failed" | "cancelled";\n  exitCode: number;\n  stdout: string | Uint8Array;\n  stderr: string | Uint8Array;\n  value?: ComputerRuntimeValue;\n  pushed: number;\n  pulled: number;\n  skipped: {\n    path: string;\n    mountRoot: string;\n    op: "write" | "delete";\n    reason: "read-only";\n  }[];\n  sync:\n    | {\n        status: "complete";\n        applied: number;\n        skipped: {\n          path: string;\n          mountRoot: string;\n          op: "write" | "delete";\n          reason: "read-only";\n        }[];\n      }\n    | {\n        status: "pending";\n        applied: number;\n        skipped: {\n          path: string;\n          mountRoot: string;\n          op: "write" | "delete";\n          reason: "read-only";\n        }[];\n        error: string;\n      };\n};',
+      '/** The completed process and filesystem-sync result from a Computer runtime. */\nexport type ComputerRuntimeResult<E extends ComputerRuntimeEncoding = undefined> = {\n  status: "completed" | "failed" | "cancelled";\n  exitCode: number;\n  stdout: E extends "utf8" ? string : Uint8Array;\n  stderr: E extends "utf8" ? string : Uint8Array;\n  value?: ComputerRuntimeValue;\n  pushed: number;\n  pulled: number;\n  skipped: {\n    path: string;\n    mountRoot: string;\n    op: "write" | "delete";\n    reason: "read-only";\n  }[];\n  sync:\n    | {\n        status: "complete";\n        applied: number;\n        skipped: {\n          path: string;\n          mountRoot: string;\n          op: "write" | "delete";\n          reason: "read-only";\n        }[];\n      }\n    | {\n        status: "pending";\n        applied: number;\n        skipped: {\n          path: string;\n          mountRoot: string;\n          op: "write" | "delete";\n          reason: "read-only";\n        }[];\n        error: string;\n      };\n};',
     summary: "The completed process and filesystem-sync result from a Computer runtime.",
     memberSummaries: {},
-    referencedTypeNames: ["ComputerRuntimeValue"],
+    referencedTypeNames: ["ComputerRuntimeEncoding", "ComputerRuntimeValue"],
+  },
+  {
+    name: "ComputerRuntimeValue",
+    kind: "typeAlias",
+    sourceText:
+      "/** JSON-compatible value accepted and returned by Cloudflare Computer runtimes. */\nexport type ComputerRuntimeValue =\n  | null\n  | boolean\n  | number\n  | string\n  | ComputerRuntimeValue[]\n  | { [key: string]: ComputerRuntimeValue };",
+    summary: "JSON-compatible value accepted and returned by Cloudflare Computer runtimes.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "CfImageTransformInput",

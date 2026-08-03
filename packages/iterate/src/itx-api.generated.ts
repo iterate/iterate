@@ -1477,9 +1477,11 @@ export interface StreamProcessorRpc<State = unknown> {
 /** Cloudflare Computer's complete RPC-safe filesystem facade. */
 export interface ComputerFilesystem {
   __describe(): Promise<Description>;
+  readFile(path: string): Promise<ReadableStream<Uint8Array>>;
+  readFile(path: string, options: "utf8"): Promise<string>;
   readFile(
     path: string,
-    options?: "utf8" | ComputerReadFileOptions,
+    options: ComputerReadFileOptions,
   ): Promise<string | ReadableStream<Uint8Array>>;
   exists(path: string): Promise<boolean>;
   stat(path: string): Promise<ComputerStatResult>;
@@ -1506,8 +1508,24 @@ export interface ComputerFilesystem {
 /** Cloudflare Computer's complete detached runtime facade. */
 export interface ComputerRuntime {
   __describe(): Promise<Description>;
-  exec(source: string, options?: ComputerRuntimeExecOptions): Promise<ComputerRuntimeExecHandle>;
-  getExec(id: string, options?: ComputerRuntimeGetOptions): Promise<ComputerRuntimeExecHandle>;
+  exec(source: string): Promise<ComputerRuntimeExecHandle<undefined>>;
+  exec(
+    source: string,
+    options: ComputerRuntimeExecOptions<"utf8">,
+  ): Promise<ComputerRuntimeExecHandle<"utf8">>;
+  exec(
+    source: string,
+    options: ComputerRuntimeExecOptions<undefined>,
+  ): Promise<ComputerRuntimeExecHandle<undefined>>;
+  getExec(id: string): Promise<ComputerRuntimeExecHandle<undefined>>;
+  getExec(
+    id: string,
+    options: ComputerRuntimeGetOptions<"utf8">,
+  ): Promise<ComputerRuntimeExecHandle<"utf8">>;
+  getExec(
+    id: string,
+    options: ComputerRuntimeGetOptions<undefined>,
+  ): Promise<ComputerRuntimeExecHandle<undefined>>;
   killExec(id: string, options?: ComputerRuntimeKillOptions): Promise<void>;
   disposeExec(id: string, options?: { backend?: string }): Promise<void>;
 }
@@ -1783,13 +1801,13 @@ export interface StreamEventPager {
 }
 
 /** A single-consumer Cloudflare Computer runtime execution handle. */
-export interface ComputerRuntimeExecHandle {
+export interface ComputerRuntimeExecHandle<E extends ComputerRuntimeEncoding = undefined> {
   __describe(): Promise<Description>;
   id: Promise<string>;
   backend: Promise<string>;
-  result(): Promise<ComputerRuntimeResult>;
+  result(): Promise<ComputerRuntimeResult<E>>;
   stream(): Promise<ReadableStream<Uint8Array>>;
-  kill(signal?: string): Promise<void>;
+  kill(signal?: "SIGTERM" | "SIGKILL" | "SIGINT" | "SIGHUP"): Promise<void>;
   [Symbol.dispose](): void;
 }
 
@@ -4090,11 +4108,11 @@ export type ComputerMkdirOptions = { recursive?: boolean; mode?: number };
 export type ComputerRmOptions = { recursive?: boolean; force?: boolean };
 
 /** Options for starting a detached Cloudflare Computer runtime execution. */
-export type ComputerRuntimeExecOptions = {
+export type ComputerRuntimeExecOptions<E extends ComputerRuntimeEncoding = undefined> = {
   id?: string;
   backend?: string;
   cwd?: string;
-  encoding?: "utf8";
+  encoding?: E;
   input?: ComputerRuntimeValue;
   env?: Record<string, string>;
   stdin?: Uint8Array | string;
@@ -4102,17 +4120,16 @@ export type ComputerRuntimeExecOptions = {
 };
 
 /** Options for reconnecting to a detached Cloudflare Computer execution. */
-export type ComputerRuntimeGetOptions = {
+export type ComputerRuntimeGetOptions<E extends ComputerRuntimeEncoding = undefined> = {
   backend?: string;
-  encoding?: "utf8";
+  encoding?: E;
   resume?: "tail" | "full" | number;
 };
 
 /** Options for signalling a detached Cloudflare Computer execution. */
 export type ComputerRuntimeKillOptions = {
   backend?: string;
-  /** One of SIGTERM, SIGKILL, SIGINT, or SIGHUP. */
-  signal?: string;
+  signal?: "SIGTERM" | "SIGKILL" | "SIGINT" | "SIGHUP";
 };
 
 /** Input for invoking Git's command-line interface inside a Computer. */
@@ -4191,6 +4208,11 @@ export type ComputerArtifactToken = {
 export type ComputerArtifactsCliInput = {
   argv: string[];
   env?: Record<string, string>;
+  remoteAdd?: (options: {
+    name: string;
+    url: string;
+    force?: boolean;
+  }) => Promise<{ ok: boolean; exists?: boolean; message?: string }>;
 };
 
 /** Dynamic invocation envelope used by flattened live capabilities. */
@@ -4727,21 +4749,15 @@ type TypedStreamEventInput<Type extends string = string, Payload = Record<string
   payload: Payload;
 };
 
-/** JSON-compatible value accepted and returned by Cloudflare Computer runtimes. */
-export type ComputerRuntimeValue =
-  | null
-  | boolean
-  | number
-  | string
-  | ComputerRuntimeValue[]
-  | { [key: string]: ComputerRuntimeValue };
+/** Output encoding supported by Cloudflare Computer's RPC-safe runtime stub. */
+export type ComputerRuntimeEncoding = "utf8" | undefined;
 
 /** The completed process and filesystem-sync result from a Computer runtime. */
-export type ComputerRuntimeResult = {
+export type ComputerRuntimeResult<E extends ComputerRuntimeEncoding = undefined> = {
   status: "completed" | "failed" | "cancelled";
   exitCode: number;
-  stdout: string | Uint8Array;
-  stderr: string | Uint8Array;
+  stdout: E extends "utf8" ? string : Uint8Array;
+  stderr: E extends "utf8" ? string : Uint8Array;
   value?: ComputerRuntimeValue;
   pushed: number;
   pulled: number;
@@ -4774,6 +4790,15 @@ export type ComputerRuntimeResult = {
         error: string;
       };
 };
+
+/** JSON-compatible value accepted and returned by Cloudflare Computer runtimes. */
+export type ComputerRuntimeValue =
+  | null
+  | boolean
+  | number
+  | string
+  | ComputerRuntimeValue[]
+  | { [key: string]: ComputerRuntimeValue };
 
 /** Input to the Images capability's `transform`: the source image stream,
  * ordered transform steps, optional overlay draws (watermarks — each with its

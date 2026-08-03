@@ -85,7 +85,9 @@ test("the Computer contract exposes the complete Cloudflare API plus OS lifecycl
   ]) {
     expect(body).toContain(osMember);
   }
-  expect(generated).toContain("export interface ComputerRuntimeExecHandle {");
+  expect(generated).toContain(
+    "export interface ComputerRuntimeExecHandle<E extends ComputerRuntimeEncoding = undefined> {",
+  );
   expect(generated).toContain("export interface ComputerArtifacts {");
   const expectedMembers: Record<string, string[]> = {
     ComputerFilesystem: [
@@ -131,7 +133,7 @@ test("the Computer contract exposes the complete Cloudflare API plus OS lifecycl
   };
   for (const [interfaceName, members] of Object.entries(expectedMembers)) {
     const interfaceBody = generated.match(
-      new RegExp(`export interface ${interfaceName} \\{(?<body>[\\s\\S]*?)\\n\\}`),
+      new RegExp(`export interface ${interfaceName}(?:<[^\\n]+>)? \\{(?<body>[\\s\\S]*?)\\n\\}`),
     )?.groups?.body;
     expect(interfaceBody, interfaceName).toBeDefined();
     for (const member of members)

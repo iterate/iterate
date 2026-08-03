@@ -407,6 +407,7 @@ import type {
   ComputerReaddirOptions,
   ComputerRmOptions,
   ComputerRuntimeExecOptions,
+  ComputerRuntimeEncoding,
   ComputerRuntimeGetOptions,
   ComputerRuntimeKillOptions,
   ComputerRuntimeResult,
@@ -2167,18 +2168,34 @@ class ComputerWorkspaceLease {
   }
 }
 
-type ComputerRuntimeRemoteHandle = {
+type ComputerRuntimeRemoteHandle<E extends ComputerRuntimeEncoding = undefined> = {
   readonly id: PromiseLike<string>;
   readonly backend: PromiseLike<string>;
-  result(): Promise<ComputerRuntimeResult>;
+  result(): Promise<ComputerRuntimeResult<E>>;
   stream(): Promise<ReadableStream<Uint8Array>>;
   kill(signal?: "SIGTERM" | "SIGKILL" | "SIGINT" | "SIGHUP"): Promise<void>;
   [Symbol.dispose](): void;
 };
 
 type ComputerRuntimeRemote = {
-  exec(source: string, options?: ComputerRuntimeExecOptions): Promise<ComputerRuntimeRemoteHandle>;
-  getExec(id: string, options?: ComputerRuntimeGetOptions): Promise<ComputerRuntimeRemoteHandle>;
+  exec(source: string): Promise<ComputerRuntimeRemoteHandle<undefined>>;
+  exec(
+    source: string,
+    options: ComputerRuntimeExecOptions<"utf8">,
+  ): Promise<ComputerRuntimeRemoteHandle<"utf8">>;
+  exec(
+    source: string,
+    options: ComputerRuntimeExecOptions<undefined>,
+  ): Promise<ComputerRuntimeRemoteHandle<undefined>>;
+  getExec(id: string): Promise<ComputerRuntimeRemoteHandle<undefined>>;
+  getExec(
+    id: string,
+    options: ComputerRuntimeGetOptions<"utf8">,
+  ): Promise<ComputerRuntimeRemoteHandle<"utf8">>;
+  getExec(
+    id: string,
+    options: ComputerRuntimeGetOptions<undefined>,
+  ): Promise<ComputerRuntimeRemoteHandle<undefined>>;
   killExec(id: string, options?: ComputerRuntimeKillOptions): Promise<void>;
   disposeExec(id: string, options?: { backend?: string }): Promise<void>;
 };
@@ -2201,6 +2218,12 @@ class ComputerFilesystemRpcTarget extends IterateRpcTarget<"ComputerFilesystem">
     });
   }
 
+  readFile(path: string): Promise<ReadableStream<Uint8Array>>;
+  readFile(path: string, options: "utf8"): Promise<string>;
+  readFile(
+    path: string,
+    options: ComputerReadFileOptions,
+  ): Promise<string | ReadableStream<Uint8Array>>;
   async readFile(
     path: string,
     options?: "utf8" | ComputerReadFileOptions,
@@ -2285,9 +2308,11 @@ class ComputerFilesystemRpcTarget extends IterateRpcTarget<"ComputerFilesystem">
 }
 
 /** A single-consumer Cloudflare Computer runtime execution handle. */
-class ComputerRuntimeExecHandleRpcTarget extends IterateRpcTarget<"ComputerRuntimeExecHandle"> {
+class ComputerRuntimeExecHandleRpcTarget<
+  E extends ComputerRuntimeEncoding = undefined,
+> extends IterateRpcTarget<"ComputerRuntimeExecHandle"> {
   constructor(
-    readonly handle: ComputerRuntimeRemoteHandle,
+    readonly handle: ComputerRuntimeRemoteHandle<E>,
     readonly workspace: Rpc.Stub<WorkspaceStub>,
   ) {
     super();
@@ -2310,7 +2335,7 @@ class ComputerRuntimeExecHandleRpcTarget extends IterateRpcTarget<"ComputerRunti
     return Promise.resolve(this.handle.backend);
   }
 
-  result(): Promise<ComputerRuntimeResult> {
+  result(): Promise<ComputerRuntimeResult<E>> {
     return this.handle.result();
   }
 
@@ -2318,7 +2343,7 @@ class ComputerRuntimeExecHandleRpcTarget extends IterateRpcTarget<"ComputerRunti
     return this.handle.stream();
   }
 
-  kill(signal?: string): Promise<void> {
+  kill(signal?: "SIGTERM" | "SIGKILL" | "SIGINT" | "SIGHUP"): Promise<void> {
     if (
       signal !== undefined &&
       signal !== "SIGTERM" &&
@@ -2352,27 +2377,55 @@ class ComputerRuntimeRpcTarget extends IterateRpcTarget<"ComputerRuntime"> {
     });
   }
 
+  exec(source: string): Promise<ComputerRuntimeExecHandleRpcTarget<undefined>>;
+  exec(
+    source: string,
+    options: ComputerRuntimeExecOptions<"utf8">,
+  ): Promise<ComputerRuntimeExecHandleRpcTarget<"utf8">>;
+  exec(
+    source: string,
+    options: ComputerRuntimeExecOptions<undefined>,
+  ): Promise<ComputerRuntimeExecHandleRpcTarget<undefined>>;
   async exec(
     source: string,
-    options?: ComputerRuntimeExecOptions,
-  ): Promise<ComputerRuntimeExecHandleRpcTarget> {
+    options: ComputerRuntimeExecOptions<ComputerRuntimeEncoding> = {},
+  ): Promise<ComputerRuntimeExecHandleRpcTarget<ComputerRuntimeEncoding>> {
     const workspace = await this.computer.durableObjectStub.__getWorkspaceStub();
     // Workers RPC transforms the upstream RpcTarget into a deeply recursive
     // Stub type. This shallow view is exactly WorkspaceRuntimeStub's public
     // wire contract and keeps TypeScript from infinitely expanding the proxy.
     const runtime = (await workspace.runtime) as unknown as ComputerRuntimeRemote;
-    const handle = await runtime.exec(source, options);
+    const handle = await (
+      runtime.exec as unknown as (
+        source: string,
+        options: ComputerRuntimeExecOptions<ComputerRuntimeEncoding>,
+      ) => Promise<ComputerRuntimeRemoteHandle<ComputerRuntimeEncoding>>
+    )(source, options);
     return new ComputerRuntimeExecHandleRpcTarget(handle, workspace);
   }
 
+  getExec(id: string): Promise<ComputerRuntimeExecHandleRpcTarget<undefined>>;
+  getExec(
+    id: string,
+    options: ComputerRuntimeGetOptions<"utf8">,
+  ): Promise<ComputerRuntimeExecHandleRpcTarget<"utf8">>;
+  getExec(
+    id: string,
+    options: ComputerRuntimeGetOptions<undefined>,
+  ): Promise<ComputerRuntimeExecHandleRpcTarget<undefined>>;
   async getExec(
     id: string,
-    options?: ComputerRuntimeGetOptions,
-  ): Promise<ComputerRuntimeExecHandleRpcTarget> {
+    options: ComputerRuntimeGetOptions<ComputerRuntimeEncoding> = {},
+  ): Promise<ComputerRuntimeExecHandleRpcTarget<ComputerRuntimeEncoding>> {
     const workspace = await this.computer.durableObjectStub.__getWorkspaceStub();
     // See exec(): this is the same exact upstream RPC-safe runtime contract.
     const runtime = (await workspace.runtime) as unknown as ComputerRuntimeRemote;
-    const handle = await runtime.getExec(id, options);
+    const handle = await (
+      runtime.getExec as unknown as (
+        id: string,
+        options: ComputerRuntimeGetOptions<ComputerRuntimeEncoding>,
+      ) => Promise<ComputerRuntimeRemoteHandle<ComputerRuntimeEncoding>>
+    )(id, options);
     return new ComputerRuntimeExecHandleRpcTarget(handle, workspace);
   }
 
