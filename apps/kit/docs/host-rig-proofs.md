@@ -123,6 +123,41 @@ The `iterate_kit` provisioning partition is **0x1000 bytes**, not the 0x10000
 a first guess produces. An image built at the larger size would have been
 written straight past the end of the partition.
 
+## Open: the device asks for transport restarts it does not need
+
+Found by the soak on 2026-08-03 and NOT yet fixed. Recorded here with what it
+is and — more usefully — what it is not, because three plausible explanations
+were tested and refuted.
+
+**The observation.** A nine-minute held call on the board: 14 turns, every one
+answered in 2.1-3.9s, `unanswered: 0`. Over the same window
+`livenessRestarts` moved by 133.
+
+**What it is not.**
+
+- Not a clock mismatch. The supervision loop and the voicelab ping use the
+  same `now_ms` (`esp_timer`).
+- Not slow pings. `pings` advances steadily, `pingFailures` is 0, and RTT
+  measures 71-112 ms.
+- Not calls in general. A single journey call moves the counter by zero; only
+  a sustained call does.
+
+**What it is, so far.** The counter counts REQUESTS, and requests coalesce:
+`connGeneration` reached 3 while the counter reached 133, so the transport
+actually regenerated three times, not a hundred and thirty-three. The name
+overstates severity by roughly forty times, which is itself worth fixing —
+`livenessRestartRequests` is what it measures. The counter is frozen at 133
+whenever the device is idle.
+
+**How to reproduce.** `pnpm cli voicelab soak --name waveshare --minutes 9
+--every 40`. The soak compares first and last sample, so the number it prints
+is the movement during the soak and not a lifetime total.
+
+The most promising remaining line is that a ping's completion is delayed
+behind inbound audio in the control inbox during a sustained call — the same
+shape as the server-side bug where a recycle was retried against a peer that
+was simply busy. That is a hypothesis, not a finding.
+
 ## What this still cannot tell you
 
 The analogue path — codec gain staging, amplifier settle, the acoustic path,
