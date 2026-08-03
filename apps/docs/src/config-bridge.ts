@@ -74,7 +74,9 @@ export class DocsAppRpcTarget extends RpcTarget {
     }
     const path = wantsDocument ? requireDocumentPath(loose.path!) : undefined;
     const repo = wantsBoard ? requireRepoPath(loose.repo!) : undefined;
-    const task = loose.task === undefined ? undefined : requireTaskPath(loose.task);
+    // task belongs to the board lens alone — a document link ignores it
+    // rather than failing board-path checks for a view that never reads it.
+    const task = wantsBoard && loose.task !== undefined ? requireTaskPath(loose.task) : undefined;
     const itx = await this.#env.ITX.get();
     try {
       const url = new URL(await itx.appUrl("docs"));
