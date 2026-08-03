@@ -290,6 +290,13 @@ type StreamEventSenderHooks = {
   /** Arm the Durable Object alarm for the earliest pending retry. */
   armAlarm(atMs: number): void;
   /**
+   * Delete the pending Durable Object alarm; called only when the full
+   * recomputation found NOTHING needing a future turn (no due or in-flight
+   * cursor rows, no idle deadline). Lets a quiet stream sleep until a real
+   * touch instead of being booted forever by its last send's watchdog.
+   */
+  clearAlarm(): void;
+  /**
    * Run durable delivery in its alarm-owned invocation. The production Stream
    * DO schedules an immediate alarm when called from an append and runs the
    * closure only when delivery is already running inside that alarm turn.
@@ -371,6 +378,7 @@ export class StreamEventSender {
         onHostedDeliveryFailure: (subscriptionKey, error) =>
           this.#onDeliveryFailure(subscriptionKey, error),
         sendDueSubscriptions: () => this.sendDue(),
+        reconcileAlarm: () => this.reconcileAlarmAfterSettlement(),
       },
     });
   }
@@ -691,6 +699,7 @@ export class StreamEventSender {
         }
       } finally {
         this.#hostedWakesInFlight.delete(subscriptionKey);
+        this.reconcileAlarmAfterSettlement();
       }
     });
   }
@@ -1005,6 +1014,7 @@ export class StreamEventSender {
         }
       } finally {
         this.#sourceOwnedSendsInFlight.delete(subscriptionKey);
+        this.reconcileAlarmAfterSettlement();
       }
     });
   }
@@ -1360,6 +1370,30 @@ export class StreamEventSender {
     }
     if (next !== null) this.#hooks.armAlarm(next);
     this.connections.rearmIdleAlarm();
+    // Nothing durable needs a future turn and no idle deadline is pending:
+    // delete the alarm outright, or the last send's in-flight watchdog
+    // outlives its successful delivery and boots the hibernated stream every
+    // ~21s forever (each boot appends `woken`, whose delivery re-arms the
+    // next watchdog). Settlement paths re-run this method so the LAST
+    // completion is what finds the quiet state. A later armNoLaterThan in
+    // the same turn re-arms after the delete.
+    if (
+      next === null &&
+      !this.connections.hasPendingIdleDeadline &&
+      this.#sourceOwnedSendsInFlight.size === 0 &&
+      this.#hostedWakesInFlight.size === 0
+    ) {
+      this.#hooks.clearAlarm();
+    }
+  }
+
+  /** Recompute (and possibly clear) the alarm after an asynchronous settlement. */
+  reconcileAlarmAfterSettlement(): void {
+    try {
+      this.#armAlarmFromStore();
+    } catch (error) {
+      console.error("post-settlement alarm reconciliation failed", error);
+    }
   }
 
   /**
@@ -1575,6 +1609,8 @@ type StreamConnectionsHooks = Pick<
   ): boolean;
   onHostedDeliveryFailure(connectionKey: string, error: unknown): void;
   sendDueSubscriptions(): void;
+  /** Recompute (and possibly clear) the alarm after a hosted batch settles. */
+  reconcileAlarm(): void;
 };
 
 const PING_ROUND_MIN_INTERVAL_MS = 5_000;
@@ -1700,6 +1736,11 @@ export class StreamConnections {
 
   rearmIdleAlarm(): void {
     if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
+  }
+
+  /** Whether an idle-teardown deadline is pending (the alarm must stay armed for it). */
+  get hasPendingIdleDeadline(): boolean {
+    return this.#idleTeardownAtMs !== null;
   }
 
   openSession(args: {
@@ -2209,6 +2250,9 @@ export class StreamConnections {
                     connectionGeneration: expectedDelivery.connectionGeneration,
                     cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
                   });
+                  // The batch's pre-armed watchdog is now moot; let the full
+                  // recomputation decide whether anything still needs a turn.
+                  this.#hooks.reconcileAlarm();
                   if (newestCreatedAtMs !== undefined && Number.isFinite(newestCreatedAtMs)) {
                     const completedAtMs = this.#hooks.now();
                     connection.completionLatency.record(

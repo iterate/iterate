@@ -143,6 +143,7 @@ type StreamDeliveryAlarmBoundaryHooks = {
 
 type StreamAlarmStorage = {
   setAlarm(atMs: number): Promise<void>;
+  deleteAlarm(): Promise<void>;
 };
 
 /**
@@ -185,6 +186,23 @@ export class StreamAlarmArmer {
   markFired(): void {
     this.#armedForMs = null;
   }
+
+  /**
+   * Delete the pending native alarm because the caller proved nothing needs
+   * a future turn. Safe by construction: durable obligations are visible to
+   * that recomputation (cursor rows, in-flight sets, the idle deadline), and
+   * new work only arises through an append or wake — both of which reconcile
+   * and re-arm. Without this, the in-flight watchdog armed before every
+   * successful send outlives its delivery, fires on the hibernated stream,
+   * boots it, appends `woken`, whose delivery arms the next watchdog — a
+   * perpetual ~21-second boot loop on quiet streams with subscriptions.
+   * A later armNoLaterThan in the same turn simply re-arms after the delete.
+   */
+  clearWhenQuiet(): void {
+    this.#armedForMs = null;
+    // Same posture as setAlarm: not awaited or caught; the output gate owns it.
+    void this.#storage.deleteAlarm();
+  }
 }
 
 export class StreamDeliveryAlarmBoundary {
@@ -195,6 +213,20 @@ export class StreamDeliveryAlarmBoundary {
     this.#hooks = hooks;
   }
 
+  /**
+   * True between an append turn arming its immediate work alarm and the
+   * alarm turn that runs the re-derived work. In that gap NOTHING else
+   * betrays that a wake is owed — no cursor row is due yet, no in-flight
+   * flag is set (the closure never started) — so the quiet-alarm deletion
+   * must treat this as pending work or it deletes the very alarm that was
+   * just armed to start delivery, stranding every durable send.
+   */
+  #scheduledWorkPending = false;
+
+  get hasScheduledWork(): boolean {
+    return this.#scheduledWorkPending;
+  }
+
   scheduleOrRun(work: () => Promise<unknown>): void {
     if (this.#inAlarmTurn) {
       this.#hooks.waitUntil(settleStreamCoreBackgroundWork(work));
@@ -203,12 +235,17 @@ export class StreamDeliveryAlarmBoundary {
     // setAlarm is itself an output-gated storage write. Issue it directly in
     // this append turn: wrapping it in a settling waitUntil would cross the
     // implicit-transaction boundary and could acknowledge lag without a wake.
+    this.#scheduledWorkPending = true;
     this.#hooks.armAlarm(this.#hooks.now());
   }
 
   runAlarmTurn(work: () => void): void {
     const wasInAlarmTurn = this.#inAlarmTurn;
     this.#inAlarmTurn = true;
+    // The fired alarm turn re-derives ALL owed work from durable cursors
+    // (the scheduled closure was deliberately discarded), so the owed-wake
+    // marker is satisfied the moment this turn starts.
+    this.#scheduledWorkPending = false;
     try {
       work();
     } finally {
@@ -468,6 +505,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       now: () => Date.now(),
       random: () => Math.random(),
       armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
+      clearAlarm: () => {
+        // An append turn may have armed an immediate alarm for scheduled
+        // durable work that has not started yet; that owed wake is invisible
+        // to the sender's recomputation and must veto the deletion.
+        if (this.#deliveryAlarmBoundary.hasScheduledWork) return;
+        this.#alarmArmer.clearWhenQuiet();
+      },
       runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
       wakeChannelKeys: () => this.#wakeSockets.channelKeys(),

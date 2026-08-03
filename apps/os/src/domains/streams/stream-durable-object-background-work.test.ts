@@ -124,10 +124,36 @@ describe("StreamDeliveryAlarmBoundary", () => {
   });
 });
 
+describe("StreamDeliveryAlarmBoundary scheduled-work marker", () => {
+  it("marks an append-armed wake as owed until the alarm turn runs", () => {
+    const boundary = new StreamDeliveryAlarmBoundary({
+      armAlarm: () => undefined,
+      now: () => 123,
+      waitUntil: () => undefined,
+    });
+    expect(boundary.hasScheduledWork).toBe(false);
+
+    // Append turn: work is scheduled, not started — nothing else (no cursor
+    // row, no in-flight flag) betrays that a wake is owed, so the quiet-alarm
+    // deletion must see this marker or it deletes the just-armed alarm and
+    // strands every durable send (the exact e2e-caught regression).
+    boundary.scheduleOrRun(() => Promise.resolve());
+    expect(boundary.hasScheduledWork).toBe(true);
+
+    boundary.runAlarmTurn(() => undefined);
+    expect(boundary.hasScheduledWork).toBe(false);
+
+    // Scheduling from within an alarm turn starts the work directly and owes
+    // no future wake.
+    boundary.runAlarmTurn(() => boundary.scheduleOrRun(() => Promise.resolve()));
+    expect(boundary.hasScheduledWork).toBe(false);
+  });
+});
+
 describe("StreamAlarmArmer", () => {
   it("writes synchronously, never moves an alarm later, and can re-arm after it fires", () => {
     const setAlarm = vi.fn(async () => undefined);
-    const armer = new StreamAlarmArmer({ setAlarm });
+    const armer = new StreamAlarmArmer({ setAlarm, deleteAlarm: vi.fn(async () => undefined) });
 
     armer.armNoLaterThan(200);
     expect(setAlarm).toHaveBeenLastCalledWith(200);
@@ -152,7 +178,7 @@ describe("StreamAlarmArmer", () => {
         throw failure;
       })
       .mockResolvedValue(undefined);
-    const armer = new StreamAlarmArmer({ setAlarm });
+    const armer = new StreamAlarmArmer({ setAlarm, deleteAlarm: vi.fn(async () => undefined) });
 
     expect(() => armer.armNoLaterThan(100)).toThrow("stream alarm arming failed");
     armer.armNoLaterThan(100);
