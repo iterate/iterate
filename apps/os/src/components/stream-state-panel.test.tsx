@@ -551,6 +551,7 @@ function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
           hasPendingDelivery: false,
         },
       },
+      dormantSubscribers: {},
       subscriptions: {
         [PROCESSOR_SUBSCRIPTION_NAME]: {
           deliveredOffset: maxOffset,

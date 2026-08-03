@@ -41,7 +41,8 @@ import {
   STREAM_PAUSED_ERROR_PREFIX,
   StreamCoreProcessor,
 } from "./core-processor.ts";
-import { compileEventFilter } from "./event-filter.ts";
+import { compileEventFilter, type EventFilter } from "./event-filter.ts";
+import { WakeSocketRegistry } from "./wake-socket.ts";
 import {
   internalStreamId,
   isInternalStreamIdempotencyKey,
@@ -144,6 +145,7 @@ type StreamDeliveryAlarmBoundaryHooks = {
 
 type StreamAlarmStorage = {
   setAlarm(atMs: number): Promise<void>;
+  deleteAlarm(): Promise<void>;
 };
 
 /**
@@ -186,6 +188,23 @@ export class StreamAlarmArmer {
   markFired(): void {
     this.#armedForMs = null;
   }
+
+  /**
+   * Delete the pending native alarm because the caller proved nothing needs
+   * a future turn. Safe by construction: durable obligations are visible to
+   * that recomputation (cursor rows, in-flight sets, the idle deadline), and
+   * new work only arises through an append or wake — both of which reconcile
+   * and re-arm. Without this, the in-flight watchdog armed before every
+   * successful send outlives its delivery, fires on the hibernated stream,
+   * boots it, appends `woken`, whose delivery arms the next watchdog — a
+   * perpetual ~21-second boot loop on quiet streams with subscriptions.
+   * A later armNoLaterThan in the same turn simply re-arms after the delete.
+   */
+  clearWhenQuiet(): void {
+    this.#armedForMs = null;
+    // Same posture as setAlarm: not awaited or caught; the output gate owns it.
+    void this.#storage.deleteAlarm();
+  }
 }
 
 export class StreamDeliveryAlarmBoundary {
@@ -196,6 +215,20 @@ export class StreamDeliveryAlarmBoundary {
     this.#hooks = hooks;
   }
 
+  /**
+   * True between an append turn arming its immediate work alarm and the
+   * alarm turn that runs the re-derived work. In that gap NOTHING else
+   * betrays that a wake is owed — no cursor row is due yet, no in-flight
+   * flag is set (the closure never started) — so the quiet-alarm deletion
+   * must treat this as pending work or it deletes the very alarm that was
+   * just armed to start delivery, stranding every durable send.
+   */
+  #scheduledWorkPending = false;
+
+  get hasScheduledWork(): boolean {
+    return this.#scheduledWorkPending;
+  }
+
   scheduleOrRun(work: () => Promise<unknown>): void {
     if (this.#inAlarmTurn) {
       this.#hooks.waitUntil(settleStreamCoreBackgroundWork(work));
@@ -204,12 +237,17 @@ export class StreamDeliveryAlarmBoundary {
     // setAlarm is itself an output-gated storage write. Issue it directly in
     // this append turn: wrapping it in a settling waitUntil would cross the
     // implicit-transaction boundary and could acknowledge lag without a wake.
+    this.#scheduledWorkPending = true;
     this.#hooks.armAlarm(this.#hooks.now());
   }
 
   runAlarmTurn(work: () => void): void {
     const wasInAlarmTurn = this.#inAlarmTurn;
     this.#inAlarmTurn = true;
+    // The fired alarm turn re-derives ALL owed work from durable cursors
+    // (the scheduled closure was deliberately discarded), so the owed-wake
+    // marker is satisfied the moment this turn starts.
+    this.#scheduledWorkPending = false;
     try {
       work();
     } finally {
@@ -646,7 +684,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     now: () => Date.now(),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
-  readonly #eventSender = new StreamEventSender({
+  readonly #eventSender: StreamEventSender = new StreamEventSender({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
       // Straight to the sized log read: delivery needs byte lengths for its
@@ -699,9 +737,27 @@ export class StreamDurableObject extends DurableObject<Env> {
       now: () => Date.now(),
       random: () => Math.random(),
       armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
+      clearAlarm: () => {
+        // An append turn may have armed an immediate alarm for scheduled
+        // durable work that has not started yet; that owed wake is invisible
+        // to the sender's recomputation and must veto the deletion.
+        if (this.#deliveryAlarmBoundary.hasScheduledWork) return;
+        this.#alarmArmer.clearWhenQuiet();
+      },
       runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
+      wakeChannelKeys: () => this.#wakeSockets.channelKeys(),
+      onSessionsIdleClosed: (connectionKeys) => this.#wakeSockets.recordIdleClosed(connectionKeys),
+      wakeDormantSubscribers: (justCommitted) =>
+        this.#wakeSockets.wakeDormant(justCommitted.map((entry) => entry.event)),
     },
+  });
+  /** DO-side wake-socket mechanics (wake-socket.ts); the attachment is the durable state. */
+  readonly #wakeSockets = new WakeSocketRegistry({
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    maxOffset: () => this.#coreProcessorState.maxOffset,
+    hasConnection: (connectionKey) => this.#eventSender.connections.has(connectionKey),
   });
   #coreProcessorState: CoreProcessorState;
   #invalidCheckpointError: unknown = undefined;
@@ -1539,9 +1595,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         ? this.#eventSender.onAlarm()
         : this.#eventSender.sendDue(args.justCommittedEvents),
     );
-    attempt("arm hosted-connection idle alarm", () =>
-      this.#eventSender.connections.armOrClearIdleAlarm(),
-    );
+    attempt("arm connection idle alarm", () => this.#eventSender.connections.armOrClearIdleAlarm());
     if (args.alarmTurn === true) {
       attempt("flush core state checkpoint", () => this.#flushCoreProcessorState());
     }
@@ -1926,7 +1980,15 @@ export class StreamDurableObject extends DurableObject<Env> {
    * (`subscription-configured` events); the source stream wakes a hosted
    * processor and retains the `processEventBatch` callback it returns.
    */
-  openConnection(args: Parameters<Stream["openConnection"]>[0]): StreamConnectionHandle {
+  openConnection(
+    args: Parameters<Stream["openConnection"]>[0],
+    // Internal relay plumbing (which wake socket this open binds) rides a
+    // separate parameter, never the public arg bag: the relay spreads the
+    // caller's args through, so anything merged into their shape would be
+    // client-spoofable by default. Public callers cannot reach this DO
+    // directly; the relay generates the id.
+    relay?: { wakeSocketId: string },
+  ): StreamConnectionHandle {
     const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
     if (this.#coreProcessorState.subscriptions.outbound.byName[connectionKey] !== undefined) {
       throw new Error(`connectionKey "${connectionKey}" is reserved by a subscription`);
@@ -1953,6 +2015,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     ) {
       throw new Error(`maxReplayOffsetGap must be a non-negative integer`);
     }
+    if (
+      args.maxDeliveryEvents !== undefined &&
+      (!Number.isSafeInteger(args.maxDeliveryEvents) || args.maxDeliveryEvents < 1)
+    ) {
+      throw new Error(`maxDeliveryEvents must be a positive integer`);
+    }
+    if (
+      args.maxDeliveryBytes !== undefined &&
+      (!Number.isSafeInteger(args.maxDeliveryBytes) || args.maxDeliveryBytes < 1)
+    ) {
+      throw new Error(`maxDeliveryBytes must be a positive integer`);
+    }
+    if (args.state === false && args.events === false) {
+      throw new Error(`a state-only connection cannot also omit state`);
+    }
 
     // Validate the caller-supplied descriptor at the boundary. The public
     // `Stream.openConnection` contract types `openedBy` as `unknown`, so without
@@ -1970,10 +2047,11 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     // One filter shape everywhere: `eventTypes` is sugar for the filter's
     // type list (compileEventFilter also validates any condition upfront).
-    const filter = compileEventFilter({
+    const filterSpec: EventFilter = {
       ...args.filter,
       ...(args.eventTypes === undefined ? {} : { eventTypes: [...args.eventTypes] }),
-    });
+    };
+    const filter = compileEventFilter(filterSpec);
 
     const connection = this.#eventSender.connections.openSession({
       connectionKey,
@@ -1983,9 +2061,19 @@ export class StreamDurableObject extends DurableObject<Env> {
       maxReplayOffsetGap: args.maxReplayOffsetGap,
       filter,
       events: args.events,
+      maxDeliveryEvents: args.maxDeliveryEvents,
+      maxDeliveryBytes: args.maxDeliveryBytes,
+      includeState: args.state !== false,
       openedBy,
       getRuntimeState: args.getRuntimeState,
       ping: args.ping,
+    });
+
+    this.#wakeSockets.bind({
+      connectionKey,
+      wakeSocketId: relay?.wakeSocketId,
+      filter: filterSpec,
+      events: args.events,
     });
 
     return new StreamConnectionRpcTarget({
@@ -2198,11 +2286,19 @@ export class StreamDurableObject extends DurableObject<Env> {
     // Cursor cleanup can reach this before the constructor assigns
     // #liveState; the optional read is therefore intentional.
     const liveState = this.#liveState;
-    if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
+    const wantsStatePush = this.#wakeSockets.hasStateSockets();
+    if ((liveState?.observed !== true && !wantsStatePush) || this.#liveStateRefreshScheduled) {
+      return;
+    }
     this.#liveStateRefreshScheduled = true;
     queueMicrotask(() => {
       this.#liveStateRefreshScheduled = false;
-      if (liveState.observed) liveState.setState(this.#readRuntimeState());
+      const state = this.#readRuntimeState();
+      if (liveState?.observed === true) liveState.setState(state);
+      // liveState watchers on the hibernatable state lane: state only
+      // changes while this DO is awake, so pushing here — the one
+      // materialization point — is complete coverage, and sends are free.
+      this.#wakeSockets.pushState(state);
     });
   }
 
@@ -2211,12 +2307,54 @@ export class StreamDurableObject extends DurableObject<Env> {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: this.#eventSender.connections.runtimeState(),
+        dormantSubscribers: this.#wakeSockets.dormantRuntimeState(),
         subscriptions: this.#eventSender.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
         storageSizeBytes: this.ctx.storage.sql.databaseSize,
       },
     };
   }
+
+  // ===========================================================================
+  // Wake sockets: the hibernatable channel behind idle-closed session
+  // connections. All mechanics live in WakeSocketRegistry (wake-socket.ts);
+  // this class only routes the platform entry points to it.
+  // ===========================================================================
+
+  /** The Stream DO's only fetch surface: the wake-socket upgrade (see WakeSocketRegistry.acceptUpgrade). */
+  async fetch(request: Request): Promise<Response> {
+    return this.#wakeSockets.acceptUpgrade(request);
+  }
+
+  /** Wake sockets are one-way (this DO → relay); inbound frames are ignored. */
+  webSocketMessage(): void {}
+
+  /**
+   * A closed socket disappears from `getWebSockets`, which is most of the
+   * cleanup: the registry stops reporting it and the connection (if any)
+   * keeps today's non-idle-eligible session semantics. But when the socket
+   * carried a DORMANT subscriber, its closing is the subscriber's real
+   * departure — the `"idle"` close deliberately was not one — so audit and
+   * presence consumers get the durable `"departed"` fact here. Idempotent
+   * per socket; best-effort like every connection-close observation.
+   */
+  webSocketClose(ws: WebSocket): void {
+    const departed = this.#wakeSockets.departedOnClose(ws);
+    if (departed === undefined) return;
+    try {
+      this.#append({ authority: "core-event" }, [
+        {
+          type: "events.iterate.com/stream/connection-closed",
+          idempotencyKey: internalStreamId("wake-socket-departed", departed.socketId),
+          payload: { connectionKey: departed.connectionKey, reason: "departed" },
+        },
+      ]);
+    } catch (error) {
+      if (!isDurableObjectLifecycleError(error)) throw error;
+    }
+  }
+
+  webSocketError(): void {}
 
   // ===========================================================================
   // Operator/admin verbs.

@@ -75,30 +75,32 @@ export function foldAttribution(
     // and full coverage collapses them away. An insertion landing STRICTLY
     // INSIDE a carried span stretches it over foreign text — subtract this
     // op's own inserted ranges so every character keeps its true author.
-    const opInserts: InsertedSpan[] = ranges
-      .filter((range) => range.toB > range.fromB)
-      .map((range) => ({
-        clientId: op.clientId,
-        createdAt: op.createdAt,
-        from: range.fromB,
-        to: range.toB,
-      }));
-    inserted = inserted
-      .map((span) => ({
-        clientId: span.clientId,
-        createdAt: span.createdAt,
-        from: changes.mapPos(span.from, 1),
-        to: changes.mapPos(span.to, -1),
-      }))
-      .filter((span) => span.from < span.to)
-      .flatMap((span) =>
-        subtract([span.from, span.to], opInserts).map(([from, to]) => ({
+    const opInserts: InsertedSpan[] = [];
+    for (const range of ranges) {
+      if (range.toB > range.fromB) {
+        opInserts.push({
+          clientId: op.clientId,
+          createdAt: op.createdAt,
+          from: range.fromB,
+          to: range.toB,
+        });
+      }
+    }
+    const carried: InsertedSpan[] = [];
+    for (const span of inserted) {
+      const from = changes.mapPos(span.from, 1);
+      const to = changes.mapPos(span.to, -1);
+      if (from >= to) continue;
+      for (const [pieceFrom, pieceTo] of subtract([from, to], opInserts)) {
+        carried.push({
           clientId: span.clientId,
           createdAt: span.createdAt,
-          from,
-          to,
-        })),
-      );
+          from: pieceFrom,
+          to: pieceTo,
+        });
+      }
+    }
+    inserted = carried;
     deleted = deleted.map((span) => ({ ...span, at: changes.mapPos(span.at, -1) }));
     deleted.push(...newDeletes);
 
@@ -121,12 +123,14 @@ export function attributionSegments(state: AttributionState): CollabChangeSegmen
   const { deleted, inserted } = state;
   const position = (segment: CollabChangeSegment) =>
     segment.kind === "inserted" ? segment.from : segment.at;
-  return [
-    ...coalesce(inserted).map((span) => ({ ...span, kind: "inserted" as const })),
-    ...deleted
-      .filter((span) => span.text.length > 0)
-      .map((span) => ({ ...span, kind: "deleted" as const })),
-  ].toSorted(
+  const segments: CollabChangeSegment[] = coalesce(inserted).map((span) => ({
+    ...span,
+    kind: "inserted" as const,
+  }));
+  for (const span of deleted) {
+    if (span.text.length > 0) segments.push({ ...span, kind: "deleted" as const });
+  }
+  return segments.toSorted(
     // Position order; at a tie (a replace), the deletion renders first —
     // struck-out old text, then the new text, redline convention.
     (left, right) =>

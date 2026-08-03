@@ -66,6 +66,7 @@ function durableObjectContext(name: string) {
   const values = new Map<string, unknown>();
   const backgroundWork: Promise<unknown>[] = [];
   const alarms: number[] = [];
+  const alarmDeletes: number[] = [];
   let storageSyncCount = 0;
   let latestInitialization: Promise<unknown> | undefined;
   let kvPutFailure: { error: Error; key?: string } | undefined;
@@ -93,6 +94,10 @@ function durableObjectContext(name: string) {
       alarms.push(atMs);
       return Promise.resolve();
     },
+    deleteAlarm(): Promise<void> {
+      alarmDeletes.push(alarms.length);
+      return Promise.resolve();
+    },
     sync(): Promise<void> {
       storageSyncCount += 1;
       return Promise.resolve();
@@ -105,6 +110,9 @@ function durableObjectContext(name: string) {
     id: { name },
     storage,
     exports: {},
+    getWebSockets(): WebSocket[] {
+      return [];
+    },
     waitUntil(work: Promise<unknown>): void {
       backgroundWork.push(work);
     },

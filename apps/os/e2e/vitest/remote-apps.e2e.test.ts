@@ -123,7 +123,7 @@ test.skipIf(!process.env.APP_CONFIG_PROJECT_APP_SESSION_SECRET?.trim())(
         .setExpirationTime(Math.floor(Date.now() / 1000) + expiresInSeconds)
         .sign(new TextEncoder().encode(sessionSecret));
     const token = await sign({
-      audience: "https://tasks--proxied.example",
+      audience: "https://docs--proxied.example",
       projectId,
       type: "project-app-session",
       userId: "usr_remote_e2e",
@@ -147,7 +147,7 @@ test.skipIf(!process.env.APP_CONFIG_PROJECT_APP_SESSION_SECRET?.trim())(
     // An expired token and a garbage token are ordinary refusals.
     const expired = await sign(
       {
-        audience: "https://tasks--proxied.example",
+        audience: "https://docs--proxied.example",
         projectId,
         type: "project-app-session",
         userId: "usr_remote_e2e",

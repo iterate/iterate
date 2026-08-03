@@ -1,6 +1,7 @@
 import { StreamProcessor } from "iterate/processors";
 import type { ProcessEventArgs, ProcessorState, ReduceArgs, StreamEvent } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
+import { StreamReceiverAbsentError } from "../streams/stream-delivery-utils.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
 import type { Project } from "../../itx-api.generated.ts";
@@ -473,7 +474,10 @@ export class CapabilityHostProcessor extends StreamProcessor<
     }
     const live = this.#liveCapabilities.get(liveKey(hit.record.path));
     if (!live) {
-      throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
+      // Receiver-absence, not failure: a stream delivery hitting an offline
+      // live mount PARKS its subscription instead of burning the retry
+      // ladder into a permanent halt. Direct itx callers see the same error.
+      throw new StreamReceiverAbsentError(`capability "${hit.record.path.join(".")}" is offline`);
     }
     return await live.invoke(hit.rest, args);
   }

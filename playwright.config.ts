@@ -63,8 +63,9 @@ export default defineConfig({
   expect: { timeout: SPEC_EXPECT_TIMEOUT_MS },
   use: {
     // Tight on purpose; the middlewright spinner-waiter extends it only while
-    // the app visibly reports progress (see e2e-policy/budgets.ts).
-    actionTimeout: videoMode ? 10_000 : SPEC_ACTION_TIMEOUT_MS,
+    // the app visibly reports progress (see e2e-policy/budgets.ts, which also
+    // explains why there is no video-mode or per-project override).
+    actionTimeout: SPEC_ACTION_TIMEOUT_MS,
     baseURL: osBaseUrl,
     extraHTTPHeaders: cloudflareWorkerVersionOverrideHeaders(process.env),
     screenshot: "only-on-failure",
@@ -93,10 +94,6 @@ export default defineConfig({
       testMatch: "**/mobile/**/*.spec.ts",
       use: {
         ...devices["Desktop Chrome"],
-        // Metro reports its HTTP server ready before the first JS bundle has
-        // compiled and hydrated, so the mobile route needs a small startup
-        // budget beyond the web app's already-running action timeout.
-        actionTimeout: 5_000,
         baseURL: mobileWebUrl,
         viewport: { width: 390, height: 844 },
         deviceScaleFactor: 1,

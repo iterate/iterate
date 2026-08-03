@@ -35,6 +35,11 @@ export function useCollabEditor(input: {
    * offset (post-rename remount while the user typed in the body). */
   focusHeadline?: "select" | "end" | { caret: number };
   onLiveContent?: (path: string, content: string) => void;
+  /** Everyone with a live caret on this document (self included), whenever
+   * the presence generation advances — host chrome renders it (an avatar
+   * strip); the in-editor cursor layer is separate and always on. Null when
+   * the session has no presence at all (ended) — hide the strip. */
+  onPeers?: (input: { self: string; clientIds: string[] } | null) => void;
   onStatus?: (status: string) => void;
   /** Filled with the live-doc API while the editor is mounted (see
    * CollabEditorApi — the board mutates open files through this). */
@@ -45,6 +50,10 @@ export function useCollabEditor(input: {
   const [recovery, setRecovery] = useState<string | null>(null);
   const redlineRef = useRef(input.redline);
   const toggleRef = useRef<((on: boolean) => void) | null>(null);
+  // Same ref discipline as redline: the session effect must NOT depend on
+  // the callback's identity (an unstable prop would remount the editor),
+  // but the adapter must still call the LATEST one.
+  const onPeersRef = useRef(input.onPeers);
   const {
     transport,
     displayName,
@@ -61,6 +70,9 @@ export function useCollabEditor(input: {
     redlineRef.current = input.redline;
     toggleRef.current?.(input.redline);
   }, [input.redline]);
+  useEffect(() => {
+    onPeersRef.current = input.onPeers;
+  }, [input.onPeers]);
   const setStatus = useCallback(
     (next: string) => {
       setStatusState(next);
@@ -77,6 +89,19 @@ export function useCollabEditor(input: {
     setStatus("connecting…");
     const connection = new CollabConnection(transport, workspacePath, displayName);
     connection.onStatus = setStatus;
+    connection.onPeers = (clients) => {
+      // Empty delivery = a dead session (the client fires [] on ended):
+      // clear the strip rather than re-injecting a self that is not live.
+      // Otherwise self at call time — the clientId rotates on reseed.
+      onPeersRef.current?.(
+        clients.length === 0
+          ? null
+          : {
+              self: connection.clientId,
+              clientIds: [...new Set(clients.map((client) => client.clientId))],
+            },
+      );
+    };
     const redlineLayer = new Compartment();
     let view: EditorView | null = null;
     let cancelled = false;
@@ -199,6 +224,9 @@ export function useCollabEditor(input: {
       );
     return () => {
       cancelled = true;
+      // An in-flight wait must not deliver a dead connection's peer list
+      // (and the NEXT connection owns the strip once it attaches).
+      connection.onPeers = null;
       if (reflectTimer) {
         clearTimeout(reflectTimer);
         // Flush, don't drop: the final keystrokes must reach the board even

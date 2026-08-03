@@ -99,7 +99,6 @@
     "@cloudflare/vite-plugin": "catalog:cloudflare",
     "@cloudflare/workers-types": "catalog:cloudflare",
     "@iterate-com/docs": "workspace:*",
-    "@iterate-com/tasks": "workspace:*",
     "@microsoft/tui-test": "0.0.4",
     "@octokit/webhooks": "^14.2.0",
     "@posthog/rollup-plugin": "^1.4.7",

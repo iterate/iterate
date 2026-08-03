@@ -127,6 +127,7 @@ function harness(args: {
     args.store ?? new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
   store.ensure(PROCESSOR_KEY, 0, 1);
   const alarms: number[] = [];
+  const alarmClears: number[] = [];
   const kept: Promise<unknown>[] = [];
   const wakeCalls: Parameters<SubscriptionReceiverCalls["wakeStreamProcessor"]>[] = [];
   const receiverCalls: SubscriptionReceiverCalls = {
@@ -155,8 +156,12 @@ function harness(args: {
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => alarms.push(atMs),
+      clearAlarm: () => alarmClears.push(now),
       runDurable: (work) => kept.push(work()),
       keepAlive: (promise) => kept.push(promise),
+      wakeChannelKeys: () => new Set<string>(),
+      onSessionsIdleClosed: () => undefined,
+      wakeDormantSubscribers: () => undefined,
     },
   });
 
@@ -173,6 +178,7 @@ function harness(args: {
   return {
     wakeCalls,
     alarms,
+    alarmClears,
     state,
     store,
     eventSender,
@@ -634,6 +640,85 @@ describe("StreamEventSender stream delivery", () => {
       failingEventOffset: null,
       failingEventAttempt: 0,
     });
+  });
+
+  it("deletes the alarm once the last send settles with nothing due, and never while a retry is pending", async () => {
+    const itxConfig = {
+      name: PROCESSOR_KEY,
+      receiver: {
+        action: "itx-call",
+        expression: ["worker", "processEventBatch"],
+        delivery: { start: "beginning", onFailingEvent: "halt" },
+      },
+    } satisfies SubscriptionConfiguredPayload;
+
+    // Success: the send's pre-armed in-flight watchdog would otherwise
+    // outlive this delivery and boot the hibernated stream forever (each
+    // boot appends `woken`, whose delivery arms the next watchdog).
+    const ok = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      deliverToItx: async () => undefined,
+      wakeProcessor: async () => {
+        throw new Error("an ITX receiver must not wake a hosted processor");
+      },
+    });
+    ok.eventSender.sendDue();
+    await ok.settle();
+    expect(ok.store.get(PROCESSOR_KEY)?.confirmedOffset).toBe(2);
+    expect(ok.alarmClears.length).toBeGreaterThan(0);
+
+    // Failure: a pending retry row must keep the alarm armed — the quiet
+    // check may never delete a wake a durable obligation depends on.
+    const failing = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      deliverToItx: async () => {
+        throw new Error("receiver down");
+      },
+      wakeProcessor: async () => {
+        throw new Error("an ITX receiver must not wake a hosted processor");
+      },
+    });
+    failing.eventSender.sendDue();
+    await failing.settle();
+    expect(failing.store.get(PROCESSOR_KEY)?.nextAttemptAt).not.toBeNull();
+    expect(failing.alarmClears).toEqual([]);
+  });
+
+  it("never clears the alarm while un-acked lag has no scheduled retry (lifecycle-retry state)", async () => {
+    // Model the lifecycle-retry state directly: a non-halted row lagging the
+    // head with nothing scheduled (an interrupted audit append leaves the
+    // cursor untouched and arms only a bare short-delay alarm). The quiet
+    // deletion must see that lag as pending work.
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: {
+        name: PROCESSOR_KEY,
+        filter: { jsonataCondition: "$notAFunction(payload)" },
+        receiver: {
+          action: "itx-call",
+          expression: ["worker", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      // The audit append for the filter failure is interrupted (false): the
+      // loop arms the lifecycle retry, leaves the row un-acked, and returns.
+      appendDeliveryEvent: (entry) =>
+        entry.type === "events.iterate.com/stream/error-occurred" ? false : true,
+      deliverToItx: async () => undefined,
+      wakeProcessor: async () => {
+        throw new Error("an ITX receiver must not wake a hosted processor");
+      },
+    });
+    h.eventSender.sendDue();
+    await h.settle();
+
+    const row = h.store.get(PROCESSOR_KEY)!;
+    expect(row.confirmedOffset).toBeLessThan(h.state.maxOffset);
+    expect(row.nextAttemptAt).toBeNull();
+    // The bare lifecycle retry was armed and, critically, never cleared.
+    expect(h.alarmClears).toEqual([]);
   });
 
   it("an ITX transform shapes each delivered event while the batch keeps the source coordinates", async () => {
@@ -2067,6 +2152,8 @@ async function flushMicrotasks() {
 function connectionsHarness(
   options: {
     events?: StreamEvent[];
+    wakeChannelKeys?: () => ReadonlySet<string>;
+    onSessionsIdleClosed?: (connectionKeys: readonly string[]) => void;
     readBatch?: ConstructorParameters<typeof StreamConnections>[0]["hooks"]["readBatch"];
     onAppend?: (args: {
       connections: StreamConnections;
@@ -2095,6 +2182,7 @@ function connectionsHarness(
     maxOffset: events.length,
   }) satisfies CoreProcessorState;
   const alarmTimes: number[] = [];
+  const sessionsIdleClosed: string[][] = [];
   const durableDeliveryWakes = vi.fn();
   const deliveryFailures = vi.fn((connectionKey: string, error: unknown) => {
     const current = store.get(connectionKey)!;
@@ -2126,6 +2214,12 @@ function connectionsHarness(
       now: () => now,
       armAlarm: (atMs) => alarmTimes.push(atMs),
       keepAlive: () => undefined,
+      wakeChannelKeys: options.wakeChannelKeys ?? (() => new Set<string>()),
+      onSessionsIdleClosed: (keys) => {
+        sessionsIdleClosed.push([...keys]);
+        options.onSessionsIdleClosed?.(keys);
+      },
+      reconcileAlarm: () => undefined,
       hostedDeliveryStillMatches: (_subscriptionKey, candidate) =>
         candidate.configuredAtOffset === expectedDelivery.configuredAtOffset &&
         candidate.cursorChangedAtOffset === expectedDelivery.cursorChangedAtOffset &&
@@ -2140,6 +2234,7 @@ function connectionsHarness(
     store,
     expectedDelivery,
     alarmTimes,
+    sessionsIdleClosed,
     deliveryFailures,
     durableDeliveryWakes,
     setNow(value: number) {
@@ -2275,6 +2370,126 @@ describe("StreamConnections hosted delivery watchdog", () => {
       payload: { connectionKey: "session", reason: "rpc-broken", error: "transport closed" },
     });
     expect(h.durableDeliveryWakes).toHaveBeenCalledOnce();
+  });
+
+  it("caps session batches without skipping events and can omit reduced state", async () => {
+    const events = Array.from({ length: 5 }, (_, index) => streamEvent(index + 1));
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+
+    h.connections.openSession({
+      connectionKey: "capped-session",
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      maxDeliveryEvents: 2,
+      includeState: false,
+    });
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(calls.map(({ batch }) => batch.events.map(({ offset }) => offset))).toEqual([
+      [1, 2],
+      [3, 4],
+      [5],
+    ]);
+    expect(calls.every(({ batch }) => batch.state === null)).toBe(true);
+    expect(h.connections.runtimeState()["capped-session"]).toMatchObject({
+      deliveredThroughOffset: 5,
+      batchesSent: 3,
+      eventsSent: 5,
+    });
+  });
+
+  it("advances event-only sessions past filter-rejected appends without empty pushes", async () => {
+    const events = [streamEvent(1, "events.example.com/ignored")];
+    const calls: DeliveryCall[] = [];
+    let readCalls = 0;
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) => {
+        readCalls += 1;
+        return events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
+      },
+    });
+    const connection = h.connections.openSession({
+      connectionKey: "filtered-session",
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+      includeState: false,
+    });
+    await flushMicrotasks();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.batch.events).toEqual([]);
+    expect(calls[0]!.batch.scannedThroughOffset).toBe(1);
+    expect(calls[0]!.batch.state).toBeNull();
+
+    events.push(
+      ...Array.from({ length: 2_001 }, (_, index) =>
+        streamEvent(index + 2, "events.example.com/ignored"),
+      ),
+    );
+    h.state.maxOffset = 2_002;
+    const readsBeforeCatchUp = readCalls;
+    connection.sendQueued();
+
+    // One scan runs synchronously, then the skipped delivery yields. Without
+    // that yield this call drains every 1,000-event page before returning.
+    expect(readCalls).toBe(readsBeforeCatchUp + 1);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(calls).toHaveLength(1);
+    expect(h.connections.runtimeState()["filtered-session"]).toMatchObject({
+      deliveredThroughOffset: 2_002,
+      batchesSent: 1,
+      eventsSent: 0,
+    });
+  });
+
+  it("delivers filter-rejected state changes to stateful sessions", async () => {
+    const events = [streamEvent(1, "events.example.com/ignored")];
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) =>
+        events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
+    });
+    const connection = h.connections.openSession({
+      connectionKey: "stateful-filtered-session",
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+    });
+    await flushMicrotasks();
+
+    events.push(streamEvent(2, "events.example.com/ignored"));
+    h.state.maxOffset = 2;
+    connection.sendQueued();
+    await flushMicrotasks();
+
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.batch).toMatchObject({
+      events: [],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+      state: { maxOffset: 2 },
+    });
   });
 
   it("classifies a broken hosted callback capability as lifecycle unavailability", () => {
@@ -2605,6 +2820,75 @@ describe("StreamConnections hosted delivery watchdog", () => {
       inFlightDeadlineAt: before.inFlightDeadlineAt,
       inFlightConnectionGeneration: before.inFlightConnectionGeneration,
     });
+  });
+
+  it("idle-tears a session connection only when it has a wake channel, stamping after the close fact", () => {
+    // One shared journal so append-vs-stamp ORDERING is actually assertable.
+    const journal: string[] = [];
+    const h = connectionsHarness({
+      wakeChannelKeys: () => new Set(["with-channel"]),
+      onAppend: ({ event }) => {
+        journal.push(event.type);
+      },
+      onSessionsIdleClosed: (keys) => journal.push(`stamp:${keys.join(",")}`),
+    });
+    h.connections.openSession({
+      connectionKey: "with-channel",
+      processEventBatch: () => undefined,
+    });
+    h.connections.openSession({
+      connectionKey: "without-channel",
+      processEventBatch: () => undefined,
+    });
+
+    expect(h.connections.runIdleTeardownNow()).toEqual(["with-channel"]);
+
+    // The wake-channel-backed session closed with "idle"; the socketless one
+    // keeps today's pinned semantics and stays live.
+    expect(h.connections.has("with-channel")).toBe(false);
+    expect(h.connections.has("without-channel")).toBe(true);
+    // The dormancy stamp is ordered AFTER the close fact so this teardown's
+    // own append can never wake the subscriber it closed.
+    const closeIndex = journal.lastIndexOf("events.iterate.com/stream/connection-closed");
+    const stampIndex = journal.indexOf("stamp:with-channel");
+    expect(closeIndex).toBeGreaterThanOrEqual(0);
+    expect(stampIndex).toBeGreaterThan(closeIndex);
+    expect(h.sessionsIdleClosed).toEqual([["with-channel"]]);
+    // Session connections never grow cursor rows.
+    expect(h.store.get("with-channel")).toBeUndefined();
+  });
+
+  it("derives the idle deadline from delivery activity instead of sliding it per reconcile", () => {
+    const h = connectionsHarness({
+      wakeChannelKeys: () => new Set(["session"]),
+      events: [],
+    });
+    h.connections.openSession({
+      connectionKey: "session",
+      processEventBatch: () => undefined,
+    });
+    // Publication itself arms the deadline: the opened-fact reconcile runs
+    // before the connection is in the map, and with quiet-alarm deletion no
+    // stray later fire exists to paper over a missed arming (Bugbot 3705177939).
+    const armedAtPublication = h.alarmTimes.at(-1);
+    expect(armedAtPublication).toBeDefined();
+    h.connections.armOrClearIdleAlarm();
+    const firstDeadline = h.alarmTimes.at(-1);
+    expect(firstDeadline).toBe(armedAtPublication);
+
+    // Re-running the check with no new delivery activity must keep the SAME
+    // deadline: the old now+window reset slid it forward on the idle alarm's
+    // own turn, so a fire landing just before the pushed deadline missed it
+    // and real-clock teardown took up to two windows.
+    h.setNow(40_000);
+    h.connections.armOrClearIdleAlarm();
+    expect(h.alarmTimes.at(-1)).toBe(firstDeadline);
+
+    // A fire that lands moments before the (unchanged) deadline re-arms the
+    // deadline itself, never a fresh whole window.
+    h.setNow(firstDeadline! - 1);
+    h.connections.armOrClearIdleAlarm();
+    expect(h.alarmTimes.at(-1)).toBe(firstDeadline);
   });
 
   it("advances a completed hosted cursor through the close fact to avoid a self-wake loop", () => {

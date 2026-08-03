@@ -154,6 +154,84 @@ test("replaying earlier events, receiving new appends, filters, state callbacks,
   await stateConnection.close();
 });
 
+// Constrained consumers (embedded clients reassembling each batch into a
+// fixed buffer) cap what one delivery may carry; the cursor pages the rest
+// with no gap, and `state: false` drops the per-batch core-state payload.
+test("per-connection delivery caps split coalesced appends and state can be omitted", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/subscriptions/session/delivery-caps/${marker}`;
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using stream = project.streams.get(streamPath);
+
+  const batches: StreamEventBatch[] = [];
+  using _capped = await stream.openConnection({
+    connectionKey: `capped-${marker}`,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    maxDeliveryEvents: 2,
+    state: false,
+    processEventBatch: (batch) => batches.push(batch),
+  });
+
+  // One atomic five-event append commits in one turn — without the cap it
+  // would arrive as a single five-event batch.
+  const appended = await stream.append(
+    ...Array.from({ length: 5 }, (_, sequence) => ({
+      type: MATCHING_EVENT_TYPE,
+      payload: { marker, sequence },
+    })),
+  );
+  const lastOffset = appended.at(-1)!.offset;
+  await waitForCondition(
+    () => batches.some((batch) => batch.events.some((event) => event.offset === lastOffset)),
+    { description: "the capped connection to page through all five events" },
+  );
+
+  const eventBatches = batches.filter((batch) => batch.events.length > 0);
+  expect(eventBatches.length).toBeGreaterThanOrEqual(3);
+  for (const batch of eventBatches) {
+    expect(batch.events.length).toBeLessThanOrEqual(2);
+  }
+  for (const batch of batches) {
+    expect(batch.state).toBeNull();
+  }
+  expect(eventBatches.flatMap((batch) => batch.events.map((event) => event.offset))).toEqual(
+    appended.map((event) => event.offset),
+  );
+
+  // A byte cap below any single event still delivers one event per batch
+  // (the consumer must see the oversized event, not a stalled cursor).
+  const single: StreamEventBatch[] = [];
+  using _bytesCapped = await stream.openConnection({
+    connectionKey: `bytes-capped-${marker}`,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    maxDeliveryBytes: 1,
+    processEventBatch: (batch) => single.push(batch),
+  });
+  const byteCappedAppend = await stream.append(
+    { type: MATCHING_EVENT_TYPE, payload: { marker, sequence: 10 } },
+    { type: MATCHING_EVENT_TYPE, payload: { marker, sequence: 11 } },
+    { type: MATCHING_EVENT_TYPE, payload: { marker, sequence: 12 } },
+  );
+  await waitForCondition(
+    () =>
+      single.some((batch) =>
+        batch.events.some((event) => event.offset === byteCappedAppend.at(-1)!.offset),
+      ),
+    { description: "the byte-capped connection to page through the appends" },
+  );
+  const singleEventBatches = single.filter((batch) => batch.events.length > 0);
+  expect(singleEventBatches.length).toBe(3);
+  for (const batch of singleEventBatches) {
+    expect(batch.events.length).toBe(1);
+    expect(batch.state).not.toBeNull();
+  }
+  expect(singleEventBatches.flatMap((batch) => batch.events.map((event) => event.offset))).toEqual(
+    byteCappedAppend.map((event) => event.offset),
+  );
+});
+
 test("a live filter failure closes the callback and records the concrete error", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/subscriptions/session/filter-failure/${marker}`;
@@ -2178,6 +2256,166 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
       timeoutMs: 30_000,
     },
   );
+});
+
+// The wake-socket cycle for session connections (wake-socket.ts): idle
+// teardown severs the pinning RPC leg while the owner's Cap'n Web session
+// stays open, and the next matching append makes the worker relay re-dial —
+// the SAME processEventBatch callback receives it, with no client
+// re-subscribe. Lifecycle facts and non-matching appends must not resurrect
+// the dormant subscriber (the close→wake→open→idle-close loop).
+test("an idle-torn session connection resumes on the next matching append without re-subscribing", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/subscriptions/session/wake/${marker}`;
+  const connectionKey = `wake-${marker.slice(0, 8)}`;
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using stream = project.streams.get(streamPath);
+
+  const received: StreamEvent[] = [];
+  const handle = await stream.openConnection({
+    connectionKey,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    processEventBatch: ({ events }) => {
+      received.push(...events);
+    },
+  });
+  try {
+    const [first] = await stream.append({
+      type: MATCHING_EVENT_TYPE,
+      payload: { round: "before-idle" },
+    });
+    await waitForCondition(async () => received.some((event) => event.offset === first!.offset), {
+      description: "the live session connection to deliver the first append",
+    });
+
+    await forceStreamIdleTeardown(stream);
+    await waitForCondition(
+      async () =>
+        runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
+      { description: "idle teardown to sever the wake-socket-backed session connection" },
+    );
+    expect(
+      (
+        await stream.getEvents({
+          eventTypes: ["events.iterate.com/stream/connection-closed"],
+          limit: 100,
+        })
+      ).some(
+        (event) =>
+          event.payload?.connectionKey === connectionKey && event.payload?.reason === "idle",
+      ),
+    ).toBe(true);
+    // The logical subscription stays live across dormancy: the relay-local
+    // handle answers for it, not the severed RPC leg.
+    await expect(Promise.resolve(handle.ping())).resolves.toBe(true);
+
+    // A non-matching append must not resurrect the dormant subscriber…
+    await stream.append({ type: OTHER_EVENT_TYPE, payload: { round: "while-dormant" } });
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    expect(
+      runtimeState(await stream.runtimeState()).runtime.connections[connectionKey],
+    ).toBeUndefined();
+
+    // …while a matching one wakes the relay, which re-dials from its exact
+    // cursor and delivers through the ORIGINAL callback.
+    const [second] = await stream.append({
+      type: MATCHING_EVENT_TYPE,
+      payload: { round: "after-idle" },
+    });
+    await waitForCondition(async () => received.some((event) => event.offset === second!.offset), {
+      description: "the wake re-dial to deliver the post-idle append to the original callback",
+      timeoutMs: 30_000,
+    });
+    expect(received.map((event) => event.type)).toEqual([MATCHING_EVENT_TYPE, MATCHING_EVENT_TYPE]);
+    expect(received.map((event) => event.offset)).toEqual([first!.offset, second!.offset]);
+    await waitForCondition(
+      async () =>
+        runtimeState(await stream.runtimeState()).runtime.connections[connectionKey]?.kind ===
+        "session",
+      { description: "the re-dialed session connection to appear in runtime state" },
+    );
+  } finally {
+    await handle.close();
+    disposeRpc(handle);
+  }
+});
+
+// The resurrection-loop regression (Bugbot 9d27eb22): a subscriber whose
+// filter explicitly names connection-closed must NOT be woken by its own idle
+// close fact — the teardown's nested reconcile runs before the dormancy stamp
+// lands, so without the isTearingDown gate the close would wake the relay,
+// re-dial, idle again, and cycle forever. The deferred close fact still
+// arrives on the next real wake.
+test("an idle close never wakes the subscriber it closed, even when its filter names connection-closed", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/subscriptions/session/wake-loop/${marker}`;
+  const connectionKey = `wake-loop-${marker.slice(0, 8)}`;
+  const CLOSED_EVENT_TYPE = "events.iterate.com/stream/connection-closed";
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using stream = project.streams.get(streamPath);
+
+  const received: StreamEvent[] = [];
+  const handle = await stream.openConnection({
+    connectionKey,
+    eventTypes: [MATCHING_EVENT_TYPE, CLOSED_EVENT_TYPE],
+    processEventBatch: ({ events }) => {
+      received.push(...events);
+    },
+  });
+  try {
+    // Deliver one matching event first so the relay has a concrete cursor;
+    // tearing down before any delivery would make the eventual re-dial
+    // replay from head and could miss the close fact the final assertion
+    // requires.
+    const [seed] = await stream.append({ type: MATCHING_EVENT_TYPE, payload: { phase: "seed" } });
+    await waitForCondition(async () => received.some((event) => event.offset === seed!.offset), {
+      description: "the live connection to deliver the seed event",
+    });
+    await forceStreamIdleTeardown(stream);
+    await waitForCondition(
+      async () =>
+        runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
+      { description: "idle teardown to sever the lifecycle-filtered session connection" },
+    );
+
+    // The loop would re-open within one wake round trip; give it ample time
+    // to manifest, then require the connection stayed dormant with exactly
+    // one idle close on the record.
+    await new Promise((resolve) => setTimeout(resolve, 2_500));
+    expect(
+      runtimeState(await stream.runtimeState()).runtime.connections[connectionKey],
+    ).toBeUndefined();
+    const idleCloses = (
+      await stream.getEvents({ eventTypes: [CLOSED_EVENT_TYPE], limit: 100 })
+    ).filter(
+      (event) => event.payload?.connectionKey === connectionKey && event.payload?.reason === "idle",
+    );
+    expect(idleCloses).toHaveLength(1);
+
+    // A real matching append wakes the relay, and the replay delivers the
+    // deferred close fact along with the new event.
+    const [fresh] = await stream.append({
+      type: MATCHING_EVENT_TYPE,
+      payload: { round: "after-idle" },
+    });
+    await waitForCondition(async () => received.some((event) => event.offset === fresh!.offset), {
+      description: "the wake re-dial to deliver the post-idle append",
+      timeoutMs: 30_000,
+    });
+    expect(
+      received.some(
+        (event) =>
+          event.type === CLOSED_EVENT_TYPE && event.payload?.connectionKey === connectionKey,
+      ),
+    ).toBe(true);
+  } finally {
+    await handle.close();
+    disposeRpc(handle);
+  }
 });
 
 // Reset ends one source-stream lifetime and starts another at the same path.

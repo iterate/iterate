@@ -9,7 +9,7 @@ test("an approval push focuses its request in the project's approval queue", () 
       requestOffset: 42,
     }),
   ).toEqual({
-    pathname: "/project/[projectId]/approvals",
+    pathname: "/project/[projectId]/notifications",
     params: { projectId: "prj_test", approvalRequestEventOffset: "137" },
   });
 });
