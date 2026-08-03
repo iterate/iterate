@@ -35,10 +35,10 @@ import { compileEventFilter, EventFilter } from "./event-filter.ts";
 export const STREAM_WAKE_SOCKET_HEADER = "x-iterate-stream-wake";
 
 /** The hibernation tag every wake socket is accepted under. */
-export const WAKE_SOCKET_TAG = "wake";
+const WAKE_SOCKET_TAG = "wake";
 
 /** The JSON body of {@link STREAM_WAKE_SOCKET_HEADER} on the upgrade request. */
-export const WakeSocketUpgradeHeader = z.object({
+const WakeSocketUpgradeHeader = z.object({
   connectionKey: z.string().trim().min(1),
   /**
    * Relay-generated unique id for this exact socket. `bind` keeps the socket
@@ -58,7 +58,7 @@ export const WakeSocketUpgradeHeader = z.object({
  * `wakeSentAtOffset` present means one wake frame was already sent for this
  * dormancy period (cleared when the relay's re-dial re-binds the key).
  */
-export const WakeSocketAttachment = z.object({
+const WakeSocketAttachment = z.object({
   v: z.literal(1),
   connectionKey: z.string().min(1),
   socketId: z.string().min(1),
@@ -70,7 +70,7 @@ export const WakeSocketAttachment = z.object({
   wakeSentAtOffset: z.number().int().nonnegative().optional(),
 });
 
-export type WakeSocketAttachment = z.infer<typeof WakeSocketAttachment>;
+type WakeSocketAttachment = z.infer<typeof WakeSocketAttachment>;
 
 /**
  * A frame sent DO → relay on the wake socket. Loose objects on purpose: a
@@ -79,12 +79,12 @@ export type WakeSocketAttachment = z.infer<typeof WakeSocketAttachment>;
  * unknown fails the whole union and is dropped whole — that is the intended
  * posture for future frame kinds too.
  */
-export const WakeSocketFrame = z.union([
+const WakeSocketFrame = z.union([
   z.object({ type: z.literal("wake") }),
   z.object({ type: z.literal("idle") }),
 ]);
 
-export type WakeSocketFrame = z.infer<typeof WakeSocketFrame>;
+type WakeSocketFrame = z.infer<typeof WakeSocketFrame>;
 
 /** Decode one inbound wake-socket frame; anything unparseable is dropped whole. */
 export function parseWakeSocketFrame(data: unknown): WakeSocketFrame | undefined {
@@ -108,7 +108,7 @@ export function parseWakeSocketFrame(data: unknown): WakeSocketFrame | undefined
  * exclusion only defers delivery to the next matching wake, where the re-dial
  * replays everything after the relay's cursor.
  */
-export const WAKE_EXCLUDED_EVENT_TYPES: ReadonlySet<string> = new Set([
+const WAKE_EXCLUDED_EVENT_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/stream/woken",
   "events.iterate.com/stream/connection-opened",
   "events.iterate.com/stream/connection-closed",

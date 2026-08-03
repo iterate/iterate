@@ -43,7 +43,7 @@ import {
 import { parseWakeSocketFrame, STREAM_WAKE_SOCKET_HEADER } from "./wake-socket.ts";
 
 /** What StreamConnectionRpcTarget's constructor needs; built here so rpc-targets.ts keeps owning the published target class. */
-export type RelayedStreamConnection = {
+type RelayedStreamConnection = {
   connectionKey: string;
   streamMaxOffset: number;
   isLive: () => boolean | Promise<boolean>;
