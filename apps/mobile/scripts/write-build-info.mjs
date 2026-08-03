@@ -1,0 +1,34 @@
+// Stamps src/build-info.json with where the JS bundle came from, so the
+// in-app Build info screen can show it. Runs before every `eas update`
+// publish (CI: scripts/ci/publish-mobile-update.ts) and on EAS build
+// machines via the eas-build-pre-install hook. The checked-in file is an
+// all-empty placeholder: empty strings mean an unstamped local Metro bundle.
+import { execSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
+import { hostname, userInfo } from "node:os";
+import { fileURLToPath } from "node:url";
+
+const git = (args) => {
+  try {
+    return execSync(`git ${args}`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+  } catch {
+    // EAS build machines get a .git-less archive; env vars cover it below.
+    return "";
+  }
+};
+
+const env = process.env;
+const info = {
+  commit: env.EAS_BUILD_GIT_COMMIT_HASH || git("rev-parse HEAD"),
+  branch: env.GITHUB_REF_NAME || git("rev-parse --abbrev-ref HEAD"),
+  builtBy: env.EAS_BUILD_USERNAME || env.GITHUB_ACTOR || userInfo().username,
+  machine: env.EAS_BUILD ? "eas-build" : env.CI ? "ci" : hostname(),
+  builtAt: new Date().toISOString(),
+};
+
+const out = fileURLToPath(new URL("../src/build-info.json", import.meta.url));
+writeFileSync(out, `${JSON.stringify(info, null, 2)}\n`);
+console.log(`stamped ${out}: ${JSON.stringify(info)}`);

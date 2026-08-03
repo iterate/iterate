@@ -1,11 +1,13 @@
 ---
-status: in-progress
+status: implemented
 size: medium
 ---
 
 # Mobile: OTA updates on merge + build info screen
 
-**Status summary:** spec committed, implementation starting. Nothing wired yet.
+**Status summary:** implemented, checks green (typecheck, tests, oxlint,
+knip, expo export). Remaining: merge, then install the CI-triggered preview
+build once and rebuild the dev client (new native modules).
 
 The workflow Misha wants: flit freely between the Metro-connected dev client
 (agent working on the app, laptop nearby) and a standalone preview build
@@ -27,33 +29,36 @@ CI via the existing `DOPPLER_TOKEN`.
 
 ## Checklist
 
-- [ ] `expo install expo-updates expo-application`; configure `updates.url` +
-      `runtimeVersion: {policy: "fingerprint"}` in app.json; channels in
-      eas.json (`preview` → preview profile, `production` → production)
-- [ ] `scripts/write-build-info.mjs` — stamps `src/build-info.json`
-      (commit, branch, builtBy, builtAt) from git or EAS builder env vars;
-      checked-in placeholder so Metro/typecheck work without running it;
-      `eas-build-pre-install` hook runs it on EAS builders
-- [ ] Build info screen (`src/app/build-info.tsx`): branch/commit/builder/
-      time from build-info.json; channel, runtime version, update id,
-      update published-at, embedded-vs-OTA from `expo-updates`; app install
-      time from `expo-application`; a "check for update now" button
-      (fetch + reload)
-- [ ] Drawer item in `project-drawer.tsx` linking to it
-- [ ] `.depot/workflows/mobile-eas-update.yml` — on push to main (mobile
-      paths), publish update via `scripts/ci/publish-mobile-update.ts`,
-      auto-trigger native preview build on fingerprint change
-- [ ] README: document the dev ↔ preview flit workflow
-- [ ] typecheck / test / lint / knip green
+- [x] expo-updates config _`expo install expo-updates expo-application` +
+      `eas update:configure`, then switched runtimeVersion policy from its
+      appVersion default to fingerprint (appVersion would let native-module
+      merges silently strand old binaries); channels per profile in eas.json_
+- [x] build stamping _`apps/mobile/scripts/write-build-info.mjs` →
+      `src/build-info.json` (checked-in all-empty placeholder); runs via CI
+      publish script and the `eas-build-pre-install` hook; also replaces the
+      hand-maintained BUILD_TIMESTAMP in `src/lib/build-info.ts`_
+- [x] Build info screen _`src/app/build-info.tsx`: bundle
+      branch/commit/builder/time, update channel/runtime/id/published,
+      app version/native build/install time, check-for-update-now button
+      (guarded by `Updates.isEnabled` so Metro dev shows a note instead)_
+- [x] Drawer item _"Build info" in `project-drawer.tsx`, below Switch
+      project_
+- [x] CI workflow _`.depot/workflows/mobile-eas-update.yml` → 
+      `scripts/ci/publish-mobile-update.ts`; concurrency-serialized so
+      updates publish in commit order; triggers a native preview build when
+      no NEW/IN_QUEUE/IN_PROGRESS/FINISHED preview build matches the
+      published runtime version_
+- [x] README _"Dev ↔ preview: two builds, one phone" section_
+- [x] typecheck / test / lint / knip green _plus `expo export --platform
+      ios` as a bundle smoke_
 
-## Notes / decisions (made while Misha tests the first preview build)
+## Post-merge notes
 
-- Same bundle ID everywhere, deliberately: installs overwrite, keychain
-  survives, sign-in persists across flits.
-- `expo-updates` + `expo-application` are new native modules → the first
-  merge changes the fingerprint, so CI's first run self-heals by triggering
-  a fresh preview build. The dev client needs one manual
-  `pnpm --dir apps/mobile build:development:ios` after merge, same as any
-  native-module change (README already documents that rhythm).
-- Dev client gets no channel: it loads from Metro; the EAS Updates tab in
-  the dev launcher is a bonus, not the mechanism.
+- First CI run will publish an update, find no preview build for the new
+  fingerprint (expo-updates + expo-application are new native modules), and
+  trigger one. Install it from its EAS page — that's the last manual preview
+  install until the next native change.
+- The dev client needs `pnpm --dir apps/mobile build:development:ios` for the
+  same reason.
+- The preview build Misha installed on 2026-08-03 (pre-expo-updates) can
+  never receive OTA updates; it gets replaced by the above.
