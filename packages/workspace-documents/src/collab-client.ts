@@ -53,6 +53,10 @@ export class CollabConnection {
   /** Set by the cursor layer: everyone's latest cursors (self included —
    * the layer filters). The pull loop keeps `presenceGeneration` current. */
   onPresence: ((clients: CollabPresence["clients"]) => void) | null = null;
+  /** Second observer, for HOST chrome (a presence avatar strip): the same
+   * payload the cursor layer gets, self included. Separate slot so the
+   * cursor plugin's set/clear lifecycle cannot orphan the page's strip. */
+  onPeers: ((clients: CollabPresence["clients"]) => void) | null = null;
   presenceGeneration = 0;
   /** The raw ops of the delivery currently being dispatched, in canonical
    * server order with true clientIds. receiveUpdates builds a finished
@@ -133,7 +137,11 @@ export class CollabConnection {
     if (result.status === "ops" && result.presence !== undefined) {
       this.presenceGeneration = result.presence.generation;
       this.onPresence?.(result.presence.clients);
+      this.onPeers?.(result.presence.clients);
     }
+    // A dead session has no peers: clear the host strip instead of freezing
+    // the last delivered avatars.
+    if (result.status === "ended") this.onPeers?.([]);
     return result;
   }
 
@@ -167,7 +175,10 @@ export class CollabConnection {
     this.dead = false;
     // Fresh dedupe identity: same-epoch recovery restarts clientSeq at 0, and
     // the server has already acked the old (clientId, seq) pairs — reusing
-    // them would silently drop every carried edit.
+    // them would silently drop every carried edit. Leave under the OLD id
+    // first (best-effort): otherwise its caret lingers server-side for the
+    // 45s staleness window and the strip shows a ghost second self.
+    this.present(null);
     this.clientId = freshClientId(this.displayName);
   }
 }
@@ -237,6 +248,10 @@ export function peerExtension(connection: CollabConnection, startVersion: number
       async pull(): Promise<void> {
         while (!this.done) {
           try {
+            // Every this.view.state read here MUST be fresh: wait() parks for
+            // minutes and dispatches advance the state between reads — caching
+            // it across an await would rebase onto a stale document.
+            // react-doctor-disable-next-line react-doctor/js-cache-property-access
             const result = await connection.wait(getSyncedVersion(this.view.state));
             if (this.done) break;
             this.failures = 0;

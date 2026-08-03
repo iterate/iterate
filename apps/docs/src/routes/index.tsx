@@ -13,7 +13,9 @@ export const Route = createFileRoute("/")({
 function DocumentPage() {
   const search = Route.useSearch();
   if (search.workspace === undefined || search.path === undefined) {
-    return <DeepLinkEmptyState />;
+    // Workspace without document: the sidebar switcher lands here — the
+    // picker opens scoped to that workspace, choosing a document is next.
+    return <DeepLinkEmptyState workspacePath={search.workspace} />;
   }
   // A deep link owns one collab session. Switching either address must tear
   // down its live editor, refs, and attach gate before the next snapshot shows.

@@ -251,7 +251,9 @@ function AnnotatedPreview({
   // stale selection stops painting (the paint effect checks sourceBody) and
   // submit's own re-find surfaces "reselect and retry" while the text
   // survives for the user to copy.
-  // eslint-disable-next-line react-doctor/no-self-updating-effect -- the sourceBody equality guard makes this a convergent rebase, not a state loop
+  // The sourceBody equality guard makes this a convergent rebase, not a
+  // state loop: the write below pins sourceBody to body, so the next run
+  // early-returns.
   useLayoutEffect(() => {
     if (pending === null || pending.sourceBody === body) return;
     const exact = pending.sourceBody.slice(pending.range.start, pending.range.end);
@@ -271,6 +273,7 @@ function AnnotatedPreview({
       if (!composerOpen) setPending(null);
       return;
     }
+    // react-doctor-disable-next-line react-doctor/no-self-updating-effect
     setPending({
       range,
       sourceBody: body,

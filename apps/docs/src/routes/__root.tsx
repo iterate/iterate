@@ -1,9 +1,16 @@
 import type { ReactNode } from "react";
 import { createRootRoute, HeadContent, Outlet, Scripts } from "@tanstack/react-router";
+import { SidebarInset, SidebarProvider } from "@iterate-com/ui/components/sidebar";
 import { TooltipProvider } from "@iterate-com/ui/components/tooltip";
 import appCss from "../styles.css?url";
+import { getAppShellContext } from "../lib/sidebar-state.ts";
+import { AppSidebar } from "../components/app-sidebar.tsx";
 
 export const Route = createRootRoute({
+  loader: async () => {
+    const shell = await getAppShellContext();
+    return { sidebarDefaultOpen: shell.defaultOpen };
+  },
   head: () => ({
     meta: [
       { charSet: "utf-8" },
@@ -19,10 +26,19 @@ export const Route = createRootRoute({
 });
 
 function RootComponent() {
+  const { sidebarDefaultOpen } = Route.useLoaderData();
   return (
     <RootDocument>
       <TooltipProvider delay={0}>
-        <Outlet />
+        <SidebarProvider defaultOpen={sidebarDefaultOpen} className="h-svh">
+          <AppSidebar />
+          {/* Mobile scrolls the inset (the page stacks editor + comments taller
+              than the viewport); only lg pins the height, matching the doc
+              page's own lg:h-svh / lg:overflow-hidden split. */}
+          <SidebarInset className="min-w-0 overflow-auto lg:overflow-hidden">
+            <Outlet />
+          </SidebarInset>
+        </SidebarProvider>
       </TooltipProvider>
     </RootDocument>
   );
