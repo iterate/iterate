@@ -301,6 +301,92 @@ static void interrupting_silence_abandons_nothing(void)
 }
 
 /* A null caller must not crash a device that is already having a bad day. */
+/*
+ * THE ANSWER THAT WAS THROWN AWAY WHOLE.
+ *
+ * Measured on hardware: 95 frames arrived, all 95 counted as ignored-stale,
+ * spkPlayed did not move, and the customer heard nothing while the transcript
+ * showed a perfectly good reply.
+ *
+ * The device abandons answer N when the talk button goes down. If the sender
+ * then numbers its NEXT answer N as well — which happens whenever the turn
+ * produced no answer, and whenever a restarted bridge begins again at zero —
+ * every frame of that new answer matches the abandoned number and is
+ * discarded. Forever, because the number the device waits to exceed is one the
+ * sender will never reach again.
+ *
+ * The tail of an abandoned answer continues from where playback stopped; a new
+ * answer reusing the number starts again at its beginning. That is what
+ * separates them.
+ */
+static void an_answer_reusing_an_abandoned_number_still_plays(void)
+{
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 3U);
+  /* Answer 4 plays up to frame 20, then the person presses talk. */
+  frame = at(3U, 4U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(3U, 4U, 20U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+  iterate_kit_playout_interrupt(&playout);
+
+  /* Frames still in flight from the abandoned answer are rightly dropped. */
+  frame = at(3U, 4U, 21U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  assert(playout.ignored_stale_answer == 1U);
+
+  /* The sender's next answer reuses number 4 and starts from the beginning. */
+  frame = at(3U, 4U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(3U, 4U, 1U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+  /* And the whole of it plays, rather than one frame in a hundred. */
+  assert(playout.ignored_stale_answer == 1U);
+}
+
+/*
+ * A bridge that restarts numbers its first answer 0, below anything the device
+ * has played. That is a new conversation, not stale speech.
+ */
+static void a_restarted_sender_starting_at_zero_is_not_stale(void)
+{
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 2U);
+  frame = at(2U, 0U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(2U, 0U, 5U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+  iterate_kit_playout_interrupt(&playout);
+
+  /* The bridge restarts: answer 0 again, from its first frame. */
+  frame = at(2U, 0U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(2U, 0U, 1U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+}
+
 static void tolerates_missing_arguments(void) {
   struct iterate_kit_playout playout;
   const struct iterate_kit_playout_frame frame = at(1U, 1U, 1U);
@@ -328,6 +414,8 @@ int main(void) {
   a_new_call_starts_clean();
   interrupting_a_turn_that_is_never_answered_does_not_deafen_us();
   interrupting_silence_abandons_nothing();
+  an_answer_reusing_an_abandoned_number_still_plays();
+  a_restarted_sender_starting_at_zero_is_not_stale();
   tolerates_missing_arguments();
   return 0;
 }

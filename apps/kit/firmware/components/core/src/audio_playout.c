@@ -24,6 +24,7 @@ void iterate_kit_playout_reset(
   playout->answer_started = false;
   playout->abandoned = 0U;
   playout->has_abandoned = false;
+  playout->abandoned_frame = 0U;
   playout->appended = 0U;
   playout->replaced = 0U;
   playout->ignored_other_call = 0U;
@@ -55,6 +56,7 @@ void iterate_kit_playout_interrupt(struct iterate_kit_playout *playout) {
    */
   if (playout->answer_started) {
     playout->abandoned = playout->answer;
+    playout->abandoned_frame = playout->frame;
     playout->has_abandoned = true;
   }
   playout->frame = 0U;
@@ -104,13 +106,32 @@ enum iterate_kit_playout_action iterate_kit_playout_classify(
     return ITERATE_KIT_PLAYOUT_IGNORE;
   }
   /*
-   * Speech from the answer the person talked over. Its frames keep arriving
-   * for a round trip after the button goes down, and resuming a sentence
-   * somebody has already cut off is the rudest thing this device does.
+   * Speech from the answer the person talked over — but ONLY the frames that
+   * were already on their way.
+   *
+   * The abandoned number is forgotten the moment the sender numbers an answer
+   * at or below it, because that can only mean the sender has moved on and
+   * this is a DIFFERENT answer wearing a number we have seen. Two ways that
+   * happens, both measured: a turn that produced no answer at all leaves the
+   * sender's counter where it was, so its next real answer reuses the number
+   * we abandoned; and a bridge that restarts begins again at zero.
+   *
+   * Remembering it past that point discards a whole answer the customer is
+   * waiting for — 95 frames of one, in the run that found this — and the
+   * device has no way back, because the number it is waiting to exceed is one
+   * the sender will never reach again.
+   *
+   * The frames this is here to reject arrive within a round trip of the
+   * button, so `frame` still climbing is what distinguishes them: the tail of
+   * an abandoned answer continues where it left off, while a new answer under
+   * a reused number starts again from its first frames.
    */
   if (playout->has_abandoned && frame->answer == playout->abandoned) {
-    ++playout->ignored_stale_answer;
-    return ITERATE_KIT_PLAYOUT_IGNORE;
+    if (frame->frame >= playout->abandoned_frame) {
+      ++playout->ignored_stale_answer;
+      return ITERATE_KIT_PLAYOUT_IGNORE;
+    }
+    playout->has_abandoned = false;
   }
   /*
    * THE FIRST FRAME OF AN ANSWER ALWAYS REPLACES.

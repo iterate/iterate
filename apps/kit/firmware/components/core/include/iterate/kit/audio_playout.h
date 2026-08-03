@@ -100,6 +100,18 @@ struct iterate_kit_playout {
    */
   uint32_t abandoned;
   bool has_abandoned;
+  /**
+   * How far into the abandoned answer the device had got.
+   *
+   * What separates "the tail of the answer we cut off" from "a new answer
+   * that happens to reuse that number". The first continues from where
+   * playback stopped; the second starts again near zero. Without it the
+   * device discards a whole answer whenever the sender's numbering does not
+   * advance — a turn that produced no answer, or a bridge that restarted at
+   * zero — and never recovers, because the number it waits to exceed is one
+   * the sender will not reach again.
+   */
+  uint32_t abandoned_frame;
   uint32_t appended;
   uint32_t replaced;
   uint32_t ignored_other_call;
