@@ -192,6 +192,12 @@ enum {
    */
   SPEAKER_BUFFER_BYTES = ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES,
   /*
+   * How long the playback task waits for a frame before treating the source
+   * as dry. Two thirds of the 90 ms I2S DMA ring (6 descriptors x 240
+   * frames at 16 kHz); see the argument at the read itself.
+   */
+  SPEAKER_DRY_WAIT_MS = 60,
+  /*
    * Playback will not start, or resume after starving, until this much audio
    * is queued. Without it the first frame starts the speaker with zero margin
    * and the DMA's 90 ms is the only tolerance the whole path has.
@@ -624,7 +630,6 @@ static void recorder_task(void *argument) {
 
 static void playback_task(void *argument) {
   static int16_t chunk[FRAME_SAMPLES];
-  static const int16_t silence[FRAME_SAMPLES];
   /*
    * The writer NEVER stops. That is the whole design.
    *
@@ -634,12 +639,12 @@ static void playback_task(void *argument) {
    * immediately starved again: one network hiccup produced a train of holes,
    * which is why the rate never went to zero however large the buffers grew.
    *
-   * Now an empty read writes 20 ms of silence instead, which keeps the DMA
-   * ring topped up and the writer's lead intact — the DAC can no longer run
-   * dry because of anything this task does. Each silence records one unit of
-   * DROP DEBT, and when audio returns that many frames are discarded before
-   * playing: concealment therefore costs no accumulated latency, which is
-   * the invariant the M5StickS3's engine is built around.
+   * The answer to that was to write silence on an empty read, and it was the
+   * wrong one: silence occupies playout time and cannot be taken back, so
+   * every frame of it puts the rest of the answer permanently further behind.
+   * The right answer, and the one three reference implementations use, is to
+   * wait long enough that a late frame is absorbed by the hardware cushion
+   * rather than concealed — see the read and the dry branch below.
    */
   struct iterate_kit_voice_playback_clock playout_clock;
   uint64_t last_write_ms = 0U;
@@ -670,24 +675,62 @@ static void playback_task(void *argument) {
       continue;
     }
 
+    /*
+     * WAIT AS LONG AS THE HARDWARE CUSHION ALLOWS.
+     *
+     * This was 20 ms — one frame — against a 90 ms I2S DMA ring, which made
+     * this the least patient playout loop of any comparable firmware by a
+     * factor of two to infinity (ESPHome waits half its DMA depth; esp-adf
+     * waits 225 ms against 58.5 ms; xiaozhi-esp32 blocks indefinitely).
+     *
+     * The impatience was invisible because of where it is measured. By the
+     * time this call is reached, the preceding esp_codec_dev_write has
+     * returned — and it returns only once i2s_channel_write has copied into
+     * the DMA descriptors, back-pressured by the driver's free-buffer queue.
+     * So at the instant this loop declares itself "dry", roughly 60 ms of
+     * real audio is still queued and the DAC is in no danger at all. Waiting
+     * is free; splicing silence is not, because silence written into the ring
+     * occupies playout time and can never be taken back.
+     *
+     * Two thirds of the cushion, so a late frame is absorbed rather than
+     * concealed, while the remaining third still bounds how long this task
+     * can sit before the ring genuinely empties.
+     */
     received = xStreamBufferReceive(
-        runtime.speaker_buffer, chunk, sizeof(chunk), pdMS_TO_TICKS(20));
+        runtime.speaker_buffer, chunk, sizeof(chunk),
+        pdMS_TO_TICKS(SPEAKER_DRY_WAIT_MS));
 
     if (received == 0U) {
       /*
-       * Dry mid-answer. Conceal rather than stall — and only while the
-       * stream is genuinely still speaking, so the end of an answer settles
-       * back to idle instead of concealing forever.
+       * DRY. WRITE NOTHING AND COME BACK.
+       *
+       * This used to splice a frame of silence into the DMA ring, on the
+       * theory that a ring kept topped up cannot starve the DAC. That has it
+       * backwards. Silence written into the ring is indistinguishable from
+       * audio: it occupies playout time, can never be taken back, and so
+       * PERMANENTLY puts the rest of the answer 20 ms further behind. Do it
+       * 149 times in one answer — measured — and the listener hears three
+       * seconds of chopping, while every frame that ever arrived is still
+       * faithfully played, just late and in pieces.
+       *
+       * Not writing costs nothing, because the ring is not empty when this
+       * branch is reached: the preceding write returned only once the driver
+       * had copied into the DMA descriptors, so tens of milliseconds of real
+       * audio are still queued and the DAC is in no danger. And an actually
+       * empty ring already clocks out clean zeros — auto_clear is set — so
+       * concealment was never buying the silence it claimed to provide.
+       *
+       * This is what xiaozhi-esp32, ESPHome's speaker and esp-adf all do:
+       * when the source is dry, stop calling write. None of them conceals.
        */
+      ++runtime.speaker_waits_dry;
       if (iterate_kit_voice_playback_clock_empty(
               &playout_clock, now_ms(NULL)) ==
-              ITERATE_KIT_VOICE_PLAYBACK_CONCEAL &&
-          waveshare_audio_write(silence, FRAME_SAMPLES)) {
+          ITERATE_KIT_VOICE_PLAYBACK_CONCEAL) {
+        /* Kept as telemetry: how often the source could not keep up. It no
+         * longer costs the listener anything. */
         ++runtime.speaker_conceal_frames;
         runtime.starve_at_ms = now_ms(NULL);
-      } else {
-        /* WAIT, or a write that failed: nothing played, nothing concealed. */
-        ++runtime.speaker_waits_dry;
       }
       continue;
     }
