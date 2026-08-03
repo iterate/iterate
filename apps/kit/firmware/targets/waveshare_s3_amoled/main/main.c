@@ -876,147 +876,158 @@ void waveshare_request_restart(void) {
 }
 
 size_t waveshare_health_json(char *out, size_t capacity) {
+  /*
+   * NAME AND VALUE TRAVEL TOGETHER.
+   *
+   * This was one snprintf with sixty-odd "%" specifiers in a format string
+   * and sixty-odd arguments below it, aligned by hand. They drifted, twice —
+   * a counter was published under its neighbour's name, and because every
+   * argument is a uint32_t the compiler could not see it: -Wformat checks
+   * types, and a reorder among identically typed arguments is type-correct.
+   *
+   * The cost was not the wrong number. It was a whole investigation into 133
+   * "liveness restarts" that never happened, and three hypotheses tested
+   * against labels that were describing other counters. A misaligned metric
+   * is worse than a missing one: a missing one asks a question, and a
+   * misaligned one answers it wrongly.
+   *
+   * So a name is now written next to the value it names, and one loop emits
+   * the pairs. Adding a counter is one line, and a line cannot be misaligned
+   * with itself.
+   */
+  struct field {
+    const char *name;
+    uint32_t value;
+  };
   struct iterate_kit_esp_idf_itx_transport_metrics metrics;
   struct iterate_kit_spsc_ring_metrics outbox_metrics;
   const uint64_t now = now_ms(NULL);
-  int length;
+  size_t used;
+  size_t index;
+  int written;
+
   iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &metrics);
   iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
-  length = snprintf(
+
+  /*
+   * The gate every producer sits behind. Closed, the device answers RPCs and
+   * does nothing else — which is exactly what a broken one looks like, so it
+   * is reported rather than inferred.
+   */
+  const bool gate_open =
+      (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) &&
+      runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+      runtime.voicelab_generation == runtime.connection.generation;
+
+  const struct field fields[] = {
+    {"connectionState", (uint32_t)runtime.connection.state},
+    {"seq", runtime.stats_sequence++},
+    {"framesSent", runtime.voicelab.frames_sent},
+    {"frameFailures", runtime.voicelab.frame_send_failures},
+    {"micCaptured", runtime.mic_frames_captured},
+    {"micDropped", runtime.mic_frames_dropped},
+    {"micGated", runtime.mic_frames_gated},
+    {"spkFrames", runtime.voicelab.spk_frames_received},
+    {"spkPlayed", runtime.speaker_frames_played},
+    {"spkOverflow", runtime.speaker_overflow_drops},
+    {"spkUnderruns", runtime.speaker_underruns},
+    {"spkConceal", runtime.speaker_conceal_frames},
+    {"spkCatchup", runtime.speaker_catchup_frames},
+    {"spkDebtPaid", runtime.speaker_debt_paid},
+    {"spkWriteFailures", runtime.speaker_write_failures},
+    {"talkReadFailures", waveshare_buttons_talk_read_failures()},
+    {"spkMarginMaxMs", runtime.speaker_margin_max_ms},
+    {"spkMarginMinMs", runtime.speaker_margin_min_ms},
+    {"spkMarginP10Ms", runtime.speaker_margin_p10_ms},
+    {"spkWrites", runtime.speaker_writes},
+    {"spkBadFrames", runtime.speaker_bad_frames},
+    {"spkSeqGaps", runtime.playout.gaps},
+    {"spkDecodeFailures", runtime.voicelab.spk_decode_failures},
+    {"spkDiscarded", runtime.speaker_discarded_frames},
+    /*
+     * The playout's own census. Every other way a frame fails to reach the
+     * speaker is counted somewhere; these are the four the classifier
+     * decides, and without them a refused frame leaves no trace at all.
+     */
+    {"spkIgnoredCall", runtime.playout.ignored_other_call},
+    {"spkIgnoredStale", runtime.playout.ignored_stale_answer},
+    {"spkIgnoredDup", runtime.playout.ignored_duplicate},
+    {"spkReplaced", runtime.playout.replaced},
+    {"spkWaitPriming", runtime.speaker_waits_priming},
+    {"spkWaitDry", runtime.speaker_waits_dry},
+    {"bargeIns", runtime.barge_in_flushes},
+    {"batches", runtime.voicelab.batches_on_connection},
+    {"connGeneration", runtime.voicelab.connection_generation},
+    {"rttMs", runtime.voicelab.last_rtt_ms},
+    {"pings", runtime.voicelab.ping_count},
+    {"pingFailures", runtime.voicelab.ping_failures},
+    {"livenessRestarts", runtime.liveness_restarts},
+    {"bridgeLosses", runtime.bridge_losses},
+    {"bridgeAgeMs",
+     runtime.voicelab.last_bridge_ms == 0U
+         ? 0U
+         : (uint32_t)iterate_kit_voice_elapsed_ms(
+               now, runtime.voicelab.last_bridge_ms)},
+    {"downlinkRecycles", runtime.downlink_recycles},
+    {"batchAgeMs",
+     runtime.voicelab.last_batch_ms == 0U
+         ? 0U
+         : (uint32_t)iterate_kit_voice_elapsed_ms(
+               now, runtime.voicelab.last_batch_ms)},
+    {"resetReason", (uint32_t)esp_reset_reason()},
+    {"heapFree", (uint32_t)esp_get_free_heap_size()},
+    {"heapMin", (uint32_t)esp_get_minimum_free_heap_size()},
+    {"dmaLargest", (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DMA)},
+    {"wsSent", metrics.control_messages_sent},
+    {"outboxDiscarded", metrics.control_outbox_discarded},
+    {"outboxUsed", (uint32_t)outbox_metrics.current_slots},
+    {"outboxSlots", (uint32_t)CONTROL_OUTBOX_SLOTS},
+    {"inboxPublished", metrics.control_inbox.messages_published},
+    {"inboxConsumed", metrics.control_inbox.messages_consumed},
+    {"inboxDiscarded", metrics.control_inbox_discarded},
+    {"inboxHighWater", metrics.control_inbox.high_water_slots},
+    {"inboxDeferrals", metrics.control_inbox_deferrals},
+    {"sessionGeneration", runtime.connection.generation},
+    {"protoFailures", metrics.protocol_failures},
+    {"recvFailures", metrics.control_receive_failures},
+    {"sendFailures", metrics.control_send_failures},
+    {"lastAppStatus", (uint32_t)metrics.last_application_capnweb_status},
+  };
+
+  /* The strings and the one 64-bit field, which do not fit the pair table. */
+  written = snprintf(
       out,
       capacity,
-      "{"
-      "\"transport\":\"%s\",\"voicelab\":\"%s\",\"voicelabFailure\":\"%s\","
-      "\"connectionState\":%d,\"callActive\":%s,\"callPending\":%s,"
-      "\"wantsCall\":%s,\"talking\":%s,\"gateOpen\":%s,"
-      "\"seq\":%" PRIu32 ",\"t\":%" PRIu64
-      ",\"framesSent\":%" PRIu32 ",\"frameFailures\":%" PRIu32
-      ",\"micCaptured\":%" PRIu32 ",\"micDropped\":%" PRIu32
-      ",\"micGated\":%" PRIu32
-      ",\"spkFrames\":%" PRIu32 ",\"spkPlayed\":%" PRIu32
-      ",\"spkOverflow\":%" PRIu32 ",\"spkUnderruns\":%" PRIu32
-      ",\"spkConceal\":%" PRIu32 ",\"spkCatchup\":%" PRIu32
-      ",\"spkDebtPaid\":%" PRIu32
-      ",\"spkWriteFailures\":%" PRIu32 ",\"talkReadFailures\":%" PRIu32 ",\"spkMarginMaxMs\":%" PRIu32
-      ",\"spkBadFrames\":%" PRIu32 ",\"spkSeqGaps\":%" PRIu32
-      ",\"spkDecodeFailures\":%" PRIu32 ",\"bargeIns\":%" PRIu32
-      ",\"batches\":%" PRIu32 ",\"connGeneration\":%" PRIu32
-      ",\"rttMs\":%" PRIu32 ",\"pings\":%" PRIu32
-      ",\"pingFailures\":%" PRIu32
-      ",\"spkDiscarded\":%" PRIu32
-      ",\"spkIgnoredCall\":%" PRIu32 ",\"spkIgnoredStale\":%" PRIu32
-      ",\"spkIgnoredDup\":%" PRIu32 ",\"spkReplaced\":%" PRIu32
-      ",\"spkWaitPriming\":%" PRIu32 ",\"spkWaitDry\":%" PRIu32
-      ",\"livenessRestarts\":%" PRIu32
-      ",\"bridgeLosses\":%" PRIu32 ",\"bridgeAgeMs\":%" PRIu32
-      ",\"downlinkRecycles\":%" PRIu32 ",\"batchAgeMs\":%" PRIu32
-      ",\"uptimeMs\":%" PRIu64 ",\"resetReason\":%d"
-      ",\"heapFree\":%" PRIu32 ",\"heapMin\":%" PRIu32
-      ",\"wsSent\":%" PRIu32 ",\"outboxDiscarded\":%" PRIu32
-      ",\"inboxPublished\":%" PRIu32 ",\"inboxConsumed\":%" PRIu32
-      ",\"inboxDiscarded\":%" PRIu32 ",\"inboxHighWater\":%" PRIu32
-      ",\"sessionGeneration\":%" PRIu32
-      ",\"protoFailures\":%" PRIu32 ",\"recvFailures\":%" PRIu32
-      ",\"sendFailures\":%" PRIu32 ",\"inboxDeferrals\":%" PRIu32
-      ",\"lastAppStatus\":%" PRId32
-      ",\"dmaLargest\":%" PRIu32
-      ",\"spkMarginMinMs\":%" PRIu32 ",\"spkMarginP10Ms\":%" PRIu32
-      ",\"spkWrites\":%" PRIu32
-      ",\"outboxUsed\":%u,\"outboxSlots\":%u}",
+      "{\"transport\":\"%s\",\"voicelab\":\"%s\",\"voicelabFailure\":\"%s\","
+      "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,\"talking\":%s,"
+      "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
       iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
-      (int)runtime.connection.state,
       runtime.voicelab.call_active ? "true" : "false",
       runtime.voicelab.call_pending ? "true" : "false",
       waveshare_display_call_requested() ? "true" : "false",
       runtime.talking ? "true" : "false",
-      /* The gate every producer sits behind. Closed, the device answers RPCs
-       * and does nothing else — which is exactly what it looks like broken. */
-      (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
-       runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
-       runtime.voicelab_generation == runtime.connection.generation)
-          ? "true"
-          : "false",
-      runtime.stats_sequence++,
+      gate_open ? "true" : "false",
       now,
-      runtime.voicelab.frames_sent,
-      runtime.voicelab.frame_send_failures,
-      runtime.mic_frames_captured,
-      runtime.mic_frames_dropped,
-      runtime.mic_frames_gated,
-      runtime.voicelab.spk_frames_received,
-      runtime.speaker_frames_played,
-      runtime.speaker_overflow_drops,
-      runtime.speaker_underruns,
-      runtime.speaker_conceal_frames,
-      runtime.speaker_catchup_frames,
-      runtime.speaker_debt_paid,
-      runtime.speaker_write_failures,
-      waveshare_buttons_talk_read_failures(),
-      runtime.speaker_margin_max_ms,
-      runtime.speaker_bad_frames,
-      runtime.playout.gaps,
-      runtime.voicelab.spk_decode_failures,
-      runtime.barge_in_flushes,
-      runtime.voicelab.batches_on_connection,
-      runtime.voicelab.connection_generation,
-      runtime.voicelab.last_rtt_ms,
-      runtime.voicelab.ping_count,
-      runtime.voicelab.ping_failures,
-      runtime.speaker_discarded_frames,
-      /*
-       * THE DECISION THAT HAD NO COUNTER.
-       *
-       * Every other way a frame can fail to reach the speaker is counted:
-       * lost, malformed, overflowed, discarded, concealed, dropped for debt
-       * or catch-up. The one that was not is the playout REFUSING it - and
-       * a refused frame leaves no trace anywhere, because sequence gaps are
-       * only counted on frames that were accepted.
-       *
-       * Measured with everything else at zero: 2 seconds of audio arriving
-       * while the ring sat unchanged at 340ms. Frames were arriving and not
-       * being written, and nothing in the device could say so.
-       */
-      runtime.playout.ignored_other_call,
-      runtime.playout.ignored_stale_answer,
-      runtime.playout.ignored_duplicate,
-      runtime.playout.replaced,
-      runtime.speaker_waits_priming,
-      runtime.speaker_waits_dry,
-      runtime.liveness_restarts,
-      runtime.bridge_losses,
-      runtime.voicelab.last_bridge_ms == 0U
-          ? 0U
-          : (uint32_t)(iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_bridge_ms)),
-      runtime.downlink_recycles,
-      runtime.voicelab.last_batch_ms == 0U
-          ? 0U
-          : (uint32_t)(iterate_kit_voice_elapsed_ms(now, runtime.voicelab.last_batch_ms)),
-      now,
-      (int)esp_reset_reason(),
-      (uint32_t)esp_get_free_heap_size(),
-      (uint32_t)esp_get_minimum_free_heap_size(),
-      metrics.control_messages_sent,
-      metrics.control_outbox_discarded,
-      metrics.control_inbox.messages_published,
-      metrics.control_inbox.messages_consumed,
-      metrics.control_inbox_discarded,
-      metrics.control_inbox.high_water_slots,
-      runtime.connection.generation,
-      metrics.protocol_failures,
-      metrics.control_receive_failures,
-      metrics.control_send_failures,
-      metrics.control_inbox_deferrals,
-      metrics.last_application_capnweb_status,
-      (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DMA),
-      runtime.speaker_margin_min_ms,
-      runtime.speaker_margin_p10_ms,
-      runtime.speaker_writes,
-      (unsigned int)outbox_metrics.current_slots,
-      (unsigned int)CONTROL_OUTBOX_SLOTS);
-  if (length <= 0 || (size_t)length >= capacity) return 0U;
-  return (size_t)length;
+      now);
+  if (written <= 0 || (size_t)written >= capacity) return 0U;
+  used = (size_t)written;
+
+  for (index = 0U; index < sizeof(fields) / sizeof(fields[0]); index++) {
+    written = snprintf(
+        out + used,
+        capacity - used,
+        ",\"%s\":%" PRIu32,
+        fields[index].name,
+        fields[index].value);
+    if (written <= 0 || (size_t)written >= capacity - used) return 0U;
+    used += (size_t)written;
+  }
+  if (used + 2U >= capacity) return 0U;
+  out[used++] = '}';
+  out[used] = '\0';
+  return used;
 }
 
 static void append_stats(uint64_t now) {
