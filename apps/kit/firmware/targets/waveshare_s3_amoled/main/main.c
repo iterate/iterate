@@ -352,6 +352,8 @@ static struct {
   volatile uint64_t speaker_last_write_ms;
   uint32_t mic_frames_captured;
   uint32_t mic_frames_dropped;
+  /** Captured with no turn open: room noise, never sent, never queued. */
+  uint32_t mic_frames_idle;
   uint32_t mic_frames_gated;
   uint32_t speaker_frames_played;
   uint32_t speaker_overflow_drops;
@@ -791,15 +793,20 @@ static void playback_task(void *argument) {
                   now_ms(NULL)),
               now_ms(NULL));
       if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
-      /*
-       * RATE LIMITED, and that limit is the whole safety of this mechanism.
-       * Skipping freely drains the entire backlog in a few milliseconds —
-       * seconds of speech gone at once, which is exactly "you can barely
-       * hear what it says". One frame per second of audio absorbs ordinary
-       * clock drift (well under 2%) while never removing enough at once to
-       * be heard.
-       */
+        /*
+         * A SKIPPED FRAME STILL SPENT ITS PLACE IN THE TIMELINE.
+         *
+         * Skipping recovers lag only if the timeline advances as the frame is
+         * discarded. Leave the counter alone and the computed lag never
+         * falls, so the loop keeps deciding it is late and skips again — it
+         * drains the whole backlog and the listener hears half the answer
+         * missing. Measured exactly that: 78 of 162 frames skipped.
+         *
+         * Advancing here is what makes "skip until level" terminate at the
+         * point it is level, which is the entire safety of the mechanism.
+         */
         ++runtime.speaker_catchup_frames;
+        ++runtime.answer_frames_played;
         continue;
       }
 
@@ -878,9 +885,31 @@ static void capture_task(void *argument) {
       continue;
     }
     ++runtime.mic_frames_captured;
+    /*
+     * NOBODY IS LISTENING, SO DO NOT QUEUE.
+     *
+     * Capture runs continuously — the codec is full duplex and stopping it
+     * between turns costs a settle on every press — but frames only LEAVE the
+     * queue while a turn is open. Queueing regardless filled it within a
+     * second of boot and then churned it forever: 7941 of 8804 frames
+     * "dropped" in one session, none of which was speech anybody said.
+     *
+     * The number mattered more than the wasted work. A drop counter at 90%
+     * is indistinguishable from a device losing the customer's words, so the
+     * one measurement that would show a real uplink fault was buried in room
+     * noise nobody wanted.
+     *
+     * Frames captured while idle are counted and discarded here, without
+     * touching the queue, so the queue holds only what a turn will send.
+     */
+    if (!runtime.talking) {
+      ++runtime.mic_frames_idle;
+      continue;
+    }
     if (xQueueSend(runtime.mic_queue, &frame, 0) != pdTRUE) {
       /* Freshest wins: discard the OLDEST frame, keep this one. Stale
-       * speech after a network hiccup is worse than a gap. */
+       * speech after a network hiccup is worse than a gap — and it is the
+       * only way a backlog can never delay what the customer says next. */
       struct mic_frame discarded;
       (void)xQueueReceive(runtime.mic_queue, &discarded, 0);
       (void)xQueueSend(runtime.mic_queue, &frame, 0);
@@ -1021,6 +1050,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"frameFailures", runtime.voicelab.frame_send_failures},
     {"micCaptured", runtime.mic_frames_captured},
     {"micDropped", runtime.mic_frames_dropped},
+    {"micIdle", runtime.mic_frames_idle},
     {"micGated", runtime.mic_frames_gated},
     {"spkFrames", runtime.voicelab.spk_frames_received},
     {"spkPlayed", runtime.speaker_frames_played},

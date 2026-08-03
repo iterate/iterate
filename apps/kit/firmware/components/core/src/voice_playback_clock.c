@@ -132,21 +132,40 @@ iterate_kit_voice_playback_clock_frame(
   const uint32_t queued_ms = queued_bytes / 32U;
   if (clock == NULL) return ITERATE_KIT_VOICE_PLAYBACK_WAIT;
   /*
-   * BEHIND ITS OWN TIMELINE, so give a frame back to get level again.
+   * BEHIND ITS OWN TIMELINE, so skip forward until level again.
    *
-   * Dropping one frame in fifty recovers 20 ms per second — inaudible as a
-   * defect, and enough to walk out half a second of lag in about half a
-   * minute of speech. The alternative is staying late forever: nothing else
-   * in this design ever returns to realtime, because a listener who is behind
-   * has no way to catch up except by playing less than arrives.
+   * SKIP, NOT TRIM. The first version of this dropped one frame in fifty —
+   * 20 ms recovered per second — which is the right shape for trimming slow
+   * clock drift and hopeless against a stall. Measured: 3.1 s of lag, three
+   * frames dropped, 60 ms recovered; at that rate the answer ends long before
+   * the device is level, so it simply stays late for the rest of the call.
    *
-   * Rate-limited by the same counter as the depth rule below, so the two can
-   * never compound into audible decimation.
+   * A listener who is behind can only catch up by playing less than arrives,
+   * and doing that gradually means doing it audibly for a long time. Doing it
+   * at once costs one visible cut and then the conversation is live again,
+   * which is what a person actually wants from a voice device: they would
+   * rather lose a syllable than talk to something three seconds in the past.
+   *
+   * The threshold is what keeps this rare — a lag this large only follows a
+   * real stall, and ordinary jitter never reaches it.
+   */
+  /*
+   * ONLY WHILE THERE IS SOMETHING TO SKIP INTO.
+   *
+   * Skipping recovers lag by playing less than arrived, so it is only ever
+   * correct when audio is waiting. With an empty ring the next frame IS the
+   * live edge — discarding it removes speech and recovers nothing, because
+   * the timeline is already as current as the data allows.
+   *
+   * Measured without this guard: 64 of 183 frames skipped, which the listener
+   * hears as the opening of an answer missing. Lag is at its highest exactly
+   * when an answer starts, since the timeline begins at the first frame
+   * played and prefill has already spent its cushion — so an unguarded rule
+   * attacks the first words of every answer, which is precisely the part
+   * nobody can afford to lose.
    */
   if (lag_ms > ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS &&
-      frames_played >= clock->next_catchup_at_frame) {
-    clock->next_catchup_at_frame =
-        frames_played + ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY;
+      queued_ms > ITERATE_KIT_VOICE_FRAME_MS) {
     return ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP;
   }
   if (queued_ms > ITERATE_KIT_VOICE_SPEAKER_HIGH_WATER_MS &&

@@ -1203,7 +1203,11 @@ static void cli_main_play_frame(
               now_ms),
           now_ms);
   if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
+    /* The skipped frame still spent its place in the timeline; see the
+     * device's copy of this branch for why leaving it makes skipping run
+     * away and delete half an answer. */
     ++runtime->speaker_catchup_frames;
+    ++runtime->answer_frames_played;
     return;
   }
   if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_DEBT) {

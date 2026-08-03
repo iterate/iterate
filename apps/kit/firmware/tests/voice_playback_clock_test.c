@@ -105,20 +105,36 @@ static void falling_behind_its_timeline_is_recovered(void)
 {
   struct iterate_kit_voice_playback_clock clock;
   const uint32_t late = ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS + 1U;
+  const uint32_t level = ITERATE_KIT_VOICE_SPEAKER_LAG_CATCHUP_MS;
+  const uint32_t backlog = 500U * 32U; /* half a second waiting to be played */
+  uint32_t index;
 
   iterate_kit_voice_playback_clock_init(&clock);
-  /* Late, with an empty ring: depth would never have noticed. */
-  assert(
-      iterate_kit_voice_playback_clock_frame(&clock, 0U, 0U, late, 1000U) ==
-      ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP);
-  /* Rate limited, so recovery is 20ms per second rather than decimation. */
-  assert(
-      iterate_kit_voice_playback_clock_frame(&clock, 0U, 1U, late, 1020U) ==
-      ITERATE_KIT_VOICE_PLAYBACK_PLAY);
+  /*
+   * Late WITH A BACKLOG, which is the only case worth skipping: it keeps
+   * skipping until level, rather than trimming one frame in fifty — measured,
+   * that recovered 60 ms against 3.1 s of lag, so the answer ended long
+   * before the device was level and it simply stayed behind.
+   */
+  for (index = 0U; index < 20U; ++index) {
+    assert(
+        iterate_kit_voice_playback_clock_frame(
+            &clock, backlog, index, late, 1000U + index * 20U) ==
+        ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP);
+  }
+  /* Level again: skipping stops at once, so the cut is bounded by the lag. */
   assert(
       iterate_kit_voice_playback_clock_frame(
-          &clock, 0U, ITERATE_KIT_VOICE_SPEAKER_CATCHUP_EVERY, late, 2000U) ==
-      ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP);
+          &clock, backlog, 20U, level, 1400U) ==
+      ITERATE_KIT_VOICE_PLAYBACK_PLAY);
+  /*
+   * And late with NOTHING QUEUED plays: the next frame is the live edge, so
+   * discarding it would delete speech and recover nothing. Unguarded, this
+   * ate the opening of every answer — lag peaks exactly when one starts.
+   */
+  assert(
+      iterate_kit_voice_playback_clock_frame(&clock, 0U, 21U, late, 1500U) ==
+      ITERATE_KIT_VOICE_PLAYBACK_PLAY);
 }
 
 /*
