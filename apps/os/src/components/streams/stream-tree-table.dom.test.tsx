@@ -120,6 +120,11 @@ test("the index table has no row-loading UI and reveals the current path", async
   expect(visiblePaths(container)).toEqual(["/", "/agents", "/agents/cows"]);
   expect(container.querySelector(".animate-spin")).toBeNull();
   expect(container.querySelector('button[aria-label^="Retry loading"]')).toBeNull();
+  const spans = [...container.querySelectorAll("span")];
+  const eventHeading = spans.find((element) => element.textContent === "Events");
+  const eventCount = spans.find((element) => element.textContent === "1 event");
+  expect(eventHeading?.classList.contains("w-[5.5rem]")).toBe(true);
+  expect(eventCount?.classList.contains("w-[5.5rem]")).toBe(true);
 
   const collapseAgents = container.querySelector<HTMLButtonElement>(
     'button[aria-label="Collapse /agents"]',

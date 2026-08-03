@@ -4,17 +4,19 @@ import { EventsStreamPathLabel } from "@iterate-com/ui/components/events/stream-
 import { cn } from "@iterate-com/ui/lib/utils";
 import { formatEventCount, streamTreeLabel, type StreamTreeNode } from "./stream-tree-table.ts";
 
+const EVENTS_COLUMN_CLASS = "w-[5.5rem] shrink-0 text-right";
+
 export function StreamTreeHeader({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "grid grid-cols-[minmax(0,1fr)_5.5rem] gap-3 border-b px-3 py-1.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase",
+        "flex items-center gap-3 border-b px-2 py-1.5 text-[10px] font-medium tracking-wide text-muted-foreground uppercase",
         className,
       )}
       aria-hidden
     >
-      <span>Stream</span>
-      <span className="text-right">Events</span>
+      <span className="min-w-0 flex-1">Stream</span>
+      <span className={EVENTS_COLUMN_CLASS}>Events</span>
     </div>
   );
 }
@@ -39,7 +41,9 @@ export function StreamTreeRowContent({
         label={streamTreeLabel(node.path)}
         className="text-xs"
       />
-      <span className="ml-auto shrink-0 text-[11px] tabular-nums text-foreground/70">
+      <span
+        className={cn("ml-auto text-[11px] tabular-nums text-foreground/70", EVENTS_COLUMN_CLASS)}
+      >
         {node.eventCount === undefined ? null : formatEventCount(node.eventCount)}
       </span>
     </>
