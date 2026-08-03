@@ -68,7 +68,7 @@ import {
   CoreProcessorContract,
   ConnectionOpenerDescriptor as ConnectionOpenerDescriptorSchema,
   parseCommittedCoreEvent,
-  subscriptionKeyForConfiguredEvent,
+  subscriptionNameForConfiguredEvent,
   type CommittedSubscriptionConfiguredEvent,
   type CommittedSubscriptionRemovedEvent,
   type CoreProcessorState,
@@ -254,14 +254,33 @@ function disposeAcknowledgedRpcResult(result: unknown, operation: string) {
   }
 }
 
-/** Build the four concrete calls used by the receiver union. */
+/**
+ * The parent-side view of one processor facet: created via
+ * `ctx.facets.get(name, …)` from the `ProcessorFacet` class in
+ * `iterate/processors/cloudflare`. Typed loosely at this seam — facet stubs
+ * are Fetchers whose RPC surface the facet class defines
+ * (configure/wakeStreamProcessor/handleAlarm, plus read doors phase 2 dials).
+ */
+type ProcessorFacetStub = {
+  configure(identity: {
+    parentName: string;
+    projectId: string | null;
+    path: string;
+  }): Promise<unknown>;
+  wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<unknown>;
+  handleAlarm(info?: AlarmInvocationInfo): Promise<unknown>;
+};
+
+/** Build the concrete calls used by the receiver union. */
 function createSubscriptionReceiverCalls(deps: {
   projectId: string | null;
   exports: unknown;
   createAuthorityRoot(): unknown;
+  /** Dial (create/configure if needed) the processor facet named after the subscription. */
+  dialProcessorFacet(name: string): Promise<ProcessorFacetStub>;
   copyToStream(path: string, batch: StreamDeliveryBatch): Promise<CopyReceipt>;
   onHostedDeliveryError(
-    subscriptionKey: string,
+    name: string,
     error: unknown,
     expectedDelivery: ExpectedHostedDeliveryState,
   ): void;
@@ -288,19 +307,30 @@ function createSubscriptionReceiverCalls(deps: {
   };
 
   return {
-    async wakeStreamProcessor(
-      expression: ItxExpression,
-      request: StreamProcessorWakeRequest,
-      expectedDelivery: ExpectedHostedDeliveryState,
-    ) {
-      const { value } = await evaluateItxExpression(
-        deps.createAuthorityRoot(),
-        toInvocation(expression, request),
-      );
+    async wakeStreamProcessor(receiver, request, expectedDelivery) {
+      let value: unknown;
+      if (receiver.placement === "facet") {
+        // Facet placement: the subscription name IS the facet name; the wake
+        // is an in-process parent→facet dial, no itx expression involved. The
+        // facet's wakeStreamProcessor returns the standard wake response, so
+        // everything downstream (retention, batching, watchdog) is shared.
+        const facet = await deps.dialProcessorFacet(request.name);
+        value = await facet.wakeStreamProcessor(request);
+      } else {
+        if (receiver.expression === undefined) {
+          throw new Error(
+            `processor-wake subscription "${request.name}" has neither facet placement nor an expression`,
+          );
+        }
+        ({ value } = await evaluateItxExpression(
+          deps.createAuthorityRoot(),
+          toInvocation(receiver.expression, request),
+        ));
+      }
       return retainProcessorWakeResponse({
         value,
         onDeliveryError: (error) =>
-          deps.onHostedDeliveryError(request.subscriptionKey, error, expectedDelivery),
+          deps.onHostedDeliveryError(request.name, error, expectedDelivery),
       });
     },
 
@@ -331,10 +361,31 @@ function createSubscriptionReceiverCalls(deps: {
           headers: { "content-type": "application/json" },
           body: JSON.stringify(delivery),
         });
-        await response.body?.cancel();
         if (!response.ok) {
+          await response.body?.cancel();
           throw new Error(`webhook responded ${response.status} ${response.statusText}`);
         }
+        // An offset-acking webhook owns its durable position by answering
+        // with JSON `{ confirmedOffset }`. Only a JSON-typed body is read —
+        // anything else is cancelled unread, so a plain webhook's 2xx keeps
+        // exactly its old cost.
+        const contentType = response.headers.get("content-type") ?? "";
+        if (!contentType.includes("json")) {
+          await response.body?.cancel();
+          return {};
+        }
+        let body: unknown;
+        try {
+          body = (await response.json()) as unknown;
+        } catch {
+          return {};
+        }
+        const confirmedOffset = (body as { confirmedOffset?: unknown } | null)?.confirmedOffset;
+        return typeof confirmedOffset === "number" &&
+          Number.isSafeInteger(confirmedOffset) &&
+          confirmedOffset >= 0
+          ? { confirmedOffset }
+          : {};
       } catch (error) {
         if (webhookEgress === egress) webhookEgress = undefined;
         (egress as Partial<Disposable>)[Symbol.dispose]?.();
@@ -354,11 +405,25 @@ function toInvocation(expression: ItxExpression, payload: unknown): ItxExpressio
 }
 
 /**
- * The subscription key of the worker feed every project-scoped stream uses.
+ * The subscription name of the worker feed every project-scoped stream uses.
  * Child streams configure it at birth. The project creation saga configures
  * it on `/` only after the seeded default worker has built.
  */
-const PROJECT_WORKER_SUBSCRIPTION_KEY = "project-worker";
+const PROJECT_WORKER_SUBSCRIPTION_NAME = "project-worker";
+
+/**
+ * The facet slice's one shared alarm desire (wall-clock ms), in the parent's
+ * kv. Facets cannot own a platform alarm (structural in workerd), so every
+ * facet's `proxySetAlarm` merges into this single slot — kept at the EARLIEST
+ * requested time, because the proxy verbs carry no facet identity and an early
+ * fire is safe (each replayed `handleAlarm` is level-triggered and re-arms its
+ * own remaining desire) while a lost fire is not. A fire clears the slot and
+ * replays into every facet-placed subscription's facet.
+ */
+const FACET_ALARM_KV_KEY = "facetAlarmAtMs";
+
+/** Bounded extra delay before retrying a facet's failed alarm replay. */
+const FACET_ALARM_RETRY_DELAY_MS = 1_000;
 
 /**
  * Durable stream storage plus the stream's own ("core") processor.
@@ -396,12 +461,21 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
   /**
+   * Waiters parked on `waitUntilConfirmed`, checked from every cursor-store
+   * mutation. One-shot and in-memory on purpose: the barrier dies with the RPC
+   * caller or this incarnation, exactly like `waitForEvent`.
+   */
+  readonly #confirmationWaiters = new Set<{ check(): void }>();
+  /**
    * Durable subscription cursor rows. A field (not inlined into the hooks)
    * because the core-state rebuild path removes rows whose configuration no
    * longer exists — see #readCoreProcessorState.
    */
   readonly #subscriptionCursorStore = new SqliteSubscriptionCursorStore(this.ctx.storage.sql, {
-    onMutation: () => this.#refreshLiveState(),
+    onMutation: () => {
+      this.#refreshLiveState();
+      for (const waiter of this.#confirmationWaiters) waiter.check();
+    },
   });
   /** In-memory throughput accounting (events/s, bytes in/out); resets with the incarnation. */
   readonly #metrics = new StreamRuntimeMetrics(Date.now());
@@ -433,13 +507,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         projectId: this.name.projectId,
         exports: this.ctx.exports,
         createAuthorityRoot: () => this.#createEventDeliveryAuthorityRoot(),
+        dialProcessorFacet: (name) => this.#dialProcessorFacet(name),
         copyToStream: (path, batch) => this.#streamStub(path).receiveCopiedEvents(batch),
-        onHostedDeliveryError: (subscriptionKey, error, expectedDelivery) =>
-          this.#eventSender.connections.onHostedDeliveryError(
-            subscriptionKey,
-            error,
-            expectedDelivery,
-          ),
+        onHostedDeliveryError: (name, error, expectedDelivery) =>
+          this.#eventSender.connections.onHostedDeliveryError(name, error, expectedDelivery),
       }),
       appendDeliveryEvent: (event) => {
         // A lifecycle interruption is expected while this incarnation is
@@ -497,6 +568,11 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
+    // The one scheduling rule: delivery RESUMES after confirmed_offset. A
+    // fresh incarnation rewinds every row's transfer position to its durable
+    // confirmation, redelivering the delivered-but-unconfirmed window
+    // (at-least-once; receivers dedupe by (streamId, offset)).
+    this.#subscriptionCursorStore.rewindDeliveredToConfirmed();
     const loaded = this.#readCoreProcessorState();
     if (loaded.kind === "ready") {
       this.#coreProcessorState = loaded.state;
@@ -519,6 +595,12 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #finishInitialization(): void {
     this.#liveState = new LiveState(this.#readRuntimeState());
+
+    // Level-triggered boot repair for the facet alarm slice: the native alarm
+    // normally survives eviction, but a crash between markFired and the
+    // re-arm could otherwise strand a persisted facet desire forever.
+    const facetAlarmAtMs = this.#readFacetAlarmAtMs();
+    if (facetAlarmAtMs !== null) this.#alarmArmer.armNoLaterThan(facetAlarmAtMs);
 
     // The first boot appends the stream's birth certificate; every wake
     // (fetch, RPC, alarm) appends a `woken` event, whose post-commit sends are
@@ -549,7 +631,7 @@ export class StreamDurableObject extends DurableObject<Env> {
           this.append({
             type: "events.iterate.com/stream/subscription-configured",
             payload: {
-              subscriptionKey: PROJECT_WORKER_SUBSCRIPTION_KEY,
+              name: PROJECT_WORKER_SUBSCRIPTION_NAME,
               receiver: {
                 action: "itx-call",
                 expression: ["processEventBatch"],
@@ -599,11 +681,151 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** Use Cloudflare's native alarm invocation as the trace root; retry work remains background. */
-  alarm(): void {
+  alarm(alarmInfo?: AlarmInvocationInfo): void {
     this.#alarmArmer.markFired();
     this.#deliveryAlarmBoundary.runAlarmTurn(() => {
+      this.#fireDueFacetAlarms(alarmInfo);
       this.#reconcileCommittedState({ alarmTurn: true });
     });
+  }
+
+  // ===========================================================================
+  // Processor facets: parent→facet dial, and the parent-owned alarm proxy.
+  // Facets cannot own a platform alarm (structural in workerd); the Stream DO
+  // multiplexes their alarm desires through its own StreamAlarmArmer and
+  // replays fires into each facet's handleAlarm.
+  // ===========================================================================
+
+  /** Facets configured this incarnation; a redundant configure after eviction is safe. */
+  readonly #configuredProcessorFacets = new Set<string>();
+  /** Per-facet consecutive handleAlarm replay failures (backoff input; in-memory). */
+  readonly #facetAlarmFailures = new Map<string, number>();
+
+  /**
+   * Create-or-reuse the processor facet named after a subscription and make
+   * sure it received its first-contact `configure` before any wake. The class
+   * is the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`,
+   * re-exported as an OS worker entrypoint so `ctx.exports` carries it.
+   */
+  async #dialProcessorFacet(name: string): Promise<ProcessorFacetStub> {
+    const workerExports = this.ctx.exports as Record<string, unknown>;
+    // Loose lookup on purpose: the class is the sibling ProcessorFacet export
+    // from iterate/processors/cloudflare, surfaced as an OS worker entrypoint;
+    // ctx.exports carries every exported entrypoint by name.
+    const facetClass = workerExports.ProcessorFacet as DurableObjectClass | undefined;
+    if (facetClass === undefined) {
+      throw new Error(
+        'facet placement requires the OS worker to export the "ProcessorFacet" entrypoint',
+      );
+    }
+    const facet = this.ctx.facets.get(name, () => ({
+      class: facetClass,
+    })) as unknown as ProcessorFacetStub;
+    if (!this.#configuredProcessorFacets.has(name)) {
+      const parentName = this.ctx.id.name;
+      if (parentName === undefined) {
+        throw new Error("Stream Durable Object must be addressed by name.");
+      }
+      await facet.configure({
+        parentName,
+        projectId: this.name.projectId,
+        path: this.name.path,
+      });
+      this.#configuredProcessorFacets.add(name);
+    }
+    return facet;
+  }
+
+  #readFacetAlarmAtMs(): number | null {
+    return this.ctx.storage.kv.get<number>(FACET_ALARM_KV_KEY) ?? null;
+  }
+
+  /** Merge a desire into the shared slot at the EARLIEST time and arm the real alarm. */
+  #mergeFacetAlarmDesire(atMs: number): void {
+    const existing = this.#readFacetAlarmAtMs();
+    const merged = existing === null ? atMs : Math.min(existing, atMs);
+    this.ctx.storage.kv.put(FACET_ALARM_KV_KEY, merged);
+    this.#alarmArmer.armNoLaterThan(merged);
+  }
+
+  /**
+   * Facet-only alarm door ({@link ProcessorFacetAlarmProxy}'s implementation):
+   * a facet's `ctx.storage.setAlarm` lands here. The verbs carry no facet
+   * identity, so desires from every facet merge into one earliest-time slot;
+   * reentrant calls during an in-flight `handleAlarm` replay are ordinary
+   * merges into the same slot.
+   */
+  proxySetAlarm(scheduledTimeMs: number): void {
+    this.#mergeFacetAlarmDesire(z.number().int().nonnegative().parse(scheduledTimeMs));
+  }
+
+  /**
+   * Facet-only alarm door. Deliberately a no-op on the shared slot: without a
+   * facet identity, deleting could lose a SIBLING facet's pending desire, and
+   * one spurious fire is harmless — every replayed `handleAlarm` is
+   * level-triggered and simply re-arms nothing, after which the slot stays
+   * clear.
+   */
+  proxyDeleteAlarm(): void {}
+
+  /** Facet-only alarm door: the shared slot's currently desired fire time. */
+  proxyGetAlarm(): number | null {
+    return this.#readFacetAlarmAtMs();
+  }
+
+  /**
+   * When the shared facet slot is due: clear it BEFORE the replays (a facet
+   * reentrantly calling `proxySetAlarm` during the awaited `handleAlarm` lands
+   * a fresh desire the completion path never clobbers), then replay the fire
+   * into EVERY facet-placed subscription's facet — early fires are safe, and
+   * without per-facet identity the fan-out is what makes no desire lose its
+   * fire. A failed replay merges a bounded retry back into the slot.
+   */
+  #fireDueFacetAlarms(alarmInfo?: AlarmInvocationInfo): void {
+    const dueAtMs = this.#readFacetAlarmAtMs();
+    if (dueAtMs === null) return;
+    if (dueAtMs > Date.now()) {
+      // A fresh incarnation's armer memory is empty; keep the slot armed.
+      this.#alarmArmer.armNoLaterThan(dueAtMs);
+      return;
+    }
+    this.ctx.storage.kv.delete(FACET_ALARM_KV_KEY);
+    const facetNames = Object.entries(
+      this.#coreProcessorState.subscriptions.outbound.byName,
+    ).flatMap(([name, entry]) => {
+      const receiver = entry.configuration.receiver;
+      return receiver.action === "processor-wake" && receiver.placement === "facet" ? [name] : [];
+    });
+    // Plain copy: the platform's AlarmInvocationInfo host object does not
+    // serialize across the facet hop.
+    const info: AlarmInvocationInfo | undefined =
+      alarmInfo === undefined
+        ? undefined
+        : {
+            isRetry: alarmInfo.isRetry,
+            retryCount: alarmInfo.retryCount,
+            scheduledTime: alarmInfo.scheduledTime,
+          };
+    for (const facet of facetNames) {
+      this.#runInBackground(async () => {
+        try {
+          const stub = await this.#dialProcessorFacet(facet);
+          await stub.handleAlarm(info);
+          this.#facetAlarmFailures.delete(facet);
+        } catch (error) {
+          const failures = (this.#facetAlarmFailures.get(facet) ?? 0) + 1;
+          this.#facetAlarmFailures.set(facet, failures);
+          console.error("facet alarm replay failed; re-arming a bounded retry", {
+            facet,
+            failures,
+            error,
+          });
+          this.#mergeFacetAlarmDesire(
+            Date.now() + computeBackoffMs(failures, Math.random()) + FACET_ALARM_RETRY_DELAY_MS,
+          );
+        }
+      });
+    }
   }
 
   // ===========================================================================
@@ -682,7 +904,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     configuration: SubscriptionConfiguredPayload;
     idempotencyKey?: string;
   }): {
-    subscriptionKey: string;
+    name: string;
     subscriptionConfiguredEvent: CommittedSubscriptionConfiguredEvent;
   } {
     const canonical = CoreProcessorContract.parseEventInput({
@@ -692,24 +914,24 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (canonical.receiver.action !== "copy-to-stream") {
       throw new Error("setCopySubscription requires a copy action");
     }
-    if (canonical.subscriptionKey === undefined && args.idempotencyKey === undefined) {
+    if (canonical.name === undefined && args.idempotencyKey === undefined) {
       throw new Error(
-        "a keyless copy subscription requires idempotencyKey so setup is safe to retry",
+        "a nameless copy subscription requires idempotencyKey so setup is safe to retry",
       );
     }
 
-    const explicitSubscriptionKey = canonical.subscriptionKey;
+    const explicitName = canonical.name;
     const existing =
-      explicitSubscriptionKey === undefined
+      explicitName === undefined
         ? undefined
-        : this.#coreProcessorState.subscriptions.outbound.byKey[explicitSubscriptionKey];
+        : this.#coreProcessorState.subscriptions.outbound.byName[explicitName];
 
     let configuredEvent: StreamEvent;
     if (existing !== undefined && jsonValuesEqual(existing.configuration, canonical)) {
       const event = this.getEvent({ offset: existing.configuredAtOffset });
       if (event?.type !== "events.iterate.com/stream/subscription-configured") {
         throw new Error(
-          `subscription "${explicitSubscriptionKey}" points to a missing configuration event at offset ${existing.configuredAtOffset}`,
+          `subscription "${explicitName}" points to a missing configuration event at offset ${existing.configuredAtOffset}`,
         );
       }
       // A halted subscription still satisfies an identical ensure: the durable
@@ -732,7 +954,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       "events.iterate.com/stream/subscription-configured",
     );
     return {
-      subscriptionKey: subscriptionKeyForConfiguredEvent(subscriptionConfiguredEvent),
+      name: subscriptionNameForConfiguredEvent(subscriptionConfiguredEvent),
       subscriptionConfiguredEvent,
     };
   }
@@ -755,18 +977,18 @@ export class StreamDurableObject extends DurableObject<Env> {
    * `expectedReceiverPath`.
    */
   removeCopySubscription(args: {
-    subscriptionKey: string;
+    name: string;
     expectedReceiverPath: string;
   }):
     | { status: "removed"; subscriptionRemovedEvent: CommittedSubscriptionRemovedEvent }
     | { status: "already-absent" } {
     const removal = CoreProcessorContract.parseEventInput({
       type: "events.iterate.com/stream/subscription-removed",
-      payload: { subscriptionKey: args.subscriptionKey, reason: "requested" },
+      payload: { name: args.name, reason: "requested" },
     }).payload;
-    const subscriptionKey = removal.subscriptionKey;
+    const name = removal.name;
     const expectedReceiverPath = canonicalizeStreamPath(args.expectedReceiverPath);
-    const configured = this.#coreProcessorState.subscriptions.outbound.byKey[subscriptionKey];
+    const configured = this.#coreProcessorState.subscriptions.outbound.byName[name];
     if (
       configured === undefined ||
       configured.configuration.receiver.action !== "copy-to-stream" ||
@@ -780,7 +1002,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#append({ authority: "public" }, [
           {
             type: "events.iterate.com/stream/subscription-removed",
-            payload: { subscriptionKey, reason: "requested" },
+            payload: { name, reason: "requested" },
           },
         ])[0]!,
         "events.iterate.com/stream/subscription-removed",
@@ -878,10 +1100,10 @@ export class StreamDurableObject extends DurableObject<Env> {
           committed,
           "events.iterate.com/stream/subscription-configured",
         );
-        const subscriptionKey = subscriptionKeyForConfiguredEvent(configured);
-        if (this.#eventSender.connections.connectionKind(subscriptionKey) === "session") {
+        const name = subscriptionNameForConfiguredEvent(configured);
+        if (this.#eventSender.connections.connectionKind(name) === "session") {
           throw new Error(
-            `subscriptionKey "${subscriptionKey}" is already used by a live session connection`,
+            `subscription name "${name}" is already used by a live session connection`,
           );
         }
       }
@@ -1174,7 +1396,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       if (parsed.success) {
         this.#deleteCoreStateRebuildCheckpoint();
         const state = this.#catchUpCoreProcessorState(parsed.data);
-        const configuredSubscriptionKeys = new Set(Object.keys(state.subscriptions.outbound.byKey));
+        const configuredSubscriptionNames = new Set(
+          Object.keys(state.subscriptions.outbound.byName),
+        );
 
         // A lifecycle interruption can land after a removal event commits but
         // before its post-commit cursor cleanup. Reduced source configuration
@@ -1182,7 +1406,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         // migration.
         pruneOrphanedSubscriptionCursorRows(
           this.#subscriptionCursorStore,
-          configuredSubscriptionKeys,
+          configuredSubscriptionNames,
         );
 
         if (state.maxOffset !== parsed.data.maxOffset) {
@@ -1338,18 +1562,18 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
     state = this.#applyHighestAssignedOffset(state);
 
-    const configuredSubscriptionKeys = new Set(Object.keys(state.subscriptions.outbound.byKey));
+    const configuredSubscriptionNames = new Set(Object.keys(state.subscriptions.outbound.byName));
     this.ctx.storage.transactionSync(() => {
       pruneOrphanedSubscriptionCursorRows(
         this.#subscriptionCursorStore,
-        configuredSubscriptionKeys,
+        configuredSubscriptionNames,
       );
       // The SQLite cursor rows survived the reducer-version change. Keep
       // monotonic acknowledged progress, but clear stale failure state so
       // every surviving subscription gets a fresh attempt under the new reducer.
       clearSubscriptionCursorFailuresAfterStateRebuild(
         this.#subscriptionCursorStore,
-        configuredSubscriptionKeys,
+        configuredSubscriptionNames,
       );
       this.#writeCoreProcessorState(state);
       this.#deleteCoreStateRebuildCheckpoint();
@@ -1443,7 +1667,7 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   openConnection(args: Parameters<Stream["openConnection"]>[0]): StreamConnectionHandle {
     const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
-    if (this.#coreProcessorState.subscriptions.outbound.byKey[connectionKey] !== undefined) {
+    if (this.#coreProcessorState.subscriptions.outbound.byName[connectionKey] !== undefined) {
       throw new Error(`connectionKey "${connectionKey}" is reserved by a subscription`);
     }
     if (
@@ -1597,10 +1821,96 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  getProcessorRuntimeState(args: {
-    subscriptionKey: string;
-  }): Promise<ProcessorRuntimeState | null> {
-    return this.#eventSender.connections.getProcessorRuntimeState(args.subscriptionKey);
+  getProcessorRuntimeState(args: { name: string }): Promise<ProcessorRuntimeState | null> {
+    return this.#eventSender.connections.getProcessorRuntimeState(args.name);
+  }
+
+  /**
+   * The uniform barrier: resolve once the named subscription's receiver has
+   * durably confirmed through `offset` — a push acknowledgement, a hosted
+   * processor's reported checkpoint, or an offset-acking webhook's response.
+   * Works for every receiver kind off `confirmed_offset`; today's
+   * `waitUntilProcessed` is the processor-wake case of this one verb.
+   *
+   * One-shot like `waitForEvent`: it dies with the RPC caller or this
+   * incarnation, and a timeout carries the modelled wait-timeout prefix.
+   */
+  async waitUntilConfirmed(
+    name: string,
+    args: { offset: number; timeoutMs?: number },
+  ): Promise<void> {
+    const trimmedName = name.trim();
+    if (trimmedName.length === 0) {
+      throw new Error("waitUntilConfirmed requires a subscription name");
+    }
+    if (!Number.isSafeInteger(args.offset) || args.offset < 0) {
+      throw new Error("waitUntilConfirmed offset must be a non-negative safe integer.");
+    }
+    const timeoutMs = args.timeoutMs ?? 20_000;
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+      throw new Error("waitUntilConfirmed timeoutMs must be a positive number.");
+    }
+    if (this.#coreProcessorState.subscriptions.outbound.byName[trimmedName] === undefined) {
+      throw new Error(`subscription "${trimmedName}" does not exist`);
+    }
+
+    const confirmed = Promise.withResolvers<void>();
+    let settled = false;
+    const waiter = {
+      check: () => {
+        if (settled) return;
+        if (this.#coreProcessorState.subscriptions.outbound.byName[trimmedName] === undefined) {
+          settled = true;
+          confirmed.reject(new Error(`subscription "${trimmedName}" was removed while waiting`));
+          return;
+        }
+        const row = this.#subscriptionCursorStore.get(trimmedName);
+        if (row !== undefined && row.confirmedOffset >= args.offset) {
+          settled = true;
+          confirmed.resolve();
+        }
+      },
+    };
+    this.#confirmationWaiters.add(waiter);
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      const row = this.#subscriptionCursorStore.get(trimmedName);
+      confirmed.reject(
+        new Error(
+          `${STREAM_WAIT_TIMEOUT_MESSAGE_PREFIX}subscription "${trimmedName}" confirmed ` +
+            `${row?.confirmedOffset ?? 0} < ${args.offset} after ${timeoutMs}ms` +
+            `${row === undefined ? "" : ` (state: ${row.state})`}`,
+        ),
+      );
+    }, timeoutMs);
+
+    try {
+      waiter.check();
+      await confirmed.promise;
+    } finally {
+      clearTimeout(timer);
+      this.#confirmationWaiters.delete(waiter);
+    }
+  }
+
+  /**
+   * Internal poke door: resume one PARKED subscription (its receiver announced
+   * presence again). Level-triggered and idempotent — a no-op when the
+   * subscription is missing, active, or halted (halts carry failure evidence
+   * and keep their explicit operator resume path). The transition itself is
+   * the ordinary `subscription-delivery-resumed` event.
+   */
+  resumeParkedSubscription(args: { name: string }): void {
+    const entry = this.#coreProcessorState.subscriptions.outbound.byName[args.name];
+    if (entry === undefined || entry.deliveryParked === undefined) return;
+    if (entry.deliveryHalted !== undefined) return;
+    this.#append({ authority: "public" }, [
+      {
+        type: "events.iterate.com/stream/subscription-delivery-resumed",
+        payload: { name: args.name },
+      },
+    ]);
   }
 
   runtimeState(): StreamRuntimeDebugState {

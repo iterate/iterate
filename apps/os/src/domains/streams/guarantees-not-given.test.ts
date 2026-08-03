@@ -190,7 +190,7 @@ async function bootStream(args: {
 
 function reviewFeedConfiguration(receivingStreamPath: string): SubscriptionConfiguredPayload {
   return {
-    subscriptionKey: "review-feed",
+    name: "review-feed",
     filter: { eventTypes: ["example.com/issue-created"] },
     receiver: {
       action: "copy-to-stream",
@@ -235,7 +235,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
 
       expect(
         source.stream.removeCopySubscription({
-          subscriptionKey: "review-feed",
+          name: "review-feed",
           expectedReceiverPath: "/reviewer",
         }),
       ).toMatchObject({ status: "removed" });
@@ -346,7 +346,9 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         // configure-time verification would reject the unusable receiver here
       }
       expect(
-        source.stream.runtimeState().coreProcessorState.subscriptions.outbound.byKey["review-feed"],
+        source.stream.runtimeState().coreProcessorState.subscriptions.outbound.byName[
+          "review-feed"
+        ],
       ).toBeUndefined();
     } finally {
       source.context.close();
@@ -382,10 +384,10 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
       maxOffset: 2,
       subscriptions: {
         outbound: {
-          byKey: {
+          byName: {
             "project-feed": {
               configuration: {
-                subscriptionKey: "project-feed",
+                name: "project-feed",
                 receiver: {
                   action: "itx-call",
                   expression: ["worker", "processEventBatch"],
@@ -420,7 +422,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         deliveredBatches.push(batch.events.map(({ offset }) => offset));
       },
       copyToStream: async () => ({ acknowledged: 0 }),
-      deliverToWebhook: async () => undefined,
+      deliverToWebhook: async () => ({}),
     };
     const eventSender = new StreamEventSender({
       idleTeardownMs: 60_000,
@@ -500,7 +502,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
 
     try {
       sourceA.stream.setCopySubscription({
-        configuration: { ...reviewFeedConfiguration("/inbox"), subscriptionKey: "feed" },
+        configuration: { ...reviewFeedConfiguration("/inbox"), name: "feed" },
       });
       sourceA.stream.append({ type: "example.com/issue-created", payload: { appended: "first" } });
       sourceA.stream.alarm();
@@ -508,7 +510,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
 
       // Appended strictly after A's event, while A's batch is still in flight.
       sourceB.stream.setCopySubscription({
-        configuration: { ...reviewFeedConfiguration("/inbox"), subscriptionKey: "feed" },
+        configuration: { ...reviewFeedConfiguration("/inbox"), name: "feed" },
       });
       sourceB.stream.append({ type: "example.com/issue-created", payload: { appended: "second" } });
       sourceB.stream.alarm();

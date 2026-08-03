@@ -48,14 +48,23 @@ import { EventFilter } from "./event-filter.ts";
 // capped at MAX_INBOUND_SOURCE_RECORDS, and exist only to fence stale source
 // lifetimes/config generations and feed the debug card. The same version also
 // removed the version-26 `endWhen` automatic-removal conditions and the
-// copy-to-stream transform option. Still within version 28 (one undeployed
-// flag day), the webhook-post receiver returned as the lane for
-// remotely-hosted processors driven by webhooks, the JSONata fields took
-// language-naming names (`jsonataCondition`, `jsonataTransform`), and the
-// optional `jsonataTransform` became available on every push receiver (copy,
-// ITX call, webhook) — never on processor-wake, whose delivery must feed the
-// processor its committed log verbatim.
-export const CORE_STATE_VERSION = 28;
+// copy-to-stream transform option, returned the webhook-post receiver as the
+// lane for remotely-hosted processors, and gave the JSONata fields
+// language-naming names.
+// Version 29 implements the subscription-model redesign
+// (docs/stream-subscription-model-redesign.md): the identity field is `name`
+// (opaque, caller-chosen; auto-generated names keep the reserved
+// `subscription:<offset>` form and are first-class — the
+// `subscriptionKeyWasGenerated` flag is gone), outbound subscriptions live
+// under `subscriptions.outbound.byName`, `processorSlug` is required on
+// `processor-wake` and the receiver gains `placement: "facet"` (the
+// subscription name IS the facet name; no itx expression), subscriptions may
+// carry per-subscription delivery controls
+// (`maxDeliveryEvents`/`maxDeliveryBytes`/`state: false`), and `parked` joins
+// `halted` as a durable delivery state (`subscription-delivery-parked`:
+// the receiver is legitimately absent — no retry ladder, cursor intact,
+// `subscription-delivery-resumed` reactivates it).
+export const CORE_STATE_VERSION = 29;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -104,7 +113,10 @@ const OnFailingEventPolicy = z.enum(["halt", "skip"]);
 /** Event sending halts only when delivering matching events exhausts its retry budget. */
 const SubscriptionHaltReason = z.literal("delivery-failed");
 
-/** Policy that exists only when the source owns an awaited delivery cursor. */
+/** A subscription parks only when its receiver signals it is legitimately absent. */
+const SubscriptionParkReason = z.literal("receiver-absent");
+
+/** Policy for subscriptions whose awaited delivery cursor the source stream owns. */
 const DeliveryPolicy = z.strictObject({
   start: SubscriptionStart,
   onFailingEvent: OnFailingEventPolicy,
@@ -123,15 +135,36 @@ const StreamReceiverDeliveryPolicy = DeliveryPolicy.extend({
  * an ITX expression.
  */
 export const SubscriptionReceiver = z.discriminatedUnion("action", [
-  z.strictObject({
-    // No jsonataTransform here, ever: a hosted processor's reduced state must
-    // equal folding its stream's committed events. Wake delivery feeds the
-    // processor its own log, so transforming it would break replay/rebuild
-    // determinism.
-    action: z.literal("processor-wake"),
-    expression: DeliveryExpression,
-    processorSlug: z.string().trim().min(1).optional(),
-  }),
+  z
+    .strictObject({
+      // No jsonataTransform here, ever: a hosted processor's reduced state must
+      // equal folding its stream's committed events. Wake delivery feeds the
+      // processor its own log, so transforming it would break replay/rebuild
+      // determinism.
+      action: z.literal("processor-wake"),
+      /**
+       * Which contract runs. Required: the subscription NAME is the instance's
+       * identity; the slug names the code. Two instances of one contract are
+       * two names sharing one slug.
+       */
+      processorSlug: z.string().trim().min(1),
+      /**
+       * Where the processor runs. `"facet"` hosts it as a facet of this
+       * stream's own Durable Object: the subscription name IS the facet name
+       * and delivery is an in-process parent→facet dial — no itx expression.
+       * Omitted: the wake dials `expression` (own-DO or userspace-worker
+       * placement, exactly as before).
+       */
+      placement: z.literal("facet").optional(),
+      expression: DeliveryExpression.optional(),
+    })
+    .refine(
+      (receiver) => (receiver.placement === "facet") !== (receiver.expression !== undefined),
+      {
+        message:
+          'processor-wake requires exactly one of placement: "facet" or a delivery expression',
+      },
+    ),
   z.strictObject({
     action: z.literal("copy-to-stream"),
     receivingStreamPath: StreamPath,
@@ -178,24 +211,36 @@ export const SubscriptionReceiver = z.discriminatedUnion("action", [
 export type SubscriptionReceiver = z.infer<typeof SubscriptionReceiver>;
 
 /**
- * Bounded because every key is retained in reduced state on both sides of a
+ * Bounded because every name is retained in reduced state on both sides of a
  * delivery — outbound configuration here, and one passive inbound record per
- * (source path, key) on each receiver. 500 covers the longest legitimate
- * platform generator, the default processor-wake key
- * `${durableObjectName}#${processorSlug}` over a ≤256-byte Durable Object
- * name, with room to spare; generated keys are `subscription:<offset>`.
+ * (source path, name) on each receiver. Names are opaque: the platform never
+ * parses structure out of one. The single reserved form is the auto-generated
+ * `subscription:<offset>`.
  */
-const SubscriptionKey = z.string().trim().min(1).max(500);
+const SubscriptionName = z.string().trim().min(1).max(500);
 
 export const SubscriptionConfiguredPayload = z.strictObject({
   /**
-   * A caller-selected source-local identity. Omitting it creates a new
-   * subscription whose effective key is derived from this event's committed
-   * offset (`subscription:<offset>`).
+   * A caller-selected source-local identity, reused verbatim as the catalog
+   * key at the stream, the itx address segment, the facet name under facet
+   * placement, and the progress-key component under own-DO placement.
+   * Omitting it creates a new subscription whose effective name is derived
+   * from this event's committed offset (`subscription:<offset>`).
    */
-  subscriptionKey: SubscriptionKey.optional(),
+  name: SubscriptionName.optional(),
   description: z.string().trim().min(1).optional(),
   filter: EventFilter.optional(),
+  /**
+   * Optional per-subscription delivery controls, honored by every push arm:
+   * `maxDeliveryEvents` caps events per delivered batch (never raises the
+   * global batch bound), `maxDeliveryBytes` caps a batch's serialized payload
+   * bytes (at least one event is always delivered), and `state: false` omits
+   * the reduced-state snapshot from wake-fed batches for constrained
+   * consumers.
+   */
+  maxDeliveryEvents: z.number().int().min(1).optional(),
+  maxDeliveryBytes: z.number().int().min(1).optional(),
+  state: z.literal(false).optional(),
   receiver: SubscriptionReceiver,
 }) satisfies z.ZodType<SubscriptionConfigurationForDelivery["payload"]>;
 
@@ -223,38 +268,38 @@ export type SubscriptionConfiguredDeliveryPayloadContractMatches = AssertTrue<
   >
 >;
 
-/** Reduced outbound configuration always contains the effective key. */
+/** Reduced outbound configuration always contains the effective name. */
 const EffectiveSubscriptionConfiguration = SubscriptionConfiguredPayload.safeExtend({
-  subscriptionKey: SubscriptionKey,
+  name: SubscriptionName,
 });
 
 /** Hard bound on how many subscriptions one source may point at one receiving stream. */
 export const MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM = 64;
 
-/** The effective source-local key for one committed configuration event. */
-export function subscriptionKeyForConfiguredEvent(event: {
+/** The effective source-local name for one committed configuration event. */
+export function subscriptionNameForConfiguredEvent(event: {
   offset: number;
-  payload: Pick<SubscriptionConfiguredPayload, "subscriptionKey">;
+  payload: Pick<SubscriptionConfiguredPayload, "name">;
 }): string {
-  return event.payload.subscriptionKey ?? `subscription:${event.offset}`;
+  return event.payload.name ?? `subscription:${event.offset}`;
 }
 
 /**
  * Reconstruct the payload that was committed in a subscription-configured
- * event from reduced outbound state. Generated keys exist only in reduced
- * state: the original event omitted the key and derives it from its offset.
+ * event from reduced outbound state. Generated names exist only in reduced
+ * state: the original event omitted the name and derives it from its offset.
  *
  * Fresh callers cannot claim the `subscription:` namespace, and a later
  * replacement necessarily has a later offset, so equality with this event's
- * generated key is unambiguous.
+ * generated name is unambiguous.
  */
 export function subscriptionConfiguredPayloadFromReducedState(args: {
   configuration: z.infer<typeof EffectiveSubscriptionConfiguration>;
   configuredAtOffset: number;
 }): SubscriptionConfiguredPayload {
   if (
-    args.configuration.subscriptionKey !==
-    subscriptionKeyForConfiguredEvent({
+    args.configuration.name !==
+    subscriptionNameForConfiguredEvent({
       offset: args.configuredAtOffset,
       payload: {},
     })
@@ -262,7 +307,7 @@ export function subscriptionConfiguredPayloadFromReducedState(args: {
     return args.configuration;
   }
 
-  const { subscriptionKey: _generatedKey, ...committedPayload } = args.configuration;
+  const { name: _generatedName, ...committedPayload } = args.configuration;
   return committedPayload;
 }
 
@@ -378,10 +423,10 @@ export const CoreProcessorContract = defineProcessorContract({
     subscriptions: z
       .object({
         /**
-         * Passive per-(source path, subscription key) records derived from the
-         * `source.copiedFrom` stamps on committed copied events — never from a
-         * configure-time handshake. They fence stale deliveries (an older
-         * source lifetime, or an older config generation of the same
+         * Passive per-(source path, subscription name) records derived from
+         * the `source.copiedFrom` stamps on committed copied events — never
+         * from a configure-time handshake. They fence stale deliveries (an
+         * older source lifetime, or an older config generation of the same
          * lifetime) and feed the debug card; the receiver learns about a
          * subscription only when its first copy arrives.
          */
@@ -407,22 +452,16 @@ export const CoreProcessorContract = defineProcessorContract({
               .default({}),
           })
           .default({ bySourcePath: {} }),
-        /** Subscriptions configured on this source stream. */
+        /** Subscriptions configured on this source stream, by their opaque name. */
         outbound: z
           .object({
-            byKey: z
+            byName: z
               .record(
                 z.string(),
                 z.object({
                   configuration: EffectiveSubscriptionConfiguration,
                   configuredAtOffset: z.number().int().positive(),
                   configuredAt: z.string(),
-                  /**
-                   * Present when the first configuration omitted its key. It
-                   * lets the returned generated key name later replacements
-                   * while fresh callers remain unable to claim that namespace.
-                   */
-                  subscriptionKeyWasGenerated: z.literal(true).optional(),
                   /**
                    * Latest explicit source read position. Delivery applies this
                    * level-triggered to its SQLite cursor row, so a post-commit
@@ -443,15 +482,30 @@ export const CoreProcessorContract = defineProcessorContract({
                       error: z.string().trim().min(1).optional(),
                     })
                     .optional(),
+                  /**
+                   * The receiver is legitimately absent (a live capability
+                   * whose providing session closed, a disconnected remote
+                   * app). Not a failure: the cursor stays put, no retry alarm
+                   * is armed, and nothing is charged against the failure
+                   * ladder. `subscription-delivery-resumed` reactivates it.
+                   */
+                  deliveryParked: z
+                    .strictObject({
+                      reason: SubscriptionParkReason,
+                      /** Confirmed cursor when this subscription parked. */
+                      afterOffset: z.number().int().nonnegative(),
+                      error: z.string().trim().min(1).optional(),
+                    })
+                    .optional(),
                 }),
               )
               .default({}),
           })
-          .default({ byKey: {} }),
+          .default({ byName: {} }),
       })
       .default({
         inbound: { bySourcePath: {} },
-        outbound: { byKey: {} },
+        outbound: { byName: {} },
       }),
   }),
   events: {
@@ -488,7 +542,7 @@ export const CoreProcessorContract = defineProcessorContract({
           description:
             "A hosted agent processor owns its checkpoint and is woken by calling its durable ITX method.",
           payload: {
-            subscriptionKey: "prj_01jzp3v9qkfxeb2m4n8r7wd5ha.iterate/agents/onboarding#agent",
+            name: "agent",
             receiver: {
               action: "processor-wake",
               expression: [
@@ -503,9 +557,21 @@ export const CoreProcessorContract = defineProcessorContract({
         },
         {
           description:
+            "A processor hosted as a facet of the stream's own Durable Object: the subscription name is the facet name; no expression is needed.",
+          payload: {
+            name: "device",
+            receiver: {
+              action: "processor-wake",
+              placement: "facet",
+              processorSlug: "device",
+            },
+          },
+        },
+        {
+          description:
             "A copy copies one repository's GitHub webhooks from a connection stream, starting with new events from now on.",
           payload: {
-            subscriptionKey: "github-repo:/repos/root",
+            name: "github-repo:/repos/root",
             description:
               "Delivers GitHub webhooks for acme/widgets to this repo's stream so the repo processor can react to them.",
             filter: {
@@ -526,7 +592,7 @@ export const CoreProcessorContract = defineProcessorContract({
           description:
             "An ITX call sends matching task events to a project worker method and stores the completed offset on this source stream.",
           payload: {
-            subscriptionKey: "tasks-for-project-worker",
+            name: "tasks-for-project-worker",
             filter: { eventTypes: ["events.example/task-created"] },
             receiver: {
               action: "itx-call",
@@ -542,7 +608,7 @@ export const CoreProcessorContract = defineProcessorContract({
           description:
             "Webhook delivery: one HTTP POST per event to an external receiver, stepping over a repeatedly failing event instead of halting all later sends.",
           payload: {
-            subscriptionKey: "ops-webhook",
+            name: "ops-webhook",
             receiver: {
               action: "webhook-post",
               url: "https://hooks.example.com/iterate/stream-events",
@@ -558,7 +624,7 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/subscription-removed": {
       description: "Removes one durable subscription.",
       payloadSchema: z.strictObject({
-        subscriptionKey: z.string().trim().min(1),
+        name: z.string().trim().min(1),
         reason: SubscriptionRemovalReason,
       }),
     },
@@ -566,37 +632,48 @@ export const CoreProcessorContract = defineProcessorContract({
       description:
         "One subscription stopped after delivering matching source events exhausted the bounded retry count.",
       payloadSchema: z.strictObject({
-        subscriptionKey: z.string().trim().min(1),
+        name: z.string().trim().min(1),
         reason: SubscriptionHaltReason,
-        /** The cursor at halt time: delivery stopped without acking past this offset. */
+        /** The cursor at halt time: delivery stopped without confirming past this offset. */
         afterOffset: z.number().int().min(0),
         attempts: z.number().int().positive(),
         error: z.string().trim().min(1).max(4_096).optional(),
       }),
     },
-    "events.iterate.com/stream/subscription-delivery-resumed": {
-      description: "Resumes one halted subscription at its existing cursor.",
+    "events.iterate.com/stream/subscription-delivery-parked": {
+      description:
+        "One subscription's receiver signalled it is legitimately absent (a live capability whose providing session closed, a disconnected remote app). Delivery stops without burning the retry ladder: the cursor stays put and no retry alarm is armed. `subscription-delivery-resumed` — or the stream's internal resume poke — reactivates it.",
       payloadSchema: z.strictObject({
-        subscriptionKey: z.string().trim().min(1),
+        name: z.string().trim().min(1),
+        reason: SubscriptionParkReason,
+        /** The confirmed cursor when this subscription parked. */
+        afterOffset: z.number().int().min(0),
+        error: z.string().trim().min(1).max(4_096).optional(),
+      }),
+    },
+    "events.iterate.com/stream/subscription-delivery-resumed": {
+      description: "Resumes one halted or parked subscription at its existing cursor.",
+      payloadSchema: z.strictObject({
+        name: z.string().trim().min(1),
       }),
     },
     "events.iterate.com/stream/subscription-cursor-set": {
       description:
         "Changes the next source offset read by one copy, ITX-call, or webhook subscription (exclusive afterOffset semantics). It rejects offsets beyond the current stream head. A receiver call already in progress may still finish, but cannot advance this new position. Hosted processors reject this event because the processor stores its own checkpoint.",
       payloadSchema: z.strictObject({
-        subscriptionKey: z.string().trim().min(1),
+        name: z.string().trim().min(1),
         afterOffset: z.number().int().min(0),
       }),
       examples: [
         {
           description:
             "Replays the stream's full history into the project worker feed (afterOffset is exclusive; 0 replays everything).",
-          payload: { subscriptionKey: "project-worker", afterOffset: 0 },
+          payload: { name: "project-worker", afterOffset: 0 },
         },
         {
           description:
             "Makes future copy sends read after offset 512; a receiver call already in progress may still finish.",
-          payload: { subscriptionKey: "github-repo:/repos/root", afterOffset: 512 },
+          payload: { name: "github-repo:/repos/root", afterOffset: 512 },
         },
       ],
     },
@@ -667,6 +744,7 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/subscription-configured",
     "events.iterate.com/stream/subscription-removed",
     "events.iterate.com/stream/subscription-delivery-halted",
+    "events.iterate.com/stream/subscription-delivery-parked",
     "events.iterate.com/stream/subscription-delivery-resumed",
     "events.iterate.com/stream/subscription-cursor-set",
     "events.iterate.com/stream/connection-opened",
@@ -679,6 +757,7 @@ export const CoreProcessorContract = defineProcessorContract({
     "events.iterate.com/stream/connection-opened",
     "events.iterate.com/stream/connection-closed",
     "events.iterate.com/stream/subscription-delivery-halted",
+    "events.iterate.com/stream/subscription-delivery-parked",
     "events.iterate.com/stream/child-stream-created",
   ],
 });

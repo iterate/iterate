@@ -147,7 +147,9 @@ export function facetProcessorDurableObjectState(
 export function plainAlarmInvocationInfo(
   info: AlarmInvocationInfo | undefined,
 ): AlarmInvocationInfo | undefined {
-  return info === undefined ? undefined : { isRetry: info.isRetry, retryCount: info.retryCount };
+  return info === undefined
+    ? undefined
+    : { scheduledTime: info.scheduledTime, isRetry: info.isRetry, retryCount: info.retryCount };
 }
 
 /**

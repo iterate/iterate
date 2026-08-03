@@ -196,16 +196,25 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
       inFlightConnectionGeneration: 7,
     });
 
-    store.clearInFlight("processor", { connectionGeneration: 6, cursorChangedAtOffset });
+    store.clearInFlight("processor", {
+      connectionGeneration: 6,
+      cursorChangedAtOffset,
+      deliveredOffset: 9,
+    });
     expect(store.get("processor")).toMatchObject({
       attempt: 14,
       nextAttemptAt: 19_000,
       lastError: "previous hosted batch failed",
       inFlightDeadlineAt: 20_000,
       inFlightConnectionGeneration: 7,
+      deliveredOffset: 4,
     });
 
-    store.clearInFlight("processor", { connectionGeneration: 7, cursorChangedAtOffset });
+    store.clearInFlight("processor", {
+      connectionGeneration: 7,
+      cursorChangedAtOffset,
+      deliveredOffset: 9,
+    });
     expect(store.get("processor")).toMatchObject({
       attempt: 0,
       nextAttemptAt: null,
@@ -215,10 +224,14 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
       failingEventSkipsSinceLastSuccess: 0,
       inFlightDeadlineAt: null,
       inFlightConnectionGeneration: null,
+      // A batch ack records TRANSFER; the receiver's durable claim is
+      // untouched until a reported checkpoint confirms it.
+      deliveredOffset: 9,
+      confirmedOffset: 4,
     });
   });
 
-  it("keeps the failure streak when a successful wake reports no checkpoint progress", () => {
+  it("confirm clears the schedule always but the failure streak only on progress", () => {
     const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
     store.ensure("processor", 4, 12);
     const cursorChangedAtOffset = store.get("processor")!.cursorChangedAtOffset;
@@ -234,10 +247,13 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
       cursorChangedAtOffset,
     });
 
-    store.recordReportedCheckpoint("processor", 4);
-
+    // No progress (checkpoint equals the confirmed offset): the wake call
+    // consumed the retry schedule, but a reachable host is not a digesting
+    // host — the streak stays so a deterministic failure still halts.
+    store.confirm("processor", 4, { cursorChangedAtOffset });
     expect(store.get("processor")).toMatchObject({
-      acknowledgedOffset: 4,
+      deliveredOffset: 4,
+      confirmedOffset: 4,
       attempt: 14,
       nextAttemptAt: null,
       lastError: "hosted batch failed",
@@ -245,6 +261,73 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
       failingEventAttempt: 3,
       inFlightDeadlineAt: null,
       inFlightConnectionGeneration: null,
+    });
+
+    // Progress clears the streak: deliveries have been digested since.
+    store.confirm("processor", 6, { cursorChangedAtOffset });
+    expect(store.get("processor")).toMatchObject({
+      deliveredOffset: 6,
+      confirmedOffset: 6,
+      attempt: 0,
+      lastError: null,
+      failingEventOffset: null,
+      failingEventAttempt: 0,
+    });
+  });
+
+  it("confirm is fenced by the cursor-changing event like an acknowledgement", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("processor", 4, 12);
+    const before = store.get("processor")!;
+
+    store.confirm("processor", 9, { cursorChangedAtOffset: 11 });
+    expect(store.get("processor")).toEqual(before);
+
+    store.confirm("processor", 9, { cursorChangedAtOffset: 12 });
+    expect(store.get("processor")).toMatchObject({ deliveredOffset: 9, confirmedOffset: 9 });
+  });
+
+  it("recordDelivered advances transfer only; rewindDeliveredToConfirmed is the boot resume rule", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("webhook", 0, 1);
+    store.nack("webhook", { attempt: 2, nextAttemptAt: 5_000, error: "post failed" });
+
+    // A 2xx without a body confirmation: transfer completed, failure cleared,
+    // durable claim untouched.
+    store.recordDelivered("webhook", 7, { cursorChangedAtOffset: 1 });
+    expect(store.get("webhook")).toMatchObject({
+      deliveredOffset: 7,
+      confirmedOffset: 0,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+
+    // The remote's lazy confirmation lands later, clamped monotonic.
+    store.confirm("webhook", 3, { cursorChangedAtOffset: 1 });
+    expect(store.get("webhook")).toMatchObject({ deliveredOffset: 7, confirmedOffset: 3 });
+
+    // Boot: delivery resumes after confirmed — the unconfirmed window
+    // (4..7) redelivers in the next incarnation.
+    store.rewindDeliveredToConfirmed();
+    expect(store.get("webhook")).toMatchObject({ deliveredOffset: 3, confirmedOffset: 3 });
+  });
+
+  it("mirrors the delivery state onto the row and resets it on reconfiguration", () => {
+    const store = new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
+    store.ensure("capability", 0, 1);
+    expect(store.get("capability")!.state).toBe("active");
+
+    store.setState("capability", "parked");
+    expect(store.get("capability")!.state).toBe("parked");
+
+    // A replacement configuration resets the row, state included.
+    store.ensure("capability", 5, 9);
+    expect(store.get("capability")).toMatchObject({
+      state: "active",
+      deliveredOffset: 5,
+      confirmedOffset: 5,
+      configuredAtOffset: 9,
     });
   });
 
@@ -262,7 +345,8 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
     const afterSeek = store.get("processor")!;
     expect(afterSeek.cursorChangedAtOffset).toBe(20);
     expect(afterSeek).toMatchObject({
-      acknowledgedOffset: 2,
+      deliveredOffset: 2,
+      confirmedOffset: 2,
       inFlightDeadlineAt: null,
       inFlightConnectionGeneration: null,
     });
@@ -274,7 +358,8 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
     });
     store.ensure("processor", 9, 13);
     expect(store.get("processor")).toMatchObject({
-      acknowledgedOffset: 9,
+      deliveredOffset: 9,
+      confirmedOffset: 9,
       configuredAtOffset: 13,
       inFlightDeadlineAt: null,
       inFlightConnectionGeneration: null,
@@ -293,10 +378,12 @@ describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
     store.ack("processor", 9, { cursorChangedAtOffset: 11 });
     expect(store.get("processor")).toEqual(before);
 
-    // The same acknowledgement naming the live cursor generation lands.
+    // The same acknowledgement naming the live cursor generation lands: a
+    // push ack writes BOTH offsets at once.
     store.ack("processor", 9, { cursorChangedAtOffset: 12 });
     expect(store.get("processor")).toMatchObject({
-      acknowledgedOffset: 9,
+      deliveredOffset: 9,
+      confirmedOffset: 9,
       attempt: 0,
       nextAttemptAt: null,
       lastError: null,

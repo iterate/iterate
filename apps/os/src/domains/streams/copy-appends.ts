@@ -46,7 +46,7 @@ import type {
 import type { CoreProcessorState } from "./core-processor-contract.ts";
 import {
   parseCommittedCoreEvent,
-  subscriptionKeyForConfiguredEvent,
+  subscriptionNameForConfiguredEvent,
 } from "./core-processor-contract.ts";
 import { compareSourceStamp } from "./core-processor.ts";
 import { applyJsonataTransform } from "./event-filter.ts";
@@ -79,7 +79,7 @@ export function buildCopyAppends({
   const receiver = configuredEvent.payload.receiver;
   if (
     configuredEvent.path !== batch.path ||
-    subscriptionKeyForConfiguredEvent(configuredEvent) !== batch.subscriptionKey ||
+    subscriptionNameForConfiguredEvent(configuredEvent) !== batch.subscriptionKey ||
     receiver.action !== "copy-to-stream" ||
     receiver.receivingStreamPath !== self.path ||
     batch.cursorChangedAtSourceOffset < configuredEvent.offset

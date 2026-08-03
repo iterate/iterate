@@ -8,7 +8,7 @@ import {
   CoreProcessorContract,
   MAX_SUBSCRIPTIONS_PER_RECEIVING_STREAM,
   parseCommittedCoreEvent as parseCoreEvent,
-  subscriptionKeyForConfiguredEvent,
+  subscriptionNameForConfiguredEvent,
   type CoreProcessorState,
 } from "./core-processor-contract.ts";
 import { compileEventFilter, compileJsonataExpression } from "./event-filter.ts";
@@ -63,6 +63,7 @@ const CHECKPOINT_GROWTH_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/child-stream-created",
   "events.iterate.com/stream/subscription-configured",
   "events.iterate.com/stream/subscription-delivery-halted",
+  "events.iterate.com/stream/subscription-delivery-parked",
   "events.iterate.com/stream/paused",
 ]);
 
@@ -105,6 +106,7 @@ const CORE_AUTHORED_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/woken",
   "events.iterate.com/stream/child-stream-created",
   "events.iterate.com/stream/subscription-delivery-halted",
+  "events.iterate.com/stream/subscription-delivery-parked",
   "events.iterate.com/stream/connection-opened",
   "events.iterate.com/stream/connection-closed",
 ]);
@@ -211,14 +213,16 @@ export class StreamCoreProcessor {
         args.event,
         "events.iterate.com/stream/subscription-configured",
       );
-      const requestedSubscriptionKey = event.payload.subscriptionKey;
+      const requestedName = event.payload.name;
+      // Only the platform's omitted-name fallback may mint `subscription:…`
+      // names; a caller may still address one that already exists (generated
+      // names are first-class, so replacing by the generated name works).
       if (
-        requestedSubscriptionKey?.startsWith("subscription:") === true &&
-        args.state.subscriptions.outbound.byKey[requestedSubscriptionKey]
-          ?.subscriptionKeyWasGenerated !== true
+        requestedName?.startsWith("subscription:") === true &&
+        args.state.subscriptions.outbound.byName[requestedName] === undefined
       ) {
         throw new Error(
-          `subscription key "${requestedSubscriptionKey}" uses the generated-key namespace but does not name an existing generated subscription`,
+          `subscription name "${requestedName}" uses the generated-name namespace but does not name an existing subscription`,
         );
       }
       if (event.payload.receiver.action === "webhook-post" && this.#projectId === null) {
@@ -243,11 +247,10 @@ export class StreamCoreProcessor {
       if (event.payload.receiver.action === "copy-to-stream") {
         const receivingStreamPath = event.payload.receiver.receivingStreamPath;
         const existingSubscriptionsForReceiver = Object.entries(
-          args.state.subscriptions.outbound.byKey,
+          args.state.subscriptions.outbound.byName,
         ).filter(
-          ([subscriptionKey, configured]) =>
-            (event.payload.subscriptionKey === undefined ||
-              subscriptionKey !== event.payload.subscriptionKey) &&
+          ([name, configured]) =>
+            (event.payload.name === undefined || name !== event.payload.name) &&
             configured.configuration.receiver.action === "copy-to-stream" &&
             configured.configuration.receiver.receivingStreamPath === receivingStreamPath,
         ).length;
@@ -268,9 +271,9 @@ export class StreamCoreProcessor {
         args.event,
         "events.iterate.com/stream/subscription-cursor-set",
       );
-      const configured = args.state.subscriptions.outbound.byKey[event.payload.subscriptionKey];
+      const configured = args.state.subscriptions.outbound.byName[event.payload.name];
       if (configured === undefined) {
-        throw new Error(`subscription "${event.payload.subscriptionKey}" does not exist`);
+        throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
       if (configured.configuration.receiver.action === "processor-wake") {
         throw new Error(
@@ -292,12 +295,12 @@ export class StreamCoreProcessor {
         args.event,
         "events.iterate.com/stream/subscription-delivery-resumed",
       );
-      const configured = args.state.subscriptions.outbound.byKey[event.payload.subscriptionKey];
+      const configured = args.state.subscriptions.outbound.byName[event.payload.name];
       if (configured === undefined) {
-        throw new Error(`subscription "${event.payload.subscriptionKey}" does not exist`);
+        throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
-      if (configured.deliveryHalted === undefined) {
-        throw new Error(`subscription "${event.payload.subscriptionKey}" is not halted`);
+      if (configured.deliveryHalted === undefined && configured.deliveryParked === undefined) {
+        throw new Error(`subscription "${event.payload.name}" is neither halted nor parked`);
       }
     }
 
@@ -309,8 +312,8 @@ export class StreamCoreProcessor {
       if (args.authority !== "public") {
         throw new Error("requested subscription removals must come from a public command");
       }
-      if (args.state.subscriptions.outbound.byKey[event.payload.subscriptionKey] === undefined) {
-        throw new Error(`subscription "${event.payload.subscriptionKey}" does not exist`);
+      if (args.state.subscriptions.outbound.byName[event.payload.name] === undefined) {
+        throw new Error(`subscription "${event.payload.name}" does not exist`);
       }
     }
 
@@ -323,6 +326,7 @@ export class StreamCoreProcessor {
       case "events.iterate.com/stream/connection-closed":
       case "events.iterate.com/stream/subscription-removed":
       case "events.iterate.com/stream/subscription-delivery-halted":
+      case "events.iterate.com/stream/subscription-delivery-parked":
         return;
       default:
         throw new StreamReceiverUnavailableError(
@@ -462,24 +466,19 @@ export class StreamCoreProcessor {
           args.event,
           "events.iterate.com/stream/subscription-configured",
         );
-        const subscriptionKey = subscriptionKeyForConfiguredEvent(event);
-        const existing = next.subscriptions.outbound.byKey[subscriptionKey];
-        const subscriptionKeyWasGenerated =
-          event.payload.subscriptionKey === undefined ||
-          existing?.subscriptionKeyWasGenerated === true;
+        const name = subscriptionNameForConfiguredEvent(event);
         return {
           ...next,
           subscriptions: {
             ...next.subscriptions,
             outbound: {
               ...next.subscriptions.outbound,
-              byKey: {
-                ...next.subscriptions.outbound.byKey,
-                [subscriptionKey]: {
-                  configuration: { ...event.payload, subscriptionKey },
+              byName: {
+                ...next.subscriptions.outbound.byName,
+                [name]: {
+                  configuration: { ...event.payload, name },
                   configuredAtOffset: event.offset,
                   configuredAt: event.createdAt,
-                  ...(subscriptionKeyWasGenerated ? { subscriptionKeyWasGenerated: true } : {}),
                 },
               },
             },
@@ -488,15 +487,14 @@ export class StreamCoreProcessor {
       }
       case "events.iterate.com/stream/subscription-removed": {
         const event = parseCoreEvent(args.event, "events.iterate.com/stream/subscription-removed");
-        const { [event.payload.subscriptionKey]: _removed, ...byKey } =
-          next.subscriptions.outbound.byKey;
+        const { [event.payload.name]: _removed, ...byName } = next.subscriptions.outbound.byName;
         return {
           ...next,
           subscriptions: {
             ...next.subscriptions,
             outbound: {
               ...next.subscriptions.outbound,
-              byKey,
+              byName,
             },
           },
         };
@@ -506,7 +504,7 @@ export class StreamCoreProcessor {
           args.event,
           "events.iterate.com/stream/subscription-delivery-halted",
         );
-        const existing = next.subscriptions.outbound.byKey[event.payload.subscriptionKey];
+        const existing = next.subscriptions.outbound.byName[event.payload.name];
         if (existing === undefined) {
           return next;
         }
@@ -516,9 +514,9 @@ export class StreamCoreProcessor {
             ...next.subscriptions,
             outbound: {
               ...next.subscriptions.outbound,
-              byKey: {
-                ...next.subscriptions.outbound.byKey,
-                [event.payload.subscriptionKey]: {
+              byName: {
+                ...next.subscriptions.outbound.byName,
+                [event.payload.name]: {
                   ...existing,
                   deliveryHalted: {
                     reason: event.payload.reason,
@@ -532,25 +530,55 @@ export class StreamCoreProcessor {
           },
         };
       }
-      case "events.iterate.com/stream/subscription-delivery-resumed": {
+      case "events.iterate.com/stream/subscription-delivery-parked": {
         const event = parseCoreEvent(
           args.event,
-          "events.iterate.com/stream/subscription-delivery-resumed",
+          "events.iterate.com/stream/subscription-delivery-parked",
         );
-        const existing = next.subscriptions.outbound.byKey[event.payload.subscriptionKey];
+        const existing = next.subscriptions.outbound.byName[event.payload.name];
         if (existing === undefined) {
           return next;
         }
-        const { deliveryHalted: _cleared, ...resumed } = existing;
         return {
           ...next,
           subscriptions: {
             ...next.subscriptions,
             outbound: {
               ...next.subscriptions.outbound,
-              byKey: {
-                ...next.subscriptions.outbound.byKey,
-                [event.payload.subscriptionKey]: resumed,
+              byName: {
+                ...next.subscriptions.outbound.byName,
+                [event.payload.name]: {
+                  ...existing,
+                  deliveryParked: {
+                    reason: event.payload.reason,
+                    afterOffset: event.payload.afterOffset,
+                    ...(event.payload.error === undefined ? {} : { error: event.payload.error }),
+                  },
+                },
+              },
+            },
+          },
+        };
+      }
+      case "events.iterate.com/stream/subscription-delivery-resumed": {
+        const event = parseCoreEvent(
+          args.event,
+          "events.iterate.com/stream/subscription-delivery-resumed",
+        );
+        const existing = next.subscriptions.outbound.byName[event.payload.name];
+        if (existing === undefined) {
+          return next;
+        }
+        const { deliveryHalted: _cleared, deliveryParked: _unparked, ...resumed } = existing;
+        return {
+          ...next,
+          subscriptions: {
+            ...next.subscriptions,
+            outbound: {
+              ...next.subscriptions.outbound,
+              byName: {
+                ...next.subscriptions.outbound.byName,
+                [event.payload.name]: resumed,
               },
             },
           },
@@ -561,7 +589,7 @@ export class StreamCoreProcessor {
           args.event,
           "events.iterate.com/stream/subscription-cursor-set",
         );
-        const existing = next.subscriptions.outbound.byKey[event.payload.subscriptionKey];
+        const existing = next.subscriptions.outbound.byName[event.payload.name];
         if (existing === undefined) {
           return next;
         }
@@ -571,9 +599,9 @@ export class StreamCoreProcessor {
             ...next.subscriptions,
             outbound: {
               ...next.subscriptions.outbound,
-              byKey: {
-                ...next.subscriptions.outbound.byKey,
-                [event.payload.subscriptionKey]: {
+              byName: {
+                ...next.subscriptions.outbound.byName,
+                [event.payload.name]: {
                   ...existing,
                   cursorSet: {
                     afterOffset: event.payload.afterOffset,

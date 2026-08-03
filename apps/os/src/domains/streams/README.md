@@ -21,7 +21,7 @@ const agentStream = project.streams.get("/agents/reviewer");
 
 await agentStream.subscribeToEventsFrom({
   sourceStreamPath: "/integrations/github/main",
-  subscriptionKey: "github-for-reviewer",
+  name: "github-for-reviewer",
   filter: {
     eventTypes: ["events.iterate.com/github/webhook-received"],
     jsonataCondition: 'payload.body.repository.full_name = "acme/widgets"',
@@ -29,19 +29,25 @@ await agentStream.subscribeToEventsFrom({
 });
 ```
 
+Subscription names are opaque, caller-chosen, per-stream-unique strings —
+the same string is the catalog key at the stream, the itx address segment,
+the facet name under facet placement, and the progress-key component under
+own-DO placement. Omitting the name generates the reserved
+`subscription:<offset>` form from the committed configure event.
+
 The source stores the subscription and product-event cursor. The receiver
 stores nothing at configure time: it keeps one passive record per
-`(source path, subscription key)`, reduced from the stamps on its own
+`(source path, subscription name)`, reduced from the stamps on its own
 committed copies, and uses it to fence batches from a stale source lifetime
 or a superseded config generation.
 Every copied event is a normal append with its immediate source
-path, stream lifetime ID, creation time, offset, type, timestamp, and subscription
-key in `source.copiedFrom`.
+path, stream lifetime ID, creation time, offset, type, timestamp, and
+subscription name in `source.copiedFrom`.
 That record proves the event travelled through that configured stream
 delivery; it is not proof of who originally appended the source event.
 
 An idempotency key based on the source stream's random lifetime ID, path,
-subscription key, source offset, and the configure-or-cursor-change event makes
+subscription name, source offset, and the configure-or-cursor-change event makes
 network retries within one send run a no-op on the receiver. Recreating the
 source, replacing the subscription, or explicitly moving its read position starts a new
 run, so replaying an old source offset deliberately appends it again.
@@ -92,7 +98,7 @@ subscriptions: {
   inbound: {
     bySourcePath: {
       [sourcePath]: {
-        [subscriptionKey]: {
+        [name]: {
           streamId,
           streamCreatedAt,
           cursorChangedAtSourceOffset,
@@ -103,21 +109,22 @@ subscriptions: {
     },
   },
   outbound: {
-    byKey: {
-      [subscriptionKey]: {
+    byName: {
+      [name]: {
         configuration,
         configuredAtOffset,
         configuredAt,
         cursorSet?: { afterOffset, setAtSourceOffset },
         deliveryHalted?,
+        deliveryParked?,
       },
     },
   },
 }
 ```
 
-Acknowledged offsets, retry times, live callbacks, and measurements live in runtime
-state. They do not repeat durable configuration.
+Delivered/confirmed offsets, retry times, live callbacks, and measurements
+live in runtime state. They do not repeat durable configuration.
 
 ## Session callback connections
 
@@ -169,6 +176,15 @@ receiver: {
   processorSlug: "agent",
 }
 ```
+
+`processorSlug` is required and names which contract runs; the subscription
+NAME is the instance's identity, so two instances of one contract are two
+names sharing one slug. Instead of an expression, `placement: "facet"` hosts
+the processor as a facet of the stream's own Durable Object: the subscription
+name is the facet name, delivery is an in-process parent→facet dial through
+the same wake protocol, and the facet's alarms are proxied to the parent's
+real platform alarm (`proxySetAlarm`/`proxyDeleteAlarm`/`proxyGetAlarm` on
+the Stream DO).
 
 The source calls the named wake method with the source stream's random lifetime
 ID. The host durably binds its checkpoint to that ID and returns the ID,
@@ -224,11 +240,14 @@ receiver: {
 ```
 
 The source POSTs one event at a time through the project's attributed egress.
-A 2xx response accepts that event. This is the lane for remotely-hosted
-processors driven by webhooks; webhook delivery is at-least-once, so a remote
-processor must deduplicate by `(streamId, offset)`. A `jsonataTransform`
-reshapes the POSTed event body while the envelope keeps the real source
-coordinates.
+A 2xx response completes the transfer (`delivered_offset`). A plain webhook is
+confirmed by the same 2xx; an offset-acking webhook answers with JSON
+`{ "confirmedOffset": N }` to own its durable position (`confirmed_offset`) —
+after an eviction the delivered-but-unconfirmed window redelivers, the
+at-least-once contract a remote-tracked processor wants. Webhook delivery is
+at-least-once either way, so a remote processor must deduplicate by
+`(streamId, offset)`. A `jsonataTransform` reshapes the POSTed event body
+while the envelope keeps the real source coordinates.
 
 ## Events marked ephemeral
 
@@ -264,12 +283,19 @@ assuming `eventCount === maxOffset`.
 ## Product-event retries and cursors
 
 `stream-event-sender.ts` reads after each durable cursor, applies the filter,
-sends a bounded batch, and advances the cursor only after the receiver call returns.
+sends a bounded batch, and records progress in two columns whose meanings
+never vary by receiver kind: `delivered_offset` (the source completed
+transfer) and `confirmed_offset` (the far side durably claims). Push kinds
+write both with one acknowledgement; a hosted processor's batch acks write
+`delivered` and its reported checkpoints write `confirmed`; an offset-acking
+webhook splits them via its 2xx body. The one scheduling rule, for every
+kind: delivery RESUMES after `confirmed_offset` — a fresh incarnation rewinds
+`delivered` to `confirmed` and redelivers the unconfirmed window.
 
 Guarantees:
 
 - Cursor advances are SQLite rows, not an event per batch.
-- Halt, resume, seek, and removal are appended events.
+- Halt, park, resume, seek, and removal are appended events.
 - Non-matching events still advance the subscription cursor stored on the
   source stream.
 - ITX calls, stream appends, and webhook responses are awaited.
@@ -279,14 +305,26 @@ Guarantees:
 - Retries are bounded and visible; the final failure halts the subscription.
   After any batch failure the next read uses batch size 1, so a poison event
   cannot strand its healthy prefix.
+- A receiver that signals its target is legitimately ABSENT
+  (`StreamReceiverAbsentError`, matched by name across RPC hops) PARKS the
+  subscription instead of burning the ladder: cursor intact, no retry alarm,
+  nothing charged as failure. `subscription-delivery-resumed` — or the Stream
+  DO's internal `resumeParkedSubscription` poke — reactivates it. `halted`
+  stays reserved for genuine failure.
 - A Durable Object alarm starts due retries even when the source is quiet.
+- Optional per-subscription delivery controls in the birth event —
+  `maxDeliveryEvents`, `maxDeliveryBytes`, `state: false` — narrow batch
+  size/bytes for push arms and strip the reduced-state snapshot from wake
+  batches.
+- `waitUntilConfirmed(name, { offset, timeoutMs? })` on the Stream DO is the
+  uniform barrier for every kind, off `confirmed_offset`.
 
 Operator commands are literal:
 
 ```ts
-await source.setSubscriptionCursor({ subscriptionKey, afterOffset });
-await source.resumeSubscription({ subscriptionKey });
-await source.setSubscriptionCursorAndResume({ subscriptionKey, afterOffset });
+await source.setSubscriptionCursor({ name, afterOffset });
+await source.resumeSubscription({ name });
+await source.setSubscriptionCursorAndResume({ name, afterOffset });
 ```
 
 ## The receiver's passive fence

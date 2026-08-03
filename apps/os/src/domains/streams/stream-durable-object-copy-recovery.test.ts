@@ -164,7 +164,7 @@ function durableObjectContext(name: string) {
 
 function subscriptionConfiguration(): SubscriptionConfiguredPayload {
   return {
-    subscriptionKey: SUBSCRIPTION_KEY,
+    name: SUBSCRIPTION_KEY,
     filter: { eventTypes: [MATCHING_EVENT_TYPE] },
     receiver: {
       action: "copy-to-stream",
@@ -595,7 +595,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
     try {
       expect(
         source.setCopySubscription({ configuration: subscriptionConfiguration() }),
-      ).toMatchObject({ subscriptionKey: SUBSCRIPTION_KEY });
+      ).toMatchObject({ name: SUBSCRIPTION_KEY });
       const [productEvent] = source.append({
         type: MATCHING_EVENT_TYPE,
         payload: { issue: "survive-eviction" },
@@ -615,7 +615,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
         events: [{ offset: productEvent!.offset, type: MATCHING_EVENT_TYPE }],
       });
       expect(source.runtimeState().runtime.subscriptions[SUBSCRIPTION_KEY]).toMatchObject({
-        acknowledgedOffset: expect.any(Number),
+        confirmedOffset: expect.any(Number),
         attempt: 0,
         lastError: null,
       });
@@ -633,11 +633,11 @@ describe("StreamDurableObject reconciliation recovery", () => {
 
       expect(source.runtimeState().coreProcessorState.subscriptions).toMatchObject({
         outbound: {
-          byKey: { [SUBSCRIPTION_KEY]: expect.any(Object) },
+          byName: { [SUBSCRIPTION_KEY]: expect.any(Object) },
         },
       });
       expect(source.runtimeState().runtime.subscriptions[SUBSCRIPTION_KEY]).toMatchObject({
-        acknowledgedOffset: expect.any(Number),
+        confirmedOffset: expect.any(Number),
         attempt: 0,
         lastError: null,
       });
@@ -654,7 +654,7 @@ describe("StreamDurableObject reconciliation recovery", () => {
       await sourceContext.waitForInitialization();
       streams.set(streamName(SOURCE_PATH), source);
       expect(
-        source.runtimeState().coreProcessorState.subscriptions.outbound.byKey[SUBSCRIPTION_KEY],
+        source.runtimeState().coreProcessorState.subscriptions.outbound.byName[SUBSCRIPTION_KEY],
       ).toEqual(expect.any(Object));
       expect(source.runtimeState().runtime.subscriptions[SUBSCRIPTION_KEY]).toMatchObject({
         attempt: 0,
@@ -850,10 +850,10 @@ describe("StreamDurableObject copy subscription commands", () => {
     await context.settle();
 
     try {
-      const { subscriptionKey: _omitted, ...keylessConfiguration } = subscriptionConfiguration();
+      const { name: _omitted, ...keylessConfiguration } = subscriptionConfiguration();
       const offsetBeforeRejectedSetup = source.runtimeState().coreProcessorState.maxOffset;
       expect(() => source.setCopySubscription({ configuration: keylessConfiguration })).toThrow(
-        "a keyless copy subscription requires idempotencyKey so setup is safe to retry",
+        "a nameless copy subscription requires idempotencyKey so setup is safe to retry",
       );
       expect(source.runtimeState().coreProcessorState.maxOffset).toBe(offsetBeforeRejectedSetup);
 
@@ -865,10 +865,8 @@ describe("StreamDurableObject copy subscription commands", () => {
         configuration: keylessConfiguration,
         idempotencyKey: "configure-review-feed-once",
       });
-      expect(first.subscriptionKey).toBe(
-        `subscription:${first.subscriptionConfiguredEvent.offset}`,
-      );
-      expect(retry.subscriptionKey).toBe(first.subscriptionKey);
+      expect(first.name).toBe(`subscription:${first.subscriptionConfiguredEvent.offset}`);
+      expect(retry.name).toBe(first.name);
       expect(retry.subscriptionConfiguredEvent.offset).toBe(
         first.subscriptionConfiguredEvent.offset,
       );
@@ -892,22 +890,22 @@ describe("StreamDurableObject copy subscription commands", () => {
 
       expect(
         source.removeCopySubscription({
-          subscriptionKey: SUBSCRIPTION_KEY,
+          name: SUBSCRIPTION_KEY,
           expectedReceiverPath: "/somewhere-else",
         }),
       ).toEqual({ status: "already-absent" });
       expect(
-        source.runtimeState().coreProcessorState.subscriptions.outbound.byKey[SUBSCRIPTION_KEY],
+        source.runtimeState().coreProcessorState.subscriptions.outbound.byName[SUBSCRIPTION_KEY],
       ).toBeDefined();
 
       const removed = source.removeCopySubscription({
-        subscriptionKey: SUBSCRIPTION_KEY,
+        name: SUBSCRIPTION_KEY,
         expectedReceiverPath: RECEIVING_STREAM_PATH,
       });
       expect(removed).toMatchObject({ status: "removed" });
       expect(
         source.removeCopySubscription({
-          subscriptionKey: SUBSCRIPTION_KEY,
+          name: SUBSCRIPTION_KEY,
           expectedReceiverPath: RECEIVING_STREAM_PATH,
         }),
       ).toEqual({ status: "already-absent" });
@@ -930,7 +928,7 @@ describe("StreamDurableObject copy subscription commands", () => {
       source.appendCoreEvent({
         type: "events.iterate.com/stream/subscription-delivery-halted",
         payload: {
-          subscriptionKey: SUBSCRIPTION_KEY,
+          name: SUBSCRIPTION_KEY,
           reason: "delivery-failed",
           afterOffset: 0,
           attempts: 15,
@@ -945,7 +943,7 @@ describe("StreamDurableObject copy subscription commands", () => {
         first.subscriptionConfiguredEvent.offset,
       );
       expect(
-        source.runtimeState().coreProcessorState.subscriptions.outbound.byKey[SUBSCRIPTION_KEY]
+        source.runtimeState().coreProcessorState.subscriptions.outbound.byName[SUBSCRIPTION_KEY]
           ?.deliveryHalted,
       ).toMatchObject({ reason: "delivery-failed" });
     } finally {
