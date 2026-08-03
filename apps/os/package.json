@@ -31,6 +31,7 @@
     "test:watch": "vitest"
   },
   "dependencies": {
+    "@cloudflare/computer": "0.1.1",
     "@cloudflare/containers": "0.3.7",
     "@cloudflare/sandbox": "0.12.3",
     "@cloudflare/shell": "^0.3.4",

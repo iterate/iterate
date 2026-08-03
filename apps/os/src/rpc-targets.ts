@@ -28,6 +28,7 @@
  *   scope's host, including the project root at `"/"`.
  */
 import { RpcTarget } from "cloudflare:workers";
+import type { WorkspaceStub } from "@cloudflare/computer";
 import type { StreamEvent, StreamEventInput, StreamListItem } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import type {
@@ -381,6 +382,42 @@ import type {
   WorkspaceMountOverlay,
   WorkspaceProcessorState,
 } from "./domains/workspaces/workspace-processor-contract.ts";
+import type {
+  ComputerConfig,
+  ComputerProcessorState,
+} from "./domains/computers/computer-processor-contract.ts";
+import type {
+  ComputerArtifactCreatedToken,
+  ComputerArtifactCreateResult,
+  ComputerArtifactRepoInfo,
+  ComputerArtifactRepoSummary,
+  ComputerArtifactsCliInput,
+  ComputerArtifactToken,
+  ComputerArtifactTokenList,
+  ComputerCliResult,
+  ComputerDirentResult,
+  ComputerExecInput,
+  ComputerExecResult,
+  ComputerFoundEntry,
+  ComputerGitCliInput,
+  ComputerGrepMatch,
+  ComputerGrepOptions,
+  ComputerMkdirOptions,
+  ComputerReadFileOptions,
+  ComputerReaddirOptions,
+  ComputerRmOptions,
+  ComputerRuntimeExecOptions,
+  ComputerRuntimeGetOptions,
+  ComputerRuntimeKillOptions,
+  ComputerRuntimeResult,
+  ComputerStatResult,
+  ComputerWriteFileOptions,
+} from "./domains/computers/types.ts";
+import {
+  agentComputerPath,
+  computerCreationEvents,
+  normalizeComputerPath,
+} from "./domains/computers/utils.ts";
 import type { CollabPresenceFlat } from "./domains/workspaces/collab-host.ts";
 import type { CollabChangesResult } from "./domains/workspaces/collab-host.ts";
 import {
@@ -2082,6 +2119,596 @@ class SandboxCollectionRpcTarget extends IterateRpcTarget<"SandboxCollection"> {
     return projectProcessorState(this.props.projectId).then((state) =>
       state.streams.filter((stream) => stream.path.startsWith("/sandboxes/")),
     );
+  }
+}
+
+/** Agent-owned Cloudflare Computers. A Computer is born by agent.create();
+ * addressing a handle alone has no side effect. */
+class ComputerCollectionRpcTarget extends IterateRpcTarget<"ComputerCollection"> {
+  constructor(readonly props: { auth: ItxAuth; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        'Catalog of agent-owned Cloudflare Computers. An agent at "/agents/x" owns "/computers/agents/x"; agent.create() births both. Callers are trusted and may address any Computer in the project.',
+      children: { get: "Address one agent-owned Computer by its full /computers/agents/** path." },
+      parent: "a project itx (itx.computers)",
+    });
+  }
+
+  get(path: string): ComputerRpcTarget {
+    return new ComputerRpcTarget({
+      auth: this.props.auth,
+      path: normalizeComputerPath(path),
+      projectId: this.props.projectId,
+    });
+  }
+}
+
+/** Owns one upstream WorkspaceStub and releases its complete child-stub graph. */
+class ComputerWorkspaceLease {
+  readonly #workspace: Promise<Rpc.Stub<WorkspaceStub>>;
+
+  constructor(computer: ComputerRpcTarget) {
+    this.#workspace = computer.durableObjectStub.__getWorkspaceStub();
+  }
+
+  get(): Promise<Rpc.Stub<WorkspaceStub>> {
+    return this.#workspace;
+  }
+
+  dispose(): void {
+    void this.#workspace
+      .then((workspace) => workspace[Symbol.dispose]())
+      .catch((error: unknown) => console.error("computer workspace stub disposal failed", error));
+  }
+}
+
+type ComputerRuntimeRemoteHandle = {
+  readonly id: PromiseLike<string>;
+  readonly backend: PromiseLike<string>;
+  result(): Promise<ComputerRuntimeResult>;
+  stream(): Promise<ReadableStream<Uint8Array>>;
+  kill(signal?: "SIGTERM" | "SIGKILL" | "SIGINT" | "SIGHUP"): Promise<void>;
+  [Symbol.dispose](): void;
+};
+
+type ComputerRuntimeRemote = {
+  exec(source: string, options?: ComputerRuntimeExecOptions): Promise<ComputerRuntimeRemoteHandle>;
+  getExec(id: string, options?: ComputerRuntimeGetOptions): Promise<ComputerRuntimeRemoteHandle>;
+  killExec(id: string, options?: ComputerRuntimeKillOptions): Promise<void>;
+  disposeExec(id: string, options?: { backend?: string }): Promise<void>;
+};
+
+/** Cloudflare Computer's complete RPC-safe filesystem facade. */
+class ComputerFilesystemRpcTarget extends IterateRpcTarget<"ComputerFilesystem"> {
+  readonly #lease: ComputerWorkspaceLease;
+
+  constructor(computer: ComputerRpcTarget) {
+    super();
+    this.#lease = new ComputerWorkspaceLease(computer);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Cloudflare Computer WorkspaceFilesystemStub, exposed verbatim: byte/text reads, metadata, search, and mutations over the durable virtual filesystem.",
+      children: {},
+      parent: "a Cloudflare Computer (itx.computer.fs)",
+    });
+  }
+
+  async readFile(
+    path: string,
+    options?: "utf8" | ComputerReadFileOptions,
+  ): Promise<string | ReadableStream<Uint8Array>> {
+    const workspace = await this.#lease.get();
+    if (options === "utf8") return workspace.fs.readFile(path, { encoding: "utf8" });
+    if (options !== undefined) return workspace.fs.readFile(path, options);
+    return workspace.fs.readFile(path, {});
+  }
+
+  async exists(path: string): Promise<boolean> {
+    return (await this.#lease.get()).fs.exists(path);
+  }
+
+  async stat(path: string): Promise<ComputerStatResult> {
+    return (await this.#lease.get()).fs.stat(path);
+  }
+
+  async statOrNull(path: string): Promise<ComputerStatResult | null> {
+    return (await this.#lease.get()).fs.statOrNull(path);
+  }
+
+  async lstat(path: string): Promise<ComputerStatResult> {
+    return (await this.#lease.get()).fs.lstat(path);
+  }
+
+  async lstatOrNull(path: string): Promise<ComputerStatResult | null> {
+    return (await this.#lease.get()).fs.lstatOrNull(path);
+  }
+
+  async readlink(path: string): Promise<string> {
+    return (await this.#lease.get()).fs.readlink(path);
+  }
+
+  async readdir(path: string, options?: ComputerReaddirOptions): Promise<ComputerDirentResult[]> {
+    return (await this.#lease.get()).fs.readdir(path, options ?? {});
+  }
+
+  async find(directory: string, pattern?: string): Promise<ComputerFoundEntry[]> {
+    return (await this.#lease.get()).fs.find(directory, pattern);
+  }
+
+  async ls(prefix: string): Promise<string[]> {
+    return (await this.#lease.get()).fs.ls(prefix);
+  }
+
+  async grep(
+    pattern: string,
+    path: string,
+    options?: ComputerGrepOptions,
+  ): Promise<ComputerGrepMatch[]> {
+    return (await this.#lease.get()).fs.grep(pattern, path, options ?? {});
+  }
+
+  async writeFile(
+    path: string,
+    content: string | Uint8Array | ReadableStream<Uint8Array>,
+    options?: ComputerWriteFileOptions,
+  ): Promise<void> {
+    return (await this.#lease.get()).fs.writeFile(path, content, options ?? {});
+  }
+
+  async mkdir(path: string, options?: ComputerMkdirOptions): Promise<void> {
+    return (await this.#lease.get()).fs.mkdir(path, options ?? {});
+  }
+
+  async rm(path: string, options?: ComputerRmOptions): Promise<void> {
+    return (await this.#lease.get()).fs.rm(path, options ?? {});
+  }
+
+  async chmod(path: string, mode: number): Promise<void> {
+    return (await this.#lease.get()).fs.chmod(path, mode);
+  }
+
+  async symlink(target: string, path: string): Promise<void> {
+    return (await this.#lease.get()).fs.symlink(target, path);
+  }
+
+  [Symbol.dispose](): void {
+    this.#lease.dispose();
+  }
+}
+
+/** A single-consumer Cloudflare Computer runtime execution handle. */
+class ComputerRuntimeExecHandleRpcTarget extends IterateRpcTarget<"ComputerRuntimeExecHandle"> {
+  constructor(
+    readonly handle: ComputerRuntimeRemoteHandle,
+    readonly workspace: Rpc.Stub<WorkspaceStub>,
+  ) {
+    super();
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Cloudflare Computer runtime execution handle. Consume exactly one of result() or stream(); kill() is independent; dispose when finished.",
+      children: {},
+      parent: "itx.computer.runtime.exec(...) or getExec(...) result",
+    });
+  }
+
+  get id(): Promise<string> {
+    return Promise.resolve(this.handle.id);
+  }
+
+  get backend(): Promise<string> {
+    return Promise.resolve(this.handle.backend);
+  }
+
+  result(): Promise<ComputerRuntimeResult> {
+    return this.handle.result();
+  }
+
+  async stream(): Promise<ReadableStream<Uint8Array>> {
+    return this.handle.stream();
+  }
+
+  kill(signal?: string): Promise<void> {
+    if (
+      signal !== undefined &&
+      signal !== "SIGTERM" &&
+      signal !== "SIGKILL" &&
+      signal !== "SIGINT" &&
+      signal !== "SIGHUP"
+    ) {
+      throw new Error(`unsupported kill signal ${JSON.stringify(signal)}`);
+    }
+    return this.handle.kill(signal);
+  }
+
+  [Symbol.dispose](): void {
+    this.handle[Symbol.dispose]();
+    this.workspace[Symbol.dispose]();
+  }
+}
+
+/** Cloudflare Computer's complete detached runtime facade. */
+class ComputerRuntimeRpcTarget extends IterateRpcTarget<"ComputerRuntime"> {
+  constructor(readonly computer: ComputerRpcTarget) {
+    super();
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Cloudflare Computer WorkspaceRuntimeStub: start, reconnect to, kill, and dispose detached executions. Handles are single-consumer and expose result() or encoded event stream().",
+      children: {},
+      parent: "a Cloudflare Computer (itx.computer.runtime)",
+    });
+  }
+
+  async exec(
+    source: string,
+    options?: ComputerRuntimeExecOptions,
+  ): Promise<ComputerRuntimeExecHandleRpcTarget> {
+    const workspace = await this.computer.durableObjectStub.__getWorkspaceStub();
+    // Workers RPC transforms the upstream RpcTarget into a deeply recursive
+    // Stub type. This shallow view is exactly WorkspaceRuntimeStub's public
+    // wire contract and keeps TypeScript from infinitely expanding the proxy.
+    const runtime = (await workspace.runtime) as unknown as ComputerRuntimeRemote;
+    const handle = await runtime.exec(source, options);
+    return new ComputerRuntimeExecHandleRpcTarget(handle, workspace);
+  }
+
+  async getExec(
+    id: string,
+    options?: ComputerRuntimeGetOptions,
+  ): Promise<ComputerRuntimeExecHandleRpcTarget> {
+    const workspace = await this.computer.durableObjectStub.__getWorkspaceStub();
+    // See exec(): this is the same exact upstream RPC-safe runtime contract.
+    const runtime = (await workspace.runtime) as unknown as ComputerRuntimeRemote;
+    const handle = await runtime.getExec(id, options);
+    return new ComputerRuntimeExecHandleRpcTarget(handle, workspace);
+  }
+
+  async killExec(id: string, options?: ComputerRuntimeKillOptions): Promise<void> {
+    const signal = options?.signal;
+    if (
+      signal !== undefined &&
+      signal !== "SIGTERM" &&
+      signal !== "SIGKILL" &&
+      signal !== "SIGINT" &&
+      signal !== "SIGHUP"
+    ) {
+      throw new Error(`unsupported kill signal ${JSON.stringify(signal)}`);
+    }
+    const workspace = await this.computer.durableObjectStub.__getWorkspaceStub();
+    try {
+      // See exec(): avoid recursively instantiating Cloudflare's proxy type.
+      const runtime = (await workspace.runtime) as unknown as ComputerRuntimeRemote;
+      await runtime.killExec(id, { ...options, signal });
+    } finally {
+      workspace[Symbol.dispose]();
+    }
+  }
+
+  async disposeExec(id: string, options?: { backend?: string }): Promise<void> {
+    const workspace = await this.computer.durableObjectStub.__getWorkspaceStub();
+    try {
+      // See exec(): avoid recursively instantiating Cloudflare's proxy type.
+      const runtime = (await workspace.runtime) as unknown as ComputerRuntimeRemote;
+      await runtime.disposeExec(id, options);
+    } finally {
+      workspace[Symbol.dispose]();
+    }
+  }
+}
+
+/** Cloudflare Computer's RPC-safe git CLI facade. */
+class ComputerGitRpcTarget extends IterateRpcTarget<"ComputerGit"> {
+  readonly #lease: ComputerWorkspaceLease;
+
+  constructor(computer: ComputerRpcTarget) {
+    super();
+    this.#lease = new ComputerWorkspaceLease(computer);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Cloudflare Computer WorkspaceGitStub. cli() accepts git argv and covers the package's complete RPC-safe git command set.",
+      children: {},
+      parent: "a Cloudflare Computer (itx.computer.git)",
+    });
+  }
+
+  async cli(input: ComputerGitCliInput): Promise<ComputerCliResult> {
+    return (await this.#lease.get()).git.cli(input);
+  }
+
+  [Symbol.dispose](): void {
+    this.#lease.dispose();
+  }
+}
+
+/** Cloudflare Computer's asset publishing facade. */
+class ComputerAssetsRpcTarget extends IterateRpcTarget<"ComputerAssets"> {
+  readonly #lease: ComputerWorkspaceLease;
+
+  constructor(computer: ComputerRpcTarget) {
+    super();
+    this.#lease = new ComputerWorkspaceLease(computer);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Cloudflare Computer WorkspaceAssetsStub. The surface is present now; publish fails clearly until OS supplies the package's R2 signing configuration.",
+      children: {},
+      parent: "a Cloudflare Computer (itx.computer.assets)",
+    });
+  }
+
+  async publish(path: string, options: { expiresAfter: number }): Promise<string> {
+    const assets = await (await this.#lease.get()).assets;
+    if (assets === undefined) throw new Error("Workspace assets are not configured");
+    return assets.publish(path, options);
+  }
+
+  [Symbol.dispose](): void {
+    this.#lease.dispose();
+  }
+}
+
+/** Cloudflare Computer's complete session-scoped Artifacts facade. */
+class ComputerArtifactsRpcTarget extends IterateRpcTarget<"ComputerArtifacts"> {
+  readonly #lease: ComputerWorkspaceLease;
+
+  constructor(computer: ComputerRpcTarget) {
+    super();
+    this.#lease = new ComputerWorkspaceLease(computer);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions:
+        "Cloudflare Computer WorkspaceArtifactsStub. Repositories and tokens are automatically scoped to this Computer's durable identity.",
+      children: {},
+      parent: "a Cloudflare Computer (itx.computer.artifacts)",
+    });
+  }
+
+  async create(
+    name: string,
+    options?: { readOnly?: boolean; description?: string; setDefaultBranch?: string },
+  ): Promise<ComputerArtifactCreateResult> {
+    return (await this.#lease.get()).artifacts.create(name, options);
+  }
+
+  async get(name: string): Promise<ComputerArtifactRepoInfo> {
+    return (await this.#lease.get()).artifacts.get(name);
+  }
+
+  async list(): Promise<ComputerArtifactRepoSummary[]> {
+    return (await this.#lease.get()).artifacts.list();
+  }
+
+  async import(
+    name: string,
+    source: { url: string; branch?: string; depth?: number },
+    options?: { description?: string; readOnly?: boolean },
+  ): Promise<ComputerArtifactCreateResult> {
+    return (await this.#lease.get()).artifacts.import(name, source, options);
+  }
+
+  async delete(name: string): Promise<boolean> {
+    return (await this.#lease.get()).artifacts.delete(name);
+  }
+
+  async createToken(
+    name: string,
+    scope?: "read" | "write",
+    ttl?: number,
+  ): Promise<ComputerArtifactCreatedToken> {
+    return (await this.#lease.get()).artifacts.createToken(name, scope, ttl);
+  }
+
+  async listTokens(name: string): Promise<ComputerArtifactTokenList> {
+    return (await this.#lease.get()).artifacts.listTokens(name);
+  }
+
+  async getToken(name: string, id: string): Promise<ComputerArtifactToken> {
+    return (await this.#lease.get()).artifacts.getToken(name, id);
+  }
+
+  async revokeToken(name: string, tokenOrId: string): Promise<boolean> {
+    return (await this.#lease.get()).artifacts.revokeToken(name, tokenOrId);
+  }
+
+  async cli(input: ComputerArtifactsCliInput): Promise<ComputerCliResult> {
+    return (await this.#lease.get()).artifacts.cli(input);
+  }
+
+  [Symbol.dispose](): void {
+    this.#lease.dispose();
+  }
+}
+
+/** One agent-owned Cloudflare Computer: durable disk, execution, and event-sourced lifecycle. */
+class ComputerRpcTarget extends IterateRpcTarget<"Computer"> {
+  constructor(readonly props: { auth: ItxAuth; path: string; projectId: string }) {
+    super();
+    props.auth.assertCanAccessProject(props.projectId);
+  }
+
+  async __describe(): Promise<Description> {
+    return describeNode({
+      instructions: `The agent-owned Cloudflare Computer at "${this.props.path}". This is the complete @cloudflare/computer WorkspaceStub surface (fs, runtime, git, assets, artifacts, useThink), plus OS birth, identity, configuration, restart, and event-processor state. Callers are trusted; this is not a restricted agent facade.`,
+      children: {
+        artifacts: "Cloudflare Computer's session-scoped Artifacts repositories and tokens.",
+        assets: "Cloudflare Computer's asset publisher (requires R2 signing configuration).",
+        configure: "Replace bounded runtime defaults used by subsequent commands.",
+        deleteFile: "Remove a file or directory from the Computer's durable disk.",
+        exec: "OS audited convenience command; the canonical Cloudflare API is runtime.exec().",
+        fs: "Cloudflare Computer's complete durable filesystem API.",
+        getConfig: "Read the reduced Computer runtime configuration.",
+        git: "Cloudflare Computer's complete RPC-safe git CLI.",
+        kill: "Restart the Computer Durable Object; the next use classifies an interrupted command.",
+        listAllFiles: "List every file under the Computer's configured working directory.",
+        processor: "The Computer lifecycle and execution-audit stream processor.",
+        readFile: "Read UTF-8 text; null when missing.",
+        readFileBytes: "Read bytes; null when missing.",
+        runtime: "Cloudflare Computer's detached execution API.",
+        state: "Alias for the Computer processor: snapshot, wait, and runtime state.",
+        useThink:
+          "False here. Cloudflare's flag only adds legacy string-oriented filesystem methods for assigning the Workspace directly to the separate Think package; use fs instead.",
+        whoami: "Computer identity string (debug).",
+        writeFile: "Write UTF-8 text to durable Computer storage.",
+        writeFileBytes: "Write bytes to durable Computer storage.",
+      },
+      parent: "computers.get(path); an agent's own Computer is itx.computer",
+    });
+  }
+
+  get fs(): ComputerFilesystemRpcTarget {
+    return new ComputerFilesystemRpcTarget(this);
+  }
+
+  get runtime(): ComputerRuntimeRpcTarget {
+    return new ComputerRuntimeRpcTarget(this);
+  }
+
+  get git(): ComputerGitRpcTarget {
+    return new ComputerGitRpcTarget(this);
+  }
+
+  get assets(): ComputerAssetsRpcTarget {
+    return new ComputerAssetsRpcTarget(this);
+  }
+
+  get artifacts(): ComputerArtifactsRpcTarget {
+    return new ComputerArtifactsRpcTarget(this);
+  }
+
+  /**
+   * Whether the upstream Workspace carries Think's legacy string-oriented
+   * filesystem adapter. OS leaves this false; callers should use `fs`.
+   */
+  get useThink(): Promise<boolean> {
+    return this.#readUseThink();
+  }
+
+  async #readUseThink(): Promise<boolean> {
+    const workspace = await this.durableObjectStub.__getWorkspaceStub();
+    try {
+      return workspace.useThink;
+    } finally {
+      workspace[Symbol.dispose]();
+    }
+  }
+
+  get durableObjectStub() {
+    return env.COMPUTER.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+    );
+  }
+
+  get #stream(): StreamRpcTarget {
+    return new StreamRpcTarget({
+      auth: this.props.auth,
+      path: this.props.path,
+      projectId: this.props.projectId,
+    });
+  }
+
+  /** Repair/idempotency door used by agent.create; callers normally never invoke it directly. */
+  async create(input: { agentPath: string }): Promise<ComputerRpcTarget> {
+    if (agentComputerPath(input.agentPath) !== this.props.path) {
+      throw new Error(
+        `computer ${this.props.path} does not belong to agent ${input.agentPath}; expected ${agentComputerPath(input.agentPath)}`,
+      );
+    }
+    const committed = await this.#stream.append(
+      ...computerCreationEvents({
+        agentPath: input.agentPath,
+        path: this.props.path,
+        projectId: this.props.projectId,
+      }),
+    );
+    const offset = committed.reduce((maximum, event) => Math.max(maximum, event.offset), 0);
+    if (offset === 0) throw new Error("computer create committed no events");
+    await this.processor.waitUntilProcessed({
+      offset,
+      timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
+    });
+    await this.durableObjectStub.prepare();
+    return this;
+  }
+
+  whoami(): Promise<string> {
+    return Promise.resolve(this.durableObjectStub.whoami());
+  }
+
+  kill(): Promise<void> {
+    return Promise.resolve(this.durableObjectStub.kill());
+  }
+
+  get processor(): StreamProcessorRpc<ComputerProcessorState> {
+    return new ProcessorRelayRpcTarget<ComputerProcessorState>({
+      auth: this.props.auth,
+      // Native Workers RPC stubs are structurally wider than the processor
+      // relay's private minimum host surface.
+      host: () => this.durableObjectStub as unknown as ProcessorHostStub,
+    });
+  }
+
+  /** Additive OS lifecycle state; Cloudflare's Workspace API remains otherwise unchanged. */
+  get state(): StreamProcessorRpc<ComputerProcessorState> {
+    return this.processor;
+  }
+
+  getConfig(): Promise<ComputerConfig> {
+    return this.durableObjectStub.getConfig();
+  }
+
+  configure(input: { config: ComputerConfig }): Promise<ComputerConfig> {
+    return this.durableObjectStub.configure(input);
+  }
+
+  exec(input: ComputerExecInput): Promise<ComputerExecResult> {
+    return this.durableObjectStub.exec(input);
+  }
+
+  readFile(path: string): Promise<string | null> {
+    return this.durableObjectStub.readFile(path);
+  }
+
+  readFileBytes(path: string): Promise<Uint8Array | null> {
+    return this.durableObjectStub.readFileBytes(path);
+  }
+
+  writeFile(path: string, content: string): Promise<void> {
+    return this.durableObjectStub.writeFile(path, content);
+  }
+
+  writeFileBytes(path: string, content: Uint8Array): Promise<void> {
+    return this.durableObjectStub.writeFileBytes(path, content);
+  }
+
+  deleteFile(path: string): Promise<void> {
+    return this.durableObjectStub.deleteFile(path);
+  }
+
+  listAllFiles(): Promise<string[]> {
+    return this.durableObjectStub.listAllFiles();
   }
 }
 
@@ -4622,7 +5249,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
 
   /**
    * Create the generic agent machinery on this stream and wait until the
-   * agent, capability-host, singleton collection, and explicitly-created
+   * agent, capability-host, singleton collection, Computer, and migration
    * workspace processors have reduced their births. The optional payload is
    * the `agent/created` birth certificate
    * (arbitrary birth facts; defaults to `{}`). Configuration, context, and
@@ -4633,6 +5260,14 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
    * over an existing agent with a different payload fails loudly.
    */
   async create(payload?: AgentCreateInput): Promise<AgentRpcTarget> {
+    const computer = new ComputerRpcTarget({
+      auth: this.#props.auth,
+      path: agentComputerPath(this.#path),
+      projectId: this.#props.projectId,
+    });
+    const computerReady = computer.create({ agentPath: this.#path });
+    // Migration bridge only. The target architecture removes this once Docs,
+    // Tasks, and repo editing have moved to itx.computer + explicit repo APIs.
     const workspace = new WorkspaceRpcTarget({
       auth: this.#props.auth,
       path: agentWorkspacePath(this.#path),
@@ -4681,6 +5316,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
           });
         },
       }),
+      computerReady,
       workspaceReady,
     ]);
     return this;
@@ -5517,6 +6153,8 @@ const PROJECT_BUILTIN_BLIPS: Record<string, string> = {
     "This scope's own capability host: provideCapability({ path, ... }) mounts a dynamic capability here (itx.provideCapability is a shortcut), revokeCapability removes one, __describe() lists everything reachable, runScript runs a script in this scope.",
   capabilityHosts:
     'Capability hosts of OTHER scopes, addressed by path: itx.capabilityHosts.get("/") is the project root — providing there makes a capability visible to every scope in the project.',
+  computers:
+    'Catalog of agent-owned Cloudflare Computers: get("/computers/agents/<path>") exposes the full Cloudflare Workspace API plus OS lifecycle and processor state. Each is born with its agent; callers are trusted and agent scopes may address the catalog too.',
   debug: "Returns formatted OS debug info for this itx scope, including a dashboard stream link.",
   devices:
     "Enrolled phone devices: list() discovers safe metadata; get(deviceId).append(...) requests a push notification.",
@@ -6465,6 +7103,27 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   get workspaces(): WorkspaceCollectionRpcTarget {
     return new WorkspaceCollectionRpcTarget({
       auth: this.#props.auth,
+      projectId: this.#projectId,
+    });
+  }
+
+  /** Agent-owned Cloudflare Computers, born one-to-one with agents. */
+  get computers(): ComputerCollectionRpcTarget {
+    return new ComputerCollectionRpcTarget({
+      auth: this.#props.auth,
+      projectId: this.#projectId,
+    });
+  }
+
+  /** @internal Full self target used by the agent's journaled itx.computer mount. */
+  get agentComputer(): ComputerRpcTarget {
+    const agentPath = this.#capabilityHost.path;
+    if (!agentPath.startsWith("/agents/")) {
+      throw new Error(`agentComputer is only available at an agent scope, got "${agentPath}"`);
+    }
+    return new ComputerRpcTarget({
+      auth: this.#props.auth,
+      path: agentComputerPath(agentPath),
       projectId: this.#projectId,
     });
   }

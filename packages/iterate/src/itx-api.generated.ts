@@ -224,6 +224,8 @@ export interface Project {
   workers: DynamicWorkerCollection;
   /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */
   workspaces: WorkspaceCollection;
+  /** Agent-owned Cloudflare Computers, born one-to-one with agents. */
+  computers: ComputerCollection;
   /**
    * Platform dispatch point: streams deliver committed event batches here
    * for the project worker. Scripts should not call this — open an event
@@ -432,7 +434,7 @@ export interface Agent {
   chat: AgentChat;
   /**
    * Create the generic agent machinery on this stream and wait until the
-   * agent, capability-host, singleton collection, and explicitly-created
+   * agent, capability-host, singleton collection, Computer, and migration
    * workspace processors have reduced their births. The optional payload is
    * the `agent/created` birth certificate
    * (arbitrary birth facts; defaults to `{}`). Configuration, context, and
@@ -1179,6 +1181,13 @@ export interface WorkspaceCollection {
   get(path: string): Workspace;
 }
 
+/** Agent-owned Cloudflare Computers. A Computer is born by agent.create();
+ * addressing a handle alone has no side effect. */
+export interface ComputerCollection {
+  __describe(): Promise<Description>;
+  get(path: string): Computer;
+}
+
 /**
  * Default seeded project worker contract.
  *
@@ -1639,6 +1648,37 @@ export interface Workspace {
   git: WorkspaceGit;
 }
 
+/** One agent-owned Cloudflare Computer: durable disk, execution, and event-sourced lifecycle. */
+export interface Computer {
+  __describe(): Promise<Description>;
+  fs: ComputerFilesystem;
+  runtime: ComputerRuntime;
+  git: ComputerGit;
+  assets: ComputerAssets;
+  artifacts: ComputerArtifacts;
+  /**
+   * Whether the upstream Workspace carries Think's legacy string-oriented
+   * filesystem adapter. OS leaves this false; callers should use `fs`.
+   */
+  useThink: Promise<boolean>;
+  /** Repair/idempotency door used by agent.create; callers normally never invoke it directly. */
+  create(input: { agentPath: string }): Promise<Computer>;
+  whoami(): Promise<string>;
+  kill(): Promise<void>;
+  processor: StreamProcessorRpc<ComputerProcessorState>;
+  /** Additive OS lifecycle state; Cloudflare's Workspace API remains otherwise unchanged. */
+  state: StreamProcessorRpc<ComputerProcessorState>;
+  getConfig(): Promise<ComputerConfig>;
+  configure(input: { config: ComputerConfig }): Promise<ComputerConfig>;
+  exec(input: ComputerExecInput): Promise<ComputerExecResult>;
+  readFile(path: string): Promise<string | null>;
+  readFileBytes(path: string): Promise<Uint8Array | null>;
+  writeFile(path: string, content: string): Promise<void>;
+  writeFileBytes(path: string, content: Uint8Array): Promise<void>;
+  deleteFile(path: string): Promise<void>;
+  listAllFiles(): Promise<string[]>;
+}
+
 /**
  * Stateful page reader for one stream read window.
  *
@@ -1779,6 +1819,85 @@ export interface WorkspaceGit {
   log(input?: WorkspaceGitLogInput): Promise<WorkspaceGitLogEntry[]>;
 }
 
+/** Cloudflare Computer's complete RPC-safe filesystem facade. */
+export interface ComputerFilesystem {
+  __describe(): Promise<Description>;
+  readFile(
+    path: string,
+    options?: "utf8" | ComputerReadFileOptions,
+  ): Promise<string | ReadableStream<Uint8Array>>;
+  exists(path: string): Promise<boolean>;
+  stat(path: string): Promise<ComputerStatResult>;
+  statOrNull(path: string): Promise<ComputerStatResult | null>;
+  lstat(path: string): Promise<ComputerStatResult>;
+  lstatOrNull(path: string): Promise<ComputerStatResult | null>;
+  readlink(path: string): Promise<string>;
+  readdir(path: string, options?: ComputerReaddirOptions): Promise<ComputerDirentResult[]>;
+  find(directory: string, pattern?: string): Promise<ComputerFoundEntry[]>;
+  ls(prefix: string): Promise<string[]>;
+  grep(pattern: string, path: string, options?: ComputerGrepOptions): Promise<ComputerGrepMatch[]>;
+  writeFile(
+    path: string,
+    content: string | Uint8Array | ReadableStream<Uint8Array>,
+    options?: ComputerWriteFileOptions,
+  ): Promise<void>;
+  mkdir(path: string, options?: ComputerMkdirOptions): Promise<void>;
+  rm(path: string, options?: ComputerRmOptions): Promise<void>;
+  chmod(path: string, mode: number): Promise<void>;
+  symlink(target: string, path: string): Promise<void>;
+  [Symbol.dispose](): void;
+}
+
+/** Cloudflare Computer's complete detached runtime facade. */
+export interface ComputerRuntime {
+  __describe(): Promise<Description>;
+  exec(source: string, options?: ComputerRuntimeExecOptions): Promise<ComputerRuntimeExecHandle>;
+  getExec(id: string, options?: ComputerRuntimeGetOptions): Promise<ComputerRuntimeExecHandle>;
+  killExec(id: string, options?: ComputerRuntimeKillOptions): Promise<void>;
+  disposeExec(id: string, options?: { backend?: string }): Promise<void>;
+}
+
+/** Cloudflare Computer's RPC-safe git CLI facade. */
+export interface ComputerGit {
+  __describe(): Promise<Description>;
+  cli(input: ComputerGitCliInput): Promise<ComputerCliResult>;
+  [Symbol.dispose](): void;
+}
+
+/** Cloudflare Computer's asset publishing facade. */
+export interface ComputerAssets {
+  __describe(): Promise<Description>;
+  publish(path: string, options: { expiresAfter: number }): Promise<string>;
+  [Symbol.dispose](): void;
+}
+
+/** Cloudflare Computer's complete session-scoped Artifacts facade. */
+export interface ComputerArtifacts {
+  __describe(): Promise<Description>;
+  create(
+    name: string,
+    options?: { readOnly?: boolean; description?: string; setDefaultBranch?: string },
+  ): Promise<ComputerArtifactCreateResult>;
+  get(name: string): Promise<ComputerArtifactRepoInfo>;
+  list(): Promise<ComputerArtifactRepoSummary[]>;
+  import(
+    name: string,
+    source: { url: string; branch?: string; depth?: number },
+    options?: { description?: string; readOnly?: boolean },
+  ): Promise<ComputerArtifactCreateResult>;
+  delete(name: string): Promise<boolean>;
+  createToken(
+    name: string,
+    scope?: "read" | "write",
+    ttl?: number,
+  ): Promise<ComputerArtifactCreatedToken>;
+  listTokens(name: string): Promise<ComputerArtifactTokenList>;
+  getToken(name: string, id: string): Promise<ComputerArtifactToken>;
+  revokeToken(name: string, tokenOrId: string): Promise<boolean>;
+  cli(input: ComputerArtifactsCliInput): Promise<ComputerCliResult>;
+  [Symbol.dispose](): void;
+}
+
 /** Attributed tracked changes since the last commit: author-tagged inserted
  * spans and deleted-text markers in current-head coordinates, plus the ONE
  * baseline both redline layers render against. */
@@ -1796,6 +1915,17 @@ export interface CollabChangesResult {
 export interface CollabPresenceFlat {
   clientIds: string[];
   paths: string[];
+}
+
+/** A single-consumer Cloudflare Computer runtime execution handle. */
+export interface ComputerRuntimeExecHandle {
+  __describe(): Promise<Description>;
+  id: Promise<string>;
+  backend: Promise<string>;
+  result(): Promise<ComputerRuntimeResult>;
+  stream(): Promise<ReadableStream<Uint8Array>>;
+  kill(signal?: string): Promise<void>;
+  [Symbol.dispose](): void;
 }
 
 // ─── Data shapes ─────────────────────────────────────────────────────────────
@@ -4207,6 +4337,54 @@ export type EditWorkspaceFileResult = {
   path: string;
 };
 
+/** Replayable lifecycle and latest execution state for one agent-owned Computer. */
+export type ComputerProcessorState = {
+  birthCertificate: {
+    agentPath: string;
+    config: { defaultBackend: "worker-shell"; defaultTimeoutMs: number; workingDirectory: string };
+  } | null;
+  config: { defaultBackend: "worker-shell"; defaultTimeoutMs: number; workingDirectory: string };
+  activeExecution: {
+    backend: "worker-shell";
+    command: string;
+    executionId: string;
+    incarnationId: string;
+    timeoutMs: number;
+  } | null;
+  lastExecution:
+    | {
+        executionId: string;
+        exitCode: number;
+        status: "completed";
+        syncStatus: "complete" | "pending";
+      }
+    | { error: string; executionId: string; status: "failed" }
+    | { executionId: string; reason: string; status: "abandoned" }
+    | null;
+};
+
+/** Runtime policy controlling an agent-owned Computer's backend, timeout, and cwd. */
+export type ComputerConfig = ComputerProcessorState["config"];
+
+/** A bounded shell command submitted to an agent-owned Cloudflare Computer. */
+export type ComputerExecInput = {
+  /** Shell command interpreted by the selected Cloudflare Computer backend. */
+  command: string;
+  /** Absolute cwd; defaults to the birth certificate's workingDirectory. */
+  cwd?: string;
+  /** Bounded execution timeout; defaults to the Computer configuration. */
+  timeoutMs?: number;
+};
+
+/** The terminal shell and filesystem-sync result of a Computer execution. */
+export type ComputerExecResult = {
+  executionId: string;
+  exitCode: number;
+  stderr: string;
+  stdout: string;
+  syncStatus: "complete" | "pending";
+};
+
 /** Durable state reduced from the events in one stream. */
 export type CoreProcessorState = {
   projectId?: string | null | undefined;
@@ -4545,6 +4723,155 @@ export type WorkspaceGitLogEntry = {
   timestamp: number;
 };
 
+/** Options for reading a UTF-8 file through Cloudflare Computer. */
+export type ComputerReadFileOptions = { encoding?: "utf8" };
+
+/** RPC-safe metadata returned for a Cloudflare Computer filesystem entry. */
+export type ComputerStatResult = {
+  name: string;
+  inode: number;
+  mode: number;
+  mtime: number;
+  size: number;
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink: boolean;
+};
+
+/** Options that bound a Cloudflare Computer directory listing. */
+export type ComputerReaddirOptions = { limit?: number };
+
+/** RPC-safe directory-entry metadata returned by Cloudflare Computer. */
+export type ComputerDirentResult = {
+  name: string;
+  parentPath: string;
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink: boolean;
+};
+
+/** A filesystem entry found by Cloudflare Computer's recursive search. */
+export type ComputerFoundEntry = { path: string; type: "file" | "dir" };
+
+/** Options controlling Cloudflare Computer filesystem text search. */
+export type ComputerGrepOptions = { ignoreCase?: boolean };
+
+/** A matching line returned by Cloudflare Computer's text search. */
+export type ComputerGrepMatch = { path: string; line: number; text: string };
+
+/** Options controlling Cloudflare Computer file creation and permissions. */
+export type ComputerWriteFileOptions = { mode?: number; exclusive?: boolean };
+
+/** Options controlling Cloudflare Computer directory creation. */
+export type ComputerMkdirOptions = { recursive?: boolean; mode?: number };
+
+/** Options controlling Cloudflare Computer filesystem removal. */
+export type ComputerRmOptions = { recursive?: boolean; force?: boolean };
+
+/** Options for starting a detached Cloudflare Computer runtime execution. */
+export type ComputerRuntimeExecOptions = {
+  id?: string;
+  backend?: string;
+  cwd?: string;
+  encoding?: "utf8";
+  input?: ComputerRuntimeValue;
+  env?: Record<string, string>;
+  stdin?: Uint8Array | string;
+  timeoutMs?: number;
+};
+
+/** Options for reconnecting to a detached Cloudflare Computer execution. */
+export type ComputerRuntimeGetOptions = {
+  backend?: string;
+  encoding?: "utf8";
+  resume?: "tail" | "full" | number;
+};
+
+/** Options for signalling a detached Cloudflare Computer execution. */
+export type ComputerRuntimeKillOptions = {
+  backend?: string;
+  /** One of SIGTERM, SIGKILL, SIGINT, or SIGHUP. */
+  signal?: string;
+};
+
+/** Input for invoking Git's command-line interface inside a Computer. */
+export type ComputerGitCliInput = {
+  argv: string[];
+  cwd?: string;
+  env?: Record<string, string>;
+  stdin?: string;
+};
+
+/** Standard streams and exit status returned by a Computer CLI operation. */
+export type ComputerCliResult = { stdout: string; stderr: string; exitCode: number };
+
+/** Repository details and initial credentials returned when creating an artifact. */
+export type ComputerArtifactCreateResult = {
+  id: string;
+  name: string;
+  description: string | null;
+  defaultBranch: string;
+  remote: string;
+  token: string;
+  tokenExpiresAt: string;
+};
+
+/** Complete metadata for an artifact repository, including its Git remote. */
+export type ComputerArtifactRepoInfo = {
+  id: string;
+  name: string;
+  description: string | null;
+  defaultBranch: string;
+  createdAt: string;
+  updatedAt: string;
+  lastPushAt: string | null;
+  source: string | null;
+  readOnly: boolean;
+  remote: string;
+};
+
+/** Summary metadata for an artifact repository. */
+export type ComputerArtifactRepoSummary = {
+  id: string;
+  name: string;
+  description: string | null;
+  defaultBranch: string;
+  createdAt: string;
+  updatedAt: string;
+  lastPushAt: string | null;
+  source: string | null;
+  readOnly: boolean;
+};
+
+/** A newly created artifact token including its one-time plaintext value. */
+export type ComputerArtifactCreatedToken = {
+  id: string;
+  plaintext: string;
+  scope: "read" | "write";
+  expiresAt: string;
+};
+
+/** A paginated collection of artifact access tokens. */
+export type ComputerArtifactTokenList = {
+  tokens: ComputerArtifactToken[];
+  total: number;
+};
+
+/** Metadata and lifecycle state for an artifact access token. */
+export type ComputerArtifactToken = {
+  id: string;
+  scope: "read" | "write";
+  state: "active" | "expired" | "revoked";
+  createdAt: string;
+  expiresAt: string;
+};
+
+/** Input for invoking the Artifacts command-line interface. */
+export type ComputerArtifactsCliInput = {
+  argv: string[];
+  env?: Record<string, string>;
+};
+
 /** Delivery progress and retry details shared by every live callback connection. */
 type ConnectionRuntimeDetails = {
   startedAt: string;
@@ -4646,6 +4973,54 @@ export type DynamicWorkerSource =
 export type WorkspaceChange = {
   change: "added" | "deleted" | "modified";
   path: string;
+};
+
+/** JSON-compatible value accepted and returned by Cloudflare Computer runtimes. */
+export type ComputerRuntimeValue =
+  | null
+  | boolean
+  | number
+  | string
+  | ComputerRuntimeValue[]
+  | { [key: string]: ComputerRuntimeValue };
+
+/** The completed process and filesystem-sync result from a Computer runtime. */
+export type ComputerRuntimeResult = {
+  status: "completed" | "failed" | "cancelled";
+  exitCode: number;
+  stdout: string | Uint8Array;
+  stderr: string | Uint8Array;
+  value?: ComputerRuntimeValue;
+  pushed: number;
+  pulled: number;
+  skipped: {
+    path: string;
+    mountRoot: string;
+    op: "write" | "delete";
+    reason: "read-only";
+  }[];
+  sync:
+    | {
+        status: "complete";
+        applied: number;
+        skipped: {
+          path: string;
+          mountRoot: string;
+          op: "write" | "delete";
+          reason: "read-only";
+        }[];
+      }
+    | {
+        status: "pending";
+        applied: number;
+        skipped: {
+          path: string;
+          mountRoot: string;
+          op: "write" | "delete";
+          reason: "read-only";
+        }[];
+        error: string;
+      };
 };
 
 /** Serializable identity of the caller that opened a connection. */

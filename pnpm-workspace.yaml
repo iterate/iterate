@@ -18,6 +18,9 @@ catalogs:
 minimumReleaseAge: 1440
 
 minimumReleaseAgeExclude:
+  # Cloudflare Computer is the deliberately same-day dependency used by the
+  # agent Computer spike. Keep it exact-pinned in apps/os.
+  - '@cloudflare/computer'
   # OpenTUI is exact-pinned in its two consumers. Allow deliberate same-day
   # upgrades without weakening the age gate for the rest of the dependency graph.
   - '@opentui/*'

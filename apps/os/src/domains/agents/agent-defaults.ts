@@ -10,6 +10,7 @@ import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.genera
 import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
+import { agentComputerPath } from "../computers/utils.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
@@ -230,7 +231,8 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
 const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "5";
 const AGENT_MODEL_POLICY_REVISION = "2";
 const AGENT_WORKSPACE_POLICY_REVISION = "3";
-const AGENT_BOOT_CONTEXT_REVISION = "3";
+const AGENT_COMPUTER_POLICY_REVISION = "3-spike";
+const AGENT_BOOT_CONTEXT_REVISION = "4";
 
 export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "2";
 export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "3";
@@ -476,6 +478,16 @@ export function agentCreationForPath<
         'To ship changes: await itx.workspace.git.commit({ message, scope: "/repos/<name>" }) — ONE repo\'s changes become a commit straight on ITS main branch (config-repo commits redeploy the project worker/website automatically; no branches, no push). scope is required whenever more than one repo is dirty. Deviate a mount via getConfig/configure (e.g. { policy: "read-only" } on reference clones).',
     },
   });
+  const computerProvided = CapabilityHostProcessorContract.buildEvent({
+    type: "events.iterate.com/capability-host/capability-provided",
+    idempotencyKey: `capability-host/computer-provided:v${AGENT_COMPUTER_POLICY_REVISION}:${projectId}:${agentPath}`,
+    payload: {
+      path: ["computer"],
+      type: "itx-call",
+      expression: ["agentComputer"],
+      instructions: `THIS agent's own Cloudflare Computer at "${agentComputerPath(agentPath)}". You are trusted with the complete @cloudflare/computer WorkspaceStub API: computer.fs, computer.runtime, computer.git, computer.assets, computer.artifacts, and computer.useThink. OS adds computer.create(), kill(), whoami(), getConfig(), configure(), processor, and state (state is the processor alias). Use computer.runtime.exec(source, options) for detached execution and consume its handle with result() or stream(). Relative filesystem paths use Cloudflare Computer semantics; the configured working directory is /workspace. It is not a repo overlay: use itx.repo/itx.repos for durable project source until explicit repo materialization is designed.`,
+    },
+  });
   const configured = AgentProcessorContract.buildEvent({
     type: "events.iterate.com/agent/configured",
     idempotencyKey: `agent/model-configured:v${AGENT_MODEL_POLICY_REVISION}:${projectId}:${agentPath}`,
@@ -513,6 +525,7 @@ export function agentCreationForPath<
           ? `- Project id: ${projectId}`
           : `- Project: ${JSON.stringify(project.name)} (slug ${project.slug}, id ${projectId})${project.workerUrl === undefined ? "" : ` — the project worker/website serves ${project.workerUrl}`}`,
         `- Your agent stream path: ${agentPath} (your itx scope; your transcript lives here)`,
+        `- Your Cloudflare Computer: ${agentComputerPath(agentPath)} (itx.computer) — durable /workspace files plus bounded command execution.`,
         `- Your workspace directory: ${agentWorkspacePath(agentPath)} — private scratch; relative workspace paths resolve there. Every project repo is mounted in your workspace at its own path.`,
         // One seed list, marked non-exhaustive, and ONE rule for choosing
         // between the two write doors — the model was repeating this line
@@ -578,6 +591,7 @@ export function agentCreationForPath<
       ...siblingBirthCertificates,
       configured,
       systemPromptContext,
+      computerProvided,
       workspaceProvided,
       bootContext,
       agentSubscription,

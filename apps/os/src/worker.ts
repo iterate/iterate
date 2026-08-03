@@ -43,6 +43,7 @@ import { STREAM_CONTEXT_HEADER } from "./domains/projects/stream-context.ts";
 export { AgentDurableObject } from "./domains/agents/agent-durable-object.ts";
 export { AgentCollectionDurableObject } from "./domains/agents/agent-collection-durable-object.ts";
 export { CapabilityHostDurableObject } from "./domains/capability-host/capability-host-durable-object.ts";
+export { ComputerDurableObject } from "./domains/computers/computer-durable-object.ts";
 export { DeviceDurableObject } from "./domains/devices/device-durable-object.ts";
 // One sandbox container class per instance type — see src/domains/sandboxes/instance-types.ts.
 export {
@@ -61,6 +62,8 @@ export { WorkerBuildCoordinatorDurableObject } from "./domains/workers/worker-bu
 export { StatefulWorkerDurableObject } from "./domains/workers/stateful-worker-durable-object.ts";
 export { StreamDurableObject } from "./domains/streams/stream-durable-object.ts";
 export { WorkspaceV2DurableObject } from "./domains/workspaces/workspace-durable-object.ts";
+// WorkerShellBackend reaches its host through this same-script entrypoint.
+export { WorkspaceServiceProxy } from "@cloudflare/computer";
 export { ItxEntrypoint } from "./domains/itx/itx-entrypoint.ts";
 export { ProjectEgressEntrypoint } from "./domains/projects/egress.ts";
 export { ScriptExecutionEntrypoint } from "./domains/capability-host/script-execution-entrypoint.ts";

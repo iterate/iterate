@@ -65,6 +65,7 @@ const ROUTED_CREATION_EVENT_TYPES = [
   "events.iterate.com/agent/configured",
   "events.iterate.com/agents/context-added",
   "events.iterate.com/capability-host/capability-provided",
+  "events.iterate.com/capability-host/capability-provided",
   "events.iterate.com/agents/context-added",
   "events.iterate.com/stream/subscription-configured",
   "events.iterate.com/stream/subscription-configured",
@@ -143,7 +144,7 @@ describe("EmailProcessor (thread router)", () => {
         role: "system",
       },
     });
-    expect(routed[13]!.payload).toEqual(receivedPayload({}));
+    expect(routed[14]!.payload).toEqual(receivedPayload({}));
     expect(h.state().threads).toEqual({ "2": "/agents/email/t2" });
     expect(h.state().threadByMessageId).toEqual({ "msg-1@mail.example": "2" });
   });

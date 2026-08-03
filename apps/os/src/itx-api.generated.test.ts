@@ -59,6 +59,87 @@ test("the public Stream API excludes raw and test-only Durable Object controls",
   }
 });
 
+test("the Computer contract exposes the complete Cloudflare API plus OS lifecycle state", () => {
+  const generated = readFileSync(generatedPath, "utf8");
+  const body = generated.match(/export interface Computer \{(?<body>[\s\S]*?)\n\}/)?.groups?.body;
+
+  expect(body).toBeDefined();
+  for (const cloudflareMember of [
+    "fs: ComputerFilesystem;",
+    "runtime: ComputerRuntime;",
+    "git: ComputerGit;",
+    "assets: ComputerAssets;",
+    "artifacts: ComputerArtifacts;",
+    "useThink: Promise<boolean>;",
+  ]) {
+    expect(body).toContain(cloudflareMember);
+  }
+  for (const osMember of [
+    "create(",
+    "kill(",
+    "whoami(",
+    "configure(",
+    "getConfig(",
+    "processor: StreamProcessorRpc<ComputerProcessorState>;",
+    "state: StreamProcessorRpc<ComputerProcessorState>;",
+  ]) {
+    expect(body).toContain(osMember);
+  }
+  expect(generated).toContain("export interface ComputerRuntimeExecHandle {");
+  expect(generated).toContain("export interface ComputerArtifacts {");
+  const expectedMembers: Record<string, string[]> = {
+    ComputerFilesystem: [
+      "readFile(",
+      "exists(",
+      "stat(",
+      "statOrNull(",
+      "lstat(",
+      "lstatOrNull(",
+      "readlink(",
+      "readdir(",
+      "find(",
+      "ls(",
+      "grep(",
+      "writeFile(",
+      "mkdir(",
+      "rm(",
+      "chmod(",
+      "symlink(",
+    ],
+    ComputerRuntime: ["exec(", "getExec(", "killExec(", "disposeExec("],
+    ComputerRuntimeExecHandle: [
+      "id: Promise<string>;",
+      "backend: Promise<string>;",
+      "result(",
+      "stream(",
+      "kill(",
+    ],
+    ComputerGit: ["cli("],
+    ComputerAssets: ["publish("],
+    ComputerArtifacts: [
+      "create(",
+      "get(",
+      "list(",
+      "import(",
+      "delete(",
+      "createToken(",
+      "listTokens(",
+      "getToken(",
+      "revokeToken(",
+      "cli(",
+    ],
+  };
+  for (const [interfaceName, members] of Object.entries(expectedMembers)) {
+    const interfaceBody = generated.match(
+      new RegExp(`export interface ${interfaceName} \\{(?<body>[\\s\\S]*?)\\n\\}`),
+    )?.groups?.body;
+    expect(interfaceBody, interfaceName).toBeDefined();
+    for (const member of members)
+      expect(interfaceBody, `${interfaceName}.${member}`).toContain(member);
+  }
+  expect(generated).not.toMatch(/^\s+agentComputer:/m);
+});
+
 test("itx-api.generated.ts resolves its exact vendor types from iterate's dependencies", () => {
   const script = `
     import type { Project, StreamEvent } from "./itx-api.generated.ts";

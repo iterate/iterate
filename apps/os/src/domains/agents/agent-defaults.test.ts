@@ -48,13 +48,18 @@ describe("agentCreationForPath", () => {
     expect(bootContent()).toContain(`- Project id: ${PROJECT_ID}`);
   });
 
-  test("mounts only the workspace — sandboxes are created explicitly, never granted", () => {
-    const mounts = defaultsFor("/agents/demo")
-      .events.filter(
-        (event) => event.type === "events.iterate.com/capability-host/capability-provided",
-      )
-      .map((event) => event.payload.path);
-    expect(mounts).toEqual([["workspace"]]);
+  test("mounts the agent-owned Computer plus the migration workspace — sandboxes remain explicit", () => {
+    const capabilities = defaultsFor("/agents/demo").events.filter(
+      (event) => event.type === "events.iterate.com/capability-host/capability-provided",
+    );
+    expect(capabilities.map((event) => event.payload.path)).toEqual([["computer"], ["workspace"]]);
+    expect(capabilities[0]).toMatchObject({
+      payload: {
+        expression: ["agentComputer"],
+        path: ["computer"],
+        type: "itx-call",
+      },
+    });
   });
 
   test("does not infer agent policy or startup events from the stream path", () => {
