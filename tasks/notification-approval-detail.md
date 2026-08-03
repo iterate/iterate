@@ -13,7 +13,10 @@ review verdict — the standalone Approvals screen was RETIRED: decide
 actions and the approver-key banner moved to the Notifications surface,
 approvals-destination pushes route there with the matching row
 pre-expanded, and both mobile specs run through the new surface (3x
-consecutive passes each). Remaining: final gates + CI.
+consecutive passes each). A bugbot round then closed the device-stream
+hole: open batches with no row on this device now ride in from the
+project root stream as synthetic "Needs approval" rows (see the
+root-stream union section below). Remaining: final gates + CI.
 
 ## Ask (Misha, 2026-08-01)
 
@@ -256,6 +259,60 @@ Fixes (no disables anywhere):
   already-present data 30s/15s → 5s; cross-server waits (screen-mount
   fetches, expansion one-shot queries, chat mounts) → 15s; cold multi-hop
   waits (first project open, batch coalescing) keep 30s.
+
+## Root-stream union: orphan batches (bugbot HIGH, 2026-08-03)
+
+Bugbot's gap was real: the retired Approvals screen derived open batches
+from the project ROOT stream (device-independent), while the new list
+derives from the DEVICE stream — so an open batch that never journaled a
+notification on this device (parked before enrollment, notifications
+denied, any delivery gap) had no decision surface anywhere and would sit
+until expiry.
+
+- [x] Notifications screen additionally subscribes to the root stream's
+      approval events
+      _the chat screen's exact subscription: shared
+      `APPROVAL_STREAM_EVENT_TYPES` constant now exported from
+      lib/approvals.ts (module-level for identity-stable connection deps —
+      chat.tsx's lesson; chat.tsx now imports it too), same
+      `["approval-events", …]` query key so the two screens share one cache_
+- [x] Open batches with no matching device row render as synthetic
+      "Needs approval" rows
+      _pure `deriveNotificationListRows(deviceRows, rootApprovalEvents)` in
+      lib/notifications.ts: `deriveOpenBatches` output deduped by batch
+      offset against device rows' `approvalRequestEventOffset` (device rows
+      stay authoritative), synthetic rows sorted ABOVE the device rows
+      newest-batch-first (they want action; root vs device offsets aren't
+      comparable anyway). Title/body mirror the server's push copy
+      (approvalPushBody) so the row reads like the row the push WOULD have
+      made; status line says "Needs approval — no notification reached this
+      device" (honest about why there's no delivery status)_
+- [x] Same expansion, detail, decide actions as a real row
+      _NotificationRow generalized to the `NotificationListRow` union — the
+      SAME component, chevron toggle, `ApprovalNotificationDetail`,
+      `ApprovalBatchBody`, `ApprovalBatchActions`; synthetic rows also honor
+      the push-targeting pre-expansion param. No fork_
+- [x] Decided-batch fate noted
+      _CHOICE: a decided orphan mirrors the retired screen's open list
+      verbatim (it IS deriveOpenBatches): all-reject vanishes immediately
+      (with its expansion), approved lingers as "Decided — awaiting release"
+      until every approved index settles, then vanishes. Decided history
+      lives only on real device rows where they exist — same as the retired
+      screen, whose Recent list was equally ephemeral per-load_
+- [x] Unit tests for the union/dedupe derivation
+      _notifications.test.ts: orphan-above-device ordering + copy, dedupe by
+      offset, rejected-vanishes / approved-lingers-until-settled, expired
+      never surfaces, newest-first sort + burst copy_
+- [x] Spec: the orphan lane
+      _notifications.spec.ts stages a batch BEFORE device enrollment (the
+      device's intent subscription starts at enrollment — `start: "now"` in
+      device-processor-implementation.ts — so the poll waits for the push
+      intent on the root stream, then enrolls: the batch is permanently
+      unrepresented on the device). Asserts the synthetic row on arrival,
+      expands it at the end, rejects from the expansion, and asserts the row
+      detaches entirely. approvalTimeoutMs bumped 120s → 300s so the
+      orphan (decided last) can't expire mid-spec. 3x consecutive passes;
+      approvals.spec.ts (chat.tsx shares the new constant) also 3x_
 
 Review round (tabbed-cards screenshot feedback):
 

@@ -7,6 +7,11 @@
 // with the `suppressed` outcome ("Skipped — already on screen"). Lane
 // two — the user is on the Notifications view (pointedly NOT the thread):
 // nothing claims the batch, the grace window lapses, and the push goes out.
+// And an ORPHAN lane, staged first: a batch parked BEFORE this device
+// enrolls never journals a notification here (the device's intent
+// subscription starts at enrollment), so the device list alone would give
+// it no decision surface — it must ride in from the project root stream as
+// a synthetic "Needs approval" row, decidable in place.
 //
 // Sign-up plumbing and the RN-web helpers (composer typing, batch-card
 // waits) are lifted from specs/mobile/approvals.spec.ts.
@@ -80,20 +85,16 @@ test("the approval push is suppressed in the watched thread and sent when you're
             description: "The notifications spec holds these for a human",
             match: { hosts: [new URL(echo.url).hostname] },
             verdict: "hold",
-            approvalTimeoutMs: 120_000,
+            // Generous on purpose: the ORPHAN batch staged below is decided
+            // LAST, after both push lanes and their expansions — a 120s
+            // horizon could expire it mid-spec on a slow run.
+            approvalTimeoutMs: 300_000,
             debounceMs: 2_000,
           },
         ],
       },
     });
     await itx.processor.waitUntilProcessed({ offset: rulesConfigured!.offset, timeoutMs: 15_000 });
-    await itx.devices.get(DEVICE_ID).enroll({
-      appVersion: "spec",
-      expoPushToken: `ExponentPushToken[${DEVICE_ID}-never-deliverable]`,
-      label: "Spec web phone",
-      notificationsStatus: "granted",
-      platform: "ios",
-    });
     // Outwait the egress gate's ~5s rules cache before the first script —
     // marked dead air so the rendered video skips the on-screen idle.
     const outwaitRulesCache = () => new Promise((resolve) => setTimeout(resolve, 6_000));
@@ -101,6 +102,32 @@ test("the approval push is suppressed in the watched thread and sent when you're
 
     const parkOneRequest = (marker: string) =>
       `async () => { await fetch(${JSON.stringify(echo.url)} + "?${marker}=1", { method: "POST", body: "${marker}" }).catch(() => {}); }`;
+
+    // ── Stage the ORPHAN before the device exists: park a batch, and only
+    // enroll once its push intent has been journaled on the root stream.
+    // The device's notification-intent subscription starts at enrollment
+    // ("start: now"), so an intent already appended never reaches this
+    // device — the batch is permanently unrepresented in the device list,
+    // exactly the gap the synthetic needs-approval row exists to cover.
+    const orphanAgent = await itx.agents.get("/agents/orphan-thread").create();
+    void orphanAgent.capabilityHost.runScript(parkOneRequest("orphan")).catch(() => {});
+    await expect
+      .poll(
+        async () =>
+          (
+            await itx.streams.get("/").getEvents({
+              eventTypes: ["events.iterate.com/notification/requested"],
+            })
+          ).length,
+      )
+      .toBe(1);
+    await itx.devices.get(DEVICE_ID).enroll({
+      appVersion: "spec",
+      expoPushToken: `ExponentPushToken[${DEVICE_ID}-never-deliverable]`,
+      label: "Spec web phone",
+      notificationsStatus: "granted",
+      platform: "ios",
+    });
 
     // ── Lane one: the user is IN the thread when its batch parks. Open a
     // fresh chat, then run the script on exactly that agent path — the
@@ -137,6 +164,10 @@ test("the approval push is suppressed in the watched thread and sent when you're
       .toBe(0);
     await notificationsItem.click();
     await page.getByText("Skipped — already on screen").waitFor();
+    // The orphan batch is already here — nothing on this device's stream
+    // mentions it, so its row is the synthetic one, riding in from the
+    // project root stream and saying so.
+    await page.getByText("Needs approval — no notification reached this device").waitFor();
 
     // ── Lane two: the user stays HERE while a different thread's batch
     // parks. No dialog renders, nothing claims the batch, the grace window
@@ -196,6 +227,19 @@ test("the approval push is suppressed in the watched thread and sent when you're
     await rejectFromExpansion(page, reason);
     await page.getByText(`Rejected because: ${reason}`).waitFor();
     await page.getByText("Sending the launch webhook").waitFor();
+
+    // ── The orphan lane's payoff: the batch that predates enrollment
+    // expands into the SAME detail and decide actions as a journaled row.
+    // Reject it right there; once decided the synthetic row vanishes
+    // entirely — all-reject is terminal, and an orphan has no device
+    // history to keep a row alive (decided history lives on real device
+    // rows, where they exist).
+    const orphanRow = page.getByTestId(/^needs-approval-row-/);
+    await orphanRow.click();
+    await page.getByText("Awaiting decision").waitFor();
+    await page.getByText("egress-echo?orphan=1").waitFor();
+    await rejectFromExpansion(page, "orphans get decided here too");
+    await orphanRow.waitFor({ state: "detached" });
 
     // The chat deep-link lives INSIDE the expansion now — its "Open thread"
     // lands in the thread that caused the push, where tapping the real push
