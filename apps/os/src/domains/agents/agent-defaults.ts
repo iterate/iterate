@@ -227,7 +227,9 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
  * matching revision whenever the shipped event payload changes; the logical
  * context key still owns supersession inside the Agent projection.
  */
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "5";
+// 6: the tasks-board teach moved onto the one docs capability
+// (itx.worker.docs.link mints both views; itx.worker.tasks is gone).
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "6";
 const AGENT_MODEL_POLICY_REVISION = "2";
 const AGENT_WORKSPACE_POLICY_REVISION = "3";
 const AGENT_BOOT_CONTEXT_REVISION = "3";
