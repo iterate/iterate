@@ -34,7 +34,17 @@
 #define CORE_S3_IO_FAILURE_LIMIT 3U
 #define CORE_S3_AEC_FILTER_LENGTH 4
 #define CORE_S3_AEC_REFERENCE_GAIN_DB 0.0F
-#define CORE_S3_AEC_NLP_LEVEL 2
+/*
+ * The nonlinear processor is deliberately not set to VERYAGGR. That setting
+ * produced excellent far-only numbers on physical StackChan, but a measured
+ * double-talk capture showed it suppressing a moderate nearby voice together
+ * with the residual echo. AGGR is Espressif's documented default and is the
+ * appropriate starting point for a full-duplex conversation where preserving
+ * interruption matters as much as making far-only output quiet. Keep the enum
+ * name instead of its numeric value: the policy must remain reviewable against
+ * ESP-SR's meanings rather than looking like an unexplained tuning constant.
+ */
+#define CORE_S3_AEC_NLP_LEVEL AEC_NLP_LEVEL_AGGR
 #define CORE_S3_AEC_SIGNAL_SAMPLE_STRIDE 8U
 #define CORE_S3_AEC_SIGNAL_WINDOW_US UINT64_C(1000000)
 #define CORE_S3_TDM_NEAR_SLOT 0U
@@ -488,7 +498,7 @@ static aec_handle_t *create_aec(void) {
       .sample_rate = ITERATE_KIT_CORE_S3_AUDIO_SAMPLE_RATE_HZ,
       .caps = MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT,
       .mode = AEC_MODE_FD_HIGH_PERF,
-      .nlp_level = (aec_nlp_level_t)CORE_S3_AEC_NLP_LEVEL,
+      .nlp_level = CORE_S3_AEC_NLP_LEVEL,
   };
   aec_handle_t *const aec = aec_create_from_config(&config);
   if (aec == NULL) {

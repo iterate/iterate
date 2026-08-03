@@ -160,6 +160,12 @@ if(APPLE)
   target_compile_features(
     iterate-kit-cli-audio-in-test PRIVATE c_std_11)
   target_compile_options(iterate-kit-cli-audio-in-test PRIVATE
+    # This Apple-only target is declared before the directory-wide -UNDEBUG
+    # below. MinSizeRel otherwise compiles every assert out and can turn tests
+    # for torn, stale, or silently dropped microphone frames into no-ops. Keep
+    # the assertion policy local here rather than moving the target away from
+    # the Apple frameworks whose availability actually controls its creation.
+    -UNDEBUG
     -Wall
     -Wextra
     -Werror

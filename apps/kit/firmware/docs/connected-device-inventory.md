@@ -80,6 +80,18 @@ its port: the USB serial mapping already provides that answer.
 7. After flashing, re-enumerate by the same serial and capture boot evidence;
    do not assume the old port survived the reset.
 
+### CoreS3 / StackChan ROM-loader recovery
+
+The CoreS3's board-specific reset-delay circuit does not always obey
+esptool's ordinary short DTR/RTS reset sequence. On 2026-08-03, both the
+standard ESP-IDF flash command and explicit USB-reset/no-reset variants wrote
+no flash bytes because ROM returned no serial data. M5Stack's CoreS3 recovery
+procedure is authoritative in that state: hold the board's bottom `RST`
+button for roughly three seconds until its green LED appears, then release and
+run esptool while it remains in download mode. Do not turn repeated blind
+auto-reset retries into a flashing strategy; they only reset the running app
+and erase incident context without changing the loader state.
+
 The shared TypeScript flashing core should implement these checks once for the
 CLI and `k.iterate.com` where the host API exposes the serial. Web Serial may
 withhold a stable serial for privacy reasons; in that case the browser must
