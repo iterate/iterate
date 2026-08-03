@@ -61,7 +61,11 @@ import { getProjectItx } from "../../../lib/itx.ts";
 // useLiveEvents folds eventTypes into its connection-hook deps, so an inline
 // literal (fresh identity every render) would tear down and reopen the
 // stream connection in a render loop.
-import { APPROVAL_STREAM_EVENT_TYPES, deriveOpenBatches } from "../../../lib/approvals.ts";
+import {
+  APPROVAL_STREAM_EVENT_TYPES,
+  deriveOpenBatches,
+  readAllApprovalEvents,
+} from "../../../lib/approvals.ts";
 import { approverKeyStatus } from "../../../lib/approver.ts";
 import { InThreadApprovalCard } from "../../../components/in-thread-approval.tsx";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
@@ -112,7 +116,7 @@ export default function ChatScreen() {
     queryKey: ["approval-events", baseUrl || "pending", projectId],
     read: async () => {
       const project = await getProjectItx(baseUrl!, projectId);
-      return await project.streams.get("/").getEvents({ eventTypes: APPROVAL_STREAM_EVENT_TYPES });
+      return await readAllApprovalEvents(project.streams.get("/"));
     },
     enabled: baseUrl !== undefined,
     eventTypes: APPROVAL_STREAM_EVENT_TYPES,

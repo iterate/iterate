@@ -40,6 +40,23 @@ export const EVENT = {
  */
 export const APPROVAL_STREAM_EVENT_TYPES = [EVENT.requested, EVENT.decided, EVENT.settled];
 
+/** Every approval event on a stream, paged to the head. A single unpaged
+ * getEvents returns only the OLDEST page — on a busy project that hides
+ * exactly the recent open batches the live subscribers exist to surface. */
+export async function readAllApprovalEvents(stream: RpcStub<Stream>): Promise<StreamEvent[]> {
+  const events: StreamEvent[] = [];
+  let cursor = 0;
+  while (true) {
+    const page = await stream.getEvents({
+      afterOffset: cursor,
+      eventTypes: APPROVAL_STREAM_EVENT_TYPES,
+    });
+    if (page.length === 0) return events;
+    events.push(...page);
+    cursor = page.at(-1)!.offset;
+  }
+}
+
 export type RequestedPayload = HumanApprovalRequestedPayload;
 export type { HeldRequest };
 export type Verdict = "approve" | "reject";

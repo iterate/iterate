@@ -27,7 +27,12 @@ import {
   ThreadContextLine,
 } from "../../../components/approval-batch.tsx";
 import { ApproverKeyBanner } from "../../../components/approver-key-banner.tsx";
-import { APPROVAL_STREAM_EVENT_TYPES, deriveBatchDetail, EVENT } from "../../../lib/approvals.ts";
+import {
+  APPROVAL_STREAM_EVENT_TYPES,
+  deriveBatchDetail,
+  EVENT,
+  readAllApprovalEvents,
+} from "../../../lib/approvals.ts";
 import { getMobileDeviceId } from "../../../lib/device-identity.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
 import {
@@ -91,7 +96,7 @@ export default function NotificationsScreen() {
     queryKey: ["approval-events", baseUrl || "pending", projectId],
     read: async () => {
       const project = await getProjectItx(baseUrl!, projectId);
-      return await project.streams.get("/").getEvents({ eventTypes: APPROVAL_STREAM_EVENT_TYPES });
+      return await readAllApprovalEvents(project.streams.get("/"));
     },
     enabled: baseUrl !== undefined,
     eventTypes: APPROVAL_STREAM_EVENT_TYPES,
@@ -286,6 +291,7 @@ function ApprovalNotificationDetail({
       // pathological many-batches-later case.
       const events: StreamEvent[] = [];
       let cursor = batchOffset - 1;
+      let detail = null;
       while (true) {
         const page = await stream.getEvents({
           afterOffset: cursor,
@@ -294,8 +300,12 @@ function ApprovalNotificationDetail({
         if (page.length === 0) break;
         events.push(...page);
         cursor = page.at(-1)!.offset;
+        // Completed history is immutable — stop paging the moment the batch
+        // is fully accounted for instead of scanning to the stream head.
+        detail = deriveBatchDetail(events, batchOffset);
+        if (detail?.complete) break;
       }
-      return deriveBatchDetail(events, batchOffset);
+      return detail;
     },
     staleTime: (query) => (query.state.data?.complete ? Infinity : 5_000),
     refetchInterval: (query) => (query.state.data?.complete ? false : 5_000),
