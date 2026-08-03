@@ -12,11 +12,17 @@ import { withDocsProject } from "../lib/docs-client.ts";
  * a starter note. Deep links (?workspace=&path=) keep working unchanged;
  * this page exists for the human who arrives without one.
  */
-export function DeepLinkEmptyState() {
+export function DeepLinkEmptyState({ workspacePath }: { workspacePath?: string }) {
   const navigate = useNavigate();
   const [workspaces, setWorkspaces] = useState<{ path: string; createdAt: string }[] | null>(null);
   const [listError, setListError] = useState<string | null>(null);
-  const [chosen, setChosen] = useState("");
+  const [chosen, setChosen] = useState(workspacePath ?? "");
+
+  // The sidebar switcher navigates here with `?workspace=` while this page
+  // is already mounted — follow the address, don't keep the stale choice.
+  useEffect(() => {
+    if (workspacePath !== undefined) setChosen(workspacePath);
+  }, [workspacePath]);
   const [documents, setDocuments] = useState<string[] | null>(null);
   const [documentsError, setDocumentsError] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
@@ -155,7 +161,7 @@ export function DeepLinkEmptyState() {
                 <li key={entry.path}>
                   <button
                     type="button"
-                    onClick={() => setChosen(entry.path)}
+                    onClick={() => void navigate({ to: "/", search: { workspace: entry.path } })}
                     className="w-full px-5 py-3 text-left font-mono text-sm transition-colors hover:bg-muted/50"
                   >
                     {entry.path}

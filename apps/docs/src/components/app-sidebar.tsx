@@ -1,13 +1,24 @@
 import { useEffect, useState } from "react";
-import { Link, useRouterState } from "@tanstack/react-router";
+import { Link, useNavigate, useRouterState } from "@tanstack/react-router";
 import {
+  ArrowLeft,
+  Check,
   ChevronsLeft,
+  ChevronsUpDown,
   FileTextIcon,
-  HomeIcon,
+  Plus,
   SquareKanbanIcon,
-  TelescopeIcon,
 } from "lucide-react";
 import { IterateLogo } from "@iterate-com/ui/components/iterate-logo";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuGroup,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@iterate-com/ui/components/dropdown-menu";
 import {
   Sidebar,
   SidebarContent,
@@ -22,6 +33,7 @@ import {
   SidebarRail,
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
+import { withDocsProject } from "../lib/docs-client.ts";
 
 /**
  * The VIEWS a workspace can be seen through — the docs and tasks apps are
@@ -29,13 +41,14 @@ import {
  * them. Docs is this app; Tasks lives on the sibling project host
  * (`docs--<slug>` ↔ `tasks--<slug>`), carrying the current workspace along.
  * Composition follows the apps/os AppSidebar (shadcn sidebar blocks 07/08):
- * logo header, icon collapse, footer collapse button, rail.
+ * workspace-switcher dropdown in the header (the os project switcher, with
+ * workspaces for projects), icon collapse, footer collapse button, rail.
  */
 export function AppSidebar() {
   // The sidebar renders OUTSIDE any one route, so the router cannot type
   // this search value; the loose view is safe because `workspace` is read
-  // as optional and only seeds the tasks-view link — absent (or any other
-  // shape), the link simply targets the tasks app's home.
+  // as optional and only seeds the switcher + tasks-view link — absent (or
+  // any other shape), both fall back to their home targets.
   const location = useRouterState({ select: (state) => state.location });
   const workspacePath = (location.search as { workspace?: string }).workspace;
   // The sibling tasks host exists only on project hosts, and only the
@@ -61,48 +74,9 @@ export function AppSidebar() {
       {/* Collapsed: nudge the logo down so its center lines up with the page
           header row — the same transition the os and tasks sidebars use. */}
       <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <SidebarMenuButton size="lg" tooltip="Docs">
-              <span className="flex aspect-square size-8 items-center justify-center rounded-md bg-black">
-                <IterateLogo className="size-6" />
-              </span>
-              <span className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">iterate</span>
-                <span className="truncate text-xs text-muted-foreground">docs</span>
-              </span>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
-        </SidebarMenu>
+        <WorkspaceSwitcher workspacePath={workspacePath} />
       </SidebarHeader>
       <SidebarContent>
-        {/* WHERE we are: the workspace is the first level of the hierarchy,
-            so the sidebar names it — the header shows only the document. */}
-        <SidebarGroup>
-          <SidebarGroupLabel>workspace</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              {workspacePath !== undefined && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton isActive tooltip={workspacePath} className="font-mono text-xs">
-                    <TelescopeIcon aria-hidden />
-                    <span className="truncate">{workspacePath}</span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={workspacePath === undefined}
-                  tooltip="All workspaces — switch or create"
-                  render={<Link to="/" search={{}} />}
-                >
-                  <HomeIcon aria-hidden />
-                  <span>{workspacePath === undefined ? "All workspaces" : "Switch workspace"}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
         <SidebarGroup>
           <SidebarGroupLabel>views</SidebarGroupLabel>
           <SidebarGroupContent>
@@ -142,6 +116,117 @@ export function AppSidebar() {
       </SidebarFooter>
       <SidebarRail />
     </Sidebar>
+  );
+}
+
+/**
+ * The os project switcher, one level down: the header dropdown names the
+ * current workspace and switches between them. Workspace items land on the
+ * home picker scoped to that workspace (picking a document is the next
+ * step); New workspace mints an ephemeral scratch one and jumps straight
+ * into its starter document.
+ */
+function WorkspaceSwitcher({ workspacePath }: { workspacePath: string | undefined }) {
+  const navigate = useNavigate();
+  const { isMobile } = useSidebar();
+  const [workspaces, setWorkspaces] = useState<{ path: string; createdAt: string }[] | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void withDocsProject((project) => project.workspaces())
+      .then((list) => {
+        if (!cancelled) setWorkspaces(list);
+      })
+      // The header stays useful without the list (the home picker surfaces
+      // the error); the dropdown just shows its loading row.
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const createScratch = () => {
+    setCreating(true);
+    void withDocsProject((project) => project.createWorkspace())
+      .then(({ workspacePath: created, path }) =>
+        navigate({ to: "/", search: { workspace: created, path } }),
+      )
+      .finally(() => setCreating(false));
+  };
+
+  return (
+    <SidebarMenu>
+      <SidebarMenuItem>
+        <DropdownMenu>
+          <DropdownMenuTrigger
+            render={
+              <SidebarMenuButton
+                size="lg"
+                className="data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground"
+              >
+                <span className="flex aspect-square size-8 items-center justify-center rounded-md bg-black">
+                  <IterateLogo className="size-6" />
+                </span>
+                <span className="grid flex-1 text-left text-sm leading-tight">
+                  <span className="truncate font-medium">docs</span>
+                  <span className="truncate font-mono text-xs text-muted-foreground">
+                    {workspacePath ?? "(select workspace)"}
+                  </span>
+                </span>
+                <ChevronsUpDown className="ml-auto" />
+              </SidebarMenuButton>
+            }
+          />
+          <DropdownMenuContent
+            align="start"
+            side={isMobile ? "bottom" : "right"}
+            sideOffset={4}
+            className="min-w-56 rounded-lg"
+          >
+            <DropdownMenuGroup className="max-h-80 overflow-y-auto">
+              <DropdownMenuLabel className="text-xs text-muted-foreground">
+                Workspaces
+              </DropdownMenuLabel>
+              {workspaces === null ? (
+                <DropdownMenuItem disabled className="p-2">
+                  <span className="truncate">Loading…</span>
+                </DropdownMenuItem>
+              ) : workspaces.length === 0 ? (
+                <DropdownMenuItem disabled className="p-2">
+                  <span className="truncate">No workspaces yet</span>
+                </DropdownMenuItem>
+              ) : (
+                workspaces.map((entry) => (
+                  <DropdownMenuItem
+                    key={entry.path}
+                    className="gap-2 p-2"
+                    render={<Link to="/" search={{ workspace: entry.path }} />}
+                  >
+                    <span className="flex size-6 shrink-0 items-center justify-center rounded-md border text-xs font-medium text-muted-foreground">
+                      {(entry.path.split("/").filter(Boolean).at(-1) ?? "?").slice(0, 1)}
+                    </span>
+                    <span className="truncate font-mono text-xs">{entry.path}</span>
+                    {entry.path === workspacePath ? <Check className="ml-auto" /> : null}
+                  </DropdownMenuItem>
+                ))
+              )}
+            </DropdownMenuGroup>
+            <DropdownMenuSeparator />
+            <DropdownMenuGroup>
+              <DropdownMenuItem disabled={creating} onClick={createScratch}>
+                <Plus />
+                <span>{creating ? "Creating…" : "New workspace"}</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem render={<Link to="/" search={{}} />}>
+                <ArrowLeft />
+                <span>View all workspaces</span>
+              </DropdownMenuItem>
+            </DropdownMenuGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </SidebarMenuItem>
+    </SidebarMenu>
   );
 }
 
