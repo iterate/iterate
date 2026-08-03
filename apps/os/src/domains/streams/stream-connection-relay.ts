@@ -369,6 +369,13 @@ export function openRelayedLiveState(input: {
       ws.addEventListener("message", (event) => {
         const frame = parseStateSocketFrame(event.data);
         if (frame === undefined) return;
+        // The only producer of state frames is this stream DO's pushState,
+        // which sends exactly #readRuntimeState() — the same value the
+        // snapshot read below returns typed. The protocol module keeps the
+        // payload `unknown` on purpose (forward-compat across deploy skew),
+        // and liveState consumers are read-only debug surfaces that tolerate
+        // transient shape drift, so a full runtime re-validation here would
+        // buy nothing but a second schema to keep in sync.
         live.setState(frame.state as StreamRuntimeDebugState);
       });
       ws.addEventListener("close", () => {
@@ -392,7 +399,7 @@ export function openRelayedLiveState(input: {
       // landing between snapshot and socket-attach still arrives as a frame.
       const stub = input.stub();
       try {
-        live.setState((await stub.runtimeState()) as StreamRuntimeDebugState);
+        live.setState(await stub.runtimeState());
       } finally {
         // Release the invocation so this read cannot pin the DO (same
         // pattern as StreamRpcTarget.runtimeState).
