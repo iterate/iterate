@@ -63,8 +63,11 @@ export function AppSidebar() {
   // switcher (and the Docs view link) would lose the workspace on the
   // board's main route.
   const checkoutId = decodeURIComponent(/^\/w\/([^/]+)/.exec(location.pathname)?.[1] ?? "");
+  // /w's validated search supplies workspace as a STRING ("" on the board
+  // home) — empty means unset here, or the switcher would wear a blank
+  // label and the Docs link a dangling workspace=.
   const workspacePath =
-    search.workspace ??
+    (search.workspace === "" ? undefined : search.workspace) ??
     (isCheckoutId(checkoutId)
       ? checkoutWorkspacePath(checkoutId, normalizeRepoPath(search.repo) ?? DEFAULT_REPO_PATH)
       : undefined);
