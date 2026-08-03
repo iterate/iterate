@@ -108,6 +108,7 @@ export type StreamEventBatch = {
   /** Inclusive raw-log cursor through which this delivery scan completed. */
   scannedThroughOffset: number;
   streamMaxOffset: number;
+  /** Reduced core state, or null when the connection opts out with `state: false`. */
   state: unknown;
 };
 
