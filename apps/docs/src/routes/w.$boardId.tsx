@@ -1,19 +1,15 @@
 import { useCallback } from "react";
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { WorkspaceBoardPage, type BoardSearch } from "../components/workspace-board-page.tsx";
-import {
-  DEFAULT_REPO_PATH,
-  checkoutWorkspacePath,
-  normalizeRepoPath,
-} from "../lib/checkout-shared.ts";
+import { DEFAULT_REPO_PATH, boardWorkspacePath, normalizeRepoPath } from "../lib/board-shared.ts";
 
 /**
  * A board on the tasks app's own workspace naming: the id in the path plus
  * `?repo=` derive the workspace path, and the workspace is lazily created on
  * first use — opening a fresh id IS how a new board is born.
- *   /w/<checkoutId>?repo=/repos/config&task=<path>&q=<filter>&group=none
+ *   /w/<boardId>?repo=/repos/config&task=<path>&q=<filter>&group=none
  */
-export const Route = createFileRoute("/w/$checkoutId")({
+export const Route = createFileRoute("/w/$boardId")({
   validateSearch: (search: Record<string, unknown>) => ({
     group:
       search.group === "none" || search.group === "label"
@@ -27,7 +23,7 @@ export const Route = createFileRoute("/w/$checkoutId")({
 });
 
 function BoardByIdPage() {
-  const { checkoutId } = Route.useParams();
+  const { boardId } = Route.useParams();
   const search = Route.useSearch();
   const navigate = useNavigate({ from: Route.fullPath });
   const repoPath = normalizeRepoPath(search.repo) ?? DEFAULT_REPO_PATH;
@@ -39,9 +35,9 @@ function BoardByIdPage() {
   return (
     <WorkspaceBoardPage
       address={{
-        checkoutId,
+        boardId,
         repoPath,
-        workspacePath: checkoutWorkspacePath(checkoutId, repoPath),
+        workspacePath: boardWorkspacePath(boardId, repoPath),
       }}
       search={{ group: search.group, q: search.q, task: search.task }}
       patchSearch={patchSearch}

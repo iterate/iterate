@@ -8,7 +8,7 @@ import type {
   WorkspaceStreamEvent,
   TasksWorkspace,
 } from "./lib/tasks-api.ts";
-import { isGuestWorkspacePath } from "./lib/checkout-shared.ts";
+import { isGuestWorkspacePath } from "./lib/board-shared.ts";
 import {
   parseTaskCard,
   setTaskCardAgent,
@@ -146,7 +146,7 @@ export class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
         project as unknown as { workspaces: { get(path: string): WorkspaceStub } }
       ).workspaces;
       // For boards the workspace identity ENCODES the repo (see
-      // checkoutWorkspacePath): the same checkout id against a different
+      // boardWorkspacePath): the same board id against a different
       // repository can never bind to (and edit) the first repository's
       // workspace.
       const ws = workspaces.get(this.#workspacePath);

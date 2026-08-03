@@ -29,7 +29,7 @@ import type { RowField } from "../lib/board-model.ts";
  * workspace always comes first; the project is never a crumb (the app's
  * host already says which project this is).
  */
-export function CheckoutBreadcrumbs({
+export function BoardBreadcrumbs({
   workspace,
   rootPath,
 }: {

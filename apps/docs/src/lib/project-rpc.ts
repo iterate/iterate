@@ -1,5 +1,6 @@
-import type { TasksUser, TasksWorkspace, WorkspaceListEntry } from "./tasks-api.ts";
-import type { BoardAddress } from "./checkout-shared.ts";
+import type { TasksWorkspace, WorkspaceListEntry } from "./tasks-api.ts";
+import type { DocsUser } from "./docs-api.ts";
+import type { BoardAddress } from "./board-shared.ts";
 import { withDocsProject, withDocsProjectOnce } from "./docs-client.ts";
 
 /**
@@ -19,12 +20,12 @@ export const withProjectOnce = withDocsProjectOnce;
  */
 export function workspaceFor(project: unknown, address: BoardAddress): TasksWorkspace {
   const doors = project as {
-    board(checkoutId: string, repoPath?: string): unknown;
+    board(boardId: string, repoPath?: string): unknown;
     workspaceAt(workspacePath: string, repoPath?: string): unknown;
   };
   return (
-    address.checkoutId !== null
-      ? doors.board(address.checkoutId, address.repoPath)
+    address.boardId !== null
+      ? doors.board(address.boardId, address.repoPath)
       : doors.workspaceAt(address.workspacePath, address.repoPath)
   ) as TasksWorkspace;
 }
@@ -40,6 +41,6 @@ export function listWorkspaces(): Promise<WorkspaceListEntry[]> {
 }
 
 /** The platform-verified identity behind this browser's session. */
-export function whoami(): Promise<TasksUser> {
+export function whoami(): Promise<DocsUser> {
   return withProject((project) => project.whoami());
 }

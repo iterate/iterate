@@ -3,7 +3,7 @@ import { WorkspaceDocumentEditor } from "@iterate-com/workspace-documents/editor
 import type { CollabEditorApi } from "@iterate-com/workspace-documents/editor-api";
 import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
 import { withProject, withProjectOnce, workspaceFor } from "../lib/project-rpc.ts";
-import type { BoardAddress } from "../lib/checkout-shared.ts";
+import type { BoardAddress } from "../lib/board-shared.ts";
 
 export function WorkspaceTaskEditor({
   address,
@@ -26,19 +26,19 @@ export function WorkspaceTaskEditor({
   onStatus?: (status: string) => void;
   onRequestClose?: () => void;
 }) {
-  const { checkoutId, workspacePath, repoPath } = address;
+  const { boardId, workspacePath, repoPath } = address;
   const transport = useMemo<WorkspaceDocumentTransport>(
     () => ({
       run: (operation) =>
         withProject((project) =>
-          operation(workspaceFor(project, { checkoutId, workspacePath, repoPath })),
+          operation(workspaceFor(project, { boardId, workspacePath, repoPath })),
         ),
       runOnce: (operation) =>
         withProjectOnce((project) =>
-          operation(workspaceFor(project, { checkoutId, workspacePath, repoPath })),
+          operation(workspaceFor(project, { boardId, workspacePath, repoPath })),
         ),
     }),
-    [checkoutId, workspacePath, repoPath],
+    [boardId, workspacePath, repoPath],
   );
 
   return (

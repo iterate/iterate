@@ -2,7 +2,7 @@ import { useCallback } from "react";
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { BoardHome } from "../components/board-home.tsx";
 import { WorkspaceBoardPage, type BoardSearch } from "../components/workspace-board-page.tsx";
-import { DEFAULT_REPO_PATH, normalizeRepoPath } from "../lib/checkout-shared.ts";
+import { DEFAULT_REPO_PATH, normalizeRepoPath } from "../lib/board-shared.ts";
 
 /**
  * The board as a LENS on an existing workspace, addressed purely by its
@@ -63,7 +63,7 @@ function BoardLensPage() {
   return (
     <WorkspaceBoardPage
       key={`${search.workspace}:${repoPath}`}
-      address={{ checkoutId: null, repoPath, workspacePath: search.workspace }}
+      address={{ boardId: null, repoPath, workspacePath: search.workspace }}
       search={{ group: search.group, q: search.q, task: search.task }}
       patchSearch={patchSearch}
     />

@@ -10,28 +10,14 @@ export type {
 /**
  * One workspace stream in the project, as the picker lists them. `board` is
  * present when the path is a tasks-app board workspace (minted under
- * /workspaces/tasks/), parsed back into its (checkoutId, repoPath) address;
+ * /workspaces/tasks/), parsed back into its (boardId, repoPath) address;
  * null for every other workspace (an agent's, ...) — a lens opens those by
  * path, as a guest.
  */
 export type WorkspaceListEntry = {
   path: string;
   createdAt: string;
-  board: { checkoutId: string; repoPath: string } | null;
-};
-
-/**
- * Who this session is, as far as the platform can prove it. userId comes
- * from the verified project-app-session claims; email/name appear once the
- * auth worker mints them into the token (absent claims stay null). The
- * machine lane (project-secret) has no user at all.
- */
-export type TasksUser = {
-  userId: string | null;
-  email: string | null;
-  name: string | null;
-  /** Avatar URL, once the auth worker mints an `image` claim. */
-  image: string | null;
+  board: { boardId: string; repoPath: string } | null;
 };
 
 /** One event from the workspace's platform stream (the event-sourced spine). */
