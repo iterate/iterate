@@ -34,6 +34,7 @@ import {
   useSidebar,
 } from "@iterate-com/ui/components/sidebar";
 import { withDocsProject } from "../lib/docs-client.ts";
+import { CloseMobileSidebarOnNavigate } from "./close-mobile-sidebar-on-navigate.tsx";
 
 /**
  * The VIEWS a workspace can be seen through — the docs and tasks apps are
@@ -73,52 +74,57 @@ export function AppSidebar() {
   }, [workspacePath]);
 
   return (
-    <Sidebar collapsible="icon">
-      {/* Collapsed: nudge the logo down so its center lines up with the page
+    <>
+      {/* Outside <Sidebar>: on mobile its children live inside a Sheet that
+          remounts when opened — the same placement as apps/os. */}
+      <CloseMobileSidebarOnNavigate />
+      <Sidebar collapsible="icon">
+        {/* Collapsed: nudge the logo down so its center lines up with the page
           header row — the same transition the os and tasks sidebars use. */}
-      <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
-        <WorkspaceSwitcher workspacePath={workspacePath} />
-      </SidebarHeader>
-      <SidebarContent>
-        <SidebarGroup>
-          <SidebarGroupLabel>views</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton isActive tooltip="Docs — this document">
-                  <FileTextIcon aria-hidden />
-                  <span>Docs</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              <SidebarMenuItem>
-                {tasksHref === null ? (
-                  <SidebarMenuButton
-                    disabled
-                    tooltip="Tasks — available on the project's own host"
-                    className="opacity-50"
-                  >
-                    <SquareKanbanIcon aria-hidden />
-                    <span>Tasks</span>
+        <SidebarHeader className="transition-[padding] group-data-[collapsible=icon]:pt-3">
+          <WorkspaceSwitcher workspacePath={workspacePath} />
+        </SidebarHeader>
+        <SidebarContent>
+          <SidebarGroup>
+            <SidebarGroupLabel>views</SidebarGroupLabel>
+            <SidebarGroupContent>
+              <SidebarMenu>
+                <SidebarMenuItem>
+                  <SidebarMenuButton isActive tooltip="Docs — this document">
+                    <FileTextIcon aria-hidden />
+                    <span>Docs</span>
                   </SidebarMenuButton>
-                ) : (
-                  <SidebarMenuButton
-                    tooltip="Tasks — the board view of this workspace"
-                    render={<a href={tasksHref} aria-label="Tasks" />}
-                  >
-                    <SquareKanbanIcon aria-hidden />
-                    <span>Tasks</span>
-                  </SidebarMenuButton>
-                )}
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-      </SidebarContent>
-      <SidebarFooter>
-        <AppSidebarCollapseButton />
-      </SidebarFooter>
-      <SidebarRail />
-    </Sidebar>
+                </SidebarMenuItem>
+                <SidebarMenuItem>
+                  {tasksHref === null ? (
+                    <SidebarMenuButton
+                      disabled
+                      tooltip="Tasks — available on the project's own host"
+                      className="opacity-50"
+                    >
+                      <SquareKanbanIcon aria-hidden />
+                      <span>Tasks</span>
+                    </SidebarMenuButton>
+                  ) : (
+                    <SidebarMenuButton
+                      tooltip="Tasks — the board view of this workspace"
+                      render={<a href={tasksHref} aria-label="Tasks" />}
+                    >
+                      <SquareKanbanIcon aria-hidden />
+                      <span>Tasks</span>
+                    </SidebarMenuButton>
+                  )}
+                </SidebarMenuItem>
+              </SidebarMenu>
+            </SidebarGroupContent>
+          </SidebarGroup>
+        </SidebarContent>
+        <SidebarFooter>
+          <AppSidebarCollapseButton />
+        </SidebarFooter>
+        <SidebarRail />
+      </Sidebar>
+    </>
   );
 }
 
