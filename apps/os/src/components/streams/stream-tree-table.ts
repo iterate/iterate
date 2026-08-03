@@ -25,7 +25,7 @@ type RemoteStreamNodeData = {
   childPaths: string[];
 };
 
-export type RemoteStreamNodeSnapshot = {
+type RemoteStreamNodeSnapshot = {
   path: string;
   loadState: StreamTreeNode["loadState"];
   data?: RemoteStreamNodeData;
@@ -102,7 +102,7 @@ export function buildRemoteStreamForest(
 }
 
 /** Shared hierarchical row model for indexed Cmd+K and lazy admin streams. */
-export function useStreamTreeTable({
+function useStreamTreeTable({
   forest,
   expansionMode,
   expansionPaths,
