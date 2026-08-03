@@ -14,6 +14,22 @@ function AdminStreamProjectLayout() {
   const splat = typeof params._splat === "string" ? params._splat : undefined;
   const currentPath = streamPathFromSplatOrRoot(splat);
   const { source } = useAdminStreamSource(projectId);
+  const openStreamPath = (path: string) => {
+    if (path === "/") {
+      void navigate({
+        to: "/admin/streams/$projectId",
+        params: { projectId },
+        search: {},
+      });
+      return;
+    }
+
+    void navigate({
+      to: "/admin/streams/$projectId/$",
+      params: { projectId, _splat: path },
+      search: {},
+    });
+  };
 
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:flex-row">
@@ -30,13 +46,7 @@ function AdminStreamProjectLayout() {
             currentPath={currentPath}
             scope={projectId}
             source={source}
-            onOpenPath={(path) =>
-              void navigate({
-                to: "/admin/streams/$projectId/$",
-                params: { projectId, _splat: path },
-                search: {},
-              })
-            }
+            onOpenPath={openStreamPath}
           />
         </div>
       </aside>

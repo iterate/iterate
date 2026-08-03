@@ -180,7 +180,7 @@ export function useRemoteStreamTreeTable({
   source: StreamTreeSource;
 }) {
   const queryClient = useQueryClient();
-  const queryPrefix = ["remote-stream-tree", scope] as const;
+  const queryPrefix = ["remote-stream-tree", scope] satisfies [string, string];
   const cachedNodes = queryClient.getQueriesData<RemoteStreamNodeData>({ queryKey: queryPrefix });
   const cachedByPath = new Map<string, RemoteStreamNodeData>();
   for (const [queryKey, data] of cachedNodes) {
