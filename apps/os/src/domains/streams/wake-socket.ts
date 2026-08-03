@@ -177,6 +177,52 @@ export class WakeSocketRegistry {
   }
 
   /** connectionKeys that currently have a live wake socket — one scan per call. */
+  /**
+   * Dormant subscribers — idle-closed connections whose subscriber is still
+   * present on a wake socket — for the stream's runtime debug state, so
+   * presence surfaces can show them instead of rendering an idle tab as gone.
+   */
+  dormantRuntimeState(): Record<
+    string,
+    { idleDeliveredThrough: number; wakeSentAtOffset?: number }
+  > {
+    const dormant: Record<string, { idleDeliveredThrough: number; wakeSentAtOffset?: number }> = {};
+    for (const { attachment } of this.#sockets()) {
+      if (attachment.idleDeliveredThrough === undefined) continue;
+      if (this.#hooks.hasConnection(attachment.connectionKey)) continue;
+      dormant[attachment.connectionKey] = {
+        idleDeliveredThrough: attachment.idleDeliveredThrough,
+        ...(attachment.wakeSentAtOffset === undefined
+          ? {}
+          : { wakeSentAtOffset: attachment.wakeSentAtOffset }),
+      };
+    }
+    return dormant;
+  }
+
+  /**
+   * Called from the DO's `webSocketClose`: if this socket carried a DORMANT
+   * subscriber (idle-closed connection, no live replacement), its closing IS
+   * the subscriber's real departure and deserves a durable close fact — the
+   * earlier `"idle"` close deliberately was not one. Live connections are
+   * excluded: their own close paths append their reasons. Returns the
+   * departed connectionKey and this socket's id (for an idempotency key), or
+   * undefined when no fact is owed.
+   */
+  departedOnClose(ws: WebSocket): { connectionKey: string; socketId: string } | undefined {
+    let raw: unknown;
+    try {
+      raw = ws.deserializeAttachment();
+    } catch {
+      return undefined;
+    }
+    const parsed = WakeSocketAttachment.safeParse(raw);
+    if (!parsed.success) return undefined;
+    if (parsed.data.idleDeliveredThrough === undefined) return undefined;
+    if (this.#hooks.hasConnection(parsed.data.connectionKey)) return undefined;
+    return { connectionKey: parsed.data.connectionKey, socketId: parsed.data.socketId };
+  }
+
   channelKeys(): ReadonlySet<string> {
     return new Set(this.#sockets().map(({ attachment }) => attachment.connectionKey));
   }

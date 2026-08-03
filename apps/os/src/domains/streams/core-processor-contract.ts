@@ -331,8 +331,19 @@ export const ConnectionCloseReason = z.enum([
    * append wakes the processor again; for a wake-socket-backed session
    * connection the subscriber stays present on its hibernatable socket and
    * the next matching append makes its relay re-dial (see wake-socket.ts).
+   * An idle close is therefore NOT a departure; the dormant subscriber's
+   * eventual real departure is the `"departed"` close below.
    */
   "idle",
+  /**
+   * A DORMANT subscriber's wake socket closed: the client behind an
+   * idle-closed session connection actually went away (tab closed, device
+   * offline, worker context canceled). Live connections never use this —
+   * their close paths append their own reasons; this fact exists so audit
+   * and presence consumers keying on close facts see the true departure
+   * that `"idle"` deliberately is not.
+   */
+  "departed",
 ]);
 
 export type ConnectionCloseReason = z.infer<typeof ConnectionCloseReason>;

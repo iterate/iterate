@@ -273,7 +273,23 @@ export async function openRelayedStreamConnection(input: {
   } finally {
     dialing = false;
   }
-  const streamMaxOffset = await currentHandle.streamMaxOffset;
+  let streamMaxOffset: number;
+  try {
+    streamMaxOffset = await currentHandle.streamMaxOffset;
+  } catch (error) {
+    // The leg opened but died before answering; without teardown here the
+    // caller would see an open failure while the socket, handle stub, and
+    // retained callbacks all stayed live — an orphaned pin with no owner.
+    closedByOwner = true;
+    teardown({ reason: "open failed reading streamMaxOffset", socketCode: 1000 });
+    throw error;
+  }
+  // Seed the resume cursor for callers that omitted replayAfterOffset ("new
+  // events only"): the head observed at open is that intent's exact baseline.
+  // Without it, an idle teardown before the first batch reaches this relay
+  // would make the wake re-dial open at the DO's CURRENT head and skip every
+  // event committed during dormancy — including the one that woke it.
+  deliveredThroughOffset ??= streamMaxOffset;
 
   return {
     connectionKey,

@@ -477,7 +477,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     },
   });
   /** DO-side wake-socket mechanics (wake-socket.ts); the attachment is the durable state. */
-  readonly #wakeSockets: WakeSocketRegistry = new WakeSocketRegistry({
+  readonly #wakeSockets = new WakeSocketRegistry({
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     maxOffset: () => this.#coreProcessorState.maxOffset,
@@ -1684,6 +1684,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: this.#eventSender.connections.runtimeState(),
+        dormantSubscribers: this.#wakeSockets.dormantRuntimeState(),
         subscriptions: this.#eventSender.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
         storageSizeBytes: this.ctx.storage.sql.databaseSize,
@@ -1706,11 +1707,29 @@ export class StreamDurableObject extends DurableObject<Env> {
   webSocketMessage(): void {}
 
   /**
-   * A closed socket disappears from `getWebSockets`, which IS the cleanup:
-   * the registry stops reporting it and the connection (if any) keeps
-   * today's non-idle-eligible session semantics.
+   * A closed socket disappears from `getWebSockets`, which is most of the
+   * cleanup: the registry stops reporting it and the connection (if any)
+   * keeps today's non-idle-eligible session semantics. But when the socket
+   * carried a DORMANT subscriber, its closing is the subscriber's real
+   * departure — the `"idle"` close deliberately was not one — so audit and
+   * presence consumers get the durable `"departed"` fact here. Idempotent
+   * per socket; best-effort like every connection-close observation.
    */
-  webSocketClose(): void {}
+  webSocketClose(ws: WebSocket): void {
+    const departed = this.#wakeSockets.departedOnClose(ws);
+    if (departed === undefined) return;
+    try {
+      this.#append({ authority: "core-event" }, [
+        {
+          type: "events.iterate.com/stream/connection-closed",
+          idempotencyKey: internalStreamId("wake-socket-departed", departed.socketId),
+          payload: { connectionKey: departed.connectionKey, reason: "departed" },
+        },
+      ]);
+    } catch (error) {
+      if (!isDurableObjectLifecycleError(error)) throw error;
+    }
+  }
 
   webSocketError(): void {}
 
