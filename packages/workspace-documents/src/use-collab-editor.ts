@@ -210,6 +210,9 @@ export function useCollabEditor(input: {
       );
     return () => {
       cancelled = true;
+      // An in-flight wait must not deliver a dead connection's peer list
+      // (and the NEXT connection owns the strip once it attaches).
+      connection.onPeers = null;
       if (reflectTimer) {
         clearTimeout(reflectTimer);
         // Flush, don't drop: the final keystrokes must reach the board even

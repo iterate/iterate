@@ -26,8 +26,10 @@ import {
  * logo header, icon collapse, footer collapse button, rail.
  */
 export function AppSidebar() {
-  // The sidebar renders outside any one route, so it reads the search union
-  // loosely; `workspace` is optional and only seeds the tasks-view link.
+  // The sidebar renders OUTSIDE any one route, so the router cannot type
+  // this search value; the loose view is safe because `workspace` is read
+  // as optional and only seeds the tasks-view link — absent (or any other
+  // shape), the link simply targets the tasks app's home.
   const location = useRouterState({ select: (state) => state.location });
   const workspacePath = (location.search as { workspace?: string }).workspace;
   // The sibling tasks host exists only on project hosts, and only the
