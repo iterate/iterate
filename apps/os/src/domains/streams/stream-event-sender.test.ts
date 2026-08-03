@@ -126,6 +126,7 @@ function harness(args: {
     args.store ?? new SqliteSubscriptionCursorStore(wrapSqlStorage(new DatabaseSync(":memory:")));
   store.ensure(PROCESSOR_KEY, 0, 1);
   const alarms: number[] = [];
+  const alarmClears: number[] = [];
   const kept: Promise<unknown>[] = [];
   const wakeCalls: Parameters<SubscriptionReceiverCalls["wakeStreamProcessor"]>[] = [];
   const receiverCalls: SubscriptionReceiverCalls = {
@@ -154,6 +155,7 @@ function harness(args: {
       now: () => now,
       random: () => 0.5,
       armAlarm: (atMs) => alarms.push(atMs),
+      clearAlarm: () => alarmClears.push(now),
       runDurable: (work) => kept.push(work()),
       keepAlive: (promise) => kept.push(promise),
       wakeChannelKeys: () => new Set<string>(),
@@ -175,6 +177,7 @@ function harness(args: {
   return {
     wakeCalls,
     alarms,
+    alarmClears,
     state,
     store,
     eventSender,
@@ -636,6 +639,85 @@ describe("StreamEventSender stream delivery", () => {
       failingEventOffset: null,
       failingEventAttempt: 0,
     });
+  });
+
+  it("deletes the alarm once the last send settles with nothing due, and never while a retry is pending", async () => {
+    const itxConfig = {
+      subscriptionKey: PROCESSOR_KEY,
+      receiver: {
+        action: "itx-call",
+        expression: ["worker", "processEventBatch"],
+        delivery: { start: "beginning", onFailingEvent: "halt" },
+      },
+    } satisfies SubscriptionConfiguredPayload;
+
+    // Success: the send's pre-armed in-flight watchdog would otherwise
+    // outlive this delivery and boot the hibernated stream forever (each
+    // boot appends `woken`, whose delivery arms the next watchdog).
+    const ok = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      deliverToItx: async () => undefined,
+      wakeProcessor: async () => {
+        throw new Error("an ITX receiver must not wake a hosted processor");
+      },
+    });
+    ok.eventSender.sendDue();
+    await ok.settle();
+    expect(ok.store.get(PROCESSOR_KEY)?.acknowledgedOffset).toBe(2);
+    expect(ok.alarmClears.length).toBeGreaterThan(0);
+
+    // Failure: a pending retry row must keep the alarm armed — the quiet
+    // check may never delete a wake a durable obligation depends on.
+    const failing = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: itxConfig,
+      deliverToItx: async () => {
+        throw new Error("receiver down");
+      },
+      wakeProcessor: async () => {
+        throw new Error("an ITX receiver must not wake a hosted processor");
+      },
+    });
+    failing.eventSender.sendDue();
+    await failing.settle();
+    expect(failing.store.get(PROCESSOR_KEY)?.nextAttemptAt).not.toBeNull();
+    expect(failing.alarmClears).toEqual([]);
+  });
+
+  it("never clears the alarm while un-acked lag has no scheduled retry (lifecycle-retry state)", async () => {
+    // Model the lifecycle-retry state directly: a non-halted row lagging the
+    // head with nothing scheduled (an interrupted audit append leaves the
+    // cursor untouched and arms only a bare short-delay alarm). The quiet
+    // deletion must see that lag as pending work.
+    const h = harness({
+      events: [event(2, "example.com/issue-created", { issue: 1 })],
+      configuration: {
+        subscriptionKey: PROCESSOR_KEY,
+        filter: { jsonataCondition: "$notAFunction(payload)" },
+        receiver: {
+          action: "itx-call",
+          expression: ["worker", "processEventBatch"],
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      // The audit append for the filter failure is interrupted (false): the
+      // loop arms the lifecycle retry, leaves the row un-acked, and returns.
+      appendDeliveryEvent: (entry) =>
+        entry.type === "events.iterate.com/stream/error-occurred" ? false : true,
+      deliverToItx: async () => undefined,
+      wakeProcessor: async () => {
+        throw new Error("an ITX receiver must not wake a hosted processor");
+      },
+    });
+    h.eventSender.sendDue();
+    await h.settle();
+
+    const row = h.store.get(PROCESSOR_KEY)!;
+    expect(row.acknowledgedOffset).toBeLessThan(h.state.maxOffset);
+    expect(row.nextAttemptAt).toBeNull();
+    // The bare lifecycle retry was armed and, critically, never cleared.
+    expect(h.alarmClears).toEqual([]);
   });
 
   it("an ITX transform shapes each delivered event while the batch keeps the source coordinates", async () => {
@@ -1823,6 +1905,7 @@ function connectionsHarness(
         sessionsIdleClosed.push([...keys]);
         options.onSessionsIdleClosed?.(keys);
       },
+      reconcileAlarm: () => undefined,
       hostedDeliveryStillMatches: (_subscriptionKey, candidate) =>
         candidate.configuredAtOffset === expectedDelivery.configuredAtOffset &&
         candidate.cursorChangedAtOffset === expectedDelivery.cursorChangedAtOffset &&
@@ -2469,9 +2552,14 @@ describe("StreamConnections hosted delivery watchdog", () => {
       connectionKey: "session",
       processEventBatch: () => undefined,
     });
+    // Publication itself arms the deadline: the opened-fact reconcile runs
+    // before the connection is in the map, and with quiet-alarm deletion no
+    // stray later fire exists to paper over a missed arming (Bugbot 3705177939).
+    const armedAtPublication = h.alarmTimes.at(-1);
+    expect(armedAtPublication).toBeDefined();
     h.connections.armOrClearIdleAlarm();
     const firstDeadline = h.alarmTimes.at(-1);
-    expect(firstDeadline).toBeDefined();
+    expect(firstDeadline).toBe(armedAtPublication);
 
     // Re-running the check with no new delivery activity must keep the SAME
     // deadline: the old now+window reset slid it forward on the idle alarm's
