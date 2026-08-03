@@ -108,6 +108,45 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
 });
 
 /** Reassemble a live subscription the way `useLiveState` does: snapshot, then patches. */
+// Stream liveState rides the hibernatable STATE socket (wake-socket.ts): the
+// worker relay seeds itself with one transient runtimeState() read and then
+// receives `{"type":"state"}` frames — no retained subscription pins the
+// Stream DO. Same public LiveStateRpc contract; this proves updates flow
+// end-to-end through the socket-fed relay engine.
+test("stream.liveState pushes updates through the state socket without a DO-side subscription", async () => {
+  const marker = crypto.randomUUID().slice(0, 8);
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`stream-live-${RUN_SUFFIX}-${marker}`).create({});
+  const streamPath = `/e2e/stream-live/${marker}`;
+  using stream = project.streams.get(streamPath);
+  const [first] = await stream.append({
+    type: "events.iterate.test/live/tick",
+    payload: { round: 1 },
+  });
+
+  const track = trackLiveState<{ coreProcessorState: { maxOffset: number } }>();
+  using subscription = await stream.liveState.subscribe(track.onUpdate);
+
+  await waitForCondition(() => track.state() !== undefined, {
+    description: "the initial stream runtime snapshot",
+  });
+  expect(track.state()!.coreProcessorState.maxOffset).toBeGreaterThanOrEqual(first!.offset);
+
+  const [second] = await stream.append({
+    type: "events.iterate.test/live/tick",
+    payload: { round: 2 },
+  });
+  await waitForCondition(
+    () => (track.state()?.coreProcessorState.maxOffset ?? 0) >= second!.offset,
+    {
+      description: "a state-socket-fed update reflecting the new append",
+      timeoutMs: 30_000,
+    },
+  );
+  expect(await subscription.ping()).toBe(true);
+});
+
 function trackLiveState<State>(): {
   onUpdate: (update: LiveUpdate<State>) => void;
   state: () => State | undefined;

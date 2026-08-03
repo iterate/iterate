@@ -204,7 +204,10 @@ import type {
   ProjectWorker,
   StatefulDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
-import { openRelayedStreamConnection } from "./domains/streams/stream-connection-relay.ts";
+import {
+  openRelayedLiveState,
+  openRelayedStreamConnection,
+} from "./domains/streams/stream-connection-relay.ts";
 import {
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
@@ -896,13 +899,18 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
   }
 
-  /** Push-driven stream runtime state for polling-free debug surfaces. */
+  /**
+   * Push-driven stream runtime state for polling-free debug surfaces.
+   *
+   * Deliberately NOT the generic DO-subscription relay: that shape retains a
+   * diff callback inside the Stream DO and pins it for the watcher's life.
+   * Stream liveState rides the hibernatable STATE socket instead
+   * (stream-connection-relay.ts) — a watched idle stream hibernates at zero
+   * duration and pushes frames only when something actually changes.
+   */
   get liveState(): LiveStateRpc<StreamRuntimeDebugState> {
-    return new LiveStateRelayRpcTarget<StreamRuntimeDebugState>(
-      () =>
-        this[
-          STREAM_DURABLE_OBJECT_STUB
-        ] as unknown as LiveStateDurableObjectStub<StreamRuntimeDebugState>,
+    return new LiveStateRpcTarget<StreamRuntimeDebugState>(
+      openRelayedLiveState({ stub: () => this[STREAM_DURABLE_OBJECT_STUB] }),
     );
   }
 

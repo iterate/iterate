@@ -33,14 +33,21 @@ import type {
   StreamConnectionHandle,
   StreamPingInput,
 } from "iterate/processors";
+import { disposeIgnoredRpcResult, LiveState } from "iterate/sdk/capnweb";
 import type { Stream } from "../../itx-api.generated.ts";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
+import type { StreamRuntimeDebugState } from "./stream-runtime-state.ts";
 import {
   retainConnectionPing,
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
 } from "./retained-event-callbacks.ts";
-import { parseWakeSocketFrame, STREAM_WAKE_SOCKET_HEADER } from "./wake-socket.ts";
+import {
+  parseStateSocketFrame,
+  parseWakeSocketFrame,
+  STATE_SOCKET_HEADER_BODY,
+  STREAM_WAKE_SOCKET_HEADER,
+} from "./wake-socket.ts";
 
 /** What StreamConnectionRpcTarget's constructor needs; built here so rpc-targets.ts keeps owning the published target class. */
 type RelayedStreamConnection = {
@@ -321,5 +328,127 @@ export async function openRelayedStreamConnection(input: {
       closedByOwner = true;
       teardown({ reason: "closed-by-owner", socketCode: 1000 });
     },
+  };
+}
+
+/**
+ * A worker-local liveState source for one stream, fed by the hibernatable
+ * STATE socket instead of a retained subscription into the Stream DO.
+ *
+ * liveState is latest-wins snapshot+diff — no cursor, no replay, reconnect =
+ * fresh snapshot — which is exactly raw hibernatable-socket semantics, so
+ * state rides the socket outright: the DO holds no callback, the relay holds
+ * no DO-side stub, and a watched idle stream hibernates at zero duration.
+ * Every read path re-seeds from one transient `runtimeState()` call (a plain
+ * RPC that pins nothing beyond itself), so a dropped socket degrades to
+ * stale-until-next-read, never to wrongness. The socket exists only while a
+ * subscriber does: `get()` alone stays snapshot-per-read, and the last
+ * unsubscribe closes the socket so an unmounted panel leaves no watcher the
+ * DO would keep materializing state for.
+ */
+export function openRelayedLiveState(input: {
+  stub: () => DurableObjectStub<StreamDurableObject>;
+}): {
+  live: Pick<LiveState<StreamRuntimeDebugState>, "getState" | "subscribe">;
+  loadAndRefreshLive: () => Promise<void>;
+} {
+  // Placeholder until the first loadAndRefreshLive; LiveStateRpcTarget awaits
+  // that refresh before every get/subscribe, so the placeholder is never read.
+  const engine = new LiveState<StreamRuntimeDebugState>({} as StreamRuntimeDebugState);
+  let socket: WebSocket | undefined;
+
+  // Snapshot reads and socket frames race on unordered paths, and a stale
+  // snapshot landing after a newer frame would rewind the engine — sticky
+  // until the next change if the stream then goes quiet. maxOffset is
+  // monotonic per stream lifetime, so apply-if-not-older closes every
+  // offset-visible rewind; equal-offset runtime-only drift (metrics, RTT)
+  // can still momentarily regress, which a debug surface tolerates.
+  const apply = (next: StreamRuntimeDebugState) => {
+    const currentOffset = engine.getState()?.coreProcessorState?.maxOffset ?? -1;
+    const nextOffset = next?.coreProcessorState?.maxOffset ?? -1;
+    if (nextOffset >= currentOffset) engine.setState(next);
+  };
+
+  const seed = async () => {
+    const stub = input.stub();
+    try {
+      apply(await stub.runtimeState());
+    } finally {
+      // Release the invocation so this read cannot pin the DO (same
+      // pattern as StreamRpcTarget.runtimeState).
+      disposeIgnoredRpcResult(stub);
+    }
+  };
+
+  const ensureSocket = async () => {
+    if (socket !== undefined) return;
+    try {
+      const upgrade = await input.stub().fetch("https://stream-wake.internal/", {
+        headers: {
+          Upgrade: "websocket",
+          [STREAM_WAKE_SOCKET_HEADER]: STATE_SOCKET_HEADER_BODY,
+        },
+      });
+      const ws = upgrade.webSocket ?? undefined;
+      if (ws === undefined) return;
+      ws.accept();
+      ws.addEventListener("message", (event) => {
+        const frame = parseStateSocketFrame(event.data);
+        if (frame === undefined) return;
+        // The only producer of state frames is this stream DO's pushState,
+        // which sends exactly #readRuntimeState() — the same value the
+        // snapshot read returns typed. The protocol module keeps the payload
+        // `unknown` on purpose (forward-compat across deploy skew), and
+        // liveState consumers are read-only debug surfaces that tolerate
+        // transient shape drift, so a full runtime re-validation here would
+        // buy nothing but a second schema to keep in sync.
+        apply(frame.state as StreamRuntimeDebugState);
+      });
+      ws.addEventListener("close", () => {
+        // Stale-until-next-read: the next subscribe re-opens and re-seeds.
+        if (socket === ws) socket = undefined;
+      });
+      socket = ws;
+    } catch (error) {
+      console.warn("stream state socket unavailable; liveState reads stay snapshot-only", {
+        error,
+      });
+    }
+  };
+
+  const releaseSocketIfUnobserved = () => {
+    if (engine.observed || socket === undefined) return;
+    const ws = socket;
+    socket = undefined;
+    try {
+      ws.close(1000, "no subscribers");
+    } catch {
+      // Already closed.
+    }
+  };
+
+  return {
+    live: {
+      getState: () => engine.getState(),
+      subscribe: (sink) => {
+        const subscription = engine.subscribe(sink);
+        // Socket lifetime tracks observation: open on first subscriber, and
+        // re-seed once attached so a change landing between the pre-read
+        // snapshot and the socket attach still becomes visible.
+        void ensureSocket().then(() => (socket === undefined ? undefined : seed()));
+        return {
+          ping: () => subscription.ping(),
+          unsubscribe: () => {
+            subscription.unsubscribe();
+            releaseSocketIfUnobserved();
+          },
+          [Symbol.dispose]() {
+            subscription[Symbol.dispose]();
+            releaseSocketIfUnobserved();
+          },
+        };
+      },
+    },
+    loadAndRefreshLive: seed,
   };
 }

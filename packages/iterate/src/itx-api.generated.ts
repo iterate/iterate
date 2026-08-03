@@ -1275,7 +1275,15 @@ export interface Stream {
    * sampling); live debug surfaces should subscribe through `liveState`.
    */
   runtimeState(): Promise<StreamRuntimeDebugState>;
-  /** Push-driven stream runtime state for polling-free debug surfaces. */
+  /**
+   * Push-driven stream runtime state for polling-free debug surfaces.
+   *
+   * Deliberately NOT the generic DO-subscription relay: that shape retains a
+   * diff callback inside the Stream DO and pins it for the watcher's life.
+   * Stream liveState rides the hibernatable STATE socket instead
+   * (stream-connection-relay.ts) — a watched idle stream hibernates at zero
+   * duration and pushes frames only when something actually changes.
+   */
   liveState: LiveStateRpc<StreamRuntimeDebugState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;
