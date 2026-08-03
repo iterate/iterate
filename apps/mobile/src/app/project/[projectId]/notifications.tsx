@@ -301,34 +301,37 @@ function ApprovalNotificationDetail({
     refetchInterval: (query) => (query.state.data?.complete ? false : 5_000),
   });
 
-  if (batch.isPending) {
-    return (
-      <View style={styles.detail}>
-        <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} size="small" />
-      </View>
-    );
-  }
-  if (batch.isError) {
-    return (
-      <View style={styles.detail}>
-        <Text style={styles.detailError}>{String(batch.error.message)}</Text>
-      </View>
-    );
-  }
-  if (batch.data === null) {
+  // Live first: open and orphan rows were DERIVED from the live approval
+  // subscription, so their payload is already in memory — a pending, failed,
+  // or empty one-shot fetch must not block the body or the decide actions.
+  // A live resolution also wins over fetched data (retires actions
+  // immediately; the 5s provisional poll covers backlog gaps, not races).
+  // The fetch remains authoritative only for deep-history batches outside
+  // the live window.
+  const liveDetail = deriveBatchDetail(liveApprovalEvents, batchOffset);
+  const detail = (liveDetail?.resolved ? liveDetail : null) || batch.data || liveDetail;
+  if (detail === null || detail === undefined) {
+    if (batch.isPending) {
+      return (
+        <View style={styles.detail}>
+          <ActivityIndicator accessibilityLabel="Loading" color={colors.textMuted} size="small" />
+        </View>
+      );
+    }
+    if (batch.isError) {
+      return (
+        <View style={styles.detail}>
+          <Text style={styles.detailError}>{String(batch.error.message)}</Text>
+        </View>
+      );
+    }
     return (
       <View style={styles.detail}>
         <Text style={styles.detailMuted}>This batch's history isn't on the stream anymore.</Text>
       </View>
     );
   }
-  // Live overlay: a decision arriving over the screen's approval
-  // subscription retires the actions IMMEDIATELY — the 5s provisional poll
-  // covers backlog gaps, not races against other surfaces' decisions. The
-  // fetched detail stays authoritative when the live window doesn't reach
-  // this batch (deep history).
-  const liveDetail = deriveBatchDetail(liveApprovalEvents, batchOffset);
-  const { payload, resolved } = liveDetail?.resolved ? liveDetail : batch.data;
+  const { payload, resolved } = detail;
   const streamContext = payload.streamContext;
   const expired = Date.parse(payload.expiresAt) <= Date.now();
   return (
