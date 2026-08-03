@@ -1308,6 +1308,26 @@ export interface Stream {
     eventTypes?: readonly string[];
     filter?: EventFilter;
     events?: boolean;
+    /**
+     * Per-connection ceiling on events in one delivery batch, for
+     * constrained consumers (an embedded client reassembling each batch
+     * into a fixed buffer). Excess matching events arrive in subsequent
+     * batches with no gap. Clamped to the platform batch limit.
+     */
+    maxDeliveryEvents?: number;
+    /**
+     * Per-connection ceiling on the summed event bytes in one delivery
+     * batch. At least one event is always delivered, so a single event
+     * larger than the cap surfaces at the consumer instead of stalling
+     * the cursor silently.
+     */
+    maxDeliveryBytes?: number;
+    /**
+     * `false` omits the reduced core state from every batch — bandwidth
+     * relief for consumers that only want events. Invalid together with
+     * `events: false` (a state-only connection is nothing without state).
+     */
+    state?: boolean;
     openedBy?: unknown;
     /** Optional live debug hook, retained for the connection's lifetime. */
     getRuntimeState?: GetProcessorRuntimeState;
@@ -4318,6 +4338,7 @@ export type StreamEventBatch = {
   /** Inclusive raw-log cursor through which this delivery scan completed. */
   scannedThroughOffset: number;
   streamMaxOffset: number;
+  /** Reduced core state, or null when the connection opts out with `state: false`. */
   state: unknown;
 };
 

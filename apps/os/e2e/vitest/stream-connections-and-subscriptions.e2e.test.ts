@@ -154,6 +154,84 @@ test("replaying earlier events, receiving new appends, filters, state callbacks,
   await stateConnection.close();
 });
 
+// Constrained consumers (embedded clients reassembling each batch into a
+// fixed buffer) cap what one delivery may carry; the cursor pages the rest
+// with no gap, and `state: false` drops the per-batch core-state payload.
+test("per-connection delivery caps split coalesced appends and state can be omitted", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/subscriptions/session/delivery-caps/${marker}`;
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using stream = project.streams.get(streamPath);
+
+  const batches: StreamEventBatch[] = [];
+  using _capped = await stream.openConnection({
+    connectionKey: `capped-${marker}`,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    maxDeliveryEvents: 2,
+    state: false,
+    processEventBatch: (batch) => batches.push(batch),
+  });
+
+  // One atomic five-event append commits in one turn — without the cap it
+  // would arrive as a single five-event batch.
+  const appended = await stream.append(
+    ...Array.from({ length: 5 }, (_, sequence) => ({
+      type: MATCHING_EVENT_TYPE,
+      payload: { marker, sequence },
+    })),
+  );
+  const lastOffset = appended.at(-1)!.offset;
+  await waitForCondition(
+    () => batches.some((batch) => batch.events.some((event) => event.offset === lastOffset)),
+    { description: "the capped connection to page through all five events" },
+  );
+
+  const eventBatches = batches.filter((batch) => batch.events.length > 0);
+  expect(eventBatches.length).toBeGreaterThanOrEqual(3);
+  for (const batch of eventBatches) {
+    expect(batch.events.length).toBeLessThanOrEqual(2);
+  }
+  for (const batch of batches) {
+    expect(batch.state).toBeNull();
+  }
+  expect(eventBatches.flatMap((batch) => batch.events.map((event) => event.offset))).toEqual(
+    appended.map((event) => event.offset),
+  );
+
+  // A byte cap below any single event still delivers one event per batch
+  // (the consumer must see the oversized event, not a stalled cursor).
+  const single: StreamEventBatch[] = [];
+  using _bytesCapped = await stream.openConnection({
+    connectionKey: `bytes-capped-${marker}`,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    maxDeliveryBytes: 1,
+    processEventBatch: (batch) => single.push(batch),
+  });
+  const byteCappedAppend = await stream.append(
+    { type: MATCHING_EVENT_TYPE, payload: { marker, sequence: 10 } },
+    { type: MATCHING_EVENT_TYPE, payload: { marker, sequence: 11 } },
+    { type: MATCHING_EVENT_TYPE, payload: { marker, sequence: 12 } },
+  );
+  await waitForCondition(
+    () =>
+      single.some((batch) =>
+        batch.events.some((event) => event.offset === byteCappedAppend.at(-1)!.offset),
+      ),
+    { description: "the byte-capped connection to page through the appends" },
+  );
+  const singleEventBatches = single.filter((batch) => batch.events.length > 0);
+  expect(singleEventBatches.length).toBe(3);
+  for (const batch of singleEventBatches) {
+    expect(batch.events.length).toBe(1);
+    expect(batch.state).not.toBeNull();
+  }
+  expect(singleEventBatches.flatMap((batch) => batch.events.map((event) => event.offset))).toEqual(
+    byteCappedAppend.map((event) => event.offset),
+  );
+});
+
 test("a live filter failure closes the callback and records the concrete error", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/subscriptions/session/filter-failure/${marker}`;

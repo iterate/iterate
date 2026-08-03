@@ -1468,6 +1468,21 @@ export class StreamDurableObject extends DurableObject<Env> {
     ) {
       throw new Error(`maxReplayOffsetGap must be a non-negative integer`);
     }
+    if (
+      args.maxDeliveryEvents !== undefined &&
+      (!Number.isSafeInteger(args.maxDeliveryEvents) || args.maxDeliveryEvents < 1)
+    ) {
+      throw new Error(`maxDeliveryEvents must be a positive integer`);
+    }
+    if (
+      args.maxDeliveryBytes !== undefined &&
+      (!Number.isSafeInteger(args.maxDeliveryBytes) || args.maxDeliveryBytes < 1)
+    ) {
+      throw new Error(`maxDeliveryBytes must be a positive integer`);
+    }
+    if (args.state === false && args.events === false) {
+      throw new Error(`a state-only connection cannot also omit state`);
+    }
 
     // Validate the caller-supplied descriptor at the boundary. The public
     // `Stream.openConnection` contract types `openedBy` as `unknown`, so without
@@ -1498,6 +1513,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       maxReplayOffsetGap: args.maxReplayOffsetGap,
       filter,
       events: args.events,
+      maxDeliveryEvents: args.maxDeliveryEvents,
+      maxDeliveryBytes: args.maxDeliveryBytes,
+      includeState: args.state !== false,
       openedBy,
       getRuntimeState: args.getRuntimeState,
       ping: args.ping,

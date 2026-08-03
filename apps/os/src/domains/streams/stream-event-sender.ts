@@ -1480,6 +1480,31 @@ type StreamConnection = {
   close(reason: ConnectionCloseReason, error?: string): void;
 };
 
+/**
+ * Apply a session connection's per-batch delivery ceilings. Count first,
+ * then cumulative bytes; the first event always survives so one event
+ * larger than the byte cap reaches the consumer (whose parser reports it)
+ * instead of stalling the cursor forever.
+ */
+function capSessionDelivery(
+  matched: SizedStreamEvent[],
+  maxEvents: number | undefined,
+  maxBytes: number | undefined,
+): SizedStreamEvent[] {
+  let capped = maxEvents !== undefined ? matched.slice(0, maxEvents) : matched;
+  if (maxBytes !== undefined && capped.length > 1) {
+    let bytes = 0;
+    for (let index = 0; index < capped.length; index += 1) {
+      bytes += capped[index]!.byteLength;
+      if (bytes > maxBytes && index > 0) {
+        capped = capped.slice(0, index);
+        break;
+      }
+    }
+  }
+  return capped;
+}
+
 type OpenConnectionArgs<Batch extends StreamEventBatch> = {
   connectionKey: string;
   kind: StreamConnectionKind;
@@ -1490,6 +1515,12 @@ type OpenConnectionArgs<Batch extends StreamEventBatch> = {
   maxReplayOffsetGap?: number;
   filter?: CompiledEventFilter;
   events?: boolean;
+  /** Per-connection ceiling on events per delivered batch (session lane). */
+  maxDeliveryEvents?: number;
+  /** Per-connection ceiling on summed event bytes per delivered batch; always ≥1 event. */
+  maxDeliveryBytes?: number;
+  /** false omits the reduced core state from every batch. */
+  includeState?: boolean;
   openedBy?: ConnectionOpenerDescriptor;
   getRuntimeState?: GetProcessorRuntimeState;
   ping?: StreamConnectionPing;
@@ -1650,6 +1681,9 @@ export class StreamConnections {
     maxReplayOffsetGap?: number;
     filter?: CompiledEventFilter;
     events?: boolean;
+    maxDeliveryEvents?: number;
+    maxDeliveryBytes?: number;
+    includeState?: boolean;
     openedBy?: ConnectionOpenerDescriptor;
     getRuntimeState?: GetProcessorRuntimeState;
     ping?: StreamConnectionPing;
@@ -2001,7 +2035,9 @@ export class StreamConnections {
                   ? visible
                   : visible.filter((entry) => args.filter!.matches(entry.event));
               const delivered =
-                kind === "hosted" ? matched.slice(0, HOSTED_CALLBACK_EVENT_LIMIT) : matched;
+                kind === "hosted"
+                  ? matched.slice(0, HOSTED_CALLBACK_EVENT_LIMIT)
+                  : capSessionDelivery(matched, args.maxDeliveryEvents, args.maxDeliveryBytes);
               // If more matching hosted work remains in the scanned window,
               // stop at the last event actually handed to the callback. The
               // next acknowledged batch resumes immediately after it; all
@@ -2018,6 +2054,20 @@ export class StreamConnections {
             const stateMaxOffset = this.#hooks.coreState().maxOffset;
             if (stateMaxOffset <= deliveredThroughOffset && !initialBatchPending) return;
             deliveredThroughOffset = stateMaxOffset;
+          }
+          if (
+            kind === "session" &&
+            args.includeState === false &&
+            deliverEvents &&
+            events.length === 0 &&
+            !initialBatchPending
+          ) {
+            // A state-free batch whose filter rejected every event has no
+            // payload. Advance the cursor without calling the consumer, but
+            // preserve the loop's cooperative yield while scanning a large
+            // non-matching backlog. The greeting batch still seeds its cursor.
+            await Promise.resolve();
+            continue;
           }
           initialBatchPending = false;
           connection.batchesSent += 1;
@@ -2043,7 +2093,7 @@ export class StreamConnections {
             scannedAfterOffset,
             scannedThroughOffset: deliveredThroughOffset,
             streamMaxOffset: currentState.maxOffset,
-            state: currentState,
+            state: args.includeState === false ? null : currentState,
           } satisfies StreamEventBatch;
           if (kind === "hosted") {
             const expectedDelivery = args.expectedHostedDelivery!;
