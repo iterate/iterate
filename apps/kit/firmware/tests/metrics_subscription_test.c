@@ -194,6 +194,7 @@ static enum iterate_kit_status sample_metrics(
     {0},
     false,
     {0},
+    0U,
   };
   sample->audio.uplink.send_deferrals =
       fixture->maximum_metrics ? maximum_counter : 29U;
@@ -229,6 +230,8 @@ static enum iterate_kit_status sample_metrics(
           : "capture_stale";
   sample->audio.uplink.last_restart_frames_discarded =
       fixture->maximum_metrics ? maximum_counter : 41U;
+  sample->subscription_callback_rejections =
+      fixture->maximum_metrics ? maximum_counter : 44U;
   sample->audio.has_buffers = fixture->include_buffers;
   sample->audio.has_playback = fixture->include_playback;
   sample->audio.buffers.uplink_application.evidence =
@@ -898,6 +901,10 @@ static void audio_metrics_fit_one_control_message(void) {
       fixture.module.poll(fixture.module.context, 0U).status ==
       ITERATE_KIT_POLL_OK);
   assert(fixture.captured_count == 3U);
+  assert(
+      strstr(
+          fixture.captured[1],
+          "\"subscriptionEnds\":44") != NULL);
   assert(
       strstr(
           fixture.captured[1],

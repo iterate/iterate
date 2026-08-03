@@ -376,6 +376,21 @@ target_compile_options(iterate-kit-audio-test PRIVATE
 target_link_libraries(iterate-kit-audio-test PRIVATE iterate-kit-core)
 add_test(NAME iterate-kit-audio-test COMMAND iterate-kit-audio-test)
 
+add_executable(iterate-kit-peer-poll-test
+  tests/peer_poll_test.c
+)
+target_compile_features(iterate-kit-peer-poll-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-peer-poll-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(iterate-kit-peer-poll-test PRIVATE iterate-kit-core)
+add_test(
+  NAME iterate-kit-peer-poll-test
+  COMMAND iterate-kit-peer-poll-test)
+
 add_executable(iterate-kit-aec-capture-bridge-test
   tests/aec_capture_bridge_test.c
 )

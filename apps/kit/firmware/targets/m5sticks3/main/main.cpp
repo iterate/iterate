@@ -648,6 +648,9 @@ iterate_kit_status sampleRuntimeMetrics(
       iterate_kit_m5sticks3_audio_metrics(&state.device);
   const auto playback = state.platform.playbackMetrics();
 
+  sample->subscription_callback_rejections =
+      iterate_kit_peer_subscription_callback_rejections(
+          &state.device.peer);
   sample->has_audio = true;
   if (audio != nullptr) {
     sample->audio.capture.sent =
@@ -1476,7 +1479,15 @@ extern "C" void app_main(void) {
         iterate_kit_m5sticks3_poll(
             &runtime.device,
             static_cast<std::uint64_t>(nowMicroseconds / 1000));
-    if (devicePoll.status != ITERATE_KIT_POLL_OK) {
+    if (devicePoll.status == ITERATE_KIT_POLL_CALLBACK_REJECTED) {
+      ESP_LOGW(
+          tag,
+          "remote capability subscription ended: callback rejected "
+          "total=%lu",
+          static_cast<unsigned long>(
+              iterate_kit_peer_subscription_callback_rejections(
+                  &runtime.device.peer)));
+    } else if (devicePoll.status != ITERATE_KIT_POLL_OK) {
       ESP_LOGE(
           tag,
           "device poll failed: status=%d capnweb=%d",

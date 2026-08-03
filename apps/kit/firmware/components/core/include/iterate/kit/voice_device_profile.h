@@ -49,7 +49,24 @@ enum {
   ITERATE_KIT_VOICE_FRAME_SAMPLES = 320,
   ITERATE_KIT_VOICE_FRAME_BYTES = 640,
   ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH = 32,
-  ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND = 4,
+  /*
+   * TWELVE, which is what the documentation beside it has always said.
+   *
+   * Every append costs TWO WebSocket messages — a push and a release — and
+   * this socket sustains roughly 25-50 messages a second. At four frames that
+   * is 12.5 appends/s = 25 messages/s: pinned to the floor of the measured
+   * ceiling while talking, with nothing left for pings or stats. At twelve it
+   * is 8.3 messages/s.
+   *
+   * Four was correct when a mic append was 5.2 KiB of PCM16 base64 against a
+   * 5760-byte socket buffer, where one write nearly filled the buffer and the
+   * next blocked — the failure that killed every push-to-talk turn. Both of
+   * those changed in the same commit that set this to 4: the uplink became
+   * mu-law (half the bytes) and the send buffer became 32 KiB. Twelve mu-law
+   * frames measure 6672 bytes against a 7600-byte args buffer and an 8192
+   * slot, so the constraint that forced 4 has not existed for some time.
+   */
+  ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND = 12,
 
   /*
    * The speaker ring is 1.5 s of jitter, not an answer store. Playback starts

@@ -107,8 +107,8 @@ struct metrics_expression_workspace {
    * pointers after poll returns would be invalid. A single aggregate makes the
    * lifetime and stack budget reviewable instead of scattering VLAs/helpers.
    */
-  struct capnweb_expression root_values[8];
-  struct capnweb_object_field root_fields[9];
+  struct capnweb_expression root_values[9];
+  struct capnweb_object_field root_fields[10];
   struct capnweb_expression capture_values[3];
   struct capnweb_object_field capture_fields[3];
   struct capnweb_expression capture_object;
@@ -692,7 +692,7 @@ static bool build_audio_expression(
 static bool build_metrics_expression(
     const struct iterate_kit_metrics_sample *sample,
     struct metrics_expression_workspace *workspace) {
-  size_t root_count = 8U;
+  size_t root_count = 9U;
   set_integer_field(
       &workspace->root_values[0],
       &workspace->root_fields[0],
@@ -741,6 +741,12 @@ static bool build_metrics_expression(
       "cpuPermille",
       11U,
       sample->cpu_permille);
+  set_integer_field(
+      &workspace->root_values[8],
+      &workspace->root_fields[8],
+      "subscriptionEnds",
+      sizeof("subscriptionEnds") - 1U,
+      sample->subscription_callback_rejections);
   if (sample->has_audio) {
     if (!build_audio_expression(sample, workspace)) {
       return false;

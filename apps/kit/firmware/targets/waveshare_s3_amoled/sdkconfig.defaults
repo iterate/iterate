@@ -120,3 +120,32 @@ CONFIG_ESP_TASK_WDT_PANIC=y
 #
 CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
 CONFIG_LWIP_TCP_WND_DEFAULT=32768
+
+#
+# ...and the receive mailbox has to be sized for that window.
+#
+# The window above was raised for the uplink stall and its counterpart was
+# left at the minimum, 6. IDF's own Kconfig states the rule: the mailbox
+# should be LWIP_TCP_WND_DEFAULT/TCP_MSS + 2, "if the mail box is full, the
+# LWIP drops the packets". For 32768 over a 1440-byte MSS that is 24, so a
+# burst of speaker frames was being dropped BELOW the socket API — invisible
+# to every counter this device has, because a mailbox drop presents only as a
+# retransmission and latency, never as a sequence gap or a receive failure.
+#
+# Espressif's own S3 network preset uses 64; esp-adf's VoIP and RTC examples
+# use 64. 24 is the documented minimum for this window.
+#
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=24
+
+#
+# Recover from a single loss without discarding the burst behind it.
+#
+# At a 32 KiB window and MSS 1440 there can be ~22 segments in flight, so one
+# loss leaves up to 21 out of order. lwIP queued four of them and dropped the
+# rest, and without SACK the far end could not tell which had arrived — so a
+# single lost packet cost a retransmission of everything after it, which on
+# an audio downlink is heard as a hole. Espressif enables SACK in its own
+# low-latency audio configuration; 12 is the Kconfig maximum for the queue.
+#
+CONFIG_LWIP_TCP_SACK_OUT=y
+CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=12

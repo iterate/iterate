@@ -480,6 +480,13 @@ struct iterate_kit_metrics_sample {
       raw_clean_aec_detail;
   bool has_avatar_detail;
   struct iterate_kit_avatar_metrics_sample avatar_detail;
+  /*
+   * Remote callbacks are session-owned: rejecting one normally means a
+   * userspace subscriber ended, while the physical device remains healthy.
+   * Keep this lifetime counter in the ordinary bounded snapshot so operators
+   * can explain a vanished subscription without retaining callback history.
+   */
+  uint32_t subscription_callback_rejections;
 };
 
 struct iterate_kit_metrics_driver {

@@ -76,6 +76,13 @@ struct iterate_kit_peer_options {
 struct iterate_kit_peer {
   struct iterate_kit_peer_options options;
   struct iterate_kit_poll_result last_poll_result;
+  /*
+   * A remote callback rejection is the normal terminal signal for one JS
+   * subscription, not evidence that the peer or device failed. Retaining a
+   * saturating lifetime count makes those endings observable without a queue
+   * of historical errors or a second diagnostics owner.
+   */
+  uint32_t subscription_callback_rejections;
   bool initialized;
 };
 
@@ -86,6 +93,8 @@ struct capnweb_capability iterate_kit_peer_capability(
     struct iterate_kit_peer *peer);
 struct iterate_kit_poll_result iterate_kit_peer_poll(
     struct iterate_kit_peer *peer, uint64_t now_ms);
+uint32_t iterate_kit_peer_subscription_callback_rejections(
+    const struct iterate_kit_peer *peer);
 void iterate_kit_peer_session_ended(struct iterate_kit_peer *peer);
 struct iterate_kit_poll_result iterate_kit_peer_close(
     struct iterate_kit_peer *peer);

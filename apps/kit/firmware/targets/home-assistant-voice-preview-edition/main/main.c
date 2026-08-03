@@ -339,6 +339,9 @@ static enum iterate_kit_status sample_runtime_metrics(
   stack_headroom = minimum_nonzero(
       stack_headroom, owner.capture_stack_minimum_free_bytes);
   sample->task_stack_high_water_bytes = stack_headroom;
+  sample->subscription_callback_rejections =
+      iterate_kit_peer_subscription_callback_rejections(
+          &state->device.peer);
 
   sample->has_audio = true;
   sample->audio.capture.sent = owner.clean_uplink_frames;
@@ -1348,7 +1351,15 @@ void app_main(void) {
     enum iterate_kit_status media_readiness_status;
     enum iterate_kit_status control_status;
 
-    if (device_poll.status != ITERATE_KIT_POLL_OK) {
+    if (device_poll.status == ITERATE_KIT_POLL_CALLBACK_REJECTED) {
+      ESP_LOGW(
+          TAG,
+          "remote capability subscription ended: callback rejected "
+          "total=%lu",
+          (unsigned long)
+              iterate_kit_peer_subscription_callback_rejections(
+                  &runtime.device.peer));
+    } else if (device_poll.status != ITERATE_KIT_POLL_OK) {
       ESP_LOGE(
           TAG,
           "device poll failed: status=%d capnweb=%d",

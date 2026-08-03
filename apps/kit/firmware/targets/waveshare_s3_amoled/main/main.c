@@ -602,6 +602,14 @@ static void on_control(
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
     waveshare_display_set_status("hold the lower button to talk");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
+    /*
+     * Drop whatever is still queued. The ring holds thirty seconds, so a call
+     * that ends mid-answer otherwise plays the dead conversation out after
+     * the screen has already said it is over.
+     */
+    runtime.speaker_discard_bytes =
+        (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
+    runtime.speaker_reprime = true;
     waveshare_recorder_end_call("bridge hung up");
     /*
      * The BELIEF ends here; the INTENT does not.
@@ -720,6 +728,26 @@ static void playback_task(void *argument) {
     received = xStreamBufferReceive(
         runtime.speaker_buffer, chunk, sizeof(chunk),
         pdMS_TO_TICKS(SPEAKER_DRY_WAIT_MS));
+
+    /*
+     * A REPRIME REQUESTED WHILE WE WERE BLOCKED STILL COUNTS.
+     *
+     * The receive above waits up to 60 ms, and a new answer's first frame
+     * routinely arrives inside that window — REPLACE sets speaker_reprime and
+     * pushes the frame, and this loop then wakes holding it. Checking the
+     * flag only at the top of the loop played that frame with priming already
+     * cancelled, so ~20 ms of the first phoneme escaped, the reprime was
+     * honoured on the NEXT iteration, and the rest of the answer waited out a
+     * full prefill behind it. That is the clipped first word.
+     */
+    if (received > 0U && runtime.speaker_reprime) {
+      runtime.speaker_reprime = false;
+      runtime.speaker_answer_done = false;
+      iterate_kit_voice_playback_clock_reprime(&playout_clock);
+      /* Put it back: it belongs to the answer we are about to prime for. */
+      (void)xStreamBufferSend(runtime.speaker_buffer, chunk, received, 0);
+      continue;
+    }
 
     if (received == 0U) {
       /*
@@ -1577,6 +1605,22 @@ void app_main(void) {
         runtime.voicelab_generation = runtime.connection.generation;
         runtime.frame_sequence = 0U;
         (void)xQueueReset(runtime.mic_queue); /* drop pre-session stale audio */
+        /*
+         * AND FORGET WHICH ANSWER WE HAD REACHED.
+         *
+         * The classifier ignores any frame numbered below the highest answer
+         * it has played, which is right within one conversation and a
+         * permanent latch across a reconnect: a restarted bridge numbers its
+         * first answer 0, every frame is then "stale", and the device stays
+         * silent for the rest of the boot while the transport reports ready
+         * and the batches keep climbing. Reset was called once, at startup,
+         * and never here — the one place a new sender takes over.
+         *
+         * The same hazard on `abandoned` was found and fixed by measurement
+         * (95 frames of one answer, discarded whole). This is its twin, on
+         * the field next to it.
+         */
+        iterate_kit_playout_reset(&runtime.playout, 1U);
         ESP_LOGI(
             tag,
             "voicelab mount started (generation %" PRIu32 ")",
