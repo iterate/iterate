@@ -9,6 +9,7 @@ import {
   SparklesIcon,
 } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
+import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
 import { Spinner } from "@iterate-com/ui/components/spinner";
 import { DocumentComments } from "@iterate-com/workspace-documents/comments";
 import type { DocumentCommentsHandle } from "@iterate-com/workspace-documents/comments";
@@ -17,6 +18,7 @@ import {
   annotationsSourceForHtmlDocument,
   transformHtmlDocumentAnnotations,
 } from "@iterate-com/workspace-documents/html-annotations";
+import { authorColor, authorLabel } from "@iterate-com/workspace-documents/collab";
 import { commentIdentityFor } from "@iterate-com/workspace-documents/identity";
 import { MarkdownDocumentPreview } from "@iterate-com/workspace-documents/preview";
 import type { WorkspaceDocumentTransport } from "@iterate-com/workspace-documents/types";
@@ -50,6 +52,10 @@ export function WorkspaceDocumentPage({
   const [showChanges, setShowChanges] = useState(false);
   const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Everyone with a live caret on this document, self first — delivered by
+  // the editor's collab session whenever the presence generation advances
+  // (join announces + 25s heartbeats keep idle readers present).
+  const [peers, setPeers] = useState<{ self: string; clientIds: string[] } | null>(null);
   const editorApiRef = useRef<CollabEditorApi | null>(null);
   const commentsRef = useRef<DocumentCommentsHandle | null>(null);
 
@@ -143,6 +149,7 @@ export function WorkspaceDocumentPage({
   return (
     <main className="flex min-h-svh flex-col bg-background lg:h-svh lg:overflow-hidden">
       <header className="flex min-h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur">
+        <SidebarTrigger className="-ml-1 md:hidden" />
         <div className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
           <FileTextIcon aria-hidden className="size-4" />
         </div>
@@ -167,6 +174,7 @@ export function WorkspaceDocumentPage({
           </p>
         </div>
         <div className="ml-auto flex items-center gap-1.5">
+          <DocumentPresence peers={peers} />
           <span className="hidden max-w-40 truncate text-[11px] text-muted-foreground md:block">
             {status}
           </span>
@@ -241,6 +249,7 @@ export function WorkspaceDocumentPage({
                 }
                 apiRef={editorApiRef}
                 onLiveContent={onLiveContent}
+                onPeers={setPeers}
                 onStatus={setStatus}
               />
             </Suspense>
@@ -280,4 +289,31 @@ function documentTitle(source: string, format: "html" | "markdown", path: string
     if (heading !== undefined && heading !== "") return heading;
   }
   return path.split("/").at(-1) ?? path;
+}
+
+/**
+ * The presence avatar strip, ported from the tasks board: everyone with a
+ * live caret on this document — yourself included, first, ringed in your own
+ * author color — with the display name decoded from each session's clientId.
+ */
+function DocumentPresence({ peers }: { peers: { self: string; clientIds: string[] } | null }) {
+  if (peers === null) return null;
+  const everyone = [peers.self, ...peers.clientIds.filter((clientId) => clientId !== peers.self)];
+  return (
+    <div className="mr-1 flex items-center -space-x-1.5">
+      {everyone.slice(0, 6).map((clientId) => (
+        <span
+          key={clientId}
+          title={authorLabel(clientId)}
+          style={{ borderColor: authorColor(clientId, 1) }}
+          className="flex size-6 items-center justify-center rounded-full border-2 bg-background text-[10px] font-semibold uppercase"
+        >
+          {authorLabel(clientId).trim().slice(0, 1) || "?"}
+        </span>
+      ))}
+      {everyone.length > 6 ? (
+        <span className="pl-2 text-xs text-muted-foreground">+{everyone.length - 6}</span>
+      ) : null}
+    </div>
+  );
 }

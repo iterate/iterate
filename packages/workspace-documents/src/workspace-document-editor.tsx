@@ -21,6 +21,7 @@ export function WorkspaceDocumentEditor({
   emptyPlaceholder = "Write in Markdown…",
   focusHeadline,
   onLiveContent,
+  onPeers,
   onStatus,
   onRequestClose,
   apiRef,
@@ -37,6 +38,9 @@ export function WorkspaceDocumentEditor({
   focusHeadline?: "select" | "end" | { caret: number };
   apiRef?: { current: CollabEditorApi | null };
   onLiveContent: (path: string, content: string) => void;
+  /** Everyone with a live caret on this document (self included) — for host
+   * chrome such as a presence avatar strip. */
+  onPeers?: (input: { self: string; clientIds: string[] }) => void;
   onStatus?: (status: string) => void;
   /** Cmd/Ctrl+Enter: done editing — close the sheet. */
   onRequestClose?: () => void;
@@ -77,6 +81,7 @@ export function WorkspaceDocumentEditor({
     extensions,
     focusHeadline,
     onLiveContent,
+    onPeers,
     onStatus,
     path,
     workspacePath,

@@ -35,6 +35,10 @@ export function useCollabEditor(input: {
    * offset (post-rename remount while the user typed in the body). */
   focusHeadline?: "select" | "end" | { caret: number };
   onLiveContent?: (path: string, content: string) => void;
+  /** Everyone with a live caret on this document (self included), whenever
+   * the presence generation advances — host chrome renders it (an avatar
+   * strip); the in-editor cursor layer is separate and always on. */
+  onPeers?: (input: { self: string; clientIds: string[] }) => void;
   onStatus?: (status: string) => void;
   /** Filled with the live-doc API while the editor is mounted (see
    * CollabEditorApi — the board mutates open files through this). */
@@ -77,6 +81,13 @@ export function useCollabEditor(input: {
     setStatus("connecting…");
     const connection = new CollabConnection(transport, workspacePath, displayName);
     connection.onStatus = setStatus;
+    connection.onPeers = (clients) => {
+      // self at call time: the connection rotates its clientId on reseed.
+      input.onPeers?.({
+        self: connection.clientId,
+        clientIds: [...new Set(clients.map((client) => client.clientId))],
+      });
+    };
     const redlineLayer = new Compartment();
     let view: EditorView | null = null;
     let cancelled = false;

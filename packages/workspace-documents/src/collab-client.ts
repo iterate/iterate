@@ -53,6 +53,10 @@ export class CollabConnection {
   /** Set by the cursor layer: everyone's latest cursors (self included —
    * the layer filters). The pull loop keeps `presenceGeneration` current. */
   onPresence: ((clients: CollabPresence["clients"]) => void) | null = null;
+  /** Second observer, for HOST chrome (a presence avatar strip): the same
+   * payload the cursor layer gets, self included. Separate slot so the
+   * cursor plugin's set/clear lifecycle cannot orphan the page's strip. */
+  onPeers: ((clients: CollabPresence["clients"]) => void) | null = null;
   presenceGeneration = 0;
   /** The raw ops of the delivery currently being dispatched, in canonical
    * server order with true clientIds. receiveUpdates builds a finished
@@ -133,6 +137,7 @@ export class CollabConnection {
     if (result.status === "ops" && result.presence !== undefined) {
       this.presenceGeneration = result.presence.generation;
       this.onPresence?.(result.presence.clients);
+      this.onPeers?.(result.presence.clients);
     }
     return result;
   }
