@@ -203,6 +203,21 @@ Removal-round log:
 - [x] VIDEO_MODE re-record of approvals spec → activity-tabs.webm
       (32s: live card with Script|Approvals tabs + ◷, settled cards with
       ✓/✗, Approvals tab opened)
+- [x] Expired-undecided batches stop reading as awaiting (bugbot medium,
+      comment 3702066150)
+      _deriveBatchesForExecution takes `nowMs` (threaded, stays pure) and
+      flags `expired` = undecided AND past expiresAt — the same wall-clock
+      gate the decide actions and deriveOpenBatches use. GLYPH CHOICE:
+      expired-undecided joins the ✗/rejected bucket in
+      summarizeBatchOutcomes, because that is exactly where the door's
+      imminent expiry decision (all-reject, decidedBy "expiry") will land
+      it — the glyph never flips when the event arrives, and ◷ never
+      advertises a hold nobody can answer. COPY CHOICE: the Approvals tab
+      shows a plain muted "Expired" note in place of "Awaiting decision" —
+      NOT the resolved badge, which stays reserved for the real expiry
+      decision that upgrades it shortly after. Unit-tested (before/after
+      horizon, and count stability across the expiry event landing);
+      approvals spec re-run green_
 
 ## Spinner-waiter disables: measured, then removed
 

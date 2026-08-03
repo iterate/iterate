@@ -52,7 +52,7 @@ export function ActivityCard({
       .filter((step): step is AgentUiCodeStep => step.kind === "code")
       .map((step) => [
         step.executionId,
-        deriveBatchesForExecution(approvals.events, step.executionId),
+        deriveBatchesForExecution(approvals.events, step.executionId, Date.now()),
       ]),
   );
   const outcomes = summarizeBatchOutcomes([...batchesByExecution.values()].flat());
@@ -90,10 +90,11 @@ export function ActivityCard({
 }
 
 /**
- * The collapsed card's approval marks: ◷ while any batch awaits its human,
- * ✓ when a batch was fully approved, ✗ when one was rejected or mixed — so
- * "did that run get its approvals?" reads without expanding anything.
- * No batches, no glyphs.
+ * The collapsed card's approval marks: ◷ while any batch awaits its human
+ * (and is still decidable — an expired-undecided batch already counts as ✗,
+ * where the door's expiry decision will land it), ✓ when a batch was fully
+ * approved, ✗ when one was rejected or mixed — so "did that run get its
+ * approvals?" reads without expanding anything. No batches, no glyphs.
  */
 function ApprovalGlyphs({
   outcomes,
@@ -166,7 +167,12 @@ function CodeStepTabs({
   step,
 }: {
   approvals: ActivityApprovalContext;
-  batches: { offset: number; payload: RequestedPayload; resolved: ResolvedBatch | null }[];
+  batches: {
+    offset: number;
+    payload: RequestedPayload;
+    resolved: ResolvedBatch | null;
+    expired: boolean;
+  }[];
   step: AgentUiCodeStep;
 }) {
   const [selected, setSelected] = useState<"script" | "approvals" | "result" | null>(null);
@@ -230,6 +236,11 @@ function CodeStepTabs({
                     {batch.resolved.decisionSummary}
                   </Text>
                 </View>
+              ) : batch.expired ? (
+                // Past its horizon with no decision: nobody can answer this
+                // hold anymore. A plain note, not the resolved badge — the
+                // door's expiry decision lands shortly and upgrades it.
+                <Text style={styles.awaiting}>Expired</Text>
               ) : (
                 <Text style={styles.awaiting}>Awaiting decision</Text>
               )}

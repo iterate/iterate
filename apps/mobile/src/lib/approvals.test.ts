@@ -458,18 +458,59 @@ test("batches for an execution: provenance-matched, resolution attached, outcome
     requestedBurst(7, "gmail-sends", 2), // exec-a again (round 2)
     decided(8, 1, ["approve", "approve", "approve"]),
   ];
-  const batches = deriveBatchesForExecution(events, "exec-a");
+  const now = Date.parse("2026-01-02T00:00:00Z"); // well inside the 2099 expiry horizon
+  const batches = deriveBatchesForExecution(events, "exec-a", now);
   expect(batches).toMatchObject([
-    { offset: 1, resolved: { decisionSummary: "Approved" } },
-    { offset: 7, resolved: null },
+    { offset: 1, resolved: { decisionSummary: "Approved" }, expired: false },
+    { offset: 7, resolved: null, expired: false },
   ]);
-  expect(deriveBatchesForExecution(events, "exec-nope")).toEqual([]);
+  expect(deriveBatchesForExecution(events, "exec-nope", now)).toEqual([]);
 
   expect(summarizeBatchOutcomes(batches)).toEqual({ open: 1, approved: 1, rejected: 0, mixed: 0 });
   expect(
     summarizeBatchOutcomes([
-      ...deriveBatchesForExecution([...events, decided(9, 7, ["reject", "reject"])], "exec-a"),
-      { resolved: { verdicts: ["approve", "reject"] } as any },
+      ...deriveBatchesForExecution([...events, decided(9, 7, ["reject", "reject"])], "exec-a", now),
+      { expired: false, resolved: { verdicts: ["approve", "reject"] } as any },
     ]),
   ).toEqual({ open: 0, approved: 1, rejected: 1, mixed: 1 });
+});
+
+test("an expired-undecided batch reads expired, not awaiting — already in the bucket its expiry decision will land in", () => {
+  const events = [
+    requested(1, "post-echo", {
+      expiresAt: "2026-01-01T00:01:00Z",
+      streamContext: {
+        kind: "script-execution",
+        executionId: "exec-a",
+        scriptRunRequestedEventOffset: 1,
+        streamPath: "/agents/demo",
+      },
+    }),
+  ];
+  const beforeExpiry = Date.parse("2026-01-01T00:00:30Z");
+  const afterExpiry = Date.parse("2026-01-01T00:02:00Z");
+  expect(deriveBatchesForExecution(events, "exec-a", beforeExpiry)).toMatchObject([
+    { offset: 1, resolved: null, expired: false },
+  ]);
+  const expired = deriveBatchesForExecution(events, "exec-a", afterExpiry);
+  expect(expired).toMatchObject([{ offset: 1, resolved: null, expired: true }]);
+  // The glyphs treat it as closed already — ◷ must not advertise a hold
+  // nobody can answer.
+  expect(summarizeBatchOutcomes(expired)).toEqual({ open: 0, approved: 0, rejected: 1, mixed: 0 });
+  // When the door's expiry decision lands, the interim flag retires (the
+  // batch is resolved now) and the counts don't move — no glyph flip.
+  const settledByDoor = deriveBatchesForExecution(
+    [...events, expiryDecided(2, 1)],
+    "exec-a",
+    afterExpiry,
+  );
+  expect(settledByDoor).toMatchObject([
+    { offset: 1, expired: false, resolved: { decidedBy: "expiry", decisionSummary: "Expired" } },
+  ]);
+  expect(summarizeBatchOutcomes(settledByDoor)).toEqual({
+    open: 0,
+    approved: 0,
+    rejected: 1,
+    mixed: 0,
+  });
 });

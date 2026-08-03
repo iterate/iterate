@@ -311,11 +311,28 @@ export function deriveBatchDetail(
  * activity card's Approvals tab renders. Matching is by the batch's
  * script-execution provenance (streamContext.executionId), the same identity
  * the code step carries. Order follows the requested events' offsets.
+ *
+ * `nowMs` (the caller's Date.now(), threaded so the derivation stays pure)
+ * feeds the `expired` flag: an UNDECIDED batch past its `expiresAt` horizon
+ * can no longer be answered — the same wall-clock gate the decide actions
+ * and deriveOpenBatches use — even though the door's own expiry decision
+ * hasn't landed yet. That decision usually arrives shortly after and
+ * replaces the flag with a real resolution (all-reject, decidedBy "expiry");
+ * the flag covers the interim honestly so this surface doesn't claim
+ * "awaiting" for a hold every other surface already treats as closed. A
+ * resolved batch is never `expired` here — the flag names exactly the
+ * expired-but-undecided window.
  */
 export function deriveBatchesForExecution(
   events: readonly StreamEvent[],
   executionId: string,
-): { offset: number; payload: RequestedPayload; resolved: ResolvedBatch | null }[] {
+  nowMs: number,
+): {
+  offset: number;
+  payload: RequestedPayload;
+  resolved: ResolvedBatch | null;
+  expired: boolean;
+}[] {
   return [...events]
     .filter((event) => {
       if (event.type !== EVENT.requested) return false;
@@ -327,21 +344,26 @@ export function deriveBatchesForExecution(
     .sort((left, right) => left.offset - right.offset)
     .map((event) => {
       const detail = deriveBatchDetail(events, event.offset);
+      const payload = detail?.payload || requestedPayload(event);
+      const resolved = detail?.resolved || null;
       return {
         offset: event.offset,
-        payload: detail?.payload || requestedPayload(event),
-        resolved: detail?.resolved || null,
+        payload,
+        resolved,
+        expired: resolved === null && Date.parse(payload.expiresAt) <= nowMs,
       };
     });
 }
 
 /**
  * Collapse a run's batches into the counts behind the activity card's
- * status glyphs: open (undecided), approved (every verdict approve),
- * rejected (every verdict reject — the door's expiry decision included),
- * mixed (a decision with both).
+ * status glyphs: open (undecided and still decidable), approved (every
+ * verdict approve), rejected (every verdict reject — the door's expiry
+ * decision included), mixed (a decision with both).
  */
-export function summarizeBatchOutcomes(batches: readonly { resolved: ResolvedBatch | null }[]): {
+export function summarizeBatchOutcomes(
+  batches: readonly { expired: boolean; resolved: ResolvedBatch | null }[],
+): {
   open: number;
   approved: number;
   rejected: number;
@@ -349,8 +371,14 @@ export function summarizeBatchOutcomes(batches: readonly { resolved: ResolvedBat
 } {
   const counts = { open: 0, approved: 0, rejected: 0, mixed: 0 };
   for (const batch of batches) {
-    if (batch.resolved === null) counts.open += 1;
-    else if (batch.resolved.verdicts.every((verdict) => verdict === "approve")) {
+    if (batch.resolved === null) {
+      // An expired-undecided batch counts where the door's imminent expiry
+      // decision (all-reject, decidedBy "expiry") will land it, so the ✗
+      // glyph is already right and doesn't flip when that event arrives —
+      // and ◷ never advertises a hold nobody can answer.
+      if (batch.expired) counts.rejected += 1;
+      else counts.open += 1;
+    } else if (batch.resolved.verdicts.every((verdict) => verdict === "approve")) {
       counts.approved += 1;
     } else if (batch.resolved.verdicts.every((verdict) => verdict === "reject")) {
       counts.rejected += 1;
