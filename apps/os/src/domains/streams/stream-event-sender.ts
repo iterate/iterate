@@ -2055,12 +2055,18 @@ export class StreamConnections {
             if (stateMaxOffset <= deliveredThroughOffset && !initialBatchPending) return;
             deliveredThroughOffset = stateMaxOffset;
           }
-          if (kind === "session" && deliverEvents && events.length === 0 && !initialBatchPending) {
-            // Appends the filter rejected advance the cursor silently. A
-            // 0-event push per non-matching append is pure noise — and for a
-            // constrained consumer it is lethal: 50 mic appends/s cost 50
-            // inbound messages/s on its own speaker connection. Only the
-            // greeting batch (cursor seed) is worth an empty delivery.
+          if (
+            kind === "session" &&
+            args.includeState === false &&
+            deliverEvents &&
+            events.length === 0 &&
+            !initialBatchPending
+          ) {
+            // A state-free batch whose filter rejected every event has no
+            // payload. Advance the cursor without calling the consumer, but
+            // preserve the loop's cooperative yield while scanning a large
+            // non-matching backlog. The greeting batch still seeds its cursor.
+            await Promise.resolve();
             continue;
           }
           initialBatchPending = false;

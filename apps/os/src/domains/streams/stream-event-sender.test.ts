@@ -1998,7 +1998,58 @@ describe("StreamConnections hosted delivery watchdog", () => {
     });
   });
 
-  it("advances past filter-rejected appends without pushing empty live batches", async () => {
+  it("advances event-only sessions past filter-rejected appends without empty pushes", async () => {
+    const events = [streamEvent(1, "events.example.com/ignored")];
+    const calls: DeliveryCall[] = [];
+    let readCalls = 0;
+    const h = connectionsHarness({
+      events,
+      readBatch: (afterOffset, _beforeOffset, limit) => {
+        readCalls += 1;
+        return events
+          .filter((candidate) => candidate.offset > afterOffset)
+          .slice(0, limit)
+          .map((event) => ({ event, byteLength: JSON.stringify(event).length }));
+      },
+    });
+    const connection = h.connections.openSession({
+      connectionKey: "filtered-session",
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
+      includeState: false,
+    });
+    await flushMicrotasks();
+
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.batch.events).toEqual([]);
+    expect(calls[0]!.batch.scannedThroughOffset).toBe(1);
+    expect(calls[0]!.batch.state).toBeNull();
+
+    events.push(
+      ...Array.from({ length: 2_001 }, (_, index) =>
+        streamEvent(index + 2, "events.example.com/ignored"),
+      ),
+    );
+    h.state.maxOffset = 2_002;
+    const readsBeforeCatchUp = readCalls;
+    connection.sendQueued();
+
+    // One scan runs synchronously, then the skipped delivery yields. Without
+    // that yield this call drains every 1,000-event page before returning.
+    expect(readCalls).toBe(readsBeforeCatchUp + 1);
+    await flushMicrotasks();
+    await flushMicrotasks();
+
+    expect(calls).toHaveLength(1);
+    expect(h.connections.runtimeState()["filtered-session"]).toMatchObject({
+      deliveredThroughOffset: 2_002,
+      batchesSent: 1,
+      eventsSent: 0,
+    });
+  });
+
+  it("delivers filter-rejected state changes to stateful sessions", async () => {
     const events = [streamEvent(1, "events.example.com/ignored")];
     const calls: DeliveryCall[] = [];
     const h = connectionsHarness({
@@ -2010,27 +2061,25 @@ describe("StreamConnections hosted delivery watchdog", () => {
           .map((event) => ({ event, byteLength: JSON.stringify(event).length })),
     });
     const connection = h.connections.openSession({
-      connectionKey: "filtered-session",
+      connectionKey: "stateful-filtered-session",
       processEventBatch: recordingProcessEventBatch(calls, () => undefined),
       replayAfterOffset: 0,
       filter: compileEventFilter({ eventTypes: ["events.example.com/matching"] }),
     });
     await flushMicrotasks();
 
-    expect(calls).toHaveLength(1);
-    expect(calls[0]!.batch.events).toEqual([]);
-    expect(calls[0]!.batch.scannedThroughOffset).toBe(1);
-
     events.push(streamEvent(2, "events.example.com/ignored"));
     h.state.maxOffset = 2;
     connection.sendQueued();
     await flushMicrotasks();
 
-    expect(calls).toHaveLength(1);
-    expect(h.connections.runtimeState()["filtered-session"]).toMatchObject({
-      deliveredThroughOffset: 2,
-      batchesSent: 1,
-      eventsSent: 0,
+    expect(calls).toHaveLength(2);
+    expect(calls[1]!.batch).toMatchObject({
+      events: [],
+      scannedAfterOffset: 1,
+      scannedThroughOffset: 2,
+      streamMaxOffset: 2,
+      state: { maxOffset: 2 },
     });
   });
 
