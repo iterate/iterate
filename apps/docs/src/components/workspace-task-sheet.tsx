@@ -24,7 +24,7 @@ import {
 } from "@iterate-com/ui/components/alert-dialog";
 import { stateLabel, type BoardTask } from "../lib/board-model.ts";
 import type { TaskChangeStatus } from "../state.ts";
-import type { BoardAddress } from "../lib/checkout-shared.ts";
+import type { BoardAddress } from "../lib/board-shared.ts";
 import { projectSlug } from "../lib/project-label.ts";
 import { TaskStateIcon } from "./board.tsx";
 import { TagPicker } from "./tag-picker.tsx";

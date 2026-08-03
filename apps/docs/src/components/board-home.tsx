@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { ClockIcon, FolderGit2Icon, Loader2Icon, PlusIcon, TelescopeIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { SidebarTrigger } from "@iterate-com/ui/components/sidebar";
-import { newCheckoutId } from "../lib/checkout-shared.ts";
+import { newBoardId } from "../lib/board-shared.ts";
 import { listRepos, listWorkspaces } from "../lib/project-rpc.ts";
 import type { WorkspaceListEntry } from "../lib/tasks-api.ts";
 
@@ -35,8 +35,8 @@ export function BoardHome() {
 
   const openNewBoard = (repoPath: string) => {
     void navigate({
-      to: "/w/$checkoutId",
-      params: { checkoutId: newCheckoutId() },
+      to: "/w/$boardId",
+      params: { boardId: newBoardId() },
       search: { group: "folder", q: "", repo: repoPath, task: "" },
     });
   };
@@ -89,8 +89,8 @@ export function BoardHome() {
                       </Link>
                     ) : (
                       <Link
-                        to="/w/$checkoutId"
-                        params={{ checkoutId: entry.board.checkoutId }}
+                        to="/w/$boardId"
+                        params={{ boardId: entry.board.boardId }}
                         search={{
                           group: "folder",
                           q: "",
@@ -100,7 +100,7 @@ export function BoardHome() {
                         className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
                       >
                         <span className="truncate font-mono text-sm">
-                          /workspaces/tasks/{entry.board.checkoutId}
+                          /workspaces/tasks/{entry.board.boardId}
                         </span>
                         <span className="flex shrink-0 items-center gap-3 text-xs text-muted-foreground">
                           <span className="font-mono">{entry.board.repoPath}</span>
@@ -145,14 +145,12 @@ export function BoardHome() {
                     {entries.map((entry) => (
                       <li key={entry.path}>
                         <Link
-                          to="/w/$checkoutId"
-                          params={{ checkoutId: entry.board!.checkoutId }}
+                          to="/w/$boardId"
+                          params={{ boardId: entry.board!.boardId }}
                           search={{ group: "folder", q: "", repo: repoPath, task: "" }}
                           className="flex items-center justify-between gap-3 px-5 py-3 transition-colors hover:bg-muted/50"
                         >
-                          <span className="truncate font-mono text-sm">
-                            {entry.board!.checkoutId}
-                          </span>
+                          <span className="truncate font-mono text-sm">{entry.board!.boardId}</span>
                           <span className="flex shrink-0 items-center gap-1.5 text-xs text-muted-foreground">
                             <ClockIcon aria-hidden className="size-3.5" />
                             {relativeTimeLong(entry.createdAt)}

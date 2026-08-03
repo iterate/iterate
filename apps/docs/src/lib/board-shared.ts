@@ -1,6 +1,6 @@
 /**
  * Board workspace naming, shared by the vessel (rpc-api.ts) and the browser
- * (routes/use-workspace-board). A board id ("checkout id" historically) has
+ * (routes/use-workspace-board). A board id has
  * exactly one job left: minting a fresh board workspace path under the tasks
  * app's own /workspaces/tasks/ namespace — the workspace mechanism holds all
  * actual state.
@@ -34,9 +34,9 @@ export function normalizeRepoPath(value: string | null | undefined): string | nu
  * the route component builds this path during render, and WebCrypto digests
  * are async-only.
  */
-export function checkoutWorkspacePath(checkoutId: string, repoPath: string): string {
+export function boardWorkspacePath(boardId: string, repoPath: string): string {
   const slug = repoPath.replace(/^\/+/, "").replaceAll("/", "--");
-  return `/workspaces/tasks/${checkoutId}~${slug}-${fnv1a32Hex(repoPath)}`;
+  return `/workspaces/tasks/${boardId}~${slug}-${fnv1a32Hex(repoPath)}`;
 }
 
 /**
@@ -49,29 +49,27 @@ export function checkoutWorkspacePath(checkoutId: string, repoPath: string): str
 export function boardAddressFor(
   path: string,
   repoPaths: readonly string[],
-): { checkoutId: string; repoPath: string } | null {
-  const checkoutId = boardCheckoutId(path);
-  if (checkoutId === null) return null;
-  const repoPath = repoPaths.find(
-    (candidate) => checkoutWorkspacePath(checkoutId, candidate) === path,
-  );
-  return repoPath === undefined ? null : { checkoutId, repoPath };
+): { boardId: string; repoPath: string } | null {
+  const boardId = boardIdOf(path);
+  if (boardId === null) return null;
+  const repoPath = repoPaths.find((candidate) => boardWorkspacePath(boardId, candidate) === path);
+  return repoPath === undefined ? null : { boardId, repoPath };
 }
 
 /** The board id a /workspaces/tasks/ path carries, if it is shaped like one. */
-function boardCheckoutId(path: string): string | null {
+function boardIdOf(path: string): string | null {
   const match = /^\/workspaces\/tasks\/([A-Za-z0-9][A-Za-z0-9_-]{0,63})~/.exec(path);
   return match?.[1] ?? null;
 }
 
 /**
- * How a board addresses its workspace. `checkoutId` is set when the board
+ * How a board addresses its workspace. `boardId` is set when the board
  * uses the tasks app's own naming (the workspace is lazily created on first
  * use); null when the board is a lens on an existing workspace addressed
  * purely by path (plain get). `workspacePath` is always resolved.
  */
 export type BoardAddress = {
-  checkoutId: string | null;
+  boardId: string | null;
   workspacePath: string;
   /** The /repos/** mount whose task files this board shows. */
   repoPath: string;
@@ -87,8 +85,8 @@ export type BoardAddress = {
  * Commit or Discard-all.
  */
 export function isGuestWorkspacePath(workspacePath: string, repoPath: string): boolean {
-  const checkoutId = boardCheckoutId(workspacePath);
-  return checkoutId === null || checkoutWorkspacePath(checkoutId, repoPath) !== workspacePath;
+  const boardId = boardIdOf(workspacePath);
+  return boardId === null || boardWorkspacePath(boardId, repoPath) !== workspacePath;
 }
 
 /** 32-bit FNV-1a as 8 lowercase hex chars. */
@@ -101,13 +99,13 @@ function fnv1a32Hex(value: string): string {
 }
 
 /** Shareable board id: date-time prefix for humans, random tail for uniqueness. */
-export function newCheckoutId(now: Date = new Date()): string {
+export function newBoardId(now: Date = new Date()): string {
   const pad = (value: number) => String(value).padStart(2, "0");
   const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;
   const tail = Math.random().toString(36).slice(2, 6);
   return `${stamp}-${tail}`;
 }
 
-export function isCheckoutId(value: string): boolean {
+export function isBoardId(value: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/.test(value);
 }

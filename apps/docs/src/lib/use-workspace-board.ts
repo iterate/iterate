@@ -3,7 +3,7 @@ import type { TaskChangeStatus, TaskChangeSummary } from "../state.ts";
 import { isTaskFilePath, parseTaskCard } from "../tasks-model.ts";
 import { withProject, workspaceFor } from "./project-rpc.ts";
 import type { TasksWorkspace, WorkspaceStreamEvent } from "./tasks-api.ts";
-import type { BoardAddress } from "./checkout-shared.ts";
+import type { BoardAddress } from "./board-shared.ts";
 import { changeAfterDelete, changeAfterWrite, toBoardTask, type BoardTask } from "./board-model.ts";
 
 /**
@@ -48,7 +48,7 @@ export function changeMap(status: unknown, repoPath: string): Map<string, TaskCh
 }
 
 export function useWorkspaceBoard(address: BoardAddress) {
-  const { checkoutId, workspacePath, repoPath } = address;
+  const { boardId, workspacePath, repoPath } = address;
   const [files, setFiles] = useState<Record<string, string> | null>(null);
   const [changes, setChanges] = useState<Map<string, TaskChangeStatus>>(new Map());
   // Fresh caret presence per path — "who has this card open" (clientIds).
@@ -62,9 +62,9 @@ export function useWorkspaceBoard(address: BoardAddress) {
   const lane = useCallback(
     <T>(operation: (ws: TasksWorkspace) => Promise<T>) =>
       withProject((project) =>
-        operation(workspaceFor(project, { checkoutId, workspacePath, repoPath })),
+        operation(workspaceFor(project, { boardId, workspacePath, repoPath })),
       ),
-    [checkoutId, workspacePath, repoPath],
+    [boardId, workspacePath, repoPath],
   );
 
   // Initial seed: the whole task file set + dirty state, in parallel.

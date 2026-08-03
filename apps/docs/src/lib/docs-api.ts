@@ -34,10 +34,10 @@ export interface DocsProject {
   repos(): Promise<string[]>;
   /**
    * A board on the app's own workspace naming: the workspace path derives
-   * from (checkoutId, repoPath) and is lazily created on first use.
+   * from (boardId, repoPath) and is lazily created on first use.
    * Synchronous on purpose so calls pipeline through it.
    */
-  board(checkoutId: string, repoPath?: string): TasksWorkspace;
+  board(boardId: string, repoPath?: string): TasksWorkspace;
   /**
    * The BOARD lens on an existing workspace addressed by its platform path —
    * plain `get`, like workspace(). Outside /workspaces/tasks/ the lens is a

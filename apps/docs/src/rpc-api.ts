@@ -20,10 +20,10 @@ import { TasksWorkspaceApi } from "./tasks-rpc-api.ts";
 import {
   DEFAULT_REPO_PATH,
   boardAddressFor,
-  checkoutWorkspacePath,
-  isCheckoutId,
+  boardWorkspacePath,
+  isBoardId,
   normalizeRepoPath,
-} from "./lib/checkout-shared.ts";
+} from "./lib/board-shared.ts";
 import type { TasksWorkspace, WorkspaceListEntry } from "./lib/tasks-api.ts";
 import type {
   DocsApi,
@@ -115,20 +115,17 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
 
   /**
    * A board on the app's own workspace naming: the workspace path is derived
-   * from (checkoutId, repoPath) and lazily created on first use — opening a
+   * from (boardId, repoPath) and lazily created on first use — opening a
    * fresh board id IS how a new board workspace is born.
    */
-  board(checkoutId: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
+  board(boardId: string, repoPath: string = DEFAULT_REPO_PATH): TasksWorkspace {
     const normalized = normalizeRepoPath(repoPath);
-    if (!isCheckoutId(checkoutId) || normalized === null) {
-      throw new Error("bad checkout id or repo path");
+    if (!isBoardId(boardId) || normalized === null) {
+      throw new Error("bad board id or repo path");
     }
-    return new TasksWorkspaceApi(
-      this.#dial,
-      checkoutWorkspacePath(checkoutId, normalized),
-      normalized,
-      { lazyCreate: true },
-    );
+    return new TasksWorkspaceApi(this.#dial, boardWorkspacePath(boardId, normalized), normalized, {
+      lazyCreate: true,
+    });
   }
 
   /**
