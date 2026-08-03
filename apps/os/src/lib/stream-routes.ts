@@ -31,9 +31,12 @@ export function linkOptionsForStreamPath(projectSlug: string, path: string) {
   const params = { projectSlug };
   const parsed = StreamPath.safeParse(path);
   if (!parsed.success) {
+    // Keep malformed input in one wildcard segment. Otherwise the router
+    // normalizes path-shaped params (notably trailing slashes) before the
+    // route parser can reject them, silently opening a different valid stream.
     return linkOptions({
       to: "/projects/$projectSlug/streams/$",
-      params: { ...params, _splat: path },
+      params: { ...params, _splat: `/${encodeURIComponent(path)}` },
       search: {},
     });
   }
