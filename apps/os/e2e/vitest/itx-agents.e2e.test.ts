@@ -692,6 +692,25 @@ test("agents.get(path).create explicitly appends and processes the complete birt
     expression: ["agentComputer"],
   });
 
+  // The birth certificate records the mount, while the agent-scoped Project
+  // target exposes the same Computer as a native RPC child. The native child
+  // is essential for the complete upstream surface: dynamic itx-call relays
+  // can invoke functions but cannot preserve scalar properties like
+  // Workspace.useThink.
+  const computerProbe = await itxScript(project.capabilityHosts.get(agentPath)).execute(
+    async (itx) => {
+      if (itx.computer === undefined) throw new Error("agent scope has no Computer");
+      return {
+        useThink: await itx.computer.useThink,
+        whoami: await itx.computer.whoami(),
+      };
+    },
+  );
+  expect(computerProbe.success()).toEqual({
+    useThink: false,
+    whoami: expect.stringContaining(agentPath),
+  });
+
   // Birth mechanics: project-worker (every project stream) + agent processor +
   // capability-host. One agent processor owns history, scheduling, and the
   // Workers AI call — no separate LLM provider processors.

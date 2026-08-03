@@ -38,7 +38,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "Project",
     kind: "interface",
     sourceText:
-      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Register (for a prospective slug) and append the complete root creation\n   * request batch. By default this resolves once the bootstrap saga has\n   * committed terminal `project/created` — the right shape for scripts that\n   * use the project immediately. `waitUntilCreated: false` resolves as soon\n   * as the identity is registered, directory primed, and request events\n   * appended:\n   * the caller renders bootstrap progress itself, so nobody is left waiting.\n   * The durable-delivery subscriptions committed in the birth batch are what\n   * guarantee the saga runs; create also nudges both root processors AFTER\n   * this response, and a failed nudge is telemetry, not a create failure —\n   * the checklist's stall detector covers the rest. Either lane returns this\n   * same handle, and addressing an unknown slug is side-effect free.\n   */\n  create(\n    args: { organizationSlug?: string; projectId?: string },\n    options?: { waitUntilCreated?: boolean },\n  ): Promise<Project>;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.get(slug).create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Canonical URL for one named app on this project's platform hostname.\n   * The deployment config keeps links on the matching production, preview,\n   * or localhost environment.\n   */\n  appUrl(appSlug: string): Promise<string>;\n  /**\n   * Admin-only project-seed repair for a platform-owned apex that already\n   * reaches this worker through Worker routes. Primes the routing directory,\n   * records the hostname in the small project catalog, and waits for it.\n   */\n  restoreDirectHostname(input: { hostname: string }): Promise<{ hostname: string }>;\n  /**\n   * Admin-only project-seed command for a Cloudflare-managed custom hostname.\n   * This submits a fresh idempotent provision intent through the normal\n   * project processor. The hostname routing directory is the ownership and\n   * routing authority; project state only catalogs the hostname and kind.\n   */\n  restoreCloudflareHostname(input: { hostname: string }): Promise<{ hostname: string }>;\n  /**\n   * Resolve once the bootstrap saga has committed terminal `project/created`,\n   * or throw the durable `project/create-failed` explanation.\n   * Replays stream history first, so an already-created project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. `create()` waits here by default; this remains useful after a\n   * non-blocking create or when a caller receives an existing handle while a\n   * bootstrap is in flight.\n   */\n  waitUntilCreated(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `birthCertificate` records terminal creation). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Small durable project key-value store: get/set/delete/list. */\n  kv: Kv;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** Enrolled phone installations and their durable notification journals. */\n  devices: DeviceCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.get(path).create(input)` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /** Agent-owned Cloudflare Computers, born one-to-one with agents. */\n  computers: ComputerCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — open an event\n   * connection or configure a subscription instead.\n   */\n  processEventBatch(batch: StreamDeliveryBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
+      "/**\n * An itx: the project capability surface, scoped to one path (the project\n * root \"/\", an agent path, ...). Built-ins (streams, repo, agents, files,\n * integrations, sandboxes, scheduler, docs, ...) are project-global and\n * identical at every scope; what differs by scope is the capability host\n * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`,\n * `computer`).\n * Unknown dotted members dispatch dynamically against the scope's capability\n * host, chaining up to the project root.\n */\nexport interface Project {\n  /** The project this itx is scoped into. */\n  projectId: string;\n  /**\n   * Register (for a prospective slug) and append the complete root creation\n   * request batch. By default this resolves once the bootstrap saga has\n   * committed terminal `project/created` — the right shape for scripts that\n   * use the project immediately. `waitUntilCreated: false` resolves as soon\n   * as the identity is registered, directory primed, and request events\n   * appended:\n   * the caller renders bootstrap progress itself, so nobody is left waiting.\n   * The durable-delivery subscriptions committed in the birth batch are what\n   * guarantee the saga runs; create also nudges both root processors AFTER\n   * this response, and a failed nudge is telemetry, not a create failure —\n   * the checklist's stall detector covers the rest. Either lane returns this\n   * same handle, and addressing an unknown slug is side-effect free.\n   */\n  create(\n    args: { organizationSlug?: string; projectId?: string },\n    options?: { waitUntilCreated?: boolean },\n  ): Promise<Project>;\n  /**\n   * Canonical identity from the project directory: id, slug (the auth\n   * worker's normalized form — what URLs and ingress hostnames use),\n   * organization, and display name. A directory read only — no project DO\n   * dial — so it is safe pre-birth and cheap to pipeline through\n   * `projects.get(slug).create()`.\n   */\n  identity(): Promise<ProjectIdentity>;\n  /**\n   * Canonical URL for one named app on this project's platform hostname.\n   * The deployment config keeps links on the matching production, preview,\n   * or localhost environment.\n   */\n  appUrl(appSlug: string): Promise<string>;\n  /**\n   * Admin-only project-seed repair for a platform-owned apex that already\n   * reaches this worker through Worker routes. Primes the routing directory,\n   * records the hostname in the small project catalog, and waits for it.\n   */\n  restoreDirectHostname(input: { hostname: string }): Promise<{ hostname: string }>;\n  /**\n   * Admin-only project-seed command for a Cloudflare-managed custom hostname.\n   * This submits a fresh idempotent provision intent through the normal\n   * project processor. The hostname routing directory is the ownership and\n   * routing authority; project state only catalogs the hostname and kind.\n   */\n  restoreCloudflareHostname(input: { hostname: string }): Promise<{ hostname: string }>;\n  /**\n   * Resolve once the bootstrap saga has committed terminal `project/created`,\n   * or throw the durable `project/create-failed` explanation.\n   * Replays stream history first, so an already-created project resolves immediately,\n   * and dialing the processor here heals a lost birth wake rather than just\n   * observing. `create()` waits here by default; this remains useful after a\n   * non-blocking create or when a caller receives an existing handle while a\n   * bootstrap is in flight.\n   */\n  waitUntilCreated(args?: { timeoutMs?: number }): Promise<void>;\n  /**\n   * Identity + full capability inventory: `projectId`/`name`, every reachable\n   * capability (built-ins + dynamic mounts), the children map, and the\n   * `Project` declaration in `types` (the full surface is one\n   * `itx.docs.get({ name })` per declaration away).\n   */\n  __describe(): Promise<ProjectDescription>;\n  /** Formatted dashboard/debug info for this itx scope, suitable for Slack messages. */\n  debug(): Promise<string>;\n  /** Restart the project's server-side object; the next request boots it fresh. */\n  kill(): Promise<void>;\n  /** The project stream processor (snapshot/state; `birthCertificate` records terminal creation). */\n  processor: WakeableStreamProcessorRpc<ProjectProcessorState>;\n  /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */\n  liveState: LiveStateRpc<ProjectLiveState>;\n  /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */\n  liveDemo: LiveDemo;\n  /** Small durable project key-value store: get/set/delete/list. */\n  kv: Kv;\n  /** Workers AI: run(model, body), models(). */\n  ai: Ai;\n  /** Browser auth for project-host web apps. */\n  auth: ProjectAuth;\n  /** Cloudflare Browser Run: quickAction() and raw fetch(). */\n  browser: CfBrowserCapability;\n  /** This scope's agent control handle, when its address is under `/agents/`. */\n  agent?: Agent;\n  /** THIS agent's web-chat door — present only on an agent-scoped itx. */\n  chat?: AgentChat;\n  /**\n   * THIS agent's Cloudflare Computer — present only on an agent-scoped itx.\n   *\n   * This is a native RPC child, rather than only a dynamic capability relay,\n   * because the upstream Computer surface includes scalar properties such as\n   * `useThink` in addition to methods and nested RPC targets.\n   */\n  computer?: Computer;\n  /**\n   * This scope's own capability host: the durable capability table behind\n   * this itx (`provideCapability`, `revokeCapability`, `runScript`,\n   * `__describe`). Dynamic dotted calls (`itx.foo.bar(...)`) fall back to it.\n   */\n  capabilityHost: CapabilityHost;\n  /**\n   * Capability hosts of OTHER scopes, by path. `capabilityHosts.get(\"/\")` is\n   * the project root — providing there makes a capability visible to every\n   * scope in the project (child scopes inherit ancestors' mounts).\n   */\n  capabilityHosts: CapabilityHostCollection;\n  /** Shortcut for `capabilityHost.provideCapability` (mounts on THIS scope). */\n  provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;\n  /** Shortcut for `capabilityHost.revokeCapability`. */\n  revokeCapability(input: RevokeCapabilityInput): Promise<void>;\n  /** Project stream catalog: get(path), list(). */\n  streams: ProjectStreamCollection;\n  /** Agent catalog: get(path), list(). */\n  agents: AgentCollection;\n  /** Project-attributed outbound fetch (+ intercept). */\n  egress: ProjectEgress;\n  /** Project email: send(...) and the connection-scoped inbound address. */\n  email: EmailCapability;\n  /** The docs door: `search({ q })` finds e2e-tested example scripts, type\n   * declarations, and this scope's mounted capabilities; `get({ name })`\n   * fetches one. Pass search MANY related words — matching is dumb word\n   * overlap. */\n  docs: Docs;\n  /** Project file storage (R2-backed): `files.get(path)` → put/bytes/url/delete. */\n  files: Files;\n  /** The integrations collection: built-in connection families selected with\n   * `.get()` (first connected) or `.get(\"slug\")` (exact), provided\n   * integrations through the capability table, management verbs, `list()`. */\n  integrations: ProjectIntegrations;\n  /** Ad-hoc MCP clients: connect(url); `itx.mcp.exa` is the built-in Exa web search. */\n  mcp: McpClientCollection;\n  /** Ad-hoc OpenAPI clients: connect(spec). */\n  openapi: OpenApiCollection;\n  /** Parallel API, preconfigured with iterate's platform API key. */\n  parallel: OpenApiRpc;\n  /** Repo catalog by path. */\n  repos: ProjectRepoCollection;\n  /** Enrolled phone installations and their durable notification journals. */\n  devices: DeviceCollection;\n  /** The project's sandboxes — explicitly created, sized Linux containers\n   * (`itx.sandboxes.get(path).create(input)` / `list`) — see {@link SandboxCollection}. */\n  sandboxes: SandboxCollection;\n  /** The default project Scheduler — shorthand for `schedulers.get(\"/scheduler/primary\")`. */\n  scheduler: Scheduler;\n  /** Path-addressed Schedulers; the default at `/scheduler/primary` covers almost every use. */\n  schedulers: SchedulerCollection;\n  /** Secret catalog by path. */\n  secrets: SecretCollection;\n  /** The project's config repo at /repos/config — shorthand for `repos.get(\"/repos/config\")`. */\n  repo: Repo;\n  /** Dynamic worker refs: get(ref). */\n  workers: DynamicWorkerCollection;\n  /** Path-addressed, event-sourced, mount-routed workspaces (`itx.workspaces.get(path)`). */\n  workspaces: WorkspaceCollection;\n  /** Agent-owned Cloudflare Computers, born one-to-one with agents. */\n  computers: ComputerCollection;\n  /**\n   * Platform dispatch point: streams deliver committed event batches here\n   * for the project worker. Scripts should not call this — open an event\n   * connection or configure a subscription instead.\n   */\n  processEventBatch(batch: StreamDeliveryBatch): Promise<void>;\n  /**\n   * The default repo-backed project worker — a convenience alias; the general\n   * API is `workers.get(ref)`. Flattened: the seeded worker implements\n   * invokeCapability in userspace, so a dotted call onto any getter the\n   * worker adds (`itx.worker.<getter>.<method>(...)`) is one RPC end to end.\n   */\n  worker: DynamicWorkerCapability<ProjectWorker>;\n}",
     summary:
       'An itx: the project capability surface, scoped to one path (the project root "/", an agent path, ...).',
     memberSummaries: {
@@ -69,6 +69,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       browser: "Cloudflare Browser Run: quickAction() and raw fetch().",
       agent: "This scope's agent control handle, when its address is under `/agents/`.",
       chat: "THIS agent's web-chat door — present only on an agent-scoped itx.",
+      computer: "THIS agent's Cloudflare Computer — present only on an agent-scoped itx.",
       capabilityHost:
         "This scope's own capability host: the durable capability table behind this itx (`provideCapability`, `revokeCapability`, `runScript`, `__describe`).",
       capabilityHosts: "Capability hosts of OTHER scopes, by path.",
@@ -118,6 +119,7 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "CfBrowserCapability",
       "Agent",
       "AgentChat",
+      "Computer",
       "CapabilityHost",
       "CapabilityHostCollection",
       "ProvideCapabilityInput",
@@ -322,6 +324,34 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
         'Say something to the user — pass the message as a plain string: `await itx.chat.sendMessage("Here you go!")`.',
     },
     referencedTypeNames: ["Description", "Stream", "FileData", "StreamEvent"],
+  },
+  {
+    name: "Computer",
+    kind: "interface",
+    sourceText:
+      "/** One agent-owned Cloudflare Computer: durable disk, execution, and event-sourced lifecycle. */\nexport interface Computer {\n  __describe(): Promise<Description>;\n  fs: ComputerFilesystem;\n  runtime: ComputerRuntime;\n  git: ComputerGit;\n  assets: ComputerAssets;\n  artifacts: ComputerArtifacts;\n  /**\n   * Whether the upstream Workspace carries Think's legacy string-oriented\n   * filesystem adapter. OS leaves this false; callers should use `fs`.\n   */\n  useThink: Promise<boolean>;\n  /** Repair/idempotency door used by agent.create; callers normally never invoke it directly. */\n  create(input: { agentPath: string }): Promise<Computer>;\n  whoami(): Promise<string>;\n  kill(): Promise<void>;\n  processor: StreamProcessorRpc<ComputerProcessorState>;\n  /** Additive OS lifecycle state; Cloudflare's Workspace API remains otherwise unchanged. */\n  state: StreamProcessorRpc<ComputerProcessorState>;\n  getConfig(): Promise<ComputerConfig>;\n  configure(input: { config: ComputerConfig }): Promise<ComputerConfig>;\n  exec(input: ComputerExecInput): Promise<ComputerExecResult>;\n  readFile(path: string): Promise<string | null>;\n  readFileBytes(path: string): Promise<Uint8Array | null>;\n  writeFile(path: string, content: string): Promise<void>;\n  writeFileBytes(path: string, content: Uint8Array): Promise<void>;\n  deleteFile(path: string): Promise<void>;\n  listAllFiles(): Promise<string[]>;\n}",
+    summary:
+      "One agent-owned Cloudflare Computer: durable disk, execution, and event-sourced lifecycle.",
+    memberSummaries: {
+      useThink:
+        "Whether the upstream Workspace carries Think's legacy string-oriented filesystem adapter.",
+      create:
+        "Repair/idempotency door used by agent.create; callers normally never invoke it directly.",
+      state: "Additive OS lifecycle state; Cloudflare's Workspace API remains otherwise unchanged.",
+    },
+    referencedTypeNames: [
+      "Description",
+      "ComputerFilesystem",
+      "ComputerRuntime",
+      "ComputerGit",
+      "ComputerAssets",
+      "ComputerArtifacts",
+      "StreamProcessorRpc",
+      "ComputerProcessorState",
+      "ComputerConfig",
+      "ComputerExecInput",
+      "ComputerExecResult",
+    ],
   },
   {
     name: "CapabilityHost",
@@ -799,6 +829,79 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["ProcessorRuntimeState", "ProcessorSnapshot"],
   },
   {
+    name: "ComputerFilesystem",
+    kind: "interface",
+    sourceText:
+      '/** Cloudflare Computer\'s complete RPC-safe filesystem facade. */\nexport interface ComputerFilesystem {\n  __describe(): Promise<Description>;\n  readFile(\n    path: string,\n    options?: "utf8" | ComputerReadFileOptions,\n  ): Promise<string | ReadableStream<Uint8Array>>;\n  exists(path: string): Promise<boolean>;\n  stat(path: string): Promise<ComputerStatResult>;\n  statOrNull(path: string): Promise<ComputerStatResult | null>;\n  lstat(path: string): Promise<ComputerStatResult>;\n  lstatOrNull(path: string): Promise<ComputerStatResult | null>;\n  readlink(path: string): Promise<string>;\n  readdir(path: string, options?: ComputerReaddirOptions): Promise<ComputerDirentResult[]>;\n  find(directory: string, pattern?: string): Promise<ComputerFoundEntry[]>;\n  ls(prefix: string): Promise<string[]>;\n  grep(pattern: string, path: string, options?: ComputerGrepOptions): Promise<ComputerGrepMatch[]>;\n  writeFile(\n    path: string,\n    content: string | Uint8Array | ReadableStream<Uint8Array>,\n    options?: ComputerWriteFileOptions,\n  ): Promise<void>;\n  mkdir(path: string, options?: ComputerMkdirOptions): Promise<void>;\n  rm(path: string, options?: ComputerRmOptions): Promise<void>;\n  chmod(path: string, mode: number): Promise<void>;\n  symlink(target: string, path: string): Promise<void>;\n  [Symbol.dispose](): void;\n}',
+    summary: "Cloudflare Computer's complete RPC-safe filesystem facade.",
+    memberSummaries: {},
+    referencedTypeNames: [
+      "Description",
+      "ComputerReadFileOptions",
+      "ComputerStatResult",
+      "ComputerReaddirOptions",
+      "ComputerDirentResult",
+      "ComputerFoundEntry",
+      "ComputerGrepOptions",
+      "ComputerGrepMatch",
+      "ComputerWriteFileOptions",
+      "ComputerMkdirOptions",
+      "ComputerRmOptions",
+    ],
+  },
+  {
+    name: "ComputerRuntime",
+    kind: "interface",
+    sourceText:
+      "/** Cloudflare Computer's complete detached runtime facade. */\nexport interface ComputerRuntime {\n  __describe(): Promise<Description>;\n  exec(source: string, options?: ComputerRuntimeExecOptions): Promise<ComputerRuntimeExecHandle>;\n  getExec(id: string, options?: ComputerRuntimeGetOptions): Promise<ComputerRuntimeExecHandle>;\n  killExec(id: string, options?: ComputerRuntimeKillOptions): Promise<void>;\n  disposeExec(id: string, options?: { backend?: string }): Promise<void>;\n}",
+    summary: "Cloudflare Computer's complete detached runtime facade.",
+    memberSummaries: {},
+    referencedTypeNames: [
+      "Description",
+      "ComputerRuntimeExecOptions",
+      "ComputerRuntimeExecHandle",
+      "ComputerRuntimeGetOptions",
+      "ComputerRuntimeKillOptions",
+    ],
+  },
+  {
+    name: "ComputerGit",
+    kind: "interface",
+    sourceText:
+      "/** Cloudflare Computer's RPC-safe git CLI facade. */\nexport interface ComputerGit {\n  __describe(): Promise<Description>;\n  cli(input: ComputerGitCliInput): Promise<ComputerCliResult>;\n  [Symbol.dispose](): void;\n}",
+    summary: "Cloudflare Computer's RPC-safe git CLI facade.",
+    memberSummaries: {},
+    referencedTypeNames: ["Description", "ComputerGitCliInput", "ComputerCliResult"],
+  },
+  {
+    name: "ComputerAssets",
+    kind: "interface",
+    sourceText:
+      "/** Cloudflare Computer's asset publishing facade. */\nexport interface ComputerAssets {\n  __describe(): Promise<Description>;\n  publish(path: string, options: { expiresAfter: number }): Promise<string>;\n  [Symbol.dispose](): void;\n}",
+    summary: "Cloudflare Computer's asset publishing facade.",
+    memberSummaries: {},
+    referencedTypeNames: ["Description"],
+  },
+  {
+    name: "ComputerArtifacts",
+    kind: "interface",
+    sourceText:
+      '/** Cloudflare Computer\'s complete session-scoped Artifacts facade. */\nexport interface ComputerArtifacts {\n  __describe(): Promise<Description>;\n  create(\n    name: string,\n    options?: { readOnly?: boolean; description?: string; setDefaultBranch?: string },\n  ): Promise<ComputerArtifactCreateResult>;\n  get(name: string): Promise<ComputerArtifactRepoInfo>;\n  list(): Promise<ComputerArtifactRepoSummary[]>;\n  import(\n    name: string,\n    source: { url: string; branch?: string; depth?: number },\n    options?: { description?: string; readOnly?: boolean },\n  ): Promise<ComputerArtifactCreateResult>;\n  delete(name: string): Promise<boolean>;\n  createToken(\n    name: string,\n    scope?: "read" | "write",\n    ttl?: number,\n  ): Promise<ComputerArtifactCreatedToken>;\n  listTokens(name: string): Promise<ComputerArtifactTokenList>;\n  getToken(name: string, id: string): Promise<ComputerArtifactToken>;\n  revokeToken(name: string, tokenOrId: string): Promise<boolean>;\n  cli(input: ComputerArtifactsCliInput): Promise<ComputerCliResult>;\n  [Symbol.dispose](): void;\n}',
+    summary: "Cloudflare Computer's complete session-scoped Artifacts facade.",
+    memberSummaries: {},
+    referencedTypeNames: [
+      "Description",
+      "ComputerArtifactCreateResult",
+      "ComputerArtifactRepoInfo",
+      "ComputerArtifactRepoSummary",
+      "ComputerArtifactCreatedToken",
+      "ComputerArtifactTokenList",
+      "ComputerArtifactToken",
+      "ComputerArtifactsCliInput",
+      "ComputerCliResult",
+    ],
+  },
+  {
     name: "ProjectEgressIntercept",
     kind: "interface",
     sourceText:
@@ -973,34 +1076,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     ],
   },
   {
-    name: "Computer",
-    kind: "interface",
-    sourceText:
-      "/** One agent-owned Cloudflare Computer: durable disk, execution, and event-sourced lifecycle. */\nexport interface Computer {\n  __describe(): Promise<Description>;\n  fs: ComputerFilesystem;\n  runtime: ComputerRuntime;\n  git: ComputerGit;\n  assets: ComputerAssets;\n  artifacts: ComputerArtifacts;\n  /**\n   * Whether the upstream Workspace carries Think's legacy string-oriented\n   * filesystem adapter. OS leaves this false; callers should use `fs`.\n   */\n  useThink: Promise<boolean>;\n  /** Repair/idempotency door used by agent.create; callers normally never invoke it directly. */\n  create(input: { agentPath: string }): Promise<Computer>;\n  whoami(): Promise<string>;\n  kill(): Promise<void>;\n  processor: StreamProcessorRpc<ComputerProcessorState>;\n  /** Additive OS lifecycle state; Cloudflare's Workspace API remains otherwise unchanged. */\n  state: StreamProcessorRpc<ComputerProcessorState>;\n  getConfig(): Promise<ComputerConfig>;\n  configure(input: { config: ComputerConfig }): Promise<ComputerConfig>;\n  exec(input: ComputerExecInput): Promise<ComputerExecResult>;\n  readFile(path: string): Promise<string | null>;\n  readFileBytes(path: string): Promise<Uint8Array | null>;\n  writeFile(path: string, content: string): Promise<void>;\n  writeFileBytes(path: string, content: Uint8Array): Promise<void>;\n  deleteFile(path: string): Promise<void>;\n  listAllFiles(): Promise<string[]>;\n}",
-    summary:
-      "One agent-owned Cloudflare Computer: durable disk, execution, and event-sourced lifecycle.",
-    memberSummaries: {
-      useThink:
-        "Whether the upstream Workspace carries Think's legacy string-oriented filesystem adapter.",
-      create:
-        "Repair/idempotency door used by agent.create; callers normally never invoke it directly.",
-      state: "Additive OS lifecycle state; Cloudflare's Workspace API remains otherwise unchanged.",
-    },
-    referencedTypeNames: [
-      "Description",
-      "ComputerFilesystem",
-      "ComputerRuntime",
-      "ComputerGit",
-      "ComputerAssets",
-      "ComputerArtifacts",
-      "StreamProcessorRpc",
-      "ComputerProcessorState",
-      "ComputerConfig",
-      "ComputerExecInput",
-      "ComputerExecResult",
-    ],
-  },
-  {
     name: "StreamEventPager",
     kind: "interface",
     sourceText:
@@ -1010,6 +1085,15 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       next: "Returns [] when no newer matching page is currently available.",
     },
     referencedTypeNames: ["StreamEvent"],
+  },
+  {
+    name: "ComputerRuntimeExecHandle",
+    kind: "interface",
+    sourceText:
+      "/** A single-consumer Cloudflare Computer runtime execution handle. */\nexport interface ComputerRuntimeExecHandle {\n  __describe(): Promise<Description>;\n  id: Promise<string>;\n  backend: Promise<string>;\n  result(): Promise<ComputerRuntimeResult>;\n  stream(): Promise<ReadableStream<Uint8Array>>;\n  kill(signal?: string): Promise<void>;\n  [Symbol.dispose](): void;\n}",
+    summary: "A single-consumer Cloudflare Computer runtime execution handle.",
+    memberSummaries: {},
+    referencedTypeNames: ["Description", "ComputerRuntimeResult"],
   },
   {
     name: "CfImagesCapability",
@@ -1081,79 +1165,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     ],
   },
   {
-    name: "ComputerFilesystem",
-    kind: "interface",
-    sourceText:
-      '/** Cloudflare Computer\'s complete RPC-safe filesystem facade. */\nexport interface ComputerFilesystem {\n  __describe(): Promise<Description>;\n  readFile(\n    path: string,\n    options?: "utf8" | ComputerReadFileOptions,\n  ): Promise<string | ReadableStream<Uint8Array>>;\n  exists(path: string): Promise<boolean>;\n  stat(path: string): Promise<ComputerStatResult>;\n  statOrNull(path: string): Promise<ComputerStatResult | null>;\n  lstat(path: string): Promise<ComputerStatResult>;\n  lstatOrNull(path: string): Promise<ComputerStatResult | null>;\n  readlink(path: string): Promise<string>;\n  readdir(path: string, options?: ComputerReaddirOptions): Promise<ComputerDirentResult[]>;\n  find(directory: string, pattern?: string): Promise<ComputerFoundEntry[]>;\n  ls(prefix: string): Promise<string[]>;\n  grep(pattern: string, path: string, options?: ComputerGrepOptions): Promise<ComputerGrepMatch[]>;\n  writeFile(\n    path: string,\n    content: string | Uint8Array | ReadableStream<Uint8Array>,\n    options?: ComputerWriteFileOptions,\n  ): Promise<void>;\n  mkdir(path: string, options?: ComputerMkdirOptions): Promise<void>;\n  rm(path: string, options?: ComputerRmOptions): Promise<void>;\n  chmod(path: string, mode: number): Promise<void>;\n  symlink(target: string, path: string): Promise<void>;\n  [Symbol.dispose](): void;\n}',
-    summary: "Cloudflare Computer's complete RPC-safe filesystem facade.",
-    memberSummaries: {},
-    referencedTypeNames: [
-      "Description",
-      "ComputerReadFileOptions",
-      "ComputerStatResult",
-      "ComputerReaddirOptions",
-      "ComputerDirentResult",
-      "ComputerFoundEntry",
-      "ComputerGrepOptions",
-      "ComputerGrepMatch",
-      "ComputerWriteFileOptions",
-      "ComputerMkdirOptions",
-      "ComputerRmOptions",
-    ],
-  },
-  {
-    name: "ComputerRuntime",
-    kind: "interface",
-    sourceText:
-      "/** Cloudflare Computer's complete detached runtime facade. */\nexport interface ComputerRuntime {\n  __describe(): Promise<Description>;\n  exec(source: string, options?: ComputerRuntimeExecOptions): Promise<ComputerRuntimeExecHandle>;\n  getExec(id: string, options?: ComputerRuntimeGetOptions): Promise<ComputerRuntimeExecHandle>;\n  killExec(id: string, options?: ComputerRuntimeKillOptions): Promise<void>;\n  disposeExec(id: string, options?: { backend?: string }): Promise<void>;\n}",
-    summary: "Cloudflare Computer's complete detached runtime facade.",
-    memberSummaries: {},
-    referencedTypeNames: [
-      "Description",
-      "ComputerRuntimeExecOptions",
-      "ComputerRuntimeExecHandle",
-      "ComputerRuntimeGetOptions",
-      "ComputerRuntimeKillOptions",
-    ],
-  },
-  {
-    name: "ComputerGit",
-    kind: "interface",
-    sourceText:
-      "/** Cloudflare Computer's RPC-safe git CLI facade. */\nexport interface ComputerGit {\n  __describe(): Promise<Description>;\n  cli(input: ComputerGitCliInput): Promise<ComputerCliResult>;\n  [Symbol.dispose](): void;\n}",
-    summary: "Cloudflare Computer's RPC-safe git CLI facade.",
-    memberSummaries: {},
-    referencedTypeNames: ["Description", "ComputerGitCliInput", "ComputerCliResult"],
-  },
-  {
-    name: "ComputerAssets",
-    kind: "interface",
-    sourceText:
-      "/** Cloudflare Computer's asset publishing facade. */\nexport interface ComputerAssets {\n  __describe(): Promise<Description>;\n  publish(path: string, options: { expiresAfter: number }): Promise<string>;\n  [Symbol.dispose](): void;\n}",
-    summary: "Cloudflare Computer's asset publishing facade.",
-    memberSummaries: {},
-    referencedTypeNames: ["Description"],
-  },
-  {
-    name: "ComputerArtifacts",
-    kind: "interface",
-    sourceText:
-      '/** Cloudflare Computer\'s complete session-scoped Artifacts facade. */\nexport interface ComputerArtifacts {\n  __describe(): Promise<Description>;\n  create(\n    name: string,\n    options?: { readOnly?: boolean; description?: string; setDefaultBranch?: string },\n  ): Promise<ComputerArtifactCreateResult>;\n  get(name: string): Promise<ComputerArtifactRepoInfo>;\n  list(): Promise<ComputerArtifactRepoSummary[]>;\n  import(\n    name: string,\n    source: { url: string; branch?: string; depth?: number },\n    options?: { description?: string; readOnly?: boolean },\n  ): Promise<ComputerArtifactCreateResult>;\n  delete(name: string): Promise<boolean>;\n  createToken(\n    name: string,\n    scope?: "read" | "write",\n    ttl?: number,\n  ): Promise<ComputerArtifactCreatedToken>;\n  listTokens(name: string): Promise<ComputerArtifactTokenList>;\n  getToken(name: string, id: string): Promise<ComputerArtifactToken>;\n  revokeToken(name: string, tokenOrId: string): Promise<boolean>;\n  cli(input: ComputerArtifactsCliInput): Promise<ComputerCliResult>;\n  [Symbol.dispose](): void;\n}',
-    summary: "Cloudflare Computer's complete session-scoped Artifacts facade.",
-    memberSummaries: {},
-    referencedTypeNames: [
-      "Description",
-      "ComputerArtifactCreateResult",
-      "ComputerArtifactRepoInfo",
-      "ComputerArtifactRepoSummary",
-      "ComputerArtifactCreatedToken",
-      "ComputerArtifactTokenList",
-      "ComputerArtifactToken",
-      "ComputerArtifactsCliInput",
-      "ComputerCliResult",
-    ],
-  },
-  {
     name: "CollabChangesResult",
     kind: "interface",
     sourceText:
@@ -1172,15 +1183,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "Fresh caret presence as index-matched flat arrays (one entry per path+client pair) — named so the generated capnweb surface references it instead of structurally promise-mapping raw string arrays (illegal).",
     memberSummaries: {},
     referencedTypeNames: [],
-  },
-  {
-    name: "ComputerRuntimeExecHandle",
-    kind: "interface",
-    sourceText:
-      "/** A single-consumer Cloudflare Computer runtime execution handle. */\nexport interface ComputerRuntimeExecHandle {\n  __describe(): Promise<Description>;\n  id: Promise<string>;\n  backend: Promise<string>;\n  result(): Promise<ComputerRuntimeResult>;\n  stream(): Promise<ReadableStream<Uint8Array>>;\n  kill(signal?: string): Promise<void>;\n  [Symbol.dispose](): void;\n}",
-    summary: "A single-consumer Cloudflare Computer runtime execution handle.",
-    memberSummaries: {},
-    referencedTypeNames: ["Description", "ComputerRuntimeResult"],
   },
   {
     name: "ItxBinding",
@@ -1550,6 +1552,42 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       "A file attached to an agent context item: content type, filename, project file-storage path, size, and the signed public URL minted at attach time (stored, not re-minted — it expires with its signature).",
     memberSummaries: {},
     referencedTypeNames: ["AgentContextAddedPayload"],
+  },
+  {
+    name: "ComputerProcessorState",
+    kind: "typeAlias",
+    sourceText:
+      '/** Replayable lifecycle and latest execution state for one agent-owned Computer. */\nexport type ComputerProcessorState = {\n  birthCertificate: {\n    agentPath: string;\n    config: { defaultBackend: "worker-shell"; defaultTimeoutMs: number; workingDirectory: string };\n  } | null;\n  config: { defaultBackend: "worker-shell"; defaultTimeoutMs: number; workingDirectory: string };\n  activeExecution: {\n    backend: "worker-shell";\n    command: string;\n    executionId: string;\n    incarnationId: string;\n    timeoutMs: number;\n  } | null;\n  lastExecution:\n    | {\n        executionId: string;\n        exitCode: number;\n        status: "completed";\n        syncStatus: "complete" | "pending";\n      }\n    | { error: string; executionId: string; status: "failed" }\n    | { executionId: string; reason: string; status: "abandoned" }\n    | null;\n};',
+    summary: "Replayable lifecycle and latest execution state for one agent-owned Computer.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerConfig",
+    kind: "typeAlias",
+    sourceText:
+      '/** Runtime policy controlling an agent-owned Computer\'s backend, timeout, and cwd. */\nexport type ComputerConfig = ComputerProcessorState["config"];',
+    summary: "Runtime policy controlling an agent-owned Computer's backend, timeout, and cwd.",
+    memberSummaries: {},
+    referencedTypeNames: ["ComputerProcessorState"],
+  },
+  {
+    name: "ComputerExecInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** A bounded shell command submitted to an agent-owned Cloudflare Computer. */\nexport type ComputerExecInput = {\n  /** Shell command interpreted by the selected Cloudflare Computer backend. */\n  command: string;\n  /** Absolute cwd; defaults to the birth certificate's workingDirectory. */\n  cwd?: string;\n  /** Bounded execution timeout; defaults to the Computer configuration. */\n  timeoutMs?: number;\n};",
+    summary: "A bounded shell command submitted to an agent-owned Cloudflare Computer.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerExecResult",
+    kind: "typeAlias",
+    sourceText:
+      '/** The terminal shell and filesystem-sync result of a Computer execution. */\nexport type ComputerExecResult = {\n  executionId: string;\n  exitCode: number;\n  stderr: string;\n  stdout: string;\n  syncStatus: "complete" | "pending";\n};',
+    summary: "The terminal shell and filesystem-sync result of a Computer execution.",
+    memberSummaries: {},
+    referencedTypeNames: [],
   },
   {
     name: "CapabilityHostCreateInput",
@@ -2198,6 +2236,204 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: ["AgentProcessorState"],
   },
   {
+    name: "ComputerReadFileOptions",
+    kind: "typeAlias",
+    sourceText:
+      '/** Options for reading a UTF-8 file through Cloudflare Computer. */\nexport type ComputerReadFileOptions = { encoding?: "utf8" };',
+    summary: "Options for reading a UTF-8 file through Cloudflare Computer.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerStatResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** RPC-safe metadata returned for a Cloudflare Computer filesystem entry. */\nexport type ComputerStatResult = {\n  name: string;\n  inode: number;\n  mode: number;\n  mtime: number;\n  size: number;\n  isFile: boolean;\n  isDirectory: boolean;\n  isSymbolicLink: boolean;\n};",
+    summary: "RPC-safe metadata returned for a Cloudflare Computer filesystem entry.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerReaddirOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Options that bound a Cloudflare Computer directory listing. */\nexport type ComputerReaddirOptions = { limit?: number };",
+    summary: "Options that bound a Cloudflare Computer directory listing.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerDirentResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** RPC-safe directory-entry metadata returned by Cloudflare Computer. */\nexport type ComputerDirentResult = {\n  name: string;\n  parentPath: string;\n  isFile: boolean;\n  isDirectory: boolean;\n  isSymbolicLink: boolean;\n};",
+    summary: "RPC-safe directory-entry metadata returned by Cloudflare Computer.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerFoundEntry",
+    kind: "typeAlias",
+    sourceText:
+      '/** A filesystem entry found by Cloudflare Computer\'s recursive search. */\nexport type ComputerFoundEntry = { path: string; type: "file" | "dir" };',
+    summary: "A filesystem entry found by Cloudflare Computer's recursive search.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerGrepOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Options controlling Cloudflare Computer filesystem text search. */\nexport type ComputerGrepOptions = { ignoreCase?: boolean };",
+    summary: "Options controlling Cloudflare Computer filesystem text search.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerGrepMatch",
+    kind: "typeAlias",
+    sourceText:
+      "/** A matching line returned by Cloudflare Computer's text search. */\nexport type ComputerGrepMatch = { path: string; line: number; text: string };",
+    summary: "A matching line returned by Cloudflare Computer's text search.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerWriteFileOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Options controlling Cloudflare Computer file creation and permissions. */\nexport type ComputerWriteFileOptions = { mode?: number; exclusive?: boolean };",
+    summary: "Options controlling Cloudflare Computer file creation and permissions.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerMkdirOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Options controlling Cloudflare Computer directory creation. */\nexport type ComputerMkdirOptions = { recursive?: boolean; mode?: number };",
+    summary: "Options controlling Cloudflare Computer directory creation.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerRmOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Options controlling Cloudflare Computer filesystem removal. */\nexport type ComputerRmOptions = { recursive?: boolean; force?: boolean };",
+    summary: "Options controlling Cloudflare Computer filesystem removal.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerRuntimeExecOptions",
+    kind: "typeAlias",
+    sourceText:
+      '/** Options for starting a detached Cloudflare Computer runtime execution. */\nexport type ComputerRuntimeExecOptions = {\n  id?: string;\n  backend?: string;\n  cwd?: string;\n  encoding?: "utf8";\n  input?: ComputerRuntimeValue;\n  env?: Record<string, string>;\n  stdin?: Uint8Array | string;\n  timeoutMs?: number;\n};',
+    summary: "Options for starting a detached Cloudflare Computer runtime execution.",
+    memberSummaries: {},
+    referencedTypeNames: ["ComputerRuntimeValue"],
+  },
+  {
+    name: "ComputerRuntimeGetOptions",
+    kind: "typeAlias",
+    sourceText:
+      '/** Options for reconnecting to a detached Cloudflare Computer execution. */\nexport type ComputerRuntimeGetOptions = {\n  backend?: string;\n  encoding?: "utf8";\n  resume?: "tail" | "full" | number;\n};',
+    summary: "Options for reconnecting to a detached Cloudflare Computer execution.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerRuntimeKillOptions",
+    kind: "typeAlias",
+    sourceText:
+      "/** Options for signalling a detached Cloudflare Computer execution. */\nexport type ComputerRuntimeKillOptions = {\n  backend?: string;\n  /** One of SIGTERM, SIGKILL, SIGINT, or SIGHUP. */\n  signal?: string;\n};",
+    summary: "Options for signalling a detached Cloudflare Computer execution.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerGitCliInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input for invoking Git's command-line interface inside a Computer. */\nexport type ComputerGitCliInput = {\n  argv: string[];\n  cwd?: string;\n  env?: Record<string, string>;\n  stdin?: string;\n};",
+    summary: "Input for invoking Git's command-line interface inside a Computer.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerCliResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** Standard streams and exit status returned by a Computer CLI operation. */\nexport type ComputerCliResult = { stdout: string; stderr: string; exitCode: number };",
+    summary: "Standard streams and exit status returned by a Computer CLI operation.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerArtifactCreateResult",
+    kind: "typeAlias",
+    sourceText:
+      "/** Repository details and initial credentials returned when creating an artifact. */\nexport type ComputerArtifactCreateResult = {\n  id: string;\n  name: string;\n  description: string | null;\n  defaultBranch: string;\n  remote: string;\n  token: string;\n  tokenExpiresAt: string;\n};",
+    summary: "Repository details and initial credentials returned when creating an artifact.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerArtifactRepoInfo",
+    kind: "typeAlias",
+    sourceText:
+      "/** Complete metadata for an artifact repository, including its Git remote. */\nexport type ComputerArtifactRepoInfo = {\n  id: string;\n  name: string;\n  description: string | null;\n  defaultBranch: string;\n  createdAt: string;\n  updatedAt: string;\n  lastPushAt: string | null;\n  source: string | null;\n  readOnly: boolean;\n  remote: string;\n};",
+    summary: "Complete metadata for an artifact repository, including its Git remote.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerArtifactRepoSummary",
+    kind: "typeAlias",
+    sourceText:
+      "/** Summary metadata for an artifact repository. */\nexport type ComputerArtifactRepoSummary = {\n  id: string;\n  name: string;\n  description: string | null;\n  defaultBranch: string;\n  createdAt: string;\n  updatedAt: string;\n  lastPushAt: string | null;\n  source: string | null;\n  readOnly: boolean;\n};",
+    summary: "Summary metadata for an artifact repository.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerArtifactCreatedToken",
+    kind: "typeAlias",
+    sourceText:
+      '/** A newly created artifact token including its one-time plaintext value. */\nexport type ComputerArtifactCreatedToken = {\n  id: string;\n  plaintext: string;\n  scope: "read" | "write";\n  expiresAt: string;\n};',
+    summary: "A newly created artifact token including its one-time plaintext value.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerArtifactTokenList",
+    kind: "typeAlias",
+    sourceText:
+      "/** A paginated collection of artifact access tokens. */\nexport type ComputerArtifactTokenList = {\n  tokens: ComputerArtifactToken[];\n  total: number;\n};",
+    summary: "A paginated collection of artifact access tokens.",
+    memberSummaries: {},
+    referencedTypeNames: ["ComputerArtifactToken"],
+  },
+  {
+    name: "ComputerArtifactToken",
+    kind: "typeAlias",
+    sourceText:
+      '/** Metadata and lifecycle state for an artifact access token. */\nexport type ComputerArtifactToken = {\n  id: string;\n  scope: "read" | "write";\n  state: "active" | "expired" | "revoked";\n  createdAt: string;\n  expiresAt: string;\n};',
+    summary: "Metadata and lifecycle state for an artifact access token.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerArtifactsCliInput",
+    kind: "typeAlias",
+    sourceText:
+      "/** Input for invoking the Artifacts command-line interface. */\nexport type ComputerArtifactsCliInput = {\n  argv: string[];\n  env?: Record<string, string>;\n};",
+    summary: "Input for invoking the Artifacts command-line interface.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
     name: "FlattenedCapabilityInvocation",
     kind: "typeAlias",
     sourceText:
@@ -2451,42 +2687,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "ComputerProcessorState",
-    kind: "typeAlias",
-    sourceText:
-      '/** Replayable lifecycle and latest execution state for one agent-owned Computer. */\nexport type ComputerProcessorState = {\n  birthCertificate: {\n    agentPath: string;\n    config: { defaultBackend: "worker-shell"; defaultTimeoutMs: number; workingDirectory: string };\n  } | null;\n  config: { defaultBackend: "worker-shell"; defaultTimeoutMs: number; workingDirectory: string };\n  activeExecution: {\n    backend: "worker-shell";\n    command: string;\n    executionId: string;\n    incarnationId: string;\n    timeoutMs: number;\n  } | null;\n  lastExecution:\n    | {\n        executionId: string;\n        exitCode: number;\n        status: "completed";\n        syncStatus: "complete" | "pending";\n      }\n    | { error: string; executionId: string; status: "failed" }\n    | { executionId: string; reason: string; status: "abandoned" }\n    | null;\n};',
-    summary: "Replayable lifecycle and latest execution state for one agent-owned Computer.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerConfig",
-    kind: "typeAlias",
-    sourceText:
-      '/** Runtime policy controlling an agent-owned Computer\'s backend, timeout, and cwd. */\nexport type ComputerConfig = ComputerProcessorState["config"];',
-    summary: "Runtime policy controlling an agent-owned Computer's backend, timeout, and cwd.",
-    memberSummaries: {},
-    referencedTypeNames: ["ComputerProcessorState"],
-  },
-  {
-    name: "ComputerExecInput",
-    kind: "typeAlias",
-    sourceText:
-      "/** A bounded shell command submitted to an agent-owned Cloudflare Computer. */\nexport type ComputerExecInput = {\n  /** Shell command interpreted by the selected Cloudflare Computer backend. */\n  command: string;\n  /** Absolute cwd; defaults to the birth certificate's workingDirectory. */\n  cwd?: string;\n  /** Bounded execution timeout; defaults to the Computer configuration. */\n  timeoutMs?: number;\n};",
-    summary: "A bounded shell command submitted to an agent-owned Cloudflare Computer.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerExecResult",
-    kind: "typeAlias",
-    sourceText:
-      '/** The terminal shell and filesystem-sync result of a Computer execution. */\nexport type ComputerExecResult = {\n  executionId: string;\n  exitCode: number;\n  stderr: string;\n  stdout: string;\n  syncStatus: "complete" | "pending";\n};',
-    summary: "The terminal shell and filesystem-sync result of a Computer execution.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
     name: "CoreProcessorState",
     kind: "typeAlias",
     sourceText:
@@ -2579,6 +2779,24 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     summary: "`StreamEventInput` with `type`/`payload` narrowed to one event definition.",
     memberSummaries: {},
     referencedTypeNames: ["StreamEventInput"],
+  },
+  {
+    name: "ComputerRuntimeValue",
+    kind: "typeAlias",
+    sourceText:
+      "/** JSON-compatible value accepted and returned by Cloudflare Computer runtimes. */\nexport type ComputerRuntimeValue =\n  | null\n  | boolean\n  | number\n  | string\n  | ComputerRuntimeValue[]\n  | { [key: string]: ComputerRuntimeValue };",
+    summary: "JSON-compatible value accepted and returned by Cloudflare Computer runtimes.",
+    memberSummaries: {},
+    referencedTypeNames: [],
+  },
+  {
+    name: "ComputerRuntimeResult",
+    kind: "typeAlias",
+    sourceText:
+      '/** The completed process and filesystem-sync result from a Computer runtime. */\nexport type ComputerRuntimeResult = {\n  status: "completed" | "failed" | "cancelled";\n  exitCode: number;\n  stdout: string | Uint8Array;\n  stderr: string | Uint8Array;\n  value?: ComputerRuntimeValue;\n  pushed: number;\n  pulled: number;\n  skipped: {\n    path: string;\n    mountRoot: string;\n    op: "write" | "delete";\n    reason: "read-only";\n  }[];\n  sync:\n    | {\n        status: "complete";\n        applied: number;\n        skipped: {\n          path: string;\n          mountRoot: string;\n          op: "write" | "delete";\n          reason: "read-only";\n        }[];\n      }\n    | {\n        status: "pending";\n        applied: number;\n        skipped: {\n          path: string;\n          mountRoot: string;\n          op: "write" | "delete";\n          reason: "read-only";\n        }[];\n        error: string;\n      };\n};',
+    summary: "The completed process and filesystem-sync result from a Computer runtime.",
+    memberSummaries: {},
+    referencedTypeNames: ["ComputerRuntimeValue"],
   },
   {
     name: "CfImageTransformInput",
@@ -2705,204 +2923,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     referencedTypeNames: [],
   },
   {
-    name: "ComputerReadFileOptions",
-    kind: "typeAlias",
-    sourceText:
-      '/** Options for reading a UTF-8 file through Cloudflare Computer. */\nexport type ComputerReadFileOptions = { encoding?: "utf8" };',
-    summary: "Options for reading a UTF-8 file through Cloudflare Computer.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerStatResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** RPC-safe metadata returned for a Cloudflare Computer filesystem entry. */\nexport type ComputerStatResult = {\n  name: string;\n  inode: number;\n  mode: number;\n  mtime: number;\n  size: number;\n  isFile: boolean;\n  isDirectory: boolean;\n  isSymbolicLink: boolean;\n};",
-    summary: "RPC-safe metadata returned for a Cloudflare Computer filesystem entry.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerReaddirOptions",
-    kind: "typeAlias",
-    sourceText:
-      "/** Options that bound a Cloudflare Computer directory listing. */\nexport type ComputerReaddirOptions = { limit?: number };",
-    summary: "Options that bound a Cloudflare Computer directory listing.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerDirentResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** RPC-safe directory-entry metadata returned by Cloudflare Computer. */\nexport type ComputerDirentResult = {\n  name: string;\n  parentPath: string;\n  isFile: boolean;\n  isDirectory: boolean;\n  isSymbolicLink: boolean;\n};",
-    summary: "RPC-safe directory-entry metadata returned by Cloudflare Computer.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerFoundEntry",
-    kind: "typeAlias",
-    sourceText:
-      '/** A filesystem entry found by Cloudflare Computer\'s recursive search. */\nexport type ComputerFoundEntry = { path: string; type: "file" | "dir" };',
-    summary: "A filesystem entry found by Cloudflare Computer's recursive search.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerGrepOptions",
-    kind: "typeAlias",
-    sourceText:
-      "/** Options controlling Cloudflare Computer filesystem text search. */\nexport type ComputerGrepOptions = { ignoreCase?: boolean };",
-    summary: "Options controlling Cloudflare Computer filesystem text search.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerGrepMatch",
-    kind: "typeAlias",
-    sourceText:
-      "/** A matching line returned by Cloudflare Computer's text search. */\nexport type ComputerGrepMatch = { path: string; line: number; text: string };",
-    summary: "A matching line returned by Cloudflare Computer's text search.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerWriteFileOptions",
-    kind: "typeAlias",
-    sourceText:
-      "/** Options controlling Cloudflare Computer file creation and permissions. */\nexport type ComputerWriteFileOptions = { mode?: number; exclusive?: boolean };",
-    summary: "Options controlling Cloudflare Computer file creation and permissions.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerMkdirOptions",
-    kind: "typeAlias",
-    sourceText:
-      "/** Options controlling Cloudflare Computer directory creation. */\nexport type ComputerMkdirOptions = { recursive?: boolean; mode?: number };",
-    summary: "Options controlling Cloudflare Computer directory creation.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerRmOptions",
-    kind: "typeAlias",
-    sourceText:
-      "/** Options controlling Cloudflare Computer filesystem removal. */\nexport type ComputerRmOptions = { recursive?: boolean; force?: boolean };",
-    summary: "Options controlling Cloudflare Computer filesystem removal.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerRuntimeExecOptions",
-    kind: "typeAlias",
-    sourceText:
-      '/** Options for starting a detached Cloudflare Computer runtime execution. */\nexport type ComputerRuntimeExecOptions = {\n  id?: string;\n  backend?: string;\n  cwd?: string;\n  encoding?: "utf8";\n  input?: ComputerRuntimeValue;\n  env?: Record<string, string>;\n  stdin?: Uint8Array | string;\n  timeoutMs?: number;\n};',
-    summary: "Options for starting a detached Cloudflare Computer runtime execution.",
-    memberSummaries: {},
-    referencedTypeNames: ["ComputerRuntimeValue"],
-  },
-  {
-    name: "ComputerRuntimeGetOptions",
-    kind: "typeAlias",
-    sourceText:
-      '/** Options for reconnecting to a detached Cloudflare Computer execution. */\nexport type ComputerRuntimeGetOptions = {\n  backend?: string;\n  encoding?: "utf8";\n  resume?: "tail" | "full" | number;\n};',
-    summary: "Options for reconnecting to a detached Cloudflare Computer execution.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerRuntimeKillOptions",
-    kind: "typeAlias",
-    sourceText:
-      "/** Options for signalling a detached Cloudflare Computer execution. */\nexport type ComputerRuntimeKillOptions = {\n  backend?: string;\n  /** One of SIGTERM, SIGKILL, SIGINT, or SIGHUP. */\n  signal?: string;\n};",
-    summary: "Options for signalling a detached Cloudflare Computer execution.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerGitCliInput",
-    kind: "typeAlias",
-    sourceText:
-      "/** Input for invoking Git's command-line interface inside a Computer. */\nexport type ComputerGitCliInput = {\n  argv: string[];\n  cwd?: string;\n  env?: Record<string, string>;\n  stdin?: string;\n};",
-    summary: "Input for invoking Git's command-line interface inside a Computer.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerCliResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** Standard streams and exit status returned by a Computer CLI operation. */\nexport type ComputerCliResult = { stdout: string; stderr: string; exitCode: number };",
-    summary: "Standard streams and exit status returned by a Computer CLI operation.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerArtifactCreateResult",
-    kind: "typeAlias",
-    sourceText:
-      "/** Repository details and initial credentials returned when creating an artifact. */\nexport type ComputerArtifactCreateResult = {\n  id: string;\n  name: string;\n  description: string | null;\n  defaultBranch: string;\n  remote: string;\n  token: string;\n  tokenExpiresAt: string;\n};",
-    summary: "Repository details and initial credentials returned when creating an artifact.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerArtifactRepoInfo",
-    kind: "typeAlias",
-    sourceText:
-      "/** Complete metadata for an artifact repository, including its Git remote. */\nexport type ComputerArtifactRepoInfo = {\n  id: string;\n  name: string;\n  description: string | null;\n  defaultBranch: string;\n  createdAt: string;\n  updatedAt: string;\n  lastPushAt: string | null;\n  source: string | null;\n  readOnly: boolean;\n  remote: string;\n};",
-    summary: "Complete metadata for an artifact repository, including its Git remote.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerArtifactRepoSummary",
-    kind: "typeAlias",
-    sourceText:
-      "/** Summary metadata for an artifact repository. */\nexport type ComputerArtifactRepoSummary = {\n  id: string;\n  name: string;\n  description: string | null;\n  defaultBranch: string;\n  createdAt: string;\n  updatedAt: string;\n  lastPushAt: string | null;\n  source: string | null;\n  readOnly: boolean;\n};",
-    summary: "Summary metadata for an artifact repository.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerArtifactCreatedToken",
-    kind: "typeAlias",
-    sourceText:
-      '/** A newly created artifact token including its one-time plaintext value. */\nexport type ComputerArtifactCreatedToken = {\n  id: string;\n  plaintext: string;\n  scope: "read" | "write";\n  expiresAt: string;\n};',
-    summary: "A newly created artifact token including its one-time plaintext value.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerArtifactTokenList",
-    kind: "typeAlias",
-    sourceText:
-      "/** A paginated collection of artifact access tokens. */\nexport type ComputerArtifactTokenList = {\n  tokens: ComputerArtifactToken[];\n  total: number;\n};",
-    summary: "A paginated collection of artifact access tokens.",
-    memberSummaries: {},
-    referencedTypeNames: ["ComputerArtifactToken"],
-  },
-  {
-    name: "ComputerArtifactToken",
-    kind: "typeAlias",
-    sourceText:
-      '/** Metadata and lifecycle state for an artifact access token. */\nexport type ComputerArtifactToken = {\n  id: string;\n  scope: "read" | "write";\n  state: "active" | "expired" | "revoked";\n  createdAt: string;\n  expiresAt: string;\n};',
-    summary: "Metadata and lifecycle state for an artifact access token.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerArtifactsCliInput",
-    kind: "typeAlias",
-    sourceText:
-      "/** Input for invoking the Artifacts command-line interface. */\nexport type ComputerArtifactsCliInput = {\n  argv: string[];\n  env?: Record<string, string>;\n};",
-    summary: "Input for invoking the Artifacts command-line interface.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
     name: "ConnectionRuntimeDetails",
     kind: "typeAlias",
     sourceText:
@@ -3016,24 +3036,6 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
       'One overlay change: a local file that shadows a mount file ("modified" — shadowed, not content-diffed), one the mount does not have ("added"), or a mount file hidden by a local delete ("deleted").',
     memberSummaries: {},
     referencedTypeNames: [],
-  },
-  {
-    name: "ComputerRuntimeValue",
-    kind: "typeAlias",
-    sourceText:
-      "/** JSON-compatible value accepted and returned by Cloudflare Computer runtimes. */\nexport type ComputerRuntimeValue =\n  | null\n  | boolean\n  | number\n  | string\n  | ComputerRuntimeValue[]\n  | { [key: string]: ComputerRuntimeValue };",
-    summary: "JSON-compatible value accepted and returned by Cloudflare Computer runtimes.",
-    memberSummaries: {},
-    referencedTypeNames: [],
-  },
-  {
-    name: "ComputerRuntimeResult",
-    kind: "typeAlias",
-    sourceText:
-      '/** The completed process and filesystem-sync result from a Computer runtime. */\nexport type ComputerRuntimeResult = {\n  status: "completed" | "failed" | "cancelled";\n  exitCode: number;\n  stdout: string | Uint8Array;\n  stderr: string | Uint8Array;\n  value?: ComputerRuntimeValue;\n  pushed: number;\n  pulled: number;\n  skipped: {\n    path: string;\n    mountRoot: string;\n    op: "write" | "delete";\n    reason: "read-only";\n  }[];\n  sync:\n    | {\n        status: "complete";\n        applied: number;\n        skipped: {\n          path: string;\n          mountRoot: string;\n          op: "write" | "delete";\n          reason: "read-only";\n        }[];\n      }\n    | {\n        status: "pending";\n        applied: number;\n        skipped: {\n          path: string;\n          mountRoot: string;\n          op: "write" | "delete";\n          reason: "read-only";\n        }[];\n        error: string;\n      };\n};',
-    summary: "The completed process and filesystem-sync result from a Computer runtime.",
-    memberSummaries: {},
-    referencedTypeNames: ["ComputerRuntimeValue"],
   },
   {
     name: "ConnectionOpenerDescriptor",

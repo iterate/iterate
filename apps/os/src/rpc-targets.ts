@@ -6241,7 +6241,8 @@ type ProjectDurableObjectRpc = {
  * root "/", an agent path, ...). Built-ins (streams, repo, agents, files,
  * integrations, sandboxes, scheduler, docs, ...) are project-global and
  * identical at every scope; what differs by scope is the capability host
- * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`).
+ * chain (which mounts resolve) and the agent-scope extras (`agent`, `chat`,
+ * `computer`).
  * Unknown dotted members dispatch dynamically against the scope's capability
  * host, chaining up to the project root.
  */
@@ -6778,6 +6779,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           ? {
               agent: "THIS agent's control surface (present because this is an agent scope).",
               chat: "THIS agent's web-chat door.",
+              computer:
+                "THIS agent's Cloudflare Computer: the full upstream API plus OS lifecycle and processor state.",
             }
           : {}),
       },
@@ -6877,12 +6880,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     return new CfBrowserCapabilityRpcTarget();
   }
 
-  // `agent` and `chat` are address-context conveniences for itx scopes under
+  // `agent`, `chat`, and `computer` are address-context conveniences for itx scopes under
   // `/agents/`. The path does not confer agent identity or create a processor:
   // `agent/created` does that, and operations on the returned handle assert the
   // birth certificate. Synchronous getters keep the contextual handle free of
   // bootstrap state while `env.ITX.get()` can return one class at every path.
-  // On a project-root itx both are undefined.
+  // On a project-root itx all three are undefined.
   /** This scope's agent control handle, when its address is under `/agents/`. */
   get agent(): AgentRpcTarget | undefined {
     const path = this.#capabilityHost.path;
@@ -6892,6 +6895,24 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
   /** THIS agent's web-chat door — present only on an agent-scoped itx. */
   get chat(): AgentChatRpcTarget | undefined {
     return this.agent?.chat;
+  }
+
+  /**
+   * THIS agent's Cloudflare Computer — present only on an agent-scoped itx.
+   *
+   * This is a native RPC child, rather than only a dynamic capability relay,
+   * because the upstream Computer surface includes scalar properties such as
+   * `useThink` in addition to methods and nested RPC targets.
+   */
+  get computer(): ComputerRpcTarget | undefined {
+    const agentPath = this.#capabilityHost.path;
+    return agentPath.startsWith("/agents/")
+      ? new ComputerRpcTarget({
+          auth: this.#props.auth,
+          path: agentComputerPath(agentPath),
+          projectId: this.#projectId,
+        })
+      : undefined;
   }
 
   // The scope's own host, plus the catalog that addresses ANY scope in the
@@ -7111,15 +7132,12 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** @internal Full self target used by the agent's journaled itx.computer mount. */
   get agentComputer(): ComputerRpcTarget {
-    const agentPath = this.#capabilityHost.path;
-    if (!agentPath.startsWith("/agents/")) {
-      throw new Error(`agentComputer is only available at an agent scope, got "${agentPath}"`);
-    }
-    return new ComputerRpcTarget({
-      auth: this.#props.auth,
-      path: agentComputerPath(agentPath),
-      projectId: this.#projectId,
-    });
+    const computer = this.computer;
+    if (computer === undefined)
+      throw new Error(
+        `agentComputer is only available at an agent scope, got "${this.#capabilityHost.path}"`,
+      );
+    return computer;
   }
 
   /**

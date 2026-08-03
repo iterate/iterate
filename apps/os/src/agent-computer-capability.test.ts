@@ -35,7 +35,8 @@ describe("agent Computer capability boundary", () => {
 
     const itx = projectAt("/agents/alice");
 
-    await expect(itx.agentComputer.useThink).resolves.toBe(false);
+    expect(itx.computer).toBeDefined();
+    await expect(itx.computer?.useThink).resolves.toBe(false);
     expect(computerMocks.workspaceUseThink).toHaveBeenCalledOnce();
   });
 
@@ -43,7 +44,9 @@ describe("agent Computer capability boundary", () => {
     const itx = projectAt("/agents/alice");
 
     expect(itx.computers.get("/computers/agents/bob")).toBeDefined();
-    const ownComputer = itx.agentComputer;
+    const ownComputer = itx.computer;
+    expect(ownComputer).toBeDefined();
+    if (ownComputer === undefined) throw new Error("agent scope has no Computer");
     const publicMembers = Object.getOwnPropertyNames(Object.getPrototypeOf(ownComputer));
     expect(publicMembers).toEqual(
       expect.arrayContaining([
@@ -67,6 +70,7 @@ describe("agent Computer capability boundary", () => {
   it("keeps the administrative Computer catalog available outside agent scopes", () => {
     const itx = projectAt("/");
 
+    expect(itx.computer).toBeUndefined();
     expect(itx.computers.get("/computers/agents/alice")).toBeDefined();
   });
 });
