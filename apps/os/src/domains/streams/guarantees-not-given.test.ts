@@ -102,6 +102,9 @@ function durableObjectContext(name: string) {
     id: { name },
     storage,
     exports: {},
+    getWebSockets(): WebSocket[] {
+      return [];
+    },
     waitUntil(work: Promise<unknown>): void {
       backgroundWork.push(work);
     },
@@ -441,6 +444,9 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         armAlarm: () => undefined,
         runDurable: (work) => kept.push(work()),
         keepAlive: (promise) => kept.push(promise),
+        wakeChannelKeys: () => new Set<string>(),
+        onSessionsIdleClosed: () => undefined,
+        wakeDormantSubscribers: () => undefined,
       },
     });
     async function settle() {

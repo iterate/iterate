@@ -39,7 +39,8 @@ import {
   STREAM_PAUSED_ERROR_PREFIX,
   StreamCoreProcessor,
 } from "./core-processor.ts";
-import { compileEventFilter } from "./event-filter.ts";
+import { compileEventFilter, type EventFilter } from "./event-filter.ts";
+import { WakeSocketRegistry } from "./wake-socket.ts";
 import {
   internalStreamId,
   isInternalStreamIdempotencyKey,
@@ -411,7 +412,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     now: () => Date.now(),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
-  readonly #eventSender = new StreamEventSender({
+  readonly #eventSender: StreamEventSender = new StreamEventSender({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
       // Straight to the sized log read: delivery needs byte lengths for its
@@ -469,7 +470,18 @@ export class StreamDurableObject extends DurableObject<Env> {
       armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
       runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
+      wakeChannelKeys: () => this.#wakeSockets.channelKeys(),
+      onSessionsIdleClosed: (connectionKeys) => this.#wakeSockets.recordIdleClosed(connectionKeys),
+      wakeDormantSubscribers: (justCommitted) =>
+        this.#wakeSockets.wakeDormant(justCommitted.map((entry) => entry.event)),
     },
+  });
+  /** DO-side wake-socket mechanics (wake-socket.ts); the attachment is the durable state. */
+  readonly #wakeSockets = new WakeSocketRegistry({
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    maxOffset: () => this.#coreProcessorState.maxOffset,
+    hasConnection: (connectionKey) => this.#eventSender.connections.has(connectionKey),
   });
   #coreProcessorState: CoreProcessorState;
   #invalidCheckpointError: unknown = undefined;
@@ -1056,9 +1068,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         ? this.#eventSender.onAlarm()
         : this.#eventSender.sendDue(args.justCommittedEvents),
     );
-    attempt("arm hosted-connection idle alarm", () =>
-      this.#eventSender.connections.armOrClearIdleAlarm(),
-    );
+    attempt("arm connection idle alarm", () => this.#eventSender.connections.armOrClearIdleAlarm());
     if (args.alarmTurn === true) {
       attempt("flush core state checkpoint", () => this.#flushCoreProcessorState());
     }
@@ -1441,7 +1451,15 @@ export class StreamDurableObject extends DurableObject<Env> {
    * (`subscription-configured` events); the source stream wakes a hosted
    * processor and retains the `processEventBatch` callback it returns.
    */
-  openConnection(args: Parameters<Stream["openConnection"]>[0]): StreamConnectionHandle {
+  openConnection(
+    args: Parameters<Stream["openConnection"]>[0],
+    // Internal relay plumbing (which wake socket this open binds) rides a
+    // separate parameter, never the public arg bag: the relay spreads the
+    // caller's args through, so anything merged into their shape would be
+    // client-spoofable by default. Public callers cannot reach this DO
+    // directly; the relay generates the id.
+    relay?: { wakeSocketId: string },
+  ): StreamConnectionHandle {
     const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
     if (this.#coreProcessorState.subscriptions.outbound.byKey[connectionKey] !== undefined) {
       throw new Error(`connectionKey "${connectionKey}" is reserved by a subscription`);
@@ -1500,10 +1518,11 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     // One filter shape everywhere: `eventTypes` is sugar for the filter's
     // type list (compileEventFilter also validates any condition upfront).
-    const filter = compileEventFilter({
+    const filterSpec: EventFilter = {
       ...args.filter,
       ...(args.eventTypes === undefined ? {} : { eventTypes: [...args.eventTypes] }),
-    });
+    };
+    const filter = compileEventFilter(filterSpec);
 
     const connection = this.#eventSender.connections.openSession({
       connectionKey,
@@ -1519,6 +1538,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       openedBy,
       getRuntimeState: args.getRuntimeState,
       ping: args.ping,
+    });
+
+    this.#wakeSockets.bind({
+      connectionKey,
+      wakeSocketId: relay?.wakeSocketId,
+      filter: filterSpec,
+      events: args.events,
     });
 
     return new StreamConnectionRpcTarget({
@@ -1658,12 +1684,54 @@ export class StreamDurableObject extends DurableObject<Env> {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: this.#eventSender.connections.runtimeState(),
+        dormantSubscribers: this.#wakeSockets.dormantRuntimeState(),
         subscriptions: this.#eventSender.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
         storageSizeBytes: this.ctx.storage.sql.databaseSize,
       },
     };
   }
+
+  // ===========================================================================
+  // Wake sockets: the hibernatable channel behind idle-closed session
+  // connections. All mechanics live in WakeSocketRegistry (wake-socket.ts);
+  // this class only routes the platform entry points to it.
+  // ===========================================================================
+
+  /** The Stream DO's only fetch surface: the wake-socket upgrade (see WakeSocketRegistry.acceptUpgrade). */
+  async fetch(request: Request): Promise<Response> {
+    return this.#wakeSockets.acceptUpgrade(request);
+  }
+
+  /** Wake sockets are one-way (this DO → relay); inbound frames are ignored. */
+  webSocketMessage(): void {}
+
+  /**
+   * A closed socket disappears from `getWebSockets`, which is most of the
+   * cleanup: the registry stops reporting it and the connection (if any)
+   * keeps today's non-idle-eligible session semantics. But when the socket
+   * carried a DORMANT subscriber, its closing is the subscriber's real
+   * departure — the `"idle"` close deliberately was not one — so audit and
+   * presence consumers get the durable `"departed"` fact here. Idempotent
+   * per socket; best-effort like every connection-close observation.
+   */
+  webSocketClose(ws: WebSocket): void {
+    const departed = this.#wakeSockets.departedOnClose(ws);
+    if (departed === undefined) return;
+    try {
+      this.#append({ authority: "core-event" }, [
+        {
+          type: "events.iterate.com/stream/connection-closed",
+          idempotencyKey: internalStreamId("wake-socket-departed", departed.socketId),
+          payload: { connectionKey: departed.connectionKey, reason: "departed" },
+        },
+      ]);
+    } catch (error) {
+      if (!isDurableObjectLifecycleError(error)) throw error;
+    }
+  }
+
+  webSocketError(): void {}
 
   // ===========================================================================
   // Operator/admin verbs.

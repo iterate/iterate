@@ -105,6 +105,9 @@ function durableObjectContext(name: string) {
     id: { name },
     storage,
     exports: {},
+    getWebSockets(): WebSocket[] {
+      return [];
+    },
     waitUntil(work: Promise<unknown>): void {
       backgroundWork.push(work);
     },

@@ -204,7 +204,7 @@ import type {
   ProjectWorker,
   StatefulDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
-import { retainProcessEventBatch } from "./domains/streams/retained-event-callbacks.ts";
+import { openRelayedStreamConnection } from "./domains/streams/stream-connection-relay.ts";
 import {
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
@@ -947,7 +947,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
    * event sending is configured separately by appending events to the source
    * stream.
    */
-  openConnection(args: {
+  async openConnection(args: {
     connectionKey?: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
@@ -997,25 +997,14 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
      */
     ping?: StreamConnectionPing;
   }): Promise<StreamConnectionHandle> {
-    // The zero-return-frame wire guarantee, relay leg. The Stream DO retains
-    // and invokes the batch callback over Workers RPC, and Workers RPC
-    // always ships a call result — so if the DO's calls were forwarded
-    // straight through to the callback owner's Cap'n Web stub, this worker
-    // would have to PULL the callback's resolution to produce that result,
-    // putting one callback-originated resolve frame per batch on the socket
-    // (live-proven against a preview deployment; see the one-way WebSocket
-    // case in stream-connections-and-subscriptions.e2e.test.ts).
-    // Terminating the call HERE keeps the callback leg one-way: the forwarder
-    // invokes the callback owner's stub and disposes the result
-    // unpulled, and the DO's Workers RPC result is the forwarder's own
-    // synchronous `undefined`. The retained stub is session-owned — Cap'n Web
-    // disposes a session's exports when the session ends, which is exactly a
-    // session connection's lifetime.
-    const forward = retainProcessEventBatch(args.processEventBatch);
-    return this[STREAM_DURABLE_OBJECT_STUB].openConnection({
-      ...args,
-      processEventBatch: (batch) => void forward(batch),
-    });
+    // The relay (stream-connection-relay.ts) terminates the callback leg at
+    // this worker and pairs the RPC leg with a hibernatable wake socket so an
+    // idle connection stops pinning the Stream DO. The stub argument is a
+    // thunk on purpose: the getter mints a fresh stub per access, and a wake
+    // re-dial may happen hours later, across DO resets.
+    return new StreamConnectionRpcTarget(
+      await openRelayedStreamConnection({ stub: () => this[STREAM_DURABLE_OBJECT_STUB], args }),
+    );
   }
 
   /** @internal Append a trusted batch copied from another stream. */
@@ -6901,14 +6890,15 @@ class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision
  */
 export class StreamConnectionRpcTarget extends IterateRpcRelay<"StreamConnectionHandle"> {
   readonly #close: () => void;
-  readonly #isLive: () => boolean;
+  readonly #isLive: () => boolean | Promise<boolean>;
   readonly #streamMaxOffset: number;
   readonly #connectionKey: string;
   #closed = false;
 
   constructor(args: {
     close: () => void;
-    isLive: () => boolean;
+    /** Sync inside the Stream DO; the worker relay's probe crosses RPC and is async. */
+    isLive: () => boolean | Promise<boolean>;
     streamMaxOffset: number;
     connectionKey: string;
   }) {
@@ -6935,8 +6925,9 @@ export class StreamConnectionRpcTarget extends IterateRpcRelay<"StreamConnection
    * the connection's own open flag, not a lookup by key, so a replacement
    * connection under the same key reports `false` here.
    */
-  ping(): boolean {
-    return !this.#closed && this.#isLive();
+  ping(): boolean | Promise<boolean> {
+    if (this.#closed) return false;
+    return this.#isLive();
   }
 
   /** Close this connection; safe to call more than once. */

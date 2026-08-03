@@ -3,7 +3,7 @@
 ## Before open
 
 ```bash
-pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
+pnpm install && pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test
 ```
 
 Clean branch off `origin/main`. Don't stack unrelated worktree WIP. Don't commit/push/open a PR unless asked.

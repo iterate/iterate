@@ -156,6 +156,9 @@ function harness(args: {
       armAlarm: (atMs) => alarms.push(atMs),
       runDurable: (work) => kept.push(work()),
       keepAlive: (promise) => kept.push(promise),
+      wakeChannelKeys: () => new Set<string>(),
+      onSessionsIdleClosed: () => undefined,
+      wakeDormantSubscribers: () => undefined,
     },
   });
 
@@ -1753,6 +1756,8 @@ async function flushMicrotasks() {
 function connectionsHarness(
   options: {
     events?: StreamEvent[];
+    wakeChannelKeys?: () => ReadonlySet<string>;
+    onSessionsIdleClosed?: (connectionKeys: readonly string[]) => void;
     readBatch?: ConstructorParameters<typeof StreamConnections>[0]["hooks"]["readBatch"];
     onAppend?: (args: {
       connections: StreamConnections;
@@ -1781,6 +1786,7 @@ function connectionsHarness(
     maxOffset: events.length,
   }) satisfies CoreProcessorState;
   const alarmTimes: number[] = [];
+  const sessionsIdleClosed: string[][] = [];
   const durableDeliveryWakes = vi.fn();
   const deliveryFailures = vi.fn((connectionKey: string, error: unknown) => {
     const current = store.get(connectionKey)!;
@@ -1812,6 +1818,11 @@ function connectionsHarness(
       now: () => now,
       armAlarm: (atMs) => alarmTimes.push(atMs),
       keepAlive: () => undefined,
+      wakeChannelKeys: options.wakeChannelKeys ?? (() => new Set<string>()),
+      onSessionsIdleClosed: (keys) => {
+        sessionsIdleClosed.push([...keys]);
+        options.onSessionsIdleClosed?.(keys);
+      },
       hostedDeliveryStillMatches: (_subscriptionKey, candidate) =>
         candidate.configuredAtOffset === expectedDelivery.configuredAtOffset &&
         candidate.cursorChangedAtOffset === expectedDelivery.cursorChangedAtOffset &&
@@ -1826,6 +1837,7 @@ function connectionsHarness(
     store,
     expectedDelivery,
     alarmTimes,
+    sessionsIdleClosed,
     deliveryFailures,
     durableDeliveryWakes,
     setNow(value: number) {
@@ -2410,6 +2422,70 @@ describe("StreamConnections hosted delivery watchdog", () => {
       inFlightDeadlineAt: before.inFlightDeadlineAt,
       inFlightConnectionGeneration: before.inFlightConnectionGeneration,
     });
+  });
+
+  it("idle-tears a session connection only when it has a wake channel, stamping after the close fact", () => {
+    // One shared journal so append-vs-stamp ORDERING is actually assertable.
+    const journal: string[] = [];
+    const h = connectionsHarness({
+      wakeChannelKeys: () => new Set(["with-channel"]),
+      onAppend: ({ event }) => {
+        journal.push(event.type);
+      },
+      onSessionsIdleClosed: (keys) => journal.push(`stamp:${keys.join(",")}`),
+    });
+    h.connections.openSession({
+      connectionKey: "with-channel",
+      processEventBatch: () => undefined,
+    });
+    h.connections.openSession({
+      connectionKey: "without-channel",
+      processEventBatch: () => undefined,
+    });
+
+    expect(h.connections.runIdleTeardownNow()).toEqual(["with-channel"]);
+
+    // The wake-channel-backed session closed with "idle"; the socketless one
+    // keeps today's pinned semantics and stays live.
+    expect(h.connections.has("with-channel")).toBe(false);
+    expect(h.connections.has("without-channel")).toBe(true);
+    // The dormancy stamp is ordered AFTER the close fact so this teardown's
+    // own append can never wake the subscriber it closed.
+    const closeIndex = journal.lastIndexOf("events.iterate.com/stream/connection-closed");
+    const stampIndex = journal.indexOf("stamp:with-channel");
+    expect(closeIndex).toBeGreaterThanOrEqual(0);
+    expect(stampIndex).toBeGreaterThan(closeIndex);
+    expect(h.sessionsIdleClosed).toEqual([["with-channel"]]);
+    // Session connections never grow cursor rows.
+    expect(h.store.get("with-channel")).toBeUndefined();
+  });
+
+  it("derives the idle deadline from delivery activity instead of sliding it per reconcile", () => {
+    const h = connectionsHarness({
+      wakeChannelKeys: () => new Set(["session"]),
+      events: [],
+    });
+    h.connections.openSession({
+      connectionKey: "session",
+      processEventBatch: () => undefined,
+    });
+    h.connections.armOrClearIdleAlarm();
+    const firstDeadline = h.alarmTimes.at(-1);
+    expect(firstDeadline).toBeDefined();
+
+    // Re-running the check with no new delivery activity must keep the SAME
+    // deadline: the old now+window reset slid it forward on the idle alarm's
+    // own turn, so a fire landing just before the pushed deadline missed it
+    // and real-clock teardown took up to two windows.
+    h.setNow(40_000);
+    h.connections.armOrClearIdleAlarm();
+    expect(h.alarmTimes.at(-1)).toBe(firstDeadline);
+
+    // A fire that lands moments before the (unchanged) deadline re-arms the
+    // deadline itself, never a fresh whole window.
+    h.setNow(firstDeadline! - 1);
+    h.connections.armOrClearIdleAlarm();
+    expect(h.alarmTimes.at(-1)).toBe(firstDeadline);
   });
 
   it("advances a completed hosted cursor through the close fact to avoid a self-wake loop", () => {
