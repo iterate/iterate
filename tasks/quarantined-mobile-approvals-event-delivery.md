@@ -5,13 +5,14 @@ size: medium
 tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 ---
 
-# Restore the quarantined mobile approvals event-delivery e2e
+# Restore the quarantined mobile approvals event-delivery e2es
 
-The end-to-end mobile approval flow was quarantined on 2026-08-03 while
-landing PR #2388. That PR changes only the OS web stream-tree model and routing;
-the mobile bundle does not import its route helper. The spec instead exposes an
-intermittent existing break between script execution, the approval batch shown
-in the thread, and the notification journal.
+The two end-to-end mobile approval and notification flows were quarantined on
+2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
+model and routing; the mobile bundle does not import its route helper. The
+specs instead expose an intermittent existing break between script execution,
+approval intent creation, the batch shown in the thread, and the device
+notification journal.
 
 ## Evidence
 
@@ -29,19 +30,29 @@ in the thread, and the notification journal.
   single-worker repetition passed twice in 56.4 and 53.7 seconds, then failed
   after the running-code spinner disappeared without the first approval batch.
   This reproduces independently of the fully parallel preview lane.
+- The next canonical preview run
+  [`l9ltm7xhch`](https://depot.dev/orgs/0p91s0lz49/workflows/thbdr63gtq?job=dg1s6sm3g4&attempt=vwckl1b7x1)
+  exposed the same defect in `specs/mobile/notifications.spec.ts` after the
+  first case was skipped. Its initial attempt never rendered the expected
+  suppressed-notification row; its retry never observed the root
+  `notification/requested` fact for an approval batch. Both attempts exhausted
+  their existing bounded waits at different transitions.
 - All runs use unique projects. The failing screenshots and traces show no page
   exception or non-2xx request, and preview Worker logs show no error-level
-  entry for either canonical run. The missing transition is therefore silent
-  today, which is itself the defect rather than evidence of a healthy request.
+  entry for the first two canonical runs. The missing transition is therefore
+  silent today, which is itself the defect rather than evidence of a healthy
+  request.
 
 ## Quarantined behavior
 
 - CI no longer proves that a mobile-web user can approve one script burst,
   reject another with a reason, see both outcomes in the same chat, and inspect
-  both batches in Notifications.
-- The preserved Playwright case is an explicit `test.skip` in
-  `specs/mobile/approvals.spec.ts`; no discovery filter, timeout increase, or
-  additional retry hides the coverage gap.
+  both batches in Notifications. It also no longer proves watched-thread push
+  suppression, off-thread push sending, or the synthetic row for an approval
+  parked before device enrollment.
+- The two preserved Playwright cases are explicit `test.skip` calls in
+  `specs/mobile/approvals.spec.ts` and `specs/mobile/notifications.spec.ts`; no
+  discovery filter, timeout increase, or additional retry hides the gap.
 - Other approval, script-execution, stream-delivery, and notification tests
   remain active.
 
