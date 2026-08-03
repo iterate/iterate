@@ -102,8 +102,43 @@ enum iterate_kit_playout_action iterate_kit_playout_classify(
    * talking after I did".
    */
   if (frame->answer < playout->answer) {
-    ++playout->ignored_stale_answer;
-    return ITERATE_KIT_PLAYOUT_IGNORE;
+    /*
+     * ...unless the sender has plainly started over.
+     *
+     * A lower number means one of two opposite things, and only the frame
+     * index tells them apart. Late frames from a superseded answer continue
+     * from where that answer had got to; a sender that has RESTARTED — a
+     * recycled bridge, a new call on the same mount — begins its first answer
+     * at frame zero. Treating the second as the first is a latch with no way
+     * out: every frame thereafter is numbered below a high-water mark the
+     * sender will never reach again, so the device stays silent for the rest
+     * of the boot while the transport reports ready and batches keep
+     * arriving. Measured across five turns: 310 frames of 1388 discarded.
+     *
+     * This is the same hazard, on the field next to it, as the `abandoned`
+     * latch below — which was also found by measurement, also silently ate a
+     * whole answer, and was also fixed by looking at the frame index.
+     *
+     * FRAME ZERO EXACTLY, and nothing looser. A straggler at frame 2 of a
+     * superseded answer is genuine stale speech and must still be refused; a
+     * tolerance of "the first few frames" admits it and resumes a sentence
+     * the person already talked over. If a restart's opening frame is lost
+     * the device waits for the next answer, which costs one reply — where
+     * being wrong the other way costs every reply until reboot.
+     */
+    if (frame->frame != 0U) {
+      ++playout->ignored_stale_answer;
+      return ITERATE_KIT_PLAYOUT_IGNORE;
+    }
+    /*
+     * Take the sender's numbering as the truth from here. Leaving the old
+     * high-water mark in place would send this frame to the branch below,
+     * which admits only a HIGHER answer — and a restart is by definition
+     * lower, so it would fall through to the duplicate test and be dropped.
+     */
+    playout->answer = frame->answer;
+    playout->answer_started = false;
+    playout->has_abandoned = false;
   }
   /*
    * Speech from the answer the person talked over — but ONLY the frames that

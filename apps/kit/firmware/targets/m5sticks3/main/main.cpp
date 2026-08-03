@@ -1212,58 +1212,69 @@ bool initialiseDevice(Runtime &state) {
    * turning diagnostics into dominant control traffic or allocating an
    * unbounded subscription history.
    */
+  /*
+   * Name this cross-layer wiring rather than relying on aggregate position.
+   * Metrics gained independently selectable AEC/avatar views while this target
+   * was evolving; a positional initializer then reinterpreted the diagnostics
+   * pointer as a bool. Named fields turn future option growth into either a
+   * harmless default or a compiler-visible omission, never a pointer/value
+   * shift that only appears in the physical firmware build.
+   */
   const iterate_kit_m5sticks3_options options{
-    state.platform.screenDriver(),
-    state.screenUrlScratch,
-    sizeof(state.screenUrlScratch),
-    state.platform.screenCaptureDriver(),
-    maximumScreenCaptureBytes,
-    {
-      &state.connection.session,
-      {
-        &state,
-        sampleRuntimeMetrics,
+    .screen = state.platform.screenDriver(),
+    .screen_url_scratch = state.screenUrlScratch,
+    .screen_url_scratch_size = sizeof(state.screenUrlScratch),
+    .screen_capture = state.platform.screenCaptureDriver(),
+    .maximum_screen_capture_bytes = maximumScreenCaptureBytes,
+    .metrics = {
+      .session = &state.connection.session,
+      .driver = {
+        .context = &state,
+        .sample = sampleRuntimeMetrics,
       },
-      state.subscriptions,
-      subscriptionCapacity,
-      1000U,
-      true,
-      false,
-      state.diagnosticsExpression,
-      sizeof(state.diagnosticsExpression),
-      nullptr,
+      .subscriptions = state.subscriptions,
+      .subscription_count = subscriptionCapacity,
+      .interval_ms = 1000U,
+      .enable_playback_view = true,
+      .enable_aec_view = false,
+      .enable_raw_clean_aec_view = false,
+      .enable_avatar_view = false,
+      .diagnostics_expression_buffer = state.diagnosticsExpression,
+      .diagnostics_expression_capacity =
+          sizeof(state.diagnosticsExpression),
+      .callback_budget = nullptr,
     },
-    {
-      ITERATE_KIT_AUDIO_PUSH_TO_TALK,
-      state.platform.audioHardware(),
-      {
-        &state,
-        sendAudioEvent,
-        sendPcm,
+    .audio = {
+      .mode = ITERATE_KIT_AUDIO_PUSH_TO_TALK,
+      .hardware = state.platform.audioHardware(),
+      .egress = {
+        .context = &state,
+        .send_event = sendAudioEvent,
+        .send_pcm = sendPcm,
       },
-      state.platform.audioCaptureDriver(),
+      .capture = state.platform.audioCaptureDriver(),
     },
-    state.eventStorage,
-    eventCapacity,
-    {
-      &state.connection.session,
-      state.eventNotifications,
-      eventNotificationCapacity,
-      state.eventSubscriptions,
-      eventSubscriptionCapacity,
-      nullptr,
-      ITERATE_KIT_AUDIO_PUSH_TO_TALK,
+    .event_storage = state.eventStorage,
+    .event_capacity = eventCapacity,
+    .event_stream = {
+      .session = &state.connection.session,
+      .storage = state.eventNotifications,
+      .capacity = eventNotificationCapacity,
+      .subscriptions = state.eventSubscriptions,
+      .subscription_count = eventSubscriptionCapacity,
+      .callback_budget = nullptr,
+      .audio_mode = ITERATE_KIT_AUDIO_PUSH_TO_TALK,
     },
-    {
-      &state,
-      observeDeviceEvent,
+    .event_observer = {
+      .context = &state,
+      .observe = observeDeviceEvent,
     },
     /*
      * Each callback owns push+pull outbound and may return resolve+release.
      * Two concurrent callbacks consume four messages per direction, leaving
      * the remainder of each eight-slot ring for the proven bounded RPC burst.
      */
-    callbackConcurrency,
+    .maximum_in_flight_callbacks = callbackConcurrency,
   };
   return iterate_kit_m5sticks3_init(
              &state.device, &options) == CAPNWEB_OK;

@@ -387,6 +387,55 @@ static void a_restarted_sender_starting_at_zero_is_not_stale(void)
       ITERATE_KIT_PLAYOUT_APPEND);
 }
 
+/*
+ * A SENDER THAT STARTED OVER IS NOT STALE SPEECH.
+ *
+ * Measured across five turns: 310 frames of 1388 discarded, spkPlayed stuck
+ * at 1036, while the transport reported ready and batches kept arriving. A
+ * recycled bridge numbers its first answer BELOW the high-water mark this
+ * device has already played, and the stale test then rejects everything for
+ * the rest of the boot — the number it waits to exceed is one the sender will
+ * never reach again.
+ *
+ * The frame index is what tells the two apart: a restart opens at zero, while
+ * late frames from a superseded answer are already deep into it.
+ */
+static void a_sender_that_restarted_is_not_stale(void)
+{
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 1U);
+  /* Answers 0..4 play; the device's high-water mark reaches 4. */
+  frame = at(1U, 4U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(1U, 4U, 30U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+
+  /* A late frame from answer 3 is genuinely stale, and is refused. */
+  frame = at(1U, 3U, 40U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  assert(playout.ignored_stale_answer == 1U);
+
+  /* The bridge recycles and starts again at answer 0, frame 0. */
+  frame = at(1U, 0U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+  frame = at(1U, 0U, 1U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_APPEND);
+  /* Nothing more refused: the whole new conversation plays. */
+  assert(playout.ignored_stale_answer == 1U);
+}
+
 static void tolerates_missing_arguments(void) {
   struct iterate_kit_playout playout;
   const struct iterate_kit_playout_frame frame = at(1U, 1U, 1U);
@@ -416,6 +465,7 @@ int main(void) {
   interrupting_silence_abandons_nothing();
   an_answer_reusing_an_abandoned_number_still_plays();
   a_restarted_sender_starting_at_zero_is_not_stale();
+  a_sender_that_restarted_is_not_stale();
   tolerates_missing_arguments();
   return 0;
 }

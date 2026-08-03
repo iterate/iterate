@@ -1,6 +1,6 @@
 # Connected Iterate Kit device inventory
 
-Recorded on 2026-07-30 and last re-enumerated non-disruptively on 2026-08-02.
+Recorded on 2026-07-30 and last re-enumerated non-disruptively on 2026-08-03.
 This is both the current four-board inventory and the safety procedure for
 finding the boards again after the shared USB hub is unplugged, moved, or
 enumerated in a different order.
@@ -52,6 +52,29 @@ their serials unchanged. On 2026-08-02, moving StackChan off the shared hub
 changed it again to location `2-1` and suffix `2101`, with the same serial.
 Both are direct evidence for making the stable serial the persistent key a CLI
 or physical test manifest stores.
+
+## Current network snapshot
+
+After the 2026-08-03 Wi-Fi change, a readback verified that provisioning kept
+each board's existing authentication, project, worker origin, and capability
+configuration. Network credentials are intentionally never recorded here.
+The following addresses are observations for diagnostics, not stable device
+identifiers:
+
+| Board | Address on 2026-08-03 |
+| --- | --- |
+| M5StickS3 | `192.168.1.51` |
+| StackChan / M5Stack CoreS3 | `192.168.1.46` |
+| Home Assistant Voice Preview Edition | `192.168.1.43` |
+| Waveshare ESP32-S3 touch-screen device | `192.168.1.36` |
+| Test Mac | `192.168.1.31` |
+| Router | `192.168.1.1` |
+
+A short zero-loss ping sample is useful only as a reachability check. Guest
+Wi-Fi latency has varied enough to invalidate a prior physical audio interval,
+so every evidence run must collect its own aligned network measurements. Never
+carry this table's result forward as proof that a later acoustic run was
+network-valid.
 
 `/dev/cu.usbserial-0001` is an unrelated CP2102/CeilSense device and is not an
 Iterate Kit flash target.
