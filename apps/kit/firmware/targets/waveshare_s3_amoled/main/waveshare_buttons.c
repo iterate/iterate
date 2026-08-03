@@ -27,6 +27,7 @@ static struct {
   bool call_down;
   bool talk_down;
   bool call_press_pending;
+  bool talk_press_pending;
   bool call_long_press_pending;
   bool call_long_press_fired;
   uint64_t call_down_since_ms;
@@ -120,6 +121,13 @@ void waveshare_buttons_poll(void) {
       now - buttons.talk_changed_at_ms >= DEBOUNCE_MS) {
     buttons.talk_changed_at_ms = now;
     buttons.talk_down = talk_down;
+    /*
+     * Committed on the DOWN edge, unlike the call button, which waits for
+     * release so a hold on its way to a reboot does not also toggle a call.
+     * The talk button has no such second meaning between calls, and a menu
+     * that only moved when you let go would feel broken.
+     */
+    if (talk_down) buttons.talk_press_pending = true;
   }
 }
 
@@ -142,6 +150,12 @@ uint32_t waveshare_buttons_talk_read_failures(void) {
 uint32_t waveshare_buttons_call_held_ms(void) {
   if (!buttons.call_down || buttons.call_down_since_ms == 0U) return 0U;
   return (uint32_t)(now_ms() - buttons.call_down_since_ms);
+}
+
+bool waveshare_buttons_take_talk_press(void) {
+  const bool pressed = buttons.talk_press_pending;
+  buttons.talk_press_pending = false;
+  return pressed;
 }
 
 bool waveshare_buttons_talk_held(void) {

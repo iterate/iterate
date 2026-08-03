@@ -176,6 +176,20 @@ struct iterate_kit_voicelab {
   /* Make-before-break: the outgoing connection lives until its successor opens. */
   struct capnweb_remote_capability previous_connection_capability;
   struct capnweb_local_capability callback_capability;
+  /* The voice-agent guest, held only while a conversation is being set up. */
+  struct capnweb_remote_capability setup_capability;
+  bool has_setup_capability;
+  /**
+   * A new conversation is being prepared: its path, and how it went.
+   *
+   * Kept on the voicelab rather than in the caller because the answer arrives
+   * on a callback, and a caller that has to remember what it asked for is a
+   * caller that can forget.
+   */
+  char setup_path[96];
+  bool setup_pending;
+  bool setup_succeeded;
+  bool setup_failed;
   bool has_session_capability;
   bool has_project_capability;
   bool has_stream_capability;
@@ -381,6 +395,22 @@ bool iterate_kit_voicelab_needs_recycle(
 /** Open the successor connection; the old one is released on success. */
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab);
+
+/**
+ * Prepare `path` for a conversation: append the birth certificate, the back
+ * office and the processor subscription, so a device can start a fresh
+ * context without a laptop.
+ *
+ * This is the same `setupVoiceAgent` the CLI calls, made from the project
+ * capability this session already holds. It is idempotent, so asking twice
+ * for a path that is ready costs one round trip and changes nothing.
+ *
+ * Completion is reported through `setup_succeeded` / `setup_failed`, because
+ * the answer arrives on a callback and the caller is a cooperative loop with
+ * nowhere to block.
+ */
+enum capnweb_status iterate_kit_voicelab_setup_conversation(
+    struct iterate_kit_voicelab *voicelab, const char *path);
 
 enum capnweb_status iterate_kit_voicelab_close(
     struct iterate_kit_voicelab *voicelab);

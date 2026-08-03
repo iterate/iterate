@@ -11,6 +11,20 @@ static const char *const authenticate_path[] = {"authenticate"};
 static const char *const streams_get_path[] = {"streams", "get"};
 static const char *const project_path[] = {"projects", "get"};
 static const char *const append_path[] = {"append"};
+static const char *const workers_get_path[] = {"workers", "get"};
+static const char *const setup_voice_agent_path[] = {"setupVoiceAgent"};
+
+/*
+ * The guest that owns setupVoiceAgent, addressed exactly as the CLI addresses
+ * it. Baked in here because the device has to be able to prepare a
+ * conversation with nothing else running — the cost is that renaming the
+ * entry point or moving the config repo needs a reflash, which is a fair
+ * price for a device that can start a fresh context on its own.
+ */
+#define VOICE_AGENT_WORKER_REF                                                \
+  "{\"path\":\"/\",\"type\":\"stateless\",\"source\":{\"createWorker\":{"       \
+  "\"entryPoint\":\"voice-agent.ts\","                                         \
+  "\"files\":{\"repoPath\":\"/repos/config\",\"type\":\"repo\"}}}}"
 
 static bool nonempty(const char *value) {
   return value != NULL && value[0] != '\0';
@@ -1448,6 +1462,73 @@ enum capnweb_status iterate_kit_voicelab_ping(
     voicelab->ping_pending = true;
   }
   return status;
+}
+
+static void setup_completed(void *context, const struct capnweb_result *result) {
+  struct iterate_kit_voicelab *voicelab = context;
+  if (voicelab == NULL) return;
+  voicelab->setup_pending = false;
+  if (result == NULL || result->kind != CAPNWEB_RESULT_VALUE) {
+    voicelab->setup_failed = true;
+    return;
+  }
+  voicelab->setup_succeeded = true;
+}
+
+static void setup_worker_ready(
+    void *context, const struct capnweb_result *result) {
+  struct iterate_kit_voicelab *voicelab = context;
+  int length;
+  if (voicelab == NULL) return;
+  if (result == NULL || result->kind != CAPNWEB_RESULT_VALUE) {
+    voicelab->setup_pending = false;
+    voicelab->setup_failed = true;
+    return;
+  }
+  if (!take_result_capability(result, &voicelab->setup_capability)) {
+    voicelab->setup_pending = false;
+    voicelab->setup_failed = true;
+    return;
+  }
+  voicelab->has_setup_capability = true;
+  length = snprintf(
+      voicelab->args_buffer, sizeof(voicelab->args_buffer),
+      "[{\"streamPath\":\"%s\"}]", voicelab->setup_path);
+  if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
+    voicelab->setup_pending = false;
+    voicelab->setup_failed = true;
+    return;
+  }
+  if (capnweb_session_call_path(
+          voicelab->options.session, voicelab->setup_capability,
+          setup_voice_agent_path, 1U, voicelab->args_buffer, (size_t)length,
+          setup_completed, voicelab) != CAPNWEB_OK) {
+    voicelab->setup_pending = false;
+    voicelab->setup_failed = true;
+  }
+}
+
+enum capnweb_status iterate_kit_voicelab_setup_conversation(
+    struct iterate_kit_voicelab *voicelab, const char *path) {
+  static const char worker_ref[] = "[" VOICE_AGENT_WORKER_REF "]";
+  if (voicelab == NULL || !nonempty(path)) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  if (voicelab->setup_pending || !voicelab->has_project_capability) {
+    return CAPNWEB_E_STATE;
+  }
+  if (strlen(path) >= sizeof(voicelab->setup_path)) {
+    return CAPNWEB_E_LIMIT;
+  }
+  (void)snprintf(
+      voicelab->setup_path, sizeof(voicelab->setup_path), "%s", path);
+  voicelab->setup_pending = true;
+  voicelab->setup_succeeded = false;
+  voicelab->setup_failed = false;
+  return capnweb_session_call_path(
+      voicelab->options.session, voicelab->project_capability,
+      workers_get_path, sizeof(workers_get_path) / sizeof(workers_get_path[0]),
+      worker_ref, sizeof(worker_ref) - 1U, setup_worker_ready, voicelab);
 }
 
 enum capnweb_status iterate_kit_voicelab_close(

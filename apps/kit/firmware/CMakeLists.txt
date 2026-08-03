@@ -23,6 +23,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/aec_signal_window.c
   components/core/src/audio_intent_reconciler.c
   components/core/src/audio_playout.c
+  components/core/src/device_menu.c
   components/core/src/audio.c
   components/core/src/configuration.c
   components/core/src/conversation_lights.c
@@ -45,6 +46,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/retry_gate.c
   components/core/src/runtime_diagnostics.c
   components/core/src/spsc_ring.c
+  components/core/src/touch_tap.c
   components/core/src/voicelab_stream.c
   components/core/src/voice_playback_clock.c
   components/core/src/websocket_frame_writer.c
@@ -71,6 +73,7 @@ add_library(iterate-kit-avatar STATIC
   components/avatar/src/face_driver.c
   components/avatar/src/face_keyframe.c
   components/avatar/src/face_performance.c
+  components/avatar/src/face_scale.c
   components/avatar/src/face_sprite_sheet.c
   components/avatar/src/face_stage.c
   components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c
@@ -342,6 +345,7 @@ foreach(ITERATE_KIT_AVATAR_TEST
     face-avatar-registry
     face-keyframe
     face-performance
+    face-scale
     face-sprite-sheet
     face-stage)
   string(REPLACE "-" "_" ITERATE_KIT_AVATAR_TEST_SOURCE
@@ -619,6 +623,25 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-conversation-lights-test
   COMMAND iterate-kit-conversation-lights-test
+)
+
+add_executable(iterate-kit-touch-tap-test
+  tests/touch_tap_test.c
+)
+target_compile_features(
+  iterate-kit-touch-tap-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-touch-tap-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-touch-tap-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-touch-tap-test
+  COMMAND iterate-kit-touch-tap-test
 )
 
 add_executable(iterate-kit-retry-gate-test
@@ -1226,6 +1249,25 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-audio-playout-test
   COMMAND iterate-kit-audio-playout-test
+)
+
+add_executable(iterate-kit-device-menu-test
+  tests/device_menu_test.c
+)
+target_compile_features(
+  iterate-kit-device-menu-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-device-menu-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-device-menu-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-device-menu-test
+  COMMAND iterate-kit-device-menu-test
 )
 
 add_executable(iterate-kit-voice-playback-clock-test

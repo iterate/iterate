@@ -14,6 +14,7 @@
  */
 #include "waveshare_display.h"
 
+#include <assert.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -26,7 +27,18 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "freertos/task.h"
+#include "iterate/kit/device_menu.h"
 #include "lvgl.h"
+
+/*
+ * Included for this one check and nothing else: the menu's decisions reach
+ * this file as a view, not as its struct. If somebody adds a fourth item, the
+ * build stops here — where the screen is — rather than shipping a device that
+ * offers an option it has no room to draw.
+ */
+_Static_assert(
+    (int)WAVESHARE_MENU_ITEMS_MAX == (int)ITERATE_KIT_MENU_ITEM_COUNT,
+    "the menu view must carry every item device_menu.h defines");
 
 static const char tag[] = "waveshare-ui";
 
@@ -45,6 +57,40 @@ enum {
   REFRESH_PERIOD_MS = 100,
 };
 
+enum {
+  /*
+   * The stream path is kept whole here and shortened only when it is drawn,
+   * because how much of it fits is a question about the screen, not about the
+   * caller. Long enough for the paths os hands out with room to spare.
+   */
+  MENU_PATH_CHARS = 128,
+  MENU_FIELD_CHARS = 64,
+  MENU_ITEM_CHARS = 32,
+  /*
+   * project, environment and connection, with the separators between them:
+   * big enough that the compiler can see the formatted line cannot truncate,
+   * which is the only way a field silently loses its last characters.
+   */
+  MENU_CONTEXT_CHARS = MENU_FIELD_CHARS * 3 + 16,
+};
+
+/*
+ * The menu as the screen holds it: every field a string this module owns.
+ *
+ * All members are bytes, so the struct has no padding and one memcmp against
+ * the painted copy is enough to answer "has anything changed?" — which is how
+ * a status line ticking during a call avoids redrawing the menu behind it.
+ */
+struct menu_snapshot {
+  char stream_path[MENU_PATH_CHARS];
+  char project[MENU_FIELD_CHARS];
+  char environment[MENU_FIELD_CHARS];
+  char connection[MENU_FIELD_CHARS];
+  char items[WAVESHARE_MENU_ITEMS_MAX][MENU_ITEM_CHARS];
+  uint8_t item_count;
+  uint8_t selected;
+};
+
 struct transcript_line {
   char text[TRANSCRIPT_LINE_CHARS];
   bool from_device_user;
@@ -61,6 +107,7 @@ static struct {
   SemaphoreHandle_t lock;
   enum waveshare_ui_state state;
   char status[STATUS_CHARS];
+  struct menu_snapshot menu;
   struct transcript_line lines[TRANSCRIPT_LINES];
   size_t line_count;
   uint32_t background;
@@ -78,6 +125,11 @@ static lv_obj_t *status_label;
 static lv_obj_t *transcript_label;
 static lv_obj_t *top_button_label;
 static lv_obj_t *bottom_button_label;
+static lv_obj_t *menu_info;
+static lv_obj_t *menu_path_label;
+static lv_obj_t *menu_context_label;
+static lv_obj_t *menu_options;
+static lv_obj_t *menu_rows[WAVESHARE_MENU_ITEMS_MAX];
 /* Snapshot staging: full-resolution RGB565 in PSRAM, reused per capture. */
 static lv_draw_buf_t snapshot_buf;
 static uint8_t *snapshot_pixels;
@@ -111,6 +163,54 @@ static void set_status_locked(void *argument) {
 
 void waveshare_display_set_status(const char *text) {
   publish(set_status_locked, (void *)(uintptr_t)text);
+}
+
+/**
+ * Take a borrowed string into a field this module owns.
+ *
+ * The whole field is cleared first, not just terminated: the painted copy is
+ * compared byte for byte to decide whether the screen needs redrawing, and
+ * leftovers past the terminator would make identical text look changed and
+ * repaint the menu on every publish.
+ */
+static void copy_field(char *field, size_t capacity, const char *text) {
+  assert(field != NULL);
+  assert(capacity > 0U);
+  memset(field, 0, capacity);
+  /* A missing field is empty, never a crash: one absent string must not cost
+   * the person the three that arrived. */
+  snprintf(field, capacity, "%s", text == NULL ? "" : text);
+}
+
+static void set_menu_locked(void *argument) {
+  const struct waveshare_menu_view *view = argument;
+  const uint8_t count = view->item_count < (uint8_t)WAVESHARE_MENU_ITEMS_MAX
+      ? view->item_count
+      : (uint8_t)WAVESHARE_MENU_ITEMS_MAX;
+  uint8_t index;
+  copy_field(ui.menu.stream_path, sizeof(ui.menu.stream_path), view->stream_path);
+  copy_field(ui.menu.project, sizeof(ui.menu.project), view->project);
+  copy_field(ui.menu.environment, sizeof(ui.menu.environment), view->environment);
+  copy_field(ui.menu.connection, sizeof(ui.menu.connection), view->connection);
+  /* Every slot is written, including the ones past `count`, so a shorter menu
+   * cannot leave the previous one's last option on screen. */
+  for (index = 0U; index < (uint8_t)WAVESHARE_MENU_ITEMS_MAX; ++index) {
+    copy_field(
+        ui.menu.items[index],
+        sizeof(ui.menu.items[index]),
+        index < count ? view->items[index] : NULL);
+  }
+  ui.menu.item_count = count;
+  /*
+   * A cursor past the last item would leave no row marked at all, which reads
+   * as a menu that has stopped answering the button.
+   */
+  ui.menu.selected = view->selected < count ? view->selected : 0U;
+}
+
+void waveshare_display_set_menu(const struct waveshare_menu_view *view) {
+  if (view == NULL) return;
+  publish(set_menu_locked, (void *)(uintptr_t)view);
 }
 
 static void set_background_locked(void *argument) {
@@ -233,6 +333,264 @@ static uint32_t state_colour(enum waveshare_ui_state state) {
   }
 }
 
+/* --- the menu screen ------------------------------------------------------ */
+
+/* Menu geometry, in points of the 368x448 portrait panel. */
+enum {
+  /* The screen's own padding is 16 on each side. */
+  MENU_CONTENT_WIDTH = WAVESHARE_DISPLAY_WIDTH - 32,
+  MENU_INFO_Y = 28,
+  MENU_INFO_GAP = 6,
+  /* The context block is two lines of small text; they need air between. */
+  MENU_INFO_LINE_SPACE = 3,
+  /*
+   * Far enough down that the info block can grow to a wrapped path and two
+   * context lines without reaching the options, and high enough that three
+   * options — one of which wraps — stay clear of the lower button's label.
+   */
+  MENU_OPTIONS_Y = 130,
+  MENU_ROW_GAP = 12,
+  MENU_ROW_PAD_X = 12,
+  MENU_ROW_PAD_Y = 10,
+  MENU_ROW_RADIUS = 8,
+  /*
+   * Characters of stream path kept. The label wraps, so a path this long is
+   * still shown in full, over two rows; the limit only exists so that a path
+   * nobody expected cannot push the options off the bottom of the screen.
+   */
+  MENU_PATH_COLUMNS = 44,
+  MENU_ELLIPSIS_CHARS = 3,
+};
+
+/* Menu colours, as 24-bit RGB. */
+enum {
+  MENU_PATH_RGB = 0xe8eaed,
+  MENU_CONTEXT_RGB = 0x8a8f98,
+  MENU_ROW_RGB = 0xe8eaed,
+  MENU_CURSOR_BG_RGB = 0xe8eaed,
+  /* The screen's own background, so the selected row reads as a hole in it. */
+  MENU_CURSOR_TEXT_RGB = 0x101820,
+};
+
+/** Which of the two looks a row wears; the caller acts on the difference. */
+enum menu_row_style {
+  MENU_ROW_PLAIN = 0,
+  MENU_ROW_CURSOR,
+};
+
+/**
+ * Fit a stream path by dropping its HEAD.
+ *
+ * Every path this device is given begins the same way — /agents/voice/… — and
+ * ends in the id that says which conversation it is, so the usual truncation
+ * would turn three different streams into three identical-looking rows and
+ * leave the person choosing between them with nothing to choose on.
+ */
+static void fit_path(char *out, size_t capacity, const char *path) {
+  const size_t columns = (size_t)MENU_PATH_COLUMNS;
+  size_t length;
+  assert(out != NULL);
+  assert(path != NULL);
+  assert(capacity > columns);
+  length = strlen(path);
+  if (length <= columns) {
+    snprintf(out, capacity, "%s", path);
+    return;
+  }
+  snprintf(
+      out,
+      capacity,
+      "...%s",
+      path + length - (columns - (size_t)MENU_ELLIPSIS_CHARS));
+}
+
+static void set_hidden(lv_obj_t *object, bool hidden) {
+  assert(object != NULL);
+  if (hidden) {
+    lv_obj_add_flag(object, LV_OBJ_FLAG_HIDDEN);
+    return;
+  }
+  lv_obj_clear_flag(object, LV_OBJ_FLAG_HIDDEN);
+}
+
+/*
+ * The menu takes the screen over rather than sharing it. The headline, the
+ * status line and the transcript all describe a call, and leaving them under
+ * options set in a size that can be read at arm's length is how 368 points of
+ * width becomes a screen with nothing legible on it.
+ */
+static void show_menu_screen(bool visible) {
+  set_hidden(menu_info, !visible);
+  set_hidden(menu_options, !visible);
+  set_hidden(state_label, visible);
+  set_hidden(status_label, visible);
+  set_hidden(transcript_label, visible);
+}
+
+static void style_menu_row(lv_obj_t *row, enum menu_row_style style) {
+  const bool cursor = style == MENU_ROW_CURSOR;
+  assert(row != NULL);
+  /*
+   * The cursor is the whole row inverted, not a marker in front of it. On a
+   * 1.8" panel a leading glyph is a smudge in a photograph, and a photograph
+   * of this screen is how anyone away from the device knows which option it
+   * is about to take.
+   */
+  lv_obj_set_style_bg_opa(
+      row, (lv_opa_t)(cursor ? LV_OPA_COVER : LV_OPA_TRANSP), 0);
+  lv_obj_set_style_text_color(
+      row,
+      lv_color_hex((uint32_t)(cursor ? MENU_CURSOR_TEXT_RGB : MENU_ROW_RGB)),
+      0);
+}
+
+/*
+ * A bare column.
+ *
+ * Bare because lv_obj's default look is a pale rounded card with a border,
+ * which on this background reads as a box somebody drew around the contents.
+ * A column because both blocks stack text whose height depends on how much of
+ * it there is — the path wraps, and so does the longest option — and fixed
+ * offsets would have one block draw over the next the first time it did.
+ */
+static lv_obj_t *build_column(int32_t y, int32_t row_gap) {
+  lv_obj_t *column = lv_obj_create(screen_root);
+  lv_obj_remove_style_all(column);
+  lv_obj_set_size(column, MENU_CONTENT_WIDTH, LV_SIZE_CONTENT);
+  lv_obj_set_flex_flow(column, LV_FLEX_FLOW_COLUMN);
+  lv_obj_set_style_pad_row(column, row_gap, 0);
+  lv_obj_clear_flag(column, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_align(column, LV_ALIGN_TOP_LEFT, 0, y);
+  return column;
+}
+
+/* A line of text in a column: full width, so it wraps at the screen edge
+ * rather than at whatever the longest word happens to be. */
+static lv_obj_t *build_menu_text(
+    lv_obj_t *parent, const lv_font_t *font, uint32_t rgb) {
+  lv_obj_t *label;
+  assert(parent != NULL);
+  assert(font != NULL);
+  label = lv_label_create(parent);
+  lv_label_set_long_mode(label, LV_LABEL_LONG_WRAP);
+  lv_obj_set_width(label, lv_pct(100));
+  lv_label_set_text(label, "");
+  lv_obj_set_style_text_color(label, lv_color_hex(rgb), 0);
+  lv_obj_set_style_text_font(label, font, 0);
+  return label;
+}
+
+/*
+ * One option, in the largest font this build carries.
+ *
+ * Wrapping rather than clipping: "continue conversation" is wider than the
+ * screen at this size, and an option that says "continue conversatio" is a
+ * different promise from the one the menu is making.
+ */
+static lv_obj_t *build_menu_row(void) {
+  lv_obj_t *row;
+  assert(menu_options != NULL);
+  row = build_menu_text(menu_options, &lv_font_montserrat_28, MENU_ROW_RGB);
+  lv_obj_set_style_pad_hor(row, MENU_ROW_PAD_X, 0);
+  lv_obj_set_style_pad_ver(row, MENU_ROW_PAD_Y, 0);
+  lv_obj_set_style_radius(row, MENU_ROW_RADIUS, 0);
+  /* Only the opacity moves between plain and cursor, so the fill colour is
+   * set once here — every style setter invalidates its object, changed or
+   * not, and the cursor moves on every press of the lower button. */
+  lv_obj_set_style_bg_color(row, lv_color_hex(MENU_CURSOR_BG_RGB), 0);
+  style_menu_row(row, MENU_ROW_PLAIN);
+  return row;
+}
+
+/*
+ * Built once at start-up and then only hidden, rather than created when the
+ * menu opens: this screen appears on every press of the lower button between
+ * calls, and building it there would put a dozen allocations on the LVGL heap
+ * in the middle of the frame the person is waiting to see.
+ */
+static void build_menu(void) {
+  uint8_t index;
+  menu_info = build_column(MENU_INFO_Y, MENU_INFO_GAP);
+  menu_path_label =
+      build_menu_text(menu_info, &lv_font_montserrat_16, MENU_PATH_RGB);
+  menu_context_label =
+      build_menu_text(menu_info, &lv_font_montserrat_14, MENU_CONTEXT_RGB);
+  lv_obj_set_style_text_line_space(menu_context_label, MENU_INFO_LINE_SPACE, 0);
+
+  menu_options = build_column(MENU_OPTIONS_Y, MENU_ROW_GAP);
+  for (index = 0U; index < (uint8_t)WAVESHARE_MENU_ITEMS_MAX; ++index) {
+    menu_rows[index] = build_menu_row();
+  }
+  /* The published cursor starts on the first item; the screen agrees with it
+   * before anything has been published. */
+  style_menu_row(menu_rows[0], MENU_ROW_CURSOR);
+  show_menu_screen(false);
+}
+
+static void paint_menu_row(const struct menu_snapshot *menu, uint8_t index) {
+  lv_obj_t *row;
+  assert(menu != NULL);
+  assert(index < (uint8_t)WAVESHARE_MENU_ITEMS_MAX);
+  row = menu_rows[index];
+  /* An option the menu is not offering is hidden, not blanked, so the column
+   * does not keep a gap where it used to be. */
+  if (index >= menu->item_count) {
+    set_hidden(row, true);
+    return;
+  }
+  set_hidden(row, false);
+  lv_label_set_text(row, menu->items[index]);
+  style_menu_row(
+      row, index == menu->selected ? MENU_ROW_CURSOR : MENU_ROW_PLAIN);
+}
+
+/*
+ * Repaint only when the published menu differs from what is on the panel.
+ *
+ * Setting a label's text invalidates it whether or not the text changed, and
+ * this runs on every publish of anything — so without the comparison a status
+ * line ticking during a call would redraw the whole menu block sitting hidden
+ * behind it, which is the flush storm refresh_ui's comment describes.
+ */
+static void paint_menu(const struct menu_snapshot *menu) {
+  static struct menu_snapshot painted;
+  char path[MENU_PATH_COLUMNS + 1];
+  char context[MENU_CONTEXT_CHARS];
+  uint8_t index;
+  assert(menu != NULL);
+  if (memcmp(menu, &painted, sizeof(painted)) == 0) return;
+  painted = *menu;
+  fit_path(path, sizeof(path), menu->stream_path);
+  lv_label_set_text(menu_path_label, path);
+  snprintf(
+      context,
+      sizeof(context),
+      "%s\n%s  -  %s",
+      menu->project,
+      menu->environment,
+      menu->connection);
+  lv_label_set_text(menu_context_label, context);
+  for (index = 0U; index < (uint8_t)WAVESHARE_MENU_ITEMS_MAX; ++index) {
+    paint_menu_row(menu, index);
+  }
+}
+
+/*
+ * What the two physical buttons do right now. In the menu they are the menu's
+ * two verbs — cycle and choose — and a label still offering "call" there
+ * describes a button that would do something else entirely.
+ */
+static const char *top_button_text(
+    enum waveshare_ui_state state, bool call_requested) {
+  if (state == WAVESHARE_UI_MENU) return "select  >";
+  return call_requested ? "end call  >" : "call  >";
+}
+
+static const char *bottom_button_text(
+    enum waveshare_ui_state state, bool talk_held) {
+  if (state == WAVESHARE_UI_MENU) return "next  >";
+  return talk_held ? "talking  >" : "talk  >";
+}
 
 static void build_ui(void) {
   screen_root = lv_screen_active();
@@ -283,10 +641,13 @@ static void build_ui(void) {
   lv_obj_set_style_text_font(bottom_button_label, &lv_font_montserrat_14, 0);
   lv_obj_align(bottom_button_label, LV_ALIGN_BOTTOM_RIGHT, 0, -24);
 
+  /* Last, because it hides the widgets above it as its final act. */
+  build_menu();
 }
 
 static void refresh_ui(void) {
   static char transcript[TRANSCRIPT_LINES * TRANSCRIPT_LINE_CHARS];
+  static struct menu_snapshot menu;
   enum waveshare_ui_state state;
   uint32_t background;
   bool call_requested;
@@ -308,6 +669,7 @@ static void refresh_ui(void) {
   call_active = ui.call_active;
   talk_held = ui.talk_held;
   memcpy(status, ui.status, sizeof(status));
+  menu = ui.menu;
   transcript[0] = '\0';
   for (index = 0U; index < ui.line_count; ++index) {
     const int written = snprintf(
@@ -344,6 +706,7 @@ static void refresh_ui(void) {
     }
     if (state != shown_state) {
       shown_state = state;
+      show_menu_screen(state == WAVESHARE_UI_MENU);
       lv_label_set_text(state_label, state_text(state));
       lv_obj_set_style_text_color(
           state_label, lv_color_hex(state_colour(state)), 0);
@@ -351,10 +714,10 @@ static void refresh_ui(void) {
     /* lv_label_set_text already skips identical text. */
     lv_label_set_text(status_label, status);
     lv_label_set_text(transcript_label, transcript);
+    paint_menu(&menu);
+    lv_label_set_text(top_button_label, top_button_text(state, call_requested));
     lv_label_set_text(
-        top_button_label, call_requested ? "end call  >" : "call  >");
-    lv_label_set_text(
-        bottom_button_label, talk_held ? "talking  >" : "talk  >");
+        bottom_button_label, bottom_button_text(state, talk_held));
     if (talk_held != shown_talk_held || call_active != shown_call_active ||
         call_requested != shown_call_requested) {
       shown_talk_held = talk_held;

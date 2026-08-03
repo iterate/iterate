@@ -38,6 +38,17 @@ uint32_t waveshare_buttons_call_held_ms(void);
 uint32_t waveshare_buttons_talk_read_failures(void);
 
 /** True while the talk button is held. */
+/**
+ * One press of the talk button, taken on the DOWN edge and consumed by the
+ * reader.
+ *
+ * Separate from `talk_held` because during a call the button is a level — the
+ * microphone is open while it is down — and between calls it is an event that
+ * moves a menu cursor. Reading the level for the cursor would advance it
+ * hundreds of times a second.
+ */
+bool waveshare_buttons_take_talk_press(void);
+
 bool waveshare_buttons_talk_held(void);
 
 /** Poll both buttons; call from the app loop. */

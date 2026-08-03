@@ -39,6 +39,7 @@
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_random.h"
 #include "esp_system.h"
 #include "esp_task_wdt.h"
 #include "esp_timer.h"
@@ -51,6 +52,7 @@
 #include "capnweb/capnweb.h"
 #include "iterate/kit/audio_playout.h"
 #include "iterate/kit/configuration.h"
+#include "iterate/kit/device_menu.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/peer.h"
 #include "iterate/kit/platforms/esp_idf_configuration.h"
@@ -300,7 +302,26 @@ EXT_RAM_BSS_ATTR static uint8_t
  * one append, so the device took 20s to come up and calls felt glacial.
  * dev-stats is ephemeral now, so this path stays fast.
  */
-#define STREAM_PATH "/voicelab/device"
+/*
+ * The stream this device mounts, as a runtime value.
+ *
+ * It was a compile-time constant, which is exactly why "start a fresh
+ * conversation" could not be expressed: one device, one stream, forever, and
+ * every reboot resumed a context that might be days old. The path IS the
+ * conversation's identity, so choosing it is choosing whether to continue or
+ * begin — no other mechanism is needed.
+ *
+ * The default is the historical one, so a device that has never been asked for
+ * anything else behaves exactly as it did.
+ */
+#define STREAM_PATH_DEFAULT "/voicelab/device"
+static char stream_path[96] = STREAM_PATH_DEFAULT;
+/*
+ * The path a setup call is preparing. Kept apart from the live one so a setup
+ * that fails leaves the device on the conversation it already had, rather than
+ * pointed at a stream nobody has prepared.
+ */
+static char pending_stream_path[96];
 #define CALL_ID "wsdev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
 
@@ -439,6 +460,8 @@ static struct {
   volatile uint32_t answer_emitted_ms;
   /** When an RPC was last answered: the mount's own liveness, not the socket's. */
   volatile uint64_t last_served_ms;
+  /* What the two buttons mean between calls; see device_menu.h. */
+  struct iterate_kit_menu menu;
   uint32_t speaker_lag_max_ms;
   volatile bool speaker_answer_done;
   uint32_t flush_frames_left;
@@ -1247,6 +1270,102 @@ static void append_stats(uint64_t now) {
    * closes the event and `]` closes the array. */
 }
 
+/*
+ * The deployment, in the only place that actually knows it: the URL.
+ *
+ * Derived rather than stored so there is not a second copy to keep in step —
+ * a screen that says "prd" while the device talks to preview is worse than a
+ * screen that says nothing.
+ */
+static const char *environment_from_base_url(const char *url) {
+  const char *host = url;
+  const char *scheme;
+
+  if (url == NULL) {
+    return "unknown";
+  }
+  scheme = strstr(url, "://");
+  if (scheme != NULL) {
+    host = scheme + 3;
+  }
+  return host;
+}
+
+/*
+ * Paint the menu, plus the facts a person needs in order to know which device
+ * and which conversation they are looking at.
+ */
+static void show_menu(void) {
+  struct waveshare_menu_view view;
+  uint8_t index;
+
+  if (!runtime.menu.open) {
+    waveshare_display_set_state(WAVESHARE_UI_IDLE);
+    return;
+  }
+  memset(&view, 0, sizeof(view));
+  view.item_count = (uint8_t)ITERATE_KIT_MENU_ITEM_COUNT;
+  if (view.item_count > (uint8_t)WAVESHARE_MENU_ITEMS_MAX) {
+    view.item_count = (uint8_t)WAVESHARE_MENU_ITEMS_MAX;
+  }
+  for (index = 0U; index < view.item_count; ++index) {
+    view.items[index] =
+        iterate_kit_menu_item_name((enum iterate_kit_menu_item)index);
+  }
+  view.stream_path = stream_path;
+  view.project = runtime.configuration.project_id;
+  view.environment = environment_from_base_url(runtime.configuration.os_base_url);
+  view.connection = iterate_kit_voicelab_state_name(runtime.voicelab.state);
+  view.selected = runtime.menu.selected;
+  waveshare_display_set_menu(&view);
+  waveshare_display_set_state(WAVESHARE_UI_MENU);
+}
+
+/*
+ * A conversation nobody has had before.
+ *
+ * The path IS the conversation's identity, so a new path is the whole of
+ * "start fresh" — there is no history to clear, because a stream nobody has
+ * written to has none. Named from the hardware RNG rather than a clock: the
+ * device may not have a trustworthy one this early, and two devices choosing
+ * the same path would drop two people into one conversation.
+ */
+static void begin_new_conversation(void) {
+  char candidate[sizeof(stream_path)];
+
+  (void)snprintf(candidate, sizeof(candidate), "/agents/voice/dev-%08lx%08lx",
+                 (unsigned long)esp_random(), (unsigned long)esp_random());
+  if (iterate_kit_voicelab_setup_conversation(&runtime.voicelab, candidate) !=
+      CAPNWEB_OK) {
+    /* Leave the menu screen either way: it has already closed underneath. */
+    waveshare_display_set_state(WAVESHARE_UI_IDLE);
+    waveshare_display_set_status("could not ask the server");
+    return;
+  }
+  (void)snprintf(pending_stream_path, sizeof(pending_stream_path), "%s",
+                 candidate);
+  waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
+  waveshare_display_set_status("preparing a new conversation...");
+}
+
+static void take_menu_action(enum iterate_kit_menu_action action) {
+  if (action == ITERATE_KIT_MENU_ACTION_REBOOT) {
+    ESP_LOGW(tag, "reboot chosen from the menu");
+    waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
+    waveshare_display_set_status("restarting...");
+    waveshare_recorder_end_call("menu reboot");
+    DELAY_MS(400);
+    esp_restart();
+    return;
+  }
+  if (action == ITERATE_KIT_MENU_ACTION_NEW) {
+    begin_new_conversation();
+    return;
+  }
+  /* CONTINUE: this stream is already mounted, so it is simply a call. */
+  waveshare_display_request_call(true);
+}
+
 void app_main(void) {
   /*
    * The app task is the sole consumer of the control inbox and therefore the
@@ -1429,31 +1548,48 @@ void app_main(void) {
                 : "upper: call   ·   lower: restart");
       }
     }
-    if (waveshare_buttons_take_call_press()) {
-      const bool wanted = !waveshare_display_call_requested();
-      ESP_LOGI(tag, "BOOT pressed: call %s", wanted ? "requested" : "ended");
-      waveshare_display_request_call(wanted);
-    }
     /*
-     * With no call up, the lower button has nothing to talk into — so it
-     * restarts the device instead. Wedging still happens, and reaching for
-     * the power button on this board is awkward.
+     * BETWEEN CALLS THE TWO BUTTONS DRIVE A MENU.
+     *
+     * During a call both are spoken for — hold the lower one to talk, press
+     * the upper one to hang up — and between calls they did almost nothing,
+     * while the things a person actually wants there (which stream is this?
+     * start a fresh conversation, reboot a wedged device) needed a laptop.
+     *
+     * The menu decides nothing itself; iterate_kit_menu does, and it is
+     * tested on the host. This is only the wiring between two buttons and
+     * three actions.
      */
-    if (!runtime.voicelab.call_active && waveshare_buttons_talk_held() &&
-        !waveshare_display_call_requested()) {
-      const uint64_t now_for_restart = now_ms(NULL);
-      if (talk_idle_since == 0U) talk_idle_since = now_for_restart;
-      if (now_for_restart - talk_idle_since > 1500U) {
-        ESP_LOGW(tag, "lower button held while idle — restarting");
-        waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
-        waveshare_display_set_status("restarting…");
-        waveshare_recorder_end_call("user restart");
-        DELAY_MS(400);
-        esp_restart();
-      }
-    } else {
-      talk_idle_since = 0U;
+    if (runtime.voicelab.call_active || waveshare_display_call_requested()) {
+      /*
+       * During a call the lower button means "talk", and the presses it
+       * latches are not menu presses. Draining the latch here is what stops
+       * the menu opening by itself the moment a call ends — every press made
+       * while talking would otherwise still be sitting there, waiting.
+       */
+      (void)waveshare_buttons_take_talk_press();
+    } else if (waveshare_buttons_take_talk_press()) {
+      iterate_kit_menu_cycle(&runtime.menu);
+      show_menu();
     }
+    if (waveshare_buttons_take_call_press()) {
+      const enum iterate_kit_menu_action action =
+          iterate_kit_menu_activate(&runtime.menu);
+      if (action == ITERATE_KIT_MENU_ACTION_NONE) {
+        /* No menu open: the upper button means what it always meant. */
+        const bool wanted = !waveshare_display_call_requested();
+        ESP_LOGI(tag, "BOOT pressed: call %s", wanted ? "requested" : "ended");
+        waveshare_display_request_call(wanted);
+      } else {
+        take_menu_action(action);
+      }
+    }
+    /* A call takes the buttons back; the menu has no business being open. */
+    if (runtime.voicelab.call_active && runtime.menu.open) {
+      iterate_kit_menu_close(&runtime.menu);
+      waveshare_display_set_state(WAVESHARE_UI_LISTENING);
+    }
+    (void)talk_idle_since;
     {
       static bool talk_logged;
       const bool talk = waveshare_buttons_talk_held();
@@ -1620,6 +1756,27 @@ void app_main(void) {
         runtime.last_served_ms = now;
         iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
       }
+      /*
+       * A prepared conversation is adopted only once the server says it is
+       * ready. Swapping the path first would point the device at a stream
+       * with no processor on it, which looks exactly like a dead device.
+       */
+      if (runtime.voicelab.setup_succeeded) {
+        runtime.voicelab.setup_succeeded = false;
+        (void)snprintf(
+            stream_path, sizeof(stream_path), "%s", pending_stream_path);
+        ESP_LOGI(tag, "new conversation ready: %s", stream_path);
+        waveshare_display_set_status(stream_path);
+        /* Remount: the mount is bound to the path it was made with. */
+        runtime.voicelab_generation = 0U;
+        waveshare_display_request_call(true);
+      }
+      if (runtime.voicelab.setup_failed) {
+        runtime.voicelab.setup_failed = false;
+        ESP_LOGE(tag, "could not prepare %s", pending_stream_path);
+        waveshare_display_set_state(WAVESHARE_UI_IDLE);
+        waveshare_display_set_status("could not start a new conversation");
+      }
       if (iterate_kit_voice_elapsed_ms(now, last_liveness_ms) > NO_LIVENESS_RESTART_MS) {
         ESP_LOGE(
             tag,
@@ -1637,7 +1794,7 @@ void app_main(void) {
         &runtime.connection.session,
         runtime.configuration.project_id,
         runtime.configuration.project_api_key,
-        STREAM_PATH,
+        stream_path,
         CALL_ID,
         now_ms,
         NULL,
@@ -1697,7 +1854,7 @@ void app_main(void) {
       runtime.last_voicelab_state = runtime.voicelab.state;
       if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) {
         waveshare_display_set_state(WAVESHARE_UI_IDLE);
-        waveshare_display_set_status(STREAM_PATH);
+        waveshare_display_set_status(stream_path);
       } else if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED) {
         /* A dead session takes the call with it; the button starts over. */
         waveshare_display_request_call(false);
