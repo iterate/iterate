@@ -1,11 +1,5 @@
-import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
 import { StreamPath } from "~/lib/stream-links.ts";
-import {
-  closestAncestorByPath,
-  flattenTreeRows,
-  toggledSet,
-  type TreeRow,
-} from "~/lib/tree-rows.ts";
+import { toggledSet } from "~/lib/tree-rows.ts";
 
 export type PaletteTab = "agents" | "tree" | "recent";
 
@@ -68,68 +62,6 @@ export function isPaletteResultKeyboardTarget(target: EventTarget | null): boole
     (target.matches('[data-slot="command-input"]') ||
       target.closest('[data-slot="command-item"]') !== null)
   );
-}
-
-type PaletteStreamTreeNode = {
-  row: StreamIndexRow;
-  children: PaletteStreamTreeNode[];
-};
-
-export function buildStreamForest(
-  streams: Record<string, StreamIndexRow>,
-): PaletteStreamTreeNode[] {
-  const nodes = new Map<string, PaletteStreamTreeNode>(
-    Object.values(streams).map((row) => [row.path, { row, children: [] }]),
-  );
-  const roots: PaletteStreamTreeNode[] = [];
-  for (const node of nodes.values()) {
-    const parent =
-      closestAncestorByPath(node.row.path, nodes) ??
-      (node.row.path === "/" ? undefined : nodes.get("/"));
-    if (parent === undefined) roots.push(node);
-    else parent.children.push(node);
-  }
-  const sort = (nodesToSort: PaletteStreamTreeNode[]) => {
-    nodesToSort.sort((left, right) => left.row.path.localeCompare(right.row.path));
-    for (const node of nodesToSort) sort(node.children);
-  };
-  sort(roots);
-  return roots;
-}
-
-const STREAM_TREE_SHAPE = {
-  children: (node: PaletteStreamTreeNode) => node.children,
-  key: (node: PaletteStreamTreeNode) => node.row.path,
-  matches: (node: PaletteStreamTreeNode, query: string) =>
-    node.row.path.toLowerCase().includes(query),
-};
-
-/** Streams render fully expanded by default; `collapsedPaths` holds the exceptions. */
-export function flattenStreamRows(
-  forest: readonly PaletteStreamTreeNode[],
-  collapsedPaths: ReadonlySet<string>,
-  query: string,
-): TreeRow<PaletteStreamTreeNode>[] {
-  const expandedPaths = new Set<string>();
-  const visit = (nodes: readonly PaletteStreamTreeNode[]) => {
-    for (const node of nodes) {
-      if (!collapsedPaths.has(node.row.path)) expandedPaths.add(node.row.path);
-      visit(node.children);
-    }
-  };
-  visit(forest);
-  return flattenTreeRows(forest, STREAM_TREE_SHAPE, expandedPaths, query);
-}
-
-/** Leaf label for a stream path in the tree (Pierre-style: basename only). */
-export function streamTreeLabel(path: string): string {
-  if (path === "/") return "/";
-  const segments = path.split("/").filter(Boolean);
-  return segments.at(-1) ?? path;
-}
-
-export function formatEventCount(count: number): string {
-  return count === 1 ? "1 event" : `${count.toLocaleString()} events`;
 }
 
 type PaletteDialogState = {

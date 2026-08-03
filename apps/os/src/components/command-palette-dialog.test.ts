@@ -1,31 +1,14 @@
 import { describe, expect, test } from "vitest";
 import {
   agentCommandValue,
-  buildStreamForest,
   defaultPaletteTab,
-  flattenStreamRows,
-  formatEventCount,
   hasPathDescendant,
   initialPaletteDialogState,
   normalizeDestination,
   paletteKeyboardAction,
   paletteKeyboardTarget,
   reducePaletteDialogState,
-  streamTreeLabel,
 } from "./command-palette-model.ts";
-import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
-
-const createdAt = "2026-07-17T10:00:00.000Z";
-
-function stream(path: string, eventCount = 1): StreamIndexRow {
-  return {
-    path,
-    createdAt,
-    lastActivityAt: createdAt,
-    lastType: "events.iterate.com/test",
-    eventCount,
-  };
-}
 
 describe("command palette models", () => {
   test("resets related palette state atomically when opening and changing tabs", () => {
@@ -121,38 +104,5 @@ describe("command palette models", () => {
     expect(normalizeDestination("/agents/")).toBeNull();
     expect(normalizeDestination("/Agents/Bad")).toBeNull();
     expect(normalizeDestination(`/${"a".repeat(1_024)}`)).toBeNull();
-  });
-
-  test("uses the closest real stream ancestor and does not invent path nodes", () => {
-    const rows = [stream("/"), stream("/agents"), stream("/agents/a/deep")];
-    const [root] = buildStreamForest(Object.fromEntries(rows.map((row) => [row.path, row])));
-
-    expect(root?.row.path).toBe("/");
-    expect(root?.children[0]?.row.path).toBe("/agents");
-    expect(root?.children[0]?.children[0]?.row.path).toBe("/agents/a/deep");
-  });
-
-  test("renders fully expanded by default, prunes collapsed subtrees, searches through them", () => {
-    const rows = [stream("/"), stream("/agents"), stream("/agents/cows")];
-    const forest = buildStreamForest(Object.fromEntries(rows.map((row) => [row.path, row])));
-
-    expect(flattenStreamRows(forest, new Set(), "").map(({ node }) => node.row.path)).toEqual([
-      "/",
-      "/agents",
-      "/agents/cows",
-    ]);
-    expect(
-      flattenStreamRows(forest, new Set(["/agents"]), "").map(({ node }) => node.row.path),
-    ).toEqual(["/", "/agents"]);
-    expect(
-      flattenStreamRows(forest, new Set(["/agents"]), "cows").map(({ node }) => node.row.path),
-    ).toEqual(["/", "/agents", "/agents/cows"]);
-  });
-
-  test("labels tree rows with the leaf segment and formats event counts", () => {
-    expect(streamTreeLabel("/")).toBe("/");
-    expect(streamTreeLabel("/agents/repos/config")).toBe("config");
-    expect(formatEventCount(1)).toBe("1 event");
-    expect(formatEventCount(827)).toBe("827 events");
   });
 });

@@ -8,15 +8,16 @@ import {
   type BrowserCoreStreamTreeState,
 } from "~/domains/streams/client-libraries/browser/core-processor-state.ts";
 
-/**
- * Where remote admin tree nodes get state: path → stream callback connection.
- */
-export type StreamTreeSource = (streamPath: string) => {
+/** Minimal stream handle required by the one-shot remote tree reader. */
+type StreamTreeHandle = {
   openConnection(args: {
     events?: boolean;
     processEventBatch(batch: { state: unknown }): unknown;
   }): Promise<StreamConnectionHandle>;
 };
+
+/** Where remote admin tree nodes get state: path → stream callback connection. */
+export type StreamTreeSource = (streamPath: string) => StreamTreeHandle | Promise<StreamTreeHandle>;
 
 /**
  * Navigation plus the optional lazy source required only by the admin explorer.
@@ -52,20 +53,23 @@ export function readStreamStateOnce(
       reject(new Error(`timed out reading state for ${streamPath}`));
       finish();
     }, READ_STATE_TIMEOUT_MS);
-    source(streamPath)
-      .openConnection({
-        events: false,
-        processEventBatch: (batch) => {
-          if (done) return;
-          done = true;
-          try {
-            resolve(parseBrowserCoreStreamTreeState(batch.state));
-          } catch (error) {
-            reject(error instanceof Error ? error : new Error(String(error)));
-          }
-          finish();
-        },
-      })
+    Promise.resolve()
+      .then(() => source(streamPath))
+      .then((stream) =>
+        stream.openConnection({
+          events: false,
+          processEventBatch: (batch) => {
+            if (done) return;
+            done = true;
+            try {
+              resolve(parseBrowserCoreStreamTreeState(batch.state));
+            } catch (error) {
+              reject(error instanceof Error ? error : new Error(String(error)));
+            }
+            finish();
+          },
+        }),
+      )
       .then((connection) => {
         release = () =>
           void Promise.resolve(connection.close())
