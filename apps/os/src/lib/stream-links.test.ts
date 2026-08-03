@@ -7,6 +7,7 @@ import {
   streamPathParent,
   streamPathToSplat,
 } from "./stream-links.ts";
+import { linkOptionsForStreamPath } from "./stream-routes.ts";
 
 describe("StreamPath", () => {
   it("accepts the empty root and ordinary kebab segments", () => {
@@ -38,5 +39,12 @@ describe("StreamPath", () => {
     expect(streamPathFromSplatOrRoot("agents/slack/c123")).toBe("/agents/slack/c123");
     expect(streamPathFromSplatOrRoot("Agents/Bad")).toBe("/");
     expect(streamPathFromSplatOrRoot("agents/with%20space")).toBe("/");
+  });
+
+  it("routes malformed indexed paths through the generic stream error boundary", () => {
+    expect(linkOptionsForStreamPath("example", "/a//c")).toMatchObject({
+      to: "/projects/$projectSlug/streams/$",
+      params: { projectSlug: "example", _splat: "/a//c" },
+    });
   });
 });

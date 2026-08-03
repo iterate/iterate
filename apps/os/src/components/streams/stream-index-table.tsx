@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useState } from "react";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { StreamTreeHeader, StreamTreeRowContent } from "./stream-tree-row.tsx";
 import { useIndexedStreamTreeTable } from "./stream-tree-table.ts";
@@ -50,45 +50,27 @@ export function StreamIndexTable({
   onOpenPath: (streamPath: string) => void;
   streams: Record<string, StreamIndexRow>;
 }) {
-  const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(new Set());
-  const currentParentPaths = useMemo(() => {
-    if (currentPath === "/") return new Set<string>();
-    return new Set(["/", ...streamPathAncestors(currentPath).slice(0, -1)]);
-  }, [currentPath]);
-  const initialCollapsedPaths = useMemo(
-    () => new Set([...collapsedPaths].filter((path) => !currentParentPaths.has(path))),
-    [collapsedPaths, currentParentPaths],
-  );
+  const [collapseState, setCollapseState] = useState<{
+    revealedPath: string;
+    collapsedPaths: ReadonlySet<string>;
+  }>(() => ({ revealedPath: currentPath, collapsedPaths: new Set() }));
 
-  return (
-    <StreamIndexTableRows
-      key={currentPath}
-      currentPath={currentPath}
-      initialCollapsedPaths={initialCollapsedPaths}
-      onCollapsedPathsChange={setCollapsedPaths}
-      onOpenPath={onOpenPath}
-      streams={streams}
-    />
-  );
-}
+  if (collapseState.revealedPath !== currentPath) {
+    const currentParentPaths =
+      currentPath === "/"
+        ? new Set<string>()
+        : new Set(["/", ...streamPathAncestors(currentPath).slice(0, -1)]);
+    setCollapseState({
+      revealedPath: currentPath,
+      collapsedPaths: new Set(
+        [...collapseState.collapsedPaths].filter((path) => !currentParentPaths.has(path)),
+      ),
+    });
+  }
 
-function StreamIndexTableRows({
-  currentPath,
-  initialCollapsedPaths,
-  onCollapsedPathsChange,
-  onOpenPath,
-  streams,
-}: {
-  currentPath: string;
-  initialCollapsedPaths: ReadonlySet<string>;
-  onCollapsedPathsChange: (paths: ReadonlySet<string>) => void;
-  onOpenPath: (streamPath: string) => void;
-  streams: Record<string, StreamIndexRow>;
-}) {
-  const [visibleCollapsedPaths, setVisibleCollapsedPaths] = useState(initialCollapsedPaths);
   const table = useIndexedStreamTreeTable({
     streams,
-    collapsedPaths: visibleCollapsedPaths,
+    collapsedPaths: collapseState.collapsedPaths,
     query: "",
   });
   const rows = table.getRowModel().rows;
@@ -109,17 +91,22 @@ function StreamIndexTableRows({
               data-stream-path={row.original.path}
               className={cn(
                 "flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 font-mono text-xs",
-                selected ? "bg-accent" : "hover:bg-accent/70",
+                selected
+                  ? "bg-accent"
+                  : row.original.indexRow === undefined
+                    ? undefined
+                    : "hover:bg-accent/70",
               )}
             >
               <StreamTreeRowContent
                 row={row}
-                onOpen={row.original.indexed ? onOpenPath : undefined}
+                onOpen={row.original.indexRow === undefined ? undefined : onOpenPath}
                 selected={selected}
                 onToggleExpanded={(path) => {
-                  const nextCollapsedPaths = toggledSet(visibleCollapsedPaths, path);
-                  setVisibleCollapsedPaths(nextCollapsedPaths);
-                  onCollapsedPathsChange(nextCollapsedPaths);
+                  setCollapseState((current) => ({
+                    ...current,
+                    collapsedPaths: toggledSet(current.collapsedPaths, path),
+                  }));
                 }}
               />
             </li>

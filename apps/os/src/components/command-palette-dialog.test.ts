@@ -11,16 +11,13 @@ import {
 } from "./command-palette-model.ts";
 
 describe("command palette models", () => {
-  test("resets related palette state atomically when opening and changing tabs", () => {
-    const collapsed = reducePaletteDialogState(initialPaletteDialogState(), {
+  test("initializes related palette state atomically and preserves it across tab changes", () => {
+    const initial = initialPaletteDialogState("recent");
+    const collapsed = reducePaletteDialogState(initial, {
       type: "stream_toggled",
       path: "/agents",
     });
-    const opened = reducePaletteDialogState(collapsed, {
-      type: "opened",
-      tab: "recent",
-    });
-    const queried = reducePaletteDialogState(opened, {
+    const queried = reducePaletteDialogState(collapsed, {
       type: "query_changed",
       query: "cattle",
     });
@@ -33,9 +30,10 @@ describe("command palette models", () => {
       tab: "agents",
     });
 
+    expect(initial).toMatchObject({ tab: "recent", query: "", selectedValue: "" });
     expect(collapsed.collapsedStreamPaths).toEqual(new Set(["/agents"]));
-    expect(opened.collapsedStreamPaths).toEqual(new Set());
     expect(queried.query).toBe("cattle");
+    expect(changedTab.collapsedStreamPaths).toEqual(new Set(["/agents"]));
     expect(changedTab).toMatchObject({
       tab: "agents",
       query: "cattle",
@@ -91,11 +89,10 @@ describe("command palette models", () => {
     expect(hasPathDescendant(["/agents/research"], "/agents/research")).toBe(false);
   });
 
-  test("defaults by route and keeps admin in stream-tree mode", () => {
-    expect(defaultPaletteTab("/agents", true)).toBe("agents");
-    expect(defaultPaletteTab("/agents/research/child", true)).toBe("agents");
-    expect(defaultPaletteTab("/repos/config", true)).toBe("recent");
-    expect(defaultPaletteTab("/agents", false)).toBe("tree");
+  test("defaults project navigation by route", () => {
+    expect(defaultPaletteTab("/agents")).toBe("agents");
+    expect(defaultPaletteTab("/agents/research/child")).toBe("agents");
+    expect(defaultPaletteTab("/repos/config")).toBe("recent");
   });
 
   test("accepts only complete canonical stream destinations", () => {

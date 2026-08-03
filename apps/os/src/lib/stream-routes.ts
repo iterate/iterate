@@ -28,9 +28,17 @@ export function linkOptionsForAdminStreamPath(projectId: string, path: string) {
  * default tab and filters rather than inheriting the previous view's.
  */
 export function linkOptionsForStreamPath(projectSlug: string, path: string) {
-  const streamPath = StreamPath.parse(path);
-  const segments = streamPath.split("/").filter(Boolean);
   const params = { projectSlug };
+  const parsed = StreamPath.safeParse(path);
+  if (!parsed.success) {
+    return linkOptions({
+      to: "/projects/$projectSlug/streams/$",
+      params: { ...params, _splat: path },
+      search: {},
+    });
+  }
+  const streamPath = parsed.data;
+  const segments = streamPath.split("/").filter(Boolean);
 
   if (streamPath === "/") {
     // Root stream + project settings panel (dashboard is not a stream view).

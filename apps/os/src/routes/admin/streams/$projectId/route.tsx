@@ -1,4 +1,4 @@
-import { Outlet, createFileRoute, useNavigate, useParams } from "@tanstack/react-router";
+import { Outlet, createFileRoute, useMatch, useNavigate } from "@tanstack/react-router";
 import { useLiveState } from "iterate/sdk/itx/react";
 import { StreamIndexTablePanel } from "~/components/streams/stream-index-table.tsx";
 import { streamPathFromSplatOrRoot } from "~/lib/stream-links.ts";
@@ -15,8 +15,11 @@ export const Route = createFileRoute("/admin/streams/$projectId")({
 function AdminStreamProjectLayout() {
   const { projectId } = Route.useParams();
   const navigate = useNavigate();
-  const params = useParams({ strict: false });
-  const splat = typeof params._splat === "string" ? params._splat : undefined;
+  const splat = useMatch({
+    from: "/admin/streams/$projectId/$",
+    shouldThrow: false,
+    select: (match) => match.params._splat,
+  });
   const currentPath = streamPathFromSplatOrRoot(splat);
   const streamIndexAvailable = projectId !== NULL_DURABLE_OBJECT_PROJECT_ID;
   const streamsState = useLiveState(
