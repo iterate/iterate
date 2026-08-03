@@ -3,6 +3,154 @@
 Newest entries are prepended. This is an evidence ledger, not a declaration
 that the three-device goal is complete.
 
+## 10:28 — Production mounts answer; the complete host suite is green under contention
+
+All three physical devices answered through the real production
+`os.iterate.com/api` capability surface after the network move. M5StickS3 and
+HAVPE each reported one healthy control connection, no control/Wi-Fi/protocol
+errors, and no PCM incident. StackChan likewise remained mounted and reported
+no control or PCM error, but retained one historical Wi-Fi disconnect with
+ESP-IDF reason 201 (`NO_AP_FOUND`). That bounded event is not erased or called
+healthy merely because the current link recovered. A second production
+snapshot at device uptime 1,291,098 ms showed the count still exactly one,
+with the same control generation and no disconnect/error increment since the
+first snapshot at 893,229 ms. Current RSSI was
+-72 dBm for Stick, -76 dBm for StackChan, and -75 dBm for HAVPE. These are
+reachability/control-plane observations, not an acoustic acceptance run.
+
+Kit's complete TypeScript suite now passes with 710 tests and the one
+deliberately live-only test skipped. The first complete run found a real host
+harness defect: under heavy parallel load, macOS could starve the fake
+CoreAudio recorder's short-lived version process past its fixed two-second
+deadline. A deterministic delayed-child regression reproduced the problem.
+The bounded capability probe now has a ten-second deadline, distinct from the
+later five-second recording-readiness gate; sixteen simultaneous reproductions
+and the complete suite pass. This changes only host-tool startup tolerance. It
+does not relax any audio frame, transport, reset, buffer, or network-validity
+criterion.
+
+The next no-acoustics step is deliberately diagnostic rather than another
+blind AEC tuning change. The existing CoreS3 BSP hook observes the exact
+128-sample PCM buffer only after TX DMA completion. StackChan's earlier source
+proves that this can be paired with RX DMA without delaying audible playout.
+The portable finite trace now has a bounded, sequence-checked fifth plane for
+that exact speaker signal alongside near, electrical reference, linear AEC,
+and clean output. Its test first failed on the absent fifth channel and now
+pins plane order, independent storage, continuity, and the no-work idle path.
+All 79 native tests pass, including realtime ELF-placement audits. The rebuilt
+StackChan image is 1,264,880 bytes (76% of the app partition free), SHA-256
+`d28e73f2c8932a8a31949031598d5e02520a1a4c550f0eed98deeee9d7f009d8`.
+The host resource profile still reports no allocator dependency, a 1,368-byte
+StackChan profile, and a 5,576-byte profile-plus-protocol working set. The
+next hardware change is to feed the fifth plane from a bounded TX/RX
+completion aligner; until a quiet, network-valid capture establishes that lag
+and gain relationship, the live canceller continues consuming its current
+electrical reference.
+
+## 10:15 — New guest network is usable for deterministic work, not yet an acoustic AEC oracle
+
+All three active voice targets were reprovisioned onto the current guest Wi-Fi
+without changing their device identity, production project, worker origin, or
+mounted capability. The password is deliberately absent from this repository.
+Non-disruptive USB enumeration on 2026-08-03 again resolved M5StickS3,
+StackChan, and Home Assistant Voice Preview Edition by their stable ROM MACs;
+their current addresses are `192.168.1.51`, `192.168.1.46`, and
+`192.168.1.43`, respectively. A fresh five-packet sample lost no packets. Its
+mean/max device RTTs were 33.795/56.571 ms, 43.597/98.589 ms, and
+13.530/27.763 ms; the router was 13.014/45.301 ms. This proves present
+reachability, not that a later audio interval is network-valid. Every physical
+run must still retain and classify its own aligned router/device/worker
+evidence.
+
+An earlier instrumented HAVPE interval on this same guest network was correctly
+classified `network-invalid`: aligned device/router/worker RTT crossed the
+run's limits while the device recorded eight no-progress freshness restarts,
+discarding old microphone work so recovery resumed at real time. The sampled
+userspace and once-per-second device counters did not share exact boundaries;
+their apparent 599-versus-546-frame difference is therefore a conservative
+callback bracket, not evidence of frame creation or loss. The harness work
+below makes that boundary semantics explicit rather than presenting sampled
+metric deltas as exact media accounting.
+
+The control owner now treats rejection of an expired remote metrics callback
+as a normal terminal subscription outcome, increments the exported
+`subscriptionEnds` counter, and continues polling later capability modules in
+the same turn. Actual driver errors still fail fast. Focused C and TypeScript
+regressions, the complete 79-test native suite, Kit typecheck, and all three
+ESP-IDF target builds pass. The complete images are 1,167,040 bytes for
+M5StickS3 (930,112 bytes / 44% of its app partition free), 1,264,880 bytes for
+StackChan (76% free), and 1,079,872 bytes for HAVPE (79% free). The full Stick
+build also exposed an unsafe positional C++ options initializer whose pointer
+arguments had drifted into newer boolean fields; it is now a named initializer
+so later option growth cannot silently reinterpret values.
+
+The three bounded Fable reviews have finished and were reconciled rather than
+blindly applied. The hardware review confirms that HAVPE already consumes the
+XMOS-processed AEC channel and should not acquire a second ESP-side canceller.
+For StackChan, the highest-value next diagnostic is the existing bit-exact
+speaker DMA-completion tap paired with the near, electrical-reference, linear,
+and final AEC planes; that distinguishes reference amplitude, alignment, and
+engine behaviour without changing the engine first. Final echo suppression,
+double-talk, and near-end reconstruction remain deliberately unaccepted in the
+current noisy room. Transport, bounded-buffer, reconnect, capability, metric,
+build-size, and deterministic waveform work remain valid here.
+
+## 07:12 — Four-stage StackChan evidence localises broadband failure; latest run is network-invalid
+
+StackChan now reports aligned near, electrical-reference, linear-AEC, and
+post-NLP peak/mean windows through the existing low-rate metrics capability.
+The implementation walks samples outside the platform critical section and
+merges only nine fixed accumulator scalars; the extra linear-output scratch is
+one fixed 1,024-byte realtime buffer, with no allocation, queue, or new task.
+The public AEC metrics schema is now version 3. Red tests first rejected both a
+missing fourth signal and the old version-2 TypeScript shape. The two targeted
+native tests, 57 relevant Vitest cases, and Kit typecheck then passed. The
+flashed StackChan app is 1,262,800 bytes (`0x1344d0`), 1,568 bytes larger than
+the preceding image, with SHA-256
+`7c343092ab976e28e131354f42223e27c02377334fe309eb1b5a21b17c21e7d0`.
+It was selected immediately before flashing by stable USB ROM MAC
+`68:EE:8F:D8:53:20`, not by the current `/dev/cu.*` suffix, and flash hashes
+verified while preserving its provisioning partition.
+
+The production waveform artifact at
+`evidence/stackchan-production-aec-waveform/2026-08-03T06-02-28-367Z`
+is deliberately retained as a failed, **network-invalid** run. Ambient, tone,
+PRBS, speech-shaped, and near-only phases each completed with exact device/worker
+frame accounting and no new capture-reserve drop, bridge error, AEC recreate,
+or transport close. During near-repeat, however, only 31,040 of the required
+64,000 samples arrived. In the same exact interval production-worker RTT rose
+through 183–357 ms, four consecutive reachability probes failed, and all three
+reachability series acquired a 5,168.879 ms coverage gap. The automatic
+network classifier rejected the run; it cannot be used as either an AEC pass
+or an audio-pipeline failure.
+
+The completed phases are nevertheless a decisive calibration observation.
+During the far tone, mean magnitudes were approximately near 4,957, reference
+1,014, linear 197, and final 183: the linear canceller did almost all of the
+suppression and NLP added less than 1 dB. During broadband PRBS they were near
+3,513, reference 872, linear 3,268, and final 3,174: linear cancellation was
+only about 0.6 dB, again with little NLP effect. Speech-shaped output was near
+7,109, reference 711, linear 1,267, and final 1,174, but the raw near channel
+also clipped at 32,768. Raising reference PGA had already failed to improve
+these outcomes. The active defect is therefore not primarily an NLP threshold:
+the reference/alignment/adaptation path cancels a stationary tone but fails on
+broadband content, while excessive microphone gain independently destroys some
+speech samples before AEC.
+
+The next discriminating change is a bounded capability-delivered synchronized
+raw/reference/linear/final capture so the harness can measure lag, polarity,
+bandwise ERLE, clipping, and drift instead of guessing from one-second
+aggregates. This must use PSRAM and a nonblocking realtime tap; USB serial is
+explicitly excluded because opening it reboots the board and destroys incident
+state. Two new independent Fable max-effort reviews are running in parallel:
+one audits both boards' codec/I2S paths and first-party Espressif guidance, and
+one compares materially different AEC architectures plus a shared physical
+oracle. Their prompts are retained in
+`fable-aec-hardware-first-party-prompt-2026-08-03.md` and
+`fable-aec-architecture-oracle-prompt-2026-08-03.md`; an earlier reference
+calibration review is also still running. Recommendations will be reconciled
+against measured evidence rather than applied blindly.
+
 ## 05:53 — Off-device StackChan calibration gate is fully green
 
 The complete Kit suite now passes: 88 test files and 690 runnable tests, with

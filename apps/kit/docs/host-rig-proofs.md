@@ -162,6 +162,37 @@ fills the difference with silence, exactly as designed. The host rig
 reproduces this class with `voicelab wire --throttle-fps`, which turns a clean
 conversation into first audio at 7446 ms and 64% concealment.
 
+## What a long soak found that short runs could not
+
+Both of the night's worst device defects appeared **after turn 15**. Six-turn
+and ten-turn runs measured perfectly clean while the device was, in one case,
+about to become permanently unreachable and in the other about to stop sending
+audio entirely. One "perfect" result did not survive its own re-run.
+
+**The device could not tell that the server had forgotten it.** Eighteen turns
+in, the capability went offline and every RPC failed with "capability
+kit.waveshare is offline" — while the device itself was flawless: rx=8468
+played=8468, conceal 0, gaps 0, looping and pinging. Nothing was watching for
+it. The downlink watchdog requires a call in progress; the last-resort liveness
+watchdog keys on pings, and pings ride the SOCKET, not the mount. A healthy TCP
+connection under a dead capability satisfies both. Answering an RPC is the only
+proof the mount is reachable, so that is now stamped and watched.
+
+**A constant changed on good reasoning stopped the uplink.** Mic batching was
+raised 4 → 12 because every append costs two WebSocket messages against a
+~25/s ceiling — a correct argument, and what the constant's own documentation
+said. Fifteen turns later `frames=0` for the rest of the soak while the
+downlink stayed perfect. Twelve frames is 240 ms against a 32-frame (640 ms)
+queue, and the catch-up rule fires at twice the batch — 480 ms, three quarters
+of the queue. Three coupled numbers, one changed.
+
+The rule this earns: **validate a firmware constant with a soak of at least
+25 minutes**, because that is where these live.
+
+```
+pnpm cli voicelab soak --name waveshare --minutes 26 --every 40
+```
+
 ## What this still cannot tell you
 
 The analogue path — codec gain staging, amplifier settle, the acoustic path,
