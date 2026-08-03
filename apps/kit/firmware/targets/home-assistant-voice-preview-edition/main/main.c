@@ -1,4 +1,5 @@
 #include "iterate/kit/audio_intent_reconciler.h"
+#include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/cpu_usage.h"
 #include "iterate/kit/debounced_button.h"
 #include "iterate/kit/devices/voice_satellite.h"
@@ -142,8 +143,8 @@ _Static_assert(
     HAVPE_PCM_FRAME_DURATION_MS == 20U,
     "HAVPE must use the exact PCM-v1 frame duration");
 _Static_assert(
-    HAVPE_LED_COUNT == HAVPE_UI_RING_LED_COUNT,
-    "the physical strip and host-tested HAVPE UI must describe one ring");
+    HAVPE_LED_COUNT == ITERATE_KIT_CONVERSATION_LIGHT_COUNT,
+    "the physical strip and shared conversation model must describe one ring");
 _Static_assert(
     HAVPE_PCM_UPLINK_RESERVE_MS % HAVPE_PCM_FRAME_DURATION_MS == 0U &&
         HAVPE_PCM_DOWNLINK_RESERVE_MS % HAVPE_PCM_FRAME_DURATION_MS == 0U,
@@ -223,7 +224,8 @@ struct havpe_runtime {
   struct iterate_kit_cpu_usage_meter cpu_usage;
   struct iterate_kit_debounced_button center_button;
   struct havpe_center_button_gesture center_button_gesture;
-  struct havpe_ui_rgb ring_frame[HAVPE_UI_RING_LED_COUNT];
+  struct iterate_kit_rgb8
+      ring_frame[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
 
   int64_t booted_at_us;
   uint64_t next_ring_refresh_ms;
@@ -770,7 +772,8 @@ static enum iterate_kit_status fill_leds(
 
 static bool write_status_ring(
     struct havpe_runtime *state,
-    const struct havpe_ui_rgb pixels[HAVPE_UI_RING_LED_COUNT]) {
+    const struct iterate_kit_rgb8
+        pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]) {
   if (state == NULL || !state->ring_power_enabled ||
       state->leds == NULL || pixels == NULL) {
     return false;
@@ -807,8 +810,9 @@ static bool write_status_ring(
 static void update_status_ring(
     struct havpe_runtime *state, uint64_t now_ms) {
   struct iterate_kit_voice_pe_audio_activity activity = {0U, 0U};
-  struct havpe_ring_ui_input input;
-  struct havpe_ui_rgb pixels[HAVPE_UI_RING_LED_COUNT];
+  struct iterate_kit_conversation_visual_state input;
+  struct iterate_kit_rgb8
+      pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
   wifi_ap_record_t access_point;
 
   if (state == NULL || now_ms < state->next_ring_refresh_ms) return;
@@ -832,21 +836,23 @@ static void update_status_ring(
 
   memset(&input, 0, sizeof(input));
   if (!state->wifi_observed) {
-    input.network = HAVPE_UI_NETWORK_DISCONNECTED;
+    input.network = ITERATE_KIT_NETWORK_DISCONNECTED;
   } else if (
       state->control_transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
-    input.network = HAVPE_UI_NETWORK_CONNECTED;
+    input.network = ITERATE_KIT_NETWORK_CONNECTED;
   } else {
-    input.network = HAVPE_UI_NETWORK_CONNECTING;
+    input.network = ITERATE_KIT_NETWORK_CONNECTING;
   }
   input.has_wifi_rssi = state->wifi_observed;
   input.wifi_rssi_dbm = state->wifi_rssi_dbm;
   input.conversation_active =
       iterate_kit_voice_satellite_is_conversation_active(&state->device);
-  input.pcm_ready = state->pcm_started &&
+  input.media_ready = state->pcm_started &&
       state->pcm_transport.state == ITERATE_KIT_ESP_IDF_PCM_READY;
-  input.pcm_failed = state->pcm_started &&
+  input.media_failed = state->pcm_started &&
       state->pcm_transport.state == ITERATE_KIT_ESP_IDF_PCM_FAILED;
+  input.microphone_listening =
+      input.conversation_active && input.media_ready;
   input.microphone_peak = activity.microphone_peak;
   input.speaker_peak = activity.speaker_peak;
   input.restart_armed = state->center_button_gesture.restart_armed;
@@ -855,7 +861,7 @@ static void update_status_ring(
       now_ms < state->ring_manual_override_until_ms) {
     return;
   }
-  havpe_ring_ui_render(&input, pixels);
+  iterate_kit_conversation_lights_render(&input, pixels);
   if (!write_status_ring(state, pixels)) {
     if (!state->ring_write_failure_latched) {
       ESP_LOGE(TAG, "status ring write failed");

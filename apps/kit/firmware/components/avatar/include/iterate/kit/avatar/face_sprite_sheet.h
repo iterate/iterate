@@ -6,6 +6,10 @@
 
 #include "iterate/kit/avatar/face_render.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Flash-resident, data-driven sprite faces.
  *
@@ -357,3 +361,7 @@ uint8_t face_sprite_select_mouth_slot(
     const face_sprite_atlas_t *atlas,
     const face_render_key_t *render_key,
     uint8_t *role);
+
+#ifdef __cplusplus
+}
+#endif

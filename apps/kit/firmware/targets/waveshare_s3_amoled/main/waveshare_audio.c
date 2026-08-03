@@ -141,6 +141,16 @@ static volatile uint32_t dma_underruns;
  * metric measuring silence rather than a fault.
  */
 static volatile bool dma_watch;
+/*
+ * Underruns in the first descriptors after playback starts, separated from
+ * the rest. The two have different causes and only one is worth chasing: an
+ * answer's opening plays into a DMA ring that has been idle, so the first
+ * buffers were cleared long ago and the very first write cannot reach them
+ * before they are sent. Underruns AFTER that are the pipeline failing to keep
+ * up, which is the real defect.
+ */
+static volatile uint32_t dma_underruns_opening;
+static volatile uint32_t dma_sends_since_start;
 
 static bool IRAM_ATTR on_dma_sent(
     i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
@@ -155,7 +165,18 @@ static bool IRAM_ATTR on_dma_sent(
    * underrun — which is the right way round for a diagnostic.
    */
   words = (const uint32_t *)event->dma_buf;
-  if (words[0] == 0U) ++dma_underruns;
+  if (words[0] == 0U) {
+    /*
+     * Six descriptors is the whole ring: past that, every buffer the hardware
+     * sends is one the software has had a chance to fill.
+     */
+    if (dma_sends_since_start < 6U) {
+      ++dma_underruns_opening;
+    } else {
+      ++dma_underruns;
+    }
+  }
+  if (dma_sends_since_start < 6U) ++dma_sends_since_start;
   return false;
 }
 
@@ -164,7 +185,12 @@ uint32_t waveshare_audio_dma_underruns(void) {
 }
 
 void waveshare_audio_dma_watch(bool active) {
+  if (active && !dma_watch) dma_sends_since_start = 0U;
   dma_watch = active;
+}
+
+uint32_t waveshare_audio_dma_underruns_opening(void) {
+  return dma_underruns_opening;
 }
 
 bool waveshare_audio_init(void) {

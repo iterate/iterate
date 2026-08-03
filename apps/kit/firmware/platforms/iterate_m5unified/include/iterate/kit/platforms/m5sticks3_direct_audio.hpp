@@ -2,6 +2,8 @@
 #define ITERATE_KIT_PLATFORMS_M5STICKS3_DIRECT_AUDIO_HPP
 
 #include "iterate/kit/pcm_lane.h"
+#include "iterate/kit/avatar/face_animator.h"
+#include "iterate/kit/avatar/face_pose.h"
 #include "iterate/kit/platforms/bounded_event_counter.hpp"
 #include "iterate/kit/platforms/direct_i2s_stereo_output.hpp"
 #include "iterate/kit/platforms/esp_idf_direct_i2s_backend.hpp"
@@ -102,6 +104,112 @@ using M5StickS3DirectI2sOutput =
         M5StickS3DirectI2sOps::descriptorCount,
         M5StickS3DirectI2sBackend>;
 
+/**
+ * Latest semantic face pose proven by an exact physical DMA completion.
+ *
+ * The publication sequence is a diagnostic identity, not a render queue. A
+ * low-priority display owner may skip any number of poses and draw only the
+ * newest coherent snapshot; audio never waits for it.
+ */
+struct M5StickS3AvatarSnapshot {
+  face_pose_t pose{};
+  std::uint32_t publicationSequence = 0U;
+};
+
+/**
+ * Lossy visual sidecar around the direct-I2S output contract.
+ *
+ * Each successfully submitted content frame is analyzed immediately into a
+ * compact pose and stored beside its `{generation, sequence}` identity. The
+ * pose is published only when the wrapped driver reports that same frame's DMA
+ * descriptor complete. This prevents network/prebuffer lead from making the
+ * mouth move ahead of the audible speaker.
+ *
+ * Only one pose per physical descriptor can exist. There is no PCM copy or
+ * visual FIFO. Visual
+ * bookkeeping failure increments a diagnostic counter and drops animation;
+ * it must never change an audio return value or deadline.
+ */
+class M5StickS3AvatarOutput {
+ public:
+  static constexpr std::size_t descriptorCount =
+      M5StickS3DirectI2sOps::descriptorCount;
+
+  explicit M5StickS3AvatarOutput(
+      M5StickS3DirectI2sOutput &output);
+
+  bool initialise();
+  iterate_kit_status resetForPlayback();
+  iterate_kit_status preloadMono(
+      const std::int16_t *samples,
+      std::size_t sampleCount);
+  iterate_kit_status preloadMono(
+      const std::int16_t *samples,
+      std::size_t sampleCount,
+      DirectI2sFrameMetadata metadata);
+  iterate_kit_status preloadSilence();
+  iterate_kit_status start();
+  DirectI2sCompletionPollResult pollCompletionBatch();
+  iterate_kit_status writeMono(
+      const std::int16_t *samples,
+      std::size_t sampleCount);
+  iterate_kit_status writeMono(
+      const std::int16_t *samples,
+      std::size_t sampleCount,
+      DirectI2sFrameMetadata metadata);
+  iterate_kit_status writeSilence();
+  iterate_kit_status writeRecoverySilence();
+  std::uint32_t takeQueueOverflows();
+  iterate_kit_status stopAndRelease();
+  bool lastPlaybackCompletion(
+      std::size_t index,
+      RealtimePlaybackDescriptorCompletion *completion) const;
+  RealtimePlaybackSuccessfulRefillTiming
+  lastSuccessfulRefillTiming() const;
+
+  bool snapshot(M5StickS3AvatarSnapshot *snapshot) const;
+  std::uint32_t droppedPoseCount() const;
+  std::uint32_t completionWithoutPoseCount() const;
+
+ private:
+  struct PendingPose {
+    DirectI2sFrameMetadata metadata{};
+    face_pose_t pose{};
+    bool occupied = false;
+  };
+
+  void clearPendingPoses();
+  void noteSubmittedPose(
+      const std::int16_t *samples,
+      std::size_t sampleCount,
+      DirectI2sFrameMetadata metadata);
+  void publishCompletedPoses();
+  void publishPose(const face_pose_t &pose);
+  void publishQuietPose();
+  static bool metadataEqual(
+      DirectI2sFrameMetadata left,
+      DirectI2sFrameMetadata right);
+  static std::uint32_t packBytes(
+      std::uint8_t byte0,
+      std::uint8_t byte1,
+      std::uint8_t byte2,
+      std::uint8_t byte3);
+
+  M5StickS3DirectI2sOutput &output_;
+  face_animator_t animator_{};
+  std::array<PendingPose, descriptorCount> pendingPoses_{};
+  std::atomic<std::uint32_t> posePublication_{0U};
+  std::atomic<std::uint32_t> poseWord0_{0U};
+  std::atomic<std::uint32_t> poseWord1_{0U};
+  std::atomic<std::uint32_t> poseWord2_{0U};
+  std::atomic<std::uint32_t> poseWord3_{0U};
+  std::atomic<std::uint32_t> poseFrameIndex_{0U};
+  std::atomic<std::uint32_t> posePlayoutSamples_{0U};
+  std::atomic<std::uint32_t> droppedPoses_{0U};
+  std::atomic<std::uint32_t> completionsWithoutPose_{0U};
+  bool initialised_ = false;
+};
+
 using M5StickS3RealtimePlayback =
     RealtimePlayback<
         M5StickS3DirectI2sOps::monoSampleCount,
@@ -144,6 +252,9 @@ class M5StickS3DirectAudioOwner {
   /** Lock-free state projection for low-cost product UI reconciliation. */
   RealtimePlaybackState playbackState() const;
   RealtimePlaybackMetrics playbackMetrics();
+  bool avatarSnapshot(M5StickS3AvatarSnapshot *snapshot) const;
+  std::uint32_t avatarDroppedPoseCount() const;
+  std::uint32_t avatarCompletionWithoutPoseCount() const;
   std::uint32_t stackHighWaterBytes() const;
   std::uint32_t
   generationFenceAcknowledgementTimeouts() const;
@@ -209,7 +320,8 @@ class M5StickS3DirectAudioOwner {
   M5StickS3DirectI2sOps i2s_{};
   M5StickS3AudioBoardOps board_{};
   M5StickS3DirectI2sBackend backend_{i2s_, board_};
-  M5StickS3DirectI2sOutput output_{backend_};
+  M5StickS3DirectI2sOutput directOutput_{backend_};
+  M5StickS3AvatarOutput output_{directOutput_};
   M5StickS3RealtimePlayback playback_{};
   iterate_kit_pcm_lane *lane_ = nullptr;
 

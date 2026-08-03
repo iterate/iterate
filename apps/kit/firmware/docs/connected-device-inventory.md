@@ -42,7 +42,7 @@ also reports the `/dev/cu.*` path needed by ESP-IDF tools.
 | -------------------------------------- | --------------------------- | ----------------------- | ----------------- | ---------------------------------------------------------------------------------- |
 | StackChan / M5Stack CoreS3             | `68:EE:8F:D8:53:20`         | `/dev/cu.usbmodem2101`  | `2-1`             | Separately connected; Iterate voice/AEC/avatar firmware, face physically confirmed |
 | M5StickS3                              | `70:04:1D:D5:45:88`         | `/dev/cu.usbmodem11301` | `1-1.3`           | Iterate voice firmware and first physical Iterate Kit firmware target              |
-| Waveshare ESP32-S3 touch-screen device | `1C:DB:D4:7A:16:C8`         | `/dev/cu.usbmodem11201` | `1-1.2`           | Iterate voice firmware                                                             |
+| Waveshare ESP32-S3 AMOLED touch-screen device (**inventory only; never flash**) | `1C:DB:D4:7A:16:C8` | `/dev/cu.usbmodem11201` | `1-1.2` | Explicitly excluded from this firmware campaign                                    |
 | Home Assistant Voice Preview Edition   | `D8:3B:DA:46:20:34`         | `/dev/cu.usbmodem11101` | `1-1.1`           | Iterate voice/AEC firmware                                                         |
 
 The ports and locations in this table are observations from the most recent
@@ -93,6 +93,11 @@ non-disruptive. Do not probe a board another agent owns merely to rediscover
 its port: the USB serial mapping already provides that answer.
 
 ## Flash guardrails
+
+The Waveshare AMOLED with ROM MAC `1C:DB:D4:7A:16:C8` is an explicit denylisted
+target. Inventory may report it, but any probe that resets it, serial monitor,
+erase, or flash command must reject that MAC before opening the port. A moving
+USB port or a matching Espressif VID/PID never overrides this rule.
 
 1. Enumerate immediately before the operation.
 2. Resolve the requested board by exact, case-insensitive stable serial.

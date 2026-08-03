@@ -7,6 +7,7 @@ idf_component_register(
     "../common/include"
   REQUIRES
     m5stack__m5unified
+    avatar
     capabilities
     core
     esp_driver_i2s

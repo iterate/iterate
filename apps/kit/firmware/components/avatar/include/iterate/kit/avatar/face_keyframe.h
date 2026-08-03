@@ -4,6 +4,10 @@
 
 #include "iterate/kit/avatar/face_pose.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Stable continuous-control interchange. This is intentionally smaller than
  * face_pose_t and remains useful for renderers that only need blendshape-like
@@ -34,7 +38,11 @@ enum {
     FACE_KEYFRAME_BYTES = 12,
 };
 
+#ifdef __cplusplus
+static_assert(
+#else
 _Static_assert(
+#endif
     sizeof(face_keyframe_t) == FACE_KEYFRAME_BYTES,
     "face keyframe wire format must remain exactly 12 bytes");
 
@@ -124,7 +132,11 @@ enum {
     FACE_RENDER_KEY_BYTES = 40,
 };
 
+#ifdef __cplusplus
+static_assert(
+#else
 _Static_assert(
+#endif
     sizeof(face_render_key_t) == FACE_RENDER_KEY_BYTES,
     "face renderer IR must remain exactly 40 bytes");
 
@@ -132,3 +144,7 @@ void face_render_key_from_pose(
     const face_pose_t *pose, face_render_key_t *render_key);
 void face_pose_apply_render_key(
     face_pose_t *pose, const face_render_key_t *render_key);
+
+#ifdef __cplusplus
+}
+#endif

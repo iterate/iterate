@@ -6,6 +6,10 @@
 #include "iterate/kit/avatar/face_driver.h"
 #include "iterate/kit/avatar/face_pose.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     uint16_t speech_floor;
     uint16_t mouth_dynamic_range;
@@ -51,3 +55,7 @@ void face_animator_push_event(
  */
 bool face_animator_snapshot(const face_animator_t *animator,
                             face_animator_state_t *state);
+
+#ifdef __cplusplus
+}
+#endif

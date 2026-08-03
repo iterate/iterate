@@ -9,6 +9,7 @@ list(APPEND EXTRA_COMPONENT_DIRS
   "${CMAKE_CURRENT_LIST_DIR}/../../idf-components/capnweb"
   "${CMAKE_CURRENT_LIST_DIR}/../../components/core"
   "${CMAKE_CURRENT_LIST_DIR}/../../components/capabilities"
+  "${CMAKE_CURRENT_LIST_DIR}/../../components/avatar"
   "${CMAKE_CURRENT_LIST_DIR}/../../devices/m5sticks3"
   "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_esp_idf"
   "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_m5unified"

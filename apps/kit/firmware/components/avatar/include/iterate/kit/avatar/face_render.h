@@ -6,6 +6,10 @@
 
 #include "iterate/kit/avatar/face_keyframe.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Portable software renderer used by both the ESP32-S3 firmware and the WASM
  * comparison laboratory. A complete frame is RGB565 at half the CoreS3 LCD
@@ -143,7 +147,11 @@ typedef struct {
     uint16_t estimated_ops_per_pixel;
 } face_render_info_t;
 
+#ifdef __cplusplus
+static_assert(
+#else
 _Static_assert(
+#endif
     sizeof(face_render_info_t) == 16,
     "renderer metadata ABI must remain exactly 16 bytes");
 
@@ -165,3 +173,7 @@ bool face_render_frame(
     uint32_t sample_clock,
     uint16_t *rgb565,
     size_t pixel_capacity);
+
+#ifdef __cplusplus
+}
+#endif

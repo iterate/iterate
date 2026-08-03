@@ -396,10 +396,18 @@ static enum capnweb_status health(
     void *context,
     const struct capnweb_call *call,
     struct capnweb_reply *reply) {
-  /* The same object dev-stats carries, so it is sized like the stats line
+  /*
+   * The same object dev-stats carries, so it is sized like the stats line
    * and not like a guess — a health call that overflows is a health call
-   * that is useless exactly when it is needed. */
-  static char health_text[1280];
+   * that is useless exactly when it is needed.
+   *
+   * Which duly happened: two counters were added and the whole thing started
+   * returning "health overflow", so the device went dark at the moment its
+   * telemetry was being extended. Sized with real headroom now, because the
+   * cost of a spare kilobyte is nothing against the cost of a diagnostic
+   * that fails when somebody adds a field to it.
+   */
+  static char health_text[2560];
   size_t length;
   (void)context;
   (void)call;

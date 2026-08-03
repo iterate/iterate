@@ -7,6 +7,10 @@
 #include "iterate/kit/avatar/face_keyframe.h"
 #include "iterate/kit/avatar/face_sprite_sheet.h"
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /*
  * Allocation-free registry for the sprite atlases compiled into a target.
  *
@@ -55,3 +59,7 @@ bool face_avatar_registry_render_snapshot_at(
     uint32_t sample_clock,
     uint16_t *rgb565,
     size_t pixel_capacity);
+
+#ifdef __cplusplus
+}
+#endif

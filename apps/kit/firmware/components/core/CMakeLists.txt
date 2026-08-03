@@ -7,6 +7,7 @@ idf_component_register(
     "src/audio_playout.c"
     "src/audio.c"
     "src/configuration.c"
+    "src/conversation_lights.c"
     "src/control_recovery.c"
     "src/cpu_usage.c"
     "src/debounced_button.c"

@@ -1105,6 +1105,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkOverflow", runtime.speaker_overflow_drops},
     {"spkUnderruns", runtime.speaker_underruns},
     {"dmaUnderruns", waveshare_audio_dma_underruns()},
+    {"dmaOpening", waveshare_audio_dma_underruns_opening()},
     {"spkConceal", runtime.speaker_conceal_frames},
     {"spkCatchup", runtime.speaker_catchup_frames},
     {"spkDebtPaid", runtime.speaker_debt_paid},
@@ -1196,7 +1197,17 @@ size_t waveshare_health_json(char *out, size_t capacity) {
         ",\"%s\":%" PRIu32,
         fields[index].name,
         fields[index].value);
-    if (written <= 0 || (size_t)written >= capacity - used) return 0U;
+    if (written <= 0 || (size_t)written >= capacity - used) {
+      /*
+       * Name the field that did not fit. "health overflow" alone sends the
+       * reader to the transport, when the answer is always the same: this
+       * buffer is one field too small.
+       */
+      ESP_LOGE(
+          tag, "health json full at \"%s\" (%u bytes)", fields[index].name,
+          (unsigned int)capacity);
+      return 0U;
+    }
     used += (size_t)written;
   }
   if (used + 2U >= capacity) return 0U;

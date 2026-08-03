@@ -6,6 +6,8 @@
 #include <M5Unified.h>
 #pragma GCC diagnostic pop
 
+#include <limits>
+
 #include "driver/i2s_common.h"
 #include "esp_err.h"
 #include "esp_timer.h"
@@ -40,6 +42,19 @@ constexpr std::uint8_t
 constexpr std::uint8_t es8311SafeDacVolume =
     es8311ZeroDbVolume - es8311SafeDacAttenuationHalfDbSteps;
 static_assert(es8311SafeDacVolume == 0x9bU);
+
+void saturatingIncrement(
+    std::atomic<std::uint32_t> &counter) {
+  auto current = counter.load(std::memory_order_relaxed);
+  while (current !=
+             std::numeric_limits<std::uint32_t>::max() &&
+         !counter.compare_exchange_weak(
+             current,
+             current + 1U,
+             std::memory_order_relaxed,
+             std::memory_order_relaxed)) {
+  }
+}
 
 iterate_kit_status statusFromEspError(esp_err_t error) {
   switch (error) {
@@ -371,11 +386,357 @@ M5StickS3AudioBoardOps::configureCodec() {
   return ITERATE_KIT_OK;
 }
 
+M5StickS3AvatarOutput::M5StickS3AvatarOutput(
+    M5StickS3DirectI2sOutput &output)
+    : output_(output) {}
+
+bool M5StickS3AvatarOutput::initialise() {
+  if (initialised_) {
+    return true;
+  }
+  if (!face_animator_init_with_config(
+          &animator_,
+          16'000U,
+          &FACE_ENVELOPE_DEFAULT_CONFIG)) {
+    return false;
+  }
+  clearPendingPoses();
+  publishQuietPose();
+  initialised_ = true;
+  return true;
+}
+
+iterate_kit_status
+M5StickS3AvatarOutput::resetForPlayback() {
+  if (!initialised_) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  const auto status = output_.resetForPlayback();
+  if (status != ITERATE_KIT_OK) {
+    return status;
+  }
+
+  /*
+   * A playback reset is a destructive generation boundary. Keeping analyzer
+   * history here could animate a freshly connected response with the previous
+   * response's release envelope, while keeping pending poses could match old
+   * speech to a reused sequence. Reset both, but only after the driver proves
+   * its old descriptor cycle is gone.
+   */
+  if (!face_animator_init_with_config(
+          &animator_,
+          16'000U,
+          &FACE_ENVELOPE_DEFAULT_CONFIG)) {
+    (void)output_.stopAndRelease();
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  clearPendingPoses();
+  publishQuietPose();
+  return ITERATE_KIT_OK;
+}
+
+iterate_kit_status M5StickS3AvatarOutput::preloadMono(
+    const std::int16_t *samples,
+    std::size_t sampleCount) {
+  /*
+   * Generation-zero compatibility calls do not carry a stable identity. Do
+   * not invent physical lip-sync by associating them with an anonymous slot;
+   * production RealtimePlayback always uses the metadata-aware overload.
+   */
+  return output_.preloadMono(samples, sampleCount);
+}
+
+iterate_kit_status M5StickS3AvatarOutput::preloadMono(
+    const std::int16_t *samples,
+    std::size_t sampleCount,
+    DirectI2sFrameMetadata metadata) {
+  const auto status =
+      output_.preloadMono(samples, sampleCount, metadata);
+  if (status == ITERATE_KIT_OK) {
+    noteSubmittedPose(samples, sampleCount, metadata);
+  }
+  return status;
+}
+
+iterate_kit_status
+M5StickS3AvatarOutput::preloadSilence() {
+  return output_.preloadSilence();
+}
+
+iterate_kit_status M5StickS3AvatarOutput::start() {
+  return output_.start();
+}
+
+DirectI2sCompletionPollResult
+M5StickS3AvatarOutput::pollCompletionBatch() {
+  const auto result = output_.pollCompletionBatch();
+  if (result.status == ITERATE_KIT_OK) {
+    publishCompletedPoses();
+  }
+  return result;
+}
+
+iterate_kit_status M5StickS3AvatarOutput::writeMono(
+    const std::int16_t *samples,
+    std::size_t sampleCount) {
+  return output_.writeMono(samples, sampleCount);
+}
+
+iterate_kit_status M5StickS3AvatarOutput::writeMono(
+    const std::int16_t *samples,
+    std::size_t sampleCount,
+    DirectI2sFrameMetadata metadata) {
+  const auto status =
+      output_.writeMono(samples, sampleCount, metadata);
+  if (status == ITERATE_KIT_OK) {
+    noteSubmittedPose(samples, sampleCount, metadata);
+  }
+  return status;
+}
+
+iterate_kit_status
+M5StickS3AvatarOutput::writeSilence() {
+  return output_.writeSilence();
+}
+
+iterate_kit_status
+M5StickS3AvatarOutput::writeRecoverySilence() {
+  return output_.writeRecoverySilence();
+}
+
+std::uint32_t
+M5StickS3AvatarOutput::takeQueueOverflows() {
+  return output_.takeQueueOverflows();
+}
+
+iterate_kit_status
+M5StickS3AvatarOutput::stopAndRelease() {
+  const auto status = output_.stopAndRelease();
+  clearPendingPoses();
+  publishQuietPose();
+  return status;
+}
+
+bool M5StickS3AvatarOutput::lastPlaybackCompletion(
+    std::size_t index,
+    RealtimePlaybackDescriptorCompletion *completion) const {
+  return output_.lastPlaybackCompletion(index, completion);
+}
+
+RealtimePlaybackSuccessfulRefillTiming
+M5StickS3AvatarOutput::lastSuccessfulRefillTiming() const {
+  return output_.lastSuccessfulRefillTiming();
+}
+
+bool M5StickS3AvatarOutput::snapshot(
+    M5StickS3AvatarSnapshot *snapshot) const {
+  if (snapshot == nullptr) {
+    return false;
+  }
+  const auto before =
+      posePublication_.load(std::memory_order_acquire);
+  if (before == 0U || (before & 1U) != 0U) {
+    return false;
+  }
+  const auto word0 = poseWord0_.load(std::memory_order_relaxed);
+  const auto word1 = poseWord1_.load(std::memory_order_relaxed);
+  const auto word2 = poseWord2_.load(std::memory_order_relaxed);
+  const auto word3 = poseWord3_.load(std::memory_order_relaxed);
+  const auto frameIndex =
+      poseFrameIndex_.load(std::memory_order_relaxed);
+  const auto playoutSamples =
+      posePlayoutSamples_.load(std::memory_order_relaxed);
+  const auto after =
+      posePublication_.load(std::memory_order_acquire);
+  if (before != after || (after & 1U) != 0U) {
+    return false;
+  }
+
+  /*
+   * Every shared payload word is atomic. A seqlock over an ordinary C struct
+   * would still be a C++ data race even when retrying on sequence mismatch;
+   * packing the compact pose into native 32-bit atomics makes the low-priority
+   * display snapshot both bounded and memory-model correct on ESP32-S3.
+   */
+  face_pose_t pose{};
+  pose.mouth_open = static_cast<std::uint8_t>(word0);
+  pose.mouth_width = static_cast<std::uint8_t>(word0 >> 8U);
+  pose.mouth_round = static_cast<std::uint8_t>(word0 >> 16U);
+  pose.mouth_press = static_cast<std::uint8_t>(word0 >> 24U);
+  pose.mouth_teeth = static_cast<std::uint8_t>(word1);
+  pose.eye_open = static_cast<std::uint8_t>(word1 >> 8U);
+  pose.viseme = static_cast<std::uint8_t>(word1 >> 16U);
+  pose.phoneme = static_cast<std::uint8_t>(word1 >> 24U);
+  pose.gaze_x = static_cast<std::int8_t>(word2);
+  pose.gaze_y = static_cast<std::int8_t>(word2 >> 8U);
+  pose.confidence = static_cast<std::uint8_t>(word2 >> 16U);
+  pose.activity = static_cast<std::uint8_t>(word2 >> 24U);
+  pose.level = static_cast<std::uint16_t>(word3);
+  pose.speaking = ((word3 >> 16U) & 1U) != 0U;
+  pose.frame_index = frameIndex;
+  pose.playout_samples = playoutSamples;
+  snapshot->pose = pose;
+  snapshot->publicationSequence = after;
+  return true;
+}
+
+std::uint32_t
+M5StickS3AvatarOutput::droppedPoseCount() const {
+  return droppedPoses_.load(std::memory_order_relaxed);
+}
+
+std::uint32_t
+M5StickS3AvatarOutput::completionWithoutPoseCount() const {
+  return completionsWithoutPose_.load(
+      std::memory_order_relaxed);
+}
+
+void M5StickS3AvatarOutput::clearPendingPoses() {
+  for (auto &pending : pendingPoses_) {
+    pending = {};
+  }
+}
+
+void M5StickS3AvatarOutput::noteSubmittedPose(
+    const std::int16_t *samples,
+    std::size_t sampleCount,
+    DirectI2sFrameMetadata metadata) {
+  if (samples == nullptr || metadata.generation == 0U) {
+    return;
+  }
+
+  face_animator_push_pcm(&animator_, samples, sampleCount);
+  face_pose_t pose{};
+  if (!face_animator_snapshot(&animator_, &pose)) {
+    saturatingIncrement(droppedPoses_);
+    return;
+  }
+  for (auto &pending : pendingPoses_) {
+    if (!pending.occupied) {
+      pending.metadata = metadata;
+      pending.pose = pose;
+      pending.occupied = true;
+      return;
+    }
+  }
+
+  /*
+   * The fixed table is sized from the physical descriptor cycle, so filling
+   * it proves visual identity fell behind an audio ownership boundary. Drop
+   * only the decoration and expose the incident; allocating or blocking here
+   * would turn a cosmetic fault into an audible one.
+   */
+  saturatingIncrement(droppedPoses_);
+}
+
+void M5StickS3AvatarOutput::publishCompletedPoses() {
+  for (std::size_t index = 0U;
+       index < descriptorCount;
+       ++index) {
+    RealtimePlaybackDescriptorCompletion completion{};
+    if (!output_.lastPlaybackCompletion(index, &completion)) {
+      break;
+    }
+    if (completion.frameKind !=
+        RealtimePlaybackFrameKind::content) {
+      publishQuietPose();
+      continue;
+    }
+    if (completion.frame.generation == 0U) {
+      continue;
+    }
+    bool matched = false;
+    for (auto &pending : pendingPoses_) {
+      if (pending.occupied &&
+          metadataEqual(pending.metadata, completion.frame)) {
+        publishPose(pending.pose);
+        pending = {};
+        matched = true;
+        break;
+      }
+    }
+    if (!matched) {
+      saturatingIncrement(completionsWithoutPose_);
+    }
+  }
+}
+
+void M5StickS3AvatarOutput::publishPose(
+    const face_pose_t &pose) {
+  auto before =
+      posePublication_.load(std::memory_order_relaxed);
+  if ((before & 1U) != 0U) {
+    ++before;
+  }
+  posePublication_.store(before + 1U, std::memory_order_release);
+  poseWord0_.store(
+      packBytes(
+          pose.mouth_open,
+          pose.mouth_width,
+          pose.mouth_round,
+          pose.mouth_press),
+      std::memory_order_relaxed);
+  poseWord1_.store(
+      packBytes(
+          pose.mouth_teeth,
+          pose.eye_open,
+          pose.viseme,
+          pose.phoneme),
+      std::memory_order_relaxed);
+  poseWord2_.store(
+      packBytes(
+          static_cast<std::uint8_t>(pose.gaze_x),
+          static_cast<std::uint8_t>(pose.gaze_y),
+          pose.confidence,
+          pose.activity),
+      std::memory_order_relaxed);
+  poseWord3_.store(
+      static_cast<std::uint32_t>(pose.level) |
+          (static_cast<std::uint32_t>(pose.speaking) << 16U),
+      std::memory_order_relaxed);
+  poseFrameIndex_.store(
+      pose.frame_index, std::memory_order_relaxed);
+  posePlayoutSamples_.store(
+      pose.playout_samples, std::memory_order_relaxed);
+  posePublication_.store(before + 2U, std::memory_order_release);
+}
+
+void M5StickS3AvatarOutput::publishQuietPose() {
+  face_pose_t quiet{};
+  quiet.eye_open = 255U;
+  quiet.viseme = FACE_VISEME_NONE;
+  quiet.phoneme = FACE_PHONEME_NONE;
+  quiet.activity = FACE_ACTIVITY_IDLE;
+  publishPose(quiet);
+}
+
+bool M5StickS3AvatarOutput::metadataEqual(
+    DirectI2sFrameMetadata left,
+    DirectI2sFrameMetadata right) {
+  return left.receivedAtMs == right.receivedAtMs &&
+      left.generation == right.generation &&
+      left.sequence == right.sequence;
+}
+
+std::uint32_t M5StickS3AvatarOutput::packBytes(
+    std::uint8_t byte0,
+    std::uint8_t byte1,
+    std::uint8_t byte2,
+    std::uint8_t byte3) {
+  return static_cast<std::uint32_t>(byte0) |
+      (static_cast<std::uint32_t>(byte1) << 8U) |
+      (static_cast<std::uint32_t>(byte2) << 16U) |
+      (static_cast<std::uint32_t>(byte3) << 24U);
+}
+
 iterate_kit_status M5StickS3DirectAudioOwner::begin(
     iterate_kit_pcm_lane *lane) {
   if (lane == nullptr || !lane->initialized ||
       lane_ != nullptr || task_ != nullptr) {
     return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  if (!output_.initialise()) {
+    return ITERATE_KIT_STATE_ERROR;
   }
   lane_ = lane;
   commandComplete_ = xSemaphoreCreateBinaryStatic(
@@ -452,6 +813,22 @@ M5StickS3DirectAudioOwner::playbackMetrics() {
     return metricsSnapshot_;
   }
   return metricsSnapshot_;
+}
+
+bool M5StickS3DirectAudioOwner::avatarSnapshot(
+    M5StickS3AvatarSnapshot *snapshot) const {
+  return output_.snapshot(snapshot);
+}
+
+std::uint32_t
+M5StickS3DirectAudioOwner::avatarDroppedPoseCount() const {
+  return output_.droppedPoseCount();
+}
+
+std::uint32_t
+M5StickS3DirectAudioOwner::avatarCompletionWithoutPoseCount()
+    const {
+  return output_.completionWithoutPoseCount();
 }
 
 std::uint32_t

@@ -25,6 +25,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/audio_playout.c
   components/core/src/audio.c
   components/core/src/configuration.c
+  components/core/src/conversation_lights.c
   components/core/src/control_recovery.c
   components/core/src/cpu_usage.c
   components/core/src/debounced_button.c
@@ -600,6 +601,25 @@ add_test(
   COMMAND iterate-kit-havpe-ui-test
 )
 
+add_executable(iterate-kit-conversation-lights-test
+  tests/conversation_lights_test.c
+)
+target_compile_features(
+  iterate-kit-conversation-lights-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-conversation-lights-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-conversation-lights-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-conversation-lights-test
+  COMMAND iterate-kit-conversation-lights-test
+)
+
 add_executable(iterate-kit-retry-gate-test
   tests/retry_gate_test.c
 )
@@ -898,6 +918,27 @@ target_compile_options(iterate-kit-display-refresh-gate-test PRIVATE
 add_test(
   NAME iterate-kit-display-refresh-gate-test
   COMMAND iterate-kit-display-refresh-gate-test
+)
+
+add_executable(iterate-kit-m5sticks3-visual-layout-test
+  tests/m5sticks3_visual_layout_test.cpp
+)
+target_include_directories(iterate-kit-m5sticks3-visual-layout-test PRIVATE
+  platforms/common/include
+)
+target_compile_features(
+  iterate-kit-m5sticks3-visual-layout-test PRIVATE cxx_std_17)
+target_compile_options(iterate-kit-m5sticks3-visual-layout-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -fno-exceptions
+  -fno-rtti
+)
+add_test(
+  NAME iterate-kit-m5sticks3-visual-layout-test
+  COMMAND iterate-kit-m5sticks3-visual-layout-test
 )
 
 add_executable(iterate-kit-configuration-test

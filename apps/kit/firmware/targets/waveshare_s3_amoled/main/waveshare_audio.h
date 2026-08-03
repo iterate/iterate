@@ -56,6 +56,15 @@ uint32_t waveshare_audio_dma_underruns(void);
  */
 void waveshare_audio_dma_watch(bool active);
 
+/**
+ * Underruns in the first ring's worth of buffers after playback resumes.
+ *
+ * Separated because they are unavoidable and uninteresting — the ring has
+ * been idle, so its buffers were cleared before the first write could reach
+ * them. It is the OTHER counter that measures a pipeline failing to keep up.
+ */
+uint32_t waveshare_audio_dma_underruns_opening(void);
+
 void waveshare_audio_set_volume(int percent);
 
 /** Microphone PGA in dB; the driver quantises to 6 dB steps. */
