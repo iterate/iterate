@@ -46,7 +46,7 @@ export const GithubAiLinter = {
             const connectionStream = itx.streams.get(`/integrations/github/${connection}`);
             const runtime = await connectionStream.runtimeState();
             const existingCondition =
-              runtime.coreProcessorState.subscriptions.outbound.byKey[REVIEW_BOT_SUBSCRIPTION_KEY]
+              runtime.coreProcessorState.subscriptions.outbound.byName[REVIEW_BOT_SUBSCRIPTION_KEY]
                 ?.configuration.filter?.jsonataCondition;
             // Both the original cutoff-only condition and the narrowed
             // condition start with this durable boundary. Keep accepting the

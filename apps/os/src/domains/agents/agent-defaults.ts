@@ -7,20 +7,42 @@ import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-even
 import type { z } from "zod";
 import type { StreamEventInput } from "iterate/processors";
 import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
-import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
 import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import {
+  AGENT_COLLECTION_CREATED_EVENT_TYPE,
   AGENT_COLLECTION_PATH,
   AGENT_COLLECTION_SUBSCRIPTION_KEY,
+  AgentCollectionProcessorContract,
 } from "./agent-collection-processor-contract.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
 
 const TYPESCRIPT_FENCE_INSTRUCTION =
   "Respond with exactly one fenced TypeScript code block opened with ```ts and no surrounding prose.";
+
+/**
+ * The complete atomic birth batch for the project's singleton agent-collection
+ * stream (`/agents`): the existence marker plus the subscription arming its
+ * facet-hosted projection processor. Previously appended by the (retired)
+ * AgentCollectionDurableObject's constructor on first dial; now every agent
+ * `create()` ensures it — the idempotency keys make retries free.
+ */
+export function agentCollectionCreationEvents(input: { projectId: string }) {
+  return [
+    AgentCollectionProcessorContract.buildEvent({
+      type: AGENT_COLLECTION_CREATED_EVENT_TYPE,
+      idempotencyKey: `agent-collection/created:${input.projectId}`,
+      payload: {},
+    }),
+    buildFacetProcessorSubscriptionConfiguredEvent({
+      idempotencyKey: `stream/subscription-configured:${AgentCollectionProcessorContract.slug}`,
+      processorSlug: AgentCollectionProcessorContract.slug,
+    }),
+  ];
+}
 
 export const AGENT_SUMMARY_INSTRUCTION = [
   "AGENT SUMMARY (mandatory) — append alongside your work:",
@@ -526,18 +548,15 @@ export function agentCreationForPath<
       ].join("\n"),
     },
   });
-  const durableObjectName = DurableObjectNameCodec.stringify({ projectId, path: agentPath });
-  const agentSubscription = buildHostedProcessorSubscriptionConfiguredEvent({
-    durableObjectName,
-    idempotencyKey: `stream/subscription-configured:${durableObjectName}#${AgentProcessorContract.slug}`,
-    processor: ["agents", ["get", agentPath], "processor"],
+  const agentSubscription = buildFacetProcessorSubscriptionConfiguredEvent({
+    idempotencyKey: `stream/subscription-configured:${AgentProcessorContract.slug}`,
     processorSlug: AgentProcessorContract.slug,
   });
   const collectionSubscription = CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",
-    idempotencyKey: `stream/subscription-configured:${durableObjectName}#agent-collection`,
+    idempotencyKey: `stream/subscription-configured:${AGENT_COLLECTION_SUBSCRIPTION_KEY}`,
     payload: {
-      subscriptionKey: AGENT_COLLECTION_SUBSCRIPTION_KEY,
+      name: AGENT_COLLECTION_SUBSCRIPTION_KEY,
       description: "Project agent collection projection",
       filter: {
         eventTypes: ["events.iterate.com/agent/created", AGENT_SUMMARY_UPDATED_EVENT_TYPE],
@@ -559,10 +578,8 @@ export function agentCreationForPath<
     input.sibling === undefined
       ? []
       : [
-          buildHostedProcessorSubscriptionConfiguredEvent({
-            durableObjectName,
-            idempotencyKey: `stream/subscription-configured:${durableObjectName}#${input.sibling.processorSlug}`,
-            processor: ["agents", ["get", agentPath], "processor"],
+          buildFacetProcessorSubscriptionConfiguredEvent({
+            idempotencyKey: `stream/subscription-configured:${input.sibling.processorSlug}`,
             processorSlug: input.sibling.processorSlug,
           }),
         ];

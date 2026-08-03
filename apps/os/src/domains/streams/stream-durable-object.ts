@@ -1,7 +1,8 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, RpcTarget } from "cloudflare:workers";
 import { z } from "zod";
 import type {
   ProcessorRuntimeState,
+  ProcessorSnapshot,
   StreamDeliveryBatch,
   StreamProcessorWakeRequest,
   StreamWebhookDelivery,
@@ -21,6 +22,7 @@ import type { StreamEvent, StreamEventInput } from "iterate/processors";
 import { StreamEventInput as StreamEventInputSchema } from "iterate/processors";
 import { StreamRuntimeMetrics } from "iterate/processors";
 import { disposeIgnoredRpcResult, LiveState, LiveStateRpcTarget } from "iterate/sdk/capnweb";
+import type { LiveStateRpc, LiveStateSubscriptionHandle, LiveUpdate } from "iterate/sdk/capnweb";
 import { streamDeliveryAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { evaluateItxExpression, type ItxExpression } from "../../itx/expression.ts";
@@ -269,6 +271,19 @@ type ProcessorFacetStub = {
   }): Promise<unknown>;
   wakeStreamProcessor(request: StreamProcessorWakeRequest): Promise<unknown>;
   handleAlarm(info?: AlarmInvocationInfo): Promise<unknown>;
+  // Read doors on the base ProcessorFacet class plus the OS subclass's own
+  // (catchUp, the capability-host domain doors, the slack presentation push)
+  // — dispatched through the parent's per-subscription facade below.
+  catchUp(args: { name: string }): Promise<void>;
+  snapshot(args?: { name?: string }): Promise<ProcessorSnapshot<unknown>>;
+  getRuntimeState(args?: { name?: string }): Promise<ProcessorRuntimeState>;
+  waitUntilProcessed(args: { offset: number; timeoutMs?: number; name?: string }): Promise<void>;
+  liveState(): Promise<LiveStateRpc<Record<string, unknown>>>;
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  provideCapability(input: unknown): Promise<{ path: string[]; providedAtOffset: number }>;
+  revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void>;
+  describeCapabilities(): Promise<unknown[]>;
+  presentAgentRuntimeTransition(args: { transition: unknown }): Promise<unknown>;
 };
 
 /** Build the concrete calls used by the receiver union. */
@@ -424,6 +439,152 @@ const FACET_ALARM_KV_KEY = "facetAlarmAtMs";
 
 /** Bounded extra delay before retrying a facet's failed alarm replay. */
 const FACET_ALARM_RETRY_DELAY_MS = 1_000;
+
+/**
+ * One row of `subscriptions.list()`: the committed catalog entry joined with
+ * its durable cursor — name, receiver kind, state, lag (head − confirmed),
+ * and the outstanding delivered/confirmed window.
+ */
+export type StreamSubscriptionListEntry = {
+  name: string;
+  action: string;
+  processorSlug?: string;
+  placement?: "facet";
+  configuredAtOffset: number;
+  state: "active" | "parked" | "halted";
+  lag: number;
+  deliveredOffset: number;
+  confirmedOffset: number;
+  lastError: string | null;
+};
+
+/** `subscriptions.get(name).describe()`: the committed configuration plus the
+ * durable delivered/confirmed cursor and retry state. */
+export type StreamSubscriptionDescription = {
+  name: string;
+  configuration: unknown;
+  configuredAtOffset: number;
+  state: "active" | "parked" | "halted";
+  lag: number;
+  deliveredOffset: number;
+  confirmedOffset: number;
+  attempt: number;
+  nextAttemptAt: number | null;
+  lastError: string | null;
+};
+
+/**
+ * The Stream DO's per-subscription processor facade: the read/domain surface
+ * of ONE facet-hosted processor instance, addressed by its subscription name
+ * (`processorFacade(name)` below). This is what the itx relays dial instead
+ * of the retired hosting Durable Objects — `agent.processor.snapshot()`,
+ * `capabilityHost.invokeCapability(...)`, `secret.liveState`, … all resolve
+ * through here. Every method dials the facet fresh (facet stubs are cheap
+ * parent-side handles) and forwards; the facet's registry resolves the named
+ * runner.
+ */
+class StreamProcessorFacadeRpcTarget extends RpcTarget {
+  readonly #name: string;
+  readonly #dial: () => Promise<ProcessorFacetStub>;
+
+  constructor(input: { name: string; dial: () => Promise<ProcessorFacetStub> }) {
+    super();
+    this.#name = input.name;
+    this.#dial = input.dial;
+  }
+
+  /** One consistent read of the committed fold, after a pull through the
+   * durable stream tail (read-your-writes — the retired hosts'
+   * catchUpBeforeSnapshot leg). */
+  async snapshot(): Promise<ProcessorSnapshot<unknown>> {
+    const facet = await this.#dial();
+    await facet.catchUp({ name: this.#name });
+    return await facet.snapshot({ name: this.#name });
+  }
+
+  async getRuntimeState(): Promise<ProcessorRuntimeState> {
+    const facet = await this.#dial();
+    return await facet.getRuntimeState({ name: this.#name });
+  }
+
+  /** Offset barrier against the named runner's confirmed fold (self-pulling). */
+  async waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
+    const facet = await this.#dial();
+    await facet.waitUntilProcessed({ ...input, name: this.#name });
+  }
+
+  /**
+   * Facet placement means the STREAM wakes the processor itself (an
+   * in-process parent→facet dial) — nothing may push batches in through the
+   * public facade, and the wake response's facet-side capabilities could not
+   * cross this boundary anyway (facet stubs never leave the parent).
+   */
+  wakeStreamProcessor(): never {
+    throw new Error(
+      `subscription "${this.#name}" runs under facet placement: its stream delivers wakes ` +
+        `directly; wakeStreamProcessor is not dialable through the processor facade`,
+    );
+  }
+
+  /** The instance's live-state node: snapshot + minimal diffs, re-wrapped —
+   * the facet returns plain capability functions, and the subscriber's
+   * callback flows INTO the facet as an ordinary argument capability. */
+  get liveState(): LiveStateRpc<Record<string, unknown>> {
+    return new FacetLiveStateRelayRpcTarget(async () => (await this.#dial()).liveState());
+  }
+
+  // Capability-host domain doors (meaningful on the "capability-host"
+  // facade): the retired CapabilityHostDurableObject's forwarded methods.
+  async invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
+    return await (await this.#dial()).invokeCapability(input);
+  }
+
+  async provideCapability(input: unknown): Promise<{ path: string[]; providedAtOffset: number }> {
+    return await (await this.#dial()).provideCapability(input);
+  }
+
+  async revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
+    await (await this.#dial()).revokeCapability(input);
+  }
+
+  async describeCapabilities(): Promise<unknown[]> {
+    return await (await this.#dial()).describeCapabilities();
+  }
+}
+
+/**
+ * Parent-side re-wrap of a facet's live-state node. The facet hop is Workers
+ * RPC, which cannot serialize capnweb RpcTargets, so the facet answers with
+ * PLAIN objects of capability functions ({@link LiveStateRpc} shape) and this
+ * relay is the real RpcTarget the outside world holds. Subscription handles
+ * are re-wrapped the same way — a facet-side stub must never leave the parent.
+ */
+class FacetLiveStateRelayRpcTarget
+  extends RpcTarget
+  implements LiveStateRpc<Record<string, unknown>>
+{
+  readonly #dialLive: () => Promise<LiveStateRpc<Record<string, unknown>>>;
+
+  constructor(dialLive: () => Promise<LiveStateRpc<Record<string, unknown>>>) {
+    super();
+    this.#dialLive = dialLive;
+  }
+
+  async get(): Promise<Record<string, unknown>> {
+    return await (await this.#dialLive()).get();
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<Record<string, unknown>>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    const handle = await (await this.#dialLive()).subscribe(onUpdate);
+    return {
+      ping: () => handle.ping(),
+      unsubscribe: () => handle.unsubscribe(),
+      [Symbol.dispose]: () => handle.unsubscribe(),
+    };
+  }
+}
 
 /**
  * Durable stream storage plus the stream's own ("core") processor.
@@ -826,6 +987,106 @@ export class StreamDurableObject extends DurableObject<Env> {
         }
       });
     }
+  }
+
+  /**
+   * The per-subscription processor facade — the read/domain surface itx
+   * relays dial for facet-hosted processors (snapshot, runtime state, offset
+   * barriers, live state, and the capability-host domain doors). The name is
+   * the subscription name, which IS the facet name.
+   */
+  processorFacade(args: { name: string }): StreamProcessorFacadeRpcTarget {
+    const name = z.string().trim().min(1).parse(args.name);
+    return new StreamProcessorFacadeRpcTarget({
+      name,
+      dial: () => this.#dialProcessorFacet(name),
+    });
+  }
+
+  /**
+   * Cross-facet presentation forward: the "agent" facet observed a committed
+   * agent runtime transition; replay it into the sibling "slack-agent" facet
+   * (whose DRIVEN runner owns the Slack presentation fold) when one is
+   * subscribed here. Best-effort by design — presentation is cosmetic and the
+   * freshness-gated paint re-derives from the fold.
+   */
+  presentAgentRuntimeTransition(args: { transition: unknown }): void {
+    const entry = this.#coreProcessorState.subscriptions.outbound.byName["slack-agent"];
+    const receiver = entry?.configuration.receiver;
+    if (receiver?.action !== "processor-wake" || receiver.placement !== "facet") return;
+    this.#runInBackground(async () => {
+      const facet = await this.#dialProcessorFacet("slack-agent");
+      disposeAcknowledgedRpcResult(
+        await facet.presentAgentRuntimeTransition(args),
+        "present-agent-runtime-transition",
+      );
+    });
+  }
+
+  /**
+   * The subscription catalog: configured subscriptions joined with their
+   * durable cursor rows — `streams.get(path).subscriptions.list()`. Lag is
+   * `head − confirmed` (durable cursors advance over EVERY offset, ephemeral
+   * included), with `delivered − confirmed` as the outstanding window.
+   */
+  listSubscriptions(): StreamSubscriptionListEntry[] {
+    const head = this.#coreProcessorState.maxOffset;
+    return Object.entries(this.#coreProcessorState.subscriptions.outbound.byName).map(
+      ([name, entry]) => {
+        const receiver = entry.configuration.receiver;
+        const row = this.#subscriptionCursorStore.get(name);
+        const confirmedOffset = row?.confirmedOffset ?? 0;
+        return {
+          name,
+          action: receiver.action,
+          ...(receiver.action === "processor-wake"
+            ? {
+                processorSlug: receiver.processorSlug,
+                ...(receiver.placement === "facet" ? { placement: "facet" as const } : {}),
+              }
+            : {}),
+          configuredAtOffset: entry.configuredAtOffset,
+          state:
+            row?.state ??
+            (entry.deliveryHalted !== undefined
+              ? ("halted" as const)
+              : entry.deliveryParked !== undefined
+                ? ("parked" as const)
+                : ("active" as const)),
+          lag: Math.max(0, head - confirmedOffset),
+          deliveredOffset: row?.deliveredOffset ?? 0,
+          confirmedOffset,
+          lastError: row?.lastError ?? null,
+        };
+      },
+    );
+  }
+
+  /** One subscription's full description: committed configuration plus the
+   * durable delivered/confirmed cursor and retry state. */
+  describeSubscription(args: { name: string }): StreamSubscriptionDescription | null {
+    const entry = this.#coreProcessorState.subscriptions.outbound.byName[args.name];
+    if (entry === undefined) return null;
+    const row = this.#subscriptionCursorStore.get(args.name);
+    const confirmedOffset = row?.confirmedOffset ?? 0;
+    return {
+      name: args.name,
+      configuration: entry.configuration,
+      configuredAtOffset: entry.configuredAtOffset,
+      state:
+        row?.state ??
+        (entry.deliveryHalted !== undefined
+          ? "halted"
+          : entry.deliveryParked !== undefined
+            ? "parked"
+            : "active"),
+      lag: Math.max(0, this.#coreProcessorState.maxOffset - confirmedOffset),
+      deliveredOffset: row?.deliveredOffset ?? 0,
+      confirmedOffset,
+      attempt: row?.attempt ?? 0,
+      nextAttemptAt: row?.nextAttemptAt ?? null,
+      lastError: row?.lastError ?? null,
+    };
   }
 
   // ===========================================================================

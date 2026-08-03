@@ -1,6 +1,6 @@
 import type { z } from "zod";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
+import type { SubscriptionConfiguredPayload } from "../streams/core-processor-contract.ts";
 import { SchedulerProcessorContract } from "./scheduler-processor-contract.ts";
 
 /** The immutable `scheduler/created` birth certificate payload. */
@@ -15,18 +15,26 @@ export function schedulerCreationEvents(input: {
   projectId: string;
 }) {
   const { path, projectId } = input;
-  const durableObjectName = DurableObjectNameCodec.stringify({ path, projectId });
   return [
     SchedulerProcessorContract.buildEvent({
       type: "events.iterate.com/scheduler/created",
       idempotencyKey: `scheduler-created:${projectId}:${path}`,
       payload: input.payload ?? { config: {} },
     }),
-    buildHostedProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${SchedulerProcessorContract.slug}`,
-      processor: ["schedulers", ["get", path], "processor"],
-      processorSlug: SchedulerProcessorContract.slug,
+    // The scheduler processor deliberately STAYS hosted in its own Durable
+    // Object (its domain alarm is entangled with the DO's platform alarm), so
+    // its wake keeps the itx expression instead of facet placement.
+    CoreProcessorContract.buildEvent({
+      type: "events.iterate.com/stream/subscription-configured",
+      idempotencyKey: `stream/subscription-configured:${SchedulerProcessorContract.slug}`,
+      payload: {
+        name: SchedulerProcessorContract.slug,
+        receiver: {
+          action: "processor-wake",
+          expression: ["schedulers", ["get", path], "processor", "wakeStreamProcessor"],
+          processorSlug: SchedulerProcessorContract.slug,
+        },
+      } satisfies SubscriptionConfiguredPayload,
     }),
   ];
 }

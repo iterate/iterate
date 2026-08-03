@@ -25,6 +25,10 @@
 
 import { itxEnv } from "../../env.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import {
+  ProjectProcessorContract,
+  type ProjectProcessorState,
+} from "../projects/project-processor-contract.ts";
 import type { SecretRefresh } from "../secrets/types.ts";
 import type {
   CompleteConnectResult,
@@ -2002,12 +2006,15 @@ async function disconnectGoogle(input: {
 export async function listIntegrationConnections(
   projectId: string,
 ): Promise<{ connection: string; integration: string; path: string }[]> {
-  const project = itxEnv.PROJECT.getByName(
+  // The project processor runs as a facet of the root stream; its facade
+  // serves the catch-up-backed snapshot.
+  const facade = await itxEnv.STREAM.getByName(
     DurableObjectNameCodec.stringify({ projectId, path: "/" }),
-  );
-  const snapshot = await (await project.processor).snapshot();
+  ).processorFacade({ name: ProjectProcessorContract.slug });
+  const snapshot = await facade.snapshot();
+  const state = snapshot.state as ProjectProcessorState;
   const entries: { connection: string; integration: string; path: string }[] = [];
-  for (const stream of snapshot.state.streams) {
+  for (const stream of state.streams) {
     const coordinates = integrationCoordinatesFromStreamPath(stream.path);
     if (coordinates === null) continue;
     entries.push({

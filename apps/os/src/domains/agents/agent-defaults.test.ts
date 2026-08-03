@@ -181,7 +181,7 @@ describe("agentCreationForPath", () => {
     expect(
       subscriptions.find((event) => event.payload.receiver.action === "copy-to-stream")?.payload,
     ).toMatchObject({
-      subscriptionKey: "agent-collection",
+      name: "agent-collection",
       filter: {
         eventTypes: [
           "events.iterate.com/agent/created",
@@ -199,8 +199,15 @@ describe("agentCreationForPath", () => {
     });
   });
 
-  test("keys every event on (projectId, agentPath) so exact retries dedupe", () => {
+  test("keys every domain event on (projectId, agentPath) so exact retries dedupe", () => {
     for (const event of defaultsFor("/agents/demo").events) {
+      if (event.type === "events.iterate.com/stream/subscription-configured") {
+        // Subscription wiring keys are stream-local by design under the
+        // subscription-model redesign: the name is the identity, keys never
+        // embed coordinates or hostnames, and idempotency is per stream.
+        expect(String(event.idempotencyKey)).toMatch(/^stream\/subscription-configured:/);
+        continue;
+      }
       expect(String(event.idempotencyKey)).toContain(PROJECT_ID);
       expect(String(event.idempotencyKey)).toContain("/agents/demo");
     }

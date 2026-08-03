@@ -5,8 +5,7 @@
 // appends first wins and every retry dedupes.
 
 import type { z } from "zod";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import {
   CapabilityHostProcessorContract,
   capabilityFallbackForScope,
@@ -37,7 +36,6 @@ export function capabilityHostCreationEvents(input: {
   projectId: string;
 }) {
   const { path, projectId } = input;
-  const durableObjectName = DurableObjectNameCodec.stringify({ projectId, path });
   return [
     CapabilityHostProcessorContract.buildEvent({
       type: "events.iterate.com/capability-host/created",
@@ -46,10 +44,8 @@ export function capabilityHostCreationEvents(input: {
       // fallback straight to it.
       payload: input.payload ?? { config: {}, fallback: capabilityFallbackForScope(path) },
     }),
-    buildHostedProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${CapabilityHostProcessorContract.slug}`,
-      processor: ["capabilityHosts", ["get", path], "processor"],
+    buildFacetProcessorSubscriptionConfiguredEvent({
+      idempotencyKey: `stream/subscription-configured:${CapabilityHostProcessorContract.slug}`,
       processorSlug: CapabilityHostProcessorContract.slug,
     }),
   ];

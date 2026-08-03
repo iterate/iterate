@@ -147,9 +147,15 @@ export function facetProcessorDurableObjectState(
 export function plainAlarmInvocationInfo(
   info: AlarmInvocationInfo | undefined,
 ): AlarmInvocationInfo | undefined {
-  return info === undefined
-    ? undefined
-    : { scheduledTime: info.scheduledTime, isRetry: info.isRetry, retryCount: info.retryCount };
+  if (info === undefined) return undefined;
+  // scheduledTime is absent from this package's ambient AlarmInvocationInfo
+  // but present at runtime (and in apps/os's patched types) — carry it through.
+  const { scheduledTime } = info as { scheduledTime?: number };
+  return {
+    ...(scheduledTime === undefined ? {} : { scheduledTime }),
+    isRetry: info.isRetry,
+    retryCount: info.retryCount,
+  } as AlarmInvocationInfo;
 }
 
 /**

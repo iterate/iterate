@@ -47,7 +47,7 @@ export async function reviewBotSubscriptionEvent(
   return {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
-      subscriptionKey: REVIEW_BOT_SUBSCRIPTION_KEY,
+      name: REVIEW_BOT_SUBSCRIPTION_KEY,
       // A restored connection stream can contain thousands of old webhooks.
       // This cutoff gives a newly configured review bot future work only.
       // Config refreshes preserve the original cutoff in index.ts.
@@ -85,7 +85,7 @@ export async function pullRequestLinterSubscriptionEvent(
   return {
     type: "events.iterate.com/stream/subscription-configured",
     payload: {
-      subscriptionKey: "app-github-ai-linter#github-ai-linter",
+      name: "app-github-ai-linter#github-ai-linter",
       // The linter Durable Object reduces this explicit protocol, not the
       // surrounding agent's tool calls, LLM bookkeeping, or conversation.
       // Source-side filtering makes a restart proportional to analyses rather

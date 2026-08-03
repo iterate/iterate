@@ -1,8 +1,6 @@
 import type { z } from "zod";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { EmailProcessorContract } from "./email-processor-contract.ts";
-import { EMAIL_INTEGRATION_STREAM_PATH } from "./utils.ts";
 
 /** The immutable `email/created` router birth certificate payload. */
 type EmailRouterCreatePayload = z.input<
@@ -20,8 +18,6 @@ export function emailRouterCreationEvents(input: {
   projectId: string;
 }) {
   const { initialSender, projectId } = input;
-  const path = EMAIL_INTEGRATION_STREAM_PATH;
-  const durableObjectName = DurableObjectNameCodec.stringify({ path, projectId });
   return [
     EmailProcessorContract.buildEvent({
       type: "events.iterate.com/email/created",
@@ -37,10 +33,8 @@ export function emailRouterCreationEvents(input: {
             payload: { pattern: initialSender, reason: "project-owner" },
           }),
         ]),
-    buildHostedProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${EmailProcessorContract.slug}`,
-      processor: ["email", "processor"],
+    buildFacetProcessorSubscriptionConfiguredEvent({
+      idempotencyKey: `stream/subscription-configured:${EmailProcessorContract.slug}`,
       processorSlug: EmailProcessorContract.slug,
     }),
   ];

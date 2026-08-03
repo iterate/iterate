@@ -120,7 +120,7 @@ describe("StreamRpcTarget", () => {
     const pageResult = await stream.getEvents();
     const waitedResult = await stream.waitForEvent({ afterOffset: 8, timeoutMs: 1_000 });
     const processorStateResult = await stream.getProcessorRuntimeState({
-      subscriptionKey: "project-worker",
+      name: "project-worker",
     });
     const runtimeStateResult = await stream.runtimeState();
 

@@ -1,7 +1,4 @@
 import { DurableObject } from "cloudflare:workers";
-import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
-import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
 import { isStreamOffsetConflictError } from "iterate/processors";
 import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
@@ -9,7 +6,6 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
@@ -28,7 +24,6 @@ import { decryptSecretCellMaterial, encryptSecretCellMaterial } from "./crypto.t
 import { fetchWithCredentialRedirects } from "./credential-fetch.ts";
 import { resolvePlatformClientCreds, resolvePlatformGithubAppKey } from "./platform-secrets.ts";
 import { SecretProcessorContract } from "./secret-processor-contract.ts";
-import { SecretProcessor } from "./secret-processor-implementation.ts";
 import {
   secretErrorResponse,
   secretReferencesFromRequest,
@@ -40,6 +35,15 @@ import { withWebSocketHandshakeHeaders } from "./websocket-handshake.ts";
 
 type SecretState = ProcessorState<typeof SecretProcessorContract>;
 type SecretSnapshot = { offset: number; state: SecretState };
+
+/** The stream facade methods this DO reads its own fold through — the secret
+ * processor runs as a facet of the secret stream's own Durable Object
+ * (src/domains/processor-facet-durable-object.ts), not here. */
+type SecretProcessorFacade = {
+  snapshot(): Promise<SecretSnapshot>;
+  waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void>;
+};
+
 const MAX_MATERIAL_APPEND_ATTEMPTS = 8;
 // Secret reduction is pure and normally completes during catchUp. If ingestion
 // is broken, fail the command instead of retaining its RPC forever.
@@ -73,38 +77,18 @@ export class SecretDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  readonly #registry = createStreamProcessorRegistry(this.ctx, {
-    stream: this.#stream,
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-    version: workerVersion(this.env),
-    // Secret material is write-only: the live state that leaves this DO is the
-    // DESCRIPTION (hasMaterial), never the ciphertext — same redaction the
-    // processor facade applies via publicState. The explicit return type does
-    // double duty: it makes the registry a LiveState<SecretDescription>, and
-    // it breaks the field-initializer inference cycle (this closure reads
-    // #reads, which is built from this registry).
-    getLiveState: (): SecretDescription => describeSecretState(this.#reads.currentState),
-  });
-  // The DO constructs the processor — no host-injected readState/writeState/
-  // keepAliveWhile deps; the runner owns durable progress and keepalive. NO
-  // recovery on purpose: the processor's only side effect (the secret/created
-  // catalog copy) is a blocked per-event append — the cursor holds until
-  // it commits, so an eviction just redelivers the event; there is no
-  // runInBackground work an eviction could lose (see the registry module
-  // doc's rule).
-  readonly #secretProcessor = this.#registry.register(
-    new SecretProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-    }),
-  );
-  // Runner-backed reads: under runner drive the runner owns the cursors and
-  // the processor instance's internal checkpoint never advances, so every
-  // read this DO serves (snapshots, the processor facade, live state) must go
-  // through the runner's committed progress.
-  readonly #reads = this.#registry.reads(this.#secretProcessor);
+
+  /** The facet-hosted secret processor's read surface on the stream. */
+  async #processorFacade(): Promise<SecretProcessorFacade> {
+    return (await this.env.STREAM.getByName(
+      DurableObjectNameCodec.stringify({
+        path: this.#name.path,
+        projectId: this.#name.projectId,
+      }),
+    ).processorFacade({
+      name: SecretProcessorContract.slug,
+    })) as unknown as SecretProcessorFacade;
+  }
 
   // In-flight refresh, shared across concurrent callers (single-flight): a
   // burst of 401s must not fan out into N token exchanges — duplicate mints
@@ -116,35 +100,9 @@ export class SecretDurableObject extends DurableObject<Env> {
   // public stream appends remain concurrent and are handled by the assertion.
   #updates: Promise<void> = Promise.resolve();
 
-  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
-    return this.#registry.wakeStreamProcessor(args);
-  }
-
-  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
-  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#registry.handleAlarm(alarmInfo);
-  }
-
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): void {
     this.ctx.abort("kill requested");
-  }
-
-  get processor() {
-    // Runner-backed reads (#reads), never the processor instance — see the
-    // field comment: instance reads are stale forever under runner drive.
-    return new StreamProcessorRpcTarget(this.#reads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(SecretProcessorContract.slug),
-      // Secret material is write-only: the live state that leaves this DO is
-      // the DESCRIPTION — snapshots and onStateChange pushes must never carry
-      // the ciphertext, only the hasMaterial fact.
-      publicState: describeSecretState,
-    });
-  }
-
-  /** The secret's live state — the DESCRIPTION only, behind `itx.secrets.get(path).liveState`. */
-  get liveState() {
-    return new LiveStateRpcTarget<SecretDescription>(this.#registry);
   }
 
   create(input: SecretCreateInput) {
@@ -775,8 +733,9 @@ export class SecretDurableObject extends DurableObject<Env> {
   }
 
   async #snapshotWithOffset(): Promise<SecretSnapshot> {
-    await this.#registry.catchUp(SecretProcessorContract.slug);
-    return await this.#reads.snapshot();
+    // The facade's snapshot pulls through the durable stream tail first
+    // (read-your-writes — the old catchUp-then-snapshot pair, one door).
+    return await (await this.#processorFacade()).snapshot();
   }
 
   async #waitUntilProcessed(offset: number): Promise<void> {
@@ -784,7 +743,12 @@ export class SecretDurableObject extends DurableObject<Env> {
     // self-pulls when the runner is behind. A separate catchUp here would put
     // an unbounded Stream RPC in front of the timeout and can orphan the
     // command even after the target Stream DO finished serving the read.
-    await this.#reads.waitUntilEvent({ offset, timeoutMs: INGEST_WAIT_TIMEOUT_MS });
+    await (
+      await this.#processorFacade()
+    ).waitUntilProcessed({
+      offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
   }
 
   async #decrypt(
@@ -958,10 +922,11 @@ function sameRefresh(current: SecretRefresh | null, expected: SecretRefresh | nu
 
 /**
  * The one projection from internal processor state to the public description.
- * Shared by describe() and the processor facade's publicState so the two can
- * never disagree about what leaves the DO.
+ * Shared by describe(), the facet host's live-state projection
+ * (src/domains/processor-facet-durable-object.ts), and the itx relay's publicState so they can
+ * never disagree about what leaves the platform.
  */
-function describeSecretState(state: SecretState): SecretDescription {
+export function describeSecretState(state: SecretState): SecretDescription {
   return {
     audit: state.audit,
     created: state.birthCertificate !== null,

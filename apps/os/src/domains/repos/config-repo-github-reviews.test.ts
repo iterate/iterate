@@ -384,7 +384,7 @@ describe("userspace GitHub pull-request routing", () => {
         idempotencyKey:
           "github-ai-linter/subscription:install-789:101:7:policy:2:stream:/agents/repos/config/pr/7/ai-linter",
         payload: {
-          subscriptionKey: "app-github-ai-linter#github-ai-linter",
+          name: "app-github-ai-linter#github-ai-linter",
           filter: {
             eventTypes: Object.values(githubAiLinterEventTypes),
           },

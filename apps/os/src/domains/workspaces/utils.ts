@@ -1,5 +1,5 @@
 import { DurableObjectNameCodec, normalizePath } from "../durable-object-names.ts";
-import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { isCanonicalRepoPath, resolveAbsolutePath } from "./paths.ts";
 import {
   WorkspaceProcessorContract,
@@ -14,7 +14,7 @@ const ROUND_TRIP_PROJECT_ID = "prj_roundtrip";
 
 // Every workspace lives under this collection prefix, matching the addressing
 // convention used by `/secrets/...`, `/repos/...`, and `/sandboxes/...`.
-const WORKSPACE_PATH_PREFIX = "/workspaces";
+export const WORKSPACE_PATH_PREFIX = "/workspaces";
 
 /**
  * Where an agent's own workspace (`itx.workspace`) lives: the agent path under
@@ -165,16 +165,8 @@ export function workspaceCreationEvents(input: {
             payload: { config: { mounts: desiredMounts } },
           }),
         ]),
-    buildHostedProcessorSubscriptionConfiguredEvent({
-      durableObjectName: DurableObjectNameCodec.stringify({
-        path: input.path,
-        projectId: input.projectId,
-      }),
-      idempotencyKey: `stream/subscription-configured:${DurableObjectNameCodec.stringify({
-        path: input.path,
-        projectId: input.projectId,
-      })}#${WorkspaceProcessorContract.slug}`,
-      processor: ["workspaces", ["get", input.path], "processor"],
+    buildFacetProcessorSubscriptionConfiguredEvent({
+      idempotencyKey: `stream/subscription-configured:${WorkspaceProcessorContract.slug}`,
       processorSlug: WorkspaceProcessorContract.slug,
     }),
   ];
