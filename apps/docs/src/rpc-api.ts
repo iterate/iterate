@@ -156,7 +156,7 @@ class DocsProjectApi extends RpcTarget implements DocsProject {
     const now = new Date();
     const pad = (value: number) => String(value).padStart(2, "0");
     const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}-${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`;
-    const workspacePath = `/workspaces/docs/${stamp}-${Math.random().toString(36).slice(2, 6)}`;
+    const workspacePath = `/workspaces/scratch/${stamp}-${Math.random().toString(36).slice(2, 6)}`;
     const path = "notes.md";
     await this.#dial.withProject(async (project) => {
       // Same pinned-client caveat as workspaces(): create/writeFile are the

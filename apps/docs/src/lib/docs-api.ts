@@ -36,7 +36,8 @@ export interface DocsProject {
    * absolute path instead; this deliberately does not walk the mounts. */
   documents(workspacePath: string): Promise<string[]>;
   /**
-   * Mint and CREATE an ephemeral scratch workspace under /workspaces/docs/
+   * Mint and CREATE an ephemeral scratch workspace under /workspaces/scratch/ (app-neutral:
+   * the same workspace opens through every lens)
    * seeded with one starter document — the docs equivalent of opening a
    * fresh tasks board. The one deliberate exception to the plain-`get`
    * posture, and the only door here that creates anything.

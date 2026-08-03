@@ -80,16 +80,16 @@ export function DeepLinkEmptyState() {
             <div className="mb-4 flex size-10 items-center justify-center rounded-xl bg-foreground text-background">
               <FileTextIcon aria-hidden className="size-5" />
             </div>
-            <h1 className="text-xl font-semibold tracking-tight">Workspace documents</h1>
+            <h1 className="text-xl font-semibold tracking-tight">Workspaces</h1>
             <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
               Pick a workspace — every document lives in one. Agents share theirs through review
-              links; yours start as scratch workspaces.
+              links; New workspace mints you an ephemeral one.
             </p>
           </div>
           <div className="flex flex-col items-end gap-1">
             <Button onClick={createScratch} disabled={creating}>
               <PlusIcon aria-hidden className="size-4" />
-              {creating ? "Creating…" : "New scratch workspace"}
+              {creating ? "Creating…" : "New workspace"}
             </Button>
             {createError !== null && (
               <p className="max-w-56 text-right text-xs text-red-700">{createError}</p>
