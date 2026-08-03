@@ -71,12 +71,19 @@ export function CommitControls({
   const dirty = taskChanges.length > 0;
   const busy = commitPending || generatingMessage;
   const [open, setOpen] = useState(false);
+  // A successful commit (or discard) empties the change set: the review
+  // popover has nothing left to say, so it closes — and STAYS closed until
+  // the user opens it again (the state resets, not just the rendering).
+  // Adjusted during render, the you-might-not-need-an-effect way.
+  const [wasDirty, setWasDirty] = useState(dirty);
+  if (dirty !== wasDirty) {
+    setWasDirty(dirty);
+    if (!dirty) setOpen(false);
+  }
 
   return (
     <div className="flex items-center gap-2">
-      {/* A successful commit empties the change set (the new base syncs
-          back); with nothing left to review the popover derives closed. */}
-      <Popover open={open && dirty} onOpenChange={setOpen}>
+      <Popover open={open} onOpenChange={setOpen}>
         <PopoverTrigger
           render={
             <Button

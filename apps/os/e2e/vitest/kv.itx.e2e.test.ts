@@ -24,7 +24,7 @@ test("itx.kv round-trips small values, lists by prefix, and is project-scoped", 
     target: "dev",
   });
 
-  expect((await project.kv.list()).sort()).toEqual(["routing/docs", "docs-app-origin"]);
+  expect((await project.kv.list()).sort()).toEqual(["docs-app-origin", "routing/docs"]);
   expect(await project.kv.list({ prefix: "routing/" })).toEqual(["routing/docs"]);
 
   // Another project sees none of it.

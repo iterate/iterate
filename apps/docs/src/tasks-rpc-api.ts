@@ -601,6 +601,9 @@ class TasksWorkspaceApi extends RpcTarget implements TasksWorkspace {
       await ws.git.commit({ message: `Assign task: ${card.title}`, scope: this.#repoPath });
     });
     await this.#dial.withProject(async (project) => {
+      // Same pinned-client caveat as WorkspaceStub: the `iterate` client
+      // types predate the agents surface, and capnweb stubs are Proxies, so
+      // the locally asserted AgentStub members resolve at runtime.
       const agent = (project as unknown as { agents: { get(path: string): AgentStub } }).agents.get(
         agentPath,
       );
