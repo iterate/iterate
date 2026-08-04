@@ -39,7 +39,10 @@ const CREATION_HANDOFF_DELAY_MS = 1_000;
  * obligation. The source Stream DO invokes this processor over a retained
  * callback; starting long work in that callback and later appending its
  * outcome to the same Stream DO creates a cyclic actor-drain tree. The
- * callback therefore only arms the Repo DO's creation slice. `alarm()` drives
+ * callback therefore only arms the Repo DO's creation slice. The create event
+ * itself arms that slice even when the source reports more raw offsets ahead;
+ * relying only on an at-head pass can strand creation when a hosted filtered
+ * delivery advances the cursor without producing that pass. `alarm()` drives
  * the vendor work after the source callback has closed, then journals the
  * immutable source and terminal fact. The terminal certificate's
  * idempotency keys are offset-free (`created` / `create-failed`), so a
@@ -101,7 +104,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   // Synchronous. The side-effect lanes are chosen HERE, at the dispatch site,
   // never inside helpers:
   //
-  // - PER-EVENT consequences (commit facts, the import request) use
+  // - PER-EVENT consequences (commit facts, the import request, creation-alarm
+  //   handoff) use
   //   `blockProcessorWhile`: each derives from an event delivered once, so a
   //   dropped append loses the fact forever.
   // - STATE-DERIVED consequences run after the switch, at head only: creation
@@ -118,6 +122,20 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (state.createFailure !== null) return;
 
     switch (event?.type) {
+      case "events.iterate.com/repos/create-requested": {
+        // Arm from the intent event itself, not only from an eventual at-head
+        // pass. Hosted delivery can report the request while still having raw,
+        // selector-filtered offsets ahead; creation must already have an
+        // independently durable wake-up if no later consumed event arrives.
+        // ensureCreationAlarm preserves a coarser retry alarm that an earlier
+        // failed attempt may already own.
+        if (event.payload.type !== "empty" && state.birthCertificate === null) {
+          blockProcessorWhile(() =>
+            this.deps.ensureCreationAlarm(this.deps.now() + CREATION_HANDOFF_DELAY_MS),
+          );
+        }
+        break;
+      }
       case "events.iterate.com/repo/cloudflare-artifact-event-received": {
         const push = repoArtifactPushFromEventPayload(event.payload);
         if (push === null || state.defaultBranch === null || push.branch !== state.defaultBranch) {
@@ -183,8 +201,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         );
         break;
       }
-      // create-requested / created / create-failed / github-link lifecycle /
-      // mirror-push outcomes / import lifecycle / stream lifecycle: no
+      // created / create-failed / github-link lifecycle / mirror-push
+      // outcomes / import lifecycle / stream lifecycle: no
       // per-event effect — they matter through the reduced state below.
     }
 

@@ -334,6 +334,38 @@ describe("RepoProcessor creation saga", () => {
     expect(h.state()).toMatchObject({ templateSource: RESOLVED_TEMPLATE });
   });
 
+  it("arms template creation before a hosted delivery reaches the raw stream head", async () => {
+    const h = makeRepoHarness();
+    await h.stream.append({
+      type: "events.iterate.com/repos/create-requested",
+      payload: {
+        type: "github-public-template",
+        owner: "iterate",
+        path: "configs/with-voice",
+        ref: "main",
+        repo: "iterate",
+      },
+    });
+    await h.stream.append({ type: "stream/connection-opened", payload: {} });
+    const request = h.stream.events[0]!;
+    const opened = await h.runner().openEventBatchCallback(h.stream.streamId, {
+      sourceScansAllEvents: true,
+    });
+
+    await opened.processEventBatch({
+      events: [request],
+      scannedAfterOffset: 0,
+      scannedThroughOffset: request.offset,
+      streamId: h.stream.streamId,
+      streamMaxOffset: 2,
+    });
+
+    await expect(h.runner().snapshot()).resolves.toMatchObject({ offset: request.offset });
+    expect(h.creationAlarm.at).toBe(h.clock.now + 1_000);
+    expect(h.resolveTemplate.calls).toEqual([]);
+    expect(h.createTemplate.calls).toEqual([]);
+  });
+
   it("keeps retryable GitHub failures open and settles missing template input", async () => {
     const request = {
       type: "github-public-template" as const,
