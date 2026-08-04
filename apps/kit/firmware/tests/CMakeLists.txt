@@ -1,6 +1,8 @@
 set(ITERATE_KIT_BOUNDARY_CHECK
     "${CMAKE_CURRENT_SOURCE_DIR}/verify_core_boundary.cmake")
 
+# Keep both entry points: ordinary builds must enforce the boundary, while the
+# named CTest gives CI and developers a focused, independently runnable check.
 add_custom_target(
   iterate-kit-architecture-check ALL
   COMMAND

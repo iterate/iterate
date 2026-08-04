@@ -8,15 +8,18 @@ file(
   "${ITERATE_KIT_FIRMWARE_ROOT}/components/core/*.c"
   "${ITERATE_KIT_FIRMWARE_ROOT}/components/core/*.cc"
   "${ITERATE_KIT_FIRMWARE_ROOT}/components/core/*.cpp"
+  "${ITERATE_KIT_FIRMWARE_ROOT}/components/core/*.cxx"
   "${ITERATE_KIT_FIRMWARE_ROOT}/components/core/*.h"
-  "${ITERATE_KIT_FIRMWARE_ROOT}/components/core/*.hpp")
+  "${ITERATE_KIT_FIRMWARE_ROOT}/components/core/*.hh"
+  "${ITERATE_KIT_FIRMWARE_ROOT}/components/core/*.hpp"
+  "${ITERATE_KIT_FIRMWARE_ROOT}/components/core/*.inc")
 
 # This is a second line of defence, not the seam itself. Platform-private
 # headers must also stay out of the core target's include paths so a bypass does
 # not compile. The source check makes the intended dependency direction visible
 # in a fast host test instead of waiting for a particular board build.
 set(ITERATE_KIT_FORBIDDEN_INCLUDE
-    "^[ \t]*#[ \t]*include[ \t]*[<\"][^>\"]*(components/audio|iterate/kit/audio|\\.\\./audio|platforms/|iterate/kit/platforms|\\.\\./platforms)[^>\"]*[>\"]")
+    "^[ \t]*#[ \t]*include[ \t]*[<\"][^>\"]*(audio_codec\\.h|audio_processor\\.h|components/audio|iterate/kit/audio|\\.\\./audio|platforms/|iterate/kit/platforms|\\.\\./platforms)[^>\"]*[>\"]")
 
 foreach(ITERATE_KIT_CORE_FILE IN LISTS ITERATE_KIT_CORE_FILES)
   file(STRINGS "${ITERATE_KIT_CORE_FILE}" ITERATE_KIT_BOUNDARY_VIOLATIONS
