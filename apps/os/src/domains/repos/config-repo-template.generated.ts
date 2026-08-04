@@ -203,7 +203,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "  \"description\": \"Iterate project worker and packaged full-stack apps.\",\n" +
       "  \"dependencies\": {\n" +
       "    \"@iterate-com/docs\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main\",\n" +
-      "    \"@iterate-com/tasks\": \"https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main\",\n" +
       "    \"iterate\": \"https://pkg.pr.new/iterate/iterate/iterate@main\",\n" +
       "    \"react\": \"19.2.4\",\n" +
       "    \"react-dom\": \"19.2.4\",\n" +
@@ -294,7 +293,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
     path: "worker.ts",
     content:
       "import { DocsApp } from \"@iterate-com/docs\";\n" +
-      "import { TasksApp } from \"@iterate-com/tasks\";\n" +
       "import { GithubAiLinter } from \"iterate/starter-apps/github-ai-linter\";\n" +
       "import { GuestbookApp } from \"iterate/starter-apps/guestbook\";\n" +
       "import { IterateWorkerEntrypoint, type StreamEvent } from \"iterate/sdk\";\n" +
@@ -329,24 +327,13 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "      originOverrideKvKey: \"docs-app-origin\",\n" +
       "    },\n" +
       "  });\n" +
-      "  #tasksApp = TasksApp.create(this.env, {\n" +
-      "    auth: { policy: \"project-member\" },\n" +
-      "    proxy: {\n" +
-      "      origin: \"https://tasks.iterate.workers.dev\",\n" +
-      "      originOverrideKvKey: \"tasks-app-origin\",\n" +
-      "    },\n" +
-      "  });\n" +
       "  #guestbookApp = GuestbookApp.create(this.env);\n" +
       "  #todoApp = TodoApp.create(this.env);\n" +
       "\n" +
-      "  /** Agent-callable Docs helpers, including `itx.worker.docs.link({ workspace, path })`. */\n" +
+      "  /** Agent-callable app helpers: `itx.worker.docs.link({ workspace, path })`\n" +
+      "   * mints the document view, `link({ workspace, repo, task? })` the board. */\n" +
       "  get docs() {\n" +
       "    return this.#docsApp.rpc;\n" +
-      "  }\n" +
-      "\n" +
-      "  /** Agent-callable Tasks helpers, including `itx.worker.tasks.link({ workspace, repo, task? })`. */\n" +
-      "  get tasks() {\n" +
-      "    return this.#tasksApp.rpc;\n" +
       "  }\n" +
       "\n" +
       "  /**\n" +
@@ -481,9 +468,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "    if (app === \"guestbook\") {\n" +
       "      return this.#guestbookApp.fetch(req);\n" +
       "    }\n" +
-      "    if (app === \"tasks\") {\n" +
-      "      return this.#tasksApp.fetch(req);\n" +
-      "    }\n" +
       "    if (app === \"docs\") {\n" +
       "      return this.#docsApp.fetch(req);\n" +
       "    }\n" +
@@ -502,8 +486,7 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "              <ul>\n" +
       "                <li><a href=\"${appUrl(\"todo\")}\">todo</a> (LiveState + Cap'n Web, project members only)</li>\n" +
       "                <li><a href=\"${appUrl(\"guestbook\")}\">guestbook</a> (stream processor reduce on /guestbook, public)</li>\n" +
-      "                <li><a href=\"${appUrl(\"tasks\")}\">tasks</a> (collaborative task board over tasks/, project members only)</li>\n" +
-      "                <li><a href=\"${appUrl(\"docs\")}\">docs</a> (direct workspace document review, project members only)</li>\n" +
+      "                <li><a href=\"${appUrl(\"docs\")}\">docs</a> (workspace documents and the task board, project members only)</li>\n" +
       "              </ul>\n" +
       "              <p>Edit worker.ts in the project repo to change this.</p>\n" +
       "            </main>\n" +

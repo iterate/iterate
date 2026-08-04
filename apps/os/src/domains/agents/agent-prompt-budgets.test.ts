@@ -41,8 +41,11 @@ const CHARS_PER_TOKEN = 4;
 // clone-your-own-source, skills discovery, and scoped commits.
 // 4100 → 4150 (2026-07-31): the tasks app became a lens on workspaces; one
 // line teaches sharing uncommitted task files as a live board via
-// itx.worker.tasks.link — the board sibling of the docs review teach.
-const DEFAULT_PROMPT_TOKEN_CEILING = 4_150;
+// The board form of the docs link teach — one app, one capability.
+// 4150 → 4200 (2026-08-04): THE SHAPE OF WORK gained one bullet — "YOU are
+// the LLM": a prod chat piped email content through ai.run and relayed a 3B
+// model's summary verbatim; the docs invited it and nothing forbade it.
+const DEFAULT_PROMPT_TOKEN_CEILING = 4_200;
 
 const AGENT_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
@@ -83,7 +86,7 @@ test("the default prompt teaches agents to share workspace files through Docs", 
 
 test("the default prompt teaches agents to share task boards through Tasks", () => {
   expect(DEFAULT_AGENT_SYSTEM_PROMPT).toContain(
-    'itx.worker.tasks.link({ workspace: "/workspaces/agents/you", repo: "/repos/config" })',
+    'itx.worker.docs.link({ workspace: "/workspaces/agents/you", repo: "/repos/config" })',
   );
 });
 

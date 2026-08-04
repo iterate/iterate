@@ -328,6 +328,10 @@ export interface Ai {
   /** List the Workers AI model catalog. */
   models(): Promise<unknown>;
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
+   * For outputs the caller cannot produce itself — images, audio, transcription,
+   * embeddings, classification at volume. An LLM agent shouldn't run a text
+   * model over content it is about to read or relay (summarize, draft, answer):
+   * return the data and write that yourself.
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
@@ -336,7 +340,9 @@ export interface Ai {
   run<T = unknown>(model: string, body: unknown, options?: CfAiRunOptions): Promise<T>;
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
-  /** Convert one document (`{ name, blob }`) to Markdown. */
+  /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
+   * string (a fetched page, an email body) converts via
+   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand. */
   toMarkdown(
     document: CfMarkdownDocument,
     options?: CfMarkdownConversionOptions,
@@ -1275,7 +1281,15 @@ export interface Stream {
    * sampling); live debug surfaces should subscribe through `liveState`.
    */
   runtimeState(): Promise<StreamRuntimeDebugState>;
-  /** Push-driven stream runtime state for polling-free debug surfaces. */
+  /**
+   * Push-driven stream runtime state for polling-free debug surfaces.
+   *
+   * Deliberately NOT the generic DO-subscription relay: that shape retains a
+   * diff callback inside the Stream DO and pins it for the watcher's life.
+   * Stream liveState rides the hibernatable STATE socket instead
+   * (stream-connection-relay.ts) — a watched idle stream hibernates at zero
+   * duration and pushes frames only when something actually changes.
+   */
   liveState: LiveStateRpc<StreamRuntimeDebugState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): Promise<void>;

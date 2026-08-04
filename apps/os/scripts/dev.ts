@@ -50,7 +50,13 @@ const DEFAULT_START_TIMEOUT_MS = 60_000;
 export default async function start(options: StartOptions = {}) {
   const requestedPort = options.port ?? (process.env.PORT ? Number(process.env.PORT) : undefined);
   const live = readDevServerInfo(APP_ROOT, { requireLive: true });
-  if (live) {
+  // Captured before eviction: shutdown removes the discovery file that
+  // recordedPort() reads, and the replacement should keep the stable URL.
+  let evictedPort: number | undefined;
+  if (live && (await evictIfMemoryPressured(live))) {
+    evictedPort = live.port;
+  }
+  if (live && evictedPort === undefined) {
     if (requestedPort !== undefined && live.port !== requestedPort) {
       throw new Error(
         `A dev server is already running on port ${live.port} (pid ${live.pid}) but port ` +
@@ -60,7 +66,7 @@ export default async function start(options: StartOptions = {}) {
     return { ...formatStatus(live), note: "already running — use restart to replace it" };
   }
 
-  const port = requestedPort ?? (await pickFreePort(recordedPort()));
+  const port = requestedPort ?? evictedPort ?? (await pickFreePort(recordedPort()));
   // Thread the picked port through the environment too: vite.config.ts writes
   // wrangler.jsonc at import time, and the local-dev vars bake
   // APP_CONFIG_BASE_URL from PORT so the worker knows its own origin (signed
@@ -181,11 +187,70 @@ async function resolveLocalOsDevServerTarget(
 > {
   const live = readDevServerInfo(APP_ROOT, { requireLive: true });
   if (live) {
+    if (await evictIfMemoryPressured(live)) {
+      // Same port so the caller's webServer machinery boots a fresh server
+      // at the URL it already resolved.
+      return { baseUrl: live.baseUrl.replace(/\/+$/, ""), kind: "start", port: live.port };
+    }
     return { baseUrl: live.baseUrl.replace(/\/+$/, ""), info: live, kind: "live", port: live.port };
   }
   const envPort = env.PORT ? Number(env.PORT) : undefined;
   const port = await pickFreePort(envPort || recordedPort());
   return { baseUrl: `http://localhost:${port}`, kind: "start", port };
+}
+
+/**
+ * Local workerd NEVER evicts worker-loader isolates (upstream: platform
+ * concern), every project worker / script run loads one under a fresh key,
+ * and all isolates share a ~4GB V8 pointer cage — so a long-lived dev
+ * server is a slow-motion SIGABRT (the historical "restart the dev server
+ * before every spec run" ritual). Details: tasks/miniflare-oom-investigation.md.
+ * Treat a bloated workerd as already dead: kill it so callers start fresh.
+ */
+async function evictIfMemoryPressured(live: DevServerInfo) {
+  // Guard NaN: `rssMb < NaN` is false, so a typo'd env var would otherwise
+  // evict every live server on every start.
+  const configured = Number(process.env.ITERATE_DEV_WORKERD_RSS_LIMIT_MB);
+  const limitMb = Number.isFinite(configured) && configured > 0 ? configured : 2048;
+  const rssMb = Math.round(workerdRssKb(live.pid) / 1024);
+  if (rssMb < limitMb) return false;
+  console.error(
+    `[dev] workerd RSS is ${rssMb}MB (limit ${limitMb}MB) — killing pid ${live.pid} for a fresh ` +
+      `start before the V8 pointer cage fills and it SIGABRTs mid-request.`,
+  );
+  await kill();
+  return true;
+}
+
+/**
+ * Sum RSS of the dev server's workerd descendants (vite spawns miniflare
+ * which spawns workerd; RSS in kB as reported by ps). workerd is where
+ * loader isolates accumulate, so its RSS — not node's heap — is the health
+ * signal that predicts the crash.
+ */
+function workerdRssKb(rootPid: number) {
+  const result = spawnSync("ps", ["-axo", "pid=,ppid=,rss=,comm="], { encoding: "utf8" });
+  if (result.status !== 0 || !result.stdout) return 0;
+  const rows = result.stdout
+    .trim()
+    .split("\n")
+    .map((line) => {
+      const [pid, ppid, rss, ...comm] = line.trim().split(/\s+/);
+      return { pid: Number(pid), ppid: Number(ppid), rss: Number(rss), comm: comm.join(" ") };
+    });
+  const childrenByPpid = new Map<number, typeof rows>();
+  for (const row of rows) {
+    childrenByPpid.set(row.ppid, [...(childrenByPpid.get(row.ppid) || []), row]);
+  }
+  let totalKb = 0;
+  const queue = [rootPid];
+  while (queue.length > 0) {
+    for (const child of childrenByPpid.get(queue.shift()!) || []) {
+      if (child.comm.includes("workerd")) totalKb += child.rss;
+      queue.push(child.pid);
+    }
+  }
+  return totalKb;
 }
 
 /** This worktree's last-used port, so restarts keep stable URLs. */
@@ -271,6 +336,9 @@ function formatStatus(info: DevServerInfo | null) {
     port: info.port,
     baseUrl: info.baseUrl,
     startedAt: info.startedAt,
+    // The crash predictor: worker-loader isolates accumulate here until the
+    // ~4GB pointer cage fills (tasks/miniflare-oom-investigation.md).
+    workerdRssMb: live ? Math.round(workerdRssKb(info.pid) / 1024) : undefined,
     log: LOG_PATH,
   };
 }

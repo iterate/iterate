@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from "react";
-import { useMatches, useNavigate } from "@tanstack/react-router";
+import { lazy, Suspense, useEffect, useState } from "react";
+import { useMatch, useMatches, useNavigate } from "@tanstack/react-router";
 import {
   Dialog,
   DialogContent,
@@ -13,11 +13,15 @@ import { activeStreamBreadcrumb } from "~/lib/route-breadcrumbs.ts";
 import { projectsListStaleTime } from "~/lib/projects-query.ts";
 import { streamPathFromSplatOrRoot } from "~/lib/stream-links.ts";
 import { linkOptionsForAdminStreamPath, linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
-import type { StreamNavigator } from "~/lib/stream-navigation.ts";
 
-const CommandPaletteDialog = lazy(() =>
+const ProjectCommandPaletteDialog = lazy(() =>
   import("./command-palette-dialog.tsx").then((module) => ({
-    default: module.CommandPaletteDialog,
+    default: module.ProjectCommandPaletteDialog,
+  })),
+);
+const AdminStreamIndexDialog = lazy(() =>
+  import("./command-palette-dialog.tsx").then((module) => ({
+    default: module.AdminStreamIndexDialog,
   })),
 );
 
@@ -41,42 +45,49 @@ export function GlobalCommandPalette() {
     setOpen(next);
     if (!next) setPickedProject(null);
   };
-  // Context tiers: the admin explorer's project (params on the /admin/streams
-  // routes) → the page's own stream (stream pages publish a streamBreadcrumb)
-  // → the active project's root (any project page — the $projectSlug layout
-  // carries `project` in its route context) → the picker dialog's choice
-  // (non-project pages).
-  const adminStream = useMemo(() => getAdminStreamContext(matches), [matches]);
+  const adminProjectId = useMatch({
+    from: "/admin/streams/$projectId",
+    shouldThrow: false,
+    select: (match) => match.params.projectId,
+  });
+  const adminSplat = useMatch({
+    from: "/admin/streams/$projectId/$",
+    shouldThrow: false,
+    select: (match) => match.params._splat,
+  });
+  const project = useMatch({
+    from: "/_app/projects/$projectSlug",
+    shouldThrow: false,
+    select: (match) => match.context.project,
+  });
+  const adminStream =
+    adminProjectId === undefined
+      ? null
+      : { projectId: adminProjectId, streamPath: streamPathFromSplatOrRoot(adminSplat) };
   // Under /admin but before a project is chosen (the /admin/streams picker
   // page), ⌘K must stay in the admin world: picking a project opens that
   // project's admin explorer instead of dialing the org-scoped app flow.
   const inAdmin = matches.some((match) => match.routeId.startsWith("/admin"));
-  const routeStream = useMemo(() => {
-    if (adminStream) return adminStream;
-    const streamBreadcrumb = activeStreamBreadcrumb(matches);
-    if (streamBreadcrumb) return streamBreadcrumb;
-    let project: { id: string; slug: string } | undefined;
-    for (const match of matches) {
-      const candidate = (match.context as { project?: { id: string; slug: string } } | undefined)
-        ?.project;
-      if (candidate !== undefined) project = candidate;
-    }
-    return project ? { projectId: project.id, projectSlug: project.slug, streamPath: "/" } : null;
-  }, [adminStream, matches]);
-  const activeStream = useMemo(
-    () =>
-      routeStream ??
-      (pickedProject
-        ? { projectId: pickedProject.id, projectSlug: pickedProject.slug, streamPath: "/" }
-        : null),
-    [routeStream, pickedProject],
-  );
+  const streamBreadcrumb = activeStreamBreadcrumb(matches);
+  const routeStream =
+    streamBreadcrumb ??
+    (project === undefined
+      ? null
+      : { projectId: project.id, projectSlug: project.slug, streamPath: "/" });
+  const activeStream =
+    routeStream ??
+    (pickedProject
+      ? { projectId: pickedProject.id, projectSlug: pickedProject.slug, streamPath: "/" }
+      : null);
 
   // Close on any navigation that swaps the stream context out from under an
   // open dialog (back button, links outside the dialog): the tree being shown
   // belongs to the page it was opened on. The palette's own navigations
   // already close it before routing.
-  const routeStreamKey = routeStream ? `${routeStream.projectId}:${routeStream.streamPath}` : null;
+  const routeStreamKey =
+    adminStream === null
+      ? routeStream && `${routeStream.projectId}:${routeStream.streamPath}`
+      : `admin:${adminStream.projectId}:${adminStream.streamPath}`;
   useEffect(() => {
     setOpen(false);
     setPickedProject(null);
@@ -102,27 +113,22 @@ export function GlobalCommandPalette() {
     };
   }, []);
 
-  const streamNavigator = useMemo<StreamNavigator | null>(() => {
-    if (adminStream != null) {
-      // Admin addresses arbitrary projects through platform-wide operator
-      // authority and stays within the admin explorer routes.
-      return {
-        onOpenPath(path) {
-          setOpen(false);
-          void navigate(linkOptionsForAdminStreamPath(adminStream.adminProjectId, path));
-        },
-      };
-    }
-    if (activeStream == null) return null;
-    return {
-      onOpenPath(path) {
-        setOpen(false);
-        void navigate(linkOptionsForStreamPath(activeStream.projectSlug, path));
-      },
-    };
-  }, [activeStream, adminStream, navigate]);
+  if (adminStream !== null) {
+    return open ? (
+      <Suspense fallback={<p role="status">Loading stream navigation…</p>}>
+        <AdminStreamIndexDialog
+          currentPath={adminStream.streamPath}
+          onOpenChange={handleOpenChange}
+          onOpenPath={(path) => {
+            void navigate(linkOptionsForAdminStreamPath(adminStream.projectId, path));
+          }}
+          projectId={adminStream.projectId}
+        />
+      </Suspense>
+    ) : null;
+  }
 
-  if (activeStream == null || streamNavigator == null) {
+  if (activeStream == null) {
     return (
       <ProjectPickerDialog
         open={open}
@@ -145,13 +151,13 @@ export function GlobalCommandPalette() {
 
   return open ? (
     <Suspense fallback={<p role="status">Loading project navigation…</p>}>
-      <CommandPaletteDialog
-        open
+      <ProjectCommandPaletteDialog
         onOpenChange={handleOpenChange}
         currentPath={activeStream.streamPath}
-        navigator={streamNavigator}
-        scope={activeStream.projectId}
-        admin={adminStream != null}
+        onOpenPath={(path) => {
+          void navigate(linkOptionsForStreamPath(activeStream.projectSlug, path));
+        }}
+        projectId={activeStream.projectId}
       />
     </Suspense>
   ) : null;
@@ -208,23 +214,4 @@ function ProjectPickerDialog({
       </DialogContent>
     </Dialog>
   );
-}
-
-/**
- * The admin stream explorer's ⌘K context: which project (or the `__null__`
- * deployment namespace) it is browsing and where it stands. Detected from the
- * /admin/streams/$projectId route params — admin navigates within its own
- * explorer routes and dials through platform-wide operator authority.
- */
-function getAdminStreamContext(matches: ReturnType<typeof useMatches>) {
-  const adminMatch = matches.find((match) => match.routeId.startsWith("/admin/streams/$projectId"));
-  if (adminMatch == null) return null;
-  const params = adminMatch.params as { projectId: string; _splat?: string };
-  const deepest = matches.at(-1)?.params as { _splat?: string } | undefined;
-  return {
-    adminProjectId: params.projectId,
-    projectId: params.projectId,
-    projectSlug: params.projectId,
-    streamPath: streamPathFromSplatOrRoot(deepest?._splat),
-  };
 }

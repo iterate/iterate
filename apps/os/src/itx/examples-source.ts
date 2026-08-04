@@ -37,6 +37,14 @@ const ALL_RUNTIMES: ItxExampleRuntime[] = [
 /** Live providers must outlive the calls, so these stay in caller-owned sessions. */
 const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
 
+/** The recursive MIME tree of a Gmail message payload (`format: "full"`);
+ * body bytes are base64url in `body.data`. Used by gmail-search-inbox. */
+type GmailMessagePart = {
+  mimeType?: string;
+  body?: { data?: string };
+  parts?: GmailMessagePart[];
+};
+
 export const ITX_EXAMPLE_SOURCES: ItxExampleSource[] = [
   sessionExample({
     id: "whoami",
@@ -1483,7 +1491,10 @@ return {
             data: {
               messages?: Array<{ id: string }>;
               resultSizeEstimate?: number;
-              payload?: { headers?: Array<{ name: string; value?: string }> };
+              snippet?: string;
+              payload?: GmailMessagePart & {
+                headers?: Array<{ name: string; value?: string }>;
+              };
             };
           }>;
         };
@@ -1492,9 +1503,9 @@ return {
   }>({
     id: "gmail-search-inbox",
     e2eProven: false,
-    title: "Search the inbox through the built-in Gmail integration",
+    title: "Search the inbox and read a message body through the built-in Gmail integration",
     description:
-      "itx.integrations.gmail.get().request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. get() selects the first connected account; pass a slug only for a specific account. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail — interactive-only.",
+      "itx.integrations.gmail.get().request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. get() selects the first connected account; pass a slug only for a specific account. List matching message ids first, then fan out metadata fetches in one Promise.all. To read a message's CONTENT, fetch it with format: 'full' — the body arrives as base64url-encoded MIME parts, so walk payload.parts for text/html, decode the bytes, and convert to Markdown with itx.ai.toMarkdown (never regex-strip HTML by hand). Reads real mail — interactive-only.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { q?: string }) => {
       const gmail = itx.integrations.gmail.get();
@@ -1511,12 +1522,52 @@ return {
           }),
         ),
       );
+      const subjects = messages.map(
+        (m) => m.data.payload?.headers?.find((h) => h.name === "Subject")?.value,
+      );
+
+      // Read the first hit's CONTENT: the body is not text — it hides in a
+      // nested MIME tree as base64url bytes. Flatten the tree, prefer html.
+      const firstId = inbox.data.messages?.[0]?.id;
+      if (!firstId) return { resultSizeEstimate: inbox.data.resultSizeEstimate, subjects };
+      const full = await gmail.request({
+        path: "/users/me/messages/" + firstId,
+        query: { format: "full" },
+      });
+      const parts = [];
+      const stack = [full.data.payload];
+      while (stack.length) {
+        const part = stack.pop();
+        if (!part) continue;
+        parts.push(part);
+        stack.push(...(part.parts ?? []));
+      }
+      const part =
+        parts.find((p) => p.mimeType === "text/html" && p.body?.data) ??
+        parts.find((p) => p.mimeType === "text/plain" && p.body?.data);
+      const encoded = part?.body?.data;
+      if (!part || !encoded) return { subjects, firstMessage: { snippet: full.data.snippet } };
+      // base64url: swap the alphabet back and re-pad to a multiple of 4.
+      const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+      const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+      const text = new TextDecoder().decode(Uint8Array.from(atob(padded), (c) => c.charCodeAt(0)));
+
+      // Plain text is already readable; HTML goes to the converter —
+      // never regex-strip it yourself.
+      const markdown =
+        part.mimeType === "text/plain"
+          ? text
+          : (
+              await itx.ai.toMarkdown({
+                name: "message.html",
+                blob: new Blob([text], { type: "text/html" }),
+              })
+            ).data;
 
       return {
         resultSizeEstimate: inbox.data.resultSizeEstimate,
-        subjects: messages.map(
-          (m) => m.data.payload?.headers?.find((h) => h.name === "Subject")?.value,
-        ),
+        subjects,
+        firstMessage: { subject: subjects[0], markdown },
       };
     },
   }),
@@ -1652,15 +1703,23 @@ export default class ProjectWorker extends WorkerEntrypoint {
   projectExample({
     id: "cf-ai-to-markdown",
     e2eProven: false,
-    title: "Convert a document to Markdown with Workers AI",
+    title: "Convert a document or HTML to Markdown with Workers AI",
     description:
-      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
+      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). It also converts an in-hand HTML string — a fetched page, an email body — via new Blob([html], { type: 'text/html' }): never strip HTML with regex. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
     runtimes: LIVE_SESSION_RUNTIMES,
     fn: async (itx) => {
       const supported = await itx.ai.toMarkdown();
       const csv = new Blob(["name,value\nalpha,1\nbeta,2\n"], { type: "text/csv" });
       const converted = await itx.integrations.cf.ai.toMarkdown({ name: "sample.csv", blob: csv });
-      return { supported: supported.slice(0, 10), converted };
+
+      // An HTML string already in hand (fetched page, email body) is a
+      // document too — wrap it in a Blob instead of regex-stripping tags.
+      const html = "<h1>Report</h1><p>Everything is <em>fine</em>.</p>";
+      const fromHtml = await itx.ai.toMarkdown({
+        name: "page.html",
+        blob: new Blob([html], { type: "text/html" }),
+      });
+      return { supported: supported.slice(0, 10), converted, fromHtml: fromHtml.data };
     },
   }),
   projectExample<{
@@ -1671,23 +1730,32 @@ export default class ProjectWorker extends WorkerEntrypoint {
   }>({
     id: "ai-generate-text",
     e2eProven: false,
-    title: "Generate or summarize text with a hosted LLM",
+    title: "Run a hosted text model for bulk, mechanical work",
     description:
-      "The most common model task: summarize, draft, classify, extract, rewrite, or answer questions by running a 'Text Generation' model through itx.ai.run() with { messages } (chat shape) and reading result.response. itx.ai.models() lists the catalog with prices. Uses paid/remote AI infrastructure — interactive-only.",
+      "Run a 'Text Generation' model through itx.ai.run(model, body) with { messages } (chat shape) and read result.response — for MECHANICAL text work at volume: classify hundreds of rows, extract a field from every record, tag or filter in bulk. If YOU are an LLM agent, never use it on content you are about to read or relay (summarize, draft, answer) — you are usually a more intelligent model; return the data and write it yourself. itx.ai.models() lists the catalog with prices. Uses paid/remote AI infrastructure — interactive-only.",
     runtimes: ALL_RUNTIMES,
-    fn: async (itx, vars: { text?: string }) => {
-      const text =
-        vars.text ?? "Cloudflare Workers run JavaScript close to users in hundreds of cities.";
+    fn: async (itx, vars: { reviews?: string[] }) => {
+      // The legitimate shape: one cheap model call PER ITEM, fanned out —
+      // work an agent could not do by hand at volume.
+      const reviews = vars.reviews ?? [
+        "Setup took thirty seconds, brilliant.",
+        "Support never answered my ticket.",
+        "Does what it says on the tin.",
+      ];
 
-      const result = await itx.ai.run("@cf/meta/llama-3.2-3b-instruct", {
-        messages: [
-          { role: "system", content: "Summarize the user's text in one short sentence." },
-          { role: "user", content: text },
-        ],
-      });
+      const results = await Promise.all(
+        reviews.map((review) =>
+          itx.ai.run("@cf/meta/llama-3.2-3b-instruct", {
+            messages: [
+              { role: "system", content: "Answer with one word: positive, negative, or neutral." },
+              { role: "user", content: review },
+            ],
+          }),
+        ),
+      );
 
       // Text models answer in result.response.
-      return { summary: result.response };
+      return reviews.map((review, i) => ({ review, sentiment: results[i].response?.trim() }));
     },
   }),
   projectExample<{

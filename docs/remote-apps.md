@@ -6,7 +6,7 @@ your project without holding any credential of its own. The model:
 - The app is a **stateless vessel**. It stores no secrets, no sessions, no
   pairing. Every useful request reaches it through your project.
 - Your project's config worker is the **front door**, serving the app on a
-  project host like `tasks--<slug>.iterate.app`: it authenticates the browser
+  project host like `docs--<slug>.iterate.app`: it authenticates the browser
   with the platform's project-member gate, then reverse-proxies everything —
   pages, assets, and WebSocket upgrades — to the vessel.
 - The browser's short-lived session token travels with each forwarded
@@ -20,20 +20,20 @@ the whole integration. Delete them and the app knows nothing.
 ## The front door: a few lines in your config worker
 
 ```ts
-import { TasksApp } from "@iterate-com/tasks";
+import { DocsApp } from "@iterate-com/docs";
 
-const tasksApp = TasksApp.create(this.env, {
+const docsApp = DocsApp.create(this.env, {
   auth: { policy: "project-member" },
   proxy: {
-    origin: "https://tasks.iterate.workers.dev",
-    originOverrideKvKey: "tasks-app-origin",
+    origin: "https://docs.iterate.workers.dev",
+    originOverrideKvKey: "docs-app-origin",
   },
 });
 
-if (app === "tasks") return tasksApp.fetch(request);
+if (app === "docs") return docsApp.fetch(request);
 ```
 
-Commit that and `https://tasks--<slug>.iterate.app` works: sign-in is the
+Commit that and `https://docs--<slug>.iterate.app` works: sign-in is the
 platform's own flow, membership is checked against the real directory, and
 the vessel never sees an unauthenticated request.
 
@@ -130,8 +130,8 @@ production origin. Both values are complete HTTPS origins.
 Flip to your laptop and back with one CLI call — no commit, no rebuild:
 
 ```bash
-pnpm cli itx run --context prj_… -e 'await itx.kv.set("tasks-app-origin", "https://jonas-tasks.tunnels.iterate.com")'
-pnpm cli itx run --context prj_… -e 'await itx.kv.delete("tasks-app-origin")'
+pnpm cli itx run --context prj_… -e 'await itx.kv.set("docs-app-origin", "https://jonas-docs.tunnels.iterate.com")'
+pnpm cli itx run --context prj_… -e 'await itx.kv.delete("docs-app-origin")'
 ```
 
 Better still, **route per-user**: the gate already knows who the member is,
@@ -146,7 +146,7 @@ const actor = await itx.auth
 const devOrigin =
   actor.userId === MY_USER_ID ? await itx.kv.get(`dev-origin:${actor.userId}`) : null;
 const origin = new URL(
-  typeof devOrigin === "string" ? devOrigin : "https://tasks.iterate.workers.dev",
+  typeof devOrigin === "string" ? devOrigin : "https://docs.iterate.workers.dev",
 );
 url.protocol = origin.protocol;
 url.host = origin.host;

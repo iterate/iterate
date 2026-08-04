@@ -17,6 +17,10 @@ export default createServerEntry({
       return docsHealthResponse(env);
     }
 
+    // The vessel's ONE api root: every lens — documents, the task board,
+    // agents via the config worker's stub — holds the same project surface
+    // over the same kind of session. Cookie for proxied browsers, explicit
+    // credential for agents and services.
     if (url.pathname === "/api") {
       if (request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
         return new Response("Cap'n Web WebSocket only — upgrade required", { status: 426 });

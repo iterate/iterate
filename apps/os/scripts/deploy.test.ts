@@ -29,7 +29,6 @@ describe("preview package prerequisite", () => {
     // awaited at its pinned URL before preview deployment starts.
     expect(previewPackageSpecsToAwait(sha)).toEqual([
       `https://pkg.pr.new/iterate/iterate/@iterate-com/docs@${sha}`,
-      `https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@${sha}`,
       `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
     ]);
   });

@@ -3,11 +3,6 @@
 import { useMemo } from "react";
 import { connectItx, connectIterateSession, reportTransportSuspicion } from "iterate/sdk/itx/react";
 
-/** Open a stream path from a project or admin navigation surface. */
-export type StreamNavigator = {
-  onOpenPath: (streamPath: string) => void;
-};
-
 /**
  * URL sentinel for streams that live outside any project (platform streams):
  * the admin stream browser addresses them as `/admin/streams/__null__/...`.

@@ -8,15 +8,29 @@ export type DocsAppOptions = {
   };
 };
 
-export type DocsLinkInput = {
-  /**
-   * Document to review: relative to the workspace, or a fully qualified
-   * stream path. Must end in .md, .markdown, .html, or .htm.
-   */
-  path: string;
-  /** Absolute /workspaces/** stream path of the reviewing workspace. */
-  workspace: string;
-};
+/**
+ * One link capability, two lenses — the input shape picks the view:
+ * `path` mints the document view, `repo` (+ optional `task`) mints the
+ * task-board view. Exactly one of the two.
+ */
+export type DocsLinkInput =
+  | {
+      /**
+       * Document to review: relative to the workspace, or a fully qualified
+       * stream path. Must end in .md, .markdown, .html, or .htm.
+       */
+      path: string;
+      /** Absolute /workspaces/** stream path of the reviewing workspace. */
+      workspace: string;
+    }
+  | {
+      /** Absolute /workspaces/** stream path of the workspace the board renders. */
+      workspace: string;
+      /** Absolute /repos/** path of the repo whose task files the board shows. */
+      repo: string;
+      /** Repo-relative task file to open (a .md file under a `tasks/` folder). */
+      task?: string;
+    };
 
 type DocsProject = {
   [Symbol.dispose](): void;
@@ -42,17 +56,38 @@ export class DocsAppRpcTarget extends RpcTarget {
     this.#env = env;
   }
 
-  /** Build a review URL for one Markdown or HTML workspace file. */
+  /**
+   * Build a URL into the app for one workspace: the document view when the
+   * input carries `path`, the task-board view when it carries `repo`
+   * (+ optional `task`). Validation mirrors what each view applies on open,
+   * so a minted link can only address something the UI will accept.
+   */
   async link(input: DocsLinkInput): Promise<string> {
-    // Same validation DocsWorkspaceApi applies when the document opens, so a
-    // minted link can only address a path the review UI will accept.
     const workspace = requireWorkspacePath(input.workspace);
-    const path = requireDocumentPath(input.path);
+    // Discriminate by VALUE, not key presence: capnweb callers are loose
+    // JSON, and a key that exists holding undefined must not pick a lens.
+    const loose = input as { path?: string; repo?: string; task?: string };
+    const wantsDocument = typeof loose.path === "string";
+    const wantsBoard = typeof loose.repo === "string";
+    if (wantsDocument === wantsBoard) {
+      throw new Error("pass exactly one of path (document view) or repo (board view)");
+    }
+    const path = wantsDocument ? requireDocumentPath(loose.path!) : undefined;
+    const repo = wantsBoard ? requireRepoPath(loose.repo!) : undefined;
+    // task belongs to the board lens alone — a document link ignores it
+    // rather than failing board-path checks for a view that never reads it.
+    const task = wantsBoard && loose.task !== undefined ? requireTaskPath(loose.task) : undefined;
     const itx = await this.#env.ITX.get();
     try {
       const url = new URL(await itx.appUrl("docs"));
       url.searchParams.set("workspace", workspace);
-      url.searchParams.set("path", path);
+      if (path !== undefined) {
+        url.searchParams.set("path", path);
+        return url.href;
+      }
+      url.pathname = "/w";
+      url.searchParams.set("repo", repo!);
+      if (task !== undefined) url.searchParams.set("task", task);
       return url.href;
     } finally {
       itx[Symbol.dispose]();
@@ -110,6 +145,36 @@ export function requireDocumentPath(value: string): string {
   if (path.startsWith("/") && !path.startsWith("/workspaces/") && !path.startsWith("/repos/")) {
     throw new Error(
       'an absolute document path must be fully qualified (under "/workspaces/" or "/repos/"); use a relative path to target the workspace\'s own directory',
+    );
+  }
+  return path;
+}
+
+/** A board's repo path is a fully qualified /repos/** mount path — the SAME
+ * rule the board applies on open (normalizeRepoPath), so a minted link can
+ * never carry a repo the route would reject. */
+export function requireRepoPath(value: string): string {
+  const path = requireCanonicalPath(value, "repo path");
+  const segments = path.startsWith("/repos/") ? path.slice(1).split("/") : [];
+  if (
+    segments.length < 2 ||
+    segments.some((segment) => !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(segment))
+  ) {
+    throw new Error(`repo path must name a repo under "/repos/": ${JSON.stringify(value)}`);
+  }
+  return path;
+}
+
+/** A task path is repo-relative: a Markdown file below a `tasks/` folder. */
+export function requireTaskPath(value: string): string {
+  const path = requireCanonicalPath(value, "task path");
+  if (path.startsWith("/")) {
+    throw new Error(`task path must be repo-relative: ${JSON.stringify(value)}`);
+  }
+  const segments = path.split("/");
+  if (!/\.(?:md|markdown)$/i.test(segments.at(-1) ?? "") || !segments.includes("tasks")) {
+    throw new Error(
+      `task path must be a .md file below a "tasks" folder: ${JSON.stringify(value)}`,
     );
   }
   return path;

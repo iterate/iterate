@@ -12,8 +12,8 @@ test("parses every published iterate/iterate URL shape", () => {
   });
   // Scoped names carry their own `@` — the ref is split on the LAST one.
   expect(
-    parseIterateRepoPkgSpec("https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main"),
-  ).toEqual({ name: "@iterate-com/tasks", ref: "main" });
+    parseIterateRepoPkgSpec("https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main"),
+  ).toEqual({ name: "@iterate-com/docs", ref: "main" });
   // Compact form: the package named after the repo.
   expect(parseIterateRepoPkgSpec("https://pkg.pr.new/iterate/iterate@1758")).toEqual({
     name: "iterate",
@@ -51,8 +51,8 @@ test("pinning swaps only the ref and keeps the URL form", () => {
     `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
   );
   expect(
-    pinIterateRepoPkgRef("https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@1758", sha),
-  ).toBe(`https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@${sha}`);
+    pinIterateRepoPkgRef("https://pkg.pr.new/iterate/iterate/@iterate-com/docs@1758", sha),
+  ).toBe(`https://pkg.pr.new/iterate/iterate/@iterate-com/docs@${sha}`);
   expect(pinIterateRepoPkgRef("https://pkg.pr.new/iterate/iterate@main", sha)).toBe(
     `https://pkg.pr.new/iterate/iterate@${sha}`,
   );

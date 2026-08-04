@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { StreamEvent } from "iterate/processors";
-import { WakeSocketRegistry } from "./wake-socket.ts";
+import { parseStateSocketFrame, WakeSocketRegistry } from "./wake-socket.ts";
 
 type FakeSocket = WebSocket & {
   attachment: unknown;
@@ -132,6 +132,24 @@ describe("WakeSocketRegistry", () => {
 
     expect((socket.attachment as Record<string, unknown>).idleDeliveredThrough).toBe(100);
     expect(socket.sent).toEqual(['{"type":"idle"}']);
+  });
+
+  it("pushes state frames to every liveState watcher, latest-wins and best-effort", () => {
+    const watcher = fakeSocket(undefined);
+    const sockets = [watcher];
+    const registry = new WakeSocketRegistry({
+      getWebSockets: (tag) => (tag === "live-state" ? sockets : []),
+      acceptWebSocket: () => undefined,
+      maxOffset: () => 100,
+      hasConnection: () => false,
+    });
+
+    expect(registry.hasStateSockets()).toBe(true);
+    registry.pushState({ runtime: { storageSizeBytes: 42 } });
+    expect(watcher.sent).toHaveLength(1);
+    expect(parseStateSocketFrame(watcher.sent[0])).toEqual({
+      state: { runtime: { storageSizeBytes: 42 } },
+    });
   });
 
   it("reports a departure only for dormant subscribers without a live replacement", () => {

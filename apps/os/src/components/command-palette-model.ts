@@ -74,9 +74,9 @@ type PaletteDialogState = {
   collapsedStreamPaths: ReadonlySet<string>;
 };
 
-export function initialPaletteDialogState(): PaletteDialogState {
+export function initialPaletteDialogState(tab: PaletteTab): PaletteDialogState {
   return {
-    tab: "agents",
+    tab,
     query: "",
     selectedValue: "",
     expandedAgentPaths: new Set(),
@@ -85,8 +85,6 @@ export function initialPaletteDialogState(): PaletteDialogState {
 }
 
 type PaletteDialogAction =
-  | { type: "closed" }
-  | { type: "opened"; tab: PaletteTab }
   | { type: "query_changed"; query: string }
   | { type: "selection_changed"; selectedValue: string }
   | { type: "tab_changed"; tab: PaletteTab }
@@ -98,16 +96,6 @@ export function reducePaletteDialogState(
   action: PaletteDialogAction,
 ): PaletteDialogState {
   switch (action.type) {
-    case "closed":
-      return { ...state, query: "", selectedValue: "" };
-    case "opened":
-      return {
-        tab: action.tab,
-        query: "",
-        selectedValue: "",
-        expandedAgentPaths: new Set(),
-        collapsedStreamPaths: new Set(),
-      };
     case "query_changed":
       return { ...state, query: action.query, selectedValue: "" };
     case "selection_changed":
@@ -135,7 +123,6 @@ export function normalizeDestination(raw: string): string | null {
   return parsed.success && parsed.data !== "/" ? parsed.data : null;
 }
 
-export function defaultPaletteTab(currentPath: string, fullProjectNavigation: boolean): PaletteTab {
-  if (!fullProjectNavigation) return "tree";
+export function defaultPaletteTab(currentPath: string): PaletteTab {
   return currentPath === "/agents" || currentPath.startsWith("/agents/") ? "agents" : "recent";
 }

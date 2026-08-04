@@ -114,6 +114,25 @@ grows from apps/tasks. Remaining: the workspace-level tree + file views
 (item 3's extraction), folding the Docs single-document view in, and then
 retiring apps/docs behind a link redirect.
 
+**DONE (2026-08-03): one app, two views.** The combined app grew from
+apps/docs, not apps/tasks: the board moved wholesale into apps/docs as the
+`/w` route (docs and tasks are two views in ONE app behind ONE host —
+`docs--<slug>`), the sidebar switches views with plain in-app links, the
+vessel serves two capnweb roots (`/api` docs lane, `/api/tasks` board lane),
+`@iterate-com/docs` now exports both config bridges (`TasksApp` is
+link-capability only — `tasks.link` mints `/w` URLs on the docs host), and
+apps/tasks is deleted along with the `tasks--` host branch in the template
+(no backwards compatibility, per Jonas). The deployed tasks vessels stay
+parked (workers are never deleted). Sequel (same day): the API unified too —
+ONE capnweb root at /api (the /api/tasks second root died), one authenticate
+returning one project surface carrying both lenses (workspace() = document
+lane, workspaceAt()/board() = board lanes, one board-aware workspaces()),
+one browser WebSocket under both views, and `itx.worker.tasks` deleted —
+`itx.worker.docs.link` mints either view by input shape ({workspace, path}
+docs, {workspace, repo, task?} board). Remaining from the /goal list: the
+pierre-style tree + diff views (item 3's extraction) and the root-folder
+constraint.
+
 ## Platform follow-up: a real `workspaces.list()`
 
 The picker currently enumerates via `streams.list()` filtered to

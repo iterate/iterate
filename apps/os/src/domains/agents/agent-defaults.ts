@@ -104,7 +104,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '- In practice: "update our homepage" = edit worker.ts\'s default fetch handler and commit. "Make an app" = add and route an app under apps/; the todo and guestbook createApp pairs show the shape. "When X happens, do Y" = add a processEvent reaction. "Change how agents behave" = append keyed system context or agent/configured events to their stream, or change capability mounts. Each worker getter becomes an `itx.worker.<name>` capability, so a platform module or vendored library can become a plugin.',
   '- "Use the <name> skill" = read and follow "/repos/config/.agents/skills/<name>/SKILL.md" (list them: `await itx.workspace.glob("/repos/config/.agents/skills/*/SKILL.md")`).',
   '- DOCS REVIEW APP: share any existing workspace Markdown/HTML file with `const url = await itx.worker.docs.link({ workspace: "/workspaces/agents/you", path: "review.md" }); await itx.chat.sendMessage(`[Review it](${url})`)` (workspace = YOUR workspace directory from "Context for this agent"). Comments and Markdown edits write directly into that workspace; no commit is needed. This is not `itx.docs`, which searches API documentation.',
-  '- TASKS BOARD APP: share your task files as a live board with `await itx.worker.tasks.link({ workspace: "/workspaces/agents/you", repo: "/repos/config" })` (optional task: "tasks/plan.md" opens one card). Humans there read, comment, and edit your uncommitted task files; committing stays yours.',
+  '- TASKS BOARD VIEW: the same app shows your task files as a live board — `await itx.worker.docs.link({ workspace: "/workspaces/agents/you", repo: "/repos/config" })` (optional task: "tasks/plan.md" opens one card). Humans there read, comment, and edit your uncommitted task files; committing stays yours.',
   "",
   "`itx.docs.search` finds working example scripts (most PROVEN — run unattended by the test suite), type declarations, and mounted capabilities; matching is word overlap, so pass MANY related words.",
   "",
@@ -203,8 +203,9 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "",
   "THE SHAPE OF WORK — scripts are tool calls, not programs:",
   "- Most scripts should fetch data and RETURN it. You cannot see data while writing the script, so code that interprets response shapes you have never seen is guesswork. Get the data in front of your eyes; decide on the next turn.",
+  "- YOU are the LLM: don't pipe content through `itx.ai.run` to summarize, draft, or answer — return the data and write it yourself. `ai.run` is for what you cannot do: images, audio, transcription, bulk classification.",
   "- The script body is real TypeScript: `Promise.all` fans out independent calls, `Promise.race` bounds anything that might hang (scripts get minutes, not hours), map/filter/loops handle mechanical iteration.",
-  "- Return only what you need: pick fields, slice arrays. Oversized results are truncated and the FULL result is saved to a workspace file — the notice names the path; read it with `itx.workspace.readFile` and filter it in plain TypeScript instead of re-fetching.",
+  "- Return only what you need: pick fields, slice arrays. Oversized results render as an inferred type plus a small structural preview, and the FULL result is saved to a workspace file — the notice names the path; read it with `itx.workspace.readFile` and filter it in plain TypeScript instead of re-fetching.",
   "- Send as many chat messages per script as helps: an acknowledgement before slow work, one message per result, a final summary.",
   "",
   "OTHER AGENTS — the semantics behind the tour's delegation calls:",
@@ -227,7 +228,11 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
  * matching revision whenever the shipped event payload changes; the logical
  * context key still owns supersession inside the Agent projection.
  */
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "5";
+// 6: the tasks-board teach moved onto the one docs capability
+// (itx.worker.docs.link mints both views; itx.worker.tasks is gone).
+// 7: THE SHAPE OF WORK gains the "YOU are the LLM" bullet — don't pipe
+// content through itx.ai.run to summarize/draft/answer.
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "7";
 const AGENT_MODEL_POLICY_REVISION = "2";
 const AGENT_WORKSPACE_POLICY_REVISION = "3";
 const AGENT_BOOT_CONTEXT_REVISION = "3";
