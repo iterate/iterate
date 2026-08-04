@@ -34,7 +34,7 @@ async function waitForArtifactReady(
  */
 export async function importGithubArtifact(
   artifacts: Pick<Artifacts, "get" | "import">,
-  input: { branch: string; depth?: number; name: string; owner: string; repo: string },
+  input: { branch?: string; depth?: number; name: string; owner: string; repo: string },
 ): Promise<void> {
   await importGithubArtifactRepo(artifacts, input);
 }
@@ -45,7 +45,7 @@ export async function importGithubArtifact(
  * above. */
 export async function getOrImportGithubArtifact(
   artifacts: Pick<Artifacts, "get" | "import">,
-  input: { branch: string; depth?: number; name: string; owner: string; repo: string },
+  input: { branch?: string; depth?: number; name: string; owner: string; repo: string },
 ): Promise<ArtifactsRepo> {
   return await importGithubArtifactRepo(artifacts, input);
 }
@@ -104,12 +104,12 @@ export async function importGithubArtifactWithInitialPushCapture(
 
 async function importGithubArtifactRepo(
   artifacts: Pick<Artifacts, "get" | "import">,
-  input: { branch: string; depth?: number; name: string; owner: string; repo: string },
+  input: { branch?: string; depth?: number; name: string; owner: string; repo: string },
 ): Promise<ArtifactsRepo> {
   try {
     await artifacts.import({
       source: {
-        branch: input.branch,
+        ...(input.branch === undefined ? {} : { branch: input.branch }),
         // Cloudflare documents depth as optional. Omitting it imports the
         // full history without transferring it through this Worker.
         // https://developers.cloudflare.com/artifacts/api/workers-binding/#importparams

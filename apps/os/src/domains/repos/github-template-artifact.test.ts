@@ -73,7 +73,7 @@ describe("GitHub template Artifact materialization", () => {
       },
       target: { name: "project--config--template-source" },
     });
-    expect(repo.log).toHaveBeenCalledWith({ limit: 1, ref: "main" });
+    expect(repo.log).toHaveBeenCalledWith({ limit: 1, ref: COMMIT_SHA });
     expect(adapter.files).toHaveBeenCalledWith(
       SOURCE,
       expect.objectContaining({ rootTreeHash: TREE_SHA }),
@@ -82,7 +82,7 @@ describe("GitHub template Artifact materialization", () => {
     expect(binding.get).toHaveBeenCalledTimes(2);
   });
 
-  it("falls back to the immutable GitHub tree when a branch moved after resolution", async () => {
+  it("rejects an Artifact that resolves the immutable commit to a different object", async () => {
     const { binding } = artifacts(MOVED_SHA);
     const adapter = sourceAdapter();
 
@@ -93,8 +93,8 @@ describe("GitHub template Artifact materialization", () => {
         sourceAdapter: adapter,
         temporaryArtifactName: "project--config--template-source",
       }),
-    ).resolves.toEqual(FILES);
-    expect(adapter.files).toHaveBeenCalledWith(SOURCE);
+    ).rejects.toMatchObject({ retryable: true });
+    expect(adapter.files).not.toHaveBeenCalled();
     expect(binding.delete).toHaveBeenCalledOnce();
   });
 
@@ -115,8 +115,8 @@ describe("GitHub template Artifact materialization", () => {
     expect(binding.get).toHaveBeenCalledTimes(2);
   });
 
-  it("uses no temporary Artifact for tags and commits", async () => {
-    const { binding } = artifacts();
+  it("imports all advertised refs server-side for tags and commits", async () => {
+    const { binding, repo } = artifacts();
     const adapter = sourceAdapter();
 
     await expect(
@@ -127,8 +127,15 @@ describe("GitHub template Artifact materialization", () => {
         temporaryArtifactName: "project--config--template-source",
       }),
     ).resolves.toEqual(FILES);
-    expect(adapter.files).toHaveBeenCalledWith({ ...SOURCE, branch: undefined, ref: "v1" });
-    expect(binding.import).not.toHaveBeenCalled();
-    expect(binding.delete).not.toHaveBeenCalled();
+    expect(binding.import).toHaveBeenCalledWith({
+      source: { url: "https://github.com/iterate/iterate.git" },
+      target: { name: "project--config--template-source" },
+    });
+    expect(repo.log).toHaveBeenCalledWith({ limit: 1, ref: COMMIT_SHA });
+    expect(adapter.files).toHaveBeenCalledWith(
+      { ...SOURCE, branch: undefined, ref: "v1" },
+      expect.objectContaining({ rootTreeHash: TREE_SHA }),
+    );
+    expect(binding.delete).toHaveBeenCalledOnce();
   });
 });

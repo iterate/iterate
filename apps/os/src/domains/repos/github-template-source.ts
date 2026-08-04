@@ -1,4 +1,5 @@
 import git from "isomorphic-git";
+import type { HttpClient } from "isomorphic-git/http/web";
 import { z } from "zod";
 import { isSafeConfigRepoTemplatePath } from "../../lib/config-repo-template-reference.ts";
 
@@ -6,7 +7,6 @@ const MAX_FILE_COUNT = 500;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
 const MAX_GITHUB_REF_BYTES = 1024 * 1024;
-const MAX_GITHUB_TREE_BYTES = 8 * 1024 * 1024;
 const MAX_PATH_BYTES = 1_024;
 const MAX_TREE_ENTRY_COUNT = 5_000;
 const RAW_FETCH_CONCURRENCY = 6;
@@ -16,26 +16,11 @@ const RAW_FETCH_CONCURRENCY = 6;
 const REQUEST_TIMEOUT_MS = 8_000;
 
 const GitSha = z.string().regex(/^[0-9a-f]{40}$/);
-const Commit = z.object({ sha: GitSha });
-const Repository = z.object({ default_branch: z.string().min(1) });
-const Branch = z.object({ commit: Commit });
 const TreeEntry = z.object({
   hash: GitSha,
   mode: z.string(),
   name: z.string(),
   type: z.enum(["blob", "commit", "symlink", "tree"]),
-});
-const GithubTree = z.object({
-  truncated: z.boolean(),
-  tree: z.array(
-    z.object({
-      mode: z.string(),
-      path: z.string(),
-      sha: GitSha,
-      size: z.number().int().nonnegative().optional(),
-      type: z.enum(["blob", "commit", "tree"]),
-    }),
-  ),
 });
 
 export type GithubTemplateRequest = {
@@ -275,114 +260,80 @@ function isRateLimited(response: Response): boolean {
   );
 }
 
-async function listGithubApiTreeFiles(
-  source: ResolvedGithubTemplateSource,
+function asyncBytes(bytes: Uint8Array): AsyncIterableIterator<Uint8Array> {
+  return (async function* () {
+    yield bytes;
+  })();
+}
+
+function githubSmartHttp(
   request: typeof globalThis.fetch,
-): Promise<ListedFile[]> {
-  let response: Response;
+  source: GithubTemplateRequest,
+): HttpClient {
+  return {
+    request: async ({ headers, method, url }) => {
+      let response: Response;
+      try {
+        response = await request(url, {
+          headers,
+          method,
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        });
+      } catch (error) {
+        throw new GithubTemplateSourceError(
+          `GitHub could not advertise refs for ${source.owner}/${source.repo}.`,
+          { cause: error, retryable: true },
+        );
+      }
+
+      const responseHeaders = Object.fromEntries(response.headers.entries());
+      const bytes = await readBoundedBytes(
+        response,
+        MAX_GITHUB_REF_BYTES,
+        "GitHub Git ref advertisement",
+      );
+      return {
+        body: asyncBytes(bytes),
+        headers: responseHeaders,
+        method,
+        statusCode: response.status,
+        statusMessage: response.statusText,
+        url: response.url,
+      };
+    },
+  };
+}
+
+async function listGithubServerRefs(
+  source: GithubTemplateRequest,
+  request: typeof globalThis.fetch,
+) {
   try {
-    response = await request(
-      `https://api.github.com/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/git/trees/${source.commitSha}?recursive=1`,
-      {
-        headers: {
-          accept: "application/vnd.github+json",
-          "user-agent": "iterate-config-template-importer",
-          "x-github-api-version": "2022-11-28",
-        },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      },
-    );
-  } catch (error) {
-    throw new GithubTemplateSourceError("GitHub could not enumerate the template tree.", {
-      cause: error,
-      retryable: true,
+    // Protocol v1 advertises HEAD, its symref, branches, tags, and peeled tags
+    // in one bounded response. Unlike GitHub's unauthenticated REST API this
+    // is the public Git transport itself, so shared Cloudflare egress does not
+    // consume a tiny accountless API quota just to resolve a public ref.
+    return await git.listServerRefs({
+      http: githubSmartHttp(request, source),
+      peelTags: true,
+      protocolVersion: 1,
+      symrefs: true,
+      url: `https://github.com/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}.git`,
     });
-  }
-  if (!response.ok) {
-    await response.body?.cancel().catch(() => undefined);
-    throw new GithubTemplateSourceError(
-      `GitHub could not enumerate template commit ${source.commitSha}: HTTP ${response.status}.`,
-      { retryable: isRateLimited(response) || response.status >= 500 },
-    );
-  }
-  let body: unknown;
-  try {
-    body = JSON.parse(
-      new TextDecoder("utf-8", { fatal: true }).decode(
-        await readBoundedBytes(response, MAX_GITHUB_TREE_BYTES, "GitHub template tree"),
-      ),
-    );
   } catch (error) {
     if (error instanceof GithubTemplateSourceError) throw error;
-    throw new GithubTemplateSourceError("GitHub returned an invalid template tree response.", {
-      cause: error,
-      retryable: false,
-    });
-  }
-  const parsed = GithubTree.safeParse(body);
-  if (!parsed.success) {
-    throw new GithubTemplateSourceError("GitHub returned an unexpected template tree response.", {
-      cause: parsed.error,
-      retryable: false,
-    });
-  }
-  if (parsed.data.truncated) {
+    const status =
+      (error as { data?: { statusCode?: unknown } } | null)?.data?.statusCode ?? undefined;
     throw new GithubTemplateSourceError(
-      "GitHub truncated this commit's recursive tree; use a branch ref or a smaller template repository.",
-      { retryable: false },
+      `GitHub could not advertise refs for ${source.owner}/${source.repo}${
+        typeof status === "number" ? `: HTTP ${status}` : ""
+      }.`,
+      {
+        cause: error,
+        retryable: status === 429 || (typeof status === "number" && status >= 500),
+      },
     );
   }
-
-  const prefix = source.path === undefined ? "" : `${source.path}/`;
-  if (source.path !== undefined) {
-    const selected = parsed.data.tree.find((entry) => entry.path === source.path);
-    if (selected === undefined) {
-      throw new GithubTemplateSourceError(
-        `Template path ${JSON.stringify(source.path)} does not exist in ${source.owner}/${source.repo} at ${source.commitSha}.`,
-        { retryable: false },
-      );
-    }
-    if (selected.type !== "tree") {
-      throw new GithubTemplateSourceError(
-        `Template path ${JSON.stringify(source.path)} must be a directory in ${source.owner}/${source.repo}.`,
-        { retryable: false },
-      );
-    }
-  }
-
-  const files: ListedFile[] = [];
-  const paths = new Set<string>();
-  for (const entry of parsed.data.tree) {
-    if (!entry.path.startsWith(prefix) || entry.path === source.path) continue;
-    const relative = prefix === "" ? entry.path : entry.path.slice(prefix.length);
-    assertSafeOutputPath(relative);
-    if (entry.type === "tree") continue;
-    const file = listedFile({
-      blobSha: entry.sha,
-      mode: entry.mode,
-      path: relative,
-      sourcePath: entry.path,
-      type: entry.type,
-    });
-    if (file !== null) {
-      if (paths.has(file.path)) {
-        throw new GithubTemplateSourceError(
-          `GitHub returned duplicate template path ${JSON.stringify(file.path)}.`,
-          { retryable: false },
-        );
-      }
-      paths.add(file.path);
-      if (entry.size !== undefined && entry.size > MAX_FILE_BYTES) {
-        throw new GithubTemplateSourceError(
-          `Template file ${JSON.stringify(relative)} exceeds the ${MAX_FILE_BYTES}-byte per-file limit.`,
-          { retryable: false },
-        );
-      }
-      files.push(file);
-    }
-    if (files.length > MAX_FILE_COUNT) return assertFileLimits(files);
-  }
-  return assertFileLimits(files);
 }
 
 async function downloadFiles(
@@ -459,81 +410,17 @@ async function downloadFiles(
 }
 
 /** A bounded, read-only GitHub adapter for copying a public repository
- * subtree. GitHub's public API resolves a ref to an immutable commit and says
- * whether it is an importable branch. Branch trees can then come from a
- * Cloudflare Artifacts server-side shallow import; tags/commits use GitHub's
- * public recursive-tree endpoint. In both cases only selected raw files cross
- * the Worker, and isomorphic-git checks every body against its immutable Git
- * blob hash. */
+ * subtree. Git smart HTTP resolves a ref to an immutable commit and says
+ * whether it is an importable branch. Cloudflare Artifacts imports Git
+ * objects server-side and supplies the selected immutable tree; only selected
+ * raw file bodies cross the Worker, and isomorphic-git checks every body
+ * against its advertised Git blob hash. */
 export function createGithubTemplateSource(
   input: {
     fetch?: typeof globalThis.fetch;
   } = {},
 ) {
   const request = input.fetch ?? globalThis.fetch;
-
-  async function requestGithubJson(
-    source: GithubTemplateRequest,
-    path: string,
-    description: string,
-    options: { allowNotFound?: boolean } = {},
-  ): Promise<unknown | undefined> {
-    let response: Response;
-    try {
-      response = await request(
-        `https://api.github.com/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}${path}`,
-        {
-          headers: {
-            accept: "application/vnd.github+json",
-            "user-agent": "iterate-config-template-importer",
-            "x-github-api-version": "2022-11-28",
-          },
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        },
-      );
-    } catch (error) {
-      throw new GithubTemplateSourceError(`${description}.`, { cause: error, retryable: true });
-    }
-    if (response.status === 404 && options.allowNotFound === true) {
-      await response.body?.cancel().catch(() => undefined);
-      return undefined;
-    }
-    if (!response.ok) {
-      await response.body?.cancel().catch(() => undefined);
-      throw new GithubTemplateSourceError(`${description}: HTTP ${response.status}.`, {
-        retryable: isRateLimited(response) || response.status >= 500,
-      });
-    }
-    try {
-      return JSON.parse(
-        new TextDecoder("utf-8", { fatal: true }).decode(
-          await readBoundedBytes(response, MAX_GITHUB_REF_BYTES, "GitHub ref response"),
-        ),
-      );
-    } catch (error) {
-      if (error instanceof GithubTemplateSourceError) throw error;
-      throw new GithubTemplateSourceError(
-        `GitHub returned invalid JSON while ${description.toLowerCase()}.`,
-        { cause: error, retryable: false },
-      );
-    }
-  }
-
-  async function resolveCommit(source: GithubTemplateRequest, ref: string): Promise<string> {
-    const body = await requestGithubJson(
-      source,
-      `/commits/${encodeURIComponent(ref)}`,
-      `GitHub could not resolve template ref ${JSON.stringify(ref)}`,
-    );
-    const parsed = Commit.safeParse(body);
-    if (!parsed.success) {
-      throw new GithubTemplateSourceError(
-        `GitHub returned an unexpected response while resolving template ref ${JSON.stringify(ref)}.`,
-        { cause: parsed.error, retryable: false },
-      );
-    }
-    return parsed.data.sha;
-  }
 
   return {
     async resolve(source: GithubTemplateRequest): Promise<ResolvedGithubTemplateSource> {
@@ -547,51 +434,37 @@ export function createGithubTemplateSource(
         return { ...source, commitSha: source.ref };
       }
 
+      const refs = await listGithubServerRefs(source, request);
       if (source.ref === undefined) {
-        const repository = Repository.safeParse(
-          await requestGithubJson(
-            source,
-            "",
-            `GitHub could not read public repository ${source.owner}/${source.repo}`,
-          ),
-        );
-        if (!repository.success) {
+        const head = refs.find((candidate) => candidate.ref === "HEAD");
+        if (head?.target === undefined || !head.target.startsWith("refs/heads/")) {
           throw new GithubTemplateSourceError(
-            `GitHub returned an unexpected response for public repository ${source.owner}/${source.repo}.`,
-            { cause: repository.error, retryable: false },
+            `Public repository ${source.owner}/${source.repo} does not advertise a default branch.`,
+            { retryable: false },
           );
         }
-        const branch = repository.data.default_branch;
-        return { ...source, branch, commitSha: await resolveCommit(source, branch) };
+        const branch = head.target.slice("refs/heads/".length);
+        return { ...source, branch, commitSha: head.oid };
       }
 
-      const branchBody = await requestGithubJson(
-        source,
-        `/branches/${encodeURIComponent(source.ref)}`,
-        `GitHub could not resolve template branch ${JSON.stringify(source.ref)}`,
-        { allowNotFound: true },
-      );
-      if (branchBody !== undefined) {
-        const branch = Branch.safeParse(branchBody);
-        if (!branch.success) {
-          throw new GithubTemplateSourceError(
-            `GitHub returned an unexpected response while resolving template branch ${JSON.stringify(source.ref)}.`,
-            { cause: branch.error, retryable: false },
-          );
-        }
-        return { ...source, branch: source.ref, commitSha: branch.data.commit.sha };
+      const branch = refs.find((candidate) => candidate.ref === `refs/heads/${source.ref}`);
+      if (branch !== undefined) {
+        return { ...source, branch: source.ref, commitSha: branch.oid };
       }
-      return { ...source, commitSha: await resolveCommit(source, source.ref) };
+      const tag = refs.find((candidate) => candidate.ref === `refs/tags/${source.ref}`);
+      if (tag !== undefined) return { ...source, commitSha: tag.peeled ?? tag.oid };
+
+      throw new GithubTemplateSourceError(
+        `GitHub does not advertise template ref ${JSON.stringify(source.ref)} in ${source.owner}/${source.repo}; use a branch, tag, or full 40-character commit SHA.`,
+        { retryable: false },
+      );
     },
 
     async files(
       source: ResolvedGithubTemplateSource,
-      treeReader?: GithubTemplateTreeReader,
+      treeReader: GithubTemplateTreeReader,
     ): Promise<GithubTemplateFile[]> {
-      const listed =
-        treeReader === undefined
-          ? await listGithubApiTreeFiles(source, request)
-          : await listArtifactTreeFiles(source, treeReader);
+      const listed = await listArtifactTreeFiles(source, treeReader);
       return await downloadFiles(source, listed, request);
     },
   };

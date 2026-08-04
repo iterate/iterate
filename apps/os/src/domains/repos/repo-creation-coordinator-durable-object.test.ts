@@ -45,6 +45,7 @@ const request = {
   repo: "iterate",
 };
 const handoff = { request, streamId: "stream-1" };
+const queuedHandoff = { ...handoff, failedAttempts: 0 };
 const resolvedSource = {
   branch: "default-configs",
   commitSha: "a".repeat(40),
@@ -119,7 +120,7 @@ describe("RepoCreationCoordinatorDurableObject", () => {
 
     await h.value.enqueue(handoff);
 
-    expect([...h.records.values()]).toEqual([handoff]);
+    expect([...h.records.values()]).toEqual([queuedHandoff]);
     expect(h.setAlarm).toHaveBeenCalledOnce();
     expect(mocks.resolveSource).not.toHaveBeenCalled();
     expect(mocks.createArtifact).not.toHaveBeenCalled();
@@ -144,7 +145,7 @@ describe("RepoCreationCoordinatorDurableObject", () => {
     await h.value.enqueue(handoff);
 
     expect(h.setAlarm).toHaveBeenCalledTimes(2);
-    expect([...h.records.values()]).toEqual([handoff]);
+    expect([...h.records.values()]).toEqual([queuedHandoff]);
   });
 
   it("upgrades the original boolean queue record when the processor next confirms the request", async () => {
@@ -152,7 +153,7 @@ describe("RepoCreationCoordinatorDurableObject", () => {
 
     await h.value.enqueue(handoff);
 
-    expect([...h.records.values()]).toEqual([handoff]);
+    expect([...h.records.values()]).toEqual([queuedHandoff]);
     expect(h.setAlarm).toHaveBeenCalledOnce();
   });
 
@@ -220,17 +221,38 @@ describe("RepoCreationCoordinatorDurableObject", () => {
     expect(mocks.appendIfStreamId).toHaveBeenCalledOnce();
   });
 
-  it("keeps retryable source failures open and surfaces the failed alarm", async () => {
+  it("keeps a classified source outage open on a bounded explicit retry", async () => {
     const failure = Object.assign(new Error("GitHub unavailable"), { retryable: true });
     mocks.resolveSource.mockRejectedValue(failure);
     const h = coordinator();
     await h.value.enqueue(handoff);
 
-    await expect(h.value.alarm()).rejects.toBe(failure);
+    await expect(h.value.alarm()).resolves.toBeUndefined();
 
-    expect([...h.records.values()]).toEqual([handoff]);
+    expect([...h.records.values()]).toEqual([{ ...queuedHandoff, failedAttempts: 1 }]);
     expect(h.setAlarm).toHaveBeenCalledTimes(2);
     expect(mocks.appendIfStreamId).not.toHaveBeenCalled();
+  });
+
+  it("settles a classified outage with a durable explanation after five attempts", async () => {
+    const failure = Object.assign(new Error("GitHub unavailable"), { retryable: true });
+    mocks.resolveSource.mockRejectedValue(failure);
+    const h = coordinator();
+    await h.value.enqueue(handoff);
+
+    for (let attempt = 0; attempt < 5; attempt += 1) await h.value.alarm();
+
+    expect(h.setAlarm).toHaveBeenCalledTimes(5);
+    expect(mocks.appendIfStreamId).toHaveBeenCalledOnce();
+    expect(mocks.appendIfStreamId.mock.calls[0]?.[0].events[0]).toMatchObject({
+      idempotencyKey: "repo/create-failed",
+      payload: {
+        error: "Public template creation failed after 5 attempts: GitHub unavailable",
+        request,
+      },
+      type: "events.iterate.com/repos/create-failed",
+    });
+    expect(h.records.size).toBe(0);
   });
 
   it("does not turn an invariant violation into an explicit retry loop", async () => {
@@ -244,7 +266,7 @@ describe("RepoCreationCoordinatorDurableObject", () => {
 
     await expect(h.value.alarm()).rejects.toThrow("no durable create-requested fact");
 
-    expect([...h.records.values()]).toEqual([handoff]);
+    expect([...h.records.values()]).toEqual([queuedHandoff]);
     expect(h.setAlarm).toHaveBeenCalledOnce();
     expect(mocks.resolveSource).not.toHaveBeenCalled();
     expect(mocks.createArtifact).not.toHaveBeenCalled();

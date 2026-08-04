@@ -26,15 +26,20 @@ import {
 const QUEUED_CREATION_STORAGE_KEY = "repo-creation:queued";
 const CREATION_HANDOFF_DELAY_MS = 1_000;
 const CREATION_RETRY_DELAY_MS = 60_000;
+const MAX_CREATION_ATTEMPTS = 5;
 const RepoTemplateCreationHandoffInput = z.strictObject({
   request: RepoProcessorContract.events["events.iterate.com/repos/create-requested"].payloadSchema,
   streamId: z.string().min(1),
+});
+const QueuedRepoTemplateCreation = RepoTemplateCreationHandoffInput.extend({
+  failedAttempts: z.number().int().nonnegative().default(0),
 });
 
 type RepoTemplateCreationHandoff = {
   request: Extract<RepoCreateRequest, { type: "github-public-template" }>;
   streamId: string;
 };
+type QueuedRepoTemplateCreation = RepoTemplateCreationHandoff & { failedAttempts: number };
 
 function parseHandoff(input: unknown): RepoTemplateCreationHandoff {
   const parsed = RepoTemplateCreationHandoffInput.parse(input);
@@ -42,6 +47,14 @@ function parseHandoff(input: unknown): RepoTemplateCreationHandoff {
     throw new Error("The repo creation coordinator accepts only public-template requests.");
   }
   return { request: parsed.request, streamId: parsed.streamId };
+}
+
+function parseQueuedCreation(input: unknown): QueuedRepoTemplateCreation {
+  const parsed = QueuedRepoTemplateCreation.parse(input);
+  if (parsed.request.type !== "github-public-template") {
+    throw new Error("The repo creation coordinator accepts only public-template requests.");
+  }
+  return { ...parsed, request: parsed.request };
 }
 
 function isRetryableCreationAttemptError(error: unknown): boolean {
@@ -83,12 +96,15 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
     if (stored === true) {
       // One-deploy migration from the initial coordinator, which stored only
       // a boolean. The next processor pass supplies the missing fenced input.
-      this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, handoff);
+      this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, {
+        ...handoff,
+        failedAttempts: 0,
+      } satisfies QueuedRepoTemplateCreation);
       await this.#ensureAlarm();
       return;
     }
     if (stored !== undefined) {
-      const existing = parseHandoff(stored);
+      const existing = parseQueuedCreation(stored);
       if (
         existing.streamId !== handoff.streamId ||
         existing.request.owner !== handoff.request.owner ||
@@ -105,7 +121,10 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
       return;
     }
 
-    this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, handoff);
+    this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, {
+      ...handoff,
+      failedAttempts: 0,
+    } satisfies QueuedRepoTemplateCreation);
     await this.#ensureAlarm();
   }
 
@@ -113,10 +132,11 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
     const stored = this.ctx.storage.kv.get<unknown>(QUEUED_CREATION_STORAGE_KEY);
     if (stored === undefined) return;
 
+    let queued: QueuedRepoTemplateCreation | undefined;
     try {
-      const handoff =
-        stored === true ? await this.#recoverOriginalBooleanHandoff() : parseHandoff(stored);
-      await this.#drive(handoff);
+      queued =
+        stored === true ? await this.#recoverOriginalBooleanHandoff() : parseQueuedCreation(stored);
+      await this.#drive(queued);
       this.ctx.storage.kv.delete(QUEUED_CREATION_STORAGE_KEY);
     } catch (error) {
       if (isStreamIdMismatchError(error)) {
@@ -125,18 +145,45 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
         this.ctx.storage.kv.delete(QUEUED_CREATION_STORAGE_KEY);
         return;
       }
-      // Native alarm retries are bounded. Preserve an explicit coarse wake-up
-      // only for classified transient failures; an invariant violation stays
-      // durably queued and visible in error telemetry without becoming an
-      // unbounded explicit retry loop.
-      if (isRetryableCreationAttemptError(error)) {
-        await this.ctx.storage.setAlarm(Date.now() + CREATION_RETRY_DELAY_MS);
+      // A classified infrastructure/source outage is an expected state, not
+      // an alarm exception. Retry it on an explicit coarse schedule, then
+      // commit a durable terminal explanation after a bounded number of
+      // attempts. Unexpected invariant failures still throw into error
+      // telemetry and retain the obligation for inspection.
+      if (queued !== undefined && isRetryableCreationAttemptError(error)) {
+        const failedAttempts = queued.failedAttempts + 1;
+        if (failedAttempts < MAX_CREATION_ATTEMPTS) {
+          this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, {
+            ...queued,
+            failedAttempts,
+          } satisfies QueuedRepoTemplateCreation);
+          console.info("public template creation will retry after a classified outage", {
+            failedAttempts,
+            maxAttempts: MAX_CREATION_ATTEMPTS,
+            path: this.#name.path,
+            projectId: this.#name.projectId,
+          });
+          await this.ctx.storage.setAlarm(Date.now() + CREATION_RETRY_DELAY_MS);
+          return;
+        }
+
+        await this.#appendFailure(
+          queued,
+          new Error(
+            `Public template creation failed after ${MAX_CREATION_ATTEMPTS} attempts: ${
+              error instanceof Error ? error.message : String(error)
+            }`,
+            { cause: error },
+          ),
+        );
+        this.ctx.storage.kv.delete(QUEUED_CREATION_STORAGE_KEY);
+        return;
       }
       throw error;
     }
   }
 
-  async #recoverOriginalBooleanHandoff(): Promise<RepoTemplateCreationHandoff> {
+  async #recoverOriginalBooleanHandoff(): Promise<QueuedRepoTemplateCreation> {
     const page = await this.#stream.getEventPage({
       eventTypes: ["events.iterate.com/repos/create-requested"],
     });
@@ -153,9 +200,9 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
     ) {
       throw new Error("The original coordinator queue does not name a public-template request.");
     }
-    const handoff = { request: parsed.payload, streamId: page.streamId };
-    this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, handoff);
-    return handoff;
+    const queued = { failedAttempts: 0, request: parsed.payload, streamId: page.streamId };
+    this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, queued);
+    return queued;
   }
 
   async #drive(handoff: RepoTemplateCreationHandoff): Promise<void> {

@@ -21,6 +21,33 @@ function bytesResponse(bytes: Uint8Array | string): Response {
   return new Response(typeof bytes === "string" ? bytes : Uint8Array.from(bytes).buffer);
 }
 
+function pktLine(value: string): string {
+  const length = new TextEncoder().encode(value).byteLength + 4;
+  return `${length.toString(16).padStart(4, "0")}${value}`;
+}
+
+function gitRefsResponse(input: {
+  branches?: Record<string, string>;
+  defaultBranch?: string;
+  tags?: Record<string, { oid: string; peeled?: string }>;
+}): Response {
+  const branches = input.branches ?? { main: COMMIT_SHA };
+  const defaultBranch = input.defaultBranch ?? "main";
+  const head = branches[defaultBranch];
+  if (head === undefined) throw new Error("The test advertisement needs its default branch.");
+  const refs = [
+    pktLine(`${head} HEAD\0symref=HEAD:refs/heads/${defaultBranch}\n`),
+    ...Object.entries(branches).map(([branch, oid]) => pktLine(`${oid} refs/heads/${branch}\n`)),
+    ...Object.entries(input.tags ?? {}).flatMap(([tag, { oid, peeled }]) => [
+      pktLine(`${oid} refs/tags/${tag}\n`),
+      ...(peeled === undefined ? [] : [pktLine(`${peeled} refs/tags/${tag}^{}\n`)]),
+    ]),
+  ];
+  return new Response(`${pktLine("# service=git-upload-pack\n")}0000${refs.join("")}0000`, {
+    headers: { "content-type": "application/x-git-upload-pack-advertisement" },
+  });
+}
+
 describe("GitHub template source", () => {
   it("pins the advertised default branch and copies exact subtree bytes and symlinks", async () => {
     const worker = "export default {}\n";
@@ -31,10 +58,7 @@ describe("GitHub template source", () => {
     const logoBlob = await blobSha(logo);
     const fetcher = vi.fn<typeof fetch>(async (url) => {
       const path = String(url);
-      if (path === "https://api.github.com/repos/iterate/iterate") {
-        return Response.json({ default_branch: "main" });
-      }
-      if (path.endsWith("/commits/main")) return Response.json({ sha: COMMIT_SHA });
+      if (path.includes("/info/refs?service=git-upload-pack")) return gitRefsResponse({});
       if (path.endsWith("/worker.ts")) return bytesResponse(worker);
       if (path.endsWith("/worker-link")) return bytesResponse(link);
       if (path.endsWith("/assets/logo.bin")) return bytesResponse(logo);
@@ -68,8 +92,8 @@ describe("GitHub template source", () => {
       repo: "iterate",
     });
     expect(fetcher).toHaveBeenCalledWith(
-      "https://api.github.com/repos/iterate/iterate",
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+      "https://github.com/iterate/iterate.git/info/refs?service=git-upload-pack",
+      expect.objectContaining({ method: "GET", signal: expect.any(AbortSignal) }),
     );
 
     const files = await source.files(resolved, {
@@ -88,15 +112,15 @@ describe("GitHub template source", () => {
   });
 
   it("resolves branches before tags and commits", async () => {
-    const fetcher = vi.fn<typeof fetch>(async (url) => {
-      const path = String(url);
-      if (path.endsWith("/branches/release")) {
-        return Response.json({ commit: { sha: COMMIT_SHA } });
-      }
-      if (path.endsWith("/branches/tag-only")) return new Response(null, { status: 404 });
-      if (path.endsWith("/commits/tag-only")) return Response.json({ sha: OTHER_SHA });
-      return new Response(null, { status: 404 });
-    });
+    const fetcher = vi.fn<typeof fetch>(async () =>
+      gitRefsResponse({
+        branches: { main: OTHER_SHA, release: COMMIT_SHA },
+        tags: {
+          "annotated-tag": { oid: ROOT_TREE, peeled: COMMIT_SHA },
+          "tag-only": { oid: OTHER_SHA },
+        },
+      }),
+    );
     const source = createGithubTemplateSource({ fetch: fetcher });
 
     await expect(source.resolve({ owner: "o", ref: "release", repo: "r" })).resolves.toMatchObject({
@@ -106,19 +130,14 @@ describe("GitHub template source", () => {
     const tag = await source.resolve({ owner: "o", ref: "tag-only", repo: "r" });
     expect(tag).toMatchObject({ commitSha: OTHER_SHA });
     expect(tag).not.toHaveProperty("branch");
-    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
-      "https://api.github.com/repos/o/r/branches/release",
-      "https://api.github.com/repos/o/r/branches/tag-only",
-      "https://api.github.com/repos/o/r/commits/tag-only",
-    ]);
+    await expect(
+      source.resolve({ owner: "o", ref: "annotated-tag", repo: "r" }),
+    ).resolves.toMatchObject({ commitSha: COMMIT_SHA });
+    expect(fetcher).toHaveBeenCalledTimes(3);
   });
 
-  it("accepts a full commit without ref discovery and resolves a short commit", async () => {
-    const fetcher = vi.fn<typeof fetch>(async (url) =>
-      String(url).includes("/branches/")
-        ? new Response(null, { status: 404 })
-        : Response.json({ sha: COMMIT_SHA }),
-    );
+  it("accepts a full commit without discovery and rejects an unadvertised short commit", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => gitRefsResponse({}));
     const source = createGithubTemplateSource({ fetch: fetcher });
 
     await expect(source.resolve({ owner: "o", ref: COMMIT_SHA, repo: "r" })).resolves.toMatchObject(
@@ -128,37 +147,27 @@ describe("GitHub template source", () => {
 
     await expect(
       source.resolve({ owner: "o", ref: COMMIT_SHA.slice(0, 12), repo: "r" }),
-    ).resolves.toMatchObject({ commitSha: COMMIT_SHA });
-    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
-      `https://api.github.com/repos/o/r/branches/${COMMIT_SHA.slice(0, 12)}`,
-      `https://api.github.com/repos/o/r/commits/${COMMIT_SHA.slice(0, 12)}`,
-    ]);
+    ).rejects.toThrow("full 40-character commit SHA");
+    expect(fetcher).toHaveBeenCalledOnce();
   });
 
-  it("uses the public GitHub tree fallback for tag and commit sources", async () => {
+  it("copies tag and commit sources from an imported immutable Artifact tree", async () => {
     const content = "tagged\n";
     const sha = await blobSha(content);
-    const fetcher = vi.fn<typeof fetch>(async (url) =>
-      String(url).includes("/git/trees/")
-        ? Response.json({
-            tree: [
-              { mode: "40000", path: "template", sha: OTHER_SHA, type: "tree" },
-              {
-                mode: "100644",
-                path: "template/value.txt",
-                sha,
-                size: content.length,
-                type: "blob",
-              },
-            ],
-            truncated: false,
-          })
-        : bytesResponse(content),
-    );
+    const fetcher = vi.fn<typeof fetch>(async () => bytesResponse(content));
     const source = createGithubTemplateSource({ fetch: fetcher });
 
     await expect(
-      source.files({ commitSha: COMMIT_SHA, owner: "o", path: "template", ref: "v1", repo: "r" }),
+      source.files(
+        { commitSha: COMMIT_SHA, owner: "o", path: "template", ref: "v1", repo: "r" },
+        {
+          readTree: async (hash) =>
+            hash === ROOT_TREE
+              ? [{ hash: TEMPLATE_TREE, mode: "40000", name: "template", type: "tree" }]
+              : [{ hash: sha, mode: "100644", name: "value.txt", type: "blob" }],
+          rootTreeHash: ROOT_TREE,
+        },
+      ),
     ).resolves.toEqual([
       { bytes: new TextEncoder().encode(content), mode: "100644", path: "value.txt" },
     ]);
@@ -179,7 +188,7 @@ describe("GitHub template source", () => {
     ).rejects.toMatchObject({ retryable: false });
   });
 
-  it("classifies GitHub API outages as retryable and non-public repos as terminal", async () => {
+  it("classifies Git transport outages as retryable and non-public repos as terminal", async () => {
     for (const [status, retryable] of [
       [401, false],
       [503, true],
@@ -198,7 +207,10 @@ describe("GitHub template source", () => {
 
   it("rejects an oversized ref response instead of retaining it", async () => {
     const source = createGithubTemplateSource({
-      fetch: async () => bytesResponse(new Uint8Array(1024 * 1024 + 1)),
+      fetch: async () =>
+        new Response(new Uint8Array(1024 * 1024 + 1), {
+          headers: { "content-type": "application/x-git-upload-pack-advertisement" },
+        }),
     });
     await expect(source.resolve({ owner: "o", repo: "r" })).rejects.toMatchObject({
       retryable: false,

@@ -47,10 +47,12 @@ async function deleteTemporaryArtifact(
 }
 
 /** Materialize a resolved public template without cloning its pack into the
- * Worker. Branches are imported server-side into a deterministic temporary
- * Artifact so its tree can be inspected. Tags and commit refs use the source
- * adapter's bounded GitHub tree fallback. The temporary repo is gone before
- * bytes are returned, making cleanup part of the creation obligation. */
+ * Worker. Cloudflare imports the source server-side into a deterministic
+ * temporary Artifact so its immutable commit tree can be inspected. Branches
+ * use a depth-one import; tags and commit SHAs omit branch/depth so every
+ * advertised ref is available without GitHub REST API rate limits. The
+ * temporary repo is gone before bytes are returned, making cleanup part of
+ * the creation obligation. */
 type ArtifactContentRepo = ArtifactsRepo & {
   log(options: { limit: number; ref: string }): Promise<
     Array<{
@@ -69,7 +71,6 @@ export async function readGithubTemplateFiles(input: {
   cleanup?: Parameters<typeof deleteTemporaryArtifact>[2];
 }): Promise<GithubTemplateFile[]> {
   const sourceAdapter = input.sourceAdapter ?? createGithubTemplateSource();
-  if (input.source.branch === undefined) return await sourceAdapter.files(input.source);
 
   try {
     // getOrImportGithubArtifact preserves the underlying Artifacts repo
@@ -77,29 +78,27 @@ export async function readGithubTemplateFiles(input: {
     // ArtifactsRepo type omits those content methods, so there is no typed
     // narrowing available; this cast only exposes the two methods used here.
     const repo = (await getOrImportGithubArtifact(input.artifacts, {
-      branch: input.source.branch,
-      depth: 1,
+      ...(input.source.branch === undefined ? {} : { branch: input.source.branch, depth: 1 }),
       name: input.temporaryArtifactName,
       owner: input.source.owner,
       repo: input.source.repo,
     })) as ArtifactContentRepo;
-    const [head] = await repo.log({ limit: 1, ref: input.source.branch });
+    const [head] = await repo.log({ limit: 1, ref: input.source.commitSha });
     if (
       head === undefined ||
       !/^[0-9a-f]{40}$/i.test(head.hash) ||
       !/^[0-9a-f]{40}$/i.test(head.treeHash)
     ) {
       throw new GithubTemplateSourceError(
-        `Imported template Artifact has no valid ${input.source.branch} head.`,
+        `Imported template Artifact does not contain commit ${input.source.commitSha}.`,
         { retryable: true },
       );
     }
     if (head.hash !== input.source.commitSha) {
-      // Ref resolution is already journaled and authoritative. Artifacts can
-      // import a branch but not an arbitrary historical SHA, so a move in the
-      // small gap between those operations uses the same bounded GitHub tree
-      // fallback as an explicit tag/commit. Never silently copy the new head.
-      return await sourceAdapter.files(input.source);
+      throw new GithubTemplateSourceError(
+        `Imported template Artifact resolved ${input.source.commitSha} to unexpected commit ${head.hash}.`,
+        { retryable: true },
+      );
     }
     return await sourceAdapter.files(input.source, {
       readTree: (hash) => repo.readTree(hash),
