@@ -238,3 +238,19 @@ describe("previewJson", () => {
     expect(result).toMatchObject({ truncated: false, value });
   });
 });
+
+describe("previewJson surrogate safety", () => {
+  it("does not split a surrogate pair at the maxStringChars boundary", () => {
+    // 99 ascii chars then an emoji: the cap of 100 lands between the pair.
+    const value = { body: `${"x".repeat(99)}😀${"y".repeat(500)}` };
+    const result = previewJson(value, {
+      maxArrayItems: 3,
+      maxStringChars: 100,
+      maxDepth: 5,
+      maxBytes: 8_000,
+    });
+    const body = (result.value as any).body as string;
+    expect(body).toMatch(/^x{99}… \[truncated from \d+ JSON bytes\]$/);
+    expect(JSON.stringify(body)).not.toMatch(/\\ud83d(?!\\)/i); // no lone surrogate escape
+  });
+});

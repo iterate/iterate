@@ -307,9 +307,14 @@ function applyPreviewPolicy(
   if (node.kind === "primitive") return { changed: false, value: node.value };
   if (node.kind === "string") {
     if (node.value.length <= options.maxStringChars) return { changed: false, value: node.value };
+    // Back off one unit if the cut lands mid-surrogate-pair — a lone high
+    // surrogate would render as a \udxxx escape in the pretty-printed preview.
+    let end = options.maxStringChars;
+    const lastUnit = node.value.charCodeAt(end - 1);
+    if (lastUnit >= 0xd800 && lastUnit <= 0xdbff) end -= 1;
     return {
       changed: true,
-      value: `${node.value.slice(0, options.maxStringChars)}… [truncated from ${node.bytes} JSON bytes]`,
+      value: `${node.value.slice(0, end)}… [truncated from ${node.bytes} JSON bytes]`,
     };
   }
   if (node.kind === "array") {
