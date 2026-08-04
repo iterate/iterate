@@ -91,9 +91,6 @@ const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 // must produce the same root commit instead of racing two timestamped seeds.
 const REPO_SEED_COMMIT_TIMESTAMP_SECONDS = 1_577_836_800;
 const REPO_DIR = "/repo";
-const CREATION_ALARM_SLICE = "repo-creation";
-const CREATION_RETRY_DELAY_MS = 60_000;
-
 // The durable GitHub link record: the mirror-push hot path (every commit)
 // reads it from KV instead of re-folding the stream. The link lifecycle events
 // on the repo stream are the record of TRUTH for inspection; this key is
@@ -159,7 +156,7 @@ export class RepoDurableObject extends DurableObject<Env> {
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
   // Registered WITH recovery because GitHub imports are consequential
   // `runInBackground` work (stream-committed requested/started obligations
-  // whose OUTCOME matters). Long creation uses its own alarm slice below.
+  // whose OUTCOME matters). Long creation uses a separate coordinator DO.
   // The keepalive alarm appends the `stream/processor-revived` fact, whose wake
   // produces the eventless at-head pass that re-drives the obligations (see the
   // registry module doc's recovery rule).
@@ -168,12 +165,8 @@ export class RepoDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      now: () => Date.now(),
-      ensureCreationAlarm: (atMs) =>
-        this.#registry.getAlarmSlice(CREATION_ALARM_SLICE) === null
-          ? this.#registry.setAlarmSlice(CREATION_ALARM_SLICE, atMs)
-          : Promise.resolve(),
-      repointCreationAlarm: (atMs) => this.#registry.setAlarmSlice(CREATION_ALARM_SLICE, atMs),
+      enqueueCreation: () =>
+        this.env.REPO_CREATION_COORDINATOR.getByName(this.ctx.id.name!).enqueue(),
       // Creation and public mutations all move the same branch. A recovered
       // creation attempt is retry-safe, but it must not move the ref between a
       // mutation's checked clone and push.
@@ -238,40 +231,20 @@ export class RepoDurableObject extends DurableObject<Env> {
     return this.#registry.wakeStreamProcessor(args);
   }
 
-  /**
-   * The registry's shared DO alarm: runner keepalives plus the long repo
-   * creation slice. Long creation runs here, outside the source Stream DO's
-   * hosted-callback call tree, so its outcome can append to that same stream
-   * without cyclically waiting on its own callback acknowledgement.
-   */
+  /** The registry's shared DO alarm owns only runner keepalives. */
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     await this.#registry.handleAlarm(alarmInfo);
-    try {
-      // The creation slice is armed for a future handoff deadline from inside
-      // a hosted source-stream batch. snapshot() queues behind that LOCAL batch
-      // and therefore observes its committed create request without pulling
-      // the source Stream DO. A catchUp() here opens a second call into that
-      // source while it may still be draining the hosted callback; in
-      // production that actor cycle held the alarm open until Cloudflare's
-      // five-minute invocation teardown. driveCreation point-reads only the
-      // offset-free resolved-source fact needed for retry immutability.
-      //
-      // Nor does this handler need to fold the facts it appends: driveCreation
-      // carries the resolved source through the same attempt, and the normal
-      // stream wake folds its idempotent source/terminal facts afterward.
-      const { state } = await this.#reads.snapshot();
-      await this.#repoProcessor.driveCreation(state);
-    } catch (error) {
-      // Cloudflare retries a throwing alarm only a bounded number of times.
-      // Keep the stream-backed obligation live across a longer vendor outage
-      // by durably arming a coarse retry before surrendering this attempt to
-      // the platform's observable alarm retry lane.
-      await this.#registry.setAlarmSlice(
-        CREATION_ALARM_SLICE,
-        Date.now() + CREATION_RETRY_DELAY_MS,
-      );
-      throw error;
-    }
+  }
+
+  /**
+   * Continue the committed creation saga from its coordinator's alarm. This
+   * same-script RPC queues behind any in-flight processor batch, so snapshot()
+   * observes the request before vendor work begins without opening a cyclic
+   * call back into the source Stream DO.
+   */
+  async continueCreation(): Promise<void> {
+    const { state } = await this.#reads.snapshot();
+    await this.#repoProcessor.driveCreation(state);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */

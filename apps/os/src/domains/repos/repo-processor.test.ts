@@ -133,10 +133,7 @@ function artifactPush(branch: string, oids?: { after?: string; before?: string }
 /** The generic harness plus the repo's scriptable vendor fakes. Pass another
  * harness's substrate for a replay incarnation over the SAME stream. */
 function makeRepoHarness(substrate?: HarnessSubstrate) {
-  const creationAlarm = {
-    at: null as number | null,
-    calls: [] as Array<number | null>,
-  };
+  const creationQueue = { calls: 0, queued: false };
   const createEmpty = {
     calls: 0,
     impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
@@ -178,15 +175,10 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
         stream: deps.stream,
         path: deps.path,
         projectId: deps.projectId,
-        now: deps.now,
-        ensureCreationAlarm: async (atMs) => {
-          if (creationAlarm.at !== null) return;
-          creationAlarm.at = atMs;
-          creationAlarm.calls.push(atMs);
-        },
-        repointCreationAlarm: async (atMs) => {
-          creationAlarm.at = atMs;
-          creationAlarm.calls.push(atMs);
+        enqueueCreation: async () => {
+          if (creationQueue.queued) return;
+          creationQueue.queued = true;
+          creationQueue.calls += 1;
         },
         createEmptyArtifact: () => {
           createEmpty.calls += 1;
@@ -223,7 +215,7 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
   });
   return {
     ...harness,
-    creationAlarm,
+    creationQueue,
     createEmpty,
     importPublic,
     createTemplate,
@@ -290,7 +282,7 @@ describe("RepoProcessor creation saga", () => {
     // The hosted source callback only arms the Repo DO. Vendor work and
     // outcome appends start later, from the alarm's independent call tree.
     expect(h.importPublic.calls).toEqual([]);
-    expect(h.creationAlarm.at).toBe(h.clock.now + 1_000);
+    expect(h.creationQueue).toEqual({ calls: 1, queued: true });
     await driveCreation(h);
 
     expect(h.importPublic.calls).toMatchObject([{ depth: 1, owner: "acme", repo: "widgets" }]);
@@ -318,7 +310,7 @@ describe("RepoProcessor creation saga", () => {
 
     expect(h.resolveTemplate.calls).toEqual([]);
     expect(h.createTemplate.calls).toEqual([]);
-    expect(h.creationAlarm.at).toBe(h.clock.now + 1_000);
+    expect(h.creationQueue).toEqual({ calls: 1, queued: true });
     await driveCreation(h);
 
     expect(h.resolveTemplate.calls).toEqual([request]);
@@ -361,7 +353,7 @@ describe("RepoProcessor creation saga", () => {
     });
 
     await expect(h.runner().snapshot()).resolves.toMatchObject({ offset: request.offset });
-    expect(h.creationAlarm.at).toBe(h.clock.now + 1_000);
+    expect(h.creationQueue).toEqual({ calls: 1, queued: true });
     expect(h.resolveTemplate.calls).toEqual([]);
     expect(h.createTemplate.calls).toEqual([]);
   });
@@ -387,17 +379,15 @@ describe("RepoProcessor creation saga", () => {
     );
     expect(retry.events("events.iterate.com/repos/create-failed")).toEqual([]);
 
-    // alarm() owns the retry cadence. A later caught-up source callback may
-    // confirm the obligation is still open, but must not pull that coarse
-    // retry forward and create a hot loop during a vendor outage.
-    retry.creationAlarm.at = retry.clock.now + 60_000;
-    const alarmCalls = retry.creationAlarm.calls.length;
+    // The coordinator owns the retry cadence. A later caught-up source
+    // callback may confirm the obligation is still open, but duplicate
+    // enqueue calls must not pull that retry forward into a hot loop.
+    const queueCalls = retry.creationQueue.calls;
     await retry.play([
       "append",
       { type: "events.iterate.com/repos/create-requested", payload: request },
     ]);
-    expect(retry.creationAlarm.at).toBe(retry.clock.now + 60_000);
-    expect(retry.creationAlarm.calls).toHaveLength(alarmCalls);
+    expect(retry.creationQueue).toEqual({ calls: queueCalls, queued: true });
 
     retry.resolveTemplate.impl = async () => RESOLVED_TEMPLATE;
     await driveCreation(retry);

@@ -99,6 +99,11 @@ export interface Env {
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
   >;
   REPO: DurableObjectNamespace<import("./domains/repos/repo-durable-object.ts").RepoDurableObject>;
+  /** Durable alarm owner for long repo creation work. Kept separate from Repo
+   * because Repo hosts a permanently retained stream-processor callback. */
+  REPO_CREATION_COORDINATOR: DurableObjectNamespace<
+    import("./domains/repos/repo-creation-coordinator-durable-object.ts").RepoCreationCoordinatorDurableObject
+  >;
   /**
    * Sandbox container namespaces, ONE PER INSTANCE TYPE: Cloudflare fixes the
    * container instance type per container class, so each instance type is its own

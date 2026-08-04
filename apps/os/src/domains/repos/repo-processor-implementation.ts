@@ -15,12 +15,6 @@ import {
 } from "./repo-push-events.ts";
 import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from "./utils.ts";
 
-// A platform alarm armed at the current millisecond from a retained hosted
-// callback can be consumed before the callback handoff becomes independently
-// runnable. Give the source Stream DO a real future deadline to record the
-// callback result and release its call tree before Repo alarm work starts.
-const CREATION_HANDOFF_DELAY_MS = 1_000;
-
 /**
  * The repo processor: one stream per repo, projecting its lifecycle and Git
  * activity, and driving two durable obligations.
@@ -39,20 +33,23 @@ const CREATION_HANDOFF_DELAY_MS = 1_000;
  * obligation. The source Stream DO invokes this processor over a retained
  * callback; starting long work in that callback and later appending its
  * outcome to the same Stream DO creates a cyclic actor-drain tree. The
- * callback therefore only arms the Repo DO's creation slice. The create event
- * itself arms that slice even when the source reports more raw offsets ahead;
- * relying only on an at-head pass can strand creation when a hosted filtered
- * delivery advances the cursor without producing that pass. `alarm()` drives
- * the vendor work after the source callback has closed, then journals the
- * immutable source and terminal fact. The terminal certificate's
- * idempotency keys are offset-free (`created` / `create-failed`), so a
+ * callback therefore only enqueues a separate creation-coordinator DO. The
+ * create event itself performs that handoff even when the source reports more
+ * raw offsets ahead; relying only on an at-head pass can strand creation when
+ * a hosted filtered delivery advances the cursor without producing that pass.
+ * The coordinator's alarm drives the vendor work from an independent event,
+ * then journals the immutable source and terminal fact. The terminal
+ * certificate's idempotency keys are offset-free (`created` /
+ * `create-failed`), so a
  * redelivery or revival cannot rotate them and double-birth. A vendor/domain
  * error settles the saga as `repos/create-failed` — FAIL-CLOSED: a failed
  * repo's stream never reacts to anything again. A still-materializing
  * Artifact (RepoNotSeededError), an Artifacts service-availability failure,
  * or a Durable Object lifecycle interruption is not a domain failure: no
  * terminal fact is journaled and the durable obligation remains open for
- * redelivery/revival.
+ * redelivery/revival. The coordinator owns its own alarm and calls back into
+ * the Repo DO only after the hosted batch has committed, so a permanently
+ * retained source callback cannot suppress the wake-up.
  *
  * Every default-branch advance becomes one `repo/commit-completed` fact.
  * OS-owned writes append it directly from the Repo Durable Object's durable
@@ -104,12 +101,12 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   // Synchronous. The side-effect lanes are chosen HERE, at the dispatch site,
   // never inside helpers:
   //
-  // - PER-EVENT consequences (commit facts, the import request, creation-alarm
+  // - PER-EVENT consequences (commit facts, the import request, creation
   //   handoff) use
   //   `blockProcessorWhile`: each derives from an event delivered once, so a
   //   dropped append loses the fact forever.
   // - STATE-DERIVED consequences run after the switch, at head only: creation
-  //   durably arms an independent Repo DO alarm, while GitHub syncs use
+  //   durably enqueues an independent coordinator DO, while GitHub syncs use
   //   `runInBackground`. Any later at-head pass re-derives an undriven
   //   obligation from state, and slow vendor work must not hold the stream
   //   cursor or append into the source stream's retained callback tree.
@@ -127,12 +124,10 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         // pass. Hosted delivery can report the request while still having raw,
         // selector-filtered offsets ahead; creation must already have an
         // independently durable wake-up if no later consumed event arrives.
-        // ensureCreationAlarm preserves a coarser retry alarm that an earlier
-        // failed attempt may already own.
+        // The coordinator preserves an already-queued retry rather than
+        // pulling it forward when this intent is replayed.
         if (event.payload.type !== "empty" && state.birthCertificate === null) {
-          blockProcessorWhile(() =>
-            this.deps.ensureCreationAlarm(this.deps.now() + CREATION_HANDOFF_DELAY_MS),
-          );
+          blockProcessorWhile(() => this.deps.enqueueCreation());
         }
         break;
       }
@@ -218,9 +213,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // GitHub-backed creation can be a long import. The source Stream DO is
     // still waiting for this hosted callback's acknowledgement, so this turn
     // MUST NOT start work that later appends back to that same Stream DO. Arm
-    // the Repo DO's dedicated alarm slice instead; its handler runs outside
-    // this callback tree and calls driveCreation(). Offset-free terminal keys
-    // make a retried alarm converge on one certificate.
+    // a dedicated coordinator DO instead; its alarm runs outside this callback
+    // tree and calls driveCreation(). Offset-free terminal keys make a retried
+    // alarm converge on one certificate.
     const createRequest = state.createRequest;
     if (
       createRequest !== null &&
@@ -229,9 +224,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     ) {
       blockProcessorWhile(async () => append(await this.#createRepoTerminal(createRequest)));
     } else if (createRequest !== null && state.birthCertificate === null) {
-      blockProcessorWhile(() =>
-        this.deps.ensureCreationAlarm(this.deps.now() + CREATION_HANDOFF_DELAY_MS),
-      );
+      blockProcessorWhile(() => this.deps.enqueueCreation());
     }
 
     // The GitHub import obligation: start it when nobody in THIS incarnation
@@ -247,9 +240,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   }
 
   /**
-   * Drive one open GitHub-backed creation obligation from the Repo DO's alarm
-   * handler, never from the source Stream DO's hosted callback. The caller
-   * supplies a runner-backed committed snapshot. A resolved source
+   * Drive one open GitHub-backed creation obligation for the independent
+   * creation coordinator, never from the source Stream DO's hosted callback.
+   * The caller supplies a runner-backed committed snapshot. A resolved source
    * is journaled before any bytes are materialized; if materialization then
    * fails retryably, the next alarm folds that fact and never resolves a moved
    * ref again. Every append is idempotency-keyed, so an alarm retry after a
@@ -263,7 +256,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       state.birthCertificate !== null ||
       state.createFailure !== null
     ) {
-      await this.deps.repointCreationAlarm(null);
       return;
     }
 
@@ -280,7 +272,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         templateSource = await this.deps.resolveGithubTemplateSource(createRequest);
       } catch (error) {
         await this.append(this.#creationFailureOrThrow(createRequest, error));
-        await this.deps.repointCreationAlarm(null);
         return;
       }
       await this.append({
@@ -295,7 +286,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     }
 
     await this.append(await this.#createRepoTerminal(createRequest, templateSource));
-    await this.deps.repointCreationAlarm(null);
   }
 
   async #readJournaledTemplateSource(
@@ -568,17 +558,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 // -----------------------------------------------------------------------------
 
 type RepoProcessorDeps = {
-  /** Current epoch milliseconds; injected so alarm scheduling is deterministic
-   * in the processor harness. */
-  now(): number;
-  /** Arm the Repo DO's creation slice only when it has no existing desire.
-   * A caught-up callback after a retryable failure must not pull the coarse
-   * retry that alarm() already scheduled back to the handoff deadline. */
-  ensureCreationAlarm(atMs: number): Promise<void>;
-  /** Point the Repo DO's dedicated creation alarm slice at an epoch ms, or
-   * disarm it with null. The alarm, not the hosted source callback, owns all
-   * long creation work so outcome appends cannot form a cyclic DO call tree. */
-  repointCreationAlarm(atMs: number | null): Promise<void>;
+  /** Durably hand long creation to a separate coordinator DO. Duplicate
+   * enqueue calls preserve an already-queued attempt and its retry cadence. */
+  enqueueCreation(): Promise<void>;
   /** Seed the backing Cloudflare Artifacts repository with the starter files.
    * Idempotent: leaves an existing branch untouched and gives concurrent
    * first seeds the same commit oid. */

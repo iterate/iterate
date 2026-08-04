@@ -185,6 +185,7 @@ const DO_CLASSES = {
   DEVICE: "DeviceDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
+  REPO_CREATION_COORDINATOR: "RepoCreationCoordinatorDurableObject",
   SCHEDULER: "SchedulerDurableObject",
   SECRET: "SecretDurableObject",
   STREAM: "StreamDurableObject",

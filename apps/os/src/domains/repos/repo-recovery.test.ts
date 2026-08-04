@@ -37,7 +37,7 @@ const RESOLVED_TEMPLATE = {
 };
 
 function makeHarness() {
-  const creationAlarm = { at: null as number | null };
+  const creationQueue = { calls: 0, queued: false };
   const createEmpty: { impl: () => Promise<typeof CREATED_ARTIFACT> } = {
     impl: () => {
       throw new Error("must not create an artifact in this scenario");
@@ -60,12 +60,10 @@ function makeHarness() {
       new RepoProcessor({
         ...deps,
         projectId: "prj_1",
-        now: deps.now,
-        ensureCreationAlarm: async (atMs) => {
-          creationAlarm.at ??= atMs;
-        },
-        repointCreationAlarm: async (atMs) => {
-          creationAlarm.at = atMs;
+        enqueueCreation: async () => {
+          if (creationQueue.queued) return;
+          creationQueue.queued = true;
+          creationQueue.calls += 1;
         },
         createEmptyArtifact: () => createEmpty.impl(),
         createGithubTemplateArtifact: () => createTemplate.impl(),
@@ -88,7 +86,7 @@ function makeHarness() {
         },
       }),
   });
-  return { ...harness, creationAlarm, createEmpty, createTemplate, resolveTemplate };
+  return { ...harness, creationQueue, createEmpty, createTemplate, resolveTemplate };
 }
 
 describe("RepoProcessor eviction recovery", () => {
@@ -214,7 +212,7 @@ describe("RepoProcessor eviction recovery", () => {
     await h.append(TEMPLATE_REQUEST);
 
     expect(h.resolveTemplate.calls).toBe(0);
-    expect(h.creationAlarm.at).toBe(h.clock.now + 1_000);
+    expect(h.creationQueue).toEqual({ calls: 1, queued: true });
     await expect(h.processor().driveCreation(h.state())).rejects.toThrow(
       "template Artifact is still materializing",
     );
