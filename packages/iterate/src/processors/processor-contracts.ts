@@ -450,22 +450,31 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
   TypedStreamEvent<Type, z.output<PayloadSchema>>,
   TypedStreamEvent<Type, z.input<PayloadSchema>>
 > {
-  return z
-    .looseObject({
-      type: z.literal(args.type),
-      payload: args.payloadSchema,
-      metadata: StreamEventSchema.shape.metadata,
-      source: StreamEventSchema.shape.source,
-      idempotencyKey: StreamEventSchema.shape.idempotencyKey,
-      ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventSchema.shape.ephemeral),
-      offset: StreamEventSchema.shape.offset,
-      createdAt: StreamEventSchema.shape.createdAt,
-      path: StreamEventSchema.shape.path,
-    })
-    .superRefine(rejectEphemeralIdempotency) as unknown as z.ZodType<
-    TypedStreamEvent<Type, z.output<PayloadSchema>>,
-    TypedStreamEvent<Type, z.input<PayloadSchema>>
-  >;
+  return (
+    z
+      .looseObject({
+        type: z.literal(args.type),
+        payload: args.payloadSchema,
+        metadata: StreamEventSchema.shape.metadata,
+        source: StreamEventSchema.shape.source,
+        idempotencyKey: StreamEventSchema.shape.idempotencyKey,
+        ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventSchema.shape.ephemeral),
+        offset: StreamEventSchema.shape.offset,
+        createdAt: StreamEventSchema.shape.createdAt,
+        path: StreamEventSchema.shape.path,
+      })
+      // Zod widens the object after a dynamic envelope shape plus `superRefine`,
+      // so it cannot retain the relationship between `Type`, `PayloadSchema`,
+      // and this function's generic result. Every envelope field above comes
+      // from the canonical StreamEvent schema, while the literal type and
+      // payload schema supply exactly the two narrowed fields; the refinement
+      // only rejects an otherwise-invalid combination. The cast restores that
+      // precise generic relationship without weakening runtime validation.
+      .superRefine(rejectEphemeralIdempotency) as unknown as z.ZodType<
+      TypedStreamEvent<Type, z.output<PayloadSchema>>,
+      TypedStreamEvent<Type, z.input<PayloadSchema>>
+    >
+  );
 }
 
 /** The envelope `ephemeral` slot: for a definition marked `ephemeral: true`,
@@ -506,19 +515,27 @@ export function getEventInputSchema<
   TypedStreamEventInput<Type, z.output<PayloadSchema>>,
   TypedStreamEventInput<Type, z.input<PayloadSchema>>
 > {
-  return z
-    .strictObject({
-      type: z.literal(args.type),
-      payload: args.payloadSchema,
-      metadata: StreamEventInputSchema.shape.metadata,
-      source: StreamEventInputSchema.shape.source,
-      idempotencyKey: StreamEventInputSchema.shape.idempotencyKey,
-      ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventInputSchema.shape.ephemeral),
-    })
-    .superRefine(rejectEphemeralIdempotency) as unknown as z.ZodType<
-    TypedStreamEventInput<Type, z.output<PayloadSchema>>,
-    TypedStreamEventInput<Type, z.input<PayloadSchema>>
-  >;
+  return (
+    z
+      .strictObject({
+        type: z.literal(args.type),
+        payload: args.payloadSchema,
+        metadata: StreamEventInputSchema.shape.metadata,
+        source: StreamEventInputSchema.shape.source,
+        idempotencyKey: StreamEventInputSchema.shape.idempotencyKey,
+        ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventInputSchema.shape.ephemeral),
+      })
+      // As above, Zod cannot express that this dynamically assembled and
+      // refined object has the input/output types of `PayloadSchema` paired with
+      // the literal `Type`. The remaining fields come directly from the
+      // canonical StreamEventInput schema and `strictObject` rejects extras, so
+      // the cast only recovers the generic relationship already enforced by the
+      // runtime shape; it does not admit values the parser would accept unsafely.
+      .superRefine(rejectEphemeralIdempotency) as unknown as z.ZodType<
+      TypedStreamEventInput<Type, z.output<PayloadSchema>>,
+      TypedStreamEventInput<Type, z.input<PayloadSchema>>
+    >
+  );
 }
 
 // =============================================================================
