@@ -6,9 +6,9 @@ branch: os-agent-feed-round-meta
 
 # apps/os: show the LLM request with its round, like mobile's Meta tab
 
-> **Status summary**: spec fleshed out, implementation starting. Main pieces:
-> round grouping in the web feed, per-round tabs (Script | Result | Meta),
-> Meta tab with YAML stats + replayed prompt. Nothing implemented yet.
+> **Status summary**: implemented and verified against local dev (PR #2407,
+> screenshots in the PR body). Rounds + tabs + Meta yaml/prompt all working;
+> tests updated (12 passing). Remaining: review feedback.
 
 Follow-up from #2398 (merged). Misha (2026-08-04, with screenshot of a 9-round
 agent turn in the os feed):
@@ -33,29 +33,41 @@ it), each a tabbed view `Script | Approvals | Result | Meta`.
 
 ## Checklist
 
-- [ ] Promote `groupActivityRounds` from `apps/mobile/src/lib/feed.ts` into
+- [x] Promote `groupActivityRounds` from `apps/mobile/src/lib/feed.ts` into
       the shared `agent-ui-reducer` (packages/ui) so both surfaces group
-      steps identically; mobile imports it from there
-- [ ] apps/os `agent-feed.tsx`: expanded activity renders "Round 1..N" toggle
-      rows instead of the flat llm/code step buttons
-- [ ] Expanding a round shows tabs `Script | Result | Meta` (structure
+      steps identically; mobile imports it from there _(agent-ui-reducer.ts
+      exports `groupActivityRounds` + `AgentUiActivityRound`; mobile's feed.ts
+      re-exports)_
+- [x] apps/os `agent-feed.tsx`: expanded activity renders "Round 1..N" toggle
+      rows instead of the flat llm/code step buttons _(new
+      `agent-activity-rounds.tsx`: `AgentActivityRounds`/`AgentActivityRoundRow`;
+      llm-only rounds render mobile's LlmStepView-style stat line instead)_
+- [x] Expanding a round shows tabs `Script | Result | Meta` (structure
       mirrors mobile's `CodeStepTabs`; cross-pointing comments in both files)
-- [ ] Script tab: the round's submitted code in the shared `SourceCodeBlock`
-- [ ] Result tab (only once the run settled with a value or error): returned
+      _(`RoundTabs` in agent-activity-rounds.tsx; header comment points at
+      mobile's activity-card.tsx and vice-versa via the shared reducer note)_
+- [x] Script tab: the round's submitted code in the shared `SourceCodeBlock`
+- [x] Result tab (only once the run settled with a value or error): returned
       value via `SerializedObjectCodeBlock` (+ oversized-preview guard),
       error text
-- [ ] Meta tab: one YAML doc (same shape as mobile's `metaYaml` — llm model /
+- [x] Meta tab: one YAML doc (same shape as mobile's `metaYaml` — llm model /
       duration / tokens / outcome, code duration, replayed `prompt:`)
       rendered in `SourceCodeBlock` yaml; prompt replayed with
       `replayLlmRequest` over the events table (same query shape as
       `llm-request-inspector-panel.tsx`), fetched only while Meta is open
-- [ ] Keep the `?llmRequest` / script-execution sheets as deep links: "Open
+      _(`buildRoundMetaYaml` in `~/lib/agent-round-meta-yaml.ts` — lib module
+      because component files must only export components for fast refresh;
+      inactive base-ui tab panels unmount, so the query only runs while open)_
+- [x] Keep the `?llmRequest` / script-execution sheets as deep links: "Open
       full trace" affordances from the tabs; per-step inspector buttons go
-      away with the flat rail
-- [ ] Live activity (`AgentLiveActivity`): settled rounds render as round
-      rows; the currently-streaming llm step keeps `LiveStepStream`
-- [ ] Update `agent-feed.test.tsx` for the rounds layout + new tests for tab
-      content (Meta yaml, optional Result)
+      away with the flat rail _("Full trace" in Meta, "Execution trace" in
+      Script — same data-testids as the old step rows)_
+- [x] Live activity (`AgentLiveActivity`): settled rounds render as round
+      rows; the currently-streaming llm step keeps `LiveStepStream` _(rounds
+      with a running code step auto-expand so the run stays watchable)_
+- [x] Update `agent-feed.test.tsx` for the rounds layout + new tests for tab
+      content (Meta yaml, optional Result) _(12 tests passing; Meta yaml unit
+      test on `buildRoundMetaYaml`)_
 
 ## Assumptions (made while Misha was AFK-ish; flag if wrong)
 
@@ -78,4 +90,15 @@ it), each a tabbed view `Script | Approvals | Result | Meta`.
 
 ## Implementation log
 
-(notes appended during implementation)
+- Implemented in one pass; typecheck/lint/knip/format clean. Pre-existing
+  unrelated failure on main: `agent-prompt-budgets.test.ts` (prompt 13 chars
+  over ceiling) — left alone, flagged separately.
+- Verified against local dev with a real 4-round agent turn; screenshots in
+  PR #2407 (captured via throwaway gitignored spec
+  `specs/rounds-demo.ignoreme.spec.ts` — pattern copied from
+  agent-chat.spec.ts; gotcha: wait for the SETTLED activity row title
+  exactly, the live toggle's title also starts with "Agent activity").
+- Header suffix for code rounds is `Started HH:MM:SS · duration` (+
+  "Code failed" / "request failed" markers); llm-only rounds reuse the old
+  stepLabel/stepMeta strings, so cancellation reasons read the same as the
+  old flat rail.
