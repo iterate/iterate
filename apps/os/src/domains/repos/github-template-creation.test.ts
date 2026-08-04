@@ -108,10 +108,11 @@ describe("createGithubTemplateArtifact", () => {
 
     await createGithubTemplateArtifact({ ...baseInput, onSeedHeadPrepared });
 
-    expect(mocks.readFiles).toHaveBeenCalledOnce();
+    expect(mocks.readFiles).not.toHaveBeenCalled();
     expect(mocks.seedArtifactRepo).toHaveBeenCalledWith(
       expect.objectContaining({
         expectExisting: true,
+        files: [],
         onSeedHeadPrepared,
         token: "minted-token",
       }),

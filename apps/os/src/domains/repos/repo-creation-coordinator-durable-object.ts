@@ -6,7 +6,11 @@ import { workerVersion, type Env } from "../../env.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
-import { createGithubTemplateArtifact, type SeededHead } from "./github-template-creation.ts";
+import {
+  createGithubTemplateArtifact,
+  type MaterializedTemplateArtifact,
+  type SeededHead,
+} from "./github-template-creation.ts";
 import {
   createGithubTemplateSource,
   isRetryableGithubTemplateSourceError,
@@ -32,6 +36,13 @@ const RepoTemplateCreationHandoffInput = z.strictObject({
 });
 const QueuedRepoTemplateCreation = RepoTemplateCreationHandoffInput.extend({
   failedAttempts: z.number().int().nonnegative().default(0),
+  materializedArtifact: z
+    .strictObject({
+      artifactName: z.string().min(1),
+      defaultBranch: z.string().min(1),
+      remote: z.string().url(),
+    })
+    .optional(),
   seededHead: z
     .strictObject({
       commitOid: z.string().min(1),
@@ -46,6 +57,7 @@ type RepoTemplateCreationHandoff = {
 };
 type QueuedRepoTemplateCreation = RepoTemplateCreationHandoff & {
   failedAttempts: number;
+  materializedArtifact?: MaterializedTemplateArtifact;
   seededHead?: SeededHead;
 };
 
@@ -253,52 +265,64 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
       return;
     }
 
-    let source = await this.#journaledSource(handoff.request);
-    if (source === null) {
-      try {
-        source = await createGithubTemplateSource().resolve(handoff.request);
-      } catch (error) {
-        if (isRetryableGithubTemplateSourceError(error)) throw error;
-        await this.#appendFailure(handoff, error);
-        return;
-      }
-      await this.#append(handoff.streamId, {
-        type: "events.iterate.com/repos/template-source-resolved",
-        idempotencyKey: `${RepoProcessorContract.slug}/template-source-resolved`,
-        payload: source,
-      });
-    }
-
     let seededHead = handoff.seededHead;
-    const artifact = await createGithubTemplateArtifact({
-      artifactName: RepoArtifactNameCodec.stringify(this.#name),
-      artifacts: this.env.ARTIFACTS,
-      artifactsAccountId: this.env.ARTIFACTS_ACCOUNT_ID,
-      artifactsNamespace: this.env.ARTIFACTS_NAMESPACE,
-      onSeedHeadPrepared: (head) => {
-        if (
-          seededHead !== undefined &&
-          (seededHead.commitOid !== head.commitOid || seededHead.contentHash !== head.contentHash)
-        ) {
-          throw new Error("Template Artifact recovered with a different deterministic seed head.");
+    let artifact = handoff.materializedArtifact;
+    if (artifact === undefined) {
+      let source = await this.#journaledSource(handoff.request);
+      if (source === null) {
+        try {
+          source = await createGithubTemplateSource().resolve(handoff.request);
+        } catch (error) {
+          if (isRetryableGithubTemplateSourceError(error)) throw error;
+          await this.#appendFailure(handoff, error);
+          return;
         }
-        seededHead = head;
-        this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, { ...handoff, seededHead: head });
-      },
-      projectId: this.#name.projectId,
-      repoPath: this.#name.path,
-      source,
-    }).catch(async (error: unknown) => {
-      if (isRetryableCreationAttemptError(error)) {
-        throw error;
+        await this.#append(handoff.streamId, {
+          type: "events.iterate.com/repos/template-source-resolved",
+          idempotencyKey: `${RepoProcessorContract.slug}/template-source-resolved`,
+          payload: source,
+        });
       }
-      await this.#appendFailure(handoff, error);
-      return null;
-    });
-    if (artifact === null) return;
+
+      const materialized = await createGithubTemplateArtifact({
+        artifactName: RepoArtifactNameCodec.stringify(this.#name),
+        artifacts: this.env.ARTIFACTS,
+        artifactsAccountId: this.env.ARTIFACTS_ACCOUNT_ID,
+        artifactsNamespace: this.env.ARTIFACTS_NAMESPACE,
+        onSeedHeadPrepared: (head) => {
+          if (
+            seededHead !== undefined &&
+            (seededHead.commitOid !== head.commitOid || seededHead.contentHash !== head.contentHash)
+          ) {
+            throw new Error(
+              "Template Artifact recovered with a different deterministic seed head.",
+            );
+          }
+          seededHead = head;
+          this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, { ...handoff, seededHead: head });
+        },
+        projectId: this.#name.projectId,
+        repoPath: this.#name.path,
+        source,
+      }).catch(async (error: unknown) => {
+        if (isRetryableCreationAttemptError(error)) {
+          throw error;
+        }
+        await this.#appendFailure(handoff, error);
+        return null;
+      });
+      if (materialized === null) return;
+      artifact = materialized;
+    }
+    if (artifact === undefined) throw new Error("Template Artifact materialization was not saved.");
     if (seededHead === undefined) {
       throw new Error("Template Artifact materialization did not report its seeded head.");
     }
+    this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, {
+      ...handoff,
+      materializedArtifact: artifact,
+      seededHead,
+    } satisfies QueuedRepoTemplateCreation);
 
     await this.#append(handoff.streamId, {
       type: "events.iterate.com/repos/created",

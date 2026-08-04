@@ -10,6 +10,11 @@ import {
 import { REPO_DEFAULT_BRANCH } from "./repo-defaults.ts";
 
 export type SeededHead = { commitOid: string; contentHash: string };
+export type MaterializedTemplateArtifact = {
+  artifactName: string;
+  defaultBranch: string;
+  remote: string;
+};
 
 /**
  * Materialize one immutable public-GitHub template into a fresh Artifact.
@@ -28,7 +33,7 @@ export async function createGithubTemplateArtifact(input: {
   projectId: string | null;
   repoPath: string;
   source: ResolvedGithubTemplateSource;
-}): Promise<{ artifactName: string; defaultBranch: string; remote: string }> {
+}): Promise<MaterializedTemplateArtifact> {
   const timing = { path: input.repoPath, projectId: input.projectId };
   const remote = `https://${input.artifactsAccountId}.artifacts.cloudflare.net/git/${input.artifactsNamespace}/${input.artifactName}.git`;
   const existing = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
@@ -36,6 +41,20 @@ export async function createGithubTemplateArtifact(input: {
       defaultBranch: REPO_DEFAULT_BRANCH,
     }),
   );
+  if (existing.lastPushAt !== null) {
+    await seedKnownArtifact({
+      artifact: existing,
+      artifactName: input.artifactName,
+      artifacts: input.artifacts,
+      expectExisting: true,
+      files: [],
+      onSeedHeadPrepared: input.onSeedHeadPrepared,
+      remote,
+      timing,
+    });
+    return { artifactName: input.artifactName, defaultBranch: REPO_DEFAULT_BRANCH, remote };
+  }
+
   const files = await timedStep("create-timing", timing, "template-read", () =>
     readGithubTemplateFiles({
       artifacts: input.artifacts,
@@ -51,7 +70,7 @@ export async function createGithubTemplateArtifact(input: {
     artifactName: input.artifactName,
     artifacts: input.artifacts,
     files,
-    expectExisting: existing.lastPushAt !== null,
+    expectExisting: false,
     onSeedHeadPrepared: input.onSeedHeadPrepared,
     remote,
     timing,

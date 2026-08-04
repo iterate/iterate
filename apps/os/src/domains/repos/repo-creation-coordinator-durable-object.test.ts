@@ -209,7 +209,7 @@ describe("RepoCreationCoordinatorDurableObject", () => {
     expect(h.records.size).toBe(0);
   });
 
-  it("checkpoints the deterministic seed head before the terminal append", async () => {
+  it("checkpoints the materialized Artifact before the terminal append", async () => {
     mocks.appendIfStreamId
       .mockResolvedValueOnce([])
       .mockRejectedValueOnce(new Error("stream reset before created append"));
@@ -218,7 +218,34 @@ describe("RepoCreationCoordinatorDurableObject", () => {
 
     await expect(h.value.alarm()).rejects.toThrow("stream reset before created append");
 
-    expect([...h.records.values()]).toEqual([{ ...queuedHandoff, seededHead }]);
+    expect([...h.records.values()]).toEqual([
+      { ...queuedHandoff, materializedArtifact: artifact, seededHead },
+    ]);
+  });
+
+  it("settles a checkpointed materialization without re-fetching GitHub or the Artifact", async () => {
+    const h = coordinator(
+      new Map([
+        ["repo-creation:queued", { ...queuedHandoff, materializedArtifact: artifact, seededHead }],
+      ]),
+    );
+
+    await h.value.alarm();
+
+    expect(mocks.resolveSource).not.toHaveBeenCalled();
+    expect(mocks.getEvent).not.toHaveBeenCalled();
+    expect(mocks.createArtifact).not.toHaveBeenCalled();
+    expect(mocks.appendIfStreamId).toHaveBeenCalledOnce();
+    expect(mocks.appendIfStreamId.mock.calls[0]?.[0].events[0]).toMatchObject({
+      idempotencyKey: "repo/created",
+      payload: {
+        ...artifact,
+        request,
+        seededHead: { branch: artifact.defaultBranch, ...seededHead },
+      },
+      type: "events.iterate.com/repos/created",
+    });
+    expect(h.records.size).toBe(0);
   });
 
   it("reuses the journaled immutable source after an interrupted materialization", async () => {
