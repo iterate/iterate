@@ -11,9 +11,15 @@
 
   // The capability-host DO (target-core §4.1). One instance per {projectId, path}, addressed by name.
   "durable_objects": {
-    "bindings": [{ "name": "ITX_HOST", "class_name": "ItxDurableObject" }],
+    "bindings": [
+      { "name": "ITX_HOST", "class_name": "ItxDurableObject" },
+      { "name": "STREAM_DO", "class_name": "StreamDurableObject" }, // backing for itx.streams (project-prefixed)
+    ],
   },
-  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ItxDurableObject"] }],
+  "migrations": [
+    { "tag": "v1", "new_sqlite_classes": ["ItxDurableObject"] },
+    { "tag": "v2", "new_sqlite_classes": ["StreamDurableObject"] },
+  ],
 
   // The DO's fallback (target-core §4.4). Solo: a self service-binding to DummyControlPlane — a DO can't mint
   // ctx.exports loopbacks, so it reaches the fallback via a binding. Self-host/hosted → bind CONTROL_PLANE.

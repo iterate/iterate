@@ -14,6 +14,7 @@ import { substituteHeaderSecrets } from "./core/egress.ts";
 import { parseAppConfig, type AppConfig } from "./core/config.ts";
 
 export { ItxDurableObject };
+export { StreamDurableObject } from "./stream-durable-object.ts";
 // Preserve the pre-skeleton runner exports so a live control-plane RUNNER binding keeps resolving.
 export { ProjectRunner, ProjectEntrypoint, ProjectAuth } from "./index.ts";
 

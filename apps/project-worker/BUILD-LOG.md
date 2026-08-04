@@ -97,7 +97,7 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
 
 ## Increment 7 — the ergonomic Itx surface (client-side prototype hop)
 
-**Commit** `<pending>`.
+**Commit** `e4393cf69`.
 
 - `core/agent-runtime.ts` exports `ITX_SURFACE_MODULE`, injected into every loaded agent as `itx.js`. It wraps
   the raw `env.ITX` host stub in an accumulating Proxy so `itx.a.b(args)` compiles to
@@ -117,5 +117,5 @@ A single `ItxDurableObject` is the host for a context: **ingress WS**, **egress*
 `itx.secrets.set`), **live providers** (capnweb `/connect` → dispatch back to a device/browser/worker), and the
 **ergonomic `itx.a.b()` surface**. All proven on `project-worker.iterate.workers.dev`.
 
-**Next:** wake-on-call for live mounts (hibernation, spikes 3-4); `itx.streams` (StreamDurableObject); the real
+**Next:** wake-on-call for live mounts (hibernation, spikes 3-4); the real
 `DurableObjectNameCodec` + parent-path fallthrough (deep `/agents/x` contexts); then the control-plane join.

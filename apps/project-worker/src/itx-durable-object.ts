@@ -13,6 +13,7 @@ import { DurableObject } from "cloudflare:workers";
 import { newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { substituteHeaderSecrets } from "./core/egress.ts";
 import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
+import type { StreamDurableObject, StreamEventInput } from "./stream-durable-object.ts";
 import type { ItxCallPath } from "./core/config.ts";
 
 /** A capnweb stub to a provider-supplied capability. `.dup()` retains it past a call; other keys are its
@@ -39,6 +40,7 @@ interface Env {
   LOADER: WorkerLoader;
   SECRETS_KV?: KVNamespace;
   ITX_KV?: KVNamespace; // backing for itx.kv (project-prefixed — the D8 portability proof point)
+  STREAM_DO?: DurableObjectNamespace<StreamDurableObject>; // backing for itx.streams (project-prefixed)
   // The fallback (target-core §4.4 / D30). Solo: a self service-binding to DummyControlPlane. A DO can't mint
   // ctx.exports loopbacks, so it reaches the fallback via a binding rather than the worker's ctx.exports.
   // It IS a whole shell: `fetch` (egress → terminal) + `invokeCapability` (capability fallthrough).
@@ -130,6 +132,14 @@ export class ItxDurableObject extends DurableObject<Env> {
     // (unforgeable) projectId — so byte-identical project code is isolated in a shared namespace (D8).
     if (callPath === "itx.whoami") return { projectId: this.#projectId };
     if (callPath.startsWith("itx.kv.")) return this.#kv(callPath.slice("itx.kv.".length), args);
+    if (callPath === "itx.streams.append") {
+      const [path, event] = args as [string, StreamEventInput];
+      return this.#stream(path).append(event);
+    }
+    if (callPath === "itx.streams.read") {
+      const [path, after] = args as [string, number?];
+      return this.#stream(path).read(after ?? 0);
+    }
     if (callPath === "itx.secrets.set") {
       const [name, value] = args as [string, string];
       if (!this.env.SECRETS_KV) throw new Error("no SECRETS_KV bound");
@@ -185,6 +195,13 @@ export class ItxDurableObject extends DurableObject<Env> {
       default:
         throw new Error(`itx.kv: no op "${op}"`);
     }
+  }
+
+  /** itx.streams — a project-prefixed view of the StreamDurableObject namespace. Name `${projectId}:${path}`
+   *  so a project can only ever name its OWN streams (constructive isolation, like itx.kv). */
+  #stream(path: string) {
+    if (!this.env.STREAM_DO) throw new Error("no STREAM_DO bound");
+    return this.env.STREAM_DO.getByName(`${this.#projectId}:${path}`);
   }
 
   /** Execute code IN this context (target-core §4.1 mode 2 / D23). Loads `source` as a confined dynamic
