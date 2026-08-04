@@ -247,12 +247,14 @@ export class RepoDurableObject extends DurableObject<Env> {
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
     await this.#registry.handleAlarm(alarmInfo);
     try {
-      // The creation slice is armed from inside a hosted source-stream batch.
-      // snapshot() queues behind that LOCAL batch and therefore observes its
-      // committed create request without pulling the source Stream DO. A
-      // catchUp() here opens a second call into that source while it may still
-      // be draining the hosted callback; in production that actor cycle held
-      // the alarm open until Cloudflare's five-minute invocation teardown.
+      // The creation slice is armed for a future handoff deadline from inside
+      // a hosted source-stream batch. snapshot() queues behind that LOCAL batch
+      // and therefore observes its committed create request without pulling
+      // the source Stream DO. A catchUp() here opens a second call into that
+      // source while it may still be draining the hosted callback; in
+      // production that actor cycle held the alarm open until Cloudflare's
+      // five-minute invocation teardown. driveCreation point-reads only the
+      // offset-free resolved-source fact needed for retry immutability.
       //
       // Nor does this handler need to fold the facts it appends: driveCreation
       // carries the resolved source through the same attempt, and the normal

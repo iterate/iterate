@@ -214,7 +214,7 @@ describe("RepoProcessor eviction recovery", () => {
     await h.append(TEMPLATE_REQUEST);
 
     expect(h.resolveTemplate.calls).toBe(0);
-    expect(h.creationAlarm.at).toBe(h.clock.now);
+    expect(h.creationAlarm.at).toBe(h.clock.now + 1_000);
     await expect(h.processor().driveCreation(h.state())).rejects.toThrow(
       "template Artifact is still materializing",
     );
@@ -228,6 +228,34 @@ describe("RepoProcessor eviction recovery", () => {
       throw new Error("recovery must not resolve the ref again");
     };
     h.createTemplate.impl = async () => CREATED_ARTIFACT;
+    await h.processor().driveCreation(h.state());
+    await h.settle();
+
+    expect(h.resolveTemplate.calls).toBe(1);
+    expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
+    expect(h.state().templateSource).toEqual(RESOLVED_TEMPLATE);
+  });
+
+  it("reads the journaled source when the local fold has not observed its append", async () => {
+    const h = makeHarness();
+    h.resolveTemplate.impl = async () => RESOLVED_TEMPLATE;
+    h.createTemplate.impl = async () => {
+      throw new RepoNotSeededError("template Artifact is still materializing");
+    };
+    await h.append(TEMPLATE_REQUEST);
+    await expect(h.processor().driveCreation(h.state())).rejects.toThrow(
+      "template Artifact is still materializing",
+    );
+
+    // Do not settle the source append into the processor. This is the alarm
+    // retry window Cursor found: the stream has the immutable SHA while the
+    // runner snapshot still reports templateSource: null.
+    expect(h.state().templateSource).toBeNull();
+    h.resolveTemplate.impl = async () => {
+      throw new Error("the journaled source must win over the moved ref");
+    };
+    h.createTemplate.impl = async () => CREATED_ARTIFACT;
+
     await h.processor().driveCreation(h.state());
     await h.settle();
 

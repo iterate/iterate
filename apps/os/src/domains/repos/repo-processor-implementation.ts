@@ -15,6 +15,12 @@ import {
 } from "./repo-push-events.ts";
 import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from "./utils.ts";
 
+// A platform alarm armed at the current millisecond from a retained hosted
+// callback can be consumed before the callback handoff becomes independently
+// runnable. Give the source Stream DO a real future deadline to record the
+// callback result and release its call tree before Repo alarm work starts.
+const CREATION_HANDOFF_DELAY_MS = 1_000;
+
 /**
  * The repo processor: one stream per repo, projecting its lifecycle and Git
  * activity, and driving two durable obligations.
@@ -205,7 +211,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     ) {
       blockProcessorWhile(async () => append(await this.#createRepoTerminal(createRequest)));
     } else if (createRequest !== null && state.birthCertificate === null) {
-      blockProcessorWhile(() => this.deps.ensureCreationAlarm(this.deps.now()));
+      blockProcessorWhile(() =>
+        this.deps.ensureCreationAlarm(this.deps.now() + CREATION_HANDOFF_DELAY_MS),
+      );
     }
 
     // The GitHub import obligation: start it when nobody in THIS incarnation
@@ -243,6 +251,13 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 
     let templateSource = state.templateSource;
     if (createRequest.type === "github-public-template" && templateSource === null) {
+      // The source fact may have committed while this runner's local fold was
+      // evicted or before its callback observed the append. Point-read the
+      // offset-free journal key before resolving a moving ref again. The
+      // stream remains the sole source of truth; this adds no shadow KV state.
+      templateSource = await this.#readJournaledTemplateSource(createRequest);
+    }
+    if (createRequest.type === "github-public-template" && templateSource === null) {
       try {
         templateSource = await this.deps.resolveGithubTemplateSource(createRequest);
       } catch (error) {
@@ -263,6 +278,29 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 
     await this.append(await this.#createRepoTerminal(createRequest, templateSource));
     await this.deps.repointCreationAlarm(null);
+  }
+
+  async #readJournaledTemplateSource(
+    request: Extract<RepoCreateRequest, { type: "github-public-template" }>,
+  ): Promise<NonNullable<RepoProcessorState["templateSource"]> | null> {
+    const event = await this.stream.getEvent({
+      idempotencyKey: internalStreamId("repo-template-source-resolved", this.projectId, this.path),
+    });
+    if (event === undefined) return null;
+
+    const parsed = RepoProcessorContract.parseEvent(event);
+    if (
+      parsed.type !== "events.iterate.com/repos/template-source-resolved" ||
+      parsed.payload.owner !== request.owner ||
+      parsed.payload.repo !== request.repo ||
+      parsed.payload.ref !== request.ref ||
+      parsed.payload.path !== request.path
+    ) {
+      throw new Error(
+        "The journaled GitHub template source does not match the repo creation request.",
+      );
+    }
+    return parsed.payload;
   }
 
   /**
@@ -517,7 +555,7 @@ type RepoProcessorDeps = {
   now(): number;
   /** Arm the Repo DO's creation slice only when it has no existing desire.
    * A caught-up callback after a retryable failure must not pull the coarse
-   * retry that alarm() already scheduled back to `now`. */
+   * retry that alarm() already scheduled back to the handoff deadline. */
   ensureCreationAlarm(atMs: number): Promise<void>;
   /** Point the Repo DO's dedicated creation alarm slice at an epoch ms, or
    * disarm it with null. The alarm, not the hosted source callback, owns all

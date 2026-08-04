@@ -290,7 +290,7 @@ describe("RepoProcessor creation saga", () => {
     // The hosted source callback only arms the Repo DO. Vendor work and
     // outcome appends start later, from the alarm's independent call tree.
     expect(h.importPublic.calls).toEqual([]);
-    expect(h.creationAlarm.at).toBe(h.clock.now);
+    expect(h.creationAlarm.at).toBe(h.clock.now + 1_000);
     await driveCreation(h);
 
     expect(h.importPublic.calls).toMatchObject([{ depth: 1, owner: "acme", repo: "widgets" }]);
@@ -318,7 +318,7 @@ describe("RepoProcessor creation saga", () => {
 
     expect(h.resolveTemplate.calls).toEqual([]);
     expect(h.createTemplate.calls).toEqual([]);
-    expect(h.creationAlarm.at).toBe(h.clock.now);
+    expect(h.creationAlarm.at).toBe(h.clock.now + 1_000);
     await driveCreation(h);
 
     expect(h.resolveTemplate.calls).toEqual([request]);
