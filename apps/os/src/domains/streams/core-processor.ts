@@ -332,6 +332,14 @@ export class StreamCoreProcessor {
   }
 
   reduce(args: { event: StreamEvent; state: CoreProcessorState }): CoreProcessorState {
+    // Ephemeral events participate in the stream's one offset sequence, but
+    // none of their other effects may enter the durable core checkpoint. If
+    // they did, rebuilding from the durable log after an incarnation ended
+    // would produce different state.
+    if (args.event.ephemeral === true) {
+      return { ...args.state, maxOffset: args.event.offset };
+    }
+
     const state = this.#reduceState(args);
     return args.event.source?.copiedFrom === undefined &&
       CIRCUIT_BREAKER_FREE_CONTROL_EVENT_TYPES.has(args.event.type)

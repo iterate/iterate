@@ -25,7 +25,7 @@ export const LLM_REPLAY_EVENT_TYPES: readonly string[] = AgentProcessorContract.
 
 /**
  * The streamed-chunk event type for pure replay callers that already hold a
- * live batch. Browser mirrors never persist or replay these ephemeral rows.
+ * live or catch-up batch. Browser mirrors never persist these ephemeral events.
  */
 const LLM_RESPONSE_CHUNK_EVENT_TYPE = "events.iterate.com/agent/llm-response-chunk";
 
@@ -226,9 +226,9 @@ function replayResponse(input: {
     break;
   }
 
-  // Deduped by sequence, first occurrence wins: chunk rows are ephemeral and
-  // evictable, so a swept-then-restreamed attempt can leave two rows per
-  // sequence in a mirror — concatenating both would double the text.
+  // Deduped by sequence, first occurrence wins: a callback reconnect can
+  // redeliver a buffered chunk already present in the caller's in-memory
+  // batch. Concatenating both occurrences would double the text.
   const deltasBySequence = new Map<number, z.infer<typeof ChunkPayloadSlice>>();
   for (const event of input.chunkEvents) {
     if (event.type !== LLM_RESPONSE_CHUNK_EVENT_TYPE) continue;

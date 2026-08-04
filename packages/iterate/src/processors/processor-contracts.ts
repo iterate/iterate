@@ -153,7 +153,7 @@ type TypedStreamEventInput<Type extends string = string, Payload = Record<string
 };
 
 /**
- * A durable processor input. Wake processors never receive ephemeral rows, so
+ * A durable processor input. Wake processors never receive ephemeral events, so
  * a domain object's processor-typed append door must not claim that they do.
  */
 type TypedConsumedEventInput<
@@ -300,7 +300,7 @@ export type ConsumedEvent<Contract> = Contract extends {
 
 /**
  * Union of durable append-input shapes accepted by a contract's `consumes`
- * list. Ephemeral rows are excluded because hosted processors cannot consume
+ * list. Ephemeral events are excluded because hosted processors cannot consume
  * them; append those intentionally through the raw Stream door. This is a
  * schema/vocabulary union, not proof that an event is valid in the processor's
  * current state or came from a particular provenance.
@@ -450,17 +450,19 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
   TypedStreamEvent<Type, z.output<PayloadSchema>>,
   TypedStreamEvent<Type, z.input<PayloadSchema>>
 > {
-  return z.looseObject({
-    type: z.literal(args.type),
-    payload: args.payloadSchema,
-    metadata: StreamEventSchema.shape.metadata,
-    source: StreamEventSchema.shape.source,
-    idempotencyKey: StreamEventSchema.shape.idempotencyKey,
-    ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventSchema.shape.ephemeral),
-    offset: StreamEventSchema.shape.offset,
-    createdAt: StreamEventSchema.shape.createdAt,
-    path: StreamEventSchema.shape.path,
-  }) as unknown as z.ZodType<
+  return z
+    .looseObject({
+      type: z.literal(args.type),
+      payload: args.payloadSchema,
+      metadata: StreamEventSchema.shape.metadata,
+      source: StreamEventSchema.shape.source,
+      idempotencyKey: StreamEventSchema.shape.idempotencyKey,
+      ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventSchema.shape.ephemeral),
+      offset: StreamEventSchema.shape.offset,
+      createdAt: StreamEventSchema.shape.createdAt,
+      path: StreamEventSchema.shape.path,
+    })
+    .superRefine(rejectEphemeralIdempotency) as unknown as z.ZodType<
     TypedStreamEvent<Type, z.output<PayloadSchema>>,
     TypedStreamEvent<Type, z.input<PayloadSchema>>
   >;
@@ -472,6 +474,19 @@ function getEventSchema<const Type extends string, const PayloadSchema extends z
  * durable stream fact. */
 function ephemeralEnvelopeSchema(forced: boolean | undefined, standard: z.ZodType): z.ZodType {
   return forced === true ? z.literal(true).default(true) : standard;
+}
+
+function rejectEphemeralIdempotency(
+  event: { ephemeral?: unknown; idempotencyKey?: unknown },
+  context: z.RefinementCtx,
+): void {
+  if (event.ephemeral === true && event.idempotencyKey !== undefined) {
+    context.addIssue({
+      code: "custom",
+      message: "ephemeral events cannot have an idempotencyKey",
+      path: ["idempotencyKey"],
+    });
+  }
 }
 
 /**
@@ -492,7 +507,7 @@ export function getEventInputSchema<
   TypedStreamEventInput<Type, z.input<PayloadSchema>>
 > {
   return z
-    .object({
+    .strictObject({
       type: z.literal(args.type),
       payload: args.payloadSchema,
       metadata: StreamEventInputSchema.shape.metadata,
@@ -500,7 +515,7 @@ export function getEventInputSchema<
       idempotencyKey: StreamEventInputSchema.shape.idempotencyKey,
       ephemeral: ephemeralEnvelopeSchema(args.ephemeral, StreamEventInputSchema.shape.ephemeral),
     })
-    .strict() as unknown as z.ZodType<
+    .superRefine(rejectEphemeralIdempotency) as unknown as z.ZodType<
     TypedStreamEventInput<Type, z.output<PayloadSchema>>,
     TypedStreamEventInput<Type, z.input<PayloadSchema>>
   >;

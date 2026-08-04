@@ -1228,8 +1228,9 @@ export interface Stream {
   /** The stream at a sub-path, resolved relative to this stream's path. */
   at(path: string): Stream;
   /** One event by offset or idempotencyKey; undefined when it does not exist.
-   * Point reads return ephemeral rows too — but those rows are evictable, so
-   * an offset that once resolved may later read as undefined. */
+   * An offset read returns a buffered ephemeral event too, but restart or FIFO
+   * eviction can make that same offset read as undefined later. Ephemeral
+   * events cannot have idempotency keys. */
   getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined>;
@@ -1255,9 +1256,8 @@ export interface Stream {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
-   * Durable rows after `afterOffset` are replayed. It can also match an
-   * `ephemeral: true` event appended after this wait opens, but historical
-   * ephemeral rows are never replayed.
+   * Durable events and currently buffered ephemeral events after `afterOffset`
+   * are replayed; it can also match a new event appended after this wait opens.
    */
   waitForEvent(args: {
     afterOffset?: number;
@@ -1297,9 +1297,8 @@ export interface Stream {
   /**
    * Open one session-owned callback connection to this stream.
    *
-   * `processEventBatch` first receives durable history after
-   * `replayAfterOffset`, then new commits. Transient events are delivered only
-   * when appended after this exact connection opens and are never replayed.
+   * `processEventBatch` first receives durable events plus any ephemeral events
+   * still buffered after `replayAfterOffset`, then new commits.
    * The stream forgets the connection when the session disconnects. Durable
    * event sending is configured separately by appending events to the source
    * stream.
@@ -2689,10 +2688,10 @@ export type AgentEventInput =
       }
     >;
 
-/** One committed event on a durable stream: type, JSON payload, offset,
- * idempotency key, and provenance (processor stamp / source-stream chain), plus
- * the commit-time `createdAt` and stream `path`. `ephemeral: true` marks a
- * second-class row (see `StreamEventInput`). */
+/** One offset-assigned stream event: type, JSON payload, offset, provenance
+ * (processor stamp / source-stream chain), plus the commit-time `createdAt`
+ * and stream `path`. Durable events may have an idempotency key;
+ * `ephemeral: true` marks a memory-only event (see `StreamEventInput`). */
 export type StreamEvent = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -3442,11 +3441,10 @@ export type SubscriptionConfigurationForDelivery = {
 
 /** Append input for `Stream.append`: event type, JSON payload, optional
  * metadata, provenance source, and idempotency key — everything before the
- * stream assigns offset and timestamp at commit. `ephemeral: true` commits a
- * second-class row: excluded from range reads unless `includeEphemeral`,
- * never delivered by durable subscriptions, and evictable —
- * for transient signals (LLM streaming chunks) whose durable truth lands as
- * its own event. */
+ * stream assigns offset and timestamp at commit. `ephemeral: true` assigns a
+ * real offset but keeps the event body only in the Stream Durable Object's
+ * bounded memory until eviction or restart; it cannot be combined with an
+ * idempotency key. */
 export type StreamEventInput = {
   type: string;
   payload?: Record<string, unknown> | undefined;
@@ -3491,9 +3489,11 @@ export type StreamEventReadInput = {
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
   /**
-   * Include ephemeral events (default false). Ephemeral rows are second-class:
-   * excluded from every range read unless explicitly requested, and the stream
-   * may evict them later — never derive durable state from one.
+   * Include ephemeral events (default false). The Durable Object incarnation
+   * keeps their bodies in a bounded memory buffer;
+   * this opt-in merges the events still buffered into the durable page.
+   * Restart and FIFO eviction leave permanent offset gaps, so never derive
+   * durable state from an ephemeral event.
    */
   includeEphemeral?: boolean;
 };
@@ -3534,6 +3534,8 @@ export type StreamRuntimeDebugState = {
     /** Stored subscription progress, keyed by subscription key. */
     subscriptions: Record<string, SubscriptionRuntimeState>;
     metrics: StreamThroughputMetrics;
+    /** Memory-only ephemeral events retained by this Durable Object incarnation. */
+    ephemeralEvents: EphemeralEventBufferRuntimeState;
     /** SQLite database size in bytes (event log + delivery rows + chunks). */
     storageSizeBytes: number;
   };
@@ -3843,7 +3845,7 @@ export type LiveStatePatch =
   | { fields?: Record<string, LiveStatePatch>; drop?: string[] };
 
 /**
- * A durable processor input. Wake processors never receive ephemeral rows, so
+ * A durable processor input. Wake processors never receive ephemeral events, so
  * a domain object's processor-typed append door must not claim that they do.
  */
 type TypedConsumedEventInput<
@@ -4341,6 +4343,17 @@ export type StreamThroughputMetrics = {
   ingress: ThroughputReport;
   /** Event batches sent to all receiving streams and open callbacks. */
   egress: ThroughputReport;
+};
+
+/** Memory use and FIFO eviction totals for one Durable Object incarnation. */
+export type EphemeralEventBufferRuntimeState = {
+  maxBytes: number;
+  bytes: number;
+  eventCount: number;
+  oldestOffset?: number;
+  newestOffset?: number;
+  evictedEventCount: number;
+  evictedBytes: number;
 };
 
 /**

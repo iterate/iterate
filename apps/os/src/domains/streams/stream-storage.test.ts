@@ -123,51 +123,85 @@ describe("StreamEventLog.getRange", () => {
     );
   });
 
-  it("excludes ephemeral rows from range reads unless asked; point reads always return them", () => {
+  it("rejects ephemeral events at the durable storage boundary", () => {
     const log = new StreamEventLog(wrapSqlStorage(new DatabaseSync(":memory:")), "/tests/stream");
     const chunk: StreamEvent = {
       ...event(2, "events.iterate.com/test/chunk"),
       ephemeral: true,
-      idempotencyKey: "chunk-2",
     };
     log.insert([event(1, "events.iterate.com/test/durable")]);
-    log.insert([chunk]);
-    log.insert([event(3, "events.iterate.com/test/durable")]);
-
-    expect(log.highestOffset()).toBe(3);
-    expect(offsets(read(log, { afterOffset: 0, limit: 10 }))).toEqual([1, 3]);
-    expect(offsets(read(log, { afterOffset: 0, limit: 10, includeEphemeral: true }))).toEqual([
-      1, 2, 3,
-    ]);
-    // Both interpolated WHERE clauses at once (ephemeral + type filter).
-    expect(
-      offsets(
-        read(log, {
-          afterOffset: 0,
-          limit: 10,
-          eventTypes: ["events.iterate.com/test/chunk"],
-          includeEphemeral: true,
-        }),
-      ),
-    ).toEqual([2]);
-    expect(
-      offsets(
-        read(log, { afterOffset: 0, limit: 10, eventTypes: ["events.iterate.com/test/chunk"] }),
-      ),
-    ).toEqual([]);
-    // Point reads are an explicit request — no flag needed.
-    expect(log.getByOffset(2)).toEqual(chunk);
-    expect(log.getByIdempotencyKey("chunk-2")).toEqual(chunk);
+    expect(() => log.insert([chunk])).toThrow(
+      "ephemeral events must not be written to the durable event log",
+    );
+    expect(log.highestOffset()).toBe(1);
+    expect(log.getByOffset(2)).toBeUndefined();
   });
 
-  it("highestAssignedOffset survives deletion of the highest row (the eviction allocator floor)", () => {
+  it("persists a highest-assigned offset with no event row", () => {
     const db = new DatabaseSync(":memory:");
     const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
     log.insert([event(1, "events.iterate.com/test/durable")]);
-    log.insert([{ ...event(2, "events.iterate.com/test/chunk"), ephemeral: true }]);
-    db.prepare("delete from events where offset = 2").run();
+    expect(log.highestAssignedOffset()).toBe(1);
+    log.advanceHighestAssignedOffset(2);
+
+    const reopened = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+    expect(log.highestOffset()).toBe(1);
+    expect(reopened.highestAssignedOffset()).toBe(2);
+    expect(reopened.getByOffset(2)).toBeUndefined();
+  });
+
+  it("removes legacy ephemeral rows while preserving their assigned offsets", () => {
+    const db = new DatabaseSync(":memory:");
+    db.exec(`
+      create table events (
+        offset integer primary key autoincrement,
+        type text not null,
+        created_at text not null,
+        idempotency_key text unique,
+        ephemeral integer not null default 0
+      );
+      create table event_chunks (
+        offset integer not null,
+        chunk_index integer not null,
+        chunk_bytes blob not null,
+        primary key (offset, chunk_index),
+        foreign key (offset) references events(offset) on delete cascade
+      ) without rowid;
+    `);
+    const durable = event(1, "events.iterate.com/test/durable");
+    const ephemeral = { ...event(2, "events.iterate.com/test/ephemeral"), ephemeral: true };
+    for (const legacyEvent of [durable, ephemeral]) {
+      db.prepare(
+        `insert into events (offset, type, created_at, idempotency_key, ephemeral)
+         values (?, ?, ?, null, ?)`,
+      ).run(
+        legacyEvent.offset,
+        legacyEvent.type,
+        legacyEvent.createdAt,
+        legacyEvent.ephemeral === true ? 1 : 0,
+      );
+      db.prepare(
+        "insert into event_chunks (offset, chunk_index, chunk_bytes) values (?, 0, ?)",
+      ).run(legacyEvent.offset, new TextEncoder().encode(JSON.stringify(legacyEvent)));
+    }
+
+    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
+
+    expect(log.getByOffset(1)).toEqual(durable);
+    expect(log.getByOffset(2)).toBeUndefined();
     expect(log.highestOffset()).toBe(1);
     expect(log.highestAssignedOffset()).toBe(2);
+    expect(db.prepare("select count(*) as count from event_chunks where offset = 2").get()).toEqual(
+      {
+        count: 0,
+      },
+    );
+    expect(
+      db
+        .prepare("pragma table_info('events')")
+        .all()
+        .map((column) => column.name),
+    ).not.toContain("ephemeral");
   });
 });
 

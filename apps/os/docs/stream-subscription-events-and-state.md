@@ -90,7 +90,7 @@ provenance, and deduplication stay keyed to the source event).
 `processor-wake` never does: a hosted processor's reduced state must equal
 folding its stream's committed events, and wake delivery feeds the processor
 its own log, so transforming it would break replay/rebuild determinism.
-Durable subscriptions never deliver ephemeral rows. Webhook delivery is
+Durable subscriptions never deliver ephemeral events. Webhook delivery is
 at-least-once; a remote processor must deduplicate by
 `(streamId, event.offset)`.
 

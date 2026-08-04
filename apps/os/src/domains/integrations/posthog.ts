@@ -161,7 +161,7 @@ function posthogEvents(args: {
   ])}`;
   const groups = { project: projectId };
   // Capture-side filtering is deliberate defense in depth: durable lanes
-  // never deliver ephemeral rows, but never index one in PostHog either way.
+  // never deliver ephemeral events, but never index one in PostHog either way.
   const durableEvents = batch.events.filter((event) => event.ephemeral !== true);
   const occurrences = durableEvents.map((event) => {
     const createdAt = normalizeEventTimestamp(event.createdAt);
