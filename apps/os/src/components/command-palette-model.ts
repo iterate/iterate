@@ -1,11 +1,5 @@
-import type { StreamIndexRow } from "~/domains/projects/stream-database.ts";
 import { StreamPath } from "~/lib/stream-links.ts";
-import {
-  closestAncestorByPath,
-  flattenTreeRows,
-  toggledSet,
-  type TreeRow,
-} from "~/lib/tree-rows.ts";
+import { toggledSet } from "~/lib/tree-rows.ts";
 
 export type PaletteTab = "agents" | "tree" | "recent";
 
@@ -70,68 +64,6 @@ export function isPaletteResultKeyboardTarget(target: EventTarget | null): boole
   );
 }
 
-type PaletteStreamTreeNode = {
-  row: StreamIndexRow;
-  children: PaletteStreamTreeNode[];
-};
-
-export function buildStreamForest(
-  streams: Record<string, StreamIndexRow>,
-): PaletteStreamTreeNode[] {
-  const nodes = new Map<string, PaletteStreamTreeNode>(
-    Object.values(streams).map((row) => [row.path, { row, children: [] }]),
-  );
-  const roots: PaletteStreamTreeNode[] = [];
-  for (const node of nodes.values()) {
-    const parent =
-      closestAncestorByPath(node.row.path, nodes) ??
-      (node.row.path === "/" ? undefined : nodes.get("/"));
-    if (parent === undefined) roots.push(node);
-    else parent.children.push(node);
-  }
-  const sort = (nodesToSort: PaletteStreamTreeNode[]) => {
-    nodesToSort.sort((left, right) => left.row.path.localeCompare(right.row.path));
-    for (const node of nodesToSort) sort(node.children);
-  };
-  sort(roots);
-  return roots;
-}
-
-const STREAM_TREE_SHAPE = {
-  children: (node: PaletteStreamTreeNode) => node.children,
-  key: (node: PaletteStreamTreeNode) => node.row.path,
-  matches: (node: PaletteStreamTreeNode, query: string) =>
-    node.row.path.toLowerCase().includes(query),
-};
-
-/** Streams render fully expanded by default; `collapsedPaths` holds the exceptions. */
-export function flattenStreamRows(
-  forest: readonly PaletteStreamTreeNode[],
-  collapsedPaths: ReadonlySet<string>,
-  query: string,
-): TreeRow<PaletteStreamTreeNode>[] {
-  const expandedPaths = new Set<string>();
-  const visit = (nodes: readonly PaletteStreamTreeNode[]) => {
-    for (const node of nodes) {
-      if (!collapsedPaths.has(node.row.path)) expandedPaths.add(node.row.path);
-      visit(node.children);
-    }
-  };
-  visit(forest);
-  return flattenTreeRows(forest, STREAM_TREE_SHAPE, expandedPaths, query);
-}
-
-/** Leaf label for a stream path in the tree (Pierre-style: basename only). */
-export function streamTreeLabel(path: string): string {
-  if (path === "/") return "/";
-  const segments = path.split("/").filter(Boolean);
-  return segments.at(-1) ?? path;
-}
-
-export function formatEventCount(count: number): string {
-  return count === 1 ? "1 event" : `${count.toLocaleString()} events`;
-}
-
 type PaletteDialogState = {
   tab: PaletteTab;
   query: string;
@@ -142,9 +74,9 @@ type PaletteDialogState = {
   collapsedStreamPaths: ReadonlySet<string>;
 };
 
-export function initialPaletteDialogState(): PaletteDialogState {
+export function initialPaletteDialogState(tab: PaletteTab): PaletteDialogState {
   return {
-    tab: "agents",
+    tab,
     query: "",
     selectedValue: "",
     expandedAgentPaths: new Set(),
@@ -153,8 +85,6 @@ export function initialPaletteDialogState(): PaletteDialogState {
 }
 
 type PaletteDialogAction =
-  | { type: "closed" }
-  | { type: "opened"; tab: PaletteTab }
   | { type: "query_changed"; query: string }
   | { type: "selection_changed"; selectedValue: string }
   | { type: "tab_changed"; tab: PaletteTab }
@@ -166,16 +96,6 @@ export function reducePaletteDialogState(
   action: PaletteDialogAction,
 ): PaletteDialogState {
   switch (action.type) {
-    case "closed":
-      return { ...state, query: "", selectedValue: "" };
-    case "opened":
-      return {
-        tab: action.tab,
-        query: "",
-        selectedValue: "",
-        expandedAgentPaths: new Set(),
-        collapsedStreamPaths: new Set(),
-      };
     case "query_changed":
       return { ...state, query: action.query, selectedValue: "" };
     case "selection_changed":
@@ -203,7 +123,6 @@ export function normalizeDestination(raw: string): string | null {
   return parsed.success && parsed.data !== "/" ? parsed.data : null;
 }
 
-export function defaultPaletteTab(currentPath: string, liveIndex: boolean): PaletteTab {
-  if (!liveIndex) return "tree";
+export function defaultPaletteTab(currentPath: string): PaletteTab {
   return currentPath === "/agents" || currentPath.startsWith("/agents/") ? "agents" : "recent";
 }

@@ -188,9 +188,13 @@ test("review a workspace document in the seeded Docs app", async ({ baseURL, pag
   await page.getByRole("link", { name: "Continue with iterate" }).click({ timeout: 30_000 });
 
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
+    // The header names the document by its workspace-relative path (the
+    // sidebar owns the workspace name; the document's own H1 carries the
+    // title). The live status is visually silent but stays in the
+    // accessibility tree — still the signal that the editor synced.
     await page
       .locator("header")
-      .getByRole("heading", { name: "Docs review walkthrough" })
+      .getByRole("heading", { name: documentPath })
       .waitFor({ timeout: 120_000 });
   });
   await page.getByText(/^live · v\d+$/).waitFor({ timeout: 30_000 });

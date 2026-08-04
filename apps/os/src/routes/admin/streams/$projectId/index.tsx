@@ -15,8 +15,8 @@ export const Route = createFileRoute("/admin/streams/$projectId/")({
   component: AdminStreamProjectPage,
 });
 
-// The project's root stream. Stream NAVIGATION is ⌘K's job here exactly as in
-// the product UI — the panel only carries the project/global switch.
+// The project's root stream. The layout owns persistent stream navigation;
+// this panel carries project/global switching and stream-view controls.
 function AdminStreamProjectPage() {
   const { projectId } = Route.useParams();
   const { source, streamProjectId, resetTransport } = useAdminStreamSource(projectId);

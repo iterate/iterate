@@ -71,7 +71,7 @@ use captun, preview, or production for public callbacks. Details:
 Before PRs:
 
 ```bash
-pnpm install && pnpm typecheck && pnpm lint && pnpm format && pnpm test
+pnpm install && pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test
 ```
 
 How to open a PR (branch hygiene, body shape, **screenshots that actually

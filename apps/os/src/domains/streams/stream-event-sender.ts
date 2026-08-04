@@ -14,7 +14,9 @@
 // | ITX expression   | evaluate and await the named method             | method result          |
 // | webhook          | send one attributed HTTP POST per event         | 2xx response           |
 //
-// Session connections are forgotten when they close.
+// Session connections are forgotten when they close (a wake-socket-backed
+// session's dormancy lives on in its socket attachment — wake-socket.ts —
+// never in this module's memory).
 // Stored subscriptions are stored configuration — the directional events
 // reduced into core state. Delivery uses one SQLite cursor row per subscription
 // (stream-storage.ts) plus the Durable Object alarm for retries. Cursor rows
@@ -288,6 +290,13 @@ type StreamEventSenderHooks = {
   /** Arm the Durable Object alarm for the earliest pending retry. */
   armAlarm(atMs: number): void;
   /**
+   * Delete the pending Durable Object alarm; called only when the full
+   * recomputation found NOTHING needing a future turn (no due or in-flight
+   * cursor rows, no idle deadline). Lets a quiet stream sleep until a real
+   * touch instead of being booted forever by its last send's watchdog.
+   */
+  clearAlarm(): void;
+  /**
    * Run durable delivery in its alarm-owned invocation. The production Stream
    * DO schedules an immediate alarm when called from an append and runs the
    * closure only when delivery is already running inside that alarm turn.
@@ -295,6 +304,26 @@ type StreamEventSenderHooks = {
   runDurable(work: () => Promise<unknown>): void;
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
+  /**
+   * connectionKeys with a live hibernatable wake channel (wake-socket.ts).
+   * Only such session connections are idle-teardown-eligible: severing a
+   * session callback with no wake channel would strand the subscriber with
+   * no way to learn about new events.
+   */
+  wakeChannelKeys(): ReadonlySet<string>;
+  /**
+   * Idle teardown just closed these session connections; ensure this
+   * teardown's own close facts can never wake the subscribers they closed.
+   * Called AFTER the close-fact appends, mirroring the hosted cursor ack.
+   */
+  onSessionsIdleClosed(connectionKeys: readonly string[]): void;
+  /**
+   * Post-commit: offer just-committed events to dormant wake-channel
+   * subscribers (wake-socket.ts). Edge-triggered by design — a frame lost to
+   * a crash between commit and send is repaired by the next qualifying
+   * append (or the relay's liveness probe), never by the repair alarm.
+   */
+  wakeDormantSubscribers(justCommitted: SizedStreamEvent[]): void;
 };
 
 export class StreamEventSender {
@@ -349,6 +378,7 @@ export class StreamEventSender {
         onHostedDeliveryFailure: (subscriptionKey, error) =>
           this.#onDeliveryFailure(subscriptionKey, error),
         sendDueSubscriptions: () => this.sendDue(),
+        reconcileAlarm: () => this.reconcileAlarmAfterSettlement(),
       },
     });
   }
@@ -391,9 +421,14 @@ export class StreamEventSender {
       );
       this.connections.sendQueued();
       if (this.connections.isTearingDown) {
+        // Also guards the dormant-wake offer below: close-fact appends during
+        // teardown must not fan back out to the subscribers they closed.
         this.#armAlarmFromStore();
         this.#consecutiveSendStartFailures = 0;
         return true;
+      }
+      if (justCommittedEvents !== undefined && justCommittedEvents.length > 0) {
+        this.#hooks.wakeDormantSubscribers(justCommittedEvents);
       }
       this.#sendDueSubscriptions();
       // A new Durable Object incarnation cannot trust an in-memory notion of
@@ -664,6 +699,7 @@ export class StreamEventSender {
         }
       } finally {
         this.#hostedWakesInFlight.delete(subscriptionKey);
+        this.reconcileAlarmAfterSettlement();
       }
     });
   }
@@ -978,6 +1014,7 @@ export class StreamEventSender {
         }
       } finally {
         this.#sourceOwnedSendsInFlight.delete(subscriptionKey);
+        this.reconcileAlarmAfterSettlement();
       }
     });
   }
@@ -1307,6 +1344,7 @@ export class StreamEventSender {
     // from either spins the alarm at zero delay.
     const state = this.#hooks.coreState();
     let next: number | null = null;
+    let lagWithoutSchedule = false;
     for (const row of this.#hooks.store.list()) {
       const key = row.subscriptionKey;
       const configured = state.subscriptions.outbound.byKey[key];
@@ -1328,11 +1366,50 @@ export class StreamEventSender {
         if (next === null || watchdogAt < next) next = watchdogAt;
         continue;
       }
-      if (row.nextAttemptAt === null) continue;
+      if (row.nextAttemptAt === null) {
+        // A non-halted row lagging the head with NOTHING scheduled is the
+        // lifecycle-retry state: an interrupted audit/settlement append armed
+        // a bare short-delay alarm without touching the row (deliberately —
+        // the cursor must not move past unexplained work). That armed wake is
+        // this row's only future, so it must veto the quiet deletion below.
+        if (row.acknowledgedOffset < state.maxOffset) lagWithoutSchedule = true;
+        continue;
+      }
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
     }
     if (next !== null) this.#hooks.armAlarm(next);
     this.connections.rearmIdleAlarm();
+    // Nothing durable needs a future turn and no idle deadline is pending:
+    // delete the alarm outright, or the last send's in-flight watchdog
+    // outlives its successful delivery and boots the hibernated stream every
+    // ~21s forever (each boot appends `woken`, whose delivery re-arms the
+    // next watchdog). Settlement paths re-run this method so the LAST
+    // completion is what finds the quiet state. A later armNoLaterThan in
+    // the same turn re-arms after the delete.
+    if (
+      next === null &&
+      !lagWithoutSchedule &&
+      !this.connections.hasPendingIdleDeadline &&
+      this.#sourceOwnedSendsInFlight.size === 0 &&
+      this.#hostedWakesInFlight.size === 0
+    ) {
+      this.#hooks.clearAlarm();
+    }
+  }
+
+  /** Recompute (and possibly clear) the alarm after an asynchronous settlement. */
+  reconcileAlarmAfterSettlement(): void {
+    try {
+      // Re-derive idle eligibility from the CURRENT connection map first: a
+      // settlement may be the first reconciliation that can see a connection
+      // published after its opened-fact reconcile, and the quiet deletion
+      // below must observe that pending idle deadline, not clear the alarm
+      // out from under it.
+      this.connections.armOrClearIdleAlarm();
+      this.#armAlarmFromStore();
+    } catch (error) {
+      console.error("post-settlement alarm reconciliation failed", error);
+    }
   }
 
   /**
@@ -1538,6 +1615,8 @@ type StreamConnectionsHooks = Pick<
   | "now"
   | "armAlarm"
   | "keepAlive"
+  | "wakeChannelKeys"
+  | "onSessionsIdleClosed"
 > & {
   readBatch(afterOffset: number, beforeOffset: number, limit: number): SizedStreamEvent[];
   hostedDeliveryStillMatches(
@@ -1546,6 +1625,8 @@ type StreamConnectionsHooks = Pick<
   ): boolean;
   onHostedDeliveryFailure(connectionKey: string, error: unknown): void;
   sendDueSubscriptions(): void;
+  /** Recompute (and possibly clear) the alarm after a hosted batch settles. */
+  reconcileAlarm(): void;
 };
 
 const PING_ROUND_MIN_INTERVAL_MS = 5_000;
@@ -1671,6 +1752,11 @@ export class StreamConnections {
 
   rearmIdleAlarm(): void {
     if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
+  }
+
+  /** Whether an idle-teardown deadline is pending (the alarm must stay armed for it). */
+  get hasPendingIdleDeadline(): boolean {
+    return this.#idleTeardownAtMs !== null;
   }
 
   openSession(args: {
@@ -1864,19 +1950,48 @@ export class StreamConnections {
   }
 
   armOrClearIdleAlarm(): void {
-    if (this.#hostedConnectionKeys().length === 0) {
+    // Teardown's own close-fact appends reconcile through here while the
+    // remainder still looks idle-eligible with stale activity; arming from
+    // that nested turn issues one pointless immediate wake per teardown.
+    if (this.#tearingDown) return;
+    const eligible = this.#idleEligibleConnectionKeys();
+    // Wedged connections are excluded from the activity derivation (teardown
+    // still closes them, but never acks or memoizes them) — their in-flight
+    // watchdog owns their future, and letting their stale lastDeliveredAt
+    // drive a past-due idle deadline would arm an immediate alarm every turn.
+    const idleCandidates = [...eligible.hosted, ...eligible.session].filter(
+      (key) => this.#connections.get(key)?.hasPendingDelivery() !== true,
+    );
+    if (idleCandidates.length === 0) {
       this.#idleTeardownAtMs = null;
       return;
     }
-    this.#idleTeardownAtMs = this.#hooks.now() + this.#idleTeardownMs;
-    this.#hooks.armAlarm(this.#idleTeardownAtMs);
+    // Level-triggered, derived from observable state: the deadline is "idle
+    // window after the newest delivery activity", never "idle window after
+    // this reconcile". The old now+window reset slid the deadline forward on
+    // the idle alarm's OWN turn, so a fire landing moments before the freshly
+    // pushed deadline missed it and rearmed a whole window out — real-clock
+    // idle teardown could take 2× the window (proven against a deployed
+    // preview). Deriving from lastDeliveredAt makes a fire always find the
+    // same due deadline it was armed for.
+    let lastActivityMs = 0;
+    for (const connectionKey of idleCandidates) {
+      const connection = this.#connections.get(connectionKey);
+      if (connection === undefined) continue;
+      const activityMs = Date.parse(connection.lastDeliveredAt ?? connection.startedAt);
+      if (Number.isFinite(activityMs) && activityMs > lastActivityMs) lastActivityMs = activityMs;
+    }
+    this.#idleTeardownAtMs =
+      (lastActivityMs === 0 ? this.#hooks.now() : lastActivityMs) + this.#idleTeardownMs;
+    this.#hooks.armAlarm(Math.max(this.#hooks.now(), this.#idleTeardownAtMs));
   }
 
   runIdleTeardownNow(): string[] {
     this.#idleTeardownAtMs = null;
-    const keys = this.#hostedConnectionKeys();
+    const { hosted, session } = this.#idleEligibleConnectionKeys();
+    const keys = [...hosted, ...session];
     const wedgedKeys = new Set(
-      keys.filter((key) => this.#connections.get(key)?.hasPendingDelivery() === true),
+      hosted.filter((key) => this.#connections.get(key)?.hasPendingDelivery() === true),
     );
     this.#tearingDown = true;
     try {
@@ -1893,19 +2008,36 @@ export class StreamConnections {
     // replays from its own reported checkpoint; the sending cursor is only the
     // source stream's wake/delivery position.
     const maxOffset = this.#hooks.coreState().maxOffset;
-    for (const connectionKey of keys) {
+    for (const connectionKey of hosted) {
       if (wedgedKeys.has(connectionKey)) continue;
       this.#hooks.store.ack(connectionKey, maxOffset);
     }
+    // Session connections have no cursor row; their equivalent of the ack
+    // above is the wake-socket attachment stamp, which must likewise land
+    // AFTER the close facts so those facts can never wake the subscriber.
+    if (session.length > 0) this.#hooks.onSessionsIdleClosed(session);
     this.#idleTeardownAtMs = null;
     if (wedgedKeys.size > 0) queueMicrotask(() => this.#hooks.sendDueSubscriptions());
     return keys.filter((connectionKey) => !wedgedKeys.has(connectionKey));
   }
 
-  #hostedConnectionKeys(): string[] {
-    return [...this.#connections]
-      .filter(([, connection]) => connection.kind === "hosted")
-      .map(([connectionKey]) => connectionKey);
+  /**
+   * Hosted connections are always idle-eligible (the durable subscription
+   * re-wakes them). A session connection is eligible only when its owner's
+   * relay holds a live wake socket; every other session connection keeps
+   * today's semantics — it lives (and pins) as long as its session does.
+   */
+  #idleEligibleConnectionKeys(): { hosted: string[]; session: string[] } {
+    const hosted: string[] = [];
+    const session: string[] = [];
+    let wakeKeys: ReadonlySet<string> | undefined;
+    for (const [connectionKey, connection] of this.#connections) {
+      if (connection.kind === "hosted") hosted.push(connectionKey);
+      else if ((wakeKeys ??= this.#hooks.wakeChannelKeys()).has(connectionKey)) {
+        session.push(connectionKey);
+      }
+    }
+    return { hosted, session };
   }
 
   #open<Batch extends StreamEventBatch>(args: OpenConnectionArgs<Batch>): StreamConnection {
@@ -2134,6 +2266,9 @@ export class StreamConnections {
                     connectionGeneration: expectedDelivery.connectionGeneration,
                     cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
                   });
+                  // The batch's pre-armed watchdog is now moot; let the full
+                  // recomputation decide whether anything still needs a turn.
+                  this.#hooks.reconcileAlarm();
                   if (newestCreatedAtMs !== undefined && Number.isFinite(newestCreatedAtMs)) {
                     const completedAtMs = this.#hooks.now();
                     connection.completionLatency.record(
@@ -2240,6 +2375,13 @@ export class StreamConnections {
     // wake path records the processor's reported checkpoint.
     this.#connections.set(connectionKey, connection);
     this.#hooks.runtimeChanged();
+    // Idle eligibility changed exactly here, so (re)derive the deadline here.
+    // The connection-opened append's nested reconcile ran BEFORE this
+    // publication and could not see the connection; on main the stray
+    // in-flight watchdog alarm papered over that gap by re-running the
+    // reconcile later, but with quiet-alarm deletion there may be no later
+    // fire — an unarmmed idle deadline would pin this connection forever.
+    this.armOrClearIdleAlarm();
     processEventBatch.onRpcBroken?.((error) => {
       if (kind === "hosted" && args.expectedHostedDelivery !== undefined) {
         this.onHostedDeliveryError(connectionKey, error, args.expectedHostedDelivery, "rpc-broken");

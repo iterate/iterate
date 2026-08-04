@@ -2341,7 +2341,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         "set -euo pipefail",
         `rm -f ${docsVitestTelemetryFile}`,
         'test "$(curl --fail --silent --show-error "$DOCS_BASE_URL/healthz")" = "ok"',
-        'curl --fail --silent --show-error "$DOCS_BASE_URL/" | grep --fixed-strings "Open a workspace document" >/dev/null',
+        'curl --fail --silent --show-error "$DOCS_BASE_URL/" | grep --fixed-strings "New workspace" >/dev/null',
         `TEST_TELEMETRY_KIND=e2e TEST_TELEMETRY_LANE=vitest TEST_TELEMETRY_WORKSPACE=@iterate-com/docs TEST_TELEMETRY_ARTIFACT_FILE=${docsVitestTelemetryFile} pnpm test`,
       ].join("; "),
     ],

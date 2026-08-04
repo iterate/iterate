@@ -56,14 +56,18 @@ function cursorDecorations(
   docLength: number,
 ): DecorationSet {
   const builder = new RangeSetBuilder<Decoration>();
-  const remote = clients
-    .filter((client) => client.clientId !== ownClientId)
-    .map((client) => ({
+  const remote: (CollabPresence["clients"][number] & { from: number; to: number })[] = [];
+  for (const client of clients) {
+    if (client.clientId === ownClientId) continue;
+    remote.push({
       ...client,
       from: Math.min(Math.min(client.anchor, client.head), docLength),
       to: Math.min(Math.max(client.anchor, client.head), docLength),
-    }))
-    .sort((left, right) => left.from - right.from || left.clientId.localeCompare(right.clientId));
+    });
+  }
+  remote.sort(
+    (left, right) => left.from - right.from || left.clientId.localeCompare(right.clientId),
+  );
   for (const client of remote) {
     if (client.from < client.to) {
       builder.add(
