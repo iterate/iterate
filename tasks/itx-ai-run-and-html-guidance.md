@@ -1,13 +1,15 @@
 ---
-status: in-progress
+status: in-review
 size: small
+pr: https://github.com/iterate/iterate/pull/2399
 ---
 
 # Stop agents outsourcing their own job to ai.run; teach the HTML→Markdown path
 
 ## Status summary
 
-Spec fleshed out; implementation not started.
+Implemented, all checks green, PR open as draft. All checklist items done; one
+judgement call flagged below (example title changed alongside its description).
 
 ## Motivation
 
@@ -29,28 +31,39 @@ our own docs:
 
 ## Checklist
 
-- [ ] Invert the `ai.run` framing in the three source-of-truth descriptions: the
-      `AiRpcTarget.__describe()` instructions, the `run` JSDoc (flows into
-      `itx-api.generated.ts`), and the `ai-generate-text` example description.
-      New framing: `ai.run` is for what the agent *cannot* do (image/audio/video
-      generation, transcription, bulk classification at volume) — never for text the
-      agent is about to read or relay.
-- [ ] Reshape the `ai-generate-text` example body to demo the legitimate use (bulk
-      classification via `Promise.all`) instead of demoing summarisation.
-- [ ] Add a "you are the LLM" bullet to THE SHAPE OF WORK in
-      `agent-defaults.ts` (and bump `DEFAULT_AGENT_SYSTEM_PROMPT_REVISION`).
-- [ ] Extend the `gmail-search-inbox` example with the real body path: fetch one
-      message `format: "full"`, walk MIME parts for `text/html`, base64url-decode,
-      convert with `itx.ai.toMarkdown` — with description keywords (body, content,
-      read, html) so word-overlap docs search routes email-content tasks there.
-- [ ] Say "in-hand HTML string → `new Blob([html], { type: "text/html" })` →
-      `toMarkdown`" in the toMarkdown descriptions (`__describe` child, JSDoc
-      overload, `cf-ai-to-markdown` example description).
-- [ ] Regenerate `itx-api.generated.ts` / `examples.generated.ts` and run checks.
+- [x] Invert the `ai.run` framing in the three source-of-truth descriptions
+      _(rpc-targets.ts: `AiRpcTarget.__describe()` instructions + `run` child blip +
+      `run` JSDoc, which flows into `itx-api.generated.ts`; and the `ai-generate-text`
+      example description in examples-source.ts)_
+- [x] Reshape the `ai-generate-text` example body to demo bulk classification
+      _(Promise.all over reviews → one-word sentiment each; also retitled "Run a hosted
+      text model for bulk, mechanical work" — the old title "Generate or summarize text
+      with a hosted LLM" contradicted the new description. Retitle-for-search-ranking
+      was scoped out, but leaving an opposite-message title made no sense; the id
+      `ai-generate-text` is unchanged. The body now compiles clean against the surface,
+      so its SURFACE_GAPS excuse in examples-typecheck.test.ts was deleted per that
+      test's own contract.)_
+- [x] Add a "you are the LLM" bullet to THE SHAPE OF WORK
+      _(agent-defaults.ts; revision 6 → 7. The bullet overflowed the prompt budget by
+      ~47 tokens, so DEFAULT_PROMPT_TOKEN_CEILING went 4150 → 4200 with a dated
+      rationale comment, following that file's established raise protocol.)_
+- [x] Extend `gmail-search-inbox` with the real body path
+      _(search → metadata subjects as before, then: fetch first hit `format: "full"`,
+      flatten the MIME tree with a stack walk (generated bodies must be plain JS — no
+      TS annotations, so no typed recursive helper), prefer text/html, base64url-decode,
+      `itx.ai.toMarkdown`. Description now carries the magnet words: content, body,
+      html, base64url, MIME, "never regex-strip HTML by hand".)_
+- [x] Teach "in-hand HTML string → Blob → toMarkdown" in the toMarkdown descriptions
+      _(`__describe` child blip + JSDoc overload in rpc-targets.ts, plus the
+      `cf-ai-to-markdown` example description and body, which now converts an HTML
+      string alongside the CSV.)_
+- [x] Regenerate and run checks
+      _(examples.generated.ts, itx-api.generated.ts ×2, itx-api-graph.generated.ts;
+      typecheck, lint, knip, format, full apps/os unit suite all green.)_
 
 ## Explicitly out of scope (for now, per Misha)
 
-- Renaming/retitling the `ai-generate-text` example for search ranking.
+- Renaming the `ai-generate-text` example *id* for search ranking.
 - Promoting the "choosing a door" (egress.fetch vs browser markdown vs toMarkdown)
   guidance into the system prompt.
 - A `getMessageText(id)`-style helper on the gmail integration — not ready for
@@ -60,4 +73,11 @@ our own docs:
 
 ## Implementation notes
 
-(log kept while implementing)
+- The examples generator extracts fn bodies as **plain JS** (they must parse under
+  `AsyncFunction`), which is why the gmail MIME walk is a while-stack instead of a
+  typed recursive function — a recursive arrow can't infer its own type without an
+  annotation, and annotations fail generation.
+- After the `ai-generate-text` body rewrite, tier-1 typecheck of the generated body
+  came back clean, and examples-typecheck.test.ts treats a clean excused entry as an
+  error ("the excuse should be deleted") — so the excuse was deleted; sibling excuse
+  entries now cross-reference `ai-generate-image` instead.
