@@ -1,0 +1,16 @@
+{
+  // POC clean-room account. New worker; does not touch apps/os.
+  "name": "capnweb-spike-gateway",
+  "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+  "main": "gateway.mjs",
+  "compatibility_date": "2026-07-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "HOST_DO", "class_name": "HostDO" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["HostDO"] }],
+  "services": [
+    { "binding": "SELF", "service": "capnweb-spike-gateway" },
+    { "binding": "PEER", "service": "capnweb-spike-peer" },
+  ],
+}

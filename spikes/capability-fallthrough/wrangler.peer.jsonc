@@ -1,0 +1,8 @@
+{
+  // POC clean-room account (iterate prd account id). New worker; does not touch apps/os.
+  "name": "capnweb-spike-peer",
+  "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+  "main": "peer.mjs",
+  "compatibility_date": "2026-07-01",
+  "workers_dev": true,
+}

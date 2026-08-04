@@ -1,0 +1,12 @@
+{
+  // POC clean-room account. New worker; does not touch apps/os.
+  "name": "capnweb-spike-wake",
+  "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
+  "main": "do.mjs",
+  "compatibility_date": "2026-07-01",
+  "workers_dev": true,
+  "durable_objects": {
+    "bindings": [{ "name": "CAP_DO", "class_name": "CapabilityWakeDO" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["CapabilityWakeDO"] }],
+}

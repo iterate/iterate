@@ -15,6 +15,9 @@ dist
 .mf
 .wrangler
 .dev.vars*
+
+# Spike build output (spikes/*/.built)
+.built
 .dev-server
 # generated from the root envs.ts by each app's scripts/generate-wrangler-config.ts
 apps/os/wrangler.jsonc
