@@ -2103,7 +2103,7 @@ test("every project child stream is born with ordinary project-worker and PostHo
 test("an expression-placed processor returns its callback, idles cleanly, and wakes again after idle and eviction", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/scheduler/e2e-hosted-${marker.slice(0, 8)}`;
-  const subscriptionName = `hosted-${marker}`;
+  const subscriptionName = "scheduler"; // name-only wake routing: must match the registered processor name
 
   using testProject = await openTestProject(marker);
   const { project } = testProject;
@@ -2426,7 +2426,7 @@ test.skipIf(deployedBaseUrl() === null)(
   async () => {
     const marker = crypto.randomUUID();
     const streamPath = `/scheduler/e2e-recreated-${marker.slice(0, 8)}`;
-    const subscriptionName = `hosted-recreated-${marker}`;
+    const subscriptionName = "scheduler"; // name-only wake routing: must match the registered processor name
     const oldKey = `old-lifetime-${marker.slice(0, 8)}`;
     const newKey = `new-lifetime-${marker.slice(0, 8)}`;
 
@@ -2542,7 +2542,7 @@ test.skipIf(deployedBaseUrl() === null)(
 test("hosted delivery intersects the stored filter with the processor's announced event types", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/scheduler/e2e-intersection-${marker.slice(0, 8)}`;
-  const subscriptionName = `hosted-intersection-${marker}`;
+  const subscriptionName = "scheduler"; // name-only wake routing: must match the registered processor name
   const excludedKey = `filter-excluded-${marker.slice(0, 8)}`;
 
   using testProject = await openTestProject(marker);
