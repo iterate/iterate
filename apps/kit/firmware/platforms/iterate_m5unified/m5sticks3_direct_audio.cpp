@@ -6,6 +6,7 @@
 #include <M5Unified.h>
 #pragma GCC diagnostic pop
 
+#include <algorithm>
 #include <limits>
 
 #include "driver/i2s_common.h"
@@ -42,6 +43,91 @@ constexpr std::uint8_t
 constexpr std::uint8_t es8311SafeDacVolume =
     es8311ZeroDbVolume - es8311SafeDacAttenuationHalfDbSteps;
 static_assert(es8311SafeDacVolume == 0x9bU);
+
+constexpr std::uint32_t cueSampleRate = 16'000U;
+constexpr std::size_t cueFrameSamples =
+    M5StickS3DirectI2sOps::monoSampleCount;
+constexpr std::size_t cueDescriptorCount =
+    M5StickS3DirectI2sOps::descriptorCount;
+constexpr std::size_t cueFrameCount = 4U;
+constexpr std::size_t cueNoteSamples = cueFrameSamples * 2U;
+constexpr std::uint32_t cueDeadlineMs = 200U;
+constexpr std::int32_t cueAmplitude = 12'000;
+constexpr std::uint32_t cueEnvelopeSamples = 48U;
+static_assert(
+    cueDescriptorCount > cueFrameCount,
+    "the bounded cue must end before cyclic DMA can wrap to its first note");
+
+constexpr std::int16_t postCaptureCueSample(
+    std::size_t absoluteSample) {
+  const auto noteSample =
+      static_cast<std::uint32_t>(
+          absoluteSample % cueNoteSamples);
+  const std::uint32_t frequency =
+      absoluteSample < cueNoteSamples ? 880U : 1'320U;
+  const auto phase = static_cast<std::uint32_t>(
+      (static_cast<std::uint64_t>(noteSample) * frequency) %
+      cueSampleRate);
+  const auto halfRate = cueSampleRate / 2U;
+  const std::int32_t triangle =
+      phase < halfRate
+      ? -cueAmplitude +
+          static_cast<std::int32_t>(
+              (static_cast<std::uint64_t>(phase) *
+               static_cast<std::uint32_t>(cueAmplitude * 2)) /
+              halfRate)
+      : cueAmplitude -
+          static_cast<std::int32_t>(
+              (static_cast<std::uint64_t>(phase - halfRate) *
+               static_cast<std::uint32_t>(cueAmplitude * 2)) /
+              halfRate);
+  const auto samplesUntilEnd = static_cast<std::uint32_t>(
+      cueNoteSamples - 1U - noteSample);
+  const auto envelope = std::min(
+      cueEnvelopeSamples,
+      std::min(noteSample, samplesUntilEnd));
+  return static_cast<std::int16_t>(
+      (triangle * static_cast<std::int32_t>(envelope)) /
+      static_cast<std::int32_t>(cueEnvelopeSamples));
+}
+
+constexpr std::array<std::int16_t, cueFrameSamples>
+makePostCaptureCueFrame(std::size_t frameIndex) {
+  std::array<std::int16_t, cueFrameSamples> frame{};
+  for (std::size_t index = 0U;
+       index < frame.size();
+       ++index) {
+    frame[index] = postCaptureCueSample(
+        frameIndex * cueFrameSamples + index);
+  }
+  return frame;
+}
+
+constexpr std::array<
+    std::array<std::int16_t, cueFrameSamples>,
+    cueFrameCount>
+makePostCaptureCue() {
+  std::array<
+      std::array<std::int16_t, cueFrameSamples>,
+      cueFrameCount> frames{};
+  for (std::size_t index = 0U;
+       index < frames.size();
+       ++index) {
+    frames[index] = makePostCaptureCueFrame(index);
+  }
+  return frames;
+}
+
+/*
+ * Eighty milliseconds of flash-resident PCM: two gently-ramped rising notes.
+ * The remaining physical DMA descriptors are preloaded with silence. Keeping
+ * the audible prefix shorter than the cycle means the owner can stop after its
+ * fourth exact EOF without refilling or allowing cyclic replay. Cue playback
+ * therefore needs no heap, PCM FIFO, borrowed buffer, or second speaker task.
+ */
+constexpr auto postCaptureCueFrames = makePostCaptureCue();
+static_assert(postCaptureCueFrames[0][0] == 0);
+static_assert(postCaptureCueFrames[3][cueFrameSamples - 1U] == 0);
 
 void saturatingIncrement(
     std::atomic<std::uint32_t> &counter) {
@@ -855,6 +941,21 @@ lifecycleAcknowledgementTimeouts() const {
   return lifecycleAcknowledgementTimeouts_.value();
 }
 
+std::uint32_t
+M5StickS3DirectAudioOwner::postCaptureCueCompletions() const {
+  return postCaptureCueCompletions_.value();
+}
+
+std::uint32_t
+M5StickS3DirectAudioOwner::postCaptureCueInterruptions() const {
+  return postCaptureCueInterruptions_.value();
+}
+
+std::uint32_t
+M5StickS3DirectAudioOwner::postCaptureCueFailures() const {
+  return postCaptureCueFailures_.value();
+}
+
 iterate_kit_status
 M5StickS3DirectAudioOwner::flushGeneration(
     std::uint32_t generation,
@@ -898,8 +999,11 @@ M5StickS3DirectAudioOwner::suspendForCapture() {
 }
 
 iterate_kit_status
-M5StickS3DirectAudioOwner::resumeAfterCapture() {
-  return runBoundedCommand(LifecycleCommand::resume);
+M5StickS3DirectAudioOwner::resumeAfterCapture(
+    M5StickS3PostCaptureCue cue) {
+  return runBoundedCommand(
+      LifecycleCommand::resume,
+      static_cast<std::uint32_t>(cue));
 }
 
 void M5StickS3DirectAudioOwner::taskEntry(
@@ -931,6 +1035,28 @@ void M5StickS3DirectAudioOwner::taskLoop() {
                  portTICK_PERIOD_MS - 1U) /
                 portTICK_PERIOD_MS);
     }
+    if (postCaptureCuePlaying_) {
+      /*
+       * EOF notifications normally wake every 20 ms. The independent absolute
+       * deadline is the bounded failure path if IDF stops publishing them;
+       * without it a lost callback would leave the amplifier and DMA cycle
+       * running forever and the subsequent assistant response unconsumed.
+       */
+      const auto cueRemainingMs =
+          beforeWaitMs >= cueDeadlineMs_
+          ? 0U
+          : cueDeadlineMs_ - beforeWaitMs;
+      const auto cueWaitTicks =
+          cueRemainingMs == 0U
+          ? static_cast<TickType_t>(0U)
+          : static_cast<TickType_t>(
+                (cueRemainingMs + portTICK_PERIOD_MS - 1U) /
+                portTICK_PERIOD_MS);
+      if (waitTicks == portMAX_DELAY ||
+          cueWaitTicks < waitTicks) {
+        waitTicks = cueWaitTicks;
+      }
+    }
     (void)ulTaskNotifyTake(pdTRUE, waitTicks);
 
     /*
@@ -957,7 +1083,9 @@ void M5StickS3DirectAudioOwner::taskLoop() {
     LifecycleMailbox::Envelope lifecycle{};
     if (lifecycleMailbox_.take(&lifecycle)) {
       const auto commandResult =
-          executeLifecycleCommand(lifecycle.command);
+          executeLifecycleCommand(
+              lifecycle.command,
+              lifecycle.generation);
       publishPlaybackState();
       lifecycleMailbox_.complete(commandResult);
       (void)xSemaphoreGive(commandComplete_);
@@ -987,6 +1115,24 @@ void M5StickS3DirectAudioOwner::taskLoop() {
       }
       sampleStackHighWater();
       continue;
+    }
+    if (postCaptureCuePlaying_) {
+      const auto cueStatus = servicePostCaptureCue(
+          static_cast<std::uint64_t>(
+              esp_timer_get_time() / 1'000));
+      publishedStatus_.store(
+          cueStatus, std::memory_order_release);
+      publishPlaybackState();
+      sampleStackHighWater();
+      if (postCaptureCuePlaying_) {
+        continue;
+      }
+      /*
+       * A downlink wake can arrive while the motif owns DMA. Once its final
+       * descriptor restores RealtimePlayback, fall through and consume that
+       * already-published lane item; waiting for a second notification would
+       * strand the first assistant frame indefinitely.
+       */
     }
     if (lane_ == nullptr) {
       publishedStatus_.store(
@@ -1025,6 +1171,19 @@ M5StickS3DirectAudioOwner::executeGenerationFenceCommand(
     case GenerationFenceCommand::flushGeneration:
       if (lane_ == nullptr || generation == 0U) {
         return ITERATE_KIT_INVALID_ARGUMENT;
+      }
+      if (postCaptureCuePlaying_) {
+        /*
+         * Reconnect teardown outranks cosmetic feedback. End the motif through
+         * the same exact descriptor-release path before the generation fence
+         * touches RealtimePlayback; two policies must never believe they own
+         * the one I2S cycle at once.
+         */
+        const auto cueStatus = endPostCaptureCue(
+            false, ITERATE_KIT_OK);
+        if (cueStatus != ITERATE_KIT_OK) {
+          return cueStatus;
+        }
       }
       if (suspended_) {
         /*
@@ -1067,10 +1226,11 @@ M5StickS3DirectAudioOwner::executeGenerationFenceCommand(
 
 iterate_kit_status
 M5StickS3DirectAudioOwner::executeLifecycleCommand(
-    LifecycleCommand command) {
+    LifecycleCommand command,
+    std::uint32_t argument) {
   switch (command) {
     case LifecycleCommand::begin:
-      if (lane_ == nullptr) {
+      if (lane_ == nullptr || argument != 0U) {
         return ITERATE_KIT_STATE_ERROR;
       }
       suspended_ = false;
@@ -1084,27 +1244,24 @@ M5StickS3DirectAudioOwner::executeLifecycleCommand(
       if (lane_ == nullptr) {
         return ITERATE_KIT_STATE_ERROR;
       }
-      if (playback_.metrics().state ==
-          RealtimePlaybackState::stopped) {
-        const auto beginStatus = playback_.begin(output_);
-        if (beginStatus != ITERATE_KIT_OK) {
-          return beginStatus;
-        }
-      }
-      if (currentGeneration_ != 0U &&
-          playback_.acceptedGeneration() !=
-              currentGeneration_) {
-        const auto generationStatus =
-            playback_.flushGeneration(
-                *lane_, output_, currentGeneration_);
-        if (generationStatus != ITERATE_KIT_OK) {
-          return generationStatus;
-        }
+      if (argument > static_cast<std::uint32_t>(
+              M5StickS3PostCaptureCue::turnComplete)) {
+        return ITERATE_KIT_INVALID_ARGUMENT;
       }
       suspended_ = false;
-      return ITERATE_KIT_OK;
+      if (argument != static_cast<std::uint32_t>(
+              M5StickS3PostCaptureCue::none)) {
+        return beginPostCaptureCue(
+            static_cast<M5StickS3PostCaptureCue>(argument),
+            static_cast<std::uint64_t>(
+                esp_timer_get_time() / 1'000));
+      }
+      return restorePlaybackAfterCue();
 
     case LifecycleCommand::snapshotMetrics:
+      if (argument != 0U) {
+        return ITERATE_KIT_INVALID_ARGUMENT;
+      }
       metricsSnapshot_ = playback_.metrics();
       {
         /*
@@ -1121,14 +1278,167 @@ M5StickS3DirectAudioOwner::executeLifecycleCommand(
         metricsSnapshot_.generationFramesFlushed =
             allGenerationFramesFlushed.value();
       }
+      {
+        /*
+         * The fixed 2 KiB public playback view has no spare wire budget for a
+         * new cue object. A local DMA/codec failure is nevertheless the same
+         * physical class as a provider-playback driver failure, so fold only
+         * failures into that existing saturating counter. Completion and
+         * intentional interruption remain owner-local diagnostics and never
+         * dilute the release-blocking error signal.
+         */
+        BoundedEventCounter allDriverFailures{};
+        allDriverFailures.add(metricsSnapshot_.driverFailures);
+        allDriverFailures.add(postCaptureCueFailures_.value());
+        metricsSnapshot_.driverFailures =
+            allDriverFailures.value();
+      }
       return ITERATE_KIT_OK;
   }
   return ITERATE_KIT_STATE_ERROR;
 }
 
 iterate_kit_status
+M5StickS3DirectAudioOwner::beginPostCaptureCue(
+    M5StickS3PostCaptureCue cue,
+    std::uint64_t nowMs) {
+  if (cue != M5StickS3PostCaptureCue::turnComplete ||
+      postCaptureCuePlaying_ || lane_ == nullptr ||
+      playback_.metrics().state !=
+          RealtimePlaybackState::stopped) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+
+  const auto resetStatus = output_.resetForPlayback();
+  if (resetStatus != ITERATE_KIT_OK) {
+    postCaptureCueFailures_.record();
+    const auto restoreStatus = restorePlaybackAfterCue();
+    return resetStatus != ITERATE_KIT_OK
+        ? resetStatus
+        : restoreStatus;
+  }
+  for (const auto &frame : postCaptureCueFrames) {
+    const auto preloadStatus =
+        output_.preloadMono(frame.data(), frame.size());
+    if (preloadStatus != ITERATE_KIT_OK) {
+      postCaptureCueFailures_.record();
+      (void)output_.stopAndRelease();
+      (void)restorePlaybackAfterCue();
+      return preloadStatus;
+    }
+  }
+  for (std::size_t index = cueFrameCount;
+       index < cueDescriptorCount;
+       ++index) {
+    const auto preloadStatus = output_.preloadSilence();
+    if (preloadStatus != ITERATE_KIT_OK) {
+      postCaptureCueFailures_.record();
+      (void)output_.stopAndRelease();
+      (void)restorePlaybackAfterCue();
+      return preloadStatus;
+    }
+  }
+  const auto startStatus = output_.start();
+  if (startStatus != ITERATE_KIT_OK) {
+    postCaptureCueFailures_.record();
+    (void)output_.stopAndRelease();
+    (void)restorePlaybackAfterCue();
+    return startStatus;
+  }
+
+  cueDescriptorsRemaining_ =
+      static_cast<std::uint32_t>(cueFrameCount);
+  cueDeadlineMs_ = nowMs + cueDeadlineMs;
+  postCaptureCuePlaying_ = true;
+  prebufferDeadline_.observe(0U, false);
+  return ITERATE_KIT_OK;
+}
+
+iterate_kit_status
+M5StickS3DirectAudioOwner::servicePostCaptureCue(
+    std::uint64_t nowMs) {
+  if (!postCaptureCuePlaying_ ||
+      cueDescriptorsRemaining_ == 0U) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  if (output_.takeQueueOverflows() != 0U) {
+    return endPostCaptureCue(false, ITERATE_KIT_IO_ERROR);
+  }
+
+  /*
+   * Poll the underlying descriptor adapter directly. The avatar wrapper treats
+   * every anonymous content completion as missing speech metadata, while this
+   * fixed UI motif is intentionally not assistant speech and must keep the
+   * face quiet rather than manufacture a diagnostic lip-sync failure.
+   */
+  const auto completion = directOutput_.pollCompletionBatch();
+  if (completion.status != ITERATE_KIT_OK) {
+    return endPostCaptureCue(false, completion.status);
+  }
+  const auto completed =
+      completion.batch.newlyCompletedDescriptorCount;
+  if (completed >= cueDescriptorsRemaining_) {
+    cueDescriptorsRemaining_ = 0U;
+    return endPostCaptureCue(true, ITERATE_KIT_OK);
+  }
+  cueDescriptorsRemaining_ -= completed;
+  if (nowMs >= cueDeadlineMs_) {
+    return endPostCaptureCue(false, ITERATE_KIT_IO_ERROR);
+  }
+  return ITERATE_KIT_OK;
+}
+
+iterate_kit_status
+M5StickS3DirectAudioOwner::restorePlaybackAfterCue() {
+  if (lane_ == nullptr) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  if (playback_.metrics().state ==
+      RealtimePlaybackState::stopped) {
+    const auto beginStatus = playback_.begin(output_);
+    if (beginStatus != ITERATE_KIT_OK) {
+      return beginStatus;
+    }
+  }
+  if (currentGeneration_ != 0U &&
+      playback_.acceptedGeneration() !=
+          currentGeneration_) {
+    return playback_.flushGeneration(
+        *lane_, output_, currentGeneration_);
+  }
+  return ITERATE_KIT_OK;
+}
+
+iterate_kit_status
+M5StickS3DirectAudioOwner::endPostCaptureCue(
+    bool completed,
+    iterate_kit_status cueStatus) {
+  const auto releaseStatus = output_.stopAndRelease();
+  postCaptureCuePlaying_ = false;
+  cueDescriptorsRemaining_ = 0U;
+  cueDeadlineMs_ = 0U;
+  const auto restoreStatus = restorePlaybackAfterCue();
+
+  const auto result =
+      cueStatus != ITERATE_KIT_OK
+      ? cueStatus
+      : releaseStatus != ITERATE_KIT_OK
+          ? releaseStatus
+          : restoreStatus;
+  if (result != ITERATE_KIT_OK) {
+    postCaptureCueFailures_.record();
+  } else if (completed) {
+    postCaptureCueCompletions_.record();
+  } else {
+    postCaptureCueInterruptions_.record();
+  }
+  return result;
+}
+
+iterate_kit_status
 M5StickS3DirectAudioOwner::runBoundedCommand(
-    LifecycleCommand command) {
+    LifecycleCommand command,
+    std::uint32_t argument) {
   if (task_ == nullptr || commandComplete_ == nullptr ||
       xTaskGetCurrentTaskHandle() == task_) {
     return ITERATE_KIT_STATE_ERROR;
@@ -1144,7 +1454,7 @@ M5StickS3DirectAudioOwner::runBoundedCommand(
             esp_timer_get_time() / 1'000);
     const auto wasFailed = lifecycleMailbox_.failed();
     const auto status = lifecycleMailbox_.request(
-        command, 0U, false, nowMs);
+        command, argument, false, nowMs);
     if (!wasFailed && lifecycleMailbox_.failed()) {
       lifecycleAcknowledgementTimeouts_.record();
     }
@@ -1189,8 +1499,29 @@ M5StickS3DirectAudioOwner::stopAndDiscard() {
   if (lane_ == nullptr) {
     return ITERATE_KIT_STATE_ERROR;
   }
+  iterate_kit_status cueStopStatus = ITERATE_KIT_OK;
+  if (postCaptureCuePlaying_) {
+    /*
+     * A new TALK down may arrive during the 80 ms completion motif. Capture
+     * owns the shared pins immediately: destroy the cue cycle before the
+     * microphone callback is acknowledged, then classify the missing tail as
+     * an intentional interruption rather than pretending it completed.
+     */
+    cueStopStatus = output_.stopAndRelease();
+    postCaptureCuePlaying_ = false;
+    cueDescriptorsRemaining_ = 0U;
+    cueDeadlineMs_ = 0U;
+    if (cueStopStatus == ITERATE_KIT_OK) {
+      postCaptureCueInterruptions_.record();
+    } else {
+      postCaptureCueFailures_.record();
+    }
+  }
   const auto stopStatus =
       playback_.stop(*lane_, output_);
+  if (cueStopStatus != ITERATE_KIT_OK) {
+    return cueStopStatus;
+  }
   if (stopStatus != ITERATE_KIT_OK) {
     return stopStatus;
   }

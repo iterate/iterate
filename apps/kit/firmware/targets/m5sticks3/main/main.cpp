@@ -1979,43 +1979,54 @@ extern "C" void app_main(void) {
     bool pressed = false;
     const bool frontChanged =
         runtime.platform.takeButtonAChange(&pressed);
-    if (frontChanged) runtime.frontButtonPressed = pressed;
-    const bool topPressed = runtime.platform.takeButtonBPress();
+    bool topLevel = false;
+    const bool topChanged =
+        runtime.platform.takeButtonBChange(&topLevel);
 
-    if (topPressed) {
+    if (topChanged && topLevel && frontChanged && pressed) {
       /*
-       * Button B has one stable meaning in every call state: context menu.
-       * Opening it cancels a momentary or locked talk first, since a hidden
-       * live microphone underneath a menu would make the display lie. If both
-       * buttons settle in this sample, TOP wins and claims FRONT until release
-       * rather than opening and instantly choosing CLOSE.
+       * M5.update() sampled both stable levels before either adapter is
+       * reduced. Preview aggregate TALK so a simultaneous MENU down claims
+       * it; the real TALK call below still owns the level transition. This
+       * preserves deterministic MENU priority without a transient mic start.
        */
-      if (cancelTalkForMenu(runtime)) {
-        runtime.frontButtonClaimedByMenu = runtime.frontButtonPressed;
-        const auto context = menuContext(runtime);
-        iterate_kit_menu_cycle(&runtime.menu, context);
-        showCurrentMenu(runtime);
+      runtime.frontButtonPressed =
+          pressed || runtime.remoteControlLevels[
+              ITERATE_KIT_LOGICAL_CONTROL_TALK];
+    }
+    if (topChanged) {
+      const auto status = setLogicalControlPressed(
+          runtime,
+          ITERATE_KIT_LOGICAL_CONTROL_MENU,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL,
+          topLevel,
+          nowMs);
+      if (status != ITERATE_KIT_OK) {
+        ESP_LOGE(
+            tag,
+            "physical MENU level failed: pressed=%d status=%d",
+            topLevel,
+            static_cast<int>(status));
       }
     }
-
     if (frontChanged) {
-      if (!pressed) {
-        runtime.frontButtonClaimedByMenu = false;
-      } else if (!topPressed && runtime.menu.open) {
-        /*
-         * With the menu visible, FRONT is selection, never microphone. Claim
-         * the matching release even when the action closes the menu so that
-         * one physical click cannot leak into the talk reducer afterwards.
-         */
-        runtime.frontButtonClaimedByMenu = true;
-        const auto action = iterate_kit_menu_activate(
-            &runtime.menu, menuContext(runtime));
-        takeMenuAction(runtime, action);
+      const auto status = setLogicalControlPressed(
+          runtime,
+          ITERATE_KIT_LOGICAL_CONTROL_TALK,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL,
+          pressed,
+          nowMs);
+      if (status != ITERATE_KIT_OK) {
+        ESP_LOGE(
+            tag,
+            "physical TALK level failed: pressed=%d status=%d",
+            pressed,
+            static_cast<int>(status));
       }
     }
 
     if (!runtime.menu.open && !runtime.frontButtonClaimedByMenu) {
-      serviceTalkButton(runtime, nowMs);
+      (void)serviceTalkButton(runtime, nowMs);
     }
 
     const iterate_kit_poll_result devicePoll =

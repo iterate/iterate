@@ -156,6 +156,26 @@ iterate_kit_status preparePlayback(void *context) {
   return ITERATE_KIT_OK;
 }
 
+iterate_kit_status rejectLogicalInput(
+    void *context,
+    iterate_kit_logical_control control,
+    bool pressed) {
+  /*
+   * The stdio fixture composes the portable M5StickS3 capability profile, but
+   * deliberately has no target UI loop, debounced buttons, monotonic gesture
+   * clock, or menu renderer. Pretending a raw TALK/MENU level was handled here
+   * would bypass exactly the reducer this capability is meant to exercise and
+   * make host e2e results disagree with the board. Unit tests cover dispatch;
+   * physical-device tests cover the target adapter. Reject this one simulator
+   * boundary explicitly until that reducer is extracted into a portable deep
+   * module shared by both targets.
+   */
+  (void)context;
+  (void)control;
+  (void)pressed;
+  return ITERATE_KIT_UNAVAILABLE;
+}
+
 iterate_kit_status sendEvent(
     void *context, iterate_kit_audio_event event) {
   auto &simulation = *static_cast<Simulation *>(context);
@@ -474,6 +494,7 @@ capnweb_status initialize(
         pollCapture,
       },
     },
+    {&simulation, rejectLogicalInput},
     simulation.eventStorage,
     eventCapacity,
     {

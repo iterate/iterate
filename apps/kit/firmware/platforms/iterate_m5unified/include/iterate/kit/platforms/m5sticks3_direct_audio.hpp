@@ -220,6 +220,19 @@ using M5StickS3RealtimePlayback =
         M5StickS3RealtimeAudioPolicy::minimumRefillLeadUs>;
 
 /**
+ * Local sounds which may be rendered only after microphone ownership ends.
+ *
+ * This is intentionally not a general mixer or an arbitrary PCM queue. The
+ * half-duplex board has one speaker owner and one fixed, semantic motif; an
+ * enum keeps the lifecycle command constant-space and makes it impossible for
+ * an application task to lend an unsafe sample pointer across the handoff.
+ */
+enum class M5StickS3PostCaptureCue : std::uint8_t {
+  none = 0U,
+  turnComplete,
+};
+
+/**
  * Sole task owner of the Stick's speaker policy and direct-I2S descriptor set.
  *
  * Network receive and the application task may only wake or submit one bounded
@@ -263,12 +276,17 @@ class M5StickS3DirectAudioOwner {
   generationFenceAcknowledgementTimeouts() const;
   std::uint32_t
   lifecycleAcknowledgementTimeouts() const;
+  std::uint32_t postCaptureCueCompletions() const;
+  std::uint32_t postCaptureCueInterruptions() const;
+  std::uint32_t postCaptureCueFailures() const;
 
   iterate_kit_status flushGeneration(
       std::uint32_t generation,
       bool connected);
   iterate_kit_status suspendForCapture();
-  iterate_kit_status resumeAfterCapture();
+  iterate_kit_status resumeAfterCapture(
+      M5StickS3PostCaptureCue cue =
+          M5StickS3PostCaptureCue::none);
 
  private:
   enum class GenerationFenceCommand : std::uint8_t {
@@ -311,9 +329,20 @@ class M5StickS3DirectAudioOwner {
       std::uint32_t generation,
       bool connected);
   iterate_kit_status executeLifecycleCommand(
-      LifecycleCommand command);
+      LifecycleCommand command,
+      std::uint32_t argument);
   iterate_kit_status runBoundedCommand(
-      LifecycleCommand command);
+      LifecycleCommand command,
+      std::uint32_t argument = 0U);
+  iterate_kit_status beginPostCaptureCue(
+      M5StickS3PostCaptureCue cue,
+      std::uint64_t nowMs);
+  iterate_kit_status servicePostCaptureCue(
+      std::uint64_t nowMs);
+  iterate_kit_status restorePlaybackAfterCue();
+  iterate_kit_status endPostCaptureCue(
+      bool completed,
+      iterate_kit_status cueStatus);
   iterate_kit_status stopAndDiscard();
   void publishPumpResult(
       RealtimePlaybackPumpResult result);
@@ -359,6 +388,9 @@ class M5StickS3DirectAudioOwner {
       generationFenceAcknowledgementTimeouts_{};
   BoundedEventCounter
       lifecycleAcknowledgementTimeouts_{};
+  BoundedEventCounter postCaptureCueCompletions_{};
+  BoundedEventCounter postCaptureCueInterruptions_{};
+  BoundedEventCounter postCaptureCueFailures_{};
   /*
    * Physical PTT stops I2S before its event can cross Cap'n Web and cancel the
    * provider. The owner discards the few obsolete frames which can arrive in
@@ -376,6 +408,9 @@ class M5StickS3DirectAudioOwner {
   std::atomic<std::uint32_t> stackHighWaterBytes_{0U};
   RealtimePlaybackMetrics metricsSnapshot_{};
   std::uint32_t currentGeneration_ = 0U;
+  std::uint32_t cueDescriptorsRemaining_ = 0U;
+  std::uint64_t cueDeadlineMs_ = 0U;
+  bool postCaptureCuePlaying_ = false;
   bool suspended_ = false;
 };
 

@@ -61,6 +61,10 @@ struct fixture {
   size_t capture_poll_count;
   size_t sprite_set_count;
   char last_sprite_set[32];
+  bool logical_levels[ITERATE_KIT_LOGICAL_CONTROL_COUNT];
+  enum iterate_kit_logical_control logical_writes[8];
+  bool logical_write_levels[8];
+  size_t logical_write_count;
   struct iterate_kit_m5sticks3 device;
 };
 
@@ -214,6 +218,25 @@ static enum iterate_kit_status poll_capture(
   return ITERATE_KIT_OK;
 }
 
+static enum iterate_kit_status set_logical_pressed(
+    void *context,
+    enum iterate_kit_logical_control control,
+    bool pressed) {
+  struct fixture *fixture = context;
+  if (fixture == NULL ||
+      control >= ITERATE_KIT_LOGICAL_CONTROL_COUNT ||
+      fixture->logical_write_count >=
+          sizeof(fixture->logical_writes) /
+              sizeof(fixture->logical_writes[0])) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  fixture->logical_levels[control] = pressed;
+  fixture->logical_writes[fixture->logical_write_count] = control;
+  fixture->logical_write_levels[fixture->logical_write_count] = pressed;
+  ++fixture->logical_write_count;
+  return ITERATE_KIT_OK;
+}
+
 static void observe_event(
     void *context,
     const struct iterate_kit_device_event *event,
@@ -224,6 +247,8 @@ static void observe_event(
   fixture->observed_results[fixture->observed_count] = result;
   ++fixture->observed_count;
 }
+
+static void receive(struct fixture *fixture, const char *message);
 
 static void fixture_init(struct fixture *fixture) {
   struct iterate_kit_m5sticks3_options device_options;
@@ -272,6 +297,10 @@ static void fixture_init(struct fixture *fixture) {
         poll_capture,
       },
     },
+    .logical_input = {
+      fixture,
+      set_logical_pressed,
+    },
     .event_storage = fixture->event_storage,
     .event_capacity = EVENT_CAPACITY,
     .event_stream = {
@@ -314,6 +343,64 @@ static void fixture_init(struct fixture *fixture) {
   assert(
       capnweb_session_init(
           &fixture->session, &session_options) == CAPNWEB_OK);
+}
+
+/*
+ * Raw input RPCs stop at the device's logical-input driver. They do not
+ * publish already-decided PTT/menu actions from the capability module: the
+ * target callback is the one seam shared with the physical button adapter and
+ * therefore owns hold, double-tap, context-menu, and source-arbitration rules.
+ * A remote down is scoped to the Cap'n Web session so disconnect releases both
+ * controls instead of leaving an invisible microphone lease behind.
+ */
+static void raw_logical_levels_reach_driver_and_release_with_session(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"logicalInput\",\"talk\","
+      "\"setPressed\"],[true]]]");
+  receive(&fixture, "[\"pull\",1]");
+  assert(fixture.logical_levels[ITERATE_KIT_LOGICAL_CONTROL_TALK]);
+  assert(fixture.logical_write_count == 1U);
+  assert(strcmp(fixture.captured[0], "[\"resolve\",1,true]") == 0);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"logicalInput\",\"menu\","
+      "\"setPressed\"],[true]]]");
+  receive(&fixture, "[\"pull\",2]");
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"logicalInput\",\"menu\","
+      "\"setPressed\"],[false]]]");
+  receive(&fixture, "[\"pull\",3]");
+  assert(!fixture.logical_levels[ITERATE_KIT_LOGICAL_CONTROL_MENU]);
+  assert(fixture.logical_write_count == 3U);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"logicalInput\",\"talk\","
+      "\"setPressed\"],[\"yes\"]]]");
+  receive(&fixture, "[\"pull\",4]");
+  assert(fixture.logical_write_count == 3U);
+  assert(strstr(fixture.captured[3], "TypeError") != NULL);
+
+  capnweb_session_close(&fixture.session);
+  iterate_kit_peer_session_ended(&fixture.device.peer);
+  assert(!fixture.logical_levels[ITERATE_KIT_LOGICAL_CONTROL_TALK]);
+  assert(!fixture.logical_levels[ITERATE_KIT_LOGICAL_CONTROL_MENU]);
+  assert(fixture.logical_write_count == 5U);
+  assert(
+      fixture.logical_writes[3] == ITERATE_KIT_LOGICAL_CONTROL_MENU);
+  assert(!fixture.logical_write_levels[3]);
+  assert(
+      fixture.logical_writes[4] == ITERATE_KIT_LOGICAL_CONTROL_TALK);
+  assert(!fixture.logical_write_levels[4]);
+  assert(
+      iterate_kit_m5sticks3_close(&fixture.device).status ==
+      ITERATE_KIT_POLL_OK);
 }
 
 static void receive(struct fixture *fixture, const char *message) {
@@ -840,6 +927,7 @@ static void conversation_lifetime_contains_manual_push_to_talk_turns(void) {
 }
 
 int main(void) {
+  raw_logical_levels_reach_driver_and_release_with_session();
   changes_only_to_known_public_sprite_sets();
   conversation_lifetime_contains_manual_push_to_talk_turns();
   remote_and_physical_conversation_controls_share_one_event_path();

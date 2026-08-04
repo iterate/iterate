@@ -229,11 +229,12 @@ void M5UnifiedHalfDuplex::update() {
     buttonChangePending_ = true;
   }
   if (M5.BtnB.wasPressed()) {
-    /*
-     * BtnB is the StickS3 top/MENU button. Only its debounced press matters;
-     * retaining releases would make an ordinary click advance twice.
-     */
-    buttonBPressPending_ = true;
+    buttonBPressed_ = true;
+    buttonBChangePending_ = true;
+  }
+  if (M5.BtnB.wasReleased()) {
+    buttonBPressed_ = false;
+    buttonBChangePending_ = true;
   }
 }
 
@@ -244,9 +245,10 @@ bool M5UnifiedHalfDuplex::takeButtonAChange(bool *pressed) {
   return true;
 }
 
-bool M5UnifiedHalfDuplex::takeButtonBPress() {
-  if (!buttonBPressPending_) return false;
-  buttonBPressPending_ = false;
+bool M5UnifiedHalfDuplex::takeButtonBChange(bool *pressed) {
+  if (pressed == nullptr || !buttonBChangePending_) return false;
+  *pressed = buttonBPressed_;
+  buttonBChangePending_ = false;
   return true;
 }
 
@@ -987,7 +989,15 @@ iterate_kit_status M5UnifiedHalfDuplex::stopCapture(void *context) {
    */
   platform.capture_.stop();
   platform.microphoneActive_ = false;
-  return platform.audioOwner_.resumeAfterCapture();
+  /*
+   * The motif is part of the same synchronous pin handoff—not a speaker call
+   * from the application task. The audio owner starts it only after Mic.end()
+   * has released shared I2S ownership, and a new TALK down destructively stops
+   * it before another Mic.begin(). Thus feedback can catch up after capture
+   * without ever contaminating the recorded utterance.
+   */
+  return platform.audioOwner_.resumeAfterCapture(
+      M5StickS3PostCaptureCue::turnComplete);
 }
 
 iterate_kit_status M5UnifiedHalfDuplex::stopPlayback(

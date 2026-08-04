@@ -136,8 +136,8 @@ The semantic cues are shared; each profile selects every adapter it can render.
 | -------------------- | -------------------------- | ------------------------ | ------------------------- |
 | ready                | awake face / READY         | steady ready colour      | optional soft ready cue   |
 | connecting           | CONNECTING / progress      | slow pulse               | periodic bounded dial cue |
-| listening, momentary | HLD / REL                  | listening colour         | start tick; stop tick     |
-| listening, locked    | LCK / DBL / END            | same hue, distinct pulse | lock motif; unlock motif  |
+| listening, momentary | HLD / REL                  | listening colour         | optional turn-end cue     |
+| listening, locked    | LCK / DBL / END            | same hue, distinct pulse | optional turn-end cue     |
 | thinking             | face + THINKING            | thinking animation       | short processing motif    |
 | speaking             | PCM-driven face            | speaking colour/level    | the speech itself         |
 | menu                 | selected action + position | menu colour              | speak selected action     |
@@ -151,8 +151,8 @@ adapter; it does not decide conversation or playback state.
 Audible cues must respect the audio profile. On a half-duplex board whose
 microphone and speaker share I2S ownership, playing a dial or lock sound while
 capture is active may interrupt or corrupt speech. Such a profile must provide
-a visual/haptic equivalent until it has a tested cue-injection path; it must not
-pretend the sound played.
+a visual or haptic listening signal and may defer an audible cue until after
+capture has released the audio hardware. It must not pretend a sound played.
 
 ## Navigation projection
 
@@ -191,9 +191,12 @@ configured stream and cannot yet settle that action truthfully.
 
 The double-tap reducer starts on the first down edge and keeps one continuous
 turn through the bounded inter-tap window. It never manufactures a tiny first
-turn. The screen renders `LCK / DBL / END` while latched. An audible lock motif
-remains a hardware-policy follow-up because the board is intentionally
-half-duplex and capture currently owns the shared I2S path.
+turn. The screen renders `LCK / DBL / END` while latched.
+
+The Stick plays no cue while its microphone owns the shared I2S path. After
+capture has ended and released the microphone, the sole audio owner plays one
+short turn-complete motif as a catch-up acknowledgement. A new TALK press
+preempts that motif immediately so feedback never delays the next utterance.
 
 ## Acceptance requirements for another endpoint
 

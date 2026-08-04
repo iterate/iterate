@@ -94,13 +94,8 @@ class M5UnifiedHalfDuplex {
    * archival button-event queue.
    */
   bool takeButtonAChange(bool *pressed);
-  /**
-   * Consumes one BtnB press used as the MENU control.
-   *
-   * A release is deliberately not exposed: MENU advances once per press, and
-   * retaining full level state would add no information to that action.
-   */
-  bool takeButtonBPress();
+  /** Consumes one coalesced BtnB/MENU level change. */
+  bool takeButtonBChange(bool *pressed);
 
   /* Lightweight driver views borrow this object for its entire lifetime. */
   iterate_kit_screen_driver screenDriver();
@@ -211,7 +206,8 @@ class M5UnifiedHalfDuplex {
   std::int64_t startedMicroseconds_ = 0;
   bool buttonPressed_ = false;
   bool buttonChangePending_ = false;
-  bool buttonBPressPending_ = false;
+  bool buttonBPressed_ = false;
+  bool buttonBChangePending_ = false;
   bool microphoneActive_ = false;
   void *capturedScreenPng_ = nullptr;
   /*

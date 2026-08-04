@@ -700,7 +700,13 @@ describe("firmware architecture boundaries", () => {
     expect(targetSource.indexOf("initialiseRings(runtime)")).toBeLessThan(
       targetSource.indexOf("iterate_kit_esp_idf_pcm_session_poll("),
     );
-    expect(stopCaptureFunction).toContain("audioOwner_.resumeAfterCapture()");
+    expect(stopCaptureFunction).toContain("M5.Mic.end()");
+    expect(stopCaptureFunction).toMatch(
+      /audioOwner_\.resumeAfterCapture\(\s*M5StickS3PostCaptureCue::turnComplete\s*\)/u,
+    );
+    expect(stopCaptureFunction.indexOf("M5.Mic.end()")).toBeLessThan(
+      stopCaptureFunction.indexOf("audioOwner_.resumeAfterCapture("),
+    );
   });
 
   test("the Stick direct path limits speaker power at the codec rather than per PCM frame", () => {
@@ -884,10 +890,14 @@ describe("firmware architecture boundaries", () => {
       expect(source).toContain("face_doze_prepare_render_key");
       expect(source).toContain("face_doze_apply_overlay");
     }
-    expect(stackChanSource).toContain(
-      "const bool dozing = !owner.latest_status.conversation_active;",
+    const stackChanDozeFunction = sourceSection(
+      stackChanSource,
+      "static bool face_dozing_now(void)",
+      "static bool prepare_avatar_frame_under_lock(",
     );
-    expect(stickSource).toContain("const bool dozing = callUiIsDozing(callUiState_);");
+    expect(stackChanDozeFunction).toContain("if (owner.latest_status.conversation_active)");
+    expect(stackChanSource).toContain("const bool dozing = face_dozing_now();");
+    expect(stickSource).toMatch(/const bool dozing = advanceFaceDoze\(\s*callUiState_,/u);
   });
 
   test("StackChan capture reuses the sole framebuffer owner without entering the audio path", () => {
