@@ -6707,7 +6707,7 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
     if (!response.ok) {
       throw new Error(`EAS API responded ${response.status}: ${await response.text()}`);
     }
-    const payload: any = await response.json();
+    const payload = await response.json<any>();
     if (payload.errors?.length) {
       throw new Error(`EAS API errors: ${JSON.stringify(payload.errors)}`);
     }
