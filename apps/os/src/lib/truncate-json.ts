@@ -287,6 +287,9 @@ const PREVIEW_KEEP_INTACT_BYTES = 100;
  * The result still serializes within `maxBytes`.
  */
 export function previewJson(value: unknown, options: PreviewOptions): TruncatedJson {
+  // serialize() round-trips through JSON.stringify (throwing on undefined), so
+  // parsing its output can only yield JSON-shaped data — the cast just names
+  // what JSON.parse's `any` already guarantees here.
   const measured = measureJson(JSON.parse(serialize(value)) as JsonValue);
   const policied = applyPreviewPolicy(measured, options, 0);
   const bounded = truncateJsonToBytes(policied.value, options.maxBytes);

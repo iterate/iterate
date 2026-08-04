@@ -52,9 +52,7 @@ function inferShape(value: unknown, depth: number): Shape {
     // undefined-valued keys are dropped, matching what JSON.stringify writes
     // to the spill file — they surface as optional fields after merging, not
     // as `| null` branches that the file would contradict.
-    const entries = Object.entries(value as Record<string, unknown>).filter(
-      ([, child]) => child !== undefined,
-    );
+    const entries = Object.entries(value).filter(([, child]) => child !== undefined);
     const fields = new Map(
       entries.map(([key, child]) => [key, { shape: inferShape(child, depth + 1), seen: 1 }]),
     );
