@@ -1,1 +1,8 @@
-export const BUILD_TIMESTAMP = "2026-07-18T18:52:32Z";
+import raw from "../build-info.json";
+
+// Stamped by scripts/write-build-info.mjs before `eas update` publishes and
+// `eas build` runs. The checked-in placeholder is all empty strings — an
+// unstamped local Metro bundle.
+export const buildInfo = raw;
+
+export const BUILD_TIMESTAMP = buildInfo.builtAt || "dev";

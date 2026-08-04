@@ -44,6 +44,12 @@
         "projectId": "cfe38002-5822-4465-94d4-7223a2002280"
       }
     },
-    "owner": "mishanustom"
+    "owner": "mishanustom",
+    "runtimeVersion": {
+      "policy": "fingerprint"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/cfe38002-5822-4465-94d4-7223a2002280"
+    }
   }
 }
