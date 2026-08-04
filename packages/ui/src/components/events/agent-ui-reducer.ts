@@ -57,6 +57,12 @@ export type AgentUiCodeStep = {
   startedAtMs: number;
   /** Absolute server-side execution deadline from the strict request contract. */
   expiresAtMs: number;
+  /**
+   * The agent's summary `activity` line as of this step (the latest
+   * agent/summary-updated fold when the step settled — scripts usually append
+   * it mid-run). Round headers show this instead of a bare start time.
+   */
+  activitySummary?: string;
 };
 
 export type AgentUiStep = AgentUiLlmStep | AgentUiCodeStep;
@@ -341,6 +347,8 @@ export type AgentUiState = {
    * same feed item instead of leaving the inferred failure as permanent truth.
    */
   provisionalActivities: Record<string, AgentUiActivity>;
+  /** Latest agent/summary-updated `activity` text — stamped onto code steps. */
+  summaryActivity: string | null;
 };
 
 const AgentUiLlmStepSchema = z
@@ -378,6 +386,7 @@ const AgentUiCodeStepSchema = z.strictObject({
   outcomeSource: z.enum(["durable", "inferred"]).optional(),
   startedAtMs: z.number().finite(),
   expiresAtMs: z.number().finite(),
+  activitySummary: z.string().optional(),
 }) satisfies z.ZodType<AgentUiCodeStep>;
 
 export const AgentUiActivitySchema = z.strictObject({
@@ -460,6 +469,7 @@ export const AgentUiStateSchema = z
     presence: z.array(AgentUiPresenceEntrySchema),
     tokenUsage: AgentUiTokenUsageSchema,
     provisionalActivities: z.record(z.string(), AgentUiActivitySchema),
+    summaryActivity: z.string().nullable(),
   })
   .superRefine((state, context) => {
     for (const [id, activity] of Object.entries(state.provisionalActivities)) {
@@ -498,6 +508,7 @@ export function initialAgentUiState(): AgentUiState {
     presence: [],
     tokenUsage: initialAgentUiTokenUsage(),
     provisionalActivities: {},
+    summaryActivity: null,
   };
 }
 
@@ -585,6 +596,7 @@ const STREAM_PAUSED = "events.iterate.com/stream/paused";
 const STREAM_RESUMED = "events.iterate.com/stream/resumed";
 const AGENT_PAUSED = "events.iterate.com/agent/paused";
 const AGENT_RESUMED = "events.iterate.com/agent/resumed";
+const AGENT_SUMMARY_UPDATED = "events.iterate.com/agent/summary-updated";
 const STREAM_WAKE_LABEL = "Stream durable object woke";
 
 // ---------------------------------------------------------------------------
@@ -821,8 +833,30 @@ function reduceAgentUiEvent(
       if (step == null || step.kind !== "code") {
         return correctProvisionalCodeStep(state, executionId, outcome, timestampMs, items);
       }
-      steps[index] = applyDurableCodeOutcome(step, outcome, timestampMs);
+      steps[index] = {
+        ...applyDurableCodeOutcome(step, outcome, timestampMs),
+        // The stream's summary status as of this round — inherited from an
+        // earlier round when this one's script didn't update it.
+        ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
+      };
       return { ...state, live: { ...state.live, steps } };
+    }
+
+    case AGENT_SUMMARY_UPDATED: {
+      const activity = readString(event, "activity");
+      if (activity == null || activity === "") return state;
+      // Summaries are usually appended by the running script itself, so the
+      // running code step picks the new text up immediately (live rounds show
+      // it before the settle stamp lands).
+      if (state.live != null) {
+        const steps = state.live.steps.map((step) =>
+          step.kind === "code" && step.status === "running"
+            ? { ...step, activitySummary: activity }
+            : step,
+        );
+        return { ...state, summaryActivity: activity, live: { ...state.live, steps } };
+      }
+      return { ...state, summaryActivity: activity };
     }
 
     case AGENT_TOKEN_USAGE_REPORTED: {

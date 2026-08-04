@@ -180,6 +180,69 @@ describe("agent-ui reducer", () => {
     });
   });
 
+  test("stamps the summary activity onto the running code step as it lands", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: { executionId: "x1", code: "await work()", expiresAt: SCRIPT_EXPIRES_AT },
+      },
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { title: "FirstFT roundup", activity: "Searching the five most recent emails" },
+      },
+    ]);
+
+    expect(state.summaryActivity).toBe("Searching the five most recent emails");
+    expect(state.live?.steps.at(-1)).toMatchObject({
+      kind: "code",
+      status: "running",
+      activitySummary: "Searching the five most recent emails",
+    });
+  });
+
+  test("a round that never updates the summary inherits the stream status as of that round", () => {
+    const state = reduceAll([
+      {
+        type: "events.iterate.com/agent/llm-request-requested",
+        offset: 5,
+        payload: { model: "gpt-test" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: { executionId: "x1", code: "await round1()", expiresAt: SCRIPT_EXPIRES_AT },
+      },
+      {
+        type: "events.iterate.com/agent/summary-updated",
+        payload: { activity: "Running script 1 of 2" },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x1", settlement: { status: "succeeded", result: 1 } },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: { executionId: "x2", code: "await round2()", expiresAt: SCRIPT_EXPIRES_AT },
+      },
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId: "x2", settlement: { status: "succeeded", result: 2 } },
+      },
+    ]);
+
+    const codeSteps = state.live?.steps.filter((step) => step.kind === "code");
+    expect(codeSteps).toMatchObject([
+      { executionId: "x1", activitySummary: "Running script 1 of 2" },
+      // x2's script appended no summary — the round's status is whatever the
+      // stream's summary said as of that round.
+      { executionId: "x2", activitySummary: "Running script 1 of 2" },
+    ]);
+  });
+
   test("llm-request-settled succeeded closes the step", () => {
     const state = reduceAll([
       {

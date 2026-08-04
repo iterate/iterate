@@ -360,7 +360,7 @@ test("a multi-round activity collapses each round to a header row", () => {
       endedAtMs: startedAtMs + 20_000,
       steps: [
         llmStep(10, startedAtMs, { model: "openai/gpt-5.6-sol" }),
-        codeStep(1, 3_000),
+        { ...codeStep(1, 3_000), activitySummary: "Searching the five most recent emails" },
         llmStep(20, startedAtMs + 6_000, { model: "openai/gpt-5.6-sol" }),
         codeStep(2, 9_000),
       ],
@@ -372,8 +372,11 @@ test("a multi-round activity collapses each round to a header row", () => {
     expect.stringContaining("Round 1"),
     expect.stringContaining("Round 2"),
   ]);
-  expect(rounds[0]?.textContent).toMatch(/Round 1Started \d/);
-  expect(rounds[0]?.textContent).toContain(" · 2 s");
+  // A round with a summary activity shows it instead of the bare start time…
+  expect(rounds[0]?.textContent).toBe("Round 1Searching the five most recent emails · 2 s");
+  // …and one without falls back to when it started.
+  expect(rounds[1]?.textContent).toMatch(/Round 2Started \d/);
+  expect(rounds[1]?.textContent).toContain(" · 2 s");
   // Collapsed rounds: no tab bars, no inline code or llm stats.
   expect(container.querySelector('[data-slot="tabs-trigger"]')).toBeNull();
   expect(container.textContent).not.toContain("return 1");

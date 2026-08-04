@@ -6,13 +6,12 @@ import type {
   AgentUiLlmStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { Button } from "@iterate-com/ui/components/button";
-import { SerializedObjectCodeBlock } from "@iterate-com/ui/components/serialized-object-code-block";
 import { SourceCodeBlock } from "@iterate-com/ui/components/source-code-block";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@iterate-com/ui/components/tabs";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { useStreamQuery } from "~/domains/streams/client-libraries/browser/hooks/use-stream-query.ts";
 import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
-import { buildRoundMetaYaml } from "~/lib/agent-round-meta-yaml.ts";
+import { buildRoundMetaYaml, resultYaml } from "~/lib/agent-round-meta-yaml.ts";
 import { formatClockTime, formatSeconds, formatTokens, looksLikeCode } from "~/lib/feed-format.ts";
 import { LLM_REPLAY_EVENT_TYPES, replayLlmRequest } from "~/lib/llm-request-replay.ts";
 import {
@@ -109,14 +108,22 @@ export function AgentActivityRoundRow({
         data-testid="agent-feed-round"
         onClick={() => setToggled(!expanded)}
         className={cn(
-          "-ml-2 self-start font-normal",
+          "-ml-2 max-w-full self-start font-normal",
           failed && "text-destructive hover:text-destructive",
         )}
       >
-        <span className={cn("font-mono text-xs text-foreground/70", failed && "text-destructive")}>
+        <span
+          className={cn(
+            "shrink-0 font-mono text-xs text-foreground/70",
+            failed && "text-destructive",
+          )}
+        >
           Round {index + 1}
         </span>
-        <span className="font-mono text-xs text-muted-foreground/70">{roundHeaderMeta(round)}</span>
+        {/* Summaries aren't forced short — truncate rather than wrap the header. */}
+        <span className="min-w-0 truncate font-mono text-xs text-muted-foreground/70">
+          {roundHeaderMeta(round)}
+        </span>
         <ChevronRightIcon
           data-icon="inline-end"
           className={cn("text-muted-foreground/50 transition-transform", expanded && "rotate-90")}
@@ -326,13 +333,8 @@ function RoundResult({ code }: { code: AgentUiCodeStep }) {
         </pre>
       )}
       {code.result === undefined ? null : oversizedResult == null ? (
-        <div className="max-h-80 overflow-y-auto">
-          <SerializedObjectCodeBlock
-            data={code.result}
-            initialFormat="json"
-            showToggle
-            showCopyButton
-          />
+        <div className="max-h-80 overflow-y-auto rounded-lg">
+          <SourceCodeBlock code={resultYaml(code.result)} language="yaml" showLineNumbers={false} />
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border bg-muted/20">
@@ -419,7 +421,11 @@ function MetaYamlBlock({ yamlText }: { yamlText: string }) {
 
 /**
  * The "Round N" header's muted suffix — the at-a-glance facts the old flat
- * step rail used to spend two rows on.
+ * step rail used to spend two rows on. When the round carries the agent's
+ * summary `activity` (the reducer stamps the latest agent/summary-updated
+ * fold onto each code step), that replaces the bare start time: "Searching
+ * the five most recent FirstFT emails · 223 ms" instead of "Started
+ * 15:28:11 · 223 ms".
  */
 function roundHeaderMeta(round: AgentUiActivityRound): string {
   const { code, llm } = round;
@@ -430,7 +436,7 @@ function roundHeaderMeta(round: AgentUiActivityRound): string {
         : code.success === false
           ? ["Code failed"]
           : []),
-      `Started ${formatClockTime(code.startedAtMs)}`,
+      code.activitySummary || `Started ${formatClockTime(code.startedAtMs)}`,
       ...(code.durationMs == null ? [] : [formatSeconds(code.durationMs)]),
       ...(llm?.outcome === "failed" ? ["request failed"] : []),
     ];

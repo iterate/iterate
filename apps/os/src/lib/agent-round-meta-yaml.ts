@@ -6,6 +6,24 @@ import type {
 import { formatClockTime } from "~/lib/feed-format.ts";
 
 /**
+ * A script result as display YAML (the round Result tabs on os and mobile
+ * both render results this way — mobile has its own copy of this fold in
+ * apps/mobile/src/components/activity-card.tsx). Multiline strings render as
+ * |- blocks, long lines never fold.
+ */
+export function resultYaml(value: unknown): string {
+  const doc = new Document(value);
+  visit(doc, {
+    Scalar(_key, node) {
+      if (typeof node.value === "string" && node.value.includes("\n")) {
+        node.type = Scalar.BLOCK_LITERAL;
+      }
+    },
+  });
+  return doc.toString({ lineWidth: 0 }).trimEnd();
+}
+
+/**
  * The round Meta tab's YAML document: the round's stats and the replayed
  * prompt (see ~/components/agent-activity-rounds.tsx). Deliberately the SAME
  * shape as mobile's metaYaml (apps/mobile/src/components/activity-card.tsx) —
