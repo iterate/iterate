@@ -254,8 +254,9 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   ): void {
     const { path, projectId } = identity;
     if (projectId === null) {
-      // Deployment-global streams: only global repos host a processor.
-      if (path.startsWith("/repos/")) this.#registerRepo(identity, stream, registry);
+      // Deployment-global streams: only repos host a processor, and repos
+      // are path-addressable anywhere (repos.get accepts any path).
+      this.#registerRepo(identity, stream, registry);
       return;
     }
     if (path === "/") this.#registerProjectRoot(identity, stream, registry);
@@ -272,7 +273,11 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
     else if (path.startsWith("/secrets/")) this.#registerSecret(identity, stream, registry);
     else if (path.startsWith(`${WORKSPACE_PATH_PREFIX}/`))
       this.#registerWorkspace(identity, stream, registry);
-    else if (path.startsWith("/repos/")) this.#registerRepo(identity, stream, registry);
+    // Repos are the ELSE arm, not a "/repos/" family: repos.get accepts any
+    // path (the examples create repos under /examples/**), exactly as the
+    // retired Repo Durable Object existed at every {projectId, path}. Only
+    // paths claimed by another family above cannot host a repo.
+    else this.#registerRepo(identity, stream, registry);
     // Every project-scoped stream can be a capability scope ("/" is the
     // project root, agent paths are agent scopes) — the capability-host
     // processor is registered everywhere, exactly as its Durable Object
