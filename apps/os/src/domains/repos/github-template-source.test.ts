@@ -4,6 +4,7 @@ import {
   GithubTemplateSourceError,
   createGithubTemplateSource,
   isRetryableGithubTemplateSourceError,
+  type GithubTemplateRequest,
 } from "./github-template-source.ts";
 
 const COMMIT_SHA = "1".repeat(40);
@@ -134,6 +135,28 @@ describe("GitHub template source", () => {
       source.resolve({ owner: "o", ref: "annotated-tag", repo: "r" }),
     ).resolves.toMatchObject({ commitSha: COMMIT_SHA });
     expect(fetcher).toHaveBeenCalledTimes(3);
+  });
+
+  it("projects a creation request onto the strict resolved-source fact", async () => {
+    const source = createGithubTemplateSource({
+      fetch: async () => gitRefsResponse({ branches: { main: COMMIT_SHA } }),
+    });
+
+    const resolved = await source.resolve({
+      type: "github-public-template",
+      owner: "iterate",
+      ref: "main",
+      repo: "iterate",
+    } as GithubTemplateRequest);
+
+    expect(resolved).toEqual({
+      branch: "main",
+      commitSha: COMMIT_SHA,
+      owner: "iterate",
+      ref: "main",
+      repo: "iterate",
+    });
+    expect(resolved).not.toHaveProperty("type");
   });
 
   it("accepts a full commit without discovery and rejects an unadvertised short commit", async () => {

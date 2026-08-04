@@ -42,6 +42,21 @@ export type GithubTemplateFile = {
   path: string;
 };
 
+function resolvedGithubTemplateSource(
+  source: GithubTemplateRequest,
+  commitSha: string,
+  branch?: string,
+): ResolvedGithubTemplateSource {
+  return {
+    ...(branch === undefined ? {} : { branch }),
+    commitSha,
+    owner: source.owner,
+    ...(source.path === undefined ? {} : { path: source.path }),
+    ...(source.ref === undefined ? {} : { ref: source.ref }),
+    repo: source.repo,
+  };
+}
+
 type GithubTemplateTreeReader = {
   readTree(hash: string): Promise<unknown>;
   rootTreeHash: string;
@@ -431,7 +446,7 @@ export function createGithubTemplateSource(
         );
       }
       if (source.ref !== undefined && GitSha.safeParse(source.ref).success) {
-        return { ...source, commitSha: source.ref };
+        return resolvedGithubTemplateSource(source, source.ref);
       }
 
       const refs = await listGithubServerRefs(source, request);
@@ -444,15 +459,17 @@ export function createGithubTemplateSource(
           );
         }
         const branch = head.target.slice("refs/heads/".length);
-        return { ...source, branch, commitSha: head.oid };
+        return resolvedGithubTemplateSource(source, head.oid, branch);
       }
 
       const branch = refs.find((candidate) => candidate.ref === `refs/heads/${source.ref}`);
       if (branch !== undefined) {
-        return { ...source, branch: source.ref, commitSha: branch.oid };
+        return resolvedGithubTemplateSource(source, branch.oid, source.ref);
       }
       const tag = refs.find((candidate) => candidate.ref === `refs/tags/${source.ref}`);
-      if (tag !== undefined) return { ...source, commitSha: tag.peeled ?? tag.oid };
+      if (tag !== undefined) {
+        return resolvedGithubTemplateSource(source, tag.peeled ?? tag.oid);
+      }
 
       throw new GithubTemplateSourceError(
         `GitHub does not advertise template ref ${JSON.stringify(source.ref)} in ${source.owner}/${source.repo}; use a branch, tag, or full 40-character commit SHA.`,
