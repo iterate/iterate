@@ -32,6 +32,7 @@ import {
 } from "../../rpc-targets.ts";
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
+import { LiveStateSockets, liveStateLaneToken } from "../live-state-socket.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
@@ -526,6 +527,18 @@ export class StreamDurableObject extends DurableObject<Env> {
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     maxOffset: () => this.#coreProcessorState.maxOffset,
     hasConnection: (connectionKey) => this.#eventSender.connections.has(connectionKey),
+  });
+  /** liveState watcher sockets (live-state-socket.ts) — push-driven runtime debug state at zero pin. */
+  readonly #liveStateSockets = new LiveStateSockets({
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    readState: () => this.#readRuntimeState(),
+    // Runtime state is always materializable — no runner loading here; the
+    // refresh just requests a ping-sample round so a fresh watcher's first
+    // frame carries real connection RTTs, mirroring the getter's behavior.
+    refresh: () => this.#eventSender.connections.samplePingsSoon(),
+    laneToken: () => liveStateLaneToken(this.env),
+    waitUntil: (work) => this.ctx.waitUntil(work),
   });
   #coreProcessorState: CoreProcessorState;
   #invalidCheckpointError: unknown = undefined;
@@ -1712,22 +1725,18 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Materialize at most once per mutation burst, and only while observed. */
   #refreshLiveState(): void {
-    // Cursor cleanup can reach this before the constructor assigns
-    // #liveState; the optional read is therefore intentional.
+    // liveState watchers on the hibernatable socket lane: state only changes
+    // while this DO is awake, so scheduling here — the one materialization
+    // point — is complete coverage; the flusher reads state at flush time.
+    // Cursor cleanup can reach this before the constructor assigns the
+    // fields; the optional reads are therefore intentional.
+    this.#liveStateSockets?.scheduleFlush();
     const liveState = this.#liveState;
-    const wantsStatePush = this.#wakeSockets.hasStateSockets();
-    if ((liveState?.observed !== true && !wantsStatePush) || this.#liveStateRefreshScheduled) {
-      return;
-    }
+    if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
     this.#liveStateRefreshScheduled = true;
     queueMicrotask(() => {
       this.#liveStateRefreshScheduled = false;
-      const state = this.#readRuntimeState();
-      if (liveState?.observed === true) liveState.setState(state);
-      // liveState watchers on the hibernatable state lane: state only
-      // changes while this DO is awake, so pushing here — the one
-      // materialization point — is complete coverage, and sends are free.
-      this.#wakeSockets.pushState(state);
+      liveState.setState(this.#readRuntimeState());
     });
   }
 
@@ -1750,9 +1759,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   // this class only routes the platform entry points to it.
   // ===========================================================================
 
-  /** The Stream DO's only fetch surface: the wake-socket upgrade (see WakeSocketRegistry.acceptUpgrade). */
+  /** The Stream DO's fetch surface: the liveState-socket and wake-socket upgrades, nothing else. */
   async fetch(request: Request): Promise<Response> {
-    return this.#wakeSockets.acceptUpgrade(request);
+    return (
+      (await this.#liveStateSockets.acceptUpgrade(request)) ??
+      this.#wakeSockets.acceptUpgrade(request)
+    );
   }
 
   /** Wake sockets are one-way (this DO → relay); inbound frames are ignored. */

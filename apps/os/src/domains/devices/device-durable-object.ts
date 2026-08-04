@@ -11,6 +11,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { LiveStateSockets, liveStateLaneToken } from "../live-state-socket.ts";
 import { deviceCreationEvents } from "./device-defaults.ts";
 import { DeviceProcessorContract } from "./device-processor-contract.ts";
 import { DeviceProcessor, type DevicePushSender } from "./device-processor-implementation.ts";
@@ -35,6 +36,15 @@ export class DeviceDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
+  /** liveState watcher sockets (domains/live-state-socket.ts) — watched devices hibernate at zero pin. */
+  readonly #liveStateSockets: LiveStateSockets = new LiveStateSockets({
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    readState: () => this.#registry.live.getState(),
+    refresh: () => this.#registry.loadAndRefreshLive(),
+    laneToken: () => liveStateLaneToken(this.env),
+    waitUntil: (work) => this.ctx.waitUntil(work),
+  });
   readonly #registry = createStreamProcessorRegistry(this.ctx, {
     stream: this.#stream,
     path: this.#name.path,
@@ -42,6 +52,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
     version: workerVersion(this.env),
     getLiveState: (): DeviceDescription =>
       describeDeviceState(this.#reads.currentState, this.#deviceId),
+    onLiveAssembled: (assembly) => this.#liveStateSockets.refreshAfterAssembly(assembly),
   });
   readonly #deviceProcessor = this.#registry.register(
     new DeviceProcessor({
@@ -117,6 +128,25 @@ export class DeviceDurableObject extends DurableObject<Env> {
   get liveState() {
     return new LiveStateRpcTarget<DeviceDescription>(this.#registry);
   }
+
+  /** The device DO's only fetch surface: the liveState-socket upgrade (see LiveStateSockets). */
+  async fetch(request: Request): Promise<Response> {
+    return (
+      (await this.#liveStateSockets.acceptUpgrade(request)) ??
+      Response.json(
+        { error: "device durable objects accept only liveState-socket upgrades" },
+        { status: 400 },
+      )
+    );
+  }
+
+  /** liveState sockets are one-way (this DO → relay); inbound frames are ignored. */
+  webSocketMessage(): void {}
+
+  /** A closed watcher socket simply drops off `getWebSockets`; nothing to clean up. */
+  webSocketClose(): void {}
+
+  webSocketError(): void {}
 
   enroll(input: DeviceEnrollInput & { ownerId: string }) {
     return this.#serializeCredentialUpdate(() => this.#enroll(input));

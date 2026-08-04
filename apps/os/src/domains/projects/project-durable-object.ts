@@ -14,6 +14,7 @@ import {
   StreamRpcTarget,
 } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { LiveStateSockets, liveStateLaneToken } from "../live-state-socket.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
 import { withWebSocketHandshakeHeaders } from "../secrets/websocket-handshake.ts";
@@ -91,11 +92,21 @@ export class ProjectDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
+  /** liveState watcher sockets (domains/live-state-socket.ts) — a watched idle project hibernates at zero pin. */
+  readonly #liveStateSockets: LiveStateSockets = new LiveStateSockets({
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    readState: () => this.#registry.live.getState(),
+    refresh: () => this.#registry.loadAndRefreshLive(),
+    laneToken: () => liveStateLaneToken(this.env),
+    waitUntil: (work) => this.ctx.waitUntil(work),
+  });
   readonly #registry = createStreamProcessorRegistry(this.ctx, {
     stream: this.#stream,
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
+    onLiveAssembled: (assembly) => this.#liveStateSockets.refreshAfterAssembly(assembly),
     // `itx.liveState` = the project's composite live state (see ProjectLiveState):
     // the processor's fold is ONE peer slice, alongside the streams index the DO
     // keeps in SQLite and the demo counter. The explicit return type breaks the
@@ -356,6 +367,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
+    // The liveState lane routes FIRST and never falls through on a bad token:
+    // this same fetch serves egress requests whose headers user scripts
+    // control, and a request wearing the internal header must not egress.
+    const liveStateUpgrade = await this.#liveStateSockets.acceptUpgrade(request);
+    if (liveStateUpgrade !== undefined) return liveStateUpgrade;
     const taken = takeStreamContext(request);
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never
@@ -364,6 +380,14 @@ export class ProjectDurableObject extends DurableObject<Env> {
     }
     return this.#egressWithApprovalGate(taken.request, taken.streamContext);
   }
+
+  /** liveState sockets are one-way (this DO → relay); inbound frames are ignored. */
+  webSocketMessage(): void {}
+
+  /** A closed watcher socket simply drops off `getWebSockets`; nothing to clean up. */
+  webSocketClose(): void {}
+
+  webSocketError(): void {}
 
   /**
    * The human-approval gate in front of the egress lanes. Requests matching a
