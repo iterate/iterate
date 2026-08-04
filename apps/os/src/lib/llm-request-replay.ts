@@ -1,11 +1,13 @@
 import { z } from "zod";
 import { extractCloudflareChunkDeltas } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { StreamEvent } from "iterate/processors";
-import { AgentProcessorContract } from "~/domains/agents/agent-processor-contract.ts";
+// Relative (not ~/) imports: apps/mobile's Meta tab replays prompts through
+// this same fold, and its tsconfig/Metro don't know the os path alias.
+import { AgentProcessorContract } from "../domains/agents/agent-processor-contract.ts";
 import {
   buildAgentLlmRequestBody,
   flattenMessageToText,
-} from "~/domains/agents/agent-processor-implementation.ts";
+} from "../domains/agents/agent-processor-implementation.ts";
 
 // The agent processor never journals an LLM request's input — it REBUILDS it
 // from committed history on every attempt (buildAgentLlmRequestBody), keyed by

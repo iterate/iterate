@@ -10,7 +10,7 @@
 // the archive; Meta holds the step stat lines (model, duration, tokens) that
 // used to sit above the tab bar.
 
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
 import type { StreamEvent } from "iterate/sdk/itx/react";
@@ -24,6 +24,10 @@ import {
 import type { AgentUiActivity, AgentUiCodeStep, AgentUiLlmStep, AgentUiStep } from "../lib/feed.ts";
 import { groupActivityRounds, summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import {
+  LLM_REPLAY_EVENT_TYPES,
+  replayLlmRequest,
+} from "../../../os/src/lib/llm-request-replay.ts";
 import { ApprovalBatchBody } from "./approval-batch.tsx";
 import CodeEditor from "./code-editor.tsx";
 
@@ -39,9 +43,13 @@ export type ActivityApprovalContext = {
 export function ActivityCard({
   activity,
   approvals,
+  threadEvents,
 }: {
   activity: AgentUiActivity;
   approvals: ActivityApprovalContext;
+  /** The thread's own event window — the Meta tab replays each llm request's
+   * exact prompt from it (same pure fold as the os trace panel). */
+  threadEvents: StreamEvent[];
 }) {
   const isLive = activity.status !== "done";
   const [toggled, setToggled] = useState<boolean | null>(null);
@@ -83,6 +91,7 @@ export function ActivityCard({
                   batches={batchesByExecution.get(round.code.executionId) || []}
                   llm={round.llm}
                   step={round.code}
+                  threadEvents={threadEvents}
                 />
               ) : null}
             </View>
@@ -176,6 +185,7 @@ function CodeStepTabs({
   batches,
   llm,
   step,
+  threadEvents,
 }: {
   approvals: ActivityApprovalContext;
   batches: {
@@ -186,6 +196,7 @@ function CodeStepTabs({
   }[];
   llm: AgentUiLlmStep | null;
   step: AgentUiCodeStep;
+  threadEvents: StreamEvent[];
 }) {
   const [selected, setSelected] = useState<"script" | "approvals" | "result" | "meta" | null>(null);
   // `as const` on the keys: without them the literals widen to string and
@@ -200,6 +211,23 @@ function CodeStepTabs({
   ];
   const active =
     selected !== null && tabs.some((tab) => tab.key === selected) ? selected : "script";
+  // The prompt replay folds the whole event window, so it only runs once the
+  // Meta tab is actually open. Same event filter as the os panel's SQL: the
+  // fold's consumed types, up to the request offset plus its own lifecycle.
+  const promptReplay = useMemo(() => {
+    if (active !== "meta" || llm === null) return null;
+    const relevant = threadEvents.filter(
+      (event) =>
+        LLM_REPLAY_EVENT_TYPES.includes(event.type) &&
+        (event.offset <= llm.llmRequestOffset ||
+          (event.payload as { llmRequestOffset?: number }).llmRequestOffset ===
+            llm.llmRequestOffset),
+    );
+    return replayLlmRequest({
+      rawEventJsons: relevant.map((event) => JSON.stringify(event)),
+      llmRequestOffset: llm.llmRequestOffset,
+    });
+  }, [active, llm, threadEvents]);
   return (
     <View style={styles.stepBody}>
       <View style={styles.tabRow}>
@@ -272,7 +300,11 @@ function CodeStepTabs({
         </View>
       ) : active === "meta" ? (
         <View style={styles.tabBody}>
-          <CodeBlock language="yaml" text={metaYaml(llm, step)} muted />
+          <CodeBlock
+            language="yaml"
+            text={metaYaml(llm, step, promptReplay?.messages || null)}
+            muted
+          />
         </View>
       ) : (
         <View style={styles.tabBody}>
@@ -288,11 +320,17 @@ function CodeStepTabs({
 
 /**
  * The Meta tab's body: the round's stats as YAML for the highlighted
- * CodeBlock. Every value is a bare scalar (numbers, `6.8s` durations,
- * slash-y model ids, kebab-case cancel reasons) so hand-rolled emission is
- * safe — no quoting cases exist. Absent fields are omitted, not nulled.
+ * CodeBlock. The stat values are all bare scalars (numbers, `6.8s`
+ * durations, slash-y model ids, kebab-case cancel reasons) so hand-rolled
+ * emission is safe; the replayed prompt messages hold arbitrary text and
+ * ride in `|-` block scalars, where indentation alone contains them.
+ * Absent fields are omitted, not nulled.
  */
-function metaYaml(llm: AgentUiLlmStep | null, code: AgentUiCodeStep): string {
+function metaYaml(
+  llm: AgentUiLlmStep | null,
+  code: AgentUiCodeStep,
+  promptMessages: { role: string; content: string }[] | null,
+): string {
   const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
   const lines = [
     ...(llm
@@ -310,6 +348,17 @@ function metaYaml(llm: AgentUiLlmStep | null, code: AgentUiCodeStep): string {
     ...(code.status === "running" ? ["  status: running"] : []),
     ...(code.durationMs ? [`  duration: ${seconds(code.durationMs)}`] : []),
     ...(code.status === "done" && code.success === false ? ["  failed: true"] : []),
+    ...(promptMessages && promptMessages.length > 0
+      ? [
+          `prompt: # ${promptMessages.length} messages, ${promptMessages.reduce((sum, message) => sum + message.content.length, 0)} chars`,
+          ...promptMessages.flatMap((message) => [
+            `  - role: ${message.role}`,
+            ...(message.content.trim() === ""
+              ? [`    content: ""`]
+              : ["    content: |-", ...message.content.split("\n").map((line) => `      ${line}`)]),
+          ]),
+        ]
+      : []),
   ];
   return lines.join("\n");
 }
