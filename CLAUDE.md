@@ -144,6 +144,13 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Task grooming](docs/tasks-grooming.md)
 - [Writing agent docs](docs/writing-agent-docs.md)
 
+
+### Personal vs project skills
+
+- **Project skills** live in `.agents/skills/` in this monorepo and are team-owned (OS debug, deploy, shadcn, etc.).
+- **Personal methodology packs** (for example Matt Pocock skills under `~/.agents/skills`) stay user-scope. Do **not** vendor them into this repo.
+- Incomplete skill directories without a `SKILL.md` should not be committed.
+
 ### App-specific
 
 - [OS app](apps/os/AGENTS.md)

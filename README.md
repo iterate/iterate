@@ -196,6 +196,13 @@ from your machine, and when you need a public callback URL. Doppler/Cloudflare/d
 - [Cloudflare trace queries](.agents/skills/cloudflare-traces/SKILL.md) — MCP dataset selection, correlation, and span-tree audits
 - [Debugging the OS worker](.agents/skills/debug-os-worker/SKILL.md) — ITX, agents, scheduler alarms, dynamic workers, and error lookup
 
+
+### Personal vs project skills
+
+- **Project skills** live in `.agents/skills/` in this monorepo and are team-owned (OS debug, deploy, shadcn, etc.).
+- **Personal methodology packs** (for example Matt Pocock skills under `~/.agents/skills`) stay user-scope. Do **not** vendor them into this repo.
+- Incomplete skill directories without a `SKILL.md` should not be committed.
+
 ### App-specific
 
 - [OS app](apps/os/AGENTS.md)
