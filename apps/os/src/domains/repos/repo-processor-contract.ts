@@ -22,7 +22,7 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.7.0",
+  version: "0.8.0",
   description: "Projects repo lifecycle, Git activity, and linked GitHub default-branch imports.",
   stateSchema: z.object({
     createRequest: repoCreateRequestSchema().nullable().default(null).meta({
@@ -475,6 +475,10 @@ function repoCreateRequestSchema() {
 
 function resolvedGithubTemplateSourceSchema() {
   return z.strictObject({
+    branch: z.string().trim().min(1).optional().meta({
+      description:
+        "Advertised source branch eligible for a server-side shallow import; omitted for tags and commits.",
+    }),
     commitSha: z
       .string()
       .regex(/^[0-9a-f]{40}$/)

@@ -3391,6 +3391,7 @@ export type RepoProcessorState = {
   } | null;
   remote: string | null;
   templateSource: {
+    branch?: string | undefined;
     commitSha: string;
     owner: string;
     path?: string | undefined;

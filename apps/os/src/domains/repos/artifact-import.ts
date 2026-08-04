@@ -39,6 +39,17 @@ export async function importGithubArtifact(
   await importGithubArtifactRepo(artifacts, input);
 }
 
+/** Import a public GitHub branch and return its ready repository handle.
+ * Template copying uses the handle's commit/tree reads before deleting the
+ * temporary import; ordinary public-repo creation only needs the void wrapper
+ * above. */
+export async function getOrImportGithubArtifact(
+  artifacts: Pick<Artifacts, "get" | "import">,
+  input: { branch: string; depth?: number; name: string; owner: string; repo: string },
+): Promise<ArtifactsRepo> {
+  return await importGithubArtifactRepo(artifacts, input);
+}
+
 /**
  * Import a public repo, then capture its initial push directly. Cloudflare's
  * server-side import completes before the Worker can observe that first push,

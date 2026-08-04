@@ -78,6 +78,7 @@ import {
   type GithubTemplateFile,
   type ResolvedGithubTemplateSource,
 } from "./github-template-source.ts";
+import { readGithubTemplateFiles } from "./github-template-artifact.ts";
 import {
   getOrCreateArtifact,
   stripArtifactTokenExpiry,
@@ -173,7 +174,13 @@ export class RepoDurableObject extends DurableObject<Env> {
         this.#serializeWrite(() => this.createGithubTemplateArtifactRepo(source)),
       importPublicGithubArtifact: (input) =>
         this.#serializeWrite(() => this.importPublicGithubArtifact(input)),
-      resolveGithubTemplateSource: (input) => this.githubTemplateSource().resolve(input),
+      resolveGithubTemplateSource: ({ owner, path, ref, repo }) =>
+        this.githubTemplateSource().resolve({
+          owner,
+          ...(path === undefined ? {} : { path }),
+          ...(ref === undefined ? {} : { ref }),
+          repo,
+        }),
       linkGithub: async (input) => {
         if (this.#name.projectId === null) {
           throw new Error("GitHub-backed repos require a project-scoped repo.");
@@ -1877,7 +1884,12 @@ export class RepoDurableObject extends DurableObject<Env> {
       };
     }
 
-    const files = await this.githubTemplateSource().files(source);
+    const files = await readGithubTemplateFiles({
+      artifacts: this.requireArtifacts(),
+      source,
+      sourceAdapter: this.githubTemplateSource(),
+      temporaryArtifactName: `${artifactName}--template-source`,
+    });
     return await this.createSeededArtifactRepo(
       files.map((file) => ({ content: file.bytes, mode: file.mode, path: file.path })),
       existing,
@@ -1885,10 +1897,10 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   private githubTemplateSource() {
-    // Deliberately unauthenticated: the public smart-HTTP remote is both the
-    // transport and the proof that this source is public. Platform or user
-    // GitHub credentials could accidentally make a private repository
-    // readable through this project-creation input.
+    // Deliberately unauthenticated: the public Git, REST, and raw transports
+    // are also the proof that this source is public. Platform or user GitHub
+    // credentials could accidentally make a private repository readable
+    // through this project-creation input.
     return createGithubTemplateSource();
   }
 

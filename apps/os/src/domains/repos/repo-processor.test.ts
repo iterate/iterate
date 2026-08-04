@@ -34,6 +34,7 @@ const SEEDED_ARTIFACT = {
   remote: "https://example.artifacts.cloudflare.net/git/ns/proj_harness--L3JlcG9zL2NvbmZpZw.git",
 };
 const RESOLVED_TEMPLATE = {
+  branch: "main",
   commitSha: "a".repeat(40),
   owner: "iterate",
   path: "configs/with-voice",
