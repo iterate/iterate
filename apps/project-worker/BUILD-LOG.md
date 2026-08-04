@@ -153,6 +153,11 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
   `{wakeSockets:1, liveMounts:1, dormant:false}` during the call, then `{wakeSockets:1, liveMounts:0,
 dormant:true}` after idle — the device stays registered while **nothing pins the DO**. (Full
   99.5%-idle-over-minutes at 1000-scale is spike-4's billing proof; identical mechanism.)
+- **Billing-analytics verification (2026-08-04):** held **50** hibernatable wake sockets on one DO, then queried
+  the Cloudflare GraphQL DO analytics (`durableObjectsPeriodicGroups`) for the `project-worker` ITX_HOST
+  namespace. Per-minute: `maxWebSockets:50` at connect, yet `activeTime` **12–415 ms/min (<1% of each minute)** —
+  the connections do NOT pin the DO; it hibernates while holding them. Confirms the no-pin claim at the billing
+  level on the clean-room DO (spike-4 saw 14–22 ms/min at 1000 sockets — identical mechanism, so it scales).
 
 ## Increment 11 — the control-plane join (a real second worker as the shell; the shell onion)
 
