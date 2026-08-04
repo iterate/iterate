@@ -10,7 +10,10 @@ const MAX_GITHUB_TREE_BYTES = 8 * 1024 * 1024;
 const MAX_PATH_BYTES = 1_024;
 const MAX_TREE_ENTRY_COUNT = 5_000;
 const RAW_FETCH_CONCURRENCY = 6;
-const REQUEST_TIMEOUT_MS = 30_000;
+// The hosted-processor wake lane detects an unresponsive host after ten
+// seconds. Every individual public-network request must settle first so a
+// transient GitHub delay becomes a classified retry instead of a host revival.
+const REQUEST_TIMEOUT_MS = 8_000;
 
 const GitSha = z.string().regex(/^[0-9a-f]{40}$/);
 const Commit = z.object({ sha: GitSha });
@@ -68,6 +71,12 @@ type ListedFile = {
   mode: GithubTemplateFile["mode"];
   path: string;
   sourcePath: string;
+};
+
+type ServerRefQuery = {
+  peelTags?: boolean;
+  prefix: string;
+  symrefs?: boolean;
 };
 
 /** A source failure whose classification controls whether the repo creation
@@ -171,8 +180,9 @@ async function collectRequestBody(body: GitHttpRequest["body"]): Promise<Uint8Ar
 }
 
 /** Isomorphic Git's stock web adapter does not pass its reserved `signal`
- * through to fetch. Ref discovery uses this adapter instead: one protocol-v1
- * response, fully bounded and consumed under a real network deadline. */
+ * through to fetch. Ref discovery uses this adapter instead: protocol-v2
+ * discovery and prefix-filtered responses, fully bounded and consumed under
+ * a network deadline shorter than the processor-host liveness deadline. */
 export function createBoundedGitHttpClient(request: typeof globalThis.fetch): HttpClient {
   return {
     request: async ({ body, headers = {}, method = "GET", url }) => {
@@ -544,18 +554,17 @@ async function downloadFiles(
 export function createGithubTemplateSource(
   input: {
     fetch?: typeof globalThis.fetch;
-    readServerRefs?: (url: string) => Promise<ServerRef[]>;
+    readServerRefs?: (url: string, query: ServerRefQuery) => Promise<ServerRef[]>;
   } = {},
 ) {
   const request = input.fetch ?? globalThis.fetch;
   const readServerRefs =
     input.readServerRefs ??
-    ((url: string) =>
+    ((url: string, query: ServerRefQuery) =>
       git.listServerRefs({
         http: createBoundedGitHttpClient(request),
-        peelTags: true,
-        protocolVersion: 1,
-        symrefs: true,
+        ...query,
+        protocolVersion: 2,
         url,
       }));
 
@@ -617,20 +626,22 @@ export function createGithubTemplateSource(
         return { ...source, commitSha: source.ref };
       }
 
-      let refs: ServerRef[];
-      try {
-        refs = await readServerRefs(
-          `https://github.com/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}.git`,
-        );
-      } catch (error) {
-        throw classifyGitFailure(
-          `Could not read public Git refs for ${source.owner}/${source.repo}.`,
-          error,
-        );
-      }
+      const remote = `https://github.com/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}.git`;
+      const refs = async (query: ServerRefQuery) => {
+        try {
+          return await readServerRefs(remote, query);
+        } catch (error) {
+          throw classifyGitFailure(
+            `Could not read public Git refs for ${source.owner}/${source.repo}.`,
+            error,
+          );
+        }
+      };
 
       if (source.ref === undefined) {
-        const head = refs.find((candidate) => candidate.ref === "HEAD");
+        const head = (await refs({ prefix: "HEAD", symrefs: true })).find(
+          (candidate) => candidate.ref === "HEAD",
+        );
         if (head === undefined) {
           throw new GithubTemplateSourceError(
             `Public GitHub template ${source.owner}/${source.repo} has no default branch.`,
@@ -643,9 +654,13 @@ export function createGithubTemplateSource(
         return { ...source, ...(branch === undefined ? {} : { branch }), commitSha: head.oid };
       }
 
-      const branch = refs.find((candidate) => candidate.ref === `refs/heads/${source.ref}`);
+      const branch = (await refs({ prefix: `refs/heads/${source.ref}` })).find(
+        (candidate) => candidate.ref === `refs/heads/${source.ref}`,
+      );
       if (branch !== undefined) return { ...source, branch: source.ref, commitSha: branch.oid };
-      const tag = refs.find((candidate) => candidate.ref === `refs/tags/${source.ref}`);
+      const tag = (await refs({ peelTags: true, prefix: `refs/tags/${source.ref}` })).find(
+        (candidate) => candidate.ref === `refs/tags/${source.ref}`,
+      );
       if (tag !== undefined) return { ...source, commitSha: tag.peeled ?? tag.oid };
       return { ...source, commitSha: await resolveUnadvertisedRef(source, source.ref) };
     },

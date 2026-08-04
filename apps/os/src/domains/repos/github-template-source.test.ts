@@ -68,7 +68,10 @@ describe("GitHub template source", () => {
       path: "configs/with-voice",
       repo: "iterate",
     });
-    expect(readServerRefs).toHaveBeenCalledWith("https://github.com/iterate/iterate.git");
+    expect(readServerRefs).toHaveBeenCalledWith("https://github.com/iterate/iterate.git", {
+      prefix: "HEAD",
+      symrefs: true,
+    });
 
     const files = await source.files(resolved, {
       readTree: async (hash) => trees.get(hash),
@@ -86,12 +89,15 @@ describe("GitHub template source", () => {
   });
 
   it("resolves branches before tags and peels annotated tags", async () => {
-    const source = createGithubTemplateSource({
-      readServerRefs: async () => [
+    const readServerRefs = vi.fn(
+      async (_url: string, _query: { peelTags?: boolean; prefix: string; symrefs?: boolean }) => [
         { oid: OTHER_SHA, ref: "refs/tags/release", peeled: COMMIT_SHA },
         { oid: COMMIT_SHA, ref: "refs/heads/release" },
         { oid: OTHER_SHA, ref: "refs/tags/tag-only", peeled: COMMIT_SHA },
       ],
+    );
+    const source = createGithubTemplateSource({
+      readServerRefs,
     });
 
     await expect(source.resolve({ owner: "o", ref: "release", repo: "r" })).resolves.toMatchObject({
@@ -101,6 +107,11 @@ describe("GitHub template source", () => {
     const tag = await source.resolve({ owner: "o", ref: "tag-only", repo: "r" });
     expect(tag).toMatchObject({ commitSha: COMMIT_SHA });
     expect(tag).not.toHaveProperty("branch");
+    expect(readServerRefs.mock.calls.map(([, query]) => query)).toEqual([
+      { prefix: "refs/heads/release" },
+      { prefix: "refs/heads/tag-only" },
+      { peelTags: true, prefix: "refs/tags/tag-only" },
+    ]);
   });
 
   it("accepts a full commit without ref discovery and resolves an unadvertised short commit", async () => {
