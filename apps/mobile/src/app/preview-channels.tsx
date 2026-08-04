@@ -19,7 +19,17 @@ export default function PreviewChannelsScreen() {
     queryFn: async () => {
       const baseUrl = (await getServerBaseUrl()) || DEFAULT_SERVER;
       const session = await getItxSession(baseUrl);
-      return session.mobilePreviewChannels();
+      try {
+        return await session.mobilePreviewChannels();
+      } catch (error) {
+        // OTA JS routinely runs ahead of the deployed worker (a PR channel's
+        // bundle can call session methods prd doesn't have until the PR merges
+        // and OS deploys). Surface that as a state, not a TypeError.
+        if (/is not a function|not a method|no such method/i.test(String(error))) {
+          return { available: false, serverBehind: true, channels: [] } as const;
+        }
+        throw error;
+      }
     },
   });
   const override = useQuery({
@@ -36,7 +46,9 @@ export default function PreviewChannelsScreen() {
       {channels.error ? <Text style={styles.errorNote}>{String(channels.error)}</Text> : null}
       {channels.data && !channels.data.available ? (
         <Text style={styles.note}>
-          This deployment has no Expo token configured, so it can't list channels.
+          {"serverBehind" in channels.data
+            ? "This OS deployment doesn't have the channel-list API yet — this bundle's JS is newer than the server. It'll work once the PR that added this screen merges and OS deploys."
+            : "This deployment has no Expo token configured, so it can't list channels."}
         </Text>
       ) : null}
       <FlatList
