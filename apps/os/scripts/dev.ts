@@ -50,17 +50,24 @@ const DEFAULT_START_TIMEOUT_MS = 60_000;
 export default async function start(options: StartOptions = {}) {
   const requestedPort = options.port ?? (process.env.PORT ? Number(process.env.PORT) : undefined);
   const live = readDevServerInfo(APP_ROOT, { requireLive: true });
-  if (live && !(await evictIfMemoryPressured(live))) {
-    if (requestedPort !== undefined && live.port !== requestedPort) {
-      throw new Error(
-        `A dev server is already running on port ${live.port} (pid ${live.pid}) but port ` +
-          `${requestedPort} was requested — kill it or use restart.`,
-      );
+  // Captured before eviction: shutdown removes the discovery file that
+  // recordedPort() reads, and the replacement should keep the stable URL.
+  let evictedPort: number | undefined;
+  if (live) {
+    if (await evictIfMemoryPressured(live)) {
+      evictedPort = live.port;
+    } else {
+      if (requestedPort !== undefined && live.port !== requestedPort) {
+        throw new Error(
+          `A dev server is already running on port ${live.port} (pid ${live.pid}) but port ` +
+            `${requestedPort} was requested — kill it or use restart.`,
+        );
+      }
+      return { ...formatStatus(live), note: "already running — use restart to replace it" };
     }
-    return { ...formatStatus(live), note: "already running — use restart to replace it" };
   }
 
-  const port = requestedPort ?? (await pickFreePort(recordedPort()));
+  const port = requestedPort ?? evictedPort ?? (await pickFreePort(recordedPort()));
   // Thread the picked port through the environment too: vite.config.ts writes
   // wrangler.jsonc at import time, and the local-dev vars bake
   // APP_CONFIG_BASE_URL from PORT so the worker knows its own origin (signed
@@ -201,7 +208,7 @@ async function resolveLocalOsDevServerTarget(
  * before every spec run" ritual). Details: tasks/miniflare-oom-investigation.md.
  * Treat a bloated workerd as already dead: kill it so callers start fresh.
  */
-async function evictIfMemoryPressured(live: DevServerInfo): Promise<boolean> {
+async function evictIfMemoryPressured(live: DevServerInfo) {
   const limitMb = Number(process.env.ITERATE_DEV_WORKERD_RSS_LIMIT_MB || 2048);
   const rssMb = Math.round(workerdRssKb(live.pid) / 1024);
   if (rssMb < limitMb) return false;
@@ -219,7 +226,7 @@ async function evictIfMemoryPressured(live: DevServerInfo): Promise<boolean> {
  * loader isolates accumulate, so its RSS — not node's heap — is the health
  * signal that predicts the crash.
  */
-function workerdRssKb(rootPid: number): number {
+function workerdRssKb(rootPid: number) {
   const result = spawnSync("ps", ["-axo", "pid=,ppid=,rss=,comm="], { encoding: "utf8" });
   if (result.status !== 0 || !result.stdout) return 0;
   const rows = result.stdout
