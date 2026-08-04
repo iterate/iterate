@@ -10,10 +10,10 @@ Send a message to a chat, leave before the reply lands → get a push with the r
 
 ## Status summary
 
-Core implementation done and unit-tested; full-suite verification in progress.
+Implementation complete; local checks all green (typecheck, lint, knip, format, full test suite). PR: #2422 (draft).
 
 - Done: all contracts, producer sibling processor, device suppression (grace + claims + claim-before-intent race + per-user audience), mobile + web claim clients, producer/device unit tests.
-- Missing: e2e coverage decision (existing `itx-devices.e2e.test.ts` covers the pipeline; a reply-specific e2e may be follow-up), full CI run.
+- Possible follow-ups: reply-specific e2e (the devices e2e covers the delivery pipeline), notifying on threads created before this change (siblings attach at creation only).
 
 ## Decisions (settled)
 
@@ -45,7 +45,7 @@ Core implementation done and unit-tested; full-suite verification in progress.
 - [x] Mobile: append claim from chat screen when newest assistant message renders foregrounded _(lib/reply-presented.ts `useClaimReplyPresented`; `appForegrounded` moved there, shared with in-thread-approval.tsx)_
 - [x] OS web app: same claim from the web thread view (document-visible gate) _(project-stream-view.tsx `useClaimReplyPresented` — SQLite max-offset query + connectItx append)_
 - [x] Tests: producer node tests (8, chat-reply-notify.test.ts); device suppression/audience tests (5 new, device-processor.test.ts) _(reply-specific e2e left as possible follow-up; the devices e2e already exercises the delivery pipeline)_
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test` _(typecheck/lint/knip/format green; full test suite running)_
+- [x] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test` _(all green; itx-api.generated.ts regenerated for the actor/audience contract changes)_
 
 ## Implementation notes
 
