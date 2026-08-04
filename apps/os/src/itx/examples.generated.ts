@@ -1431,24 +1431,32 @@ while (stack.length) {
   parts.push(part);
   stack.push(...(part.parts ?? []));
 }
-const encoded = (
+const part =
   parts.find((p) => p.mimeType === "text/html" && p.body?.data) ??
-  parts.find((p) => p.mimeType === "text/plain" && p.body?.data)
-)?.body?.data;
-if (!encoded) return { subjects, firstMessage: { snippet: full.data.snippet } };
+  parts.find((p) => p.mimeType === "text/plain" && p.body?.data);
+const encoded = part?.body?.data;
+if (!part || !encoded) return { subjects, firstMessage: { snippet: full.data.snippet } };
+// base64url: swap the alphabet back and re-pad to a multiple of 4.
 const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
-const html = new TextDecoder().decode(Uint8Array.from(atob(base64), (c) => c.charCodeAt(0)));
+const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+const text = new TextDecoder().decode(Uint8Array.from(atob(padded), (c) => c.charCodeAt(0)));
 
-// Hand the markup to the converter — never regex-strip HTML yourself.
-const converted = await itx.ai.toMarkdown({
-  name: "message.html",
-  blob: new Blob([html], { type: "text/html" }),
-});
+// Plain text is already readable; HTML goes to the converter —
+// never regex-strip it yourself.
+const markdown =
+  part.mimeType === "text/plain"
+    ? text
+    : (
+        await itx.ai.toMarkdown({
+          name: "message.html",
+          blob: new Blob([text], { type: "text/html" }),
+        })
+      ).data;
 
 return {
   resultSizeEstimate: inbox.data.resultSizeEstimate,
   subjects,
-  firstMessage: { subject: subjects[0], markdown: converted.data },
+  firstMessage: { subject: subjects[0], markdown },
 };
 `.trim(),
   },
