@@ -148,18 +148,17 @@ return { deviceId, requestOffset: requested.offset };
   },
   {
     id: "ephemeral-events",
-    title: "Ephemeral events: transient signals whose durable truth lands separately",
+    title: "Ephemeral events: memory-only signals whose durable truth lands separately",
     description:
-      "append({ ephemeral: true }) commits a transient event: callbacks already opened with openConnection() see it, getEvents() skips it unless includeEphemeral is true, and durable subscriptions never deliver it. Use them for high-volume signals such as LLM chunks and progress ticks, then append the durable fact as its own ordinary event.",
+      "append({ ephemeral: true }) assigns a real offset but keeps the event body only in bounded Durable Object memory. Reads with includeEphemeral and session connections can replay it while buffered; restart or FIFO eviction forgets it, and durable subscriptions never deliver it. Ephemeral events cannot have idempotency keys. Use them for streaming signals such as LLM chunks and progress ticks, then append the durable fact as its own ordinary event.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
-// Transient signal: callbacks already open see it; product state never will.
+// Memory-only signal: session processors can reduce it while buffered.
 const stream = itx.streams.get(vars.path ?? "/repl/ephemeral-demo");
 const operationId = crypto.randomUUID();
 const [tick] = await stream.append({
   type: "events.iterate.repl/progress-ticked",
-  idempotencyKey: \`ephemeral-events:\${operationId}:progress-ticked\`,
   ephemeral: true,
   payload: { percent: 50 },
 });
@@ -174,7 +173,7 @@ const [done] = await stream.append({
 const defaults = await stream.getEvents({ afterOffset: tick.offset - 1 });
 const raw = await stream.getEvents({ afterOffset: tick.offset - 1, includeEphemeral: true });
 return {
-  tickOffset: tick.offset, // ephemeral rows consume offsets like any commit
+  tickOffset: tick.offset, // memory-only events consume offsets like any commit
   doneOffset: done.offset, // the durable event landed right after it
   defaultOffsets: defaults.map((e) => e.offset), // [done.offset] — the tick is excluded
   rawOffsets: raw.map((e) => e.offset), // [tick.offset, done.offset]

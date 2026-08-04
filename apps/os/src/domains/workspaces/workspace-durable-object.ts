@@ -245,7 +245,7 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
   ): Promise<WorkspaceConfig> {
     for (let attempt = 1; attempt <= MAX_CONFIGURE_ATTEMPTS; attempt++) {
       // Pin BOTH heads in one read: the reduction barrier waits for the
-      // DURABLE head — a processor catch-up never sees ephemeral rows, so
+      // DURABLE head — a durable processor catch-up never sees ephemeral events, so
       // waiting for the raw head would wedge on a trailing ephemeral suffix —
       // while the CAS below asserts against the RAW head, where offsets are
       // actually assigned. waitUntilEvent THROWS on a wedged catch-up, so a

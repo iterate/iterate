@@ -3,7 +3,6 @@
 // cross-stream appends live together in stream-connections-and-subscriptions.e2e.test.ts.
 
 import { expect, test } from "vitest";
-import { isIdempotencyConflict } from "iterate/processors";
 import type { Stream } from "../../src/itx-api.generated.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -76,7 +75,7 @@ test("readEvents pages a bounded window and getEvents filters by type", async ()
   await expect(stream.getEvents({ limit: 501 })).rejects.toThrow("getEvents limit");
 });
 
-test("ephemeral rows preserve offsets and idempotency while normal reads omit them", async () => {
+test("memory-only ephemeral events preserve offsets while normal reads omit them", async () => {
   const marker = crypto.randomUUID();
   const ephemeralType = `${EVENT_TYPE}/ephemeral`;
 
@@ -92,28 +91,13 @@ test("ephemeral rows preserve offsets and idempotency while normal reads omit th
   const [ephemeral] = await stream.append({
     type: ephemeralType,
     ephemeral: true,
-    idempotencyKey: `ephemeral-${marker}`,
     payload: { marker },
   });
   const [after] = await stream.append({ type: EVENT_TYPE, payload: { marker, position: "after" } });
 
   expect(ephemeral).toMatchObject({ ephemeral: true, offset: before!.offset + 1 });
   expect(after!).toMatchObject({ offset: ephemeral!.offset + 1 });
-  const [deduplicated] = await stream.append({
-    type: ephemeralType,
-    ephemeral: true,
-    idempotencyKey: `ephemeral-${marker}`,
-    payload: { marker },
-  });
-  expect(deduplicated!).toMatchObject({ offset: ephemeral!.offset });
-  await expect(
-    stream.append({
-      type: ephemeralType,
-      ephemeral: true,
-      idempotencyKey: `ephemeral-${marker}`,
-      payload: { marker, different: true },
-    }),
-  ).rejects.toSatisfy(isIdempotencyConflict);
+  await expect(stream.getEvent({ offset: ephemeral!.offset })).resolves.toEqual(ephemeral);
 
   const window = { afterOffset: before!.offset - 1, beforeOffset: after!.offset + 1 };
   expect((await stream.getEvents(window)).map((event) => event.offset)).toEqual([
@@ -123,6 +107,24 @@ test("ephemeral rows preserve offsets and idempotency while normal reads omit th
   expect(
     (await stream.getEvents({ ...window, includeEphemeral: true })).map((event) => event.offset),
   ).toEqual([before!.offset, ephemeral!.offset, after!.offset]);
+  const firstPage = await stream.getEventPage({
+    ...window,
+    includeEphemeral: true,
+    limit: 2,
+  });
+  const secondPage = await stream.getEventPage({
+    afterOffset: firstPage.events.at(-1)!.offset,
+    beforeOffset: window.beforeOffset,
+    includeEphemeral: true,
+    limit: 2,
+  });
+  expect(firstPage.events.map((event) => event.offset)).toEqual([
+    before!.offset,
+    ephemeral!.offset,
+  ]);
+  expect(secondPage.events.map((event) => event.offset)).toEqual([after!.offset]);
+  expect(firstPage).toMatchObject({ streamMaxOffset: after!.offset });
+  expect(secondPage).toMatchObject({ streamMaxOffset: after!.offset });
   await expect(
     stream.append({
       type: "events.iterate.com/stream/paused",
@@ -130,18 +132,77 @@ test("ephemeral rows preserve offsets and idempotency while normal reads omit th
       payload: { reason: "control facts must be durable" },
     }),
   ).rejects.toThrow(/cannot be ephemeral/);
+});
 
-  const [ephemeralHead] = await stream.append({
+test("an idempotency key on an ephemeral event rejects the whole append batch", async () => {
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects
+    .get(`stream-ephemeral-idempotency-${RUN_SUFFIX}-${marker}`)
+    .create({});
+  using stream = project.streams.get(`/e2e/streams/ephemeral-idempotency/${marker}`);
+
+  const [before] = await stream.append({
+    type: EVENT_TYPE,
+    payload: { marker, position: "before" },
+  });
+  await expect(
+    stream.append(
+      {
+        type: `${EVENT_TYPE}/ephemeral`,
+        ephemeral: true,
+        idempotencyKey: `invalid-ephemeral-${marker}`,
+        payload: { marker },
+      },
+      {
+        type: EVENT_TYPE,
+        payload: { marker, position: "must-not-commit" },
+      },
+    ),
+  ).rejects.toThrow("ephemeral events cannot have an idempotencyKey");
+
+  const [after] = await stream.append({
+    type: EVENT_TYPE,
+    payload: { marker, position: "after" },
+  });
+  expect(after!).toMatchObject({ offset: before!.offset + 1 });
+});
+
+test("ephemeral events are forgotten after the stream Durable Object restarts", async () => {
+  const marker = crypto.randomUUID();
+  const ephemeralType = `${EVENT_TYPE}/ephemeral-restart`;
+
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects
+    .get(`stream-ephemeral-restart-${RUN_SUFFIX}-${marker}`)
+    .create({});
+  using stream = project.streams.get(`/e2e/streams/ephemeral-restart/${marker}`);
+
+  const [ephemeral] = await stream.append({
     type: ephemeralType,
     ephemeral: true,
-    payload: { marker, sequence: 2 },
+    payload: { marker },
   });
+
   await stream.kill().catch(() => undefined);
+
+  expect(
+    await stream.getEvents({
+      afterOffset: ephemeral!.offset - 1,
+      beforeOffset: ephemeral!.offset + 1,
+      includeEphemeral: true,
+    }),
+  ).toEqual([]);
+  await expect(stream.getEvent({ offset: ephemeral!.offset })).resolves.toBeUndefined();
+
   const [afterRestart] = await stream.append({
     type: EVENT_TYPE,
     payload: { marker, position: "after-restart" },
   });
-  expect(afterRestart!.offset).toBeGreaterThan(ephemeralHead!.offset);
+  expect(afterRestart!.offset).toBeGreaterThan(ephemeral!.offset);
 });
 
 test("a stream killed during a call reports the retryable stream-unavailable tag", async () => {

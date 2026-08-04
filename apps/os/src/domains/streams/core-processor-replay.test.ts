@@ -27,12 +27,12 @@ function committed(offset: number, type: string, payload: Record<string, unknown
 }
 
 /**
- * One literal committed event for every event type owned by the version-28
+ * One literal committed event for every event type owned by the version-29
  * core contract. These are deliberately not produced from the schemas: a
  * schema edit must either keep this exact event history replayable or require
  * an intentional state-version/cutover decision and fixture update.
  */
-const VERSION_28_COMMITTED_EVENTS: StreamEvent[] = [
+const VERSION_29_COMMITTED_EVENTS: StreamEvent[] = [
   committed(1, "events.iterate.com/stream/created", {
     projectId: PROJECT_ID,
     path: STREAM_PATH,
@@ -149,17 +149,17 @@ const VERSION_28_COMMITTED_EVENTS: StreamEvent[] = [
   },
 ];
 
-describe("core processor version 28 committed-event replay", () => {
-  test("version 28 parses and reduces one frozen event of every owned type", () => {
-    expect(CORE_STATE_VERSION).toBe(28);
-    expect(new Set(VERSION_28_COMMITTED_EVENTS.map((event) => event.type))).toEqual(
+describe("core processor version 29 committed-event replay", () => {
+  test("version 29 parses and reduces one frozen event of every owned type", () => {
+    expect(CORE_STATE_VERSION).toBe(29);
+    expect(new Set(VERSION_29_COMMITTED_EVENTS.map((event) => event.type))).toEqual(
       new Set(Object.keys(CoreProcessorContract.events)),
     );
 
     const processor = new StreamCoreProcessor({ projectId: PROJECT_ID });
     let state: CoreProcessorState = CoreProcessorContract.stateSchema.parse({});
     const states = new Map<number, CoreProcessorState>();
-    for (const fixture of VERSION_28_COMMITTED_EVENTS) {
+    for (const fixture of VERSION_29_COMMITTED_EVENTS) {
       // First-hand control events must still parse under this reducer version.
       // Received copies deliberately bypass that parse, exactly as the replay
       // reducer does, because their payload belongs to the source lifetime.
@@ -193,8 +193,8 @@ describe("core processor version 28 committed-event replay", () => {
       streamId: STREAM_ID,
       createdAt: "2026-07-21T12:00:01.000Z",
       incarnationId: "incarnation-1",
-      maxOffset: VERSION_28_COMMITTED_EVENTS.at(-1)?.offset,
-      eventCount: VERSION_28_COMMITTED_EVENTS.length,
+      maxOffset: VERSION_29_COMMITTED_EVENTS.at(-1)?.offset,
+      eventCount: VERSION_29_COMMITTED_EVENTS.length,
       childPaths: ["/children"],
       paused: false,
       pauseReason: null,

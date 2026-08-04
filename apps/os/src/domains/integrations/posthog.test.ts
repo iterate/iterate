@@ -95,7 +95,7 @@ function captureArgs(events: StreamEvent[], workerName = "os-prd") {
 }
 
 describe("first-party PostHog stream integration", () => {
-  it("uses an all-history subscription that excludes ephemeral rows", () => {
+  it("uses an all-history subscription that excludes ephemeral events", () => {
     const event = posthogSubscriptionEvent();
     expect(event).toEqual({
       type: "events.iterate.com/stream/subscription-configured",
@@ -159,7 +159,7 @@ describe("first-party PostHog stream integration", () => {
     }
   });
 
-  it("drops ephemeral rows from capture, including all-ephemeral batches", async () => {
+  it("drops ephemeral events from capture, including all-ephemeral batches", async () => {
     const durable = streamEvent();
     const ephemeral = streamEvent({
       type: "events.example.com/progress",

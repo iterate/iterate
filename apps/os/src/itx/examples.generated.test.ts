@@ -34,7 +34,7 @@ test("every source entry ships: same ids, same order, code everywhere", () => {
   }
 });
 
-test("the ephemeral example keys every append for lifecycle-safe replay", async () => {
+test("the ephemeral example keys only its durable completion", async () => {
   const example = ITX_EXAMPLES.find((candidate) => candidate.id === "ephemeral-events");
   expect(example).toBeDefined();
 
@@ -59,14 +59,9 @@ test("the ephemeral example keys every append for lifecycle-safe replay", async 
   );
 
   const [tick, done] = append.mock.calls.map(([event]) => event);
-  expect(tick).toMatchObject({
-    ephemeral: true,
-    idempotencyKey: expect.stringMatching(/^ephemeral-events:.+:progress-ticked$/),
-  });
+  expect(tick).toMatchObject({ ephemeral: true });
+  expect(tick).not.toHaveProperty("idempotencyKey");
   expect(done).toMatchObject({
     idempotencyKey: expect.stringMatching(/^ephemeral-events:.+:work-completed$/),
   });
-  expect(String(tick!.idempotencyKey).replace(/:progress-ticked$/, "")).toBe(
-    String(done!.idempotencyKey).replace(/:work-completed$/, ""),
-  );
 });

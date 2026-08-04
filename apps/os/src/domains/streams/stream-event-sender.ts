@@ -771,7 +771,7 @@ export class StreamEventSender {
             sized.map((entry) => [entry.event.offset, entry.byteLength]),
           );
 
-          // Durable delivery never sends ephemeral rows. The cursor still
+          // Durable delivery never sends ephemeral events. The cursor still
           // advances over skipped rows.
           const visible = sized
             .filter((entry) => entry.event.ephemeral !== true)
@@ -2158,10 +2158,7 @@ export class StreamConnections {
               const visible =
                 kind === "hosted"
                   ? readEvents.filter((entry) => entry.event.ephemeral !== true)
-                  : readEvents.filter(
-                      (entry) =>
-                        entry.event.ephemeral !== true || entry.event.offset > openedAtOffset,
-                    );
+                  : readEvents;
               const matched =
                 args.filter === undefined
                   ? visible

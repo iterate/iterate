@@ -23,9 +23,11 @@ export type StreamEventReadInput = {
   /** Page size, 1-500. Defaults to 500. */
   limit?: number;
   /**
-   * Include ephemeral events (default false). Ephemeral rows are second-class:
-   * excluded from every range read unless explicitly requested, and the stream
-   * may evict them later — never derive durable state from one.
+   * Include ephemeral events (default false). The Durable Object incarnation
+   * keeps their bodies in a bounded memory buffer;
+   * this opt-in merges the events still buffered into the durable page.
+   * Restart and FIFO eviction leave permanent offset gaps, so never derive
+   * durable state from an ephemeral event.
    */
   includeEphemeral?: boolean;
 };

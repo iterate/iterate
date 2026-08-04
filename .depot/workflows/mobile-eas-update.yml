@@ -13,6 +13,8 @@ on:
     paths:
       - .depot/workflows/mobile-eas-update.yml
       - scripts/ci/publish-mobile-update.ts
+      - scripts/ci/mobile-preview.ts
+      - scripts/ci/github.ts
       - apps/mobile/**
       - packages/ui/**
       - packages/shared/**
