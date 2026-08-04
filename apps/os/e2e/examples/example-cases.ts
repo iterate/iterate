@@ -446,9 +446,10 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
       expect(result).toMatchObject({
         examplePasteReady: true,
         streamTypesIncludeAppend: true,
+        topDocInlined: true,
       });
       expect((result as { hitCount: number }).hitCount).toBeGreaterThan(0);
-      expect(result).toHaveProperty("firstHit.fetchCall");
+      expect((result as { firstHitName: string | null }).firstHitName).toBeTruthy();
     },
   },
   "typed-capability-mount": {

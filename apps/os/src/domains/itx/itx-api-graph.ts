@@ -55,6 +55,10 @@ export interface DocsSearchHit {
   summary: string;
   /** The literal itx call that fetches the full entry — copy it verbatim. */
   fetchCall: string;
+  /** The full entry (exactly what `fetchCall` would return), inlined on the
+   * top hit(s) per the search's `expand` input so the best match usually
+   * needs no second call. Absent on the rest — fetch those via `fetchCall`. */
+  result?: string;
 }
 
 /**

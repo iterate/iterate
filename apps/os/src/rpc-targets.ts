@@ -2962,7 +2962,7 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
         models: "List available models.",
         run: "Run one model invocation — for outputs the caller cannot produce itself (images, audio, transcription, bulk classification), not for text the caller will read or relay.",
         toMarkdown:
-          "Convert one document or an array of { name, blob } to Markdown — an in-hand HTML string converts via new Blob([html], { type: 'text/html' }); call with no args for supported formats.",
+          "Convert one document or an array of { name, blob } to Markdown — an in-hand HTML string converts via new Blob([html], { type: 'text/html' }); call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
       },
       parent: "a project itx (itx.ai)",
     });
@@ -3001,7 +3001,10 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
   /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
    * string (a fetched page, an email body) converts via
-   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand. */
+   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand.
+   * `{ conversionOptions: { output: { format: "text" } } }` returns plain
+   * text with link targets and image URLs stripped — the compact choice for
+   * emails and newsletters, whose bytes are mostly tracking links. */
   toMarkdown(
     document: CfMarkdownDocument,
     options?: CfMarkdownConversionOptions,
@@ -7162,13 +7165,13 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
     return describeNode({
       instructions:
         "Search + fetch over everything callable from this scope: working example scripts (proven ones run unattended against a live project in the platform's test suite — copy those first), the public type surface, and this scope's mounted capabilities. " +
-        'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". ' +
-        "get({ name }) fetches what a hit names: an example's full annotated code, a type declaration with its referenced types, or a mounted capability's instructions + types. " +
+        'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". The top hit arrives with its full doc inlined in `result`, so when it is the right one there is nothing left to fetch. ' +
+        "get({ name }) fetches what a later hit names: an example's full annotated code, a type declaration with its referenced types, or a mounted capability's instructions + types. " +
         "typecheck({ code }) compiles an `async (itx) => { … }` script against this scope's types without running it.",
       children: {
         get: "Fetch one entry by name: an example's full code, a type declaration closure, or a mount's types.",
         search:
-          "Find examples, types, and mounted capabilities by keywords (pass many related words).",
+          "Find examples, types, and mounted capabilities by keywords (pass many related words). The top hit arrives with its full doc inlined in `result` — no follow-up get needed when it's the right one ({ limit, expand } tune hit count and expansion).",
         typecheck: "Compile a script against this scope's types without running it (advisory).",
       },
       parent: "a project itx (itx.docs)",
@@ -7183,10 +7186,13 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
    * noise and a word matching a row's NAME counts double, so `"itx.docs"`,
    * `"worker"`, or `"agents"` rank their subject first instead of every row
    * that mentions the word. Example hits are working scripts — prefer copying
-   * them over writing calls from scratch. Each hit's `fetchCall` field holds
-   * the ready-made docs.get call that fetches its full doc.
+   * them over writing calls from scratch. The TOP hit arrives with its full
+   * doc inlined in `result` (tune with `expand`: how many hits to expand,
+   * default 1) — when the first hit is the right one, skip the follow-up
+   * `docs.get` round and use `result` directly. Other hits carry `fetchCall`,
+   * the ready-made docs.get call. `limit` caps the hit count (default 5).
    */
-  async search(input: { q: string }): Promise<DocsSearchHit[]> {
+  async search(input: { q: string; limit?: number; expand?: number }): Promise<DocsSearchHit[]> {
     const scored: Array<{ hit: DocsSearchHit; score: number; proven?: boolean }> = [];
 
     for (const example of PROJECT_CONTEXT_EXAMPLES) {
@@ -7267,10 +7273,12 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
     }
 
     // Equal-score tie-break mirrors the guidance: working examples first,
-    // scope-specific mounts next, type reference last; 12 hits is about one
-    // screenful for a model.
+    // scope-specific mounts next, type reference last. 5 hits default: a live
+    // trace showed 12 hits was one right answer plus eleven distractions —
+    // callers wanting the wide net pass a bigger limit.
     const kindRank: Record<DocsSearchHit["kind"], number> = { example: 0, capability: 1, type: 2 };
-    return scored
+    const limit = Number.isFinite(input.limit) ? Math.min(Math.max(input.limit!, 1), 25) : 5;
+    const hits = scored
       .sort(
         (a, b) =>
           b.score - a.score ||
@@ -7281,8 +7289,19 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
           Number(b.proven ?? false) - Number(a.proven ?? false) ||
           a.hit.name.localeCompare(b.hit.name),
       )
-      .slice(0, 12)
+      .slice(0, limit)
       .map((entry) => entry.hit);
+    // Inline the top hit(s)' full docs: search-then-get was costing a whole
+    // agent round when the first hit was already the right one.
+    const expand = Number.isFinite(input.expand)
+      ? Math.min(Math.max(input.expand!, 0), limit)
+      : Math.min(1, limit);
+    await Promise.all(
+      hits.slice(0, expand).map(async (hit) => {
+        hit.result = await this.get({ name: hit.name });
+      }),
+    );
+    return hits;
   }
 
   /**
