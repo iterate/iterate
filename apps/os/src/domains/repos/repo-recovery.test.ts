@@ -34,7 +34,6 @@ const RESOLVED_TEMPLATE = {
   path: "configs/with-voice",
   ref: "main",
   repo: "iterate",
-  treeSha: "b".repeat(40),
 };
 
 function makeHarness() {

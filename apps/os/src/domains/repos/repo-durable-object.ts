@@ -1885,16 +1885,11 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   private githubTemplateSource() {
-    const github = parseConfig(this.env).integrations.github;
-    if (github === undefined) {
-      throw new Error(
-        "Public GitHub config templates require integrations.github OAuth credentials.",
-      );
-    }
-    return createGithubTemplateSource({
-      clientId: github.oauthClientId,
-      clientSecret: github.oauthClientSecret.exposeSecret(),
-    });
+    // Deliberately unauthenticated: the public smart-HTTP remote is both the
+    // transport and the proof that this source is public. Platform or user
+    // GitHub credentials could accidentally make a private repository
+    // readable through this project-creation input.
+    return createGithubTemplateSource();
   }
 
   private async createSeededArtifactRepo(

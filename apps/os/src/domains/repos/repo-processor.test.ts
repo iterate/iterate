@@ -39,7 +39,6 @@ const RESOLVED_TEMPLATE = {
   path: "configs/with-voice",
   ref: "main",
   repo: "iterate",
-  treeSha: "b".repeat(40),
 };
 
 const CREATE_REQUESTED = {
@@ -714,6 +713,15 @@ describe("repos/create-requested payload schema", () => {
     expect(() => requestSchema.parse({ type: "github-private", repo: "private" })).toThrow();
     expect(() => requestSchema.parse({ type: "github-public-template", owner: "acme" })).toThrow();
   });
+
+  it.each(["../private", ".git/objects", "/configs/default", "configs\\default"])(
+    "rejects unsafe template path %s",
+    (path) => {
+      expect(() =>
+        requestSchema.parse({ type: "github-public-template", owner: "acme", path, repo: "app" }),
+      ).toThrow();
+    },
+  );
 
   it("requires a positive public import depth", () => {
     expect(() =>

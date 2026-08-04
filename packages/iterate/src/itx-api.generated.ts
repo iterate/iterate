@@ -3396,7 +3396,6 @@ export type RepoProcessorState = {
     path?: string | undefined;
     ref?: string | undefined;
     repo: string;
-    treeSha: string;
   } | null;
 };
 

@@ -1,30 +1,24 @@
+import { InMemoryFs } from "@cloudflare/shell";
+import { createGit } from "@cloudflare/shell/git";
+import git, { type ServerRef } from "isomorphic-git";
+import http from "isomorphic-git/http/web";
 import { z } from "zod";
+import { isSafeConfigRepoTemplatePath } from "../../lib/config-repo-template-reference.ts";
 
 const MAX_FILE_COUNT = 2_000;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
-const MAX_TREE_REQUESTS = 4_000;
-const BLOB_CONCURRENCY = 8;
 const REQUEST_TIMEOUT_MS = 30_000;
+const SOURCE_DIR = "/template-source";
 
 const GitSha = z.string().regex(/^[0-9a-f]{40}$/);
-const Repository = z.object({ default_branch: z.string().trim().min(1) });
-const Commit = z.object({
-  commit: z.object({ tree: z.object({ sha: GitSha }) }),
-  sha: GitSha,
-});
-const TreeEntry = z.object({
-  mode: z.string(),
-  path: z.string().min(1),
-  sha: GitSha,
-  size: z.number().int().nonnegative().optional(),
-  type: z.enum(["blob", "tree", "commit"]),
-});
-const Tree = z.object({
-  sha: GitSha,
-  tree: z.array(TreeEntry),
-  truncated: z.boolean(),
-});
+const Commit = z.object({ sha: GitSha });
+const GitFailure = z
+  .object({
+    code: z.string().optional(),
+    data: z.object({ statusCode: z.number().int().optional() }).loose().optional(),
+  })
+  .loose();
 
 export type GithubTemplateRequest = {
   owner: string;
@@ -35,16 +29,22 @@ export type GithubTemplateRequest = {
 
 export type ResolvedGithubTemplateSource = GithubTemplateRequest & {
   commitSha: string;
-  treeSha: string;
 };
 
 export type GithubTemplateFile = {
   bytes: Uint8Array;
-  mode: "100644" | "100755" | "120000";
+  mode: "100644" | "120000";
   path: string;
 };
 
-type GithubTreeEntry = z.output<typeof TreeEntry>;
+type TemplateCheckout = {
+  filesystem: Pick<
+    InMemoryFs,
+    "exists" | "lstat" | "readdirWithFileTypes" | "readFileBytes" | "readlink"
+  >;
+  headSha: string;
+  root: string;
+};
 
 /** A source failure whose classification controls whether the repo creation
  * obligation remains open for recovery or terminates as create-failed. */
@@ -64,314 +64,245 @@ export function isRetryableGithubTemplateSourceError(
   return error instanceof GithubTemplateSourceError && error.retryable;
 }
 
-/** A bounded, read-only GitHub adapter for copying a public repository
- * subtree. It resolves moving refs separately from fetching blobs so callers
- * can durably journal the immutable commit before materialization begins. */
-export function createGithubTemplateSource(input: {
-  clientId: string;
-  clientSecret: string;
-  fetch?: typeof globalThis.fetch;
-}) {
-  const request = input.fetch ?? globalThis.fetch;
-  const authorization = `Basic ${btoa(`${input.clientId}:${input.clientSecret}`)}`;
+function githubRemote(source: GithubTemplateRequest): string {
+  return `https://github.com/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}.git`;
+}
 
-  async function api(path: string, accept = "application/vnd.github+json"): Promise<Response> {
+function classifyGitFailure(message: string, error: unknown): GithubTemplateSourceError {
+  if (error instanceof GithubTemplateSourceError) return error;
+  const parsed = GitFailure.safeParse(error);
+  const status = parsed.success ? parsed.data.data?.statusCode : undefined;
+  const code = parsed.success ? parsed.data.code : undefined;
+  return new GithubTemplateSourceError(message, {
+    cause: error,
+    retryable:
+      status === 429 ||
+      (status !== undefined && status >= 500) ||
+      (status === undefined && code !== "NotFoundError"),
+  });
+}
+
+/** A bounded, read-only GitHub adapter for copying a public repository
+ * subtree. Isomorphic Git resolves and shallow-clones the public smart-HTTP
+ * remote directly: no archive extraction or credential is involved. Moving
+ * refs are resolved and journaled as immutable commit SHAs before a separate
+ * clone materializes their files. Only an unadvertised abbreviated commit
+ * needs one unauthenticated GitHub API lookup. */
+export function createGithubTemplateSource(
+  input: {
+    checkout?: (source: ResolvedGithubTemplateSource) => Promise<TemplateCheckout>;
+    fetch?: typeof globalThis.fetch;
+    readServerRefs?: (url: string) => Promise<ServerRef[]>;
+  } = {},
+) {
+  const request = input.fetch ?? globalThis.fetch;
+  const readServerRefs =
+    input.readServerRefs ??
+    ((url: string) => git.listServerRefs({ http, peelTags: true, symrefs: true, url }));
+  const checkout =
+    input.checkout ??
+    (async (source: ResolvedGithubTemplateSource): Promise<TemplateCheckout> => {
+      const filesystem = new InMemoryFs();
+      const sourceGit = createGit(filesystem, SOURCE_DIR);
+      try {
+        await sourceGit.clone({
+          branch: source.commitSha,
+          depth: 1,
+          singleBranch: true,
+          url: githubRemote(source),
+        });
+      } catch (error) {
+        throw classifyGitFailure(
+          `Could not shallow-clone public GitHub template ${source.owner}/${source.repo} at ${source.commitSha}.`,
+          error,
+        );
+      }
+      const [head] = await sourceGit.log({ depth: 1 });
+      if (head?.oid !== source.commitSha) {
+        throw new GithubTemplateSourceError(
+          `GitHub template clone resolved ${head?.oid ?? "no head"}; expected ${source.commitSha}.`,
+          { retryable: true },
+        );
+      }
+      return { filesystem, headSha: head.oid, root: SOURCE_DIR };
+    });
+
+  async function resolveUnadvertisedRef(source: GithubTemplateRequest, ref: string) {
     let response: Response;
     try {
-      response = await request(`https://api.github.com${path}`, {
-        headers: {
-          accept,
-          authorization,
-          "user-agent": "iterate-config-template-importer",
-          "x-github-api-version": "2022-11-28",
-        },
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-      });
-    } catch (error) {
-      throw new GithubTemplateSourceError(
-        "GitHub could not be reached while copying the template.",
+      response = await request(
+        `https://api.github.com/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/commits/${encodeURIComponent(ref)}`,
         {
-          cause: error,
-          retryable: true,
+          headers: {
+            accept: "application/vnd.github+json",
+            "user-agent": "iterate-config-template-importer",
+            "x-github-api-version": "2022-11-28",
+          },
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
         },
       );
+    } catch (error) {
+      throw new GithubTemplateSourceError(
+        `GitHub could not resolve template ref ${JSON.stringify(ref)}.`,
+        { cause: error, retryable: true },
+      );
     }
-    if (response.ok) return response;
-
-    const rateLimited =
-      response.status === 429 ||
-      (response.status === 403 &&
-        (response.headers.has("retry-after") ||
-          response.headers.get("x-ratelimit-remaining") === "0"));
-    const retryable = rateLimited || response.status >= 500;
-    throw new GithubTemplateSourceError(
-      `GitHub rejected template source request ${path}: HTTP ${response.status}.`,
-      { retryable },
-    );
-  }
-
-  async function json<T>(path: string, schema: z.ZodType<T>): Promise<T> {
-    const response = await api(path);
+    if (!response.ok) {
+      const rateLimited =
+        response.status === 429 ||
+        (response.status === 403 &&
+          (response.headers.has("retry-after") ||
+            response.headers.get("x-ratelimit-remaining") === "0"));
+      throw new GithubTemplateSourceError(
+        `GitHub could not resolve template ref ${JSON.stringify(ref)}: HTTP ${response.status}.`,
+        { retryable: rateLimited || response.status >= 500 },
+      );
+    }
     let body: unknown;
     try {
       body = await response.json();
     } catch (error) {
-      throw new GithubTemplateSourceError(`GitHub returned invalid JSON for ${path}.`, {
-        cause: error,
-        retryable: true,
-      });
-    }
-    const result = schema.safeParse(body);
-    if (!result.success) {
-      throw new GithubTemplateSourceError(`GitHub returned an unexpected response for ${path}.`, {
-        cause: result.error,
-        retryable: true,
-      });
-    }
-    return result.data;
-  }
-
-  function repoPath(source: GithubTemplateRequest): string {
-    return `/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}`;
-  }
-
-  async function tree(source: GithubTemplateRequest, sha: string, recursive = false) {
-    return await json(
-      `${repoPath(source)}/git/trees/${sha}${recursive ? "?recursive=1" : ""}`,
-      Tree,
-    );
-  }
-
-  async function selectedTreeSha(source: ResolvedGithubTemplateSource): Promise<string> {
-    if (source.path === undefined) return source.treeSha;
-
-    let currentTreeSha = source.treeSha;
-    for (const segment of source.path.split("/")) {
-      const currentTree = await tree(source, currentTreeSha);
-      const entry = currentTree.tree.find((candidate) => candidate.path === segment);
-      if (entry === undefined) {
-        throw new GithubTemplateSourceError(
-          `Template path "${source.path}" does not exist in ${source.owner}/${source.repo} at ${source.commitSha}.`,
-          { retryable: false },
-        );
-      }
-      if (entry.type !== "tree") {
-        throw new GithubTemplateSourceError(
-          `Template path "${source.path}" must be a directory in ${source.owner}/${source.repo}.`,
-          { retryable: false },
-        );
-      }
-      currentTreeSha = entry.sha;
-    }
-    return currentTreeSha;
-  }
-
-  function validateFileEntry(entry: GithubTreeEntry, path: string): void {
-    if (entry.type === "commit" || entry.mode === "160000") {
       throw new GithubTemplateSourceError(
-        `Template contains unsupported Git submodule "${path}".`,
-        { retryable: false },
-      );
-    }
-    if (entry.type !== "blob" || !["100644", "100755", "120000"].includes(entry.mode)) {
-      throw new GithubTemplateSourceError(
-        `Template contains unsupported Git entry "${path}" (${entry.type} ${entry.mode}).`,
-        { retryable: false },
-      );
-    }
-    const segments = path.split("/");
-    if (
-      path.startsWith("/") ||
-      path.includes("\0") ||
-      segments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
-    ) {
-      throw new GithubTemplateSourceError(`Template contains unsafe path "${path}".`, {
-        retryable: false,
-      });
-    }
-    if (entry.size !== undefined && entry.size > MAX_FILE_BYTES) {
-      throw new GithubTemplateSourceError(
-        `Template file "${path}" exceeds the ${MAX_FILE_BYTES}-byte per-file limit.`,
-        { retryable: false },
-      );
-    }
-  }
-
-  function assertEntryLimits(entries: Array<GithubTreeEntry & { outputPath: string }>): void {
-    if (entries.length === 0) {
-      throw new GithubTemplateSourceError("The selected template directory contains no files.", {
-        retryable: false,
-      });
-    }
-    if (entries.length > MAX_FILE_COUNT) {
-      throw new GithubTemplateSourceError(
-        `Template contains ${entries.length} files; the limit is ${MAX_FILE_COUNT}.`,
-        { retryable: false },
-      );
-    }
-    const knownBytes = entries.reduce((total, entry) => total + (entry.size ?? 0), 0);
-    if (knownBytes > MAX_TOTAL_BYTES) {
-      throw new GithubTemplateSourceError(
-        `Template exceeds the ${MAX_TOTAL_BYTES}-byte total size limit.`,
-        { retryable: false },
-      );
-    }
-  }
-
-  async function listFiles(
-    source: ResolvedGithubTemplateSource,
-  ): Promise<Array<GithubTreeEntry & { outputPath: string }>> {
-    const rootSha = await selectedTreeSha(source);
-    const recursive = await tree(source, rootSha, true);
-    if (!recursive.truncated) {
-      const entries = recursive.tree.flatMap((entry) => {
-        if (entry.type === "tree") return [];
-        validateFileEntry(entry, entry.path);
-        return [{ ...entry, outputPath: entry.path }];
-      });
-      assertEntryLimits(entries);
-      return entries;
-    }
-
-    const files: Array<GithubTreeEntry & { outputPath: string }> = [];
-    const pending = [{ prefix: "", sha: rootSha }];
-    let requestedTrees = 0;
-    while (pending.length > 0) {
-      const directory = pending.shift();
-      if (directory === undefined) break;
-      requestedTrees += 1;
-      if (requestedTrees > MAX_TREE_REQUESTS) {
-        throw new GithubTemplateSourceError(
-          `Template exceeds the ${MAX_TREE_REQUESTS}-directory traversal limit.`,
-          { retryable: false },
-        );
-      }
-      const listing = await tree(source, directory.sha);
-      for (const entry of listing.tree) {
-        const outputPath =
-          directory.prefix.length === 0 ? entry.path : `${directory.prefix}/${entry.path}`;
-        if (entry.type === "tree") {
-          pending.push({ prefix: outputPath, sha: entry.sha });
-          continue;
-        }
-        validateFileEntry(entry, outputPath);
-        files.push({ ...entry, outputPath });
-        if (files.length > MAX_FILE_COUNT) {
-          throw new GithubTemplateSourceError(
-            `Template contains more than the ${MAX_FILE_COUNT}-file limit.`,
-            { retryable: false },
-          );
-        }
-      }
-    }
-    assertEntryLimits(files);
-    return files;
-  }
-
-  async function blob(source: ResolvedGithubTemplateSource, entry: GithubTreeEntry) {
-    const response = await api(
-      `${repoPath(source)}/git/blobs/${entry.sha}`,
-      "application/vnd.github.raw+json",
-    );
-    const contentLength = response.headers.get("content-length");
-    if (contentLength !== null && Number(contentLength) > MAX_FILE_BYTES) {
-      throw new GithubTemplateSourceError(
-        `Template file "${entry.path}" exceeds the ${MAX_FILE_BYTES}-byte per-file limit.`,
-        { retryable: false },
-      );
-    }
-    const chunks: Uint8Array[] = [];
-    let byteLength = 0;
-    const reader = response.body?.getReader();
-    if (reader === undefined) {
-      throw new GithubTemplateSourceError(`GitHub returned no body for "${entry.path}".`, {
-        retryable: true,
-      });
-    }
-    try {
-      while (true) {
-        const chunk = await reader.read();
-        if (chunk.done) break;
-        byteLength += chunk.value.byteLength;
-        if (byteLength > MAX_FILE_BYTES) {
-          await reader.cancel();
-          throw new GithubTemplateSourceError(
-            `Template file "${entry.path}" exceeds the ${MAX_FILE_BYTES}-byte per-file limit.`,
-            { retryable: false },
-          );
-        }
-        chunks.push(chunk.value);
-      }
-    } catch (error) {
-      if (error instanceof GithubTemplateSourceError) throw error;
-      throw new GithubTemplateSourceError(
-        `GitHub blob body could not be read for "${entry.path}".`,
+        `GitHub returned invalid JSON while resolving template ref ${JSON.stringify(ref)}.`,
         { cause: error, retryable: true },
       );
     }
-    const bytes = new Uint8Array(byteLength);
-    let offset = 0;
-    for (const chunk of chunks) {
-      bytes.set(chunk, offset);
-      offset += chunk.byteLength;
-    }
-    const header = new TextEncoder().encode(`blob ${bytes.byteLength}\0`);
-    const canonical = new Uint8Array(header.byteLength + bytes.byteLength);
-    canonical.set(header);
-    canonical.set(bytes, header.byteLength);
-    const digest = new Uint8Array(await crypto.subtle.digest("SHA-1", canonical));
-    const sha = Array.from(digest, (byte) => byte.toString(16).padStart(2, "0")).join("");
-    if (sha !== entry.sha) {
+    const parsed = Commit.safeParse(body);
+    if (!parsed.success) {
       throw new GithubTemplateSourceError(
-        `GitHub blob integrity check failed for "${entry.path}" (expected ${entry.sha}, received ${sha}).`,
-        { retryable: true },
+        `GitHub returned an unexpected response while resolving template ref ${JSON.stringify(ref)}.`,
+        { cause: parsed.error, retryable: true },
       );
     }
-    return bytes;
+    return parsed.data.sha;
   }
 
   return {
     async resolve(source: GithubTemplateRequest): Promise<ResolvedGithubTemplateSource> {
-      const ref = source.ref ?? (await json(repoPath(source), Repository)).default_branch;
-      const commit = await json(`${repoPath(source)}/commits/${encodeURIComponent(ref)}`, Commit);
-      return {
-        ...source,
-        commitSha: commit.sha,
-        treeSha: commit.commit.tree.sha,
-      };
+      if (source.path !== undefined && !isSafeConfigRepoTemplatePath(source.path)) {
+        throw new GithubTemplateSourceError(
+          `Template path ${JSON.stringify(source.path)} must stay within the public repository and outside .git.`,
+          { retryable: false },
+        );
+      }
+      let refs: ServerRef[];
+      try {
+        refs = await readServerRefs(githubRemote(source));
+      } catch (error) {
+        throw classifyGitFailure(
+          `Could not read public Git refs for ${source.owner}/${source.repo}.`,
+          error,
+        );
+      }
+
+      let commitSha: string | undefined;
+      if (source.ref === undefined) {
+        commitSha = refs.find((candidate) => candidate.ref === "HEAD")?.oid;
+      } else {
+        const branch = refs.find((candidate) => candidate.ref === `refs/heads/${source.ref}`);
+        const tag = refs.find((candidate) => candidate.ref === `refs/tags/${source.ref}`);
+        commitSha = branch?.oid ?? tag?.peeled ?? tag?.oid;
+        if (commitSha === undefined && GitSha.safeParse(source.ref).success) {
+          commitSha = source.ref;
+        }
+        if (commitSha === undefined) commitSha = await resolveUnadvertisedRef(source, source.ref);
+      }
+      if (commitSha === undefined) {
+        throw new GithubTemplateSourceError(
+          `Public GitHub template ${source.owner}/${source.repo} has no default branch.`,
+          { retryable: false },
+        );
+      }
+      return { ...source, commitSha };
     },
 
     async files(source: ResolvedGithubTemplateSource): Promise<GithubTemplateFile[]> {
-      const entries = await listFiles(source);
-      const results = new Array<GithubTemplateFile>(entries.length);
-      let totalBytes = 0;
-      let cursor = 0;
+      const materialized = await checkout(source);
+      if (materialized.headSha !== source.commitSha) {
+        throw new GithubTemplateSourceError(
+          `GitHub template checkout resolved ${materialized.headSha}; expected ${source.commitSha}.`,
+          { retryable: true },
+        );
+      }
+      const selectedRoot =
+        source.path === undefined
+          ? materialized.root
+          : `${materialized.root}/${source.path.split("/").join("/")}`;
+      if (!(await materialized.filesystem.exists(selectedRoot))) {
+        throw new GithubTemplateSourceError(
+          `Template path ${JSON.stringify(source.path)} does not exist in ${source.owner}/${source.repo} at ${source.commitSha}.`,
+          { retryable: false },
+        );
+      }
+      if ((await materialized.filesystem.lstat(selectedRoot)).type !== "directory") {
+        throw new GithubTemplateSourceError(
+          `Template path ${JSON.stringify(source.path)} must be a directory in ${source.owner}/${source.repo}.`,
+          { retryable: false },
+        );
+      }
 
-      await Promise.all(
-        Array.from({ length: Math.min(BLOB_CONCURRENCY, entries.length) }, async () => {
-          while (cursor < entries.length) {
-            const index = cursor;
-            cursor += 1;
-            const entry = entries[index];
-            if (entry === undefined) break;
-            const bytes = await blob(source, entry);
-            totalBytes += bytes.byteLength;
-            if (totalBytes > MAX_TOTAL_BYTES) {
-              throw new GithubTemplateSourceError(
-                `Template exceeds the ${MAX_TOTAL_BYTES}-byte total size limit.`,
-                { retryable: false },
-              );
-            }
-            results[index] = {
-              bytes,
-              mode:
-                entry.mode === "120000" ? "120000" : entry.mode === "100755" ? "100755" : "100644",
-              path: entry.outputPath,
-            };
+      const files: GithubTemplateFile[] = [];
+      const pending = [{ absolute: selectedRoot, relative: "" }];
+      let totalBytes = 0;
+      while (pending.length > 0) {
+        const directory = pending.shift();
+        if (directory === undefined) break;
+        const entries = (
+          await materialized.filesystem.readdirWithFileTypes(directory.absolute)
+        ).sort((left, right) => left.name.localeCompare(right.name));
+        for (const entry of entries) {
+          if (directory.relative === "" && source.path === undefined && entry.name === ".git") {
+            continue;
           }
-        }),
-      );
-      return results.sort((left, right) => left.path.localeCompare(right.path));
+          const absolute = `${directory.absolute}/${entry.name}`;
+          const relative =
+            directory.relative === "" ? entry.name : `${directory.relative}/${entry.name}`;
+          if (entry.type === "directory") {
+            pending.push({ absolute, relative });
+            continue;
+          }
+          if (entry.type !== "file" && entry.type !== "symlink") {
+            throw new GithubTemplateSourceError(
+              `Template contains unsupported filesystem entry ${JSON.stringify(relative)}.`,
+              { retryable: false },
+            );
+          }
+          const bytes =
+            entry.type === "symlink"
+              ? new TextEncoder().encode(await materialized.filesystem.readlink(absolute))
+              : await materialized.filesystem.readFileBytes(absolute);
+          if (bytes.byteLength > MAX_FILE_BYTES) {
+            throw new GithubTemplateSourceError(
+              `Template file ${JSON.stringify(relative)} exceeds the ${MAX_FILE_BYTES}-byte per-file limit.`,
+              { retryable: false },
+            );
+          }
+          totalBytes += bytes.byteLength;
+          if (totalBytes > MAX_TOTAL_BYTES) {
+            throw new GithubTemplateSourceError(
+              `Template exceeds the ${MAX_TOTAL_BYTES}-byte total size limit.`,
+              { retryable: false },
+            );
+          }
+          files.push({
+            bytes,
+            mode: entry.type === "symlink" ? "120000" : "100644",
+            path: relative,
+          });
+          if (files.length > MAX_FILE_COUNT) {
+            throw new GithubTemplateSourceError(
+              `Template contains more than the ${MAX_FILE_COUNT}-file limit.`,
+              { retryable: false },
+            );
+          }
+        }
+      }
+      if (files.length === 0) {
+        throw new GithubTemplateSourceError("The selected template directory contains no files.", {
+          retryable: false,
+        });
+      }
+      return files.sort((left, right) => left.path.localeCompare(right.path));
     },
   };
 }

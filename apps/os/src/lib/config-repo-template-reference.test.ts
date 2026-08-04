@@ -59,6 +59,7 @@ describe("config repo template references", () => {
     "github:iterate/iterate#main&path:",
     "github:iterate/iterate#main&path:/configs/default",
     "github:iterate/iterate#main&path:configs/../default",
+    "github:iterate/iterate#main&path:configs/.git/objects",
     "github:iterate/iterate#main&path:configs\\default",
     "github:iterate/iterate#main..other",
     "git+http://github.com/iterate/iterate.git",

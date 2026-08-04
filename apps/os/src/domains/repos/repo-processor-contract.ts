@@ -17,6 +17,7 @@
 
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/processors";
+import { isSafeConfigRepoTemplatePath } from "../../lib/config-repo-template-reference.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
@@ -412,6 +413,9 @@ function repoCreateRequestSchema() {
           .string()
           .trim()
           .min(1)
+          .refine(isSafeConfigRepoTemplatePath, {
+            error: "Template path must stay within the public repository and outside .git.",
+          })
           .optional()
           .meta({ description: "Repository-relative directory copied as the new repo root." }),
         ref: z.string().trim().min(1).optional().meta({
@@ -483,10 +487,6 @@ function resolvedGithubTemplateSourceSchema() {
       description: "Requested branch, tag, or commit; omitted when the default branch was used.",
     }),
     repo: z.string().trim().min(1).meta({ description: "GitHub repository from the request." }),
-    treeSha: z
-      .string()
-      .regex(/^[0-9a-f]{40}$/)
-      .meta({ description: "Root tree for the resolved commit." }),
   });
 }
 

@@ -508,7 +508,7 @@ type RepoProcessorDeps = {
     defaultBranch: string;
     remote: string;
   }>;
-  /** Materialize a previously journaled immutable GitHub tree as a fresh
+  /** Materialize a previously journaled immutable GitHub commit as a fresh
    * Artifact root commit. Idempotent: an existing branch is left untouched. */
   createGithubTemplateArtifact(source: NonNullable<RepoProcessorState["templateSource"]>): Promise<{
     artifactName: string;

@@ -1,96 +1,42 @@
-import { createHash } from "node:crypto";
+import { InMemoryFs } from "@cloudflare/shell";
 import { describe, expect, it, vi } from "vitest";
 import {
   GithubTemplateSourceError,
   createGithubTemplateSource,
   isRetryableGithubTemplateSourceError,
+  type ResolvedGithubTemplateSource,
 } from "./github-template-source.ts";
 
 const COMMIT_SHA = "1".repeat(40);
-const ROOT_TREE_SHA = "2".repeat(40);
-const CONFIGS_TREE_SHA = "3".repeat(40);
-const VOICE_TREE_SHA = "4".repeat(40);
+const OTHER_SHA = "2".repeat(40);
+const CHECKOUT_ROOT = "/checkout";
 
-function blobSha(bytes: Uint8Array): string {
-  return createHash("sha1").update(`blob ${bytes.byteLength}\0`).update(bytes).digest("hex");
-}
-
-function json(body: unknown, init?: ResponseInit): Response {
-  return Response.json(body, init);
-}
-
-function requestUrl(input: RequestInfo | URL): URL {
-  return new URL(input instanceof Request ? input.url : input.toString());
+async function checkout(
+  source: ResolvedGithubTemplateSource,
+  setup?: (filesystem: InMemoryFs) => Promise<void>,
+) {
+  const filesystem = new InMemoryFs();
+  await filesystem.mkdir(`${CHECKOUT_ROOT}/configs/with-voice/assets`, { recursive: true });
+  await filesystem.writeFile(
+    `${CHECKOUT_ROOT}/configs/with-voice/worker.ts`,
+    "export default {}\n",
+  );
+  await filesystem.writeFileBytes(
+    `${CHECKOUT_ROOT}/configs/with-voice/assets/logo.bin`,
+    Uint8Array.from([0, 255, 1, 2]),
+  );
+  await filesystem.symlink("worker.ts", `${CHECKOUT_ROOT}/configs/with-voice/worker-link`);
+  await setup?.(filesystem);
+  return { filesystem, headSha: source.commitSha, root: CHECKOUT_ROOT };
 }
 
 describe("GitHub template source", () => {
-  it("pins the default branch, selects a subtree, and downloads exact blob bytes", async () => {
-    const worker = new TextEncoder().encode("export default {};\n");
-    const logo = Uint8Array.from([0, 255, 1, 2]);
-    const link = new TextEncoder().encode("README.md");
-    const workerSha = blobSha(worker);
-    const logoSha = blobSha(logo);
-    const linkSha = blobSha(link);
-    const fetcher = vi.fn<typeof fetch>(async (input) => {
-      const url = requestUrl(input);
-      const route = `${url.pathname}${url.search}`;
-      if (route === "/repos/iterate/iterate") return json({ default_branch: "main" });
-      if (route === "/repos/iterate/iterate/commits/main") {
-        return json({ commit: { tree: { sha: ROOT_TREE_SHA } }, sha: COMMIT_SHA });
-      }
-      if (route === `/repos/iterate/iterate/git/trees/${ROOT_TREE_SHA}`) {
-        return json({
-          sha: ROOT_TREE_SHA,
-          tree: [{ mode: "040000", path: "configs", sha: CONFIGS_TREE_SHA, type: "tree" }],
-          truncated: false,
-        });
-      }
-      if (route === `/repos/iterate/iterate/git/trees/${CONFIGS_TREE_SHA}`) {
-        return json({
-          sha: CONFIGS_TREE_SHA,
-          tree: [{ mode: "040000", path: "with-voice", sha: VOICE_TREE_SHA, type: "tree" }],
-          truncated: false,
-        });
-      }
-      if (route === `/repos/iterate/iterate/git/trees/${VOICE_TREE_SHA}?recursive=1`) {
-        return json({
-          sha: VOICE_TREE_SHA,
-          tree: [
-            {
-              mode: "100644",
-              path: "worker.ts",
-              sha: workerSha,
-              size: worker.byteLength,
-              type: "blob",
-            },
-            {
-              mode: "100644",
-              path: "assets/logo.bin",
-              sha: logoSha,
-              size: logo.byteLength,
-              type: "blob",
-            },
-            {
-              mode: "120000",
-              path: "AGENTS.md",
-              sha: linkSha,
-              size: link.byteLength,
-              type: "blob",
-            },
-          ],
-          truncated: false,
-        });
-      }
-      if (url.pathname.endsWith(`/git/blobs/${workerSha}`)) return new Response(worker);
-      if (url.pathname.endsWith(`/git/blobs/${logoSha}`)) return new Response(logo);
-      if (url.pathname.endsWith(`/git/blobs/${linkSha}`)) return new Response(link);
-      return new Response("not found", { status: 404 });
-    });
-    const source = createGithubTemplateSource({
-      clientId: "client-id",
-      clientSecret: "client-secret",
-      fetch: fetcher,
-    });
+  it("pins the advertised default branch and copies exact subtree bytes and symlinks", async () => {
+    const readServerRefs = vi.fn(async () => [
+      { oid: COMMIT_SHA, ref: "HEAD", target: "refs/heads/main" },
+      { oid: COMMIT_SHA, ref: "refs/heads/main" },
+    ]);
+    const source = createGithubTemplateSource({ checkout, readServerRefs });
 
     const resolved = await source.resolve({
       owner: "iterate",
@@ -102,188 +48,110 @@ describe("GitHub template source", () => {
       owner: "iterate",
       path: "configs/with-voice",
       repo: "iterate",
-      treeSha: ROOT_TREE_SHA,
     });
-    const files = await source.files(resolved);
+    expect(readServerRefs).toHaveBeenCalledWith("https://github.com/iterate/iterate.git");
 
+    const files = await source.files(resolved);
     expect(files.map(({ mode, path }) => ({ mode, path }))).toEqual([
-      { mode: "120000", path: "AGENTS.md" },
       { mode: "100644", path: "assets/logo.bin" },
+      { mode: "120000", path: "worker-link" },
       { mode: "100644", path: "worker.ts" },
     ]);
-    expect(files.find((file) => file.path === "assets/logo.bin")?.bytes).toEqual(logo);
-    const firstHeaders = new Headers(fetcher.mock.calls[0]?.[1]?.headers);
-    expect(firstHeaders.get("authorization")).toBe(`Basic ${btoa("client-id:client-secret")}`);
-    const blobCall = fetcher.mock.calls.find(([input]) =>
-      requestUrl(input).pathname.includes("/git/blobs/"),
+    expect(files.find((file) => file.path === "assets/logo.bin")?.bytes).toEqual(
+      Uint8Array.from([0, 255, 1, 2]),
     );
-    expect(new Headers(blobCall?.[1]?.headers).get("accept")).toBe(
-      "application/vnd.github.raw+json",
+    expect(new TextDecoder().decode(files.find((file) => file.path === "worker-link")?.bytes)).toBe(
+      "worker.ts",
     );
   });
 
-  it("walks non-recursive trees when GitHub truncates the recursive response", async () => {
-    const bytes = new TextEncoder().encode("hello");
-    const sha = blobSha(bytes);
-    const childTreeSha = "5".repeat(40);
-    const fetcher = vi.fn<typeof fetch>(async (input) => {
-      const url = requestUrl(input);
-      const route = `${url.pathname}${url.search}`;
-      if (route === "/repos/o/r/commits/release%2Fnext") {
-        return json({ commit: { tree: { sha: ROOT_TREE_SHA } }, sha: COMMIT_SHA });
-      }
-      if (route === `/repos/o/r/git/trees/${ROOT_TREE_SHA}?recursive=1`) {
-        return json({ sha: ROOT_TREE_SHA, tree: [], truncated: true });
-      }
-      if (route === `/repos/o/r/git/trees/${ROOT_TREE_SHA}`) {
-        return json({
-          sha: ROOT_TREE_SHA,
-          tree: [{ mode: "040000", path: "nested", sha: childTreeSha, type: "tree" }],
-          truncated: false,
-        });
-      }
-      if (route === `/repos/o/r/git/trees/${childTreeSha}`) {
-        return json({
-          sha: childTreeSha,
-          tree: [{ mode: "100644", path: "file.txt", sha, size: bytes.byteLength, type: "blob" }],
-          truncated: false,
-        });
-      }
-      if (route === `/repos/o/r/git/blobs/${sha}`) return new Response(bytes);
-      return new Response("not found", { status: 404 });
-    });
+  it("resolves branches before tags and peels annotated tags", async () => {
     const source = createGithubTemplateSource({
-      clientId: "id",
-      clientSecret: "secret",
-      fetch: fetcher,
+      checkout,
+      readServerRefs: async () => [
+        { oid: OTHER_SHA, ref: "refs/tags/release", peeled: COMMIT_SHA },
+        { oid: COMMIT_SHA, ref: "refs/heads/release" },
+        { oid: OTHER_SHA, ref: "refs/tags/tag-only", peeled: COMMIT_SHA },
+      ],
     });
 
-    const resolved = await source.resolve({ owner: "o", ref: "release/next", repo: "r" });
-    await expect(source.files(resolved)).resolves.toMatchObject([
-      { mode: "100644", path: "nested/file.txt" },
-    ]);
-    expect(fetcher).not.toHaveBeenCalledWith(
-      expect.stringContaining("/repos/o/r"),
-      expect.objectContaining({ method: expect.anything() }),
+    await expect(source.resolve({ owner: "o", ref: "release", repo: "r" })).resolves.toMatchObject({
+      commitSha: COMMIT_SHA,
+    });
+    await expect(source.resolve({ owner: "o", ref: "tag-only", repo: "r" })).resolves.toMatchObject(
+      { commitSha: COMMIT_SHA },
     );
   });
 
-  it("rejects submodules and blob-integrity mismatches as explicit source outcomes", async () => {
-    const fetcher = vi.fn<typeof fetch>(async (input) => {
-      const url = requestUrl(input);
-      if (url.search === "?recursive=1") {
-        return json({
-          sha: ROOT_TREE_SHA,
-          tree: [{ mode: "160000", path: "vendor", sha: "6".repeat(40), type: "commit" }],
-          truncated: false,
-        });
-      }
-      return new Response("wrong bytes");
-    });
+  it("accepts a full commit directly and resolves an unadvertised short commit through GitHub", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ sha: COMMIT_SHA }));
     const source = createGithubTemplateSource({
-      clientId: "id",
-      clientSecret: "secret",
+      checkout,
       fetch: fetcher,
-    });
-    const resolved = { commitSha: COMMIT_SHA, owner: "o", repo: "r", treeSha: ROOT_TREE_SHA };
-
-    await expect(source.files(resolved)).rejects.toMatchObject({
-      message: 'Template contains unsupported Git submodule "vendor".',
-      retryable: false,
+      readServerRefs: async () => [{ oid: OTHER_SHA, ref: "HEAD" }],
     });
 
-    const expectedSha = blobSha(new TextEncoder().encode("expected"));
-    fetcher.mockImplementation(async (input) => {
-      const url = requestUrl(input);
-      if (url.search === "?recursive=1") {
-        return json({
-          sha: ROOT_TREE_SHA,
-          tree: [{ mode: "100644", path: "file", sha: expectedSha, type: "blob" }],
-          truncated: false,
-        });
-      }
-      return new Response("wrong bytes");
-    });
-    await expect(source.files(resolved)).rejects.toSatisfy((error: unknown) =>
-      isRetryableGithubTemplateSourceError(error),
+    await expect(source.resolve({ owner: "o", ref: COMMIT_SHA, repo: "r" })).resolves.toMatchObject(
+      { commitSha: COMMIT_SHA },
+    );
+    expect(fetcher).not.toHaveBeenCalled();
+
+    await expect(
+      source.resolve({ owner: "o", ref: COMMIT_SHA.slice(0, 12), repo: "r" }),
+    ).resolves.toMatchObject({ commitSha: COMMIT_SHA });
+    expect(fetcher).toHaveBeenCalledWith(
+      `https://api.github.com/repos/o/r/commits/${COMMIT_SHA.slice(0, 12)}`,
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
     );
   });
 
-  it("enforces the file limit while streaming and keeps interrupted bodies retryable", async () => {
-    const oversizedSha = "7".repeat(40);
-    let bodyCancelled = false;
-    const fetcher = vi.fn<typeof fetch>(async (input) => {
-      const url = requestUrl(input);
-      if (url.search === "?recursive=1") {
-        return json({
-          sha: ROOT_TREE_SHA,
-          tree: [{ mode: "100644", path: "large.bin", sha: oversizedSha, type: "blob" }],
-          truncated: false,
-        });
-      }
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          cancel() {
-            bodyCancelled = true;
-          },
-          start(controller) {
-            controller.enqueue(new Uint8Array(8 * 1024 * 1024));
-            controller.enqueue(Uint8Array.of(1));
-          },
-        }),
-      );
-    });
+  it("rejects missing and non-directory subtrees as terminal source outcomes", async () => {
     const source = createGithubTemplateSource({
-      clientId: "id",
-      clientSecret: "secret",
-      fetch: fetcher,
+      checkout,
+      readServerRefs: async () => [{ oid: COMMIT_SHA, ref: "HEAD" }],
     });
-    const resolved = { commitSha: COMMIT_SHA, owner: "o", repo: "r", treeSha: ROOT_TREE_SHA };
 
-    await expect(source.files(resolved)).rejects.toMatchObject({
-      message: expect.stringContaining("per-file limit"),
-      retryable: false,
-    });
-    expect(bodyCancelled).toBe(true);
-
-    fetcher.mockImplementation(async (input) => {
-      const url = requestUrl(input);
-      if (url.search === "?recursive=1") {
-        return json({
-          sha: ROOT_TREE_SHA,
-          tree: [{ mode: "100644", path: "broken.bin", sha: oversizedSha, type: "blob" }],
-          truncated: false,
-        });
-      }
-      return new Response(
-        new ReadableStream<Uint8Array>({
-          start(controller) {
-            controller.error(new Error("connection reset"));
-          },
-        }),
-      );
-    });
-    await expect(source.files(resolved)).rejects.toSatisfy((error: unknown) =>
-      isRetryableGithubTemplateSourceError(error),
-    );
+    await expect(
+      source.files({ commitSha: COMMIT_SHA, owner: "o", path: "missing", repo: "r" }),
+    ).rejects.toMatchObject({ retryable: false });
+    await expect(
+      source.files({
+        commitSha: COMMIT_SHA,
+        owner: "o",
+        path: "configs/with-voice/worker.ts",
+        repo: "r",
+      }),
+    ).rejects.toMatchObject({ retryable: false });
   });
 
-  it("classifies missing sources as terminal and service outages as retryable", async () => {
+  it("classifies Git smart-HTTP outages as retryable and non-public repos as terminal", async () => {
     for (const [status, retryable] of [
-      [404, false],
+      [401, false],
       [503, true],
       [429, true],
     ] as const) {
       const source = createGithubTemplateSource({
-        clientId: "id",
-        clientSecret: "secret",
-        fetch: async () => new Response("no", { status }),
+        checkout,
+        readServerRefs: async () => {
+          throw { code: "HttpError", data: { statusCode: status } };
+        },
       });
       const error = await source
-        .resolve({ owner: "o", ref: "main", repo: "r" })
+        .resolve({ owner: "o", repo: "r" })
         .catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(GithubTemplateSourceError);
       expect(error).toMatchObject({ retryable });
     }
+  });
+
+  it("keeps a checkout mismatch retryable instead of copying a moved source", async () => {
+    const source = createGithubTemplateSource({
+      checkout: async (resolved) => ({ ...(await checkout(resolved)), headSha: OTHER_SHA }),
+      readServerRefs: async () => [{ oid: COMMIT_SHA, ref: "HEAD" }],
+    });
+
+    await expect(source.files({ commitSha: COMMIT_SHA, owner: "o", repo: "r" })).rejects.toSatisfy(
+      (error: unknown) => isRetryableGithubTemplateSourceError(error),
+    );
   });
 });
