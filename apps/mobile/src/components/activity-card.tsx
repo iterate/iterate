@@ -162,7 +162,7 @@ function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeS
   if (code == null) return "";
   return [
     ...(code.activitySummary ? [code.activitySummary] : []),
-    ...(code.durationMs ? [`${(code.durationMs / 1000).toFixed(1)}s`] : []),
+    ...(code.durationMs == null ? [] : [`${(code.durationMs / 1000).toFixed(1)}s`]),
   ].join(" · ");
 }
 
@@ -375,9 +375,9 @@ function metaYaml(
       ? {
           llm: {
             ...(llm.model ? { model: llm.model } : {}),
-            ...(llm.durationMs ? { duration: seconds(llm.durationMs) } : {}),
-            ...(llm.inputTokens ? { inputTokens: llm.inputTokens } : {}),
-            ...(llm.outputTokens ? { outputTokens: llm.outputTokens } : {}),
+            ...(llm.durationMs == null ? {} : { duration: seconds(llm.durationMs) }),
+            ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
+            ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
             ...(llm.outcome && llm.outcome !== "completed" ? { outcome: llm.outcome } : {}),
             ...(llm.cancelReason ? { cancelReason: llm.cancelReason } : {}),
           },
@@ -385,7 +385,7 @@ function metaYaml(
       : {}),
     code: {
       ...(code.status === "running" ? { status: "running" } : {}),
-      ...(code.durationMs ? { duration: seconds(code.durationMs) } : {}),
+      ...(code.durationMs == null ? {} : { duration: seconds(code.durationMs) }),
       ...(code.status === "done" && code.success === false ? { failed: true } : {}),
     },
     ...(promptMessages && promptMessages.length > 0

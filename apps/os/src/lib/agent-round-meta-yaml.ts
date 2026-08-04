@@ -43,9 +43,9 @@ export function buildRoundMetaYaml(
       ? {
           llm: {
             ...(llm.model ? { model: llm.model } : {}),
-            ...(llm.durationMs ? { duration: seconds(llm.durationMs) } : {}),
-            ...(llm.inputTokens ? { inputTokens: llm.inputTokens } : {}),
-            ...(llm.outputTokens ? { outputTokens: llm.outputTokens } : {}),
+            ...(llm.durationMs == null ? {} : { duration: seconds(llm.durationMs) }),
+            ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
+            ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
             ...(llm.outcome && llm.outcome !== "completed" ? { outcome: llm.outcome } : {}),
             ...(llm.cancelReason ? { cancelReason: llm.cancelReason } : {}),
           },
@@ -53,8 +53,8 @@ export function buildRoundMetaYaml(
       : {}),
     code: {
       ...(code.status === "running" ? { status: "running" } : {}),
-      ...(code.startedAtMs ? { started: formatClockTime(code.startedAtMs) } : {}),
-      ...(code.durationMs ? { duration: seconds(code.durationMs) } : {}),
+      started: formatClockTime(code.startedAtMs),
+      ...(code.durationMs == null ? {} : { duration: seconds(code.durationMs) }),
       ...(code.status === "done" && code.success === false ? { failed: true } : {}),
     },
     ...(promptMessages && promptMessages.length > 0
