@@ -3,9 +3,12 @@
 // Collapsed: the one-line summary plus status glyphs (spinner while running,
 // approval marks once the run parked batches at the egress door). Expanded
 // (tap, or automatically while live-streaming): the run organized into
-// ROUNDS — the llm step that writes a script and the code step that runs it
-// — where each code step is a tabbed view: Script | Approvals | Result |
-// Meta. The Approvals tab renders the SAME shared ApprovalBatchBody the
+// ROUNDS — the llm step that writes a script and the code step that runs it.
+// A single round shows its content directly; several rounds each collapse to
+// a "Round N · <summary status>" header (tap to expand; a running round
+// streams open) — where each code step is a tabbed view: Script | Approvals
+// | Result | Meta. The Approvals tab renders the SAME shared
+// ApprovalBatchBody the
 // Notifications expansion uses, so the in-context view can never drift from
 // the archive; Meta holds the step stat lines (model, duration, tokens) that
 // used to sit above the tab bar.
@@ -83,34 +86,82 @@ export function ActivityCard({
       </Pressable>
       {expanded
         ? rounds.map((round, index) => (
-            <View key={round.code?.id || round.llm?.id || index} style={styles.step}>
-              {rounds.length > 1 ? (
-                <View style={styles.roundHeader}>
-                  <Text style={styles.roundLabel}>Round {index + 1}</Text>
-                  {/* The agent's summary status as of this round (the reducer
-                      stamps the latest agent/summary-updated fold onto each
-                      code step). Summaries aren't forced short — one line,
-                      ellipsized. */}
-                  {roundHeaderMeta(round) === "" ? null : (
-                    <Text numberOfLines={1} style={styles.roundMeta}>
-                      {roundHeaderMeta(round)}
-                    </Text>
-                  )}
-                </View>
-              ) : null}
-              {round.llm ? <LlmStepView code={round.code} step={round.llm} /> : null}
-              {round.code ? (
-                <CodeStepTabs
-                  approvals={approvals}
-                  batches={batchesByExecution.get(round.code.executionId) || []}
-                  llm={round.llm}
-                  step={round.code}
-                  threadEvents={threadEvents}
-                />
-              ) : null}
-            </View>
+            <RoundView
+              key={round.code?.id || round.llm?.id || index}
+              approvals={approvals}
+              batches={round.code ? batchesByExecution.get(round.code.executionId) || [] : []}
+              collapsible={rounds.length > 1}
+              index={index}
+              round={round}
+              threadEvents={threadEvents}
+            />
           ))
         : null}
+    </View>
+  );
+}
+
+/**
+ * One round of the expanded card. A single round renders its content
+ * directly; several rounds each collapse to a "Round N · <status> ·
+ * <duration>" header row so the per-round summary statuses read as a list —
+ * the os feed's AgentActivityRoundRow shape
+ * (apps/os/src/components/agent-activity-rounds.tsx). A round whose code
+ * step is still running expands automatically so the live run stays
+ * watchable.
+ */
+function RoundView({
+  approvals,
+  batches,
+  collapsible,
+  index,
+  round,
+  threadEvents,
+}: {
+  approvals: ActivityApprovalContext;
+  batches: {
+    offset: number;
+    payload: RequestedPayload;
+    resolved: ResolvedBatch | null;
+    expired: boolean;
+  }[];
+  collapsible: boolean;
+  index: number;
+  round: { llm: AgentUiLlmStep | null; code: AgentUiCodeStep | null };
+  threadEvents: StreamEvent[];
+}) {
+  const [toggled, setToggled] = useState<boolean | null>(null);
+  const expanded = !collapsible || (toggled ?? round.code?.status === "running");
+  return (
+    <View style={styles.step}>
+      {collapsible ? (
+        <Pressable style={styles.roundHeader} onPress={() => setToggled(!expanded)}>
+          <Text style={styles.chevron}>{expanded ? "▾" : "▸"}</Text>
+          <Text style={styles.roundLabel}>Round {index + 1}</Text>
+          {/* The agent's summary status as of this round (the reducer stamps
+              the latest agent/summary-updated fold onto each code step).
+              Summaries aren't forced short — one line, ellipsized. */}
+          {roundHeaderMeta(round) === "" ? null : (
+            <Text numberOfLines={1} style={styles.roundMeta}>
+              {roundHeaderMeta(round)}
+            </Text>
+          )}
+        </Pressable>
+      ) : null}
+      {expanded ? (
+        <>
+          {round.llm ? <LlmStepView code={round.code} step={round.llm} /> : null}
+          {round.code ? (
+            <CodeStepTabs
+              approvals={approvals}
+              batches={batches}
+              llm={round.llm}
+              step={round.code}
+              threadEvents={threadEvents}
+            />
+          ) : null}
+        </>
+      ) : null}
     </View>
   );
 }
@@ -158,8 +209,25 @@ function ApprovalGlyphs({
  * header stays bare (the Meta tab carries the stats).
  */
 function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeStep | null }) {
-  const code = round.code;
-  if (code == null) return "";
+  const { code, llm } = round;
+  if (code == null) {
+    // An llm-only round (cancelled, failed, or its code half never arrived):
+    // now that collapsed rounds hide LlmStepView's stat line, the header
+    // carries the outcome — same vocabulary as footerStats.
+    if (llm == null) return "";
+    return [
+      ...(llm.cancelReason === "interrupted-by-user-input"
+        ? ["stopped for your new message"]
+        : llm.cancelReason === "expired"
+          ? ["expired"]
+          : llm.outcome === "cancelled"
+            ? ["cancelled"]
+            : llm.outcome === "failed"
+              ? ["failed"]
+              : []),
+      ...(llm.durationMs == null ? [] : [`${(llm.durationMs / 1000).toFixed(1)}s`]),
+    ].join(" · ");
+  }
   return [
     ...(code.activitySummary ? [code.activitySummary] : []),
     ...(code.durationMs == null ? [] : [`${(code.durationMs / 1000).toFixed(1)}s`]),
