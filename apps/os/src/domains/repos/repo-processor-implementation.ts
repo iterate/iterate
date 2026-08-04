@@ -223,7 +223,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   /**
    * Drive one open GitHub-backed creation obligation from the Repo DO's alarm
    * handler, never from the source Stream DO's hosted callback. The caller
-   * supplies runner-backed committed state after catch-up. A resolved source
+   * supplies a runner-backed committed snapshot. A resolved source
    * is journaled before any bytes are materialized; if materialization then
    * fails retryably, the next alarm folds that fact and never resolves a moved
    * ref again. Every append is idempotency-keyed, so an alarm retry after a
