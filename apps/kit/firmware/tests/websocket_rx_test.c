@@ -244,10 +244,10 @@ static void fragmented_control_is_dropped_without_poisoning_the_peer(void) {
 /*
  * A nonblocking TLS read can report that a frame is in progress while yielding
  * zero new payload bytes. Treating that as a data chunk sends an empty fragment
- * into the PCM lane and causes a reconnect; resetting the offset makes the next
- * bytes look like a new frame. Preserve the in-progress frame across the idle
- * observation so ordinary packet loss or record splitting cannot corrupt the
- * audio stream.
+ * into the binary lane and causes a reconnect; resetting the offset makes the
+ * next bytes look like a new frame. Preserve the in-progress frame across the
+ * idle observation so ordinary packet loss or record splitting cannot corrupt
+ * the audio stream.
  */
 static void a_zero_byte_payload_stall_preserves_data_offset(void) {
   static const uint8_t first[] = {0x10U, 0x20U};

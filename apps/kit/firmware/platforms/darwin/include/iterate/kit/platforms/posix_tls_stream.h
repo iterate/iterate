@@ -8,6 +8,7 @@
 #include <stdint.h>
 #include <sys/socket.h>
 
+#include <dns_sd.h>
 #include <openssl/ssl.h>
 
 #ifdef __cplusplus
@@ -58,13 +59,15 @@ struct iterate_kit_posix_tls_address {
  * OpenSSL owns opaque per-connection allocations, but this adapter owns no
  * growing application buffer or reconnect queue. connect(), read(), and
  * write() perform one bounded state transition and distinguish scheduler
- * deferral from loss. prepare() resolves the fixed endpoint once; connect()
- * therefore contains only explicitly poll-driven socket and optional TLS
- * progress. Plain TCP exists solely to reach local ws:// development servers;
- * deployed wss:// endpoints always select TLS in the WebSocket adapter.
+ * deferral from loss. DNS, socket connect, and optional TLS all advance only
+ * through connect(), so the caller's one open-attempt deadline bounds every
+ * establishment stage. Plain TCP exists solely to reach local ws://
+ * development servers; deployed wss:// endpoints always select TLS in the
+ * WebSocket adapter.
  */
 struct iterate_kit_posix_tls_stream {
   char host[ITERATE_KIT_POSIX_TLS_HOST_CAPACITY];
+  DNSServiceRef resolver;
   SSL_CTX *context;
   SSL *ssl;
   struct iterate_kit_posix_tls_address
@@ -78,6 +81,8 @@ struct iterate_kit_posix_tls_stream {
   bool tcp_connecting;
   bool tls_handshaking;
   bool ready;
+  bool resolver_reply_complete;
+  bool resolver_failed;
   bool use_tls;
   bool dangerous_disable_certificate_verification;
   bool initialized;

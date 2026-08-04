@@ -186,3 +186,54 @@ clean server-log window.
 **Open:** Run the independent Phase 1 review once more against this correction
 commit. Phase 2 still owns the formal codec/processor seams and audio quality
 work. The preservation archive's iCloud upload remains pending.
+
+## 2026-08-05 — phase 1: second re-review corrections
+
+**Did:** Superseded the previous entry's incorrect claim that the whole open
+attempt was bounded: `prepare()` still called synchronous `getaddrinfo()` before
+the deadline was armed. The Darwin transport now starts Apple's asynchronous
+`DNSServiceGetAddrInfo` from `connect()`, advances it through the resolver file
+descriptor without blocking, and lets the same bounded close path cancel DNS,
+TCP, TLS, and WebSocket upgrade work. Added a regression test proving
+`prepare()` does not begin resolution. Closed the dynamic worker's remaining
+ownership races by disposing a connection that resolves after teardown,
+classifying rejected initial and reopened connections through bounded teardown,
+and disposing every `__describe()` result and setup append result even when a
+sibling operation fails. Removed the last stale “PCM lane” comments.
+
+**Measured:** The literal interactive Mac path used the real CoreAudio input and
+output with the shared push-to-talk module. While PTT was held, the speaker said
+“Please tell me one short sentence about the color blue”; the microphone
+captured that exact transcript, the agent answered “Blue is the color of the
+sky on a clear day,” and all 143 response frames played with zero gaps,
+concealment, or underruns. The retained PCM16 mono 16 kHz artifacts are
+`/tmp/iterate-talk-233647-mic.wav` (14.78 s) and
+`/tmp/iterate-talk-233647-speaker.wav` (2.86 s). A separate deterministic turn
+sent 188 frames, received 31, completed without a failed turn, restart, lost
+call, or sequence gap, and measured 706 ms to first audio and 2,502 ms to the
+first answer completion; its configured wall-clock end correctly classified
+the in-progress second turn as a deadline cancellation. The exact 2,596-line
+server window contained 123 `ok` RPC outcomes and one `built` outcome, with no
+warning, error, unhandled rejection, or disposal signal. The host suite passed
+34/34 ASan/UBSan CTests. Repository format, typecheck, zero-warning lint, and
+the full workspace test gate passed; OS contributed 2,704 passes, 12 expected
+failures, and one skip.
+
+**Surprised by:** A transport can look completely deadline-driven while hiding
+one blocking name-resolution call immediately before the deadline exists. The
+interactive proof also exposed the terminal's real input semantics: one space
+starts capture, repeated spaces keep it held, and stopping repeats produces the
+ordered commit after 700 ms. That is materially stronger evidence than the
+shared-module integration test or the unattended WAV driver.
+
+**Reviewer said:** The maximum-effort fallback re-review found three blockers:
+DNS was synchronous before the open deadline, a late/rejected connection and
+several temporary RPC results escaped ownership, and the claimed physical PTT
+path had only been exercised by tests and an unattended WAV/file-speaker run.
+→ **did:** Replaced resolution with the cancellable Apple API, closed all named
+RPC lifetime paths, and exercised the complete live microphone/PTT/server/live
+speaker path with retained audio and exact transcripts.
+
+**Open:** Run a fresh independent Phase 1 review against this correction. Phase
+2 owns the formal codec/processor seams and systematic concealment/underrun
+quality work. The preservation archive's iCloud upload remains pending.

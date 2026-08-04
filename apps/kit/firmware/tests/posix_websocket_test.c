@@ -255,10 +255,31 @@ static void plain_stream_transfers_bytes_over_loopback(void) {
   assert(close(listener) == 0);
 }
 
+/*
+ * Resolution used to run synchronously in prepare(), before the transport
+ * armed its open-attempt deadline. A deliberately unresolvable name must be
+ * accepted here without starting DNS; the first connect() poll owns that work
+ * and the surrounding transport can therefore cancel it at its deadline.
+ */
+static void endpoint_resolution_starts_inside_connect(void) {
+  struct iterate_kit_posix_tls_stream stream;
+  const struct iterate_kit_posix_tls_stream_options options = {
+    .host = "deadline-proof.invalid",
+    .port = 443U,
+    .use_tls = true,
+  };
+  assert(iterate_kit_posix_tls_stream_prepare(&stream, &options) ==
+         ITERATE_KIT_OK);
+  assert(stream.resolver == NULL);
+  assert(stream.address_count == 0U);
+  iterate_kit_posix_tls_stream_cleanup(&stream);
+}
+
 int main(void) {
   handshake_accept_key_matches_rfc_vector();
   websocket_url_selects_plain_or_secure_transport();
   plain_stream_transfers_bytes_over_loopback();
+  endpoint_resolution_starts_inside_connect();
   would_block_read_loop_retains_frame_boundary();
   short_write_resumes_one_outbox_slot();
   return 0;

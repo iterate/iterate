@@ -4,8 +4,9 @@
 #include <string.h>
 
 /*
- * This ring is the small concurrency primitive underneath the PCM lane. It is
- * specifically SPSC: one producer owns write_acquired and producer_sequence;
+ * This ring is the small concurrency primitive underneath bounded byte lanes.
+ * It is specifically SPSC: one producer owns write_acquired and
+ * producer_sequence;
  * one consumer owns read_acquired and consumer_sequence. Supporting multiple
  * writers with a mutex or CAS reservation loop was rejected because audio
  * tasks must never wait behind unrelated work and every current lane already

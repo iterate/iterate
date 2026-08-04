@@ -7,6 +7,7 @@ import {
   type StreamConnectionHandle,
   createProcessorHost,
 } from "iterate/sdk";
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import {
   defineProcessorContract,
   StreamProcessor,
@@ -19,7 +20,7 @@ import { createVisemeTracker, type VisemeChangeEvent } from "./viseme.ts";
 /** Release one Cap'n Web/Workers RPC capability without hiding a failed release. */
 function disposeRpcStub(value: unknown, label: string): void {
   try {
-    (value as Partial<Disposable> | null | undefined)?.[Symbol.dispose]?.();
+    disposeIgnoredRpcResult(value);
   } catch (error) {
     console.error("voice-agent RPC stub disposal failed", { error, label });
   }
@@ -321,11 +322,10 @@ const briefKey = (context: ReturnType<typeof briefContext>) =>
  * setup without anybody editing this file.
  */
 async function describeProvidedCapabilities(project: Awaited<IterateWorkerEntrypoint["itx"]>) {
+  let description: Awaited<ReturnType<typeof project.__describe>> | undefined;
   try {
-    const description = (await project.__describe()) as {
-      capabilities?: Array<{ instructions?: string; path?: string[]; type?: string }>;
-    };
-    const live = (description.capabilities ?? []).filter(
+    description = await project.__describe();
+    const live = description.capabilities.filter(
       (entry) => entry.type === "live" && (entry.instructions ?? "").trim().length > 0,
     );
     if (live.length === 0) {
@@ -345,6 +345,8 @@ async function describeProvidedCapabilities(project: Awaited<IterateWorkerEntryp
   } catch (error) {
     /* Never fail setup over the prompt: an honest gap beats a wrong claim. */
     return `The device description could not be read (${String(error)}). Do not guess at what hardware can do.`;
+  } finally {
+    disposeRpcStub(description, "project description result");
   }
 }
 
@@ -2663,9 +2665,15 @@ export class VoiceBridge extends IterateDurableObject {
           processEventBatch: (batch) => handleEvents(batch.events),
           ...(lastSeenOffset >= 0 ? { replayAfterOffset: lastSeenOffset } : {}),
         });
+        if (closedDown) {
+          disposeRpcStub(next, "late voice stream connection");
+          return;
+        }
         currentConnection = next;
         currentBatches = 0;
         disposeRpcStub(previous, "superseded voice stream connection");
+      } catch (error) {
+        if (!closedDown) teardown(`stream connection open failed: ${String(error)}`);
       } finally {
         opening = false;
       }
@@ -2794,6 +2802,10 @@ export class VoiceBridge extends IterateDurableObject {
     });
 
     await reopen();
+    if (closedDown) {
+      const ready = await sessionReady;
+      return Response.json({ callId, ...ready }, { status: 502 });
+    }
     // `pair` is non-null exactly when this call has an anchor socket to hand back.
     if (pair !== null) return new Response(null, { status: 101, webSocket: pair[0] });
 
@@ -3435,17 +3447,21 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
     const xaiSecret = project.secrets.get(XAI_SECRET);
     try {
       const secret = await xaiSecret.__describe();
-      /*
-       * Reported rather than thrown. Whether a credential exists is the
-       * caller's decision to act on, and a health check that fails on policy
-       * cannot distinguish "this worker is broken" from "you have not finished
-       * setting up" — which are different problems with different fixes.
-       */
-      return {
-        ok: true,
-        projectId,
-        xaiSecretReady: secret.created === true && secret.hasMaterial === true,
-      };
+      try {
+        /*
+         * Reported rather than thrown. Whether a credential exists is the
+         * caller's decision to act on, and a health check that fails on policy
+         * cannot distinguish "this worker is broken" from "you have not finished
+         * setting up" — which are different problems with different fixes.
+         */
+        return {
+          ok: true,
+          projectId,
+          xaiSecretReady: secret.created === true && secret.hasMaterial === true,
+        };
+      } finally {
+        disposeRpcStub(secret, "health secret description result");
+      }
     } finally {
       disposeRpcStub(xaiSecret, "health secret");
     }
@@ -3461,9 +3477,17 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
 
     const project = await this.itx;
     const xaiSecret = project.secrets.get(XAI_SECRET);
-    let xaiDescription: Awaited<ReturnType<typeof xaiSecret.__describe>>;
+    let xaiDescription: { created: boolean; hasMaterial: boolean };
     try {
-      xaiDescription = await xaiSecret.__describe();
+      const description = await xaiSecret.__describe();
+      try {
+        xaiDescription = {
+          created: description.created,
+          hasMaterial: description.hasMaterial,
+        };
+      } finally {
+        disposeRpcStub(description, "setup secret description result");
+      }
     } finally {
       disposeRpcStub(xaiSecret, "setup secret");
     }
@@ -3495,6 +3519,8 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
     const stream = project.streams.get(streamPath);
     /* The voice agent for THIS conversation is also its back office. */
     const backOffice = project.agents.get(streamPath);
+    let voiceEvents: Awaited<ReturnType<Stream["append"]>> | undefined;
+    let agentEvents: Awaited<ReturnType<typeof ensureVoiceAgent>> | undefined;
     try {
       const birthPayload = {};
       /*
@@ -3564,7 +3590,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
        */
       const setupId = crypto.randomUUID();
       const startedAt = Date.now();
-      const [voiceEvents, agentEvents] = await Promise.all([
+      [voiceEvents, agentEvents] = await Promise.all([
         stream.append(
           {
             type: "events.iterate.com/voice-agent/created",
@@ -3620,13 +3646,10 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
 
       const created: string[] = [];
       const alreadyThere: string[] = [];
-      for (const event of [...voiceEvents, ...(agentEvents ?? [])]) {
+      for (const event of [...(voiceEvents ?? []), ...(agentEvents ?? [])]) {
         const key = event.idempotencyKey ?? `${event.path}@${String(event.offset)}`;
         (Date.parse(event.createdAt) < startedAt ? alreadyThere : created).push(key);
       }
-      disposeRpcStub(agentEvents, "setup agent append result");
-      disposeRpcStub(voiceEvents, "setup stream append result");
-
       /*
        * AND IS IT ACTUALLY LISTENING?
        *
@@ -3810,6 +3833,8 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       }
       return { streamPath, created, alreadyThere, warm };
     } finally {
+      disposeRpcStub(agentEvents, "setup agent append result");
+      disposeRpcStub(voiceEvents, "setup stream append result");
       disposeRpcStub(backOffice, "setup back-office agent");
       disposeRpcStub(stream, "setup stream");
     }

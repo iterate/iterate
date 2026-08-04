@@ -3,8 +3,8 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <netinet/in.h>
 #include <poll.h>
-#include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
 #include <unistd.h>
@@ -25,46 +25,138 @@ static void remember_failure(
   stream->last_openssl_error = stream->use_tls ? ERR_peek_last_error() : 0UL;
 }
 
-static bool resolve_endpoint(
+static void cancel_resolver(struct iterate_kit_posix_tls_stream *stream) {
+  if (stream->resolver != NULL) {
+    DNSServiceRefDeallocate(stream->resolver);
+    stream->resolver = NULL;
+  }
+}
+
+static void DNSSD_API resolved_address(
+    DNSServiceRef resolver,
+    DNSServiceFlags flags,
+    uint32_t interface_index,
+    DNSServiceErrorType error,
+    const char *hostname,
+    const struct sockaddr *address,
+    uint32_t ttl,
+    void *context) {
+  struct iterate_kit_posix_tls_stream *stream = context;
+  socklen_t length;
+  (void)resolver;
+  (void)interface_index;
+  (void)hostname;
+  (void)ttl;
+  if (stream == NULL) {
+    return;
+  }
+  if (error != kDNSServiceErr_NoError) {
+    stream->last_errno = (int)error;
+    stream->resolver_failed = true;
+    stream->resolver_reply_complete = true;
+    return;
+  }
+  if (address == NULL || (flags & kDNSServiceFlagsAdd) == 0U) {
+    stream->resolver_reply_complete =
+        (flags & kDNSServiceFlagsMoreComing) == 0U;
+    return;
+  }
+  if (address->sa_family == AF_INET) {
+    length = (socklen_t)sizeof(struct sockaddr_in);
+  } else if (address->sa_family == AF_INET6) {
+    length = (socklen_t)sizeof(struct sockaddr_in6);
+  } else {
+    stream->resolver_reply_complete =
+        (flags & kDNSServiceFlagsMoreComing) == 0U;
+    return;
+  }
+  if (stream->address_count == ITERATE_KIT_POSIX_TLS_ADDRESS_CAPACITY) {
+    stream->last_errno = EAI_OVERFLOW;
+    stream->resolver_failed = true;
+    stream->resolver_reply_complete = true;
+    return;
+  }
+  struct iterate_kit_posix_tls_address *destination =
+      &stream->addresses[stream->address_count++];
+  memcpy(&destination->storage, address, length);
+  if (address->sa_family == AF_INET) {
+    ((struct sockaddr_in *)&destination->storage)->sin_port =
+        htons(stream->port);
+  } else {
+    ((struct sockaddr_in6 *)&destination->storage)->sin6_port =
+        htons(stream->port);
+  }
+  destination->length = length;
+  destination->family = address->sa_family;
+  destination->socktype = SOCK_STREAM;
+  destination->protocol = IPPROTO_TCP;
+  stream->resolver_reply_complete =
+      (flags & kDNSServiceFlagsMoreComing) == 0U;
+}
+
+static enum iterate_kit_posix_tls_connect_result drive_resolver(
     struct iterate_kit_posix_tls_stream *stream) {
-  struct addrinfo hints;
-  struct addrinfo *addresses = NULL;
-  const struct addrinfo *address;
-  char port[6];
-  int result;
-  memset(&hints, 0, sizeof(hints));
-  hints.ai_family = AF_UNSPEC;
-  hints.ai_socktype = SOCK_STREAM;
-  hints.ai_protocol = IPPROTO_TCP;
-  (void)snprintf(port, sizeof(port), "%u", (unsigned int)stream->port);
-  result = getaddrinfo(stream->host, port, &hints, &addresses);
-  if (result != 0) {
-    stream->last_errno = result;
-    return false;
-  }
-  for (address = addresses; address != NULL; address = address->ai_next) {
-    struct iterate_kit_posix_tls_address *destination;
-    if (address->ai_addrlen > sizeof(destination->storage)) {
-      continue;
+  DNSServiceErrorType result;
+  struct pollfd candidate;
+  int poll_result;
+  if (stream->resolver == NULL) {
+    stream->address_count = 0U;
+    stream->address_index = 0U;
+    stream->resolver_reply_complete = false;
+    stream->resolver_failed = false;
+    result = DNSServiceGetAddrInfo(
+        &stream->resolver,
+        0,
+        kDNSServiceInterfaceIndexAny,
+        kDNSServiceProtocol_IPv4 | kDNSServiceProtocol_IPv6,
+        stream->host,
+        resolved_address,
+        stream);
+    if (result != kDNSServiceErr_NoError) {
+      stream->last_errno = (int)result;
+      cancel_resolver(stream);
+      return ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
     }
-    if (stream->address_count == ITERATE_KIT_POSIX_TLS_ADDRESS_CAPACITY) {
-      freeaddrinfo(addresses);
-      stream->last_errno = EAI_OVERFLOW;
-      return false;
-    }
-    destination = &stream->addresses[stream->address_count++];
-    memcpy(&destination->storage, address->ai_addr, address->ai_addrlen);
-    destination->length = address->ai_addrlen;
-    destination->family = address->ai_family;
-    destination->socktype = address->ai_socktype;
-    destination->protocol = address->ai_protocol;
   }
-  freeaddrinfo(addresses);
+  candidate = (struct pollfd){
+    .fd = DNSServiceRefSockFD(stream->resolver),
+    .events = POLLIN,
+  };
+  if (candidate.fd < 0) {
+    stream->last_errno = EIO;
+    cancel_resolver(stream);
+    return ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
+  }
+  poll_result = poll(&candidate, 1U, 0);
+  if (poll_result == 0) {
+    return ITERATE_KIT_POSIX_TLS_CONNECT_WOULD_BLOCK;
+  }
+  if (poll_result < 0 ||
+      (candidate.revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+    remember_failure(stream);
+    cancel_resolver(stream);
+    return ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
+  }
+  result = DNSServiceProcessResult(stream->resolver);
+  if (result != kDNSServiceErr_NoError) {
+    stream->last_errno = (int)result;
+    stream->resolver_failed = true;
+  }
+  if (stream->resolver_failed ||
+      (stream->resolver_reply_complete && stream->address_count == 0U)) {
+    if (stream->last_errno == 0) {
+      stream->last_errno = EAI_NONAME;
+    }
+    cancel_resolver(stream);
+    return ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
+  }
   if (stream->address_count == 0U) {
-    stream->last_errno = EAI_NONAME;
-    return false;
+    return ITERATE_KIT_POSIX_TLS_CONNECT_WOULD_BLOCK;
   }
-  return true;
+  /* One daemon reply carries the answer batch (MoreComing marks its records).
+   * A connection attempt needs a finite snapshot, not a long-lived DNS watch. */
+  cancel_resolver(stream);
+  return ITERATE_KIT_POSIX_TLS_CONNECT_READY;
 }
 
 void iterate_kit_posix_tls_stream_close(
@@ -72,6 +164,7 @@ void iterate_kit_posix_tls_stream_close(
   if (stream == NULL || !stream->initialized) {
     return;
   }
+  cancel_resolver(stream);
   if (stream->ssl != NULL) {
     SSL_free(stream->ssl);
     stream->ssl = NULL;
@@ -83,7 +176,10 @@ void iterate_kit_posix_tls_stream_close(
   stream->tcp_connecting = false;
   stream->tls_handshaking = false;
   stream->ready = false;
+  stream->address_count = 0U;
   stream->address_index = 0U;
+  stream->resolver_reply_complete = false;
+  stream->resolver_failed = false;
 }
 
 void iterate_kit_posix_tls_stream_cleanup(
@@ -115,10 +211,6 @@ enum iterate_kit_status iterate_kit_posix_tls_stream_prepare(
   stream->use_tls = options->use_tls;
   stream->dangerous_disable_certificate_verification =
       options->DANGEROUS_disable_certificate_verification;
-  if (!resolve_endpoint(stream)) {
-    memset(stream, 0, sizeof(*stream));
-    return ITERATE_KIT_IO_ERROR;
-  }
   if (!stream->use_tls) {
     stream->dangerous_disable_certificate_verification = false;
     stream->initialized = true;
@@ -285,6 +377,13 @@ iterate_kit_posix_tls_stream_connect(
   }
   if (stream->ready) {
     return ITERATE_KIT_POSIX_TLS_CONNECT_READY;
+  }
+  if (stream->address_count == 0U) {
+    const enum iterate_kit_posix_tls_connect_result resolve_result =
+        drive_resolver(stream);
+    if (resolve_result != ITERATE_KIT_POSIX_TLS_CONNECT_READY) {
+      return resolve_result;
+    }
   }
   if (stream->descriptor < 0) {
     tcp_result = start_tcp(stream);
