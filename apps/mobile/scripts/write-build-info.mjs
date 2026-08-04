@@ -25,6 +25,8 @@ const git = (args) => {
 const env = process.env;
 const info = {
   commit: env.EAS_BUILD_GIT_COMMIT_HASH || git("rev-parse HEAD"),
+  // No EAS env var carries the message, so EAS's .git-less archive stamps "".
+  message: git("log -1 --format=%s").slice(0, 200),
   branch: env.GITHUB_REF_NAME || git("rev-parse --abbrev-ref HEAD"),
   builtBy: env.EAS_BUILD_USERNAME || env.GITHUB_ACTOR || userInfo().username,
   machine: env.EAS_BUILD ? "eas-build" : env.CI ? "ci" : hostname(),
