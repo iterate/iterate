@@ -9,9 +9,9 @@
 //     (alias/static/code/stateful) → fall back to the PARENT PATH, then the SHELL. "Reads fall back, writes
 //     stay local."
 //   • provideCapability — mount at a callPath. Two dynamic-worker kinds (mirroring apps/os): `code` = a
-//     STATELESS repo fn; `stateful` = a repo `DurableObject` class hosted as a FACET (isolated SQLite,
-//     durable). load — run confined code IN this context (env.ITX = self-stub). itx.configure — run the repo's
-//     config worker. itx.repo — the project's file store.
+//     STATELESS repo fn; `stateful` = a repo `DurableObject` class run by the dedicated StatefulWorkerDurableObject
+//     runner (a separate DO the host forwards to by name). load — run confined code IN this context
+//     (env.ITX = self-stub). itx.configure — run the repo's config worker. itx.repo — the project's file store.
 //
 // Wake-on-call (spike-4): a live RPC leg is the ONLY thing that pins the DO; wake sockets are hibernatable, so
 // 1000 registered devices cost ~nothing while idle. The fallback is a real second worker (the control plane).
