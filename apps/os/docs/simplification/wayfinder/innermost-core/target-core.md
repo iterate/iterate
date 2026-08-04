@@ -407,10 +407,13 @@ invention — the hard parts are already proven.
 
 ## 8. Open questions to settle before coding
 
-1. **Core home:** a workspace package `packages/itx` (my assumption), or `apps/project-worker/src` imported
-   relatively by the control plane?
-2. **Folder layout (your note):** two `apps/` folders, or one app with two entrypoints? TanStack apps —
-   out of scope for now.
+1. **Core home — RESOLVED (D34, Jonas 2026-08-04): ONE npm package, no `packages/itx`.** The shared core
+   (`itx-durable-object.ts`, `stream-durable-object.ts`, `core/*`) and BOTH worker entrypoints
+   (`worker.ts` = project/inner core, `control-plane-shell.ts` = shell) live in one package
+   (`apps/project-worker`), each deployed via its own wrangler config. Both import the core directly. "It's
+   just easier to have one package."
+2. **Folder layout — RESOLVED (D34): one package, two entrypoints + two wrangler configs** (not two `apps/`
+   folders, not `packages/itx`). TanStack apps — out of scope for now.
 3. **DO always, or DO only when needed?** D19 says every dynamic `invokeCapability` enters `ItxDurableObject`
    (built-in getters resolve in-isolate without a hop). Confirm that split.
 4. **How mount-overrides of built-ins fire (the last core design question).** Jonas's `callPath`-as-itx-

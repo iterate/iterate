@@ -2,10 +2,11 @@
   "name": "project-worker",
   "private": true,
   "type": "module",
-  "description": "Project worker — the runner. Loads + serves a project's confined config worker (the project config worker) via Worker Loader. Dialed by the control plane over a service binding (same account) or HTTP + shared secret (cross-account). Pure-play. See docs/simplification/wayfinder/deployment-topologies.md.",
+  "description": "The clean-room inner core — ONE npm package (D34, no packages/itx). src/ holds the shared core (itx-durable-object, stream-durable-object, core/*) + both worker entrypoints: worker.ts (the project worker / capability host, deployed via wrangler.jsonc) and control-plane-shell.ts (the outer shell, deployed via wrangler.control-plane.jsonc). See apps/project-worker/BUILD-LOG.md.",
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
+    "deploy:control-plane": "wrangler deploy --config wrangler.control-plane.jsonc",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

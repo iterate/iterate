@@ -432,6 +432,14 @@ substrate: 4 spikes in `spikes/` (pipelining, fallthrough, wake, fused-1000-devi
     **Platform facts learned:** outbound WS = `https://` URL + `Upgrade` header (not `ws://`); a worker can't
     WS its own hostname (loop protection); a no-props `ctx.exports.X` loopback stub is used directly as a
     Fetcher (calling it with args throws). NOT YET committed (awaiting Jonas per standing rule).
+- **D34 — ONE npm package for the clean room; NO `packages/itx`. (Jonas, 2026-08-04.)** Reverses D26's
+  `packages/itx` + separate-apps split: "have everything in one npm package still, like the control plane and
+  the project worker — it's just easier." The whole clean-room lives in **one package** whose `src/` holds the
+  shared core (`itx-durable-object.ts`, `stream-durable-object.ts`, `core/*`) AND both worker entrypoints
+  (`worker.ts` = the project worker/inner core; `control-plane-shell.ts` = the shell), each deployed via its
+  own wrangler config (`wrangler.jsonc`, `wrangler.control-plane.jsonc`). Both workers import the same core
+  modules directly — the "write code the same way inner and outer" ideal (D26) achieved WITHOUT a package
+  boundary. (Implemented as `apps/project-worker` across increments 1–11.) Resolves target-core §8 open Q #1.
 - **D14 — Cost/billing is USERSPACE, not a control-plane primitive.** Budgets/spend limits are a key PRODUCT
   concern but implemented in userspace: a **stream processor that consumes cost-bearing events** across
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core
