@@ -370,7 +370,7 @@ export function CodeBlock({
   // the text → editor swap cannot cause a layout jump (CodeMirror fills
   // whatever box it is given).
   const lineCount = text.split("\n").length;
-  const height = Math.min(260, Math.max(58, lineCount * 19 + 24));
+  const height = Math.min(260, Math.max(58, lineCount * 19 + 36));
   return (
     <View style={[styles.codeViewer, { height }, muted && styles.codeMuted]}>
       <View
