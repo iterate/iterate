@@ -173,9 +173,23 @@ dormant:true}` after idle — the device stays registered while **nothing pins t
 - **Topology note:** this is self-host/hosted (two workers). Solo = the same project worker with `FALLBACK` →
   its own `DummyControlPlane` (one worker). Same code, config-only difference (D26).
 
+## Increment 12 — cross-script DO sharing: the control plane writes into a project's stream (D27)
+
+**Commit** `<pending>`.
+
+- The control-plane worker binds the project worker's `StreamDurableObject` namespace **cross-script**
+  (`{ class_name:"StreamDurableObject", script_name:"project-worker" }` — no migration; the class is owned by
+  project-worker). So there is ONE shared streams namespace across both workers.
+- `control-plane-shell.ts` `/emit` names `${projectId}:${path}` directly (the SAME name a project's
+  `itx.streams` builds) and appends — the outer→inner write (project-created events, routed inbound webhooks).
+- **Proven:** `iterate-control-plane/emit?projectId=prj_demo&path=/inbox&type=project-created` →
+  `{wroteInto:"prj_demo:/inbox", offset:1}`; then the PROJECT read its own `/inbox`
+  (`itx.streams.read`) and saw `{type:"project-created", payload:{by:"control-plane"}}`. Outer reaches in; a
+  project can only name its own streams (inner→outer is unexpressible — increment 8's isolation).
+
 ---
 
-## Status after increment 11 — the inner core end to end
+## Status after increment 12 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project
 secret-sub → fallback → terminal), the **capability model** (`invokeCapability`/`provideCapability` +

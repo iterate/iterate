@@ -9,9 +9,14 @@
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "./core/egress.ts";
+import type { StreamDurableObject } from "./stream-durable-object.ts";
 
 interface Env {
   PLATFORM_SECRETS_KV?: KVNamespace; // first-party keys (hosted only); keyed by bare name (not project-prefixed)
+  // CROSS-SCRIPT binding to the project worker's StreamDurableObject namespace (D27): ONE shared streams
+  // namespace, so the control plane can name + write into a PROJECT's stream. A project can only ever name its
+  // OWN streams (constructive isolation) — so this reach is outer→inner ONLY.
+  STREAM_DO?: DurableObjectNamespace<StreamDurableObject>;
 }
 
 export class ControlPlaneShell extends WorkerEntrypoint<Env> {
@@ -31,7 +36,22 @@ export class ControlPlaneShell extends WorkerEntrypoint<Env> {
 }
 
 export default {
-  fetch(): Response {
+  async fetch(request: Request, env: Env): Promise<Response> {
+    const url = new URL(request.url);
+    // The OUTER shell writing INTO a project's stream (D27): the control plane names `{projectId}:{path}`
+    // directly (the SAME name a project's itx.streams builds) and appends — e.g. a project-created event or a
+    // routed inbound webhook. A project can only ever name its own streams, so this direction is outer→inner.
+    if (url.pathname === "/emit") {
+      const projectId = url.searchParams.get("projectId") ?? "";
+      const path = url.searchParams.get("path") ?? "/inbox";
+      const type = url.searchParams.get("type") ?? "project-created";
+      if (!env.STREAM_DO) return new Response("no STREAM_DO bound\n", { status: 500 });
+      const r = await env.STREAM_DO.getByName(`${projectId}:${path}`).append({
+        type,
+        payload: { by: "control-plane", projectId },
+      });
+      return Response.json({ ok: true, wroteInto: `${projectId}:${path}`, ...r });
+    }
     return new Response("iterate control-plane (shell)\n", {
       headers: { "content-type": "text/plain" },
     });
