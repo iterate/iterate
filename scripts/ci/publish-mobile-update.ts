@@ -54,14 +54,22 @@ if (!runtimeVersion) {
 }
 console.log(`published update ${updates[0].id} (runtime ${runtimeVersion}): ${message}`);
 
-const builds: any[] = easJson(["build:list", "--platform", "ios", "--limit", "30"]);
+// Filter server-side (--build-profile/--runtime-version) so unrelated dev
+// builds can't push the matching preview build past --limit. --status only
+// accepts one value, so the usable-status check stays client-side.
+const builds: any[] = easJson([
+  "build:list",
+  "--platform",
+  "ios",
+  "--build-profile",
+  "preview",
+  "--runtime-version",
+  runtimeVersion,
+  "--limit",
+  "30",
+]);
 const usable = ["NEW", "IN_QUEUE", "IN_PROGRESS", "FINISHED"];
-const compatible = builds.find(
-  (b) =>
-    b.buildProfile === "preview" &&
-    b.runtimeVersion === runtimeVersion &&
-    usable.includes(b.status),
-);
+const compatible = builds.find((b) => usable.includes(b.status));
 if (compatible) {
   console.log(`native preview build already exists: ${compatible.id} (${compatible.status})`);
 } else {
