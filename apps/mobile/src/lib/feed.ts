@@ -14,7 +14,6 @@ import {
   type AgentUiItem,
   type AgentUiState,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
-import type { AgentUiStep as AgentUiStepInternal } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 
 export type {
@@ -27,6 +26,9 @@ export type {
   AgentUiStep,
   AgentUiStreamWakeItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+// Round grouping lives with the reducer so the os web feed groups the same
+// way (apps/os/src/components/agent-feed.tsx renders the same rounds).
+export { groupActivityRounds } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 export type AgentFeed = {
   /** Settled items in order, then queued user messages, then the live activity. */
@@ -107,32 +109,4 @@ export function collapseConsecutiveStreamWakes(items: AgentUiItem[]): MobileFeed
 /** One-line summary for a collapsed activity row: "Ran code 2× · 3 requests · 7.4s". */
 export function summarizeActivity(activity: AgentUiActivity): string {
   return formatAgentUiActivitySummary(activity);
-}
-
-/**
- * Group an activity's steps into ROUNDS for the card's vertical layout: the
- * llm step that writes a script and the code step that runs it belong
- * together, and an agent that returns itself a value for the next attempt
- * produces round 2, 3, … A round opens at every llm step (or at a code step
- * with no llm before it — replays can drop the llm half).
- */
-export function groupActivityRounds(steps: readonly AgentUiStepInternal[]): {
-  llm: Extract<AgentUiStepInternal, { kind: "llm" }> | null;
-  code: Extract<AgentUiStepInternal, { kind: "code" }> | null;
-}[] {
-  const rounds: {
-    llm: Extract<AgentUiStepInternal, { kind: "llm" }> | null;
-    code: Extract<AgentUiStepInternal, { kind: "code" }> | null;
-  }[] = [];
-  for (const step of steps) {
-    const current = rounds.at(-1);
-    if (step.kind === "llm") {
-      rounds.push({ llm: step, code: null });
-    } else if (current !== undefined && current.code === null) {
-      current.code = step;
-    } else {
-      rounds.push({ llm: null, code: step });
-    }
-  }
-  return rounds;
 }

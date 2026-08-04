@@ -7,6 +7,7 @@ import type {
   AgentUiLlmStep,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { AgentFeedItemRow, AgentLiveActivity } from "./agent-feed.tsx";
+import { buildRoundMetaYaml } from "~/lib/agent-round-meta-yaml.ts";
 
 afterEach(() => {
   vi.useRealTimers();
@@ -187,6 +188,9 @@ test("an expired request renders as a failed activity with its reason labeled", 
 
   expect(summary?.textContent).toBe("1 request · failed · 31 s");
   expect(summary?.querySelector("svg.lucide-circle-alert")).not.toBeNull();
+  // A single llm-only round renders its stat line in place (no tabs, no
+  // "Round 1" header) — mirroring mobile's LlmStepView.
+  expect(expired.textContent).not.toContain("Round 1");
   expect(expired.textContent).toContain("Request expiredopenai/gpt-5.6-sol · 5 s");
 });
 
@@ -210,9 +214,11 @@ test("known and unknown cancellations render distinctly inside a failed activity
   expect(interrupted.querySelector('button[title^="Agent activity"]')?.textContent).toBe(
     "2 requests · failed · 5 s",
   );
-  expect(interrupted.querySelector("svg.lucide-ban")).not.toBeNull();
-  expect(interrupted.textContent).toContain("Stopped for your new message");
-  expect(interrupted.textContent).toContain("Request cancelled");
+  expect(interrupted.querySelector("svg.lucide-circle-alert")).not.toBeNull();
+  // Two llm-only rounds: each gets a "Round N" header whose suffix carries
+  // the cancellation reason.
+  expect(interrupted.textContent).toContain("Round 1Stopped for your new message");
+  expect(interrupted.textContent).toContain("Round 2Request cancelled");
 });
 
 test("a pending request without a running step shows its own status, not a finished operation's", () => {
@@ -290,32 +296,25 @@ test("a running code row stops counting and fails visibly at its absolute deadli
   expect(status?.querySelector("svg.lucide-loader-circle")).toBeNull();
 });
 
-test("expanded activity rows are themselves inspector buttons without inline trace details", () => {
+test("a single settled round expands straight to Script | Result | Meta tabs", () => {
   const startedAtMs = Date.UTC(2026, 6, 15, 22, 6, 0);
   const inspected = activity({
     startedAtMs,
     endedAtMs: startedAtMs + 5_000,
     steps: [
-      {
-        kind: "llm",
-        id: "llm:53",
-        llmRequestOffset: 53,
-        status: "done",
+      llmStep(53, startedAtMs, {
         model: "openai/gpt-5.6-sol",
-        thinkingText: "",
-        responseText: "",
-        outcome: "completed",
-        startedAtMs,
         durationMs: 2_942,
         inputTokens: 6_601,
         outputTokens: 72,
-      },
+      }),
       {
         kind: "code",
         id: "code:53",
         executionId: "agent-output:53",
         status: "done",
         code: "return { ok: true }",
+        result: { ok: true },
         success: true,
         startedAtMs: startedAtMs + 3_000,
         durationMs: 2_000,
@@ -326,15 +325,62 @@ test("expanded activity rows are themselves inspector buttons without inline tra
 
   const container = renderActivity(inspected);
 
-  const llmRow = container.querySelector('[data-testid="agent-feed-inspect-llm-request"]');
-  const scriptRow = container.querySelector('[data-testid="agent-feed-inspect-script-execution"]');
-  expect(llmRow?.tagName).toBe("BUTTON");
-  expect(scriptRow?.tagName).toBe("BUTTON");
-  expect(llmRow?.textContent).toContain("openai/gpt-5.6-sol6.6k → 72 tok · 2.9 s");
-  expect(scriptRow?.textContent).toContain("Ran codeStarted ");
-  expect(scriptRow?.textContent).toContain(" · 2 s");
-  expect(container.textContent).not.toContain("View trace");
-  expect(container.textContent).not.toContain('"status": "completed"');
+  // One round: no "Round 1" header, the tab bar renders directly, and the
+  // llm request's stats no longer spend a feed row — they live in Meta.
+  expect(container.textContent).not.toContain("Round 1");
+  const tabLabels = [...container.querySelectorAll('[data-slot="tabs-trigger"]')].map(
+    (tab) => tab.textContent,
+  );
+  expect(tabLabels).toEqual(["Script", "Result", "Meta"]);
+  expect(container.textContent).not.toContain("6.6k → 72 tok");
+  // Script is the default tab: the submitted code's execution trace remains
+  // one click away.
+  expect(
+    container.querySelector('[data-testid="agent-feed-inspect-script-execution"]')?.tagName,
+  ).toBe("BUTTON");
+});
+
+test("a multi-round activity collapses each round to a header row", () => {
+  const startedAtMs = Date.UTC(2026, 6, 15, 22, 6, 0);
+  const codeStep = (id: number, offsetMs: number) =>
+    ({
+      kind: "code",
+      id: `code:${id}`,
+      executionId: `agent-output:${id}`,
+      status: "done",
+      code: `return ${id}`,
+      success: true,
+      startedAtMs: startedAtMs + offsetMs,
+      durationMs: 2_000,
+      expiresAtMs: startedAtMs + 60_000,
+    }) as const;
+  const container = renderActivity(
+    activity({
+      startedAtMs,
+      endedAtMs: startedAtMs + 20_000,
+      steps: [
+        llmStep(10, startedAtMs, { model: "openai/gpt-5.6-sol" }),
+        { ...codeStep(1, 3_000), activitySummary: "Searching the five most recent emails" },
+        llmStep(20, startedAtMs + 6_000, { model: "openai/gpt-5.6-sol" }),
+        codeStep(2, 9_000),
+      ],
+    }),
+  );
+
+  const rounds = [...container.querySelectorAll('[data-testid="agent-feed-round"]')];
+  expect(rounds.map((round) => round.textContent)).toMatchObject([
+    expect.stringContaining("Round 1"),
+    expect.stringContaining("Round 2"),
+  ]);
+  // A round with a summary activity shows it instead of the bare start time…
+  expect(rounds[0]?.textContent).toBe("Round 1Searching the five most recent emails · 2 s");
+  // …and one without falls back to when it started.
+  expect(rounds[1]?.textContent).toMatch(/Round 2Started \d/);
+  expect(rounds[1]?.textContent).toContain(" · 2 s");
+  // Collapsed rounds: no tab bars, no inline code or llm stats.
+  expect(container.querySelector('[data-slot="tabs-trigger"]')).toBeNull();
+  expect(container.textContent).not.toContain("return 1");
+  expect(container.textContent).not.toContain("openai/gpt-5.6-sol");
 });
 
 test("failed script outcomes are explicit in both collapsed and expanded activity rows", () => {
@@ -360,7 +406,45 @@ test("failed script outcomes are explicit in both collapsed and expanded activit
   const container = renderActivity(failed);
 
   expect(container.textContent).toContain("Ran code 1× · 0 requests · failed · 2m 0s");
-  expect(
-    container.querySelector('[data-testid="agent-feed-inspect-script-execution"]')?.textContent,
-  ).toMatch(/Code failedStarted .* · 2m 0s/);
+  // The failed run settled with an error, so the single round offers a
+  // Result tab alongside Script and Meta.
+  const tabLabels = [...container.querySelectorAll('[data-slot="tabs-trigger"]')].map(
+    (tab) => tab.textContent,
+  );
+  expect(tabLabels).toEqual(["Script", "Result", "Meta"]);
+});
+
+test("the Meta yaml carries the round stats and the replayed prompt", () => {
+  const startedAtMs = Date.UTC(2026, 6, 15, 22, 6, 0);
+  const yaml = buildRoundMetaYaml(
+    llmStep(53, startedAtMs, {
+      model: "openai/gpt-5.6-sol",
+      durationMs: 2_942,
+      inputTokens: 6_601,
+      outputTokens: 72,
+    }),
+    {
+      kind: "code",
+      id: "code:53",
+      executionId: "agent-output:53",
+      status: "done",
+      code: "return 1",
+      success: true,
+      startedAtMs,
+      durationMs: 2_000,
+      expiresAtMs: startedAtMs + 60_000,
+    },
+    [
+      { role: "system", content: "You are an agent." },
+      { role: "user", content: "Line one\nLine two" },
+    ],
+  );
+
+  expect(yaml).toContain("model: openai/gpt-5.6-sol");
+  expect(yaml).toContain("duration: 2.9s");
+  expect(yaml).toContain("inputTokens: 6601");
+  expect(yaml).toContain("prompt: # 2 messages, 34 chars");
+  // Multiline prompt content renders as a readable block scalar.
+  expect(yaml).toContain("content: |-");
+  expect(yaml).toContain("Line two");
 });
