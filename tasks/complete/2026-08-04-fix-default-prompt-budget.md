@@ -1,11 +1,11 @@
 ---
-status: done-pending-ci
+status: done
 size: small
 ---
 
 # Fix main CI: default agent prompt 13 chars over budget
 
-**Status summary:** fix implemented and verified locally (full apps/os suite + typecheck/lint/knip green). Awaiting CI on PR #2406.
+**Status summary:** done — PR #2406 fully green (all Depot checks pass, mergeable CLEAN).
 
 Main has been red since fe7167f6b (#2399). `agent-prompt-budgets.test.ts > the default prompt stays under 4200 tokens` fails: 16813 chars vs the 16800 ceiling (4200 tokens × 4 chars/token).
 
