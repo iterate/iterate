@@ -1422,15 +1422,15 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
      */
     const watch = await watchStream({
       eventTypes: [
-        "voicelab/dev-stats",
-        "voicelab/grok-event",
-        "voicelab/call-accepted",
-        "voicelab/call-ended",
+        "voice-agent/dev-stats",
+        "voice-agent/grok-event",
+        "voice-agent/call-accepted",
+        "voice-agent/call-ended",
         /* A losing bridge announces itself here and nowhere else. */
-        "voicelab/call-failed",
+        "voice-agent/call-failed",
         /* The device's own re-asks, which is how a lost request shows up. */
-        "voicelab/call-requested",
-        "voicelab/bridge-redialling",
+        "voice-agent/call-requested",
+        "voice-agent/bridge-redialling",
       ],
       key: `sessions-${input.runStartedAt}-s${input.index}`,
       onNote: (what) => step(what),
@@ -1438,13 +1438,13 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
       onBatch: (batch) => {
         for (const event of batch.events) {
           const payload = (event.payload ?? {}) as Record<string, unknown>;
-          if (event.type === "voicelab/dev-stats") {
+          if (event.type === "voice-agent/dev-stats") {
             const sample: StatsSample = { ...(payload as DeviceStats), atMs: elapsed() };
             samples.push(sample);
             input.samples.push({ ...sample, session: input.index });
             continue;
           }
-          if (event.type === "voicelab/call-accepted") {
+          if (event.type === "voice-agent/call-accepted") {
             callLiveAt = Date.now();
             if (sessionLive || callAccepts.length === 0) {
               callAccepts.push({
@@ -1456,7 +1456,7 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
             liveCallId = typeof payload.callId === "string" ? payload.callId : null;
             continue;
           }
-          if (event.type === "voicelab/call-ended") {
+          if (event.type === "voice-agent/call-ended") {
             callLiveAt = 0;
             liveCallId = null;
             if (sessionLive) {
@@ -1468,7 +1468,7 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
             }
             continue;
           }
-          if (event.type === "voicelab/call-requested") {
+          if (event.type === "voice-agent/call-requested") {
             /*
              * ONLY THE BRING-UP WINDOW.
              *
@@ -1486,7 +1486,7 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
             }
             continue;
           }
-          if (event.type === "voicelab/call-failed") {
+          if (event.type === "voice-agent/call-failed") {
             callFailures.push({
               atMs: elapsed(),
               callId: typeof payload.callId === "string" ? payload.callId : null,
@@ -1494,7 +1494,7 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
             });
             continue;
           }
-          if (event.type === "voicelab/bridge-redialling") {
+          if (event.type === "voice-agent/bridge-redialling") {
             redials++;
             continue;
           }
@@ -1540,7 +1540,7 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
       let firstAt = 0;
       const handle = await stream.openConnection({
         connectionKey: `sessions-audio-${input.runStartedAt}-${label}`,
-        eventTypes: ["voicelab/spk-frame"],
+        eventTypes: ["voice-agent/spk-frame"],
         maxDeliveryBytes: 1400,
         maxDeliveryEvents: 1,
         processEventBatch: (batch) => {
@@ -1957,7 +1957,7 @@ async function voiceAgentRemovalConfirmed(
     const recent = events.slice(-40);
     const bridgeAlive = recent.some(
       (event: StreamEventLike) =>
-        event.type === "voicelab/call-accepted" &&
+        event.type === "voice-agent/call-accepted" &&
         Date.parse(event.createdAt) > Date.now() - 10_000,
     );
     if (!subscribed && !bridgeAlive) {
@@ -2026,7 +2026,7 @@ async function takeTurn(input: TakeTurnInput): Promise<SessionTurn> {
     promptClass: planned.promptClass,
     proves: planned.proves,
   };
-  await input.stream.append({ payload: { text: planned.text }, type: "voicelab/say" });
+  await input.stream.append({ payload: { text: planned.text }, type: "voice-agent/say" });
 
   /** The answer this turn's latency is measured against, and when it was asked. */
   let measuredFrom = askedAt;
@@ -2054,7 +2054,7 @@ async function takeTurn(input: TakeTurnInput): Promise<SessionTurn> {
       turn.interruptPrompt = planned.interruptWith;
       await input.stream.append({
         payload: { text: planned.interruptWith ?? "" },
-        type: "voicelab/say",
+        type: "voice-agent/say",
       });
       const deadline = measuredFrom + ANSWER_TIMEOUT_MS.short;
       while (Date.now() < deadline && (input.readAnswer()?.doneAt ?? 0) === 0) {

@@ -126,10 +126,10 @@ export async function client(options: ClientOptions) {
   const connection = await openResilientConnection(stream, {
     connectionKey: `voicelab-client-${callId}`,
     eventTypes: [
-      "voicelab/spk-frame",
-      "voicelab/grok-event",
-      "voicelab/pong",
-      "voicelab/call-accepted",
+      "voice-agent/spk-frame",
+      "voice-agent/grok-event",
+      "voice-agent/pong",
+      "voice-agent/call-accepted",
     ],
     quietMs: 4000,
     // Before call-accepted there is legitimately no traffic; afterwards pings
@@ -141,11 +141,11 @@ export async function client(options: ClientOptions) {
         for (const event of events) {
           const payload = event.payload as Record<string, unknown>;
           switch (event.type) {
-            case "voicelab/call-accepted":
+            case "voice-agent/call-accepted":
               accepted = true;
               console.error(`client: call accepted by ${payload.bridge} bridge (${payload.model})`);
               break;
-            case "voicelab/spk-frame": {
+            case "voice-agent/spk-frame": {
               spkFrames++;
               const seq = payload.seq as number;
               if (lastSpkSeq >= 0 && seq > lastSpkSeq + 1) spkFramesLost += seq - lastSpkSeq - 1;
@@ -168,12 +168,12 @@ export async function client(options: ClientOptions) {
               playout.write(pcm);
               break;
             }
-            case "voicelab/grok-event": {
+            case "voice-agent/grok-event": {
               const grokEvent = payload.event as { type: string; [key: string]: unknown };
               handleGrokEvent(grokEvent, now);
               break;
             }
-            case "voicelab/pong": {
+            case "voice-agent/pong": {
               const t0 = payload.t0 as number;
               const t1 = payload.t1 as number;
               const rtt = now - t0;
@@ -242,7 +242,7 @@ export async function client(options: ClientOptions) {
 
   // Durable control-plane event opens the call; the bridge answers call-accepted.
   await stream.append({
-    type: "voicelab/call-requested",
+    type: "voice-agent/call-requested",
     payload: {
       callId,
       ...(options.model ? { model: options.model } : {}),
@@ -319,7 +319,7 @@ export async function client(options: ClientOptions) {
     pendingFrames.push({ seq: micSeq++, t: Date.now(), pcm: frame.toString("base64") });
     if (pendingFrames.length >= framesPerAppend) {
       const events = pendingFrames.map((payload) => ({
-        type: "voicelab/mic-frame",
+        type: "voice-agent/mic-frame",
         ephemeral: true as const,
         payload: { callId, ...payload },
       }));
@@ -332,7 +332,7 @@ export async function client(options: ClientOptions) {
 
   const pingTimer = setInterval(() => {
     const payload = { id: crypto.randomUUID().slice(0, 8), t0: Date.now() };
-    impair.tx(() => fireAppend({ type: "voicelab/ping", ephemeral: true, payload }));
+    impair.tx(() => fireAppend({ type: "voice-agent/ping", ephemeral: true, payload }));
   }, 2000);
 
   if (options.mic) {
@@ -356,7 +356,7 @@ export async function client(options: ClientOptions) {
   if (anchorPingTimer) clearInterval(anchorPingTimer);
   mic.stop();
   playout.stop();
-  fireAppend({ type: "voicelab/call-ended", payload: { callId, reason: "client done" } });
+  fireAppend({ type: "voice-agent/call-ended", payload: { callId, reason: "client done" } });
   await new Promise((resolve) => setTimeout(resolve, 300));
   anchor?.close();
   connection.close();

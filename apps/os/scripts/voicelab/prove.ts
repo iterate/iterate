@@ -2509,7 +2509,7 @@ async function watchStream(itx: Awaited<ReturnType<typeof connectProject>>, path
   let seen = 0;
   const connection = await itx.streams.get(path).openConnection({
     connectionKey: `prove-restart-${Date.now()}`,
-    eventTypes: ["voicelab/dev-stats"],
+    eventTypes: ["voice-agent/dev-stats"],
     processEventBatch: (batch: { events: unknown[] }) => {
       seen += batch.events.length;
     },

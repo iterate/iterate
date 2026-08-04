@@ -27,7 +27,21 @@ import { connectProject, resolveVoicelabBaseUrl, type VoicelabConnectOptions } f
 import { installVoiceAgent } from "./deploy.ts";
 import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
 
-const DEFAULT_PROJECT = "prj_698c23da57f84d92a9ba5dc959efebec";
+/*
+ * PRODUCTION, AND A PROJECT THAT EXISTS TOMORROW.
+ *
+ * This defaulted to a preview slot and an opaque project id, and that combination
+ * cost a real debugging session: a call was made, three turns went unanswered,
+ * and by the time the stream was opened to find out why, `preview_3` answered
+ * 503 to everything. Preview environments hold a roughly three-hour lease and
+ * are then reclaimed — so the evidence for a bug found on one has a shelf life
+ * shorter than the bug report. `voice-test` on production does not evaporate,
+ * and a slug is something you can recognise in a prompt.
+ *
+ * `--project` and ITERATE_PROJECT still point this anywhere; the default is
+ * about where an unattended answer lands, which should be the boring place.
+ */
+const DEFAULT_PROJECT = "voice-test";
 const DEFAULT_MINUTES = 30;
 const XAI_SECRET = "/secrets/xai";
 /**

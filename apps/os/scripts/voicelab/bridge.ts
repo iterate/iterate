@@ -99,7 +99,7 @@ export async function bridge(options: BridgeOptions) {
     callId = null;
     grok?.close();
     grok = null;
-    fireAppend({ type: "voicelab/call-ended", payload: { callId: endedCallId, reason } });
+    fireAppend({ type: "voice-agent/call-ended", payload: { callId: endedCallId, reason } });
     console.error(`bridge: call ${endedCallId} ended (${reason})`);
     printSummary();
     if (options.once) done?.();
@@ -125,7 +125,7 @@ export async function bridge(options: BridgeOptions) {
     client.connect();
     client.on("ready", () => {
       fireAppend({
-        type: "voicelab/call-accepted",
+        type: "voice-agent/call-accepted",
         payload: { callId, bridge: "node", model: client.options.model },
       });
       console.error(`bridge: call ${callId} accepted (model=${client.options.model})`);
@@ -152,7 +152,7 @@ export async function bridge(options: BridgeOptions) {
       for (let offset = 0; offset < pcm.length; offset += 640) {
         spkFrames++;
         events.push({
-          type: "voicelab/spk-frame",
+          type: "voice-agent/spk-frame",
           ephemeral: true as const,
           payload: {
             callId,
@@ -177,7 +177,7 @@ export async function bridge(options: BridgeOptions) {
         paceQueue.length = 0; // barge-in: never drip stale response audio
       }
       fireAppend({
-        type: "voicelab/grok-event",
+        type: "voice-agent/grok-event",
         ephemeral: true,
         payload: { callId, t: Date.now(), event },
       });
@@ -189,10 +189,10 @@ export async function bridge(options: BridgeOptions) {
   const connection = await openResilientConnection(stream, {
     connectionKey: `voicelab-bridge-${crypto.randomUUID().slice(0, 8)}`,
     eventTypes: [
-      "voicelab/mic-frame",
-      "voicelab/call-requested",
-      "voicelab/call-ended",
-      "voicelab/ping",
+      "voice-agent/mic-frame",
+      "voice-agent/call-requested",
+      "voice-agent/call-ended",
+      "voice-agent/ping",
     ],
     quietMs: 4000,
     // Pings flow every 2s during a call; when idle, silence is expected and
@@ -203,22 +203,22 @@ export async function bridge(options: BridgeOptions) {
       for (const event of events) {
         const payload = event.payload as Record<string, unknown>;
         switch (event.type) {
-          case "voicelab/mic-frame": {
+          case "voice-agent/mic-frame": {
             micInBatch++;
             micFrames++;
             micOneWay.push(Date.now() - (payload.t as number));
             grok?.sendAudio(Buffer.from(payload.pcm as string, "base64"));
             break;
           }
-          case "voicelab/call-requested":
+          case "voice-agent/call-requested":
             startCall(payload);
             break;
-          case "voicelab/call-ended":
+          case "voice-agent/call-ended":
             if ((payload.callId as string) === callId) endCall("client requested end");
             break;
-          case "voicelab/ping":
+          case "voice-agent/ping":
             fireAppend({
-              type: "voicelab/pong",
+              type: "voice-agent/pong",
               ephemeral: true,
               payload: { id: payload.id, t0: payload.t0, t1: Date.now() },
             });

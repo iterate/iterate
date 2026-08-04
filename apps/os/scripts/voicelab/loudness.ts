@@ -119,7 +119,7 @@ async function playTone(
         pcm.writeInt16LE(Math.round(Math.sin(phase) * 16_384), sample * 2);
       }
       events.push({
-        type: "voicelab/spk-frame",
+        type: "voice-agent/spk-frame",
         ephemeral: true,
         payload: { callId, pcm: pcm.toString("base64"), seq: sequence++, t: Date.now() },
       });

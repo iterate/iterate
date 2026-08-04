@@ -2,6 +2,7 @@
 // abstraction. See README.md in this directory for the protocol and findings.
 export { bench } from "./bench.ts";
 export { bridge } from "./bridge.ts";
+export { chronology } from "./chronology.ts";
 export { client } from "./client.ts";
 export { deploy } from "./deploy.ts";
 export { device } from "./device.ts";

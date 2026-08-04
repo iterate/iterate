@@ -29,13 +29,13 @@ function history(markers: { setupId: string; briefKey: string }[], audioBetween:
   for (const marker of markers) {
     for (let frame = 0; frame < audioBetween; frame++) {
       /* The bulk: both directions of audio, plus the stats that ride along. */
-      events.push({ type: "voicelab/spk-frame", payload: { seq: frame } });
-      events.push({ type: "voicelab/mic-frame", payload: { seq: frame } });
+      events.push({ type: "voice-agent/spk-frame", payload: { seq: frame } });
+      events.push({ type: "voice-agent/mic-frame", payload: { seq: frame } });
       if (frame % 50 === 0)
-        events.push({ type: "voicelab/dev-stats", payload: { spkPlayed: frame } });
+        events.push({ type: "voice-agent/dev-stats", payload: { spkPlayed: frame } });
     }
     events.push({
-      type: "voicelab/brief-current",
+      type: "voice-agent/brief-current",
       payload: { ...marker, contentHash: `hash-of-${marker.setupId}` },
     });
   }
@@ -99,25 +99,25 @@ describe("briefMarkerFromEvent", () => {
     /* Which is what setup's bounded failure reports, rather than acknowledging
      * a brief nobody named. */
     expect(fold(history([], 100))).toBeNull();
-    expect(fold([{ type: "voicelab/spk-frame", payload: { seq: 1 } }])).toBeNull();
+    expect(fold([{ type: "voice-agent/spk-frame", payload: { seq: 1 } }])).toBeNull();
   });
 
   it("refuses a marker missing either half of its identity", () => {
     /* Both halves are required: the key alone could belong to an identical brief
      * from another setup, and the setupId alone names no context event. */
-    expect(briefMarkerFromEvent({ type: "voicelab/brief-current", payload: {} })).toBeNull();
+    expect(briefMarkerFromEvent({ type: "voice-agent/brief-current", payload: {} })).toBeNull();
     expect(
-      briefMarkerFromEvent({ type: "voicelab/brief-current", payload: { setupId: "s1" } }),
+      briefMarkerFromEvent({ type: "voice-agent/brief-current", payload: { setupId: "s1" } }),
     ).toBeNull();
     expect(
       briefMarkerFromEvent({
-        type: "voicelab/brief-current",
+        type: "voice-agent/brief-current",
         payload: { briefKey: "k", contentHash: "h" },
       }),
     ).toBeNull();
     expect(
       briefMarkerFromEvent({
-        type: "voicelab/brief-current",
+        type: "voice-agent/brief-current",
         payload: { setupId: "", briefKey: "k", contentHash: "h" },
       }),
     ).toBeNull();

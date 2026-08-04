@@ -151,7 +151,7 @@ export async function device(options: DeviceOptions) {
           pcm.writeInt16LE(Math.round(Math.sin(phase) * 16_384), sample * 2);
         }
         events.push({
-          type: "voicelab/spk-frame" as const,
+          type: "voice-agent/spk-frame" as const,
           ephemeral: true as const,
           payload: {
             callId: "tone",
@@ -283,7 +283,7 @@ export async function device(options: DeviceOptions) {
       let spokenText = "";
       const connection = await stream.openConnection({
         connectionKey: `journey-${Date.now()}`,
-        eventTypes: ["voicelab/grok-event"],
+        eventTypes: ["voice-agent/grok-event"],
         processEventBatch: (batch: { events: { payload?: unknown }[] }) => {
           for (const event of batch.events) {
             const inner = (event.payload as { event?: { type?: string; delta?: string } })?.event;

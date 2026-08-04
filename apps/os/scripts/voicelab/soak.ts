@@ -95,11 +95,11 @@ export async function soak(options: SoakOptions) {
    */
   const watch = await watchStream({
     eventTypes: [
-      "voicelab/dev-stats",
-      "voicelab/grok-event",
-      "voicelab/call-accepted",
-      "voicelab/call-ended",
-      "voicelab/bridge-redialling",
+      "voice-agent/dev-stats",
+      "voice-agent/grok-event",
+      "voice-agent/call-accepted",
+      "voice-agent/call-ended",
+      "voice-agent/bridge-redialling",
     ],
     key: `soak-${startedAt}`,
     onNote: note,
@@ -107,20 +107,20 @@ export async function soak(options: SoakOptions) {
     onBatch: (batch) => {
       for (const event of batch.events) {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
-        if (event.type === "voicelab/dev-stats") {
+        if (event.type === "voice-agent/dev-stats") {
           samples.push(payload as unknown as DeviceStats);
           continue;
         }
-        if (event.type === "voicelab/call-accepted") {
+        if (event.type === "voice-agent/call-accepted") {
           callLiveAt = Date.now();
           note(`call-accepted by bridge ${String(payload.bridgeId)}`);
           continue;
         }
-        if (event.type === "voicelab/call-ended") {
+        if (event.type === "voice-agent/call-ended") {
           note(`CALL ENDED: ${String(payload.reason)}`);
           continue;
         }
-        if (event.type === "voicelab/bridge-redialling") {
+        if (event.type === "voice-agent/bridge-redialling") {
           /*
            * Not a failure: the provider closes its socket on its own
            * schedule and the bridge replaces it underneath the
@@ -201,7 +201,7 @@ export async function soak(options: SoakOptions) {
     } else {
       await stream.append({
         payload: { text: prompt },
-        type: "voicelab/say",
+        type: "voice-agent/say",
       });
     }
     const answer = await waitForAnswer(45_000);

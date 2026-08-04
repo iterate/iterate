@@ -470,11 +470,11 @@ export async function stress(options: StressOptions) {
    */
   const watch = await watchStream({
     eventTypes: [
-      "voicelab/dev-stats",
-      "voicelab/grok-event",
-      "voicelab/call-accepted",
-      "voicelab/call-ended",
-      "voicelab/bridge-redialling",
+      "voice-agent/dev-stats",
+      "voice-agent/grok-event",
+      "voice-agent/call-accepted",
+      "voice-agent/call-ended",
+      "voice-agent/bridge-redialling",
     ],
     key: `stress-${startedAt}`,
     onNote: note,
@@ -505,17 +505,17 @@ export async function stress(options: StressOptions) {
     onBatch: (batch) => {
       for (const event of batch.events) {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
-        if (event.type === "voicelab/dev-stats") {
+        if (event.type === "voice-agent/dev-stats") {
           samples.push({ ...(payload as DeviceStats), atMs: elapsed() });
           continue;
         }
-        if (event.type === "voicelab/call-accepted") {
+        if (event.type === "voice-agent/call-accepted") {
           callLiveAt = Date.now();
           callAccepts++;
           note(`call-accepted by bridge ${String(payload.bridgeId ?? payload.bridge ?? "?")}`);
           continue;
         }
-        if (event.type === "voicelab/call-ended") {
+        if (event.type === "voice-agent/call-ended") {
           callLiveAt = 0;
           if (runLive) {
             callEnds.push({
@@ -527,7 +527,7 @@ export async function stress(options: StressOptions) {
           note(`CALL ENDED: ${String(payload.reason)}`);
           continue;
         }
-        if (event.type === "voicelab/bridge-redialling") {
+        if (event.type === "voice-agent/bridge-redialling") {
           /* Not a failure: the provider closes its socket on its own schedule
            * and the bridge replaces it under the conversation, replaying what
            * was said. Counted, because one per turn would mean something else. */
@@ -569,7 +569,7 @@ export async function stress(options: StressOptions) {
     let firstAt = 0;
     const handle = await stream.openConnection({
       connectionKey: `stress-audio-${startedAt}-${index}`,
-      eventTypes: ["voicelab/spk-frame"],
+      eventTypes: ["voice-agent/spk-frame"],
       maxDeliveryBytes: 1400,
       maxDeliveryEvents: 1,
       processEventBatch: (batch) => {
@@ -675,7 +675,7 @@ export async function stress(options: StressOptions) {
     const probe = await openAudioProbe(index);
     const turnAt = Date.now();
     answer = { createdAt: 0, doneAt: 0, firstTranscriptAt: 0, text: "" };
-    await stream.append({ payload: { text: prompt.text }, type: "voicelab/say" });
+    await stream.append({ payload: { text: prompt.text }, type: "voice-agent/say" });
 
     const timeoutMs = ANSWER_TIMEOUT_MS[prompt.promptClass];
     const answerDeadline = turnAt + timeoutMs;

@@ -80,7 +80,7 @@ if (isMainModule(import.meta.url)) {
   if (!process.env.DOPPLER_CONFIG && isVoicelabTalk(args) && !isHelpRequest(args)) {
     const environment =
       optionValue(args, "--environment") ??
-      (await promptWithDefault("Environment", process.env.ITERATE_ENV?.trim() || "preview_3"));
+      (await promptWithDefault("Environment", process.env.ITERATE_ENV?.trim() || "prd"));
     spawnAndExit("doppler", [
       "run",
       "--project",

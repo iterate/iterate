@@ -120,10 +120,10 @@ export async function reliability(options: ReliabilityOptions) {
   const openWatch = (generation: number) =>
     stream.openConnection({
       connectionKey: `reliability-${Date.now()}-g${generation}`,
-      eventTypes: ["voicelab/grok-event", "voicelab/call-accepted"],
+      eventTypes: ["voice-agent/grok-event", "voice-agent/call-accepted"],
       processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
         for (const event of batch.events) {
-          if (event.type === "voicelab/call-accepted") {
+          if (event.type === "voice-agent/call-accepted") {
             callLiveAt = Date.now();
             continue;
           }

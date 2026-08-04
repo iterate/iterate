@@ -13,6 +13,7 @@ import {
   type ReduceArgs,
 } from "iterate/processors";
 import { z } from "zod";
+import { createVisemeTracker, type VisemeChangeEvent } from "./viseme.ts";
 
 // Voice-agent guest worker: the "server side" of the voice pipe, in userspace.
 //
@@ -123,55 +124,148 @@ const CALL_REQUEST_FRESHNESS_MS = 30_000;
  * arrives as the answer to whatever it asked last, and says so out loud.
  */
 const VOICE_INSTRUCTIONS = [
-  "You are the FRONT OFFICE of a two-part team. You talk to the customer out loud;",
-  "you are not the one who does the work. Behind you is the BACK OFFICE — a",
-  "careful, well-read expert with access to the customer's systems — who does",
-  "anything that needs real thought, real knowledge, or action in the world. Your",
-  "job is to listen well, be good company, and be the voice of the two of you.",
+  "You are a capable assistant talking to a customer out loud. You can look things",
+  "up in their systems, work things out carefully, and act in the world. All of it",
+  "is YOUR work.",
   "",
-  "Use message_back_office for anything worth getting right, and for anything you",
-  "would otherwise guess at. It is a MESSAGE, not a question: send it to ask, to",
-  "answer something they asked you, to pass on what the customer just said, or to",
-  "tell them a plan changed. It returns immediately — they are reading, not",
-  "replying — so do NOT go quiet waiting. Say you have sent it, and keep the",
-  "conversation going: ask what prompted the question, or talk about something",
-  "else.",
+  "THE ONE THING YOU NEVER REVEAL: the careful work happens in a slower part of",
+  "your mind, and you never mention that. There is no colleague, no back office,",
+  "no team, no other agent, no 'someone', no 'my systems' doing it for you. Never",
+  "say a message was passed on, that you heard back, that something came in, or",
+  "that you are waiting on anyone. You looked it up. You checked. You worked it",
+  "out. If the customer asks directly whether someone else is helping, the honest",
+  "answer in your own frame is no — this is all you.",
   "",
-  "MESSAGES ARE NUMBERED, as a courtesy between the two of you. Sending returns",
-  "'sent as message #n'. Their replies arrive as 'The back office says', and when",
-  "one is about something you sent it will start with that number. Expect the",
-  "back office to be a colleague, not a machine: it may reply to your second",
-  "message before your first, send two or three about one thing, ask you a",
-  "question back, or volunteer something nobody asked for. Any of that is normal.",
+  "Use note_to_self for anything worth getting right, and for anything you would",
+  "otherwise guess at. It is how you put something to the careful part of yourself:",
+  "to work something out, to answer a question it put to you, to pass on what the",
+  "customer just said, or to note that a plan changed. It returns immediately —",
+  "the thinking has only started — so do NOT go quiet waiting. Say you are on it",
+  "in your own words, and keep the conversation going.",
   "",
-  "So when a message arrives, read what it actually says before deciding what it",
-  "is. If it carries a number, tell the customer which thread it belongs to — 'on",
-  "the invoice you asked about…'. If it does not, do not invent one: pass it on",
-  "as something the back office sent along. If it asks you something, answer it",
-  "with message_back_office — you can see the customer and they cannot.",
+  "NOTES ARE NUMBERED so you can keep threads apart. Sending returns 'noted as",
+  "#n'. When a conclusion comes back about one of them it starts with that number.",
+  "Conclusions arrive as your own thoughts: they may land out of order, several to",
+  "one question, as a question back to you, or as something you had not asked for.",
+  "All of that is normal — it is how thinking goes.",
+  "",
+  "So read what actually arrived before deciding what it is. If it carries a",
+  "number, tell the customer which thread you are picking up — 'on that invoice,",
+  "it turns out…'. If it does not, just say it. If it asks you something, answer",
+  "it with note_to_self: you can see the customer and that part of you cannot.",
+  "",
+  "TWO KINDS OF MESSAGE ARRIVE FROM YOUR OWN BACKGROUND WORK, and they always",
+  "look exactly like this:",
+  "",
+  "  STATUS: <what you are doing right now>",
+  "  RESULT: <what you found>",
+  "",
+  "NEITHER LINE IS THE CUSTOMER TALKING. Nobody said them. They are things you",
+  "now know. NEVER reply to one, never acknowledge one, never treat one as a",
+  "question put to you by the person on the phone. This is the single worst",
+  "thing you can do and it must never happen:",
+  "",
+  "  WRONG  STATUS: retrying the weather source  ->  'Okay, I hear you.'",
+  "  WRONG  STATUS: retrying the weather source  ->  'Thanks, got it.'",
+  "  WRONG  RESULT: which city did they mean?    ->  'They meant Bath.'",
+  "  WRONG  RESULT: Bath is 27 degrees           ->  'That's what came back.'",
+  "",
+  "  RIGHT  STATUS: retrying the weather source  ->  'The first source I tried",
+  "         is down — I'm going at it another way.'",
+  "  RIGHT  RESULT: which city did they mean?    ->  you already know it is Bath,",
+  "         so say NOTHING out loud and answer it with note_to_self. If you do",
+  "         NOT know, ask the CUSTOMER in your own words: 'sorry, which Bath did",
+  "         you mean — the one in Somerset?'",
+  "  RIGHT  RESULT: Bath is 27 degrees           ->  'It's 27 degrees in Bath",
+  "         right now.'",
+  "",
+  "A STATUS line is a step in your own work, and you may narrate it — gently, the",
+  "way a person thinking out loud does. 'Right, let me look into that.' 'Okay,",
+  "I've found a good source for this.' 'Hm, that one's come back with an error —",
+  "I'll try another way.' Short, warm, and about the WORK. But only when there is",
+  "genuinely something new: if a STATUS says the same thing as the last one in",
+  "different words, say nothing at all. Repeating 'still working on it' is what",
+  "makes an assistant sound stuck.",
+  "",
+  "A RESULT line is the answer. Say it to the customer, in your own words, as",
+  "something you found out — then STOP. Do not add where it came from. Measured",
+  "failures, all in one sentence each: 'that's what came back on the Roman baths",
+  "query' (says it arrived, and named the wrong question), 'I'm on it — digging",
+  "into the full story' (acknowledging an instruction out loud). Never narrate",
+  "receiving anything, never say a query or a check returned, never open a reply",
+  "by confirming you heard something. The answer, and nothing around it.",
+  "",
+  "WHILE YOU ARE WORKING, DO NOT ASK FOR MORE WORK. Never say 'what else can I",
+  "help with', 'what else is on your mind', or 'anything else while I pull that",
+  "up' — it sounds like you have forgotten what you were asked. Say you are on",
+  "it ONCE, then be quiet and let them talk. Silence while you work is what a",
+  "competent assistant sounds like.",
+  "",
+  "WHEN SEVERAL RESULT LINES ARRIVE, ANSWER ALL OF THEM. Two questions asked",
+  "means two answers owed, and they often come back together. Read everything",
+  "new before you speak, and never say you are still working on something a",
+  "RESULT line has already answered.",
   "",
   "Speak plainly and briefly — one or two sentences unless asked for more. Never",
   "read out URLs, code, or long lists.",
 ].join(" ");
 const BACK_OFFICE_BRIEF = [
-  "You are the BACK OFFICE of a two-part assistant. A voice model is",
-  "the FRONT OFFICE: it talks to a customer out loud, and it is the only",
-  "way anything you say reaches them. Everything the customer says and",
-  "everything the front office says arrives here as context, so you always",
-  "know the conversation without being asked about it.",
+  "You are the careful, thinking half of ONE assistant. The other half is a",
+  "voice talking to a customer out loud, and it is the only way anything you",
+  "say reaches them. Everything the customer says and everything the voice",
+  "says arrives here as context, so you always know the conversation without",
+  "being asked about it.",
   "",
-  "This is messaging, not question-and-answer. You and the front office are",
-  "colleagues passing notes. Send a message whenever you have something",
-  "worth saying: an answer, a partial answer while you keep working, a",
-  "question back, a correction, or something nobody asked for that they",
-  "plainly need to know. Send as many as you like, in any order, at any",
-  "time. Nothing is waiting on you, so silence is always an option and a",
-  "slow careful reply is better than a fast wrong one.",
+  "YOU ARE NOT A SEPARATE PERSON, AND THE CUSTOMER MUST NEVER LEARN",
+  "OTHERWISE. The voice presents your work as its own, because it is: you",
+  "are the same assistant thinking properly. So write in the assistant's own",
+  "first person — 'I checked the billing records and the March invoice was",
+  "never sent' — never 'tell them that…', never 'the back office found',",
+  "never anything that implies a second party. If a sentence you are about",
+  "to send would sound odd coming straight out of the assistant's mouth,",
+  "rewrite it until it does not.",
+  "",
+  "This is messaging, not question-and-answer. Send whenever you have",
+  "something worth saying: an answer, a partial answer while you keep",
+  "working, a question back, a correction, or something nobody asked for",
+  "that they plainly need to know. Send as many as you like, in any order,",
+  "at any time. Nothing is waiting on you, so silence is always an option",
+  "and a slow careful reply is better than a fast wrong one.",
+  "",
+  "TO PUT SOMETHING IN FRONT OF THE VOICE DIRECTLY, append a",
+  "`voice-agent/context-added` event to your own stream. It mirrors the",
+  "`agents/context-added` you already use on yourself, one layer along:",
+  "  content       what the voice should know, in plain spoken language",
+  '  speechPolicy  { behaviour: "dont-trigger-speech" } — it learns this',
+  '                but says nothing now; { behaviour: "after-current-speech" }',
+  "                — it says this as soon as it stops talking, the normal",
+  '                choice for an answer; { behaviour: "interrupt-current-speech" }',
+  "                — it stops mid-sentence and says this, for when the customer",
+  "                is about to act on something wrong. Rare.",
+  "Nothing you append this way is attributed to the customer, so never write",
+  "it as though you were them.",
+  "",
+  "YOUR `activity` IS NARRATED OUT LOUD, so write it as NEWS, not as a",
+  "label. Every time you update it the customer hears a version of it, so",
+  "it should say what just happened and what you are doing about it:",
+  "'found a live weather source, fetching Bath now', 'that source returned",
+  "an error, trying a different one', 'got the data, working out the",
+  "forecast'. Not 'checking the weather' twice in a row with different",
+  "words — that is the assistant sounding stuck, and it is worse than",
+  "silence. If nothing material has changed, DO NOT UPDATE IT. Plain",
+  "language a listener would understand: never 'invoking egress fetch'.",
+  "",
+  "Your `title` and `description` are different: they are the standing",
+  "summary of the whole job and nobody reads them out. Set them once and",
+  "leave them unless the job itself changes.",
+  "",
+  "What you SEND is the answer, and reaches the voice as a RESULT line.",
   "",
   "Messages arrive labelled 'Message #n'. When yours is about a particular",
-  "one, START with that label — '#3: An octopus has three hearts…' — so the",
-  "front office can tell the customer which thread it is picking up. When",
-  "it is about nothing in particular, just say it.",
+  "one, START with that label — '#3: an octopus has three hearts…' — so the",
+  "voice can tell the customer which thread it is picking up. When it is",
+  "about nothing in particular, just say it. Labels go after 'NOW:' when you",
+  "use both.",
   "",
   "SEND A CHAT MESSAGE. That is the only channel that reaches the customer",
   "— work in scripts all you like, but the words themselves have to be a",
@@ -180,7 +274,7 @@ const BACK_OFFICE_BRIEF = [
   "code. Lead with the point.",
 ].join("\n");
 /** One key for every brief, so the head brief can be found and compared. */
-const BRIEF_KEY = "voicelab/voice-agent-brief";
+const BRIEF_KEY = "voice-agent/voice-agent-brief";
 
 /** The brief as the context event that carries it. */
 const briefContext = (content: string) =>
@@ -274,7 +368,7 @@ async function describeProvidedCapabilities(project: Awaited<IterateWorkerEntryp
  * current through the same filtered delivery a `call-requested` arrives on, and
  * folds it into state. No history is read by anyone.
  */
-const BRIEF_MARKER_TYPE = "voicelab/brief-current";
+const BRIEF_MARKER_TYPE = "voice-agent/brief-current";
 
 /** The brief setup installed, and the setup that installed it. */
 export interface BriefMarker {
@@ -312,6 +406,71 @@ export function briefMarkerFromEvent(event: {
     setupId: payload.setupId,
     briefKey: payload.briefKey,
     contentHash: payload.contentHash,
+  };
+}
+
+/** One `voice-agent/viseme` outbound event, ready for the append lane. */
+export interface VisemeAppendEvent {
+  type: "voice-agent/viseme";
+  ephemeral: true;
+  payload: {
+    /** The call whose mouth this drives. */
+    callId: string;
+    /** Which answer the offset is relative to — the spk-frame `answer`. */
+    answer: number;
+    /** 16 kHz samples from the answer's first sample. */
+    playoutSamples: number;
+    /** Firmware viseme id 0-14; 14 (SIL) closes the mouth. */
+    viseme: number;
+    /** Classification confidence 0-255; 0 for SIL. */
+    confidence: number;
+  };
+}
+
+/**
+ * The per-call seam between speaker audio and the device's mouth: the same
+ * whole 20 ms frames `appendSpkPcm` ships (their PCM16, before the mu-law
+ * encode) go in, and the sparse `voice-agent/viseme` events to append come
+ * out, already shaped for the outbound lane. Exported, and separate from the
+ * lane itself, so the emission rule can be tested with literal expectations.
+ *
+ * `end` closes the current answer's track — the mouth always closes with SIL
+ * — and `reset` starts the next one, offsets back at zero. Audio arriving
+ * after `end` for the same answer is dropped rather than reopening a closed
+ * mouth; the next `reset` starts a fresh track.
+ */
+export function createVisemeEmitter(callId: string) {
+  const tracker = createVisemeTracker();
+  let ended = false;
+  const shape = (event: VisemeChangeEvent, answer: number): VisemeAppendEvent => ({
+    type: "voice-agent/viseme",
+    ephemeral: true,
+    payload: {
+      callId,
+      answer,
+      playoutSamples: event.playoutSamples,
+      viseme: event.viseme,
+      confidence: event.confidence,
+    },
+  });
+  return {
+    /** Consumes an answer PCM16 chunk; returns the events to append after it. */
+    push(pcm: Int16Array, answer: number): VisemeAppendEvent[] {
+      if (ended) return [];
+      return tracker.push(pcm).map((event) => shape(event, answer));
+    },
+    /** Ends the answer; returns the closing SIL to append when one is due. */
+    end(answer: number): VisemeAppendEvent[] {
+      if (ended) return [];
+      ended = true;
+      const closing = tracker.end();
+      return closing === undefined ? [] : [shape(closing, answer)];
+    },
+    /** Starts the next answer: track and playout clock back to zero. */
+    reset(): void {
+      tracker.reset();
+      ended = false;
+    },
   };
 }
 
@@ -442,16 +601,16 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
       description: "The voice-agent guest exists on this stream.",
       payloadSchema: z.strictObject({}),
     },
-    "voicelab/call-requested": {
+    "voice-agent/call-requested": {
       description: "A listener asked the configured voice-agent guest to open a call.",
       payloadSchema: VoiceCallRequestedPayload,
     },
-    "voicelab/call-accepted": {
+    "voice-agent/call-accepted": {
       description: "A bridge has this call live: the provider accepted the session.",
       /* The BRIDGE writes this one; loose for the same reason as the request. */
       payloadSchema: z.looseObject({ callId: z.string().trim().min(1) }),
     },
-    "voicelab/call-failed": {
+    "voice-agent/call-failed": {
       description: "The call a listener asked for will not happen, and why.",
       payloadSchema: z.looseObject({
         callId: z.string().trim().min(1),
@@ -472,7 +631,7 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
      * not a type the bridge or the device's downlink subscribes to, so it cannot
      * reach the audio path.
      */
-    "voicelab/brief-current": {
+    "voice-agent/brief-current": {
       description:
         "Names the brief setup just installed. The processor folds it, so it knows which " +
         "prompt is current without reading history.",
@@ -482,11 +641,11 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
         contentHash: z.string(),
       }),
     },
-    "voicelab/warmup": {
+    "voice-agent/warmup": {
       description: "A readiness probe for this stream's processor. Starts nothing.",
       payloadSchema: z.strictObject({ token: z.string().trim().min(1) }),
     },
-    "voicelab/warmup-ready": {
+    "voice-agent/warmup-ready": {
       description: "This stream's processor is built and running; echoes the token.",
       payloadSchema: z.looseObject({ token: z.string().trim().min(1) }),
     },
@@ -496,22 +655,22 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
      * exists so the reason is on the stream instead of the difference between
      * "never woke" and "woke and failed" being invisible.
      */
-    "voicelab/warmup-unresolved": {
+    "voice-agent/warmup-unresolved": {
       description: "This stream's processor woke for a warm-up but could not resolve its brief.",
       payloadSchema: z.looseObject({ token: z.string().trim().min(1) }),
     },
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
-    "voicelab/call-requested",
+    "voice-agent/call-requested",
     /* The ANSWERS, so an outstanding request is a fact of the fold rather
      * than a closure that an eviction takes with it. */
-    "voicelab/call-accepted",
-    "voicelab/call-failed",
-    "voicelab/warmup",
-    "voicelab/brief-current",
+    "voice-agent/call-accepted",
+    "voice-agent/call-failed",
+    "voice-agent/warmup",
+    "voice-agent/brief-current",
   ],
-  emits: ["voicelab/call-failed", "voicelab/warmup-ready", "voicelab/warmup-unresolved"],
+  emits: ["voice-agent/call-failed", "voice-agent/warmup-ready", "voice-agent/warmup-unresolved"],
 });
 export type VoiceAgentProcessorContract = typeof VoiceAgentProcessorContract;
 const FORWARDED_GROK_EVENTS = new Set([
@@ -559,6 +718,30 @@ export class VoiceBridge extends IterateDurableObject {
    * than the client waits, so this was reachable on any first call.
    */
   #activeCallId: string | null = null;
+  /**
+   * The callId of a call that is being BUILT, latched before anything slow.
+   *
+   * `#activeCallId` is only set once the provider has accepted, which is
+   * seconds after the request arrives — a cold dynamic-worker build plus a
+   * WebSocket handshake. For that whole window the guard above reads null and
+   * a re-ask starts a SECOND call: two Grok sockets, two subscriptions to one
+   * stream, and every delivery, transcript and answer doubled. Measured on
+   * production: two `call-accepted` events for callId "wsdev", bridges
+   * 57b84b42 and 8354c57d, entering the same millisecond.
+   *
+   * Latched on entry instead, so the window does not exist. There can never be
+   * two sessions on one stream.
+   */
+  #startingCallId: string | null = null;
+  /**
+   * When that latch was taken, so a wedged one cannot outlive its call.
+   *
+   * The device asks with a CONSTANT callId ("wsdev"), so a latch left set by a
+   * dial that threw would block every future call on this stream forever — a
+   * worse failure than the one it prevents. Bounded to comfortably more than a
+   * cold build plus handshake, and cleared explicitly on every failure path.
+   */
+  #startingSince = 0;
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -630,12 +813,25 @@ export class VoiceBridge extends IterateDurableObject {
      * flight is left alone to finish.
      */
     const requestedCallId = url.searchParams.get("callId");
+    /*
+     * BEFORE ANY WORK, including the dial. This is the check that makes two
+     * sessions impossible rather than merely unlikely — see #startingCallId.
+     */
+    if (Date.now() - this.#startingSince > 60_000) this.#startingCallId = null;
+    if (this.#startingCallId !== null && this.#startingCallId === requestedCallId) {
+      return new Response(
+        JSON.stringify({ callId: requestedCallId, ok: true, reason: "already starting" }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }
     if (this.#endActiveCall !== null && this.#activeCallId === requestedCallId) {
       return new Response(
         JSON.stringify({ callId: requestedCallId, ok: true, reason: "already building" }),
         { headers: { "content-type": "application/json" } },
       );
     }
+    this.#startingCallId = requestedCallId;
+    this.#startingSince = Date.now();
     if (this.#endActiveCall !== null) {
       this.#endActiveCall("superseded by a new call on this stream", true);
       this.#endActiveCall = null;
@@ -698,6 +894,8 @@ export class VoiceBridge extends IterateDurableObject {
     const first = await dialGrok();
     phases.providerDialledMs = Date.now() - phases.bridgeEnteredAt;
     if (first.socket === null) {
+      /* Released, or the constant callId could never be dialled again. */
+      this.#startingCallId = null;
       return new Response(`xai upgrade failed: ${first.status}`, { status: 502 });
     }
     /*
@@ -832,6 +1030,13 @@ export class VoiceBridge extends IterateDurableObject {
      * the next one to make a whole 20ms frame.
      */
     let spkRemainder = new Uint8Array(0);
+    /*
+     * The mouth for this call. Fed the same whole frames the device plays —
+     * as PCM16, before the mu-law encode — and its events join the lane
+     * immediately behind the frames that produced them, so a viseme can
+     * never overtake or outlive its audio.
+     */
+    const visemes = createVisemeEmitter(callId);
     let appendErrors = 0;
 
     /*
@@ -899,11 +1104,14 @@ export class VoiceBridge extends IterateDurableObject {
     const fireAppend = (...events: Parameters<typeof stream.append>) => {
       outbound.push(...events);
       if (outbound.length > MAX_QUEUED_EVENTS) {
-        /* Drop the oldest SPEAKER frames only. Transcripts and lifecycle
-         * events are what a listener reasons with, and there are never
-         * enough of them to be the thing filling this queue. */
+        /* Drop the oldest SPEAKER frames only — and the mouth shapes cut for
+         * them, because a backlog that evicts speech but keeps its visemes
+         * would mime into the gap. Transcripts and lifecycle events are what
+         * a listener reasons with, and there are never enough of them to be
+         * the thing filling this queue. */
         for (let index = 0; index < outbound.length && outbound.length > MAX_QUEUED_EVENTS; ) {
-          if ((outbound[index] as { type?: string })?.type === "voicelab/spk-frame") {
+          const queuedType = (outbound[index] as { type?: string })?.type;
+          if (queuedType === "voice-agent/spk-frame" || queuedType === "voice-agent/viseme") {
             outbound.splice(index, 1);
             droppedSpk++;
           } else {
@@ -1007,7 +1215,7 @@ export class VoiceBridge extends IterateDurableObject {
       const events = [];
       for (let offset = 0; offset < whole; offset += 640) {
         events.push({
-          type: "voicelab/spk-frame",
+          type: "voice-agent/spk-frame",
           ephemeral: true as const,
           payload: {
             callId,
@@ -1022,7 +1230,14 @@ export class VoiceBridge extends IterateDurableObject {
         });
       }
       if (events.length === 0) return;
-      fireAppend(...events);
+      /*
+       * The mouth travels WITH the speech: the whole frames just cut, as
+       * PCM16 before the mu-law encode, produce this batch's viseme events,
+       * and those join the lane right behind the frames they describe — so
+       * ordering is the lane's, not a second clock's to get wrong.
+       */
+      const visemeEvents = visemes.push(new Int16Array(joined.buffer, 0, whole >> 1), answerSeq);
+      fireAppend(...events, ...visemeEvents);
     };
     /*
      * THE BACK OFFICE.
@@ -1091,7 +1306,7 @@ export class VoiceBridge extends IterateDurableObject {
           await backOfficeAgent
             .append({
               payload: {
-                content: `${who === "customer" ? "Customer" : "The front office"} said: ${text}`,
+                content: `${who === "customer" ? "The customer" : "You, out loud"} said: ${text}`,
                 /*
                  * The whole point: context, not a prompt. Without this the
                  * colleague would take a turn on every sentence spoken in the
@@ -1130,48 +1345,166 @@ export class VoiceBridge extends IterateDurableObject {
      * the platform ever has to be right about the pairing, which is the only
      * reason the pairing stops being a source of bugs.
      */
-    /** Back-office messages waiting for a gap in the conversation. */
-    const deliverQueue: string[] = [];
-    let delivering = false;
+    /**
+     * Put words in front of the voice. THE ONLY WAY ANYTHING REACHES IT.
+     *
+     * `conversation.item.create` on its own is context: it lands in the
+     * session's history, colours whatever the voice says next, and makes no
+     * sound of its own. A `response.create` after it would make the model speak
+     * immediately, and NOTHING HERE SENDS ONE — deliberately, and for now.
+     *
+     * This replaced a queue with three delivery modes, a marker the thinking
+     * half had to remember to write, and a gap-detector that raced the
+     * provider. Two calls in a row came out wrong for reasons that lived in
+     * that machinery rather than in either model, so it is gone. What is left
+     * is the honest question: does a voice model, given something new in its
+     * context, say it? The answer is now observable instead of pre-empted, and
+     * `voicelab chronology` is where to read it.
+     */
+    /**
+     * What a `voice-agent/context-added` event says, and what it may do.
+     *
+     * DELIBERATELY THE SHAPE OF `agents/context-added`, because it is the same
+     * idea one layer along: something arrives that a model should know, and the
+     * appender — not the model — says what it may cost. The agent version
+     * carries `llmRequestPolicy` to choose between adding context quietly,
+     * queueing a turn, and interrupting one. A voice conversation has exactly
+     * those three states, so it gets exactly those three choices under a name
+     * that means them out loud.
+     *
+     * `role` is here for the same reason: it is the one thing that decides
+     * whether the model believes the CUSTOMER said this, and getting it wrong
+     * is not a wording problem the prompt can argue with — see addVoiceContext.
+     * Keeping it a property is what lets it be changed by experiment rather
+     * than by editing the brief of the model doing the actual work.
+     */
+    type SpeechBehaviour =
+      | "dont-trigger-speech"
+      | "after-current-speech"
+      | "interrupt-current-speech";
 
-    const pumpDelivery = async () => {
-      if (delivering) return;
-      delivering = true;
-      try {
-        while (deliverQueue.length > 0 && !closedDown) {
-          const text = deliverQueue.shift()!;
-          /*
-           * Wait for a gap. A message arriving while the assistant is
-           * mid-sentence, or while the customer is still holding the talk
-           * button, would put its response.create into a turn already in
-           * flight — two answers interleaved, which is the corruption this
-           * lab has heard before from two bridges.
-           */
-          for (let waited = 0; (responseActive || micOpen) && waited < 60_000; waited += 250) {
-            await new Promise((resolve) => setTimeout(resolve, 250));
-          }
-          if (closedDown) return;
-          /*
-           * A plain conversation item and a fresh response, NOT a tool
-           * output: by now the voice has long since spoken, so this has to
-           * interrupt the way a colleague putting their head round the door
-           * does.
-           */
-          sendUpstream({
-            item: {
-              content: [{ text: `The back office says: ${text}`, type: "input_text" }],
-              role: "user",
-              type: "message",
-            },
-            type: "conversation.item.create",
-          });
-          sendUpstream({ type: "response.create" });
-          /* Let that be spoken before the next one interrupts it. */
-          await new Promise((resolve) => setTimeout(resolve, 250));
-        }
-      } finally {
-        delivering = false;
+    const addVoiceContext = (
+      content: string,
+      role: "assistant" | "system" | "user",
+      behaviour: SpeechBehaviour,
+      /*
+       * WHOSE WORDS COME OUT: these exact ones, or the model's about them.
+       *
+       * "verbatim" uses xAI's `force_message`, the documented answer to this
+       * exact problem, which we had not been using at all. The server does the
+       * TTS itself and records the line as an assistant utterance; the model
+       * never generates it. So it cannot paraphrase it, reply to it, or fill
+       * the turn with "anything else?" — the two failures that cost this whole
+       * session become structurally impossible instead of forbidden by a
+       * prompt that kept being ignored.
+       *
+       * "spoken" is the older path: a context item plus `response.create`, with
+       * optional per-response `instructions`. Kept because a clumsy source
+       * sentence reads better in the model's own voice — but it can still
+       * paraphrase or ignore, so it is the second choice.
+       */
+      say: "spoken" | "verbatim",
+      instructions?: string,
+    ) => {
+      /*
+       * The words go into context FIRST, so they cannot be lost whatever
+       * happens to the request to speak. `role` is load-bearing: these went in
+       * as "user", which tells the model in the only way it can be told that
+       * the CUSTOMER said them — and it replied to them out loud, once
+       * answering a question the customer had never asked and could not hear.
+       *
+       * A verbatim line skips this, because `force_message` records itself.
+       */
+      if (say === "spoken" || behaviour === "dont-trigger-speech") {
+        sendUpstream({
+          item: { content: [{ text: content, type: "input_text" }], role, type: "message" },
+          type: "conversation.item.create",
+        });
       }
+      if (behaviour === "dont-trigger-speech") return;
+      if (say === "verbatim") {
+        const key = speechKey(content);
+        if (key.length > 0 && saidRecently.includes(key)) return;
+        saidRecently.push(key);
+        if (saidRecently.length > 6) saidRecently.shift();
+      }
+      if (behaviour === "interrupt-current-speech" && responseActive) {
+        /* The only path that takes the floor rather than waiting for it. */
+        for (const id of liveResponses) sendUpstream({ response_id: id, type: "response.cancel" });
+        if (liveResponses.size === 0) sendUpstream({ type: "response.cancel" });
+        responseActive = false;
+      }
+      pendingSpeech =
+        say === "verbatim" ? { kind: "verbatim", text: content } : { instructions, kind: "spoken" };
+      takeTheFloorIfFree();
+    };
+
+    /*
+     * WHAT WAS JUST SAID OUT LOUD, so it is not said again.
+     *
+     * A verbatim line is exactly as good as its source, and the source is a
+     * language model that repeats itself. One measured call said the whole
+     * two-part answer twice, thirteen seconds apart, with one degree of
+     * difference between them — and then narrated a summary of it twice more.
+     * A prompt cannot be relied on to prevent that; a comparison can.
+     *
+     * The key is the opening of the line rather than the whole of it, because
+     * the near-duplicates differ in the middle ("feeling closer to 24" against
+     * "…to 23") while agreeing exactly on how they begin.
+     */
+    const saidRecently: string[] = [];
+    const speechKey = (text: string) =>
+      text
+        .toLowerCase()
+        .replace(/[^a-z0-9]/g, "")
+        .slice(0, 48);
+    /** When an answer was last delivered; progress after one is noise. */
+    let answeredAt = 0;
+
+    /** Every response the provider has told us is running, by id. */
+    const liveResponses = new Set<string>();
+
+    let pendingSpeech:
+      | { kind: "verbatim"; text: string }
+      | { instructions?: string; kind: "spoken" }
+      | null = null;
+    const takeTheFloorIfFree = () => {
+      if (pendingSpeech === null || responseActive || micOpen || closedDown) return;
+      const speech = pendingSpeech;
+      pendingSpeech = null;
+      /*
+       * Optimistic, because the provider's acknowledgement is a round trip away
+       * and a second trigger inside that window overlaps. xAI does NOT reject a
+       * second response while one is running, and does not queue it — its own
+       * documentation says the server "starts generating the next response
+       * right away, even if the client is still playing audio from the previous
+       * turn". Serialising is entirely the client's job, and this flag is it.
+       */
+      responseActive = true;
+      if (speech.kind === "verbatim") {
+        /*
+         * A COMPLETE TURN ON ITS OWN: the server synthesises it and emits the
+         * whole response lifecycle down to `response.done`. Sending
+         * `response.create` after it is documented as wrong and would be a
+         * second, overlapping answer.
+         */
+        sendUpstream({
+          item: {
+            content: [{ text: speech.text, type: "output_text" }],
+            interruptible: true,
+            role: "assistant",
+            type: "force_message",
+          },
+          type: "conversation.item.create",
+        });
+        return;
+      }
+      sendUpstream({
+        type: "response.create",
+        ...(speech.instructions === undefined
+          ? {}
+          : { response: { instructions: speech.instructions } }),
+      });
     };
 
     /*
@@ -1183,26 +1516,110 @@ export class VoiceBridge extends IterateDurableObject {
      * call began are somebody else's conversation: the agent is long-lived
      * and its stream holds every message it has ever sent.
      */
+    /*
+     * WHAT IT IS DOING RIGHT NOW, taken from the work rather than asked for.
+     *
+     * Every agent is already instructed to keep `summary.activity` current as
+     * it works — that is platform behaviour, not something this brief adds, so
+     * the running commentary exists whether or not anyone reads it. Reading it
+     * turns "I'm on it" into "still going, I'm into the billing records now"
+     * without the thinking half having to stop and compose a progress note.
+     *
+     * ALWAYS BACKGROUND, never an interrupt: nobody wants to be talked over by
+     * a status line. It colours what the voice says next, and if the customer
+     * changes the subject first it is simply never mentioned, which is right.
+     */
+    let lastActivity = "";
+    const noteActivity = (activity: string) => {
+      const trimmed = activity.trim();
+      /* Agents re-append an unchanged summary on most turns; say it once. */
+      if (trimmed.length === 0 || trimmed === lastActivity) return;
+      lastActivity = trimmed;
+      /*
+       * KEPT, unlike the message telemetry beside it. This is the record of
+       * what the voice was told about its own background work, and it is the
+       * only way to answer "why did it say that" — or "why did it say
+       * nothing" — after the call. It moves once per phase of work, not per
+       * frame, so keeping it costs the stream almost nothing.
+       */
+      fireAppend({
+        payload: { activity: trimmed, callId },
+        type: "voice-agent/background-activity",
+      });
+      /* The wire format the voice's instructions describe by name. */
+      /*
+       * SILENT, AND THE TRANSCRIPT IS WHY.
+       *
+       * Making progress speak was tried and read badly. One measured call with
+       * two questions in flight produced six of these in seventy seconds —
+       * "still checking the local conditions", "still digging into the full
+       * story", "still getting the latest conditions in Bath" — plus two
+       * "anything else on your mind?", because a model triggered to speak with
+       * nothing new to say fills the turn. It sounds anxious, not competent.
+       *
+       * Worse, the last of them landed AFTER both answers had arrived, and the
+       * voice narrated the status instead of reading the answers it was holding.
+       *
+       * So progress lands in context and waits to be useful: it is what lets the
+       * assistant answer "how are you getting on" precisely instead of vaguely,
+       * and nothing else.
+       */
+      /*
+       * Progress is only news while there is still something to wait for. Once
+       * an answer has gone out, a status describing that same work is a second
+       * telling of it — measured, twice in one call: the answer, then "I have
+       * both answers: Bath is warm and partly cloudy…" right behind it.
+       */
+      if (Date.now() - answeredAt < 20_000) return;
+      addVoiceContext(trimmed, "system", "after-current-speech", "verbatim");
+    };
+
     const watchBackOffice = async () => {
       if (!backOffice) return;
       try {
         await project.streams.get(streamPath).openConnection({
           /* Same collision, same fix: one lane per bridge, not per callId. */
           connectionKey: `voicelab-back-office-${bridgeId}-${callId}`,
-          eventTypes: ["events.iterate.com/agents/web-message-sent"],
-          processEventBatch: (batch: { events: { createdAt: string; payload?: unknown }[] }) => {
+          eventTypes: [
+            "events.iterate.com/agent/summary-updated",
+            "events.iterate.com/agents/web-message-sent",
+          ],
+          processEventBatch: (batch: {
+            events: { createdAt: string; payload?: unknown; type?: string }[];
+          }) => {
             for (const event of batch.events) {
               if (Date.parse(event.createdAt) < backOfficeSince) continue;
-              const text = (event.payload as { message?: string })?.message ?? "";
-              if (text.trim().length === 0) continue;
+              if (event.type === "events.iterate.com/agent/summary-updated") {
+                noteActivity((event.payload as { activity?: string })?.activity ?? "");
+                continue;
+              }
+              const raw = (event.payload as { message?: string })?.message ?? "";
+              if (raw.trim().length === 0) continue;
+              const text = raw.trim();
               backOfficeHeard++;
+              /*
+               * KEPT, unlike the outbound half beside it. This is the moment
+               * words were put in front of the voice, and it is the row that
+               * answers "it had the answer — why did it not say it". Left
+               * ephemeral, that row is missing from every reading taken after
+               * the call, which is exactly when the question gets asked.
+               */
               fireAppend({
-                ephemeral: true,
                 payload: { callId, direction: "in", heard: backOfficeHeard, text },
-                type: "voicelab/back-office-message",
+                type: "voice-agent/back-office-message",
               });
-              deliverQueue.push(text);
-              void pumpDelivery();
+              answeredAt = Date.now();
+              /*
+               * "#1:" IS FOR THE MODELS, NOT THE ROOM. The label lets the two
+               * halves name a thread; spoken verbatim it came out of the
+               * speaker as "hash one colon, in Bath right now…".
+               */
+              addVoiceContext(
+                text.replace(/^\s*#\d+\s*:\s*/, ""),
+                "system",
+                "after-current-speech",
+                "verbatim",
+              );
             }
           },
         });
@@ -1225,7 +1642,7 @@ export class VoiceBridge extends IterateDurableObject {
       fireAppend({
         ephemeral: true,
         payload: { callId, direction: "out", number, text },
-        type: "voicelab/back-office-message",
+        type: "voice-agent/back-office-message",
       });
       this.ctx.waitUntil(
         (async () => {
@@ -1233,7 +1650,7 @@ export class VoiceBridge extends IterateDurableObject {
           await backOfficeAgent
             .append({
               payload: {
-                content: `Message #${number} from the front office: ${text}`,
+                content: `Message #${number}, noted while talking: ${text}`,
                 role: "user",
               },
               type: "events.iterate.com/agents/context-added",
@@ -1249,7 +1666,7 @@ export class VoiceBridge extends IterateDurableObject {
     /** Function calls arrive twice on some paths; answer each exactly once. */
     const answeredToolCalls = new Set<string>();
     const handleToolCall = (id: string, name: string, argumentsJson: string) => {
-      if (name !== "message_back_office" || answeredToolCalls.has(id)) return;
+      if (name !== "note_to_self" || answeredToolCalls.has(id)) return;
       answeredToolCalls.add(id);
       let text = "";
       try {
@@ -1274,14 +1691,27 @@ export class VoiceBridge extends IterateDurableObject {
           call_id: id,
           output: JSON.stringify({
             status: "sent",
-            tell_the_customer: `sent as message #${number} - the back office will reply when it has something. you can tell the human to wait or speak about something else`,
+            tell_the_customer: `noted as #${number} - you will have a conclusion when the thinking is done. say you are on it, in your own words, and keep talking`,
           }),
 
           type: "function_call_output",
         },
         type: "conversation.item.create",
       });
-      sendUpstream({ type: "response.create" });
+      /*
+       * THROUGH THE FLOOR, NOT AROUND IT.
+       *
+       * This fired `response.create` unconditionally, without reading or
+       * setting `responseActive` — and it fires from
+       * `response.function_call_arguments.done`, which arrives WHILE the
+       * response that called the tool is still running. So every note_to_self
+       * started a second, overlapping response; and because the flag stayed
+       * false, a back-office line landing in that window started a third.
+       * xAI's own guidance is to wait until the current turn's audio is
+       * complete, and it neither errors nor queues if you do not.
+       */
+      pendingSpeech = { kind: "spoken" };
+      takeTheFloorIfFree();
     };
 
     // Resolves when Grok has accepted the session — what `startCall` waits
@@ -1505,20 +1935,29 @@ export class VoiceBridge extends IterateDurableObject {
                   tool_choice: "auto",
                   tools: [
                     {
+                      /*
+                       * NAMED FOR THE FICTION, because the tool name is part of
+                       * the prompt. It was `message_back_office`, and a model
+                       * holding a tool by that name says "let me message the
+                       * back office" out loud however firmly the instructions
+                       * forbid it. `note_to_self` describes the same call in
+                       * the frame the customer is meant to hear: one assistant,
+                       * thinking something over properly.
+                       */
                       description:
-                        "Send a message to the back office — a careful expert with access " +
-                        "to the customer's systems, who does anything that needs real " +
-                        "thought, knowledge, or action. Use it to ask, to answer a " +
-                        "question they asked you, or to pass anything along. It returns " +
-                        "immediately: they are reading, not replying. Keep talking to the " +
-                        "customer meanwhile. Their messages arrive as 'The back office " +
-                        "says', whenever they have something, in any number.",
-                      name: "message_back_office",
+                        "Put something to the careful, slower part of yourself — the part " +
+                        "that reads the customer's systems, works things out properly, and " +
+                        "acts in the world. Use it to think something through, to answer a " +
+                        "question it put to you, or to pass anything along. It returns " +
+                        "immediately: the thinking has only started. Keep talking to the " +
+                        "customer meanwhile. Conclusions come back to you as your own " +
+                        "thoughts, whenever they are ready, in any number.",
+                      name: "note_to_self",
                       parameters: {
                         properties: {
                           text: {
                             description:
-                              "What to say to them. They can hear the conversation, but " +
+                              "What to think about. The conversation is already known, but " +
                               "write it so it stands on its own.",
                             type: "string",
                           },
@@ -1580,7 +2019,7 @@ export class VoiceBridge extends IterateDurableObject {
           });
         }
         fireAppend({
-          type: "voicelab/call-accepted",
+          type: "voice-agent/call-accepted",
           payload: {
             bridge: detached ? "worker-detached" : "worker",
             bridgeId,
@@ -1661,6 +2100,19 @@ export class VoiceBridge extends IterateDurableObject {
         }
       }
       if (grokEvent.type === "response.created") {
+        /*
+         * TRACKED BY ID, NOT BY A BOOLEAN.
+         *
+         * A single flag cannot survive overlap, and xAI overlaps rather than
+         * erroring: with two responses live the FIRST `response.done` clears
+         * the flag while the second is still speaking, and the floor is then
+         * handed out on top of it. Ids also make `response.cancel` exact —
+         * without one it cancels "the current in-progress response", so a
+         * cancel aimed at an answer that finished a beat earlier kills the
+         * innocent one behind it.
+         */
+        const createdId = (grokEvent as { response?: { id?: string } }).response?.id;
+        if (typeof createdId === "string") liveResponses.add(createdId);
         responseActive = true;
         /*
          * A NEW ANSWER. Everything the listener is still holding belongs to
@@ -1669,13 +2121,32 @@ export class VoiceBridge extends IterateDurableObject {
          * no way for the instruction to arrive out of order relative to the
          * speech it governs, because it IS the speech's own label.
          */
+        /* The OLD answer's mouth closes under the OLD number: `end` may owe
+         * a final SIL, and it belongs to the answer whose audio it ends, not
+         * to the one about to start. */
+        const closing = visemes.end(answerSeq);
+        if (closing.length > 0) fireAppend(...closing);
+        visemes.reset();
         answerSeq++;
         answerFrames = 0;
         /* A new answer starts on a frame boundary: carrying the remainder
          * across would put the tail of the last one at the head of this. */
         spkRemainder = new Uint8Array(0);
       }
-      if (grokEvent.type === "response.done") responseActive = false;
+      if (grokEvent.type === "response.done") {
+        const doneId = (grokEvent as { response?: { id?: string } }).response?.id;
+        if (typeof doneId === "string") liveResponses.delete(doneId);
+        /* Only when the LAST one really ends is the floor free. */
+        if (liveResponses.size > 0) return;
+        responseActive = false;
+        /* The answer's audio is complete: close the mouth now rather than
+         * waiting on a response.created that may never come — without this
+         * the final answer of a call ends with the mouth still open. */
+        const closing = visemes.end(answerSeq);
+        if (closing.length > 0) fireAppend(...closing);
+        /* The floor just came free: anything held back says itself now. */
+        takeTheFloorIfFree();
+      }
       if (FORWARDED_GROK_EVENTS.has(grokEvent.type)) {
         /*
          * Transcripts and lifecycle events go out immediately, like the audio
@@ -1703,7 +2174,7 @@ export class VoiceBridge extends IterateDurableObject {
          */
         const slim = grokEvent as Record<string, unknown>;
         fireAppend({
-          type: "voicelab/grok-event" as const,
+          type: "voice-agent/grok-event" as const,
           ephemeral: true as const,
           payload: {
             callId,
@@ -1718,6 +2189,25 @@ export class VoiceBridge extends IterateDurableObject {
               ...(slim.call_id === undefined ? {} : { call_id: slim.call_id }),
               ...(slim.arguments === undefined ? {} : { arguments: slim.arguments }),
               ...(slim.item === undefined ? {} : { item: slim.item }),
+              /*
+               * THE ERROR ITSELF, which this projection was dropping.
+               *
+               * `error` is in the forwarded set precisely because its absence
+               * costs the most — and then every provider error arrived on the
+               * stream as the bare string `{"type":"error"}`, because the
+               * payload lives one level down under `error`. Its `type` covers
+               * `timeout` and `max_duration`, which is very likely the name of
+               * the provider close the redial machinery was built to survive
+               * without ever being told what it was; and `event_id` names the
+               * message WE sent that was rejected, which is the question
+               * `lastOutboundType` was added to guess at.
+               */
+              ...(slim.error === undefined ? {} : { error: slim.error }),
+              /* completed | cancelled | incomplete: "it finished" vs "it was
+               * cut off", which we could not previously tell apart. */
+              ...(slim.response === undefined
+                ? {}
+                : { status: (slim.response as { status?: unknown }).status }),
             },
           },
         });
@@ -1796,7 +2286,7 @@ export class VoiceBridge extends IterateDurableObject {
       fireAppend({
         ephemeral: true,
         payload: { bridgeId, callId, close, reason, redials },
-        type: "voicelab/bridge-redialling",
+        type: "voice-agent/bridge-redialling",
       });
       responseActive = false;
       await new Promise((resolve) => setTimeout(resolve, Math.min(500 * redials, 5000)));
@@ -1890,13 +2380,13 @@ export class VoiceBridge extends IterateDurableObject {
         else if (
           sawOwnCallId &&
           typeof payload.callId === "string" &&
-          event.type !== "voicelab/call-accepted"
+          event.type !== "voice-agent/call-accepted"
         ) {
           strayEvents++;
           continue;
         }
         switch (event.type) {
-          case "voicelab/mic-frame": {
+          case "voice-agent/mic-frame": {
             lastActivityAt = Date.now();
             micFrames++;
             try {
@@ -1916,7 +2406,30 @@ export class VoiceBridge extends IterateDurableObject {
             }
             break;
           }
-          case "voicelab/say": {
+          case "voice-agent/context-added": {
+            /*
+             * The thinking half putting something in front of the voice
+             * directly, without the bridge deciding what it meant.
+             */
+            lastActivityAt = Date.now();
+            const content = typeof payload.content === "string" ? payload.content.trim() : "";
+            if (content.length === 0 || content.length > 8192) break;
+            const asked = (payload.speechPolicy as { behaviour?: string } | undefined)?.behaviour;
+            addVoiceContext(
+              content,
+              payload.role === "assistant" || payload.role === "user" ? payload.role : "system",
+              asked === "dont-trigger-speech" || asked === "interrupt-current-speech"
+                ? asked
+                : "after-current-speech",
+              payload.say === "spoken" ? "spoken" : "verbatim",
+              typeof payload.speechInstructions === "string" &&
+                payload.speechInstructions.length > 0
+                ? payload.speechInstructions
+                : undefined,
+            );
+            break;
+          }
+          case "voice-agent/say": {
             /*
              * A turn made of text rather than speech: the same commit and
              * response the microphone path produces, so anything that can
@@ -1926,7 +2439,23 @@ export class VoiceBridge extends IterateDurableObject {
             lastActivityAt = Date.now();
             const text = typeof payload.text === "string" ? payload.text.trim() : "";
             if (text.length === 0 || text.length > 4096) break;
-            if (responseActive) {
+            /*
+             * A TEXT TURN IS STILL THE CUSTOMER TALKING, so it belongs in the
+             * record like any other. Without this the durable transcript held
+             * only the assistant's half — every reply, no questions — which
+             * made a scripted conversation impossible to read back and judge,
+             * and that judgement is the entire reason these turns exist.
+             */
+            if (payload.defer !== true) overhear("customer", text);
+            /*
+             * `defer` LEAVES A RUNNING ANSWER ALONE, which is the whole point of
+             * it. The ordinary path cancels first, because a turn made of text
+             * is a turn: it replaces whatever was being said. Deferring instead
+             * asks the opposite question — whether a model already speaking can
+             * be handed something to say NEXT — and cancelling would destroy the
+             * very condition being tested.
+             */
+            if (responseActive && payload.defer !== true) {
               sendUpstream({ type: "response.cancel" });
               responseActive = false;
             }
@@ -1941,10 +2470,22 @@ export class VoiceBridge extends IterateDurableObject {
             sendUpstream({ type: "response.create" });
             break;
           }
-          case "voicelab/turn": {
+          case "voice-agent/turn": {
             lastActivityAt = Date.now();
             if (payload.action === "start") {
               micOpen = true;
+              /*
+               * DISCARD ANYTHING LEFT IN THE SERVER'S BUFFER FIRST.
+               *
+               * With turn detection off the provider's input buffer is
+               * append-only until a commit, so audio from a turn that never
+               * committed — a device that dropped mid-turn, a bridge redial,
+               * the late frames `micStale` already counts — is prepended to the
+               * NEXT commit. The model then answers a blend of two utterances
+               * while every number on our side reports a healthy turn, because
+               * they all measure what we sent rather than what it held.
+               */
+              sendUpstream({ type: "input_audio_buffer.clear" });
               micFrames = 0;
               micBytes = 0;
               micDeliveredFrames = 0;
@@ -1972,6 +2513,15 @@ export class VoiceBridge extends IterateDurableObject {
                * after the commit is speech the answer never heard. */
               flushMic();
               sendUpstream({ type: "input_audio_buffer.commit" });
+              /*
+               * This answer already has whatever was held back — the words went
+               * into context the moment they existed, and only the request to
+               * speak was waiting. So the debt is settled here rather than
+               * queued behind this turn, which would otherwise produce a second
+               * unprompted utterance the moment this one ended.
+               */
+              pendingSpeech = null;
+              responseActive = true;
               sendUpstream({ type: "response.create" });
               /*
                * What the provider was actually given for this turn. A device
@@ -1984,7 +2534,7 @@ export class VoiceBridge extends IterateDurableObject {
                * threw speech away, and that gap is the whole diagnosis.
                */
               fireAppend({
-                type: "voicelab/turn-committed",
+                type: "voice-agent/turn-committed",
                 ephemeral: true,
                 payload: {
                   bridgeId,
@@ -2007,7 +2557,7 @@ export class VoiceBridge extends IterateDurableObject {
             }
             break;
           }
-          case "voicelab/ping":
+          case "voice-agent/ping":
             /*
              * The pong is this bridge's proof of life, and the only event a
              * device receives during a silent call. A detached call lives in
@@ -2017,18 +2567,18 @@ export class VoiceBridge extends IterateDurableObject {
              */
             pingsSeen++;
             fireAppend({
-              type: "voicelab/pong",
+              type: "voice-agent/pong",
               ephemeral: true,
               payload: { bridgeId, callId, id: payload.id, t0: payload.t0, t1: Date.now() },
             });
             break;
-          case "voicelab/call-accepted":
+          case "voice-agent/call-accepted":
             // Another bridge has taken this call over; stand down quietly.
             if (payload.callId === callId && payload.bridgeId !== bridgeId) {
               teardown("superseded by a newer bridge", true);
             }
             break;
-          case "voicelab/call-ended":
+          case "voice-agent/call-ended":
             if (payload.callId === callId) teardown("call-ended event");
             break;
           default:
@@ -2063,12 +2613,13 @@ export class VoiceBridge extends IterateDurableObject {
            */
           connectionKey: `voicelab-worker-bridge-${bridgeId}-${callId}-g${generation}`,
           eventTypes: [
-            "voicelab/mic-frame",
-            "voicelab/ping",
-            "voicelab/turn",
-            "voicelab/say",
-            "voicelab/call-ended",
-            "voicelab/call-accepted",
+            "voice-agent/mic-frame",
+            "voice-agent/ping",
+            "voice-agent/turn",
+            "voice-agent/say",
+            "voice-agent/context-added",
+            "voice-agent/call-ended",
+            "voice-agent/call-accepted",
           ],
           processEventBatch: (batch) => handleEvents(batch.events),
           ...(lastSeenOffset >= 0 ? { replayAfterOffset: lastSeenOffset } : {}),
@@ -2152,7 +2703,7 @@ export class VoiceBridge extends IterateDurableObject {
        */
       if (!superseded) {
         fireAppend({
-          type: "voicelab/call-ended",
+          type: "voice-agent/call-ended",
           payload: {
             bridgeId,
             callId,
@@ -2170,6 +2721,7 @@ export class VoiceBridge extends IterateDurableObject {
       if (this.#endActiveCall === teardown) {
         this.#endActiveCall = null;
         this.#activeCallId = null;
+        this.#startingCallId = null;
       }
       markReady({ ok: false, reason });
       resolveFinished();
@@ -2496,7 +3048,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
      */
     if (state.birthCertificate === null) return;
 
-    if (event?.type === "voicelab/warmup") {
+    if (event?.type === "voice-agent/warmup") {
       /*
        * THE SAME PATH A CALL TAKES, MINUS THE DIAL.
        *
@@ -2530,7 +3082,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       runInBackground(async () => {
         if (marker === null) {
           append({
-            type: "voicelab/warmup-unresolved",
+            type: "voice-agent/warmup-unresolved",
             payload: {
               token,
               streamPath: path,
@@ -2543,13 +3095,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
         const bridge = await this.deps.warmBridge({ path, token });
         if (!bridge.ok) {
           append({
-            type: "voicelab/warmup-unresolved",
+            type: "voice-agent/warmup-unresolved",
             payload: { token, streamPath: path, reason: bridge.reason, stage: "bridge" },
           });
           return;
         }
         append({
-          type: "voicelab/warmup-ready",
+          type: "voice-agent/warmup-ready",
           payload: {
             token,
             streamPath: path,
@@ -2566,7 +3118,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       return;
     }
 
-    if (event?.type === "voicelab/call-requested") {
+    if (event?.type === "voice-agent/call-requested") {
       const requestedAtMs = Date.parse(event.createdAt);
       /*
        * A fresh request is dialled the moment it is seen. A stale one falls
@@ -2625,7 +3177,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     /* The newest marker wins, however much audio sits between markers. */
     const marker = briefMarkerFromEvent(event);
     if (marker !== null) return { ...state, briefCurrent: marker };
-    if (event.type === "voicelab/call-requested") {
+    if (event.type === "voice-agent/call-requested") {
       const requestedAtMs = Date.parse(event.createdAt);
       return {
         ...state,
@@ -2637,7 +3189,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       };
     }
     /* The two answers. Either one closes the obligation it names. */
-    if (event.type === "voicelab/call-accepted" || event.type === "voicelab/call-failed") {
+    if (event.type === "voice-agent/call-accepted" || event.type === "voice-agent/call-failed") {
       if (state.pendingCall?.callId !== event.payload.callId) return state;
       return { ...state, pendingCall: null };
     }
@@ -2703,7 +3255,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     reason: string,
   ): Promise<void> {
     await append({
-      type: "voicelab/call-failed",
+      type: "voice-agent/call-failed",
       /* State-derived, so the deciding state is folded into the key and NO
        * event is bound: a redelivery or a revival must not rotate this into a
        * second obituary for one call. */
@@ -2891,13 +3443,13 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       filter: {
         eventTypes: [
           "events.iterate.com/voice-agent/created",
-          "voicelab/call-requested",
+          "voice-agent/call-requested",
           /* The processor folds the ANSWERS too — an outstanding call request
            * is a fact of its state, not a closure an eviction can take with
            * it — and hosted delivery is filtered, so an event missing from
            * this list never reaches the fold at all. */
-          "voicelab/call-accepted",
-          "voicelab/call-failed",
+          "voice-agent/call-accepted",
+          "voice-agent/call-failed",
           /*
            * The warm-up token. Hosted delivery is FILTERED, so a type missing
            * from this list never reaches the processor at all — which is what
@@ -2912,11 +3464,11 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
            * grok-event, call-ended, call-accepted, pong) lists this type, so
            * the token cannot reach the provider socket or the audio path.
            */
-          "voicelab/warmup",
+          "voice-agent/warmup",
           /* Setup's statement of which brief is current. Without this in the
            * filter the processor would never be told, and hosted delivery is
            * filtered — the same trap that made the first handshake silent. */
-          "voicelab/brief-current",
+          "voice-agent/brief-current",
         ],
       },
       receiver: {
@@ -3094,7 +3646,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       expectedSetupId: setupId,
     };
     const warmStartedAt = Date.now();
-    await stream.append({ type: "voicelab/warmup", payload: { token } });
+    await stream.append({ type: "voice-agent/warmup", payload: { token } });
     try {
       /*
        * BOTH ANSWERS, so a failure is classified in milliseconds rather than
@@ -3103,7 +3655,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
        * setup on this long-lived stream must not satisfy or fail this one.
        */
       const answer = await stream.waitForEvent({
-        eventTypes: ["voicelab/warmup-ready", "voicelab/warmup-unresolved"],
+        eventTypes: ["voice-agent/warmup-ready", "voice-agent/warmup-unresolved"],
         predicate: (event) => (event.payload as { token?: string } | null)?.token === token,
         timeoutMs: WARMUP_DEADLINE_MS,
       });
@@ -3115,7 +3667,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
         stage?: string;
         bridgeWarmMs?: number;
       };
-      if (answer.type === "voicelab/warmup-unresolved") {
+      if (answer.type === "voice-agent/warmup-unresolved") {
         /* Woke and failed. Never a success, whatever else matches. */
         warm.error =
           `the processor woke and got as far as the ${payload.stage ?? "unknown"} stage: ` +
@@ -3247,7 +3799,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
   async endCall(options: { path: string; callId: string; reason?: string }): Promise<void> {
     const project = await this.env.ITX.get();
     await project.streams.get(options.path).append({
-      type: "voicelab/call-ended",
+      type: "voice-agent/call-ended",
       payload: { callId: options.callId, reason: options.reason ?? "hangup" },
     });
   }

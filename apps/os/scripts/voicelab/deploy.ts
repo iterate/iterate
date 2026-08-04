@@ -26,6 +26,17 @@ export interface InstallResult {
   file: string;
 }
 
+/*
+ * Modules voice-agent.ts imports at runtime, committed WITH it.
+ *
+ * The dynamic worker is built from repo files alone, so an import that was
+ * never committed builds fine on the machine that has the file and dies at
+ * the project's cold start with `No such module`. The model rides inside
+ * viseme-model.generated.ts because repo files are read as text — a .bin
+ * cannot make the trip.
+ */
+const runtimeImportNames = ["viseme.ts", "viseme-model.generated.ts"] as const;
+
 interface ConfigRepo {
   readFile(input: { path: string }): Promise<{ content?: string } | string | null>;
   commitFiles(input: {
@@ -52,13 +63,20 @@ export async function installVoiceAgent(
 ): Promise<InstallResult> {
   const file = options.file ?? new URL("./config-repo/voice-agent.ts", import.meta.url).pathname;
   const content = fs.readFileSync(file, "utf8");
+  const changes = [
+    { content, path: "voice-agent.ts" },
+    ...runtimeImportNames.map((name) => ({
+      content: fs.readFileSync(new URL(`./config-repo/${name}`, import.meta.url).pathname, "utf8"),
+      path: name,
+    })),
+  ];
   const repo = (itx as { repo: ConfigRepo }).repo;
   const result = await repo.commitFiles({
-    changes: [{ content, path: "voice-agent.ts" }],
+    changes,
     message: options.message ?? "voicelab: deploy voice-agent.ts",
   });
   return {
-    bytes: content.length,
+    bytes: changes.reduce((total, change) => total + change.content.length, 0),
     changed: !result.noChanges,
     commitOid: result.commitOid,
     file,
@@ -70,7 +88,7 @@ export async function deploy(options: DeployOptions) {
   const result = await installVoiceAgent(itx, options);
   console.log(
     result.changed
-      ? `committed ${result.commitOid.slice(0, 8)}: voice-agent.ts`
+      ? `committed ${result.commitOid.slice(0, 8)}: voice-agent.ts, ${runtimeImportNames.join(", ")}`
       : `no change — the project already runs this worker (${result.commitOid.slice(0, 8)})`,
   );
   /*
