@@ -197,6 +197,8 @@ function reduceAgentEventCore(input: {
               pendingLlmRequestTrigger: {
                 offset: event.offset,
                 atMs: Date.parse(event.createdAt),
+                // as const: inside the conditional spread the literal would
+                // widen to string and fall out of the trigger-source union.
                 source: "agent-loop" as const,
               },
             }
@@ -322,6 +324,10 @@ function reduceAgentEvents(events: readonly StreamEvent[]): AgentProcessorState 
       payloadSchema: definition.payloadSchema,
     }).safeParse(event);
     if (!parsed.success) continue;
+    // Safe: the schema came from this event type's own consumed-event
+    // definition, so a successful parse IS the discriminant check — the
+    // assertion only restores the contract union that safeParse's generic
+    // output type dropped.
     state = reduceAgentEvent({ event: parsed.data as AgentConsumedEvent, state });
   }
   return state;
@@ -455,6 +461,8 @@ export function buildAgentLlmRequestBody(input: {
         ? []
         : [
             {
+              // as const: in the array literal the role would widen to
+              // string and fall out of AgentChatMessage's role union.
               role: "developer" as const,
               content: `Current date and time (UTC): ${requestedAt}`,
             },
