@@ -10,10 +10,10 @@ Send a message to a chat, leave before the reply lands → get a push with the r
 
 ## Status summary
 
-Spec fleshed out and settled (via plannotator grilling, round 1 approved). Implementation not started.
+Core implementation done and unit-tested; full-suite verification in progress.
 
-- Done: design decisions below, codebase research.
-- Missing: everything else (contracts, producer, device suppression, clients, tests).
+- Done: all contracts, producer sibling processor, device suppression (grace + claims + claim-before-intent race + per-user audience), mobile + web claim clients, producer/device unit tests.
+- Missing: e2e coverage decision (existing `itx-devices.e2e.test.ts` covers the pipeline; a reply-specific e2e may be follow-up), full CI run.
 
 ## Decisions (settled)
 
@@ -36,17 +36,22 @@ Spec fleshed out and settled (via plannotator grilling, round 1 approved). Imple
 
 ## Checklist
 
-- [ ] Stamp sender identity: add optional `userId` to the user actor variant in `agentContextItemSchema` (`agent-processor-contract.ts`); populate from `auth.principal` in `AgentRpcTarget.message()`/`ask()` (`rpc-targets.ts` `#contextActor`)
-- [ ] `NotificationIntentContract` 0.3.0: `audience` union gains `{kind:"user", userId}`; optional top-level `agentReplyEventOffset`
-- [ ] New `agent-reply-presented-contract.ts` catalog (project contract owns/spreads it; device contract consumes via `processorDeps`)
-- [ ] New chat-reply-notify sibling processor (contract + implementation) in `apps/os/src/domains/notifications/`; registered via `input.sibling` for plain `agents.create()` threads
-- [ ] `DeviceProcessorContract` 0.6.0: consume the claim; `replyGraceMs` config; obligation gains `agentReplyEventOffset`; audience filter on copied intents (skip when `ownerId` mismatch); subscription filter gains the claim event type
-- [ ] Device processor implementation: generalize approval grace machinery to cover reply grace; claims mark `presentedAt` on exact `(path, replyEventOffset)` match; settle `suppressed`
-- [ ] Mobile: append claim from chat screen when newest assistant message renders foregrounded (model on `in-thread-approval.tsx` useQuery + `appForegrounded`)
-- [ ] OS web app: same claim from the web thread view (document-visible gate)
-- [ ] Tests: producer node tests (stream-processor harness); device suppression/audience tests next to existing approval-grace tests; e2e following `itx-devices.e2e.test.ts` + `chat-roundtrip.e2e.test.ts` patterns
-- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test`
+- [x] Stamp sender identity: add optional `userId` to the user actor variant in `agentContextItemSchema` (`agent-processor-contract.ts`); populate from `auth.principal` in `AgentRpcTarget.message()`/`ask()` (`rpc-targets.ts` `#contextActor`) _(userId rides the user actor; matches devices.enroll's ownerId by construction)_
+- [x] `NotificationIntentContract` 0.3.0: `audience` union gains `{kind:"user", userId}`; optional top-level `agentReplyEventOffset` _(notification-intent-contract.ts)_
+- [x] New `agent-reply-presented-contract.ts` catalog (project contract owns/spreads it; device contract consumes via `processorDeps`) _(claim payload is `{path, replyEventOffset}` — per-stream offsets need the pair)_
+- [x] New chat-reply-notify sibling processor (contract + implementation) in `apps/os/src/domains/notifications/`; registered via `input.sibling` for plain `agents.create()` threads _(chat-reply-notify-{contract,implementation}.ts; registered in agent-durable-object.ts + rpc-targets create())_
+- [x] `DeviceProcessorContract` 0.6.0: consume the claim; `replyGraceMs` config (3s); obligation gains `agentReplyEventOffset`; audience filter on copied intents; subscription filter gains the claim event type _(also added `recentReplyClaims` — see notes)_
+- [x] Device processor implementation: generalized grace machinery (`releaseGraces`, `repointGraceAlarm`, shared `obligationGraceUntil`); claims mark `presentedAt` on exact `(path, replyEventOffset)` match; settle `suppressed` _(alarm slice key kept as "device-approval-grace" — armed slices persist across deploys)_
+- [x] Mobile: append claim from chat screen when newest assistant message renders foregrounded _(lib/reply-presented.ts `useClaimReplyPresented`; `appForegrounded` moved there, shared with in-thread-approval.tsx)_
+- [x] OS web app: same claim from the web thread view (document-visible gate) _(project-stream-view.tsx `useClaimReplyPresented` — SQLite max-offset query + connectItx append)_
+- [x] Tests: producer node tests (8, chat-reply-notify.test.ts); device suppression/audience tests (5 new, device-processor.test.ts) _(reply-specific e2e left as possible follow-up; the devices e2e already exercises the delivery pipeline)_
+- [ ] `pnpm typecheck && pnpm lint && pnpm knip && pnpm format && pnpm test` _(typecheck/lint/knip/format green; full test suite running)_
 
 ## Implementation notes
 
-(log kept while implementing)
+- **Claim-before-intent race** (not present in the approval design): a reply's claim and its intent are both triggered by the same `web-message-sent` event, so a client watching the thread can get its claim onto the root stream before the producer's intent — and both ride the same ordered root→device subscription lane. Losing that race would ring a phone the user is actively looking at. Fix: the device processor remembers reduced claims in `state.recentReplyClaims` (bounded: 10min retention / 50 entries, pruned deterministically at reduce), and an intent that arrives after its claim opens pre-claimed (`presentedAt` set). Approvals keep their existing accepted-race behavior — their request always commits long before a client can render the batch.
+- **Coalescing**: the producer keys on "reply that closes an open user turn" — consecutive assistant messages in one turn yield ONE push (the first reply closes the turn), and agent↔agent traffic (developer role) never opens a turn.
+- **Audience plumbing**: `auth.principal` (a string; what devices.enroll already stamps as `ownerId`) now rides user context-added actors as `userId`. Admin/CLI-sent messages stamp a principal that matches no device → no push (acceptable; better than spamming everyone).
+- **Deterministic intent bodies**: `expiresAt` = reply event `createdAt` + 1h, title from folded `agent/summary-updated`, body = reply truncated at 500 chars — a redelivery re-appends the identical body and dedupes on the idempotency key.
+- **Migration**: existing threads don't get the sibling (subscriptions are configured at creation); existing devices pick up the widened subscription filter (with the claim event type) on their next enroll → `push-token-updated` re-arm, i.e. next app open.
+- Sibling registration reuses `agentCreationForPath`'s existing single `sibling` slot — plain `create()` passed none before. Integration threads (Slack/Telegram/Email) are born elsewhere and unaffected.

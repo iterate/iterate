@@ -29,6 +29,7 @@ import { DeviceProcessorContract } from "../devices/device-processor-contract.ts
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { ApprovalPresentedEvents } from "./approval-presented-contract.ts";
+import { AgentReplyPresentedEvents } from "./agent-reply-presented-contract.ts";
 import { StreamContext } from "./stream-context.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
@@ -456,6 +457,9 @@ export const ProjectProcessorContract = defineProcessorContract({
     // consume it and cannot import this module back (this module imports the
     // device contract).
     ...ApprovalPresentedEvents,
+    // Same arrangement for the chat-reply suppression claim ("the user is
+    // already looking at this reply") — standalone catalog, owned here.
+    ...AgentReplyPresentedEvents,
   },
   consumes: [
     "*",

@@ -5,8 +5,9 @@
 // Approvals screen, which is now the cross-thread queue + history view.
 
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { AppState, Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
 import { decide, EVENT, hostBreakdown, type OpenBatch, type Verdict } from "../lib/approvals.ts";
+import { appForegrounded } from "../lib/reply-presented.ts";
 import { signWithApproverKey } from "../lib/approver.ts";
 import { getProjectItx } from "../lib/itx.ts";
 import { promptForRejectReason } from "../lib/reject-reason.ts";
@@ -153,20 +154,3 @@ const styles = StyleSheet.create({
   approveText: { color: colors.background, fontSize: 14, fontWeight: "600" },
   error: { color: colors.danger, fontSize: 12, marginTop: spacing.xs },
 });
-
-/**
- * Resolves once the app is foregrounded — immediately when it already is
- * (always, on web). One-shot: the listener removes itself on the first
- * "active" transition, so an abandoned wait leaks nothing beyond a single
- * subscription for the app's backgrounded lifetime.
- */
-function appForegrounded(): Promise<void> {
-  if (AppState.currentState === "active") return Promise.resolve();
-  return new Promise((resolve) => {
-    const subscription = AppState.addEventListener("change", (state) => {
-      if (state !== "active") return;
-      subscription.remove();
-      resolve();
-    });
-  });
-}
