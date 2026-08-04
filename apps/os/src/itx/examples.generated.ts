@@ -1445,15 +1445,14 @@ const messages = await Promise.all(
     // never regex-strip it yourself. output.format "text" drops link
     // targets and image URLs (most of an email's bytes are tracking
     // links), so whole inboxes fit in one return.
-    const text =
-      part.mimeType === "text/plain"
-        ? decoded
-        : (
-            await itx.ai.toMarkdown(
-              { name: "message.html", blob: new Blob([decoded], { type: "text/html" }) },
-              { conversionOptions: { output: { format: "text" } } },
-            )
-          ).data;
+    let text = decoded;
+    if (part.mimeType !== "text/plain") {
+      const md = await itx.ai.toMarkdown(
+        { name: "message.html", blob: new Blob([decoded], { type: "text/html" }) },
+        { conversionOptions: { output: { format: "text" } } },
+      );
+      text = md.data || text;
+    }
     return { id: message.id, subject, text };
   }),
 );

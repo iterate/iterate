@@ -1313,9 +1313,9 @@ export const ITX_API_DECLARATIONS: readonly ItxApiDeclaration[] = [
     name: "CfMarkdownConversionResult",
     kind: "typeAlias",
     sourceText:
-      '/** One converted document from `ai.toMarkdown`: `format` is "markdown" with\n * the markdown text in `data` (plus a token estimate), or "error" with the\n * failure message in `error`. */\nexport type CfMarkdownConversionResult = {\n  name: string;\n  format: "markdown" | "error";\n  mimeType?: string;\n  tokens?: number;\n  data?: string;\n  error?: string;\n};',
+      '/** One converted document from `ai.toMarkdown`: `format` is "markdown" — or\n * "text" when `output.format: "text"` was requested — with the converted\n * text in `data` (plus a token estimate), or "error" with the failure\n * message in `error`. */\nexport type CfMarkdownConversionResult = {\n  name: string;\n  format: "markdown" | "text" | "error";\n  mimeType?: string;\n  tokens?: number;\n  data?: string;\n  error?: string;\n};',
     summary:
-      'One converted document from `ai.toMarkdown`: `format` is "markdown" with the markdown text in `data` (plus a token estimate), or "error" with the failure message in `error`.',
+      'One converted document from `ai.toMarkdown`: `format` is "markdown" — or "text" when `output.format: "text"` was requested — with the converted text in `data` (plus a token estimate), or "error" with the failure message in `error`.',
     memberSummaries: {},
     referencedTypeNames: [],
   },

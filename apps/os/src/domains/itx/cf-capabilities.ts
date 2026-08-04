@@ -35,12 +35,13 @@ export type CfMarkdownConversionOptions = {
   };
 };
 
-/** One converted document from `ai.toMarkdown`: `format` is "markdown" with
- * the markdown text in `data` (plus a token estimate), or "error" with the
- * failure message in `error`. */
+/** One converted document from `ai.toMarkdown`: `format` is "markdown" — or
+ * "text" when `output.format: "text"` was requested — with the converted
+ * text in `data` (plus a token estimate), or "error" with the failure
+ * message in `error`. */
 export type CfMarkdownConversionResult = {
   name: string;
-  format: "markdown" | "error";
+  format: "markdown" | "text" | "error";
   mimeType?: string;
   tokens?: number;
   data?: string;
