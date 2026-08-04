@@ -1289,7 +1289,12 @@ async function renderScriptSettlement(input: {
           "```",
           text.slice(0, shownChars),
           "```",
-          rawTextSpillNotice({ path: spilledPath, shownChars, totalChars: text.length }),
+          rawTextSpillNotice({
+            historyLimit,
+            path: spilledPath,
+            shownChars,
+            totalChars: text.length,
+          }),
         ].join("\n");
       }
       return renderOversizedJsonResult({
@@ -1406,7 +1411,35 @@ function renderOversizedJsonResult(input: {
     "  // you can now do whatever you see fit with `data`",
     "}",
     "```",
+    resultBudgetArithmetic({
+      historyLimit: input.historyLimit,
+      itemCount: Array.isArray(input.result) ? input.result.length : null,
+      totalChars: input.text.length,
+    }),
   ].join("\n");
+}
+
+/**
+ * The budget line for an oversized result: the actual numbers, so the next
+ * script trims to FIT instead of guessing (a live trace showed four
+ * consecutive rounds each returning 2-5x the window with a different slicing
+ * heuristic — none of them did the division).
+ */
+function resultBudgetArithmetic(input: {
+  historyLimit: number;
+  itemCount: number | null;
+  totalChars: number;
+}): string {
+  const times = Math.max(2, Math.round(input.totalChars / input.historyLimit));
+  const perItem =
+    input.itemCount !== null && input.itemCount > 1
+      ? ` Across ${input.itemCount} items that is ~${Math.floor(input.historyLimit / input.itemCount).toLocaleString("en-US")} chars each.`
+      : "";
+  return (
+    `Budget arithmetic: only ~${input.historyLimit.toLocaleString("en-US")} chars render inline, and this result was ~${times}x that.${perItem} ` +
+    `Slice to fit, page the file across turns, or COMPACT before returning — long markdown is usually mostly link/image URLs (strip them), and HTML converts far smaller via ` +
+    `itx.ai.toMarkdown(doc, { conversionOptions: { output: { format: "text" } } }).`
+  );
 }
 
 /**
@@ -1416,6 +1449,7 @@ function renderOversizedJsonResult(input: {
  * fetch.
  */
 function rawTextSpillNotice(input: {
+  historyLimit: number;
   path: string;
   shownChars: number;
   totalChars: number;
@@ -1428,6 +1462,11 @@ function rawTextSpillNotice(input: {
     `  return text.slice(${input.shownChars}, ${input.shownChars * 4}); // page/regex to return only what you need`,
     "}",
     "```",
+    resultBudgetArithmetic({
+      historyLimit: input.historyLimit,
+      itemCount: null,
+      totalChars: input.totalChars,
+    }),
   ].join("\n");
 }
 

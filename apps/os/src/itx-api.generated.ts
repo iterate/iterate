@@ -342,7 +342,10 @@ export interface Ai {
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
   /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
    * string (a fetched page, an email body) converts via
-   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand. */
+   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand.
+   * `{ conversionOptions: { output: { format: "text" } } }` returns plain
+   * text with link targets and image URLs stripped — the compact choice for
+   * emails and newsletters, whose bytes are mostly tracking links. */
   toMarkdown(
     document: CfMarkdownDocument,
     options?: CfMarkdownConversionOptions,
@@ -734,10 +737,13 @@ export interface Docs {
    * noise and a word matching a row's NAME counts double, so `"itx.docs"`,
    * `"worker"`, or `"agents"` rank their subject first instead of every row
    * that mentions the word. Example hits are working scripts — prefer copying
-   * them over writing calls from scratch. Each hit's `fetchCall` field holds
-   * the ready-made docs.get call that fetches its full doc.
+   * them over writing calls from scratch. The TOP hit arrives with its full
+   * doc inlined in `result` (tune with `expand`: how many hits to expand,
+   * default 1) — when the first hit is the right one, skip the follow-up
+   * `docs.get` round and use `result` directly. Other hits carry `fetchCall`,
+   * the ready-made docs.get call. `limit` caps the hit count (default 5).
    */
-  search(input: { q: string }): Promise<DocsSearchHit[]>;
+  search(input: { q: string; limit?: number; expand?: number }): Promise<DocsSearchHit[]>;
   /**
    * Fetch one entry by the name a search hit gave you. An example name
    * returns its full script, annotated with its provenance (most examples
@@ -1448,6 +1454,10 @@ export interface DocsSearchHit {
   summary: string;
   /** The literal itx call that fetches the full entry — copy it verbatim. */
   fetchCall: string;
+  /** The full entry (exactly what `fetchCall` would return), inlined on the
+   * top hit(s) per the search's `expand` input so the best match usually
+   * needs no second call. Absent on the rest — fetch those via `fetchCall`. */
+  result?: string;
 }
 
 /** One project file, addressed by path. */
@@ -2336,11 +2346,16 @@ export type CfMarkdownDocument = {
   blob: Blob;
 };
 
-/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
+/** Per-format tuning for `ai.toMarkdown`: output format (markdown, or plain
+ * text with link targets and image URLs stripped — the compact choice for
+ * emails and newsletters full of tracking links), HTML scoping (CSS selector,
  * hostname for relative links), image description language, PDF metadata
  * exclusion. */
 export type CfMarkdownConversionOptions = {
   conversionOptions?: {
+    output?: {
+      format?: "markdown" | "text";
+    };
     html?: {
       cssSelector?: string;
       hostname?: string;

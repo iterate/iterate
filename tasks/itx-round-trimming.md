@@ -1,13 +1,15 @@
 ---
-status: in-progress
+status: in-review
 size: medium
+pr: https://github.com/iterate/iterate/pull/2409
 ---
 
 # Cut agent rounds: toMarkdown text output, docs.search inline expansion, budget-aware truncation notices
 
 ## Status summary
 
-Spec fleshed out; implementation not started.
+Implemented, all checks green (typecheck, lint, knip, 251 test files), PR open as
+draft. All checklist items done.
 
 ## Motivation
 
@@ -31,29 +33,32 @@ After the ai.run/toMarkdown docs fixes (#2399) and the truncation preview improv
 
 ## Checklist
 
-- [ ] Add `output?: { format?: "markdown" | "text" }` to `CfMarkdownConversionOptions`
-      (apps/os/src/domains/itx/cf-capabilities.ts) and regenerate the API.
-- [ ] Teach `output.format: "text"` in the toMarkdown JSDoc overloads and
-      `AiRpcTarget.__describe()`: strips link/image URLs — reach for it on emails and
-      newsletters, which are dominated by tracking links and giant base64 images.
-- [ ] `itx.docs.search`: default page size 12 → 5 via a new `limit` input (clamped),
-      and inline the full doc (`docs.get` output) on the top hit via a new `result`
-      field on `DocsSearchHit` — count configurable via `expand` (default 1, 0 to
-      disable). Update the search JSDoc, `__describe`, and the docs-search-and-get
-      example so agents know the top hit usually needs no second call.
-- [ ] Budget-aware truncation notices (agent-processor-implementation.ts): the
-      oversized-JSON and raw-text spill notices state the inline window, how many
-      times over the result was, and — when the result is an array — the per-item
-      budget (window ÷ N). Nudge compaction: strip URLs, or convert HTML with
-      `conversionOptions.output.format: "text"`.
-- [ ] Gmail example: collapse to one-shot — search, fan out `format: "full"` fetches,
-      decode, convert every message with `output.format: "text"`, return everything.
-      Description teaches both new lessons: use text output for email HTML (tracking
-      links, base64 images), and don't over-trim across rounds — return the lot; an
-      oversized result comes back as a typed preview plus a spill file to read next
-      turn.
-- [ ] cf-ai-to-markdown example: demo `output.format: "text"` alongside markdown.
-- [ ] Regenerate (`generate:itx-examples`, `generate:itx-api`) and run checks.
+- [x] Add `output?: { format?: "markdown" | "text" }` to `CfMarkdownConversionOptions`
+      _(cf-capabilities.ts; regenerated into both itx-api.generated.ts copies)_
+- [x] Teach `output.format: "text"` in the toMarkdown JSDoc and `AiRpcTarget.__describe()`
+      _(rpc-targets.ts single-doc overload + describe child blip: "emails and
+      newsletters are mostly tracking links and giant base64 images — often 10x smaller")_
+- [x] `itx.docs.search`: `limit` (default 5, clamp 1–25) + `expand` (default 1, clamp
+      0–limit) inlining the full doc on top hit(s) via new `DocsSearchHit.result`
+      _(rpc-targets.ts search; DocsSearchHit in itx-api-graph.ts; search JSDoc,
+      DocsRpcTarget __describe, docs-search-and-get example, exec-typescript step 2,
+      and the system-prompt docs teach line all updated — prompt revision 8 → 9,
+      trimmed to stay inside the 4200-token ceiling rather than raising it)_
+- [x] Budget-aware truncation notices
+      _(agent-processor-implementation.ts: new `resultBudgetArithmetic` appended to
+      both the oversized-JSON and raw-text spill notices — states the inline window,
+      how many times over the result was, per-item budget when the result is an
+      array, and points at URL-stripping / output.format "text" compaction)_
+- [x] Gmail example one-shot rewrite
+      _(examples-source.ts: list → fan out format:"full" → decode → toMarkdown with
+      output text for EVERY hit, one return; description teaches "don't spread
+      list/read across turns, don't pre-trim — oversized returns degrade to typed
+      preview + spill file")_
+- [x] cf-ai-to-markdown example demos `output.format: "text"`
+      _(same doc converted both ways; description carries the email/newsletter hint)_
+- [x] Regenerate and run checks
+      _(generate:itx-examples + generate:itx-api after format; typecheck, lint, knip,
+      full apps/os suite 251 files green)_
 
 ## Out of scope
 
@@ -64,4 +69,12 @@ After the ai.run/toMarkdown docs fixes (#2399) and the truncation preview improv
 
 ## Implementation notes
 
-(log kept while implementing)
+- `output.format: "text"` verified against prd before implementing: link targets and
+  image URLs are dropped, link text and alt text kept.
+- The docs teach line in the default prompt had ~11 chars of headroom under the
+  4200-token ceiling (revision 8 was itself a post-merge budget trim), so the new
+  sentence is compensated by tightening the same line ("example scripts (most PROVEN —
+  run unattended by the test suite), type declarations" → "examples (most PROVEN,
+  CI-run), types").
+- `expand` fetches run through the same `docs.get` path as a manual call, so a type
+  hit inlines its declaration closure under the default 1500-token budget.

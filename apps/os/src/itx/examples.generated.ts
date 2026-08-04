@@ -878,17 +878,20 @@ return { offset: sent.offset, payload: sent.payload, type: sent.type };
     id: "docs-search-and-get",
     title: "Find working code + types through itx.docs",
     description:
-      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query.",
+      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; the TOP hit arrives with its full doc inlined in `result`, so when it's the right one there is no second call to make. get({ name }) fetches any other — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
 // MANY related words per query — the search is dumb word matching, so
-// synonyms are what buy recall.
+// synonyms are what buy recall. 5 hits by default ({ limit } widens);
+// the top hit's full doc is already inlined in \`result\` ({ expand }
+// tunes how many hits get that) — usually no follow-up get needed.
 const hits = await itx.docs.search({ q: "repo file edit commit write change" });
+const topDocInlined = typeof hits[0]?.result === "string";
 
-// Hits are { kind: "example" | "type" | "capability", name, summary, fetchCall };
-// each hit's fetchCall field is the literal next call. Example hits are
-// working scripts — copy those first.
+// Hits are { kind: "example" | "type" | "capability", name, summary, fetchCall, result? };
+// for hits past the expansion window, fetchCall is the literal next
+// call. Example hits are working scripts — copy those first.
 const example = await itx.docs.get({ name: vars.name ?? "describe-project" });
 // Example scripts come back paste-ready: a complete async (itx) => { ... }
 // with the annotation and a vars stub INSIDE the function.
@@ -899,7 +902,8 @@ const streamTypes = await itx.docs.get({ name: "Stream", maxTokens: 800 });
 
 return {
   hitCount: hits.length,
-  firstHit: hits[0] ?? null,
+  topDocInlined,
+  firstHitName: hits[0]?.name ?? null,
   examplePasteReady: example.startsWith("async (itx) => {") && example.includes("// EXAMPLE"),
   streamTypesIncludeAppend: streamTypes.includes("append("),
 };
@@ -1391,9 +1395,9 @@ return { copied: copied.payload, copiedFrom: copied.source?.copiedFrom };
   {
     id: "gmail-search-inbox",
     e2eProven: false,
-    title: "Search the inbox and read a message body through the built-in Gmail integration",
+    title: "Search the inbox and read message bodies through the built-in Gmail integration",
     description:
-      "itx.integrations.gmail.get().request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. get() selects the first connected account; pass a slug only for a specific account. List matching message ids first, then fan out metadata fetches in one Promise.all. To read a message's CONTENT, fetch it with format: 'full' — the body arrives as base64url-encoded MIME parts, so walk payload.parts for text/html, decode the bytes, and convert to Markdown with itx.ai.toMarkdown (never regex-strip HTML by hand). Reads real mail — interactive-only.",
+      "itx.integrations.gmail.get().request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. get() selects the first connected account; pass a slug only for a specific account. Do it in ONE script: list matching ids, fan out format: 'full' fetches, decode and convert every body, return the lot — don't spread list/read across turns, and don't pre-trim out of caution: an oversized return comes back as a typed preview plus a spill file you read next turn. Bodies arrive as base64url-encoded MIME parts: walk payload.parts for text/html, decode the bytes, and convert with itx.ai.toMarkdown using conversionOptions.output.format 'text' (never regex-strip HTML by hand) — email HTML is mostly tracking links and giant base64 images, and text output strips link/image URLs for ~10x smaller content. Reads real mail — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
@@ -1403,61 +1407,58 @@ const inbox = await gmail.request({
   query: { maxResults: 5, q: vars.q ?? "in:inbox is:unread" },
 });
 
+// One script, one return: fetch every hit in full and read all the
+// bodies now — splitting list/read across turns wastes rounds, and an
+// oversized return degrades safely (typed preview + spill file).
 const messages = await Promise.all(
-  (inbox.data.messages ?? []).map((message) =>
-    gmail.request({
+  (inbox.data.messages ?? []).map(async (message) => {
+    const full = await gmail.request({
       path: "/users/me/messages/" + message.id,
-      query: { format: "metadata", metadataHeaders: "Subject" },
-    }),
-  ),
+      query: { format: "full" },
+    });
+    const headers = full.data.payload?.headers ?? [];
+    const subject = headers.find((h) => h.name === "Subject")?.value;
+
+    // The body is not text — it hides in a nested MIME tree as
+    // base64url bytes. Flatten the tree, prefer html.
+    const parts = [];
+    const stack = [full.data.payload];
+    while (stack.length) {
+      const part = stack.pop();
+      if (!part) continue;
+      parts.push(part);
+      stack.push(...(part.parts ?? []));
+    }
+    const part =
+      parts.find((p) => p.mimeType === "text/html" && p.body?.data) ??
+      parts.find((p) => p.mimeType === "text/plain" && p.body?.data);
+    const encoded = part?.body?.data;
+    if (!part || !encoded) return { id: message.id, subject, snippet: full.data.snippet };
+    // base64url: swap the alphabet back and re-pad to a multiple of 4.
+    const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+    const decoded = new TextDecoder().decode(
+      Uint8Array.from(atob(padded), (c) => c.charCodeAt(0)),
+    );
+
+    // Plain text is already readable; HTML goes to the converter —
+    // never regex-strip it yourself. output.format "text" drops link
+    // targets and image URLs (most of an email's bytes are tracking
+    // links), so whole inboxes fit in one return.
+    const text =
+      part.mimeType === "text/plain"
+        ? decoded
+        : (
+            await itx.ai.toMarkdown(
+              { name: "message.html", blob: new Blob([decoded], { type: "text/html" }) },
+              { conversionOptions: { output: { format: "text" } } },
+            )
+          ).data;
+    return { id: message.id, subject, text };
+  }),
 );
-const subjects = messages.map(
-  (m) => m.data.payload?.headers?.find((h) => h.name === "Subject")?.value,
-);
 
-// Read the first hit's CONTENT: the body is not text — it hides in a
-// nested MIME tree as base64url bytes. Flatten the tree, prefer html.
-const firstId = inbox.data.messages?.[0]?.id;
-if (!firstId) return { resultSizeEstimate: inbox.data.resultSizeEstimate, subjects };
-const full = await gmail.request({
-  path: "/users/me/messages/" + firstId,
-  query: { format: "full" },
-});
-const parts = [];
-const stack = [full.data.payload];
-while (stack.length) {
-  const part = stack.pop();
-  if (!part) continue;
-  parts.push(part);
-  stack.push(...(part.parts ?? []));
-}
-const part =
-  parts.find((p) => p.mimeType === "text/html" && p.body?.data) ??
-  parts.find((p) => p.mimeType === "text/plain" && p.body?.data);
-const encoded = part?.body?.data;
-if (!part || !encoded) return { subjects, firstMessage: { snippet: full.data.snippet } };
-// base64url: swap the alphabet back and re-pad to a multiple of 4.
-const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
-const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
-const text = new TextDecoder().decode(Uint8Array.from(atob(padded), (c) => c.charCodeAt(0)));
-
-// Plain text is already readable; HTML goes to the converter —
-// never regex-strip it yourself.
-const markdown =
-  part.mimeType === "text/plain"
-    ? text
-    : (
-        await itx.ai.toMarkdown({
-          name: "message.html",
-          blob: new Blob([text], { type: "text/html" }),
-        })
-      ).data;
-
-return {
-  resultSizeEstimate: inbox.data.resultSizeEstimate,
-  subjects,
-  firstMessage: { subject: subjects[0], markdown },
-};
+return { resultSizeEstimate: inbox.data.resultSizeEstimate, messages };
 `.trim(),
   },
   {
@@ -1591,7 +1592,7 @@ return {
     e2eProven: false,
     title: "Convert a document or HTML to Markdown with Workers AI",
     description:
-      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). It also converts an in-hand HTML string — a fetched page, an email body — via new Blob([html], { type: 'text/html' }): never strip HTML with regex. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
+      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). It also converts an in-hand HTML string — a fetched page, an email body — via new Blob([html], { type: 'text/html' }): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `
@@ -1601,12 +1602,21 @@ const converted = await itx.integrations.cf.ai.toMarkdown({ name: "sample.csv", 
 
 // An HTML string already in hand (fetched page, email body) is a
 // document too — wrap it in a Blob instead of regex-stripping tags.
-const html = "<h1>Report</h1><p>Everything is <em>fine</em>.</p>";
-const fromHtml = await itx.ai.toMarkdown({
-  name: "page.html",
-  blob: new Blob([html], { type: "text/html" }),
+const html =
+  '<h1>Report</h1><p><a href="https://example.com/very-long-tracking-url">Everything</a> is <em>fine</em>.</p>';
+const doc = { name: "page.html", blob: new Blob([html], { type: "text/html" }) };
+const fromHtml = await itx.ai.toMarkdown(doc);
+// output.format "text": link/image URLs stripped, text kept — the
+// compact choice when the URLs don't matter (emails, newsletters).
+const asText = await itx.ai.toMarkdown(doc, {
+  conversionOptions: { output: { format: "text" } },
 });
-return { supported: supported.slice(0, 10), converted, fromHtml: fromHtml.data };
+return {
+  supported: supported.slice(0, 10),
+  converted,
+  fromHtml: fromHtml.data,
+  asText: asText.data,
+};
 `.trim(),
   },
   {
