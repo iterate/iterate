@@ -141,6 +141,11 @@ export class WorkspaceV2DurableObject extends DurableObject<Env> {
       }),
     ).processorFacade({
       name: PROCESSOR_SLUG,
+      // The Stream DO's facade forwards to the facet registered for this
+      // path family; /workspaces/** registers exactly the workspace
+      // processor under this name, so its snapshot/waitUntilProcessed doors
+      // carry WorkspaceProcessorState. Double assertion because the
+      // generated stub type erases the per-name state parameter.
     })) as unknown as WorkspaceProcessorFacade;
   }
 

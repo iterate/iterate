@@ -7259,6 +7259,10 @@ export class StreamProcessorRpcTarget<State, PublicState = State>
   }
 
   #project(state: State): PublicState {
+    // No projection supplied means this relay was constructed with
+    // PublicState = State (projection-less call sites pin the two type
+    // parameters together); the double assertion exists only because the
+    // class body cannot see that per-call-site equality.
     return this.#publicState === undefined
       ? (state as unknown as PublicState)
       : this.#publicState(state);
@@ -7629,6 +7633,10 @@ export class ProcessorRelayRpcTarget<
   }
 
   #project(state: State): PublicState {
+    // No projection supplied means this relay was constructed with
+    // PublicState = State (projection-less call sites pin the two type
+    // parameters together); the double assertion exists only because the
+    // class body cannot see that per-call-site equality.
     return this.#publicState === undefined
       ? (state as unknown as PublicState)
       : this.#publicState(state);
