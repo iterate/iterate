@@ -14,7 +14,7 @@
     "gen:wrangler": "tsx ./scripts/generate-wrangler-config.ts",
     "test": "pnpm test:web && pnpm firmware:test:host",
     "test:web": "vitest run --config vitest.config.ts --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
-    "firmware:configure": "cmake -S firmware -B firmware/.build/host -DCMAKE_BUILD_TYPE=Debug",
+    "firmware:configure": "cmake -S firmware -B firmware/.build/host -DCMAKE_BUILD_TYPE=Debug -DITERATE_KIT_SANITIZE=ON",
     "firmware:build:host": "pnpm firmware:configure && cmake --build firmware/.build/host --parallel",
     "firmware:test:host": "pnpm firmware:build:host && ctest --test-dir firmware/.build/host --output-on-failure",
     "typecheck": "pnpm gen:wrangler && tsc --noEmit"

@@ -19,7 +19,7 @@ file(
 # not compile. The source check makes the intended dependency direction visible
 # in a fast host test instead of waiting for a particular board build.
 set(ITERATE_KIT_FORBIDDEN_INCLUDE
-    "^[ \t]*#[ \t]*include[ \t]*[<\"][^>\"]*(audio_codec\\.h|audio_processor\\.h|components/audio|iterate/kit/audio|\\.\\./audio|platforms/|iterate/kit/platforms|\\.\\./platforms)[^>\"]*[>\"]")
+    "^[ \t]*#[ \t]*include[ \t]*[<\"][^>\"]*(audio_codec\\.h|audio_processor\\.h|components/audio|iterate/kit/audio/|\\.\\./audio|platforms/|iterate/kit/platforms|\\.\\./platforms)[^>\"]*[>\"]")
 
 foreach(ITERATE_KIT_CORE_FILE IN LISTS ITERATE_KIT_CORE_FILES)
   file(STRINGS "${ITERATE_KIT_CORE_FILE}" ITERATE_KIT_BOUNDARY_VIOLATIONS

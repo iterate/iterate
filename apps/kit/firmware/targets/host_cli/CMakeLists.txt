@@ -1,0 +1,34 @@
+find_library(ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK AudioToolbox REQUIRED)
+find_library(ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
+
+add_executable(iterate-kit-cli
+  cli_audio_in.c
+  cli_audio_out.c
+  cli_capabilities.c
+  cli_conversation.c
+  cli_delivery_fault.c
+  cli_device_profile.c
+  cli_fault_schedule.c
+  cli_keyboard.c
+  cli_microphone.c
+  cli_options.c
+  cli_paced_sink.c
+  cli_report.c
+  cli_speaker.c
+  cli_virtual_clock.c
+  cli_wav.c
+  main.c)
+
+target_include_directories(iterate-kit-cli PRIVATE .)
+target_compile_features(iterate-kit-cli PRIVATE c_std_11)
+target_compile_options(iterate-kit-cli PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+  -Wconversion
+  -Wshadow)
+target_link_libraries(iterate-kit-cli PRIVATE
+  iterate-kit-darwin
+  ${ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK}
+  ${ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK})

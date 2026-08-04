@@ -6,6 +6,18 @@ plan cites one, not front to back.
 
 ---
 
+## 0. User amendment — 2026-08-04
+
+- StackChan firmware is in scope. Port the proven `c-capabilities` AEC path into
+  the shared audio-processor architecture and keep it compiling and tested.
+- StackChan is offline: do not flash it and do not claim physical proof. This
+  supersedes the StackChan/AEC exclusions below, but not the preservation rule;
+  the archived `iterate/stackchan` repository remains read-only input.
+- If Claude cannot perform a mandatory review because of usage limits, run a
+  fresh Codex CLI review with `gpt-5.6-sol` at maximum reasoning effort instead.
+
+---
+
 ## 1. The goal, in the order it will be judged
 
 1. **A PR that is green and mergeable.** Not a branch, not a checkpoint. Green CI

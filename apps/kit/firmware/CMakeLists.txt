@@ -4,6 +4,38 @@ project(iterate_kit_firmware LANGUAGES C)
 
 enable_testing()
 
+option(
+  ITERATE_KIT_SANITIZE
+  "Enable address and undefined-behavior sanitizers for host verification"
+  OFF)
+
+if(ITERATE_KIT_SANITIZE AND CMAKE_C_COMPILER_ID MATCHES "AppleClang|Clang|GNU")
+  add_compile_options(-fsanitize=address,undefined -fno-omit-frame-pointer)
+  add_link_options(-fsanitize=address,undefined)
+endif()
+
+# The device profile is maintained in the first-party Cap'n Web repository.
+# Pinning a commit keeps firmware builds reproducible without copying upstream
+# implementation files into this monorepo.
+include(FetchContent)
+set(CAPNWEB_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
+set(CAPNWEB_BUILD_FUZZER OFF CACHE BOOL "" FORCE)
+set(CAPNWEB_SANITIZE ${ITERATE_KIT_SANITIZE} CACHE BOOL "" FORCE)
+FetchContent_Declare(
+  capnweb_c
+  GIT_REPOSITORY https://github.com/iterate/capnweb.git
+  GIT_TAG 275830e6593ca8212432b108efdaee4a1b50541d
+  GIT_SHALLOW FALSE
+  SOURCE_SUBDIR c)
+FetchContent_MakeAvailable(capnweb_c)
+
 add_subdirectory(components/core)
 add_subdirectory(components/audio)
+add_subdirectory(components/capabilities)
+
+if(APPLE)
+  add_subdirectory(platforms/darwin)
+  add_subdirectory(targets/host_cli)
+endif()
+
 add_subdirectory(tests)
