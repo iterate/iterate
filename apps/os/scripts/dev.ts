@@ -53,18 +53,17 @@ export default async function start(options: StartOptions = {}) {
   // Captured before eviction: shutdown removes the discovery file that
   // recordedPort() reads, and the replacement should keep the stable URL.
   let evictedPort: number | undefined;
-  if (live) {
-    if (await evictIfMemoryPressured(live)) {
-      evictedPort = live.port;
-    } else {
-      if (requestedPort !== undefined && live.port !== requestedPort) {
-        throw new Error(
-          `A dev server is already running on port ${live.port} (pid ${live.pid}) but port ` +
-            `${requestedPort} was requested — kill it or use restart.`,
-        );
-      }
-      return { ...formatStatus(live), note: "already running — use restart to replace it" };
+  if (live && (await evictIfMemoryPressured(live))) {
+    evictedPort = live.port;
+  }
+  if (live && evictedPort === undefined) {
+    if (requestedPort !== undefined && live.port !== requestedPort) {
+      throw new Error(
+        `A dev server is already running on port ${live.port} (pid ${live.pid}) but port ` +
+          `${requestedPort} was requested — kill it or use restart.`,
+      );
     }
+    return { ...formatStatus(live), note: "already running — use restart to replace it" };
   }
 
   const port = requestedPort ?? evictedPort ?? (await pickFreePort(recordedPort()));
@@ -209,7 +208,10 @@ async function resolveLocalOsDevServerTarget(
  * Treat a bloated workerd as already dead: kill it so callers start fresh.
  */
 async function evictIfMemoryPressured(live: DevServerInfo) {
-  const limitMb = Number(process.env.ITERATE_DEV_WORKERD_RSS_LIMIT_MB || 2048);
+  // Guard NaN: `rssMb < NaN` is false, so a typo'd env var would otherwise
+  // evict every live server on every start.
+  const configured = Number(process.env.ITERATE_DEV_WORKERD_RSS_LIMIT_MB);
+  const limitMb = Number.isFinite(configured) && configured > 0 ? configured : 2048;
   const rssMb = Math.round(workerdRssKb(live.pid) / 1024);
   if (rssMb < limitMb) return false;
   console.error(
