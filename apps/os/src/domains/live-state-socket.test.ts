@@ -387,9 +387,10 @@ describe("openRelayedLiveState", () => {
     const { updates, sink } = collectUpdates();
     const subscription = await relay.subscribe(sink);
     expect(updates).toEqual([{ type: "snapshot", revision: 0, state: { n: 5 } }]);
-    // ping stays true: a false ping would re-dial in a loop against a host
-    // that already said no.
-    expect(subscription.ping()).toBe(true);
+    // A degraded subscription is frozen at its first paint, so it must report
+    // unhealthy — the owner's watchdog is the only way back to live data, and
+    // a healthy-looking frozen subscription is a silently stale page forever.
+    expect(subscription.ping()).toBe(false);
   });
 
   it("ignores late frames from a socket released by the last unsubscribe", async () => {

@@ -395,10 +395,8 @@ export function openRelayedLiveState<State extends object>(input: {
             error,
           });
           socketFed = false;
-          // A fresh transient read per degraded subscribe: the subscriber
-          // still gets a current first paint, just no pushes. `ping()` stays
-          // true — a false ping would make the client watchdog re-dial in a
-          // loop against a host that already said no.
+          // A fresh transient read per degraded subscribe, so the subscriber
+          // still gets a current first paint — it just will not receive pushes.
           engine.setState(await input.readSnapshot());
         }
         const subscription = engine.subscribe(sink);
@@ -408,9 +406,15 @@ export function openRelayedLiveState<State extends object>(input: {
           releaseSocketIfUnwatched();
         };
         return {
-          // A dead socket must fail pings even while the engine still holds
-          // the subscriber: the client watchdog is the re-dial path.
-          ping: () => subscription.ping() && (!socketFed || socket === dialedSocket),
+          // `ping()` answers one question: is this subscription still being
+          // fed? A subscription whose socket died — or that never got one and
+          // is serving a frozen degraded snapshot — must answer NO even though
+          // the engine still holds it, because the owner's watchdog is the only
+          // path back to live data. Reporting a frozen subscription healthy
+          // leaves a page silently stale forever; reporting it unhealthy costs
+          // one re-dial per watchdog interval (45s in `useLiveState`) until the
+          // host can serve a socket again.
+          ping: () => subscription.ping() && socketFed && socket === dialedSocket,
           unsubscribe,
           [Symbol.dispose]: unsubscribe,
         };
