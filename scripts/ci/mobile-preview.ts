@@ -75,7 +75,7 @@ export const latestInstalledRuntime = (): string | undefined => {
 
 /** A build that can run JS published for `runtime`: reuse any usable one,
  * else trigger a fresh build (--no-wait) and return it. */
-export const ensureBuildForRuntime = (runtime: string): any => {
+export const ensureBuildForRuntime = (runtime: string) => {
   const builds: any[] = easJson([
     "build:list",
     "--platform",
