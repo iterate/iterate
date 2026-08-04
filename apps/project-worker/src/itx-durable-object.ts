@@ -3,13 +3,15 @@
 //   • NATIVE fetch — the ONE method a WS upgrade (101) can flow through. `/register` → a hibernatable WAKE
 //     socket (no pin); `/connect` → a capnweb provider RPC leg; a WS upgrade → ingress (acceptWebSocket); a
 //     non-WS request → EGRESS (secret-sub → fallback). `/state` → observability.
-//   • invokeCapability — the single dispatch: built-ins (whoami/kv/secrets/streams) → live provider mounts →
-//     WAKE-ON-CALL (page a hibernatable device) → local static/alias mounts → fall back to the PARENT PATH,
-//     then the SHELL. "Reads fall back, writes stay local" (§4.4 / D21).
-//   • provideCapability — mount at a callPath. load — run confined code IN this context (env.ITX = self-stub).
+//   • invokeCapability — the single dispatch: built-ins (whoami/kv/secrets/streams/repo/provideCapability/
+//     configure) → live provider mounts → WAKE-ON-CALL (page a hibernatable device) → local mounts
+//     (alias/static/code) → fall back to the PARENT PATH, then the SHELL. "Reads fall back, writes stay local."
+//   • provideCapability — mount at a callPath (incl. `code`: a dynamic capability defined by a repo file).
+//     load — run confined code IN this context (env.ITX = self-stub). itx.configure — run the repo's config
+//     worker. itx.repo — the project's file store.
 //
 // Wake-on-call (spike-4): a live RPC leg is the ONLY thing that pins the DO; wake sockets are hibernatable, so
-// 1000 registered devices cost ~nothing while idle. Deferred: the control-plane join (a real shell worker).
+// 1000 registered devices cost ~nothing while idle. The fallback is a real second worker (the control plane).
 
 import { DurableObject } from "cloudflare:workers";
 import { newWorkersRpcResponse, RpcTarget } from "capnweb";
