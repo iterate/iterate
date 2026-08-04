@@ -1,4 +1,4 @@
-import { DocsApp, TasksApp } from "@iterate-com/docs";
+import { DocsApp } from "@iterate-com/docs";
 import { GithubAiLinter } from "iterate/starter-apps/github-ai-linter";
 import { GuestbookApp } from "iterate/starter-apps/guestbook";
 import { IterateWorkerEntrypoint, type StreamEvent } from "iterate/sdk";
@@ -33,20 +33,13 @@ export default class ProjectWorker extends IterateWorkerEntrypoint {
       originOverrideKvKey: "docs-app-origin",
     },
   });
-  // The tasks board is the /w view of the docs app — same vessel, same host;
-  // this capability only mints links there.
-  #tasksApp = TasksApp.create(this.env);
   #guestbookApp = GuestbookApp.create(this.env);
   #todoApp = TodoApp.create(this.env);
 
-  /** Agent-callable Docs helpers, including `itx.worker.docs.link({ workspace, path })`. */
+  /** Agent-callable app helpers: `itx.worker.docs.link({ workspace, path })`
+   * mints the document view, `link({ workspace, repo, task? })` the board. */
   get docs() {
     return this.#docsApp.rpc;
-  }
-
-  /** Agent-callable Tasks helpers, including `itx.worker.tasks.link({ workspace, repo, task? })`. */
-  get tasks() {
-    return this.#tasksApp.rpc;
   }
 
   /**

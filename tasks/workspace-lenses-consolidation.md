@@ -123,7 +123,13 @@ vessel serves two capnweb roots (`/api` docs lane, `/api/tasks` board lane),
 link-capability only — `tasks.link` mints `/w` URLs on the docs host), and
 apps/tasks is deleted along with the `tasks--` host branch in the template
 (no backwards compatibility, per Jonas). The deployed tasks vessels stay
-parked (workers are never deleted). Remaining from the /goal list: the
+parked (workers are never deleted). Sequel (same day): the API unified too —
+ONE capnweb root at /api (the /api/tasks second root died), one authenticate
+returning one project surface carrying both lenses (workspace() = document
+lane, workspaceAt()/board() = board lanes, one board-aware workspaces()),
+one browser WebSocket under both views, and `itx.worker.tasks` deleted —
+`itx.worker.docs.link` mints either view by input shape ({workspace, path}
+docs, {workspace, repo, task?} board). Remaining from the /goal list: the
 pierre-style tree + diff views (item 3's extraction) and the root-folder
 constraint.
 

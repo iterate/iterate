@@ -17,7 +17,7 @@
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as WIndexRouteImport } from './routes/w.index'
-import { Route as WCheckoutIdRouteImport } from './routes/w.$checkoutId'
+import { Route as WBoardIdRouteImport } from './routes/w.$boardId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -29,39 +29,39 @@ const WIndexRoute = WIndexRouteImport.update({
   path: '/w/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const WCheckoutIdRoute = WCheckoutIdRouteImport.update({
-  id: '/w/$checkoutId',
-  path: '/w/$checkoutId',
+const WBoardIdRoute = WBoardIdRouteImport.update({
+  id: '/w/$boardId',
+  path: '/w/$boardId',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
-  '/w/$checkoutId': typeof WCheckoutIdRoute
+  '/w/$boardId': typeof WBoardIdRoute
   '/w/': typeof WIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
-  '/w/$checkoutId': typeof WCheckoutIdRoute
+  '/w/$boardId': typeof WBoardIdRoute
   '/w': typeof WIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
-  '/w/$checkoutId': typeof WCheckoutIdRoute
+  '/w/$boardId': typeof WBoardIdRoute
   '/w/': typeof WIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/w/$checkoutId' | '/w/'
+  fullPaths: '/' | '/w/$boardId' | '/w/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/w/$checkoutId' | '/w'
-  id: '__root__' | '/' | '/w/$checkoutId' | '/w/'
+  to: '/' | '/w/$boardId' | '/w'
+  id: '__root__' | '/' | '/w/$boardId' | '/w/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
-  WCheckoutIdRoute: typeof WCheckoutIdRoute
+  WBoardIdRoute: typeof WBoardIdRoute
   WIndexRoute: typeof WIndexRoute
 }
 
@@ -81,11 +81,11 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof WIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    '/w/$checkoutId': {
-      id: '/w/$checkoutId'
-      path: '/w/$checkoutId'
-      fullPath: '/w/$checkoutId'
-      preLoaderRoute: typeof WCheckoutIdRouteImport
+    '/w/$boardId': {
+      id: '/w/$boardId'
+      path: '/w/$boardId'
+      fullPath: '/w/$boardId'
+      preLoaderRoute: typeof WBoardIdRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
@@ -93,7 +93,7 @@ declare module '@tanstack/react-router' {
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
-  WCheckoutIdRoute: WCheckoutIdRoute,
+  WBoardIdRoute: WBoardIdRoute,
   WIndexRoute: WIndexRoute,
 }
 export const routeTree = rootRouteImport

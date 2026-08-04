@@ -15,7 +15,7 @@ import {
   type BoardTask,
   type RowField,
 } from "../lib/board-model.ts";
-import { isGuestWorkspacePath, type BoardAddress } from "../lib/checkout-shared.ts";
+import { isGuestWorkspacePath, type BoardAddress } from "../lib/board-shared.ts";
 import {
   columnsForTasks,
   fallbackCommitMessage,
@@ -28,12 +28,12 @@ import {
   taskPathForTitle,
 } from "../tasks-model.ts";
 import {
-  CheckoutBreadcrumbs,
+  BoardBreadcrumbs,
   FilterControl,
   MobileOverflow,
   ShareButton,
   WithTooltip,
-} from "./checkout-header.tsx";
+} from "./board-header.tsx";
 import { BoardSettings } from "./board-settings.tsx";
 import { CommitControls, DeletedTasksStrip } from "./commit-controls.tsx";
 import { StreamEventsSheet } from "./stream-events-sheet.tsx";
@@ -526,9 +526,9 @@ export function WorkspaceBoardPage({
     <>
       <header className="flex h-11 shrink-0 items-center gap-2 border-b bg-background px-3">
         <SidebarTrigger className="-ml-1 md:hidden" />
-        <CheckoutBreadcrumbs
+        <BoardBreadcrumbs
           workspace={
-            address.checkoutId !== null ? `/workspaces/tasks/${address.checkoutId}` : workspacePath
+            address.boardId !== null ? `/workspaces/tasks/${address.boardId}` : workspacePath
           }
           rootPath={repoPath}
         />

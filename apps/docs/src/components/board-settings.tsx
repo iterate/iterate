@@ -3,7 +3,7 @@ import { Button } from "@iterate-com/ui/components/button";
 import { Checkbox } from "@iterate-com/ui/components/checkbox";
 import { Popover, PopoverContent, PopoverTrigger } from "@iterate-com/ui/components/popover";
 import type { RowField } from "../lib/board-model.ts";
-import { WithTooltip } from "./checkout-header.tsx";
+import { WithTooltip } from "./board-header.tsx";
 
 const GROUPINGS: { label: string; value: RowField }[] = [
   { label: "No grouping", value: null },

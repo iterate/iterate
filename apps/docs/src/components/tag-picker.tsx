@@ -7,7 +7,7 @@ import { cn } from "@iterate-com/ui/lib/utils";
 
 /**
  * The tag combobox: shows the task's tags, proposes every tag that already
- * exists anywhere in the checkout, and creates new ones from the query.
+ * exists anywhere in the board, and creates new ones from the query.
  * Writes go straight to the frontmatter (and the doc syncs them back), so
  * this and the YAML stay in lockstep.
  */
