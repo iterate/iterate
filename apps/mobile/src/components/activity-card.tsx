@@ -184,36 +184,31 @@ function CodeStepTabs({
   step: AgentUiCodeStep;
 }) {
   const [selected, setSelected] = useState<"script" | "approvals" | "result" | "meta" | null>(null);
-  // `as const` throughout: without them the literals widen to string and
+  // `as const` on the keys: without them the literals widen to string and
   // the inferred tab union collapses.
   const tabs = [
-    "script" as const,
-    ...(batches.length > 0 ? ["approvals" as const] : []),
+    { key: "script" as const, name: "Script" },
+    ...(batches.length > 0 ? [{ key: "approvals" as const, name: "Approvals" }] : []),
     ...(step.status === "done" && (step.result !== undefined || step.errorMessage)
-      ? ["result" as const]
+      ? [{ key: "result" as const, name: "Result" }]
       : []),
-    "meta" as const,
+    { key: "meta" as const, name: "Meta" },
   ];
-  const active = selected !== null && tabs.includes(selected) ? selected : "script";
+  const active =
+    selected !== null && tabs.some((tab) => tab.key === selected) ? selected : "script";
   return (
     <View style={styles.stepBody}>
       <View style={styles.tabRow}>
         {tabs.map((tab) => (
           <Pressable
             accessibilityRole="button"
-            accessibilityState={{ selected: tab === active }}
-            key={tab}
-            onPress={() => setSelected(tab)}
-            style={[styles.tab, tab === active && styles.tabActive]}
+            accessibilityState={{ selected: tab.key === active }}
+            key={tab.key}
+            onPress={() => setSelected(tab.key)}
+            style={[styles.tab, tab.key === active && styles.tabActive]}
           >
-            <Text style={[styles.tabLabel, tab === active && styles.tabLabelActive]}>
-              {tab === "script"
-                ? "Script"
-                : tab === "approvals"
-                  ? "Approvals"
-                  : tab === "result"
-                    ? "Result"
-                    : "Meta"}
+            <Text style={[styles.tabLabel, tab.key === active && styles.tabLabelActive]}>
+              {tab.name}
             </Text>
           </Pressable>
         ))}
@@ -223,7 +218,7 @@ function CodeStepTabs({
           {step.code !== "" ? (
             <CodeBlock language="typescript" muted={false} text={step.code} />
           ) : null}
-          {tabs.includes("result") ? null : step.errorMessage ? (
+          {tabs.some((tab) => tab.key === "result") ? null : step.errorMessage ? (
             <Text style={styles.error}>{step.errorMessage}</Text>
           ) : null}
         </>
