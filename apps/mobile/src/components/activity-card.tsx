@@ -145,7 +145,11 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
       {/* Once the round has a code step, this stat line lives in its Meta
           tab instead; with no code step there is no tab bar, so it renders
           here (streaming llm, or a round whose code half never arrived). */}
-      {code === null ? <Text style={styles.stepLabel}>{llmMetaLabel(step)}</Text> : null}
+      {code === null ? (
+        <Text style={styles.stepLabel}>
+          {`llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`}
+        </Text>
+      ) : null}
       {step.thinkingText !== "" ? (
         <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
       ) : null}
@@ -268,8 +272,7 @@ function CodeStepTabs({
         </View>
       ) : active === "meta" ? (
         <View style={styles.tabBody}>
-          {llm ? <Text style={styles.stepLabel}>{llmMetaLabel(llm)}</Text> : null}
-          <Text style={styles.stepLabel}>{codeMetaLabel(step)}</Text>
+          <CodeBlock language="yaml" text={metaYaml(llm, step)} muted />
         </View>
       ) : (
         <View style={styles.tabBody}>
@@ -283,14 +286,32 @@ function CodeStepTabs({
   );
 }
 
-function llmMetaLabel(step: AgentUiLlmStep): string {
-  return `llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`;
-}
-
-function codeMetaLabel(step: AgentUiCodeStep): string {
-  return `code${step.durationMs ? ` · ${(step.durationMs / 1000).toFixed(1)}s` : ""}${
-    step.status === "done" && step.success === false ? " · failed" : ""
-  }`;
+/**
+ * The Meta tab's body: the round's stats as YAML for the highlighted
+ * CodeBlock. Every value is a bare scalar (numbers, `6.8s` durations,
+ * slash-y model ids, kebab-case cancel reasons) so hand-rolled emission is
+ * safe — no quoting cases exist. Absent fields are omitted, not nulled.
+ */
+function metaYaml(llm: AgentUiLlmStep | null, code: AgentUiCodeStep): string {
+  const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+  const lines = [
+    ...(llm
+      ? [
+          "llm:",
+          ...(llm.model ? [`  model: ${llm.model}`] : []),
+          ...(llm.durationMs ? [`  duration: ${seconds(llm.durationMs)}`] : []),
+          ...(llm.inputTokens ? [`  inputTokens: ${llm.inputTokens}`] : []),
+          ...(llm.outputTokens ? [`  outputTokens: ${llm.outputTokens}`] : []),
+          ...(llm.outcome && llm.outcome !== "completed" ? [`  outcome: ${llm.outcome}`] : []),
+          ...(llm.cancelReason ? [`  cancelReason: ${llm.cancelReason}`] : []),
+        ]
+      : []),
+    "code:",
+    ...(code.status === "running" ? ["  status: running"] : []),
+    ...(code.durationMs ? [`  duration: ${seconds(code.durationMs)}`] : []),
+    ...(code.status === "done" && code.success === false ? ["  failed: true"] : []),
+  ];
+  return lines.join("\n");
 }
 
 function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {
@@ -327,7 +348,7 @@ export function CodeBlock({
   text,
   muted,
 }: {
-  language: "json" | "typescript";
+  language: "json" | "typescript" | "yaml";
   text: string;
   muted: boolean;
 }) {

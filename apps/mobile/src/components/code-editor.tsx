@@ -11,6 +11,7 @@ import { html } from "@codemirror/lang-html";
 import { javascript } from "@codemirror/lang-javascript";
 import { json } from "@codemirror/lang-json";
 import { markdown } from "@codemirror/lang-markdown";
+import { yaml } from "@codemirror/lang-yaml";
 import { Compartment, type Extension } from "@codemirror/state";
 import { EditorState } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
@@ -114,6 +115,7 @@ function languageForPath(path: string): Extension {
   if (extension === "json") return json();
   if (["md", "mdx"].includes(extension || "")) return markdown();
   if (extension === "css") return css();
+  if (["yaml", "yml"].includes(extension || "")) return yaml();
   if (["html", "htm"].includes(extension || "")) return html();
   return [];
 }
