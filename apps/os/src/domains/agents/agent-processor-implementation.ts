@@ -11,6 +11,8 @@ import {
   StreamProcessor,
 } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs, StreamEvent } from "iterate/processors";
+import { inferJsonType } from "../../lib/infer-json-type.ts";
+import { previewJson } from "../../lib/truncate-json.ts";
 import {
   AgentProcessorContract,
   type AgentContextAddedPayload,
@@ -1848,13 +1850,25 @@ async function renderScriptSettlement(input: {
         text,
         writeWorkspaceFile,
       });
-      return [
-        "Your script returned:",
-        fence,
-        text.slice(0, historyLimit),
-        "```",
-        spillNotice({ isRawText, path: spilledPath, totalChars: text.length, historyLimit }),
-      ].join("\n");
+      // Once the full result is safely on disk, the inline copy stops trying
+      // to be the data and becomes a map of it: shrink hard (well under
+      // historyLimit) and spend the space on shape instead of payload.
+      if (isRawText) {
+        const shownChars = Math.min(OVERSIZED_RAW_TEXT_PREVIEW_CHARS, historyLimit);
+        return [
+          "Your script returned:",
+          "```",
+          text.slice(0, shownChars),
+          "```",
+          rawTextSpillNotice({ path: spilledPath, shownChars, totalChars: text.length }),
+        ].join("\n");
+      }
+      return renderOversizedJsonResult({
+        historyLimit,
+        path: spilledPath,
+        result: settlement.result,
+        text,
+      });
     } catch (error) {
       // Spilling is best effort: a workspace that cannot clone or write must
       // not lose the result entirely — fall through to inline truncation.
@@ -1908,31 +1922,81 @@ async function spillScriptResult(input: {
   return written.absolutePath;
 }
 
+/** Inline budgets for an oversized result once the full copy is spilled: the
+ * inferred type and shape-preserving preview replace raw payload — the model
+ * reads the spill file when it needs actual data, so keep history lean. */
+const OVERSIZED_RAW_TEXT_PREVIEW_CHARS = 10_000;
+const OVERSIZED_TYPE_MAX_CHARS = 3_000;
+const OVERSIZED_JSON_PREVIEW_MAX_BYTES = 8_000;
+
 /**
- * The model-facing text after a truncated preview: where the full result
- * lives and a concrete next-script recipe for paging it, so the model reads
- * the file with plain TypeScript instead of re-running the expensive fetch.
+ * Oversized JSON result, spilled successfully: render an inferred TypeScript
+ * type (the whole shape, cheap) plus an aggressively elided preview (a few
+ * items per array, capped strings/depth) plus the read-it-back recipe. Both
+ * smart parts degrade independently — a value that defeats inference or
+ * previewing still renders the other, or falls back to a plain slice.
  */
-function spillNotice(input: {
-  isRawText: boolean;
-  path: string;
-  totalChars: number;
+function renderOversizedJsonResult(input: {
   historyLimit: number;
+  path: string;
+  result: unknown;
+  text: string;
 }): string {
-  const readRecipe = input.isRawText
-    ? [
-        `  const text = await itx.workspace.readFile(${JSON.stringify(input.path)});`,
-        "  return text.slice(30_000, 60_000); // page/regex to return only what you need",
-      ]
-    : [
-        `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
-        "  return Object.keys(data); // then slice/filter/regex to return only what you need",
-      ];
+  let typeText: string | null = null;
+  try {
+    typeText = inferJsonType(input.result, {
+      maxChars: Math.min(OVERSIZED_TYPE_MAX_CHARS, input.historyLimit),
+    });
+  } catch (error) {
+    console.error("[agent] failed to infer type for oversized script result", { error });
+  }
+  let previewText: string;
+  try {
+    const preview = previewJson(input.result, {
+      maxArrayItems: 3,
+      maxBytes: Math.min(OVERSIZED_JSON_PREVIEW_MAX_BYTES, input.historyLimit),
+      maxDepth: 5,
+      maxStringChars: 500,
+    });
+    previewText = JSON.stringify(preview.value, null, 2);
+  } catch (error) {
+    console.error("[agent] failed to build preview for oversized script result", { error });
+    previewText = `${input.text.slice(0, Math.min(OVERSIZED_JSON_PREVIEW_MAX_BYTES, input.historyLimit))}\n… (cut mid-document)`;
+  }
   return [
-    `…truncated: showing the first ${input.historyLimit.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
+    `Your script returned ${input.text.length.toLocaleString("en-US")} chars of JSON — too big to show in full.${typeText === null ? "" : " Inferred type:"}`,
+    ...(typeText === null ? [] : ["```ts", `type Result = ${typeText}`, "```"]),
+    "Preview (long arrays/strings elided):",
+    "```json",
+    previewText,
+    "```",
+    `The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
     "```ts",
     "async (itx) => {",
-    ...readRecipe,
+    `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
+    "  // you can now do whatever you see fit with `data`",
+    "}",
+    "```",
+  ].join("\n");
+}
+
+/**
+ * The model-facing text after a truncated raw-text preview: where the full
+ * result lives and a concrete next-script recipe for paging it, so the model
+ * reads the file with plain TypeScript instead of re-running the expensive
+ * fetch.
+ */
+function rawTextSpillNotice(input: {
+  path: string;
+  shownChars: number;
+  totalChars: number;
+}): string {
+  return [
+    `…truncated: showing the first ${input.shownChars.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
+    "```ts",
+    "async (itx) => {",
+    `  const text = await itx.workspace.readFile(${JSON.stringify(input.path)});`,
+    `  return text.slice(${input.shownChars}, ${input.shownChars * 4}); // page/regex to return only what you need`,
     "}",
     "```",
   ].join("\n");
