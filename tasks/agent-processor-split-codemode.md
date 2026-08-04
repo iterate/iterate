@@ -5,9 +5,9 @@ size: large
 
 # Agent processor split + `<codemode>` response format experiment
 
-> **Status summary** (for skimmers): phase 1 (pure refactor) in progress on branch
-> `agent-processor-split`. Phase 2 (codemode-tag format + config template) will be a
-> stacked PR on top. Nothing user-visible changes in phase 1.
+> **Status summary** (for skimmers): phase 1 (pure refactor) done on branch
+> `agent-processor-split` — nothing user-visible changed; all existing tests pass unmodified.
+> Phase 2 (codemode-tag format + config template) is a stacked PR on top.
 
 ## Why
 
@@ -59,16 +59,24 @@ Full approved plan with design rationale: see PR body / `~/.claude/plans/warm-wa
 
 ### Phase 1 — pure refactor (this PR, zero behavior change)
 
-- [ ] extract `agent-response-format.ts`: `AgentResponseFormat` interface, `ResponseParseOutcome`,
+- [x] extract `agent-response-format.ts`: `AgentResponseFormat` interface, `ResponseParseOutcome`,
       `fencedTsResponseFormat` (moves `extractAsyncTypescriptSnippet` + regexes + corrective
-      feedback strings)
-- [ ] extract `agent-llm-request.ts`: LLM request component (`#runLlmRequest`/`#attemptLlm`,
-      in-flight slot, chunk streaming, settle appends; compaction goes through `attempt()`)
-- [ ] `agent-processor-implementation.ts` delegates to both; emitted bodies and idempotency keys
-      byte-identical
-- [ ] new `agent-response-format.test.ts` (pure unit tests incl. fence-in-string-literal case)
-- [ ] existing suites pass unchanged: `agent-processor.test.ts`, `workers-ai-transport.test.ts`,
-      `agent-prompt-budgets.test.ts`, `agent-codemode-fence.itx.e2e.test.ts`
+      feedback strings) — _corrective feedback strings moved into the outcome (`feedback` field) so
+      the processor is fully format-agnostic; the outcome's `status`/`prose` fields exist now but
+      only phase 2 produces them_
+- [x] extract `agent-llm-request.ts`: LLM request component (`#runLlmRequest`/`#attemptLlm`,
+      in-flight slot, chunk streaming, settle appends; compaction goes through `attempt()`) —
+      _class `AgentLlmRequest`, constructed by the processor with `{deps, idempotencyKey,
+      readConsumedEvents, now}`; interrupt path uses `abortInFlight()`, adopt check uses
+      `isExecuting()`; `prepareAgentLlmMessages`/`buildAgentCompactionRequestBody`/
+      `contextWindowTokens` moved along and re-exported from the implementation for compat_
+- [x] `agent-processor-implementation.ts` delegates to both; emitted bodies and idempotency keys
+      byte-identical — _1441 → ~1040 lines; module-level `responseFormat` const marks the phase-2
+      registry seam_
+- [x] new `agent-response-format.test.ts` (pure unit tests incl. fence-in-string-literal case)
+- [x] existing suites pass unchanged: `agent-processor.test.ts`, `workers-ai-transport.test.ts`,
+      `agent-prompt-budgets.test.ts` — _all 250 apps/os unit test files green with zero test-file
+      diffs; codemode-fence e2e runs in CI_
 
 ### Phase 2 — codemode-tag format + template (stacked PR)
 
