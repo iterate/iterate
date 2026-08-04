@@ -3,6 +3,8 @@
 // publish (CI: scripts/ci/publish-mobile-update.ts) and on EAS build
 // machines via the eas-build-pre-install hook. The checked-in file is an
 // all-empty placeholder: empty strings mean an unstamped local Metro bundle.
+// CI/EAS checkouts are ephemeral, so the stamp never lands in git; the one
+// local caller (`pnpm update:preview`) restores the placeholder afterwards.
 import { execSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { hostname, userInfo } from "node:os";
