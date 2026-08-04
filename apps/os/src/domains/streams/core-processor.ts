@@ -25,7 +25,7 @@ export const STREAM_PAUSED_ERROR_PREFIX = "stream paused: ";
  * cursor/timestamp/counter fields to entries that already passed this limit,
  * or are copied events updating an EXISTING inbound record's fixed-shape
  * fields; a copied event whose stamp names a new (source path, subscription
- * key) pair creates a fresh entry with strings no limit has seen, so it runs
+ * name) pair creates a fresh entry with strings no limit has seen, so it runs
  * the scan, and {@link MAX_INBOUND_SOURCE_RECORDS} bounds how many such
  * entries can accumulate at all. The remaining 1 MiB is the headroom for the
  * fixed-shape drift.
@@ -35,7 +35,7 @@ export const MAX_CORE_PROCESSOR_STATE_BYTES = 1024 * 1024;
 /**
  * Hard cap on passive inbound records, counted across every source path. A
  * copied event's stamp may name a never-before-seen (source path,
- * subscription key) pair, so without a cap ever-new sources would grow this
+ * subscription name) pair, so without a cap ever-new sources would grow this
  * single-KV-value checkpoint until it could never be flushed — and a staged
  * rebuild of it would throw during boot — forever. Evicting is SAFE by
  * design: an evicted record merely degrades the fence to first-contact-accept
@@ -83,11 +83,9 @@ export function assertCoreProcessorCheckpointGrowthFits(args: {
     if (hop === undefined) return CHECKPOINT_GROWTH_EVENT_TYPES.has(event.type);
     // A copied event's only reducer mutation is its passive inbound record.
     // Updating an existing record touches bounded fields; creating one
-    // retains the stamp's path and subscription-key strings, which no other
+    // retains the stamp's path and subscription-name strings, which no other
     // limit has measured yet.
-    return (
-      args.before.subscriptions.inbound.bySourcePath[hop.path]?.[hop.subscriptionKey] === undefined
-    );
+    return args.before.subscriptions.inbound.bySourcePath[hop.path]?.[hop.name] === undefined;
   });
   if (!batchGrowsRetainedState) {
     return;
@@ -133,7 +131,7 @@ function parseCoreEventInput<const Type extends ParsedCoreEventInput["type"]>(
 }
 
 /**
- * Order two source delivery stamps for one (source path, subscription key):
+ * Order two source delivery stamps for one (source path, subscription name):
  * creation time orders stream lifetimes, the random stream ID makes a
  * same-millisecond tie deterministic, and the configure/cursor-set offset
  * orders config generations within one lifetime. The receiver's inbound fence
@@ -356,7 +354,7 @@ export class StreamCoreProcessor {
     const hop = args.event.source?.copiedFrom?.at(-1);
     if (hop !== undefined) {
       const byKey = next.subscriptions.inbound.bySourcePath[hop.path] ?? {};
-      const recorded = byKey[hop.subscriptionKey];
+      const recorded = byKey[hop.name];
       const sameLifetime =
         recorded !== undefined &&
         recorded.streamId === hop.streamId &&
@@ -368,7 +366,7 @@ export class StreamCoreProcessor {
           ...next.subscriptions.inbound.bySourcePath,
           [hop.path]: {
             ...byKey,
-            [hop.subscriptionKey]: {
+            [hop.name]: {
               streamId: hop.streamId,
               streamCreatedAt: hop.streamCreatedAt,
               cursorChangedAtSourceOffset: hop.cursorChangedAtSourceOffset,
@@ -682,7 +680,7 @@ function resetCircuitBreaker(
  * committed-event-derived data for replay/rebuild to produce identical state:
  * oldest `lastEventReceivedAt` first (every value is a committed event's
  * `createdAt`, so plain string order is time order), ties broken by (source
- * path, subscription key) — always via this explicit sort, never object-key
+ * path, subscription name) — always via this explicit sort, never object-key
  * enumeration order. Evicting is SAFE by design: the fence merely degrades to
  * first-contact-accept for that source. Deleting a source path's last record
  * deletes the source path entry.
@@ -690,10 +688,10 @@ function resetCircuitBreaker(
 function evictInboundRecordsOverCap(
   bySourcePath: CoreProcessorState["subscriptions"]["inbound"]["bySourcePath"],
 ): CoreProcessorState["subscriptions"]["inbound"]["bySourcePath"] {
-  const records: [sourcePath: string, subscriptionKey: string, lastEventReceivedAt: string][] = [];
+  const records: [sourcePath: string, name: string, lastEventReceivedAt: string][] = [];
   for (const [sourcePath, byKey] of Object.entries(bySourcePath)) {
-    for (const [subscriptionKey, record] of Object.entries(byKey)) {
-      records.push([sourcePath, subscriptionKey, record.lastEventReceivedAt ?? ""]);
+    for (const [name, record] of Object.entries(byKey)) {
+      records.push([sourcePath, name, record.lastEventReceivedAt ?? ""]);
     }
   }
   if (records.length <= MAX_INBOUND_SOURCE_RECORDS) return bySourcePath;
@@ -704,11 +702,8 @@ function evictInboundRecordsOverCap(
       compareStrings(leftKey, rightKey),
   );
   let remaining = bySourcePath;
-  for (const [sourcePath, subscriptionKey] of records.slice(
-    0,
-    records.length - MAX_INBOUND_SOURCE_RECORDS,
-  )) {
-    const { [subscriptionKey]: _evicted, ...keptRecords } = remaining[sourcePath]!;
+  for (const [sourcePath, name] of records.slice(0, records.length - MAX_INBOUND_SOURCE_RECORDS)) {
+    const { [name]: _evicted, ...keptRecords } = remaining[sourcePath]!;
     if (Object.keys(keptRecords).length === 0) {
       const { [sourcePath]: _emptied, ...keptSourcePaths } = remaining;
       remaining = keptSourcePaths;

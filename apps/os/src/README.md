@@ -393,7 +393,7 @@ an RpcTarget. A domain Durable Object constructs its processors and one
 `wakeStreamProcessor` calls and alarms to the right runner.
 
 When a hosted-processor subscription has events to send, the source stream
-calls `wakeStreamProcessor({ subscriptionKey, processorSlug, stream })`. The
+calls `wakeStreamProcessor({ name, processorSlug, stream })`. The
 runner's `openEventBatchCallback()` returns its committed checkpoint plus a
 live `processEventBatch` callback. The source retains that callback and sends
 ordered batches after the checkpoint. The processor, not the source, commits

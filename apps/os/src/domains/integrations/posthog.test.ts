@@ -34,7 +34,7 @@ function streamEvent(overrides: Partial<StreamEvent> = {}): StreamEvent {
       },
       copiedFrom: [
         {
-          subscriptionKey: "mirror",
+          name: "mirror",
           streamId: "11111111-1111-4111-8111-111111111111",
           streamCreatedAt: "2026-07-16T09:00:00.000Z",
           cursorChangedAtSourceOffset: 1,
@@ -59,7 +59,7 @@ function batch(events: StreamEvent[]): StreamDeliveryBatch {
     streamCreatedAt: "2026-07-16T09:00:00.000Z",
     events,
     streamMaxOffset: 99,
-    subscriptionKey: POSTHOG_SUBSCRIPTION_NAME,
+    name: POSTHOG_SUBSCRIPTION_NAME,
     cursorChangedAtSourceOffset: 4,
     deliveryId: `${POSTHOG_SUBSCRIPTION_NAME}:7-8`,
     attempt: 2,

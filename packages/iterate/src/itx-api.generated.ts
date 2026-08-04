@@ -2182,7 +2182,8 @@ export type StreamDeliveryBatch = {
    */
   events: StreamEvent[];
   streamMaxOffset: number;
-  subscriptionKey: SubscriptionKey;
+  /** The source stream's subscription this delivery serves, by NAME. */
+  name: SubscriptionKey;
   /**
    * Offset of the configure or cursor-set event that started this delivery run.
    * It stays stable across network retries, but changes after an explicit seek
@@ -2752,7 +2753,7 @@ export type StreamEvent = {
           | undefined;
         copiedFrom?:
           | {
-              subscriptionKey: string;
+              name: string;
               streamId: string;
               streamCreatedAt: string;
               cursorChangedAtSourceOffset: number;
@@ -3519,7 +3520,7 @@ export type StreamEventInput = {
           | undefined;
         copiedFrom?:
           | {
-              subscriptionKey: string;
+              name: string;
               streamId: string;
               streamCreatedAt: string;
               cursorChangedAtSourceOffset: number;
@@ -3662,7 +3663,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
             | undefined;
           copiedFrom?:
             | {
-                subscriptionKey: string;
+                name: string;
                 streamId: string;
                 streamCreatedAt: string;
                 cursorChangedAtSourceOffset: number;
@@ -3700,7 +3701,7 @@ export type CommittedSubscriptionConfiguredEvent = Omit<
               | undefined;
             copiedFrom?:
               | {
-                  subscriptionKey: string;
+                  name: string;
                   streamId: string;
                   streamCreatedAt: string;
                   cursorChangedAtSourceOffset: number;
@@ -3810,7 +3811,7 @@ export type CommittedSubscriptionRemovedEvent = Omit<
             | undefined;
           copiedFrom?:
             | {
-                subscriptionKey: string;
+                name: string;
                 streamId: string;
                 streamCreatedAt: string;
                 cursorChangedAtSourceOffset: number;
@@ -3848,7 +3849,7 @@ export type CommittedSubscriptionRemovedEvent = Omit<
               | undefined;
             copiedFrom?:
               | {
-                  subscriptionKey: string;
+                  name: string;
                   streamId: string;
                   streamCreatedAt: string;
                   cursorChangedAtSourceOffset: number;

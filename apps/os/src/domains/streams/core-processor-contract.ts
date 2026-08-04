@@ -54,8 +54,8 @@ import { EventFilter } from "./event-filter.ts";
 // Version 29 implements the subscription-model redesign
 // (docs/stream-subscription-model-redesign.md): the identity field is `name`
 // (opaque, caller-chosen; auto-generated names keep the reserved
-// `subscription:<offset>` form and are first-class — the
-// `subscriptionKeyWasGenerated` flag is gone), outbound subscriptions live
+// `subscription:<offset>` form and are first-class — the old
+// generated-key flag is gone), outbound subscriptions live
 // under `subscriptions.outbound.byName`, `processorSlug` is required on
 // `processor-wake` and the receiver gains `placement: "facet"` (the
 // subscription name IS the facet name; no itx expression), subscriptions may

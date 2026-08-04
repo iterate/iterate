@@ -389,10 +389,9 @@ export class StreamEventSender {
         ...args.hooks,
         readBatch: (afterOffset, beforeOffset, limit) =>
           this.#readBatch(afterOffset, beforeOffset, limit),
-        hostedDeliveryStillMatches: (subscriptionKey, expectedDelivery) =>
-          this.#deliveryStillMatches(subscriptionKey, expectedDelivery),
-        onHostedDeliveryFailure: (subscriptionKey, error) =>
-          this.#onDeliveryFailure(subscriptionKey, error),
+        hostedDeliveryStillMatches: (name, expectedDelivery) =>
+          this.#deliveryStillMatches(name, expectedDelivery),
+        onHostedDeliveryFailure: (name, error) => this.#onDeliveryFailure(name, error),
         sendDueSubscriptions: () => this.sendDue(),
         reconcileAlarm: () => this.reconcileAlarmAfterSettlement(),
       },
@@ -919,9 +918,8 @@ export class StreamEventSender {
                     receiver.jsonataTransform,
                     matched[0]!,
                   ),
-                  // The delivery envelope's field keeps its wire name; the
-                  // value is the subscription's opaque NAME.
-                  subscriptionKey: name,
+                  // The subscription's opaque NAME.
+                  name,
                   cursorChangedAtSourceOffset: row.cursorChangedAtOffset,
                   deliveryId: deliveryId(
                     streamId,
@@ -955,8 +953,8 @@ export class StreamEventSender {
                       )
                     : matched,
                 streamMaxOffset: state.maxOffset,
-                // Wire name unchanged; the value is the subscription's NAME.
-                subscriptionKey: name,
+                // The subscription's opaque NAME.
+                name,
                 cursorChangedAtSourceOffset: row.cursorChangedAtOffset,
                 deliveryId: deliveryId(
                   streamId,

@@ -135,7 +135,7 @@ export class ProjectProcessor extends StreamProcessor<
         if (
           origin?.projectId !== this.deps.itx.projectId ||
           origin.path !== CONFIG_REPO_PATH ||
-          origin.subscriptionKey !== "project-config-to-root" ||
+          origin.name !== "project-config-to-root" ||
           origin.type !== event.type ||
           state.birthCertificate !== null ||
           state.createRequest === null ||
@@ -282,7 +282,7 @@ export class ProjectProcessor extends StreamProcessor<
         if (
           origin?.projectId !== this.deps.itx.projectId ||
           origin.path !== CONFIG_REPO_PATH ||
-          origin.subscriptionKey !== "project-config-to-root" ||
+          origin.name !== "project-config-to-root" ||
           origin.type !== event.type ||
           state.birthCertificate === null
         ) {

@@ -69,7 +69,7 @@ function copiedEvent(
     streamId?: string;
     streamCreatedAt?: string;
     cursorChangedAtSourceOffset?: number;
-    subscriptionKey?: string;
+    name?: string;
     sourceOffset?: number;
     path?: string;
   } = {},
@@ -83,7 +83,7 @@ function copiedEvent(
       source: {
         copiedFrom: [
           {
-            subscriptionKey: stamp.subscriptionKey ?? "issues",
+            name: stamp.name ?? "issues",
             streamId: stamp.streamId ?? SOURCE_STREAM_ID,
             streamCreatedAt: stamp.streamCreatedAt ?? SOURCE_CREATED_AT,
             cursorChangedAtSourceOffset: stamp.cursorChangedAtSourceOffset ?? 2,
@@ -199,7 +199,7 @@ describe("StreamCoreProcessor circuit-breaker accounting", () => {
       source: {
         copiedFrom: [
           {
-            subscriptionKey: "issues",
+            name: "issues",
             streamId: SOURCE_STREAM_ID,
             streamCreatedAt: SOURCE_CREATED_AT,
             cursorChangedAtSourceOffset: 2,
@@ -218,7 +218,7 @@ describe("StreamCoreProcessor circuit-breaker accounting", () => {
       source: {
         copiedFrom: [
           {
-            subscriptionKey: "issues",
+            name: "issues",
             streamId: SOURCE_STREAM_ID,
             streamCreatedAt: SOURCE_CREATED_AT,
             cursorChangedAtSourceOffset: 2,
@@ -695,7 +695,7 @@ describe("passive inbound records", () => {
       processor,
       state,
       copiedEvent(3, {
-        subscriptionKey: "other",
+        name: "other",
         cursorChangedAtSourceOffset: 7,
         sourceOffset: 41,
       }),
@@ -718,7 +718,7 @@ describe("passive inbound records", () => {
       source: {
         copiedFrom: [
           {
-            subscriptionKey: "issues",
+            name: "issues",
             streamId: SOURCE_STREAM_ID,
             streamCreatedAt: SOURCE_CREATED_AT,
             cursorChangedAtSourceOffset: 2,
@@ -799,8 +799,8 @@ describe("passive inbound record cap", () => {
     const { processor } = harness();
     const overflowing = [
       copiedEvent(2, { path: "/sources/new-a", sourceOffset: 41 }),
-      copiedEvent(3, { path: "/sources/new-b", subscriptionKey: "other", sourceOffset: 7 }),
-      copiedEvent(4, { path: "/sources/new-a", subscriptionKey: "other", sourceOffset: 9 }),
+      copiedEvent(3, { path: "/sources/new-b", name: "other", sourceOffset: 7 }),
+      copiedEvent(4, { path: "/sources/new-a", name: "other", sourceOffset: 9 }),
       copiedEvent(5, { path: "/sources/new-c", sourceOffset: 12 }),
     ];
     const first = overflowing.reduce(
@@ -874,7 +874,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       source: {
         copiedFrom: [
           {
-            subscriptionKey: "issues",
+            name: "issues",
             streamId: SOURCE_STREAM_ID,
             streamCreatedAt: SOURCE_CREATED_AT,
             cursorChangedAtSourceOffset: 3,

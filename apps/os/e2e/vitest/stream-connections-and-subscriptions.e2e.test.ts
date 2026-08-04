@@ -868,13 +868,12 @@ test("an agent-scoped script can make any project stream receive from another", 
   expect(copied).toMatchObject({
     payload: { marker, configuredBy: agentPath },
     source: {
-      // The provenance hop's wire field keeps its `subscriptionKey` name; the
-      // value is the subscription's source-local name.
+      // The provenance hop's `name` is the subscription's source-local name.
       copiedFrom: [
         expect.objectContaining({
           path: sourcePath,
           offset: sent!.offset,
-          subscriptionKey: subscriptionName,
+          name: subscriptionName,
         }),
       ],
     },
@@ -924,7 +923,7 @@ test("bare subscribeToEventsFrom generates an offset key, starts now, and copies
     timeoutMs: 15_000,
   });
   expect(copiedControl.source?.copiedFrom?.at(-1)).toMatchObject({
-    subscriptionKey: generatedName,
+    name: generatedName,
     offset: liveControl!.offset,
     path: sourcePath,
   });
@@ -1080,8 +1079,8 @@ test("a receiver rejects a delayed batch after the same source key is reconfigur
     streamCreatedAt: sourceState.createdAt!,
     events: [sourceEvent!],
     streamMaxOffset: sourceState.maxOffset,
-    // Wire-envelope field: StreamDeliveryBatch keeps `subscriptionKey`.
-    subscriptionKey: subscriptionName,
+    // Wire-envelope field: the subscription's name.
+    name: subscriptionName,
     cursorChangedAtSourceOffset: first.subscriptionConfiguredEvent.offset,
     deliveryId: `stale-batch:${marker}`,
     attempt: 1,
@@ -1366,7 +1365,7 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
     timeoutMs: 15_000,
   });
   expect(chained.source?.copiedFrom?.map((hop) => hop.path)).toEqual(paths.slice(0, -1));
-  expect(chained.source?.copiedFrom?.map((hop) => hop.subscriptionKey)).toEqual(forwardRuleKeys);
+  expect(chained.source?.copiedFrom?.map((hop) => hop.name)).toEqual(forwardRuleKeys);
 
   // G→A would complete a cycle. A acknowledges the source coordinate without
   // appending a duplicate product event, and records that decision as one
@@ -1422,7 +1421,7 @@ test("chains longer than five copies retain provenance, cycles terminate, and re
   expect(observedAfterRemoval.source?.copiedFrom?.at(-1)).toMatchObject({
     offset: afterRemoval!.offset,
     path: pathA,
-    subscriptionKey: removalObserverKey,
+    name: removalObserverKey,
   });
   expect(
     (await streamB.getEvents({ afterOffset: 0, eventTypes: [MATCHING_EVENT_TYPE] })).map(
@@ -1467,7 +1466,7 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
     ...historical!,
     source: {
       copiedFrom: Array.from({ length: MAX_COPIED_FROM_HOPS }, (_, index) => ({
-        subscriptionKey: `prior-copy-${index}`,
+        name: `prior-copy-${index}`,
         streamId: crypto.randomUUID(),
         streamCreatedAt: new Date(Date.parse(historical!.createdAt) - index).toISOString(),
         cursorChangedAtSourceOffset: 1,
@@ -1486,7 +1485,7 @@ test("the stream-copy limit is an acknowledged durable drop whose audit event is
     streamCreatedAt: sourceState.createdAt!,
     events: [eventAtLimit],
     streamMaxOffset: sourceState.maxOffset,
-    subscriptionKey: subscriptionName,
+    name: subscriptionName,
     cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
     deliveryId: streamDeliveryId(
       sourceState.streamId!,
@@ -1598,7 +1597,7 @@ test("a copy filters, records its source, and deduplicates a retried delivery", 
     source: {
       copiedFrom: [
         {
-          subscriptionKey: subscriptionName,
+          name: subscriptionName,
           cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
           createdAt: selected!.createdAt,
           offset: selected!.offset,
@@ -1621,7 +1620,7 @@ test("a copy filters, records its source, and deduplicates a retried delivery", 
     streamCreatedAt: sourceStateAfterCopy.createdAt!,
     events: [selected!],
     streamMaxOffset: sourceStateAfterCopy.maxOffset,
-    subscriptionKey: subscriptionName,
+    name: subscriptionName,
     cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
     deliveryId: streamDeliveryId(
       sourceStateAfterCopy.streamId!,
@@ -1684,7 +1683,7 @@ test("a copy transform shapes the committed copy, keeps provenance, and dedupes 
     source: {
       copiedFrom: [
         {
-          subscriptionKey: subscriptionName,
+          name: subscriptionName,
           cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
           createdAt: selected!.createdAt,
           offset: selected!.offset,
@@ -1709,7 +1708,7 @@ test("a copy transform shapes the committed copy, keeps provenance, and dedupes 
     streamCreatedAt: sourceStateAfterCopy.createdAt!,
     events: [selected!],
     streamMaxOffset: sourceStateAfterCopy.maxOffset,
-    subscriptionKey: subscriptionName,
+    name: subscriptionName,
     cursorChangedAtSourceOffset: configured.subscriptionConfiguredEvent.offset,
     deliveryId: streamDeliveryId(
       sourceStateAfterCopy.streamId!,
@@ -1778,7 +1777,7 @@ test("changing a subscription cursor deliberately copies the same source coordin
     source: {
       copiedFrom: [
         expect.objectContaining({
-          subscriptionKey: subscriptionName,
+          name: subscriptionName,
           cursorChangedAtSourceOffset: cursorSet.offset,
           offset: selected!.offset,
         }),
@@ -1866,7 +1865,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
     source: {
       copiedFrom: [
         expect.objectContaining({
-          subscriptionKey: subscriptionName,
+          name: subscriptionName,
           cursorChangedAtSourceOffset: replacement.subscriptionConfiguredEvent.offset,
           offset: selected!.offset,
         }),
@@ -1889,7 +1888,7 @@ test("replacing a subscription starts a new copy run and keeps configuration out
     source: {
       copiedFrom: [
         expect.objectContaining({
-          subscriptionKey: subscriptionName,
+          name: subscriptionName,
           offset: newUnderReplacement!.offset,
           path: sourcePath,
         }),
@@ -2013,7 +2012,7 @@ test("every project child stream is born with ordinary project-worker and PostHo
       streamCreatedAt: new Date().toISOString(),
       events: [],
       streamMaxOffset: 0,
-      subscriptionKey: "project-worker",
+      name: "project-worker",
       cursorChangedAtSourceOffset: 1,
       deliveryId: `forged-project-worker:${marker}`,
       attempt: 1,
@@ -2051,7 +2050,7 @@ test("every project child stream is born with ordinary project-worker and PostHo
       path: "/forged-source",
       events: [],
       streamMaxOffset: 1,
-      subscriptionKey: "forged",
+      name: "forged",
       cursorChangedAtSourceOffset: 1,
       deliveryId: `forged-copy:${marker}`,
       attempt: 1,
@@ -2089,7 +2088,7 @@ test("every project child stream is born with ordinary project-worker and PostHo
       path: streamPath,
       projectId,
       streamMaxOffset: 0,
-      subscriptionKey: "iterate-platform-posthog",
+      name: "iterate-platform-posthog",
     }),
   ).rejects.toThrow("PostHog ingestion is available only to stream delivery");
 });
@@ -2716,8 +2715,8 @@ test("an ITX-expression receiver invokes the project worker in awaited batches",
         content: `
             import { WorkerEntrypoint } from "cloudflare:workers";
 
-            // The delivered batch is a wire envelope: its field stays
-            // subscriptionKey; the value is the subscription's name.
+            // The delivered batch is a wire envelope: its name field
+            // carries the subscription's name.
             const SUBSCRIPTION_NAME = ${JSON.stringify(subscriptionName)};
             const OUTPUT_PATH = ${JSON.stringify(outputPath)};
             const OUTPUT_TYPE = ${JSON.stringify(outputType)};
@@ -2726,7 +2725,7 @@ test("an ITX-expression receiver invokes the project worker in awaited batches",
               fetch() { return new Response("subscription probe"); }
 
               async processEventBatch(batch) {
-                if (batch.subscriptionKey !== SUBSCRIPTION_NAME) return;
+                if (batch.name !== SUBSCRIPTION_NAME) return;
                 const itx = await this.env.ITX.get();
                 await itx.streams.get(OUTPUT_PATH).append({
                   type: OUTPUT_TYPE,
@@ -2736,7 +2735,7 @@ test("an ITX-expression receiver invokes the project worker in awaited batches",
                     deliveryId: batch.deliveryId,
                     offsets: batch.events.map((event) => event.offset),
                     sourcePath: batch.path,
-                    subscriptionKey: batch.subscriptionKey,
+                    name: batch.name,
                   },
                 });
               }
@@ -2776,7 +2775,7 @@ test("an ITX-expression receiver invokes the project worker in awaited batches",
     attempt: 1,
     offsets: appended.map((event) => event.offset),
     sourcePath,
-    subscriptionKey: subscriptionName,
+    name: subscriptionName,
   });
   await waitForCondition(
     async () =>
@@ -2813,7 +2812,7 @@ test("an ITX-expression receiver isolates one repeatedly failing event, skips it
               fetch() { return new Response("failing-event probe"); }
 
               async processEventBatch(batch) {
-                if (batch.subscriptionKey !== SUBSCRIPTION_NAME) return;
+                if (batch.name !== SUBSCRIPTION_NAME) return;
                 const itx = await this.env.ITX.get();
                 const output = itx.streams.get(OUTPUT_PATH);
                 await output.append({
@@ -2932,7 +2931,7 @@ test("the consecutive-failure limit survives stream eviction and halts before ma
               fetch() { return new Response("fuse probe"); }
 
               async processEventBatch(batch) {
-                if (batch.subscriptionKey !== SUBSCRIPTION_NAME) return;
+                if (batch.name !== SUBSCRIPTION_NAME) return;
                 const itx = await this.env.ITX.get();
                 const released = await itx.streams.get(RELEASE_PATH).getEvents({
                   eventTypes: [RELEASE_TYPE],
@@ -3080,9 +3079,9 @@ test("a webhook receives one ordered lean envelope per event", async () => {
       attempt: 1,
       event: { offset: appended[index]!.offset },
       path: sourcePath,
-      // The webhook envelope is wire surface: its field keeps the
-      // `subscriptionKey` name, carrying the subscription's name as value.
-      subscriptionKey: subscriptionName,
+      // The webhook envelope is wire surface: `name` carries the
+      // subscription's name.
+      name: subscriptionName,
       configuredEvent: {
         type: "events.iterate.com/stream/subscription-configured",
       },
@@ -3392,7 +3391,7 @@ test("public callers cannot forge copied events or platform-authored stream fact
       source: {
         copiedFrom: [
           {
-            subscriptionKey: `forged-received-from-${marker}`,
+            name: `forged-received-from-${marker}`,
             streamId: crypto.randomUUID(),
             streamCreatedAt: new Date().toISOString(),
             cursorChangedAtSourceOffset: 1,

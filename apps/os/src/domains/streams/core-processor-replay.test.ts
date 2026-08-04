@@ -154,7 +154,7 @@ const VERSION_29_COMMITTED_EVENTS: StreamEvent[] = [
     source: {
       copiedFrom: [
         {
-          subscriptionKey: SUBSCRIPTION_NAME,
+          name: SUBSCRIPTION_NAME,
           streamId: SOURCE_STREAM_ID,
           streamCreatedAt: SOURCE_STREAM_CREATED_AT,
           cursorChangedAtSourceOffset: 5,

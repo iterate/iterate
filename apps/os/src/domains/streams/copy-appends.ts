@@ -79,23 +79,23 @@ export function buildCopyAppends({
   const receiver = configuredEvent.payload.receiver;
   if (
     configuredEvent.path !== batch.path ||
-    subscriptionNameForConfiguredEvent(configuredEvent) !== batch.subscriptionKey ||
+    subscriptionNameForConfiguredEvent(configuredEvent) !== batch.name ||
     receiver.action !== "copy-to-stream" ||
     receiver.receivingStreamPath !== self.path ||
     batch.cursorChangedAtSourceOffset < configuredEvent.offset
   ) {
     throw new Error(
-      `copy batch from ${batch.path}#${batch.subscriptionKey} does not address receiver ${self.path}`,
+      `copy batch from ${batch.path}#${batch.name} does not address receiver ${self.path}`,
     );
   }
 
   // The passive fence: accept an equal-or-newer stamp; reject strictly older.
   // The reducer updates the record from the committed events, so the fence
   // needs no configure-time handshake and replay reconstructs it identically.
-  const recorded = inbound?.[batch.subscriptionKey];
+  const recorded = inbound?.[batch.name];
   if (recorded !== undefined && compareSourceStamp(batch, recorded) < 0) {
     throw new Error(
-      `copy receiver ${self.path} already accepted a newer delivery for ${batch.path}#${batch.subscriptionKey} ` +
+      `copy receiver ${self.path} already accepted a newer delivery for ${batch.path}#${batch.name} ` +
         `(recorded source lifetime ${recorded.streamId} created ${recorded.streamCreatedAt}, ` +
         `config generation ${recorded.cursorChangedAtSourceOffset}); this stale batch can never land`,
     );
@@ -106,7 +106,7 @@ export function buildCopyAppends({
   for (const event of batch.events) {
     const chain = event.source?.copiedFrom ?? [];
     const hop = {
-      subscriptionKey: batch.subscriptionKey,
+      name: batch.name,
       streamId: batch.streamId,
       streamCreatedAt: batch.streamCreatedAt,
       cursorChangedAtSourceOffset: batch.cursorChangedAtSourceOffset,
@@ -135,12 +135,7 @@ export function buildCopyAppends({
     // before the platform-owned fields below, so it can only shape
     // type/payload/metadata. A throw here rejects the whole batch into the
     // sender's ladder — copies halt on a repeatedly failing event.
-    const shaped = applyJsonataTransform(
-      "copy",
-      batch.subscriptionKey,
-      receiver.jsonataTransform,
-      event,
-    );
+    const shaped = applyJsonataTransform("copy", batch.name, receiver.jsonataTransform, event);
 
     // A received event is a new event: `ephemeral` deliberately does not
     // propagate. Source offsets are descriptive, never dereferenced, so
@@ -158,7 +153,7 @@ export function buildCopyAppends({
       // source coordinates only: transform output cannot affect dedupe.
       idempotencyKey: internalStreamId(
         "copy",
-        batch.subscriptionKey,
+        batch.name,
         batch.cursorChangedAtSourceOffset,
         batch.projectId,
         event.path,
@@ -178,7 +173,7 @@ export function buildCopyAppends({
         batch.projectId,
         batch.path,
         batch.streamId,
-        batch.subscriptionKey,
+        batch.name,
         batch.cursorChangedAtSourceOffset,
         firstOffset,
         lastOffset,
@@ -186,7 +181,7 @@ export function buildCopyAppends({
       payload: {
         message:
           `dropped ${droppedOffsets.length} copied event(s) from "${batch.path}" subscription ` +
-          `"${batch.subscriptionKey}" (source offsets ${firstOffset}-${lastOffset}): their ` +
+          `"${batch.name}" (source offsets ${firstOffset}-${lastOffset}): their ` +
           `stream-copy path already contains this stream or reached ${MAX_COPIED_FROM_HOPS} hops`,
       },
     });

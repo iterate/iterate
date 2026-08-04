@@ -1,7 +1,7 @@
 // GitHub-backed repos, the CI-provable half: webhook events arriving on a
 // GitHub connection stream reach the linked repo's own stream
 // through the exact copy subscription `repo.linkGithub` installs (same
-// subscriptionKey, same JSONata condition on push type + GitHub's stable repository ID, same
+// name, same JSONata condition on push type + GitHub's stable repository ID, same
 // first-class destination). The GitHub-touching half (mirror
 // push, create-on-link, syncFromGithub) authenticates against real GitHub and
 // is proven by production smoke, not here.
@@ -106,7 +106,7 @@ test("github pushes about a linked repository reach the repo stream", async () =
   expect(copied.source?.copiedFrom).toHaveLength(1);
   expect(copied.source?.copiedFrom?.[0]).toMatchObject({
     path: connectionPath,
-    subscriptionKey: `github-repo:${repoPath}`,
+    name: `github-repo:${repoPath}`,
     type: GITHUB_WEBHOOK_RECEIVED_EVENT_TYPE,
   });
 

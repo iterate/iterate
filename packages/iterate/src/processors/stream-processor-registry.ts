@@ -461,32 +461,26 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
   }
 
   /**
-   * Route a wake to a registered entry. The subscription NAME is the primary
-   * key (name-based registration; under facet placement the name IS the facet
-   * name); a default-named host (name = slug) still resolves through the
-   * required contract slug, so today's subscriptions with generated names keep
-   * waking without re-registration.
+   * Route a wake to a registered entry. The subscription NAME is the key
+   * (name-based registration; under facet placement the name IS the facet
+   * name). Every subscription carries a name, so an unknown name is a loud
+   * error — there is no slug-based fallback.
    */
   function resolveProcessorName(args: StreamProcessorWakeRequest): string {
     const named = entries.get(args.name);
-    if (named !== undefined) {
-      if (named.processor.contract.slug !== args.processorSlug) {
-        throw new Error(
-          `wakeStreamProcessor for "${args.name}" expects contract "${args.processorSlug}", ` +
-            `but that name is registered with contract "${named.processor.contract.slug}"`,
-        );
-      }
-      return args.name;
+    if (named === undefined) {
+      throw new Error(
+        `wakeStreamProcessor for unknown name "${args.name}" (contract "${args.processorSlug}") — ` +
+          `subscribe by registered name (registered: ${[...entries.keys()].join(", ") || "none"})`,
+      );
     }
-    const bySlug = [...entries].filter(
-      ([, entry]) => entry.processor.contract.slug === args.processorSlug,
-    );
-    if (bySlug.length === 1) return bySlug[0]![0];
-    throw new Error(
-      `wakeStreamProcessor for "${args.name}" (contract "${args.processorSlug}") matches ` +
-        `${bySlug.length === 0 ? "no registered processor" : "more than one registered instance — subscribe by registered name"} ` +
-        `(registered: ${[...entries.keys()].join(", ") || "none"})`,
-    );
+    if (named.processor.contract.slug !== args.processorSlug) {
+      throw new Error(
+        `wakeStreamProcessor for "${args.name}" expects contract "${args.processorSlug}", ` +
+          `but that name is registered with contract "${named.processor.contract.slug}"`,
+      );
+    }
+    return args.name;
   }
 
   // The node's live-state engine. Seeded empty; assembled from runner state

@@ -1430,7 +1430,7 @@ describe("StreamEventSender webhook delivery", () => {
       path: "/source",
       streamId: SOURCE_STREAM_ID,
       streamCreatedAt: "2026-07-21T10:00:00.000Z",
-      subscriptionKey: PROCESSOR_KEY,
+      name: PROCESSOR_KEY,
       cursorChangedAtSourceOffset: 1,
       attempt: 1,
       configuredEvent: { type: "events.iterate.com/stream/subscription-configured" },
@@ -2220,7 +2220,7 @@ function connectionsHarness(
         options.onSessionsIdleClosed?.(keys);
       },
       reconcileAlarm: () => undefined,
-      hostedDeliveryStillMatches: (_subscriptionKey, candidate) =>
+      hostedDeliveryStillMatches: (_name, candidate) =>
         candidate.configuredAtOffset === expectedDelivery.configuredAtOffset &&
         candidate.cursorChangedAtOffset === expectedDelivery.cursorChangedAtOffset &&
         candidate.connectionGeneration === expectedDelivery.connectionGeneration,

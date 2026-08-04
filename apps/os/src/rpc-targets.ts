@@ -98,7 +98,7 @@ import type { EventFilter } from "./domains/streams/event-filter.ts";
 import { parseAgentPath, resolveAgentPath } from "./domains/agents/utils.ts";
 import {
   AGENT_COLLECTION_PATH,
-  AGENT_COLLECTION_SUBSCRIPTION_KEY,
+  AGENT_COLLECTION_SUBSCRIPTION_NAME,
   type AgentCollectionProcessorState,
 } from "./domains/agents/agent-collection-processor-contract.ts";
 import {
@@ -4821,7 +4821,7 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
         context: { path: this.#path },
         message: "agent collection confirmation restarting after Durable Object reset",
         operation: () =>
-          this.stream.subscriptions.get(AGENT_COLLECTION_SUBSCRIPTION_KEY).waitUntilConfirmed({
+          this.stream.subscriptions.get(AGENT_COLLECTION_SUBSCRIPTION_NAME).waitUntilConfirmed({
             offset: birthOffset,
             timeoutMs: PROCESSOR_BIRTH_WAIT_TIMEOUT_MS,
           }),

@@ -130,7 +130,7 @@ test("Authenticated internal auth itx can create project and append to stream", 
         expect.objectContaining({
           path: "/repos/config",
           projectId: description.projectId,
-          subscriptionKey: "project-config-to-root",
+          name: "project-config-to-root",
           type: "events.iterate.com/repos/created",
         }),
       ],

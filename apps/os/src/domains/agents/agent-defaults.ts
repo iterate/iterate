@@ -15,7 +15,7 @@ import { capabilityHostCreationEvents } from "../capability-host/capability-host
 import {
   AGENT_COLLECTION_CREATED_EVENT_TYPE,
   AGENT_COLLECTION_PATH,
-  AGENT_COLLECTION_SUBSCRIPTION_KEY,
+  AGENT_COLLECTION_SUBSCRIPTION_NAME,
   AgentCollectionProcessorContract,
 } from "./agent-collection-processor-contract.ts";
 import { AgentProcessorContract } from "./agent-processor-contract.ts";
@@ -556,9 +556,9 @@ export function agentCreationForPath<
   });
   const collectionSubscription = CoreProcessorContract.buildEvent({
     type: "events.iterate.com/stream/subscription-configured",
-    idempotencyKey: `stream/subscription-configured:${AGENT_COLLECTION_SUBSCRIPTION_KEY}`,
+    idempotencyKey: `stream/subscription-configured:${AGENT_COLLECTION_SUBSCRIPTION_NAME}`,
     payload: {
-      name: AGENT_COLLECTION_SUBSCRIPTION_KEY,
+      name: AGENT_COLLECTION_SUBSCRIPTION_NAME,
       description: "Project agent collection projection",
       filter: {
         eventTypes: ["events.iterate.com/agent/created", AGENT_SUMMARY_UPDATED_EVENT_TYPE],

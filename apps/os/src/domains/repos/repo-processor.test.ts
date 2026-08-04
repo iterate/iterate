@@ -64,7 +64,7 @@ function githubPush(input?: {
   installationId?: string;
   provenance?: boolean;
   repositoryId?: number;
-  subscriptionKey?: string;
+  name?: string;
 }): RepoEventInput {
   const connection = input?.connection ?? "install-789";
   return {
@@ -85,7 +85,7 @@ function githubPush(input?: {
           source: {
             copiedFrom: [
               {
-                subscriptionKey: input?.subscriptionKey ?? `github-repo:${REPO_PATH}`,
+                name: input?.name ?? `github-repo:${REPO_PATH}`,
                 streamId: "11111111-1111-4111-8111-111111111111",
                 streamCreatedAt: "2026-07-17T11:00:00.000Z",
                 cursorChangedAtSourceOffset: 1,
@@ -450,7 +450,7 @@ describe("RepoProcessor GitHub imports", () => {
     ["the wrong connection", { connection: "install-other" }],
     ["the wrong installation", { installationId: "456" }],
     ["the wrong repository", { repositoryId: 202 }],
-    ["the wrong subscription", { subscriptionKey: "userspace:other" }],
+    ["the wrong subscription", { name: "userspace:other" }],
   ])("does not import %s", async (_case, webhookInput) => {
     const h = makeRepoHarness();
     await h.play(

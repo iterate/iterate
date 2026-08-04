@@ -56,7 +56,7 @@ function batch(
     streamCreatedAt,
     events: [sourceEvent],
     streamMaxOffset: sourceEvent.offset,
-    subscriptionKey: configured.name,
+    name: configured.name,
     cursorChangedAtSourceOffset: 2,
     deliveryId: deliveryId(streamId, configured.name, 2, sourceEvent.offset, sourceEvent.offset),
     attempt: 1,
@@ -118,7 +118,7 @@ describe("copy input boundary", () => {
             streamId: FIRST_STREAM_ID,
             streamCreatedAt: SOURCE_CREATED_AT,
             offset: sourceEvent.offset,
-            subscriptionKey: configuration.name,
+            name: configuration.name,
           },
         ],
       },
@@ -318,7 +318,7 @@ describe("copy event construction", () => {
       streamId: SECOND_STREAM_ID,
       streamCreatedAt: SOURCE_CREATED_AT,
       offset: sourceEvent.offset,
-      subscriptionKey: configuration.name,
+      name: configuration.name,
     });
   });
 
@@ -351,7 +351,7 @@ describe("copy event construction", () => {
             path: SOURCE_PATH,
             streamId: FIRST_STREAM_ID,
             offset: sourceEvent.offset,
-            subscriptionKey: configuration.name,
+            name: configuration.name,
             // The hop records the ORIGINAL source type; only the committed
             // body is reshaped.
             type: sourceEvent.type,
@@ -422,7 +422,7 @@ describe("copy event construction", () => {
 
   test("a cycle drop acknowledges the whole batch and appends one idempotent error event", () => {
     const copiedFrom = {
-      subscriptionKey: "prior-subscription",
+      name: "prior-subscription",
       streamId: SECOND_STREAM_ID,
       streamCreatedAt: SOURCE_CREATED_AT,
       cursorChangedAtSourceOffset: 1,
@@ -464,7 +464,7 @@ describe("copy event construction", () => {
 
   test("durably drops a received-from chain at the hop cap instead of retrying it", () => {
     const copiedFrom = Array.from({ length: MAX_COPIED_FROM_HOPS }, (_, index) => ({
-      subscriptionKey: `subscription-${index}`,
+      name: `subscription-${index}`,
       streamId: SECOND_STREAM_ID,
       streamCreatedAt: SOURCE_CREATED_AT,
       cursorChangedAtSourceOffset: 1,

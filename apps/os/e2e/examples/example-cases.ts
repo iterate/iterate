@@ -115,12 +115,12 @@ export const EXAMPLE_CASES: Record<string, ExampleCase> = {
     assert: (result, _ctx, expect) => {
       const shaped = result as {
         copied: { importance: string; text: string };
-        copiedFrom: Array<{ subscriptionKey: string }>;
+        copiedFrom: Array<{ name: string }>;
       };
       expect(shaped.copied).toMatchObject({ importance: "high", text: "copied" });
       expect(shaped.copiedFrom).toHaveLength(1);
       expect(shaped.copiedFrom[0]).toMatchObject({
-        subscriptionKey: "example/high-importance-notes",
+        name: "example/high-importance-notes",
       });
     },
   },
