@@ -245,7 +245,7 @@ describe("the BYOK gateway lane", () => {
         kind: "byok",
         gatewayId: "default",
         openaiApiKey: "sk-test",
-        openaiPromptCacheKey: "prj_1:/agents/onboarding",
+        openaiPromptCacheKey: "prj_1:/agents/cache-probe",
         responseCacheTtlSeconds: 600,
       },
     });
@@ -265,7 +265,7 @@ describe("the BYOK gateway lane", () => {
         { role: "developer", content: "trusted application context" },
         { role: "user", content: "hi" },
       ],
-      prompt_cache_key: "prj_1:/agents/onboarding",
+      prompt_cache_key: "prj_1:/agents/cache-probe",
       reasoning_effort: "medium",
       stream: true,
     });
@@ -370,20 +370,20 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
     const bodyFor = (projectId: string, agentPath: string) => ({
       model: "gpt-5.5",
       messages: [
-        { role: "system", content: "You are the onboarding agent." },
+        { role: "system", content: "You are a project agent." },
         {
           role: "user",
-          content: `<project-context projectId="${projectId}" agentPath="${agentPath}" />\nStart onboarding now`,
+          content: `<project-context projectId="${projectId}" agentPath="${agentPath}" />\nRun the cache probe`,
         },
       ],
       prompt_cache_key: `${projectId}:${agentPath}`,
       stream: true,
     });
     const keyA = await cloudflareAiGatewayResponseCacheKey(
-      bodyFor("prj_0123456789abcdef0123456789abcdef", "/agents/onboarding"),
+      bodyFor("prj_0123456789abcdef0123456789abcdef", "/agents/cache-probe"),
     );
     const keyB = await cloudflareAiGatewayResponseCacheKey(
-      bodyFor("prj_fedcba9876543210fedcba9876543210", "/agents/onboarding"),
+      bodyFor("prj_fedcba9876543210fedcba9876543210", "/agents/cache-probe"),
     );
     expect(keyA).toBe(keyB);
   });
@@ -413,7 +413,7 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
   });
 
   it("masks the clock stamp and the boot-context project line — birth turns share a key across projects", () => {
-    // Two projects' onboarding births differ ONLY in per-project boot facts
+    // Two projects' identical turns differ ONLY in per-project boot facts
     // and the per-request clock; the response cache must see them as equal
     // (the preview-burn protection from the response-cache work).
     const bodyFor = (name: string, slug: string, at: string) =>
@@ -422,7 +422,7 @@ describe("cloudflareAiGatewayResponseCacheKey", () => {
           { role: "system", content: "You are an agent." },
           {
             role: "user",
-            content: `Platform context for this agent:\n- Project: "${name}" (slug ${slug}, id prj_${"0".repeat(32)}) — the project worker/website serves https://${slug}.iterate-preview-4.app\n- Your agent stream path: /agents/onboarding`,
+            content: `Platform context for this agent:\n- Project: "${name}" (slug ${slug}, id prj_${"0".repeat(32)}) — the project worker/website serves https://${slug}.iterate-preview-4.app\n- Your agent stream path: /agents/cache-probe`,
           },
           { role: "system", content: `Current date and time (UTC): ${at}` },
         ],

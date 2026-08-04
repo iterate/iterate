@@ -184,10 +184,8 @@ Post-creation events own their own retry contract. Give durable startup facts
 an explicit revisioned idempotency key, and retry the append independently if
 a process fails between `create()` and `append()`. One idempotency key names
 one exact event payload forever; when shipped policy content changes, bump its
-revision and append the new occurrence. Onboarding follows this pattern: it
-ensures the generic agent exists and then always appends the same revisioned
-prompt and kickoff facts, so retries and concurrent callers converge. A keyed
-context item composes with every differently keyed item; it supersedes only
+revision and append the new occurrence. A keyed context item composes with
+every differently keyed item; it supersedes only
 the prior item with the same key. `agent/system-prompt` is the well-known
 readiness and execution-policy slot, not a separate authorization mechanism:
 any project member with access to that stream can intentionally update it.

@@ -6,7 +6,6 @@
 import { AGENT_SUMMARY_UPDATED_EVENT_TYPE } from "@iterate-com/shared/agent-events";
 import type { z } from "zod";
 import type { StreamEventInput } from "iterate/processors";
-import { PROJECT_REPO_INITIAL_FILES } from "../repos/config-repo-template.generated.ts";
 import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
@@ -80,7 +79,7 @@ export const AGENT_SUMMARY_INSTRUCTION = [
 
 /**
  * The default codemode system prompt for web-chat agents (child agents, MCP
- * session agents, and the onboarding agent build on it). Deliberately small:
+ * and session agents build on it). Deliberately small:
  * it teaches the ACT contract, the turn loop, the config repo (the one lever
  * behind "update our homepage" / "make an app" / "configure iterate"), how to
  * FIND working code, and then SHOWS the surface as one annotated tour script
@@ -271,13 +270,11 @@ const AGENT_BOOT_CONTEXT_REVISION = "3";
 export const SLACK_AGENT_SYSTEM_PROMPT_REVISION = "2";
 export const TELEGRAM_AGENT_SYSTEM_PROMPT_REVISION = "3";
 export const EMAIL_AGENT_SYSTEM_PROMPT_REVISION = "2";
-// The MCP and onboarding prompts EMBED the default prompt, so their event
-// bodies change whenever it does — their occurrence identity must move with
-// every constituent revision, or an existing stream rejects the re-append as
-// a different body under a reused key. The own component still covers their
-// own extension text (onboarding: also PROJECT_REPO_ONBOARDING_MD).
+// The MCP prompt EMBEDS the default prompt, so its event body changes whenever
+// the default does — its occurrence identity must move with every constituent
+// revision, or an existing stream rejects the re-append as a different body
+// under a reused key. The own component still covers its extension text.
 export const MCP_AGENT_SYSTEM_PROMPT_REVISION = `1.${DEFAULT_AGENT_SYSTEM_PROMPT_REVISION}`;
-export const ONBOARDING_AGENT_SYSTEM_PROMPT_REVISION = `1.${DEFAULT_AGENT_SYSTEM_PROMPT_REVISION}`;
 
 type AgentSystemPromptPolicy = {
   content: string;
@@ -286,12 +283,6 @@ type AgentSystemPromptPolicy = {
   /** Exact shipped payload revision; bump it when `content` changes. */
   revision: string;
 };
-
-// The onboarding script ships INSIDE the seeded repo (the agent can read the
-// same file the prompt embeds); the prompt below needs its text at build time.
-const PROJECT_REPO_ONBOARDING_MD = PROJECT_REPO_INITIAL_FILES.find(
-  (file) => file.path === "ONBOARDING.md",
-)!.content;
 
 /**
  * Agents under `/agents/slack/**` are Slack-thread agents: the slack webhook
@@ -394,19 +385,6 @@ export const MCP_AGENT_SYSTEM_PROMPT = [
   "",
   "You are serving this project's MCP server. Your messages come from an AI agent (an MCP client) acting on behalf of the project owner, through the ask_assistant MCP tool. That tool call blocks until your next itx.chat.sendMessage reply and returns it verbatim to the asking agent.",
   "This overrides the multi-message chat and every-turn progress-update guidance above: send NO acknowledgements or progress updates — the first sendMessage ends the caller's wait, so it must BE the complete answer. Reply exactly once per request with await itx.chat.sendMessage(message). Do the requested work directly with your capabilities; only ask a clarifying question when the request is genuinely ambiguous.",
-].join("\n");
-
-/**
- * The onboarding agent is a normal web-chat agent whose system prompt embeds
- * the seeded ONBOARDING.md script. Same codemode contract as every agent.
- */
-export const ONBOARDING_AGENT_SYSTEM_PROMPT = [
-  DEFAULT_AGENT_SYSTEM_PROMPT,
-  "",
-  "You are this project's onboarding agent. Follow the onboarding script below.",
-  "On a brand-new project, the project repo and worker may still be seeding during your first turn. If a repo or worker capability reports that it is missing or not ready, keep onboarding conversational and retry shortly instead of treating that as a fatal setup failure.",
-  "",
-  PROJECT_REPO_ONBOARDING_MD,
 ].join("\n");
 
 /**

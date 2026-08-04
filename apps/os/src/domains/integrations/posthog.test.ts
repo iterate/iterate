@@ -223,7 +223,6 @@ describe("first-party PostHog stream integration", () => {
         createRequestedAtOffset: 1,
         config: {
           creatorEmail: "owner@example.com",
-          onboardingActive: true,
           slug: "gold-path",
         },
       },

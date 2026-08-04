@@ -255,7 +255,7 @@ function ProjectReactivityContent() {
                   </Badge>
                 </dd>
                 <dt className="text-muted-foreground">Created</dt>
-                <dd data-testid="reactivity-onboarding">
+                <dd data-testid="reactivity-created">
                   {projectState === undefined
                     ? "unknown"
                     : String(projectState.birthCertificate !== null)}

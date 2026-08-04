@@ -59,7 +59,7 @@ describe("DurableObjectNameCodec", () => {
   test("round-trips formatted names", () => {
     const input = {
       projectId: "prj_123",
-      path: "/agents/onboarding",
+      path: "/agents/demo",
       props: { slot: "a" },
     };
     const durableObjectName = DurableObjectNameCodec.stringify(input);

@@ -409,7 +409,7 @@ export class ProjectProcessor extends StreamProcessor<
         });
         break;
       }
-      // created/heartbeat-triggered/onboarding-completed/notification facts,
+      // created/heartbeat-triggered/notification facts,
       // catalog facts, egress rules and approval events: no platform side
       // effect. The project worker handles userspace lifecycle events.
     }
@@ -626,7 +626,6 @@ export class ProjectProcessor extends StreamProcessor<
           ...state,
           createRequest: event.payload,
           createRequestedAtOffset: event.offset,
-          onboardingActive: event.payload.config.onboardingActive === true,
         };
       case "events.iterate.com/project/created":
       case "events.iterate.com/project/create-failed": {
@@ -649,8 +648,6 @@ export class ProjectProcessor extends StreamProcessor<
           ? { ...state, birthCertificate: terminal.payload }
           : { ...state, createFailure: terminal.payload };
       }
-      case "events.iterate.com/project/onboarding-completed":
-        return { ...state, onboardingActive: false, onboardingCompletedAt: event.createdAt };
       case "events.iterate.com/notification/created":
         return { ...state, notificationReady: true };
       case "events.iterate.com/stream/created":

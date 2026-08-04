@@ -66,12 +66,12 @@ type ProjectWithIngressUrl = Project & { ingressUrl: string };
  * waiting only until the project exists (identity registered, directory
  * primed, birth events appended) — the saga runs behind the handle.
  * Single-project users then enter the project home's welcome flow, which
- * renders the remaining bootstrap progress from live state before onboarding.
+ * renders the remaining bootstrap progress from live state before the dashboard.
  *
  * If the deployment-status probe or server-side birth fails, the decision
  * carries an explicit `ensureBirth` handoff. The authenticated welcome page
  * makes the same idempotent create once, so recovery preserves the intended
- * onboarding destination instead of succeeding silently on `/projects`.
+ * project destination instead of succeeding silently on `/projects`.
  */
 export const getRootProjectRedirectServerFn: (input?: {
   data?: { preferredProjectSlug: string | null };

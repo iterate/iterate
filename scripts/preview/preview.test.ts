@@ -342,7 +342,7 @@ describe("preview workflow scope", () => {
         "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/dummy-petshop",
       ],
       os: [
-        "onboarding-smoke:script/e2e/onboarding-smoke@iterate-root",
+        "agent-smoke:script/e2e/agent-smoke@iterate-root",
         "tui-quarantine:script/e2e/tui@iterate-root",
         "vitest-retry-telemetry-reporter:vitest/e2e/vitest@@iterate-com/os",
         "playwright-telemetry-reporter:playwright/e2e/playwright@iterate-root",
@@ -944,7 +944,7 @@ describe("preview test commands", () => {
   test("starts Playwright early while gating project-backed work and Vitest", () => {
     const script = cloudflarePreviewApps.os.previewTestCommandArgs[2];
     const playwrightInstall = "pnpm --dir ../.. exec playwright install chromium";
-    const smokeLane = "pnpm exec tsx e2e/vitest/onboarding-smoke.ts";
+    const smokeLane = "pnpm exec tsx e2e/vitest/agent-smoke.ts";
     const tuiLane = "pnpm exec tsx e2e/tui-test/run.ts";
     const e2eLane = "pnpm e2e --project node";
     const playwrightSpec = "pnpm --dir ../.. spec";

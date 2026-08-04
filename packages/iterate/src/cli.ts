@@ -43,7 +43,6 @@ import {
 type ParsedRouter = ReturnType<typeof parseRouter>;
 
 const OAUTH_REFRESH_SKEW_MS = 60_000;
-const DEFAULT_CHAT_AGENT_PATH = "/agents/onboarding";
 type OsAuthHeaders = { cookie?: string; authorization?: string };
 type OsAuth = { credentials: ItxAuthCredentials; requestHeaders?: HeadersInit };
 type CreateOsSession = (input: { auth: OsAuth; baseUrl: string }) => RpcStub<Session>;
@@ -82,15 +81,6 @@ const firstNonFlagArgument = (args: string[]): string | undefined => {
     if (!arg.startsWith("-")) return arg;
   }
   return undefined;
-};
-
-export const defaultBareInvocationToChat = (args: string[]) =>
-  args.length === 0 ? ["chat"] : args;
-
-const applyDefaultBareInvocation = () => {
-  const args = process.argv.slice(2);
-  const nextArgs = defaultBareInvocationToChat(args);
-  if (nextArgs !== args) process.argv.splice(2, args.length, ...nextArgs);
 };
 
 const resolveStreamTuiEntrypointPath = () => {
@@ -1015,9 +1005,7 @@ const launcherProcedures = {
           .trim()
           .min(1)
           .startsWith("/agents/")
-          .optional()
-          .default(DEFAULT_CHAT_AGENT_PATH)
-          .describe("Agent stream path to chat with (default: /agents/onboarding)"),
+          .describe("Agent stream path to chat with"),
       }),
     )
     .meta({
@@ -1484,7 +1472,6 @@ const launcherProcedures = {
 export const getCli = async () => {
   // Parse custom top-level flags early, before trpc-cli sees the args.
   configFlagOverride = consumeCliStringFlag("--config");
-  applyDefaultBareInvocation();
   const requestedRootCommand = firstNonFlagArgument(process.argv.slice(2));
   const shouldLoadRemoteRouters =
     !requestedRootCommand ||

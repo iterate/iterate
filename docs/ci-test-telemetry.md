@@ -171,7 +171,7 @@ dimensions, never separate event families.
 | `framework`         | `vitest`, `playwright`, `node-test`, `script`; orchestration aggregates may be `mixed` |
 | `test_kind`         | `unit`, `integration`, `e2e`                                                           |
 | `workspace` / `app` | pnpm package and deployed application                                                  |
-| `lane`              | `unit`, `vitest`, `playwright`, `onboarding-smoke`, `tui`, `preview`                   |
+| `lane`              | `unit`, `vitest`, `playwright`, `agent-smoke`, `tui`, `preview`                        |
 | source              | repository, SHA, branch, pull request                                                  |
 | execution           | workflow/run/attempt/job URLs, runner provider, preview slot, test project             |
 | identity            | stable artifact, test-run, logical-test, and execution IDs                             |
@@ -209,12 +209,12 @@ the full graph.
 
 ### Runner Capability Matrix
 
-| Runner           | Complete attempts              | Native start time | Root-cause detail                                                                                                                                                  |
-| ---------------- | ------------------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Playwright       | yes                            | yes               | all nested steps including hooks, fixtures, expects, and API calls; worker/parallel index; errors; output/attachment sizes; timeout/tags/annotations               |
-| Node `test`      | yes                            | no                | runner attempt duration and error; reporter infers start from observation time minus duration and labels it `inferred`                                             |
-| Vitest           | no: aggregate retry count only | yes               | before/after-each duration, body remainder, explicit `e2e-phase` annotations, heap/slow/repeat diagnostics when enabled, module lifecycle, individual import costs |
-| Onboarding smoke | yes                            | reporter clock    | explicit project creation, agent readiness, greeting, and failure phases, including partial phases on a failed attempt                                             |
+| Runner      | Complete attempts              | Native start time | Root-cause detail                                                                                                                                                  |
+| ----------- | ------------------------------ | ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Playwright  | yes                            | yes               | all nested steps including hooks, fixtures, expects, and API calls; worker/parallel index; errors; output/attachment sizes; timeout/tags/annotations               |
+| Node `test` | yes                            | no                | runner attempt duration and error; reporter infers start from observation time minus duration and labels it `inferred`                                             |
+| Vitest      | no: aggregate retry count only | yes               | before/after-each duration, body remainder, explicit `e2e-phase` annotations, heap/slow/repeat diagnostics when enabled, module lifecycle, individual import costs |
+| Agent smoke | yes                            | reporter clock    | explicit project creation, agent creation, reply, and failure phases, including partial phases on a failed attempt                                                 |
 
 Vitest's public reporter receives one final `onTestCaseResult`; its diagnostic
 contains aggregate duration/retry count but not each attempt's duration. Do not

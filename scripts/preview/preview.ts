@@ -29,7 +29,7 @@ import {
 import { fetchCloudflareWith429Retry } from "../lib/cloudflare-429-retry.ts";
 import {
   compactRetryFailure,
-  OS_ONBOARDING_SMOKE_TIMEOUT_SECS,
+  OS_AGENT_SMOKE_TIMEOUT_SECS,
   OS_PREVIEW_LANE_TIMEOUT_SECS,
   OS_TUI_LANE_TIMEOUT_SECS,
 } from "../../packages/shared/src/test-support/e2e-policy/index.ts";
@@ -1896,8 +1896,8 @@ export type PreviewTestSummary = PreviewRetrySummary & {
  * (marathon loops) can't leak stale telemetry.
  */
 const osVitestRetryTelemetryFile = "/tmp/os-preview-vitest-retries.json";
-/** Structured timing for the standalone onboarding smoke's logical test. */
-const osOnboardingSmokeTelemetryFile = "/tmp/os-preview-onboarding-smoke.json";
+/** Structured timing for the standalone agent smoke's logical test. */
+const osAgentSmokeTelemetryFile = "/tmp/os-preview-agent-smoke.json";
 /** Same JSON shape, written by the Microsoft TUI Test wrapper. */
 const osTuiRetryTelemetryFile = "/tmp/os-preview-tui-retries.json";
 /** Same contract for the streams-example-app lane's vitest sub-lane. */
@@ -2227,7 +2227,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
       "dummy-petshop": "PETSHOP_BASE_URL",
     },
     previewTestArtifactSources: [
-      previewScriptArtifactSource("onboarding-smoke", "onboarding-smoke", "iterate-root"),
+      previewScriptArtifactSource("agent-smoke", "agent-smoke", "iterate-root"),
       previewScriptArtifactSource("tui-quarantine", "tui", "iterate-root"),
       previewVitestArtifactSource("@iterate-com/os"),
       previewPlaywrightArtifactSource("iterate-root"),
@@ -2247,7 +2247,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // previous run on the same machine (marathon loops), and
         // collectRetryTelemetry runs pass or fail, so a leftover file would
         // report a previous run's retries against this one.
-        `rm -f ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ${osOnboardingSmokeTelemetryFile} ../../test-results/playwright-results.json`,
+        `rm -f ${osVitestRetryTelemetryFile} ${osTuiRetryTelemetryFile} ${osAgentSmokeTelemetryFile} ../../test-results/playwright-results.json`,
         // The chromium download hits no deployed slot, so start it first and
         // let it overlap the smoke and TUI lanes; it's ready by the
         // time we reach the specs instead of adding ~4s in front of them.
@@ -2257,7 +2257,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         // project-creation helpers and the smoke consume the absolute rollout
         // boundary passed above, so unrelated setup continues while fresh
         // project-backed DO work waits. The high-fanout Vitest lane waits for
-        // both the production-shaped onboarding smoke and the same bounded age.
+        // both the production-shaped agent smoke and the same bounded age.
         // Edge readiness cannot prove global Durable Object code propagation:
         // Cloudflare may reset an object when its assigned version changes.
         // The age clock starts when deploy completes and overlaps every lane
@@ -2279,7 +2279,7 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
         'run_logged_lane() { local lane="$1"; local log="$2"; shift 2; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" > "$log" 2>&1 || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         'run_visible_lane() { local lane="$1"; shift; local started="$SECONDS"; local rc=0; echo "[preview:os] lane start: $lane"; "$@" || rc=$?; echo "[preview:os] lane finish: $lane ($((SECONDS - started))s, exit $rc)"; return "$rc"; }',
         `run_visible_lane rollout-settle sleep "$${previewRolloutRemainingSecondsEnvironment}" & ROLLOUT_PID=$!`,
-        `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=onboarding-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osOnboardingSmokeTelemetryFile} timeout ${OS_ONBOARDING_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/onboarding-smoke.ts & SMOKE_PID=$!`,
+        `run_logged_lane smoke /tmp/os-preview-smoke.log env TEST_TELEMETRY_LANE=agent-smoke TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osAgentSmokeTelemetryFile} timeout ${OS_AGENT_SMOKE_TIMEOUT_SECS} pnpm exec tsx e2e/vitest/agent-smoke.ts & SMOKE_PID=$!`,
         `run_logged_lane tui /tmp/os-preview-tui.log env TEST_TELEMETRY_LANE=tui TEST_TELEMETRY_WORKSPACE=iterate-root TEST_TELEMETRY_ARTIFACT_FILE=${osTuiRetryTelemetryFile} timeout ${OS_TUI_LANE_TIMEOUT_SECS} pnpm exec tsx e2e/tui-test/run.ts & TUI_PID=$!`,
         'PW_INSTALL_OK=0; wait "$PW_INSTALL_PID" || PW_INSTALL_OK=$?',
         `SPEC_OK=0; SPEC_PID=""; if [ "$PW_INSTALL_OK" -eq 0 ]; then run_visible_lane playwright env TEST_TELEMETRY_LANE=playwright TEST_TELEMETRY_WORKSPACE=iterate-root PLAYWRIGHT_PREVIEW_SLOW_FIRST=1 timeout ${OS_PREVIEW_LANE_TIMEOUT_SECS} pnpm --dir ../.. spec & SPEC_PID=$!; else cat /tmp/os-preview-pw-install.log; SPEC_OK=$PW_INSTALL_OK; fi`,
@@ -2297,8 +2297,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     ],
     collectTestTelemetry: async ({ repositoryRoot }) => {
       const [smoke, vitest, specs] = await Promise.all([
-        readTestTelemetryLane("os onboarding smoke", () =>
-          readCanonicalTestTelemetry(osOnboardingSmokeTelemetryFile, "onboarding smoke"),
+        readTestTelemetryLane("os agent smoke", () =>
+          readCanonicalTestTelemetry(osAgentSmokeTelemetryFile, "agent smoke"),
         ),
         readTestTelemetryLane("os vitest lane", () =>
           readCanonicalTestTelemetry(osVitestRetryTelemetryFile, "vitest"),

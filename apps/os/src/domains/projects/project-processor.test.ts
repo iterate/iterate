@@ -295,7 +295,6 @@ describe("ProjectProcessor bootstrap", () => {
     expect(h.state()).toMatchObject({
       createRequest: PROJECT_CREATE_REQUESTED.payload,
       birthCertificate: null,
-      onboardingActive: true,
       notificationReady: true,
     });
   });
@@ -362,25 +361,6 @@ describe("ProjectProcessor bootstrap", () => {
     await h.play(["append", PROJECT_CREATE_REQUESTED, PROJECT_CREATED]);
     await h.play(["append", PROJECT_CREATED]);
     expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
-  });
-
-  it("does not reopen onboarding when project/created follows an early completion", async () => {
-    const h = makeProjectHarness();
-    await h.play([
-      "append",
-      PROJECT_CREATE_REQUESTED,
-      {
-        type: "events.iterate.com/project/onboarding-completed",
-        payload: { agentPath: "/agents/onboarding" },
-      },
-      PROJECT_CREATED,
-    ]);
-
-    expect(h.state()).toMatchObject({
-      birthCertificate: PROJECT_CREATED.payload,
-      onboardingActive: false,
-      onboardingCompletedAt: expect.any(String),
-    });
   });
 
   it("only the first project/create-requested event can drive sibling creation", async () => {

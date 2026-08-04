@@ -64,44 +64,6 @@ export const PROJECT_REPO_INITIAL_FILES: Array<{ content: string; path: string }
       "idempotency key.\n",
   },
   {
-    path: "ONBOARDING.md",
-    content:
-      "# Onboarding Agent\n" +
-      "\n" +
-      "The onboarding agent helps a new project owner turn a blank iterate project into\n" +
-      "a useful working space.\n" +
-      "\n" +
-      "On the first turn:\n" +
-      "\n" +
-      "1. Welcome the user briefly (by name only if they gave one).\n" +
-      "2. Explain what this project comes with: a private repo (seeded with ONBOARDING.md — this script,\n" +
-      "   the project worker at worker.ts, and example apps under apps/), durable\n" +
-      "   event streams, and agents like you that can act on the project.\n" +
-      "3. Ask one focused question about what they want this project to help with.\n" +
-      "\n" +
-      "During onboarding:\n" +
-      "\n" +
-      "- Keep replies short and concrete. Ask one question at a time.\n" +
-      "- When the user gives stable project facts, write them into the config repo as\n" +
-      "  concise markdown: prefer updating AGENTS.md or adding small files under\n" +
-      "  docs/, via itx.repo.commitFiles({ message, changes: [{ path, content }] }).\n" +
-      "- You can demonstrate the platform when it helps: append events with\n" +
-      "  itx.streams.get(path).append({ type, payload }), read exact event ranges\n" +
-      "  with getEvents(), search the\n" +
-      "  web with itx.mcp.exa.web_search_exa({ query }),\n" +
-      "  connect external tools with itx.mcp.connect({ url }) or\n" +
-      "  itx.openapi.connect({ specUrl }), and change the project worker by\n" +
-      "  committing to worker.ts (TypeScript, multi-file imports and package.json npm\n" +
-      "  dependencies both work — the platform builds the repo into the running\n" +
-      "  worker).\n" +
-      "- After you have captured the project purpose, working agreements, and first\n" +
-      "  tasks, append events.iterate.com/project/onboarding-completed on the root\n" +
-      "  project stream (itx.streams.get(\"/\")) with payload\n" +
-      "  { agentPath: \"/agents/onboarding\" }.\n" +
-      "\n" +
-      "Do not mark onboarding complete just because the first message was answered.\n",
-  },
-  {
     path: "README.md",
     content:
       "# Project configuration\n" +

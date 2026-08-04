@@ -73,7 +73,7 @@ json_run_field() {
 }
 
 retry_count() {
-  local log=$1 annotations onboarding transport
+  local log=$1 agent_smoke annotations transport
   # Depot's finite log export renders GitHub workflow commands as
   # `##[notice]`/`##[warning]`. Keep the raw command fallback for older CLI
   # exports, but never sum both representations of the same annotations.
@@ -87,12 +87,12 @@ retry_count() {
         awk '{ total += $1 } END { print total + 0 }'
     )
   fi
-  onboarding=$(grep -cF '[retry-telemetry] onboarding smoke passed on attempt 2/2' "$log" || true)
+  agent_smoke=$(grep -cF '[retry-telemetry] agent smoke passed on attempt 2/2' "$log" || true)
   # A fresh pre-session WebSocket dial keeps ordinary CI reliable without
   # replaying any RPC work, but the strict proof still rejects the recovery.
   # The same marker is emitted by the CLI and Playwright admin helpers.
   transport=$(grep -cF '[itx-initial-connection-retry] ' "$log" || true)
-  echo $((annotations + onboarding + transport))
+  echo $((agent_smoke + annotations + transport))
 }
 
 record_result() {

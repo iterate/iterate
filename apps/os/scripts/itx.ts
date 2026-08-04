@@ -135,7 +135,7 @@ export async function startRepl(options: ReplOptions) {
 }
 
 type AgentSmokeOptions = {
-  /** Agent stream path, e.g. /agents/onboarding. */
+  /** Agent stream path, e.g. /agents/smoke. */
   agentPath: string;
   /** OS base URL. Defaults to APP_CONFIG_BASE_URL. */
   baseUrl?: string;

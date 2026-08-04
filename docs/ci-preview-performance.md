@@ -17,7 +17,7 @@ The preview lifecycle has two barriers:
 
 Every freshly deployed live suite that addresses Durable Objects respects one
 bounded deployment-age clock. Short Semaphore, Streams, and Petshop suites wait
-at their own command boundary. OS starts its onboarding smoke, explicit TUI
+at their own command boundary. OS starts its agent smoke, explicit TUI
 quarantine marker, Chromium setup, and Playwright immediately; browser and auth
 setup continue while project-backed Playwright fixture creation and high-fanout
 Vitest wait for the same absolute boundary. The clock normally finishes under

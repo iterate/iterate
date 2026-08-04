@@ -26,19 +26,14 @@ test("a new user can create a project through the UI form", async ({ page }, tes
 
   const slug = uniqueFixtureSlug("create-project");
   // spinner-waiter is disabled through here: the /projects pending state and
-  // the agent page's loading state both render two spinner-matching elements
+  // the project page's loading state can render two spinner-matching elements
   // at once, tripping its strict-mode isVisible.
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
-    // Back on OS after auth first-run onboarding: a single project enters its
-    // creation flow, which hands off to the onboarding agent once ready.
-    // The composer is that route's structural chrome (renders on mount, no
-    // LLM output involved); 60s carried over from the waitForURL this
-    // replaced — cold-slot bootstrap + redirect can straggle.
-    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
+    // Back on OS after auth first-run onboarding: the initial project enters
+    // its creation flow and lands on its dashboard once bootstrap completes.
+    await page.getByTestId("project-dashboard").waitFor({ timeout: 60_000 });
   });
-  // The composer only renders under an agent-stream route, so the URL has
-  // settled — assert we landed on the FIRST project's onboarding agent.
-  expect(page.url()).toContain(`/projects/${firstSlug}/agents/streams/agents/onboarding`);
+  expect(new URL(page.url())).toMatchObject({ pathname: `/projects/${firstSlug}` });
 
   await spinnerWaiter.settings.run({ disabled: true }, async () => {
     // /new-project is the deep-linked create sheet (sidebar + projects list
@@ -48,12 +43,9 @@ test("a new user can create a project through the UI form", async ({ page }, tes
 
     await page.getByLabel("Slug").fill(slug, { timeout: 15_000 });
     // Create resolves after the atomic birth batch, then project home shows
-    // the bootstrap saga and hands off to onboarding once ready. The composer
-    // is that destination's structural chrome; 60s covers the cold birth +
-    // saga + handoff.
+    // the bootstrap saga and the dashboard once ready.
     await page.getByRole("button", { name: "Create project" }).click({ timeout: 15_000 });
-    await page.getByPlaceholder("Message this agent").waitFor({ timeout: 60_000 });
+    await page.getByTestId("project-dashboard").waitFor({ timeout: 60_000 });
   });
-  // After the checklist completes, welcome handoff lands on onboarding.
-  expect(page.url()).toContain(`/projects/${slug}/agents/streams/agents/onboarding`);
+  expect(new URL(page.url())).toMatchObject({ pathname: `/projects/${slug}` });
 });

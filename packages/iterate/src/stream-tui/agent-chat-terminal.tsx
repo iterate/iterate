@@ -29,10 +29,6 @@ import {
   useStreamConnection,
   type Itx,
 } from "../sdk/itx/react.ts";
-import {
-  ensureOnboardingAgentReady,
-  ONBOARDING_AGENT_PATH,
-} from "../../../../apps/os/src/lib/onboarding-agent.ts";
 import { sendAgentMessage } from "./agent-message-command.ts";
 import { createAgentFeedModel, type AgentFeedSnapshot } from "./agent-feed-model.ts";
 import { ensureAgentFeedReady, readAgentFeedHistory } from "./agent-feed-query.ts";
@@ -103,13 +99,7 @@ function AgentChatApp() {
   // closes the read→open race with replay, then owns the tail.
   const history = useItxQuery({
     key: historyQueryKey,
-    query: (itx) =>
-      readAgentFeedHistory(itx, args.agentPath, {
-        initialize: (agent) =>
-          args.agentPath === ONBOARDING_AGENT_PATH
-            ? ensureOnboardingAgentReady({ agent })
-            : ensureAgentFeedReady(agent),
-      }),
+    query: (itx) => readAgentFeedHistory(itx, args.agentPath, { initialize: ensureAgentFeedReady }),
   });
   const [model] = useState(() => {
     const next = createAgentFeedModel();

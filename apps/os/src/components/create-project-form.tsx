@@ -93,7 +93,7 @@ export function CreateProjectForm({
     onSuccess: ({ slug }) => {
       setNavigatingAway(true);
       // The project home plays bootstrap progress from live state, then
-      // `welcome` hands the new owner into onboarding once created.
+      // `welcome` keeps the creation checklist visible until bootstrap completes.
       void router.navigate({
         to: "/projects/$projectSlug",
         params: { projectSlug: slug },
