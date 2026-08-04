@@ -195,7 +195,8 @@ async function publishMobilePrPreview() {
     "--build-profile",
     "preview",
     "--status",
-    "FINISHED",
+    // The flag wants lowercase; the JSON output reports uppercase. Sigh.
+    "finished",
     "--limit",
     "1",
   ]);
