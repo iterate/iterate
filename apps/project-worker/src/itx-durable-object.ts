@@ -13,9 +13,17 @@ import type { ItxCallPath } from "./core/config.ts";
 
 interface Env {
   ITX_HOST: DurableObjectNamespace<ItxDurableObject>;
+  LOADER: WorkerLoader;
   // The fallback (target-core §4.4 / D30). Solo: a self service-binding to DummyControlPlane. A DO can't mint
   // ctx.exports loopbacks, so it reaches the fallback via a binding rather than the worker's ctx.exports.
   FALLBACK: { invokeCapability(callPath: string, args?: unknown[]): Promise<unknown> };
+}
+
+/** djb2 — a stable content hash so the loader cache key changes when the source changes. */
+function hashSource(s: string): string {
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = ((h << 5) + h + s.charCodeAt(i)) | 0;
+  return (h >>> 0).toString(36);
 }
 
 // A mount (target-core §4.1). `itx-expression` = an ALIAS to another callPath. `static` = a plain value (a
@@ -87,5 +95,22 @@ export class ItxDurableObject extends DurableObject<Env> {
 
     // reads fall back — the SAME method on the fallback, which recurses to the terminal (target-core §4.4)
     return this.env.FALLBACK.invokeCapability(callPath, args);
+  }
+
+  /** Execute code IN this context (target-core §4.1 mode 2 / D23). Loads `source` as a confined dynamic
+   *  worker whose ONLY binding is env.ITX = globalOutbound = a self-stub to THIS host — so the agent's
+   *  `itx.*` calls and its plain `fetch()` both resolve against its own capability host. The agent calling
+   *  back into this DO while we await it is intra-DO re-entrancy (allowed: the input gate is open during the
+   *  await). Returns the agent's Response. */
+  async load(source: string, request?: Request): Promise<Response> {
+    const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?"); // a stub to THIS host
+    const worker = this.env.LOADER.get(`load:${this.ctx.id.name}:${hashSource(source)}`, () => ({
+      compatibilityDate: "2026-07-01",
+      mainModule: "agent.js",
+      modules: { "agent.js": source },
+      env: { ITX: self }, // the agent sees ONLY its itx (the confinement)
+      globalOutbound: self, // plain fetch() → this host's fetch (egress)
+    }));
+    return worker.getEntrypoint().fetch(request ?? new Request("https://agent.local/"));
   }
 }

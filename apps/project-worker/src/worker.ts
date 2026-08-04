@@ -57,6 +57,19 @@ export default {
 `;
 const AGENT_VERSION = "skeleton-2";
 
+// A confined agent run BY the DO (host.load). It calls back into its own capability host via env.ITX — an
+// intra-DO re-entrancy probe: whoami (built-in) + invokeCapability (falls back to the DummyControlPlane).
+const ITX_CALLBACK_AGENT = /* js */ `
+export default {
+  async fetch(request, env) {
+    // env.ITX is a stub to the agent's OWN capability host (the DO). These calls re-enter that DO.
+    const who = await env.ITX.invokeCapability("itx.whoami");
+    const auth = await env.ITX.invokeCapability("itx.auth.gate");
+    return Response.json({ who, auth, ranInContext: true });
+  }
+};
+`;
+
 // The EGRESS door (project level): substitute the project's own secrets, then delegate outward to the
 // configured fallback. WS-safe (it only rewrites headers). Minted per request via ctx.exports and wired as
 // the confined agent's globalOutbound.
@@ -123,6 +136,18 @@ export default {
         return Response.json(await env.ITX_HOST.getByName(ctxName).provideCapability(input));
       } catch (e) {
         return Response.json({ ok: false, error: String((e as Error).message) });
+      }
+    }
+    // ── execution in the DO: host.load runs a confined agent whose env.ITX is a self-stub to its host ──
+    if (url.pathname === "/load") {
+      const ctxName = url.searchParams.get("ctx") ?? "prj_demo";
+      try {
+        return await env.ITX_HOST.getByName(ctxName).load(ITX_CALLBACK_AGENT);
+      } catch (e) {
+        return Response.json(
+          { ok: false, error: String((e as Error).message ?? e) },
+          { status: 500 },
+        );
       }
     }
     if (url.pathname === "/call") {
