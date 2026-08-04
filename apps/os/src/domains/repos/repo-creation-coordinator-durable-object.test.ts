@@ -70,10 +70,14 @@ function committedRequest() {
 }
 
 function coordinator(records = new Map<string, unknown>()) {
-  const setAlarm = vi.fn(async () => undefined);
+  let alarmAt: number | null = null;
+  const setAlarm = vi.fn<(scheduledTime: number | Date) => Promise<void>>(async (scheduledTime) => {
+    alarmAt = Number(scheduledTime);
+  });
   const ctx = {
     id: { name: repoName },
     storage: {
+      getAlarm: vi.fn(async () => alarmAt),
       kv: {
         delete: (key: string) => records.delete(key),
         get: <T>(key: string) => records.get(key) as T | undefined,
@@ -88,6 +92,9 @@ function coordinator(records = new Map<string, unknown>()) {
     ARTIFACTS_NAMESPACE: "ns",
   } as unknown as Env;
   return {
+    clearAlarm: () => {
+      alarmAt = null;
+    },
     records,
     setAlarm,
     value: new RepoCreationCoordinatorDurableObject(ctx, env),
@@ -127,6 +134,17 @@ describe("RepoCreationCoordinatorDurableObject", () => {
     await expect(h.value.enqueue({ ...handoff, streamId: "different-stream" })).rejects.toThrow(
       "different template-creation handoff",
     );
+  });
+
+  it("re-arms a queued handoff whose alarm was lost during a reset", async () => {
+    const h = coordinator();
+    await h.value.enqueue(handoff);
+    h.clearAlarm();
+
+    await h.value.enqueue(handoff);
+
+    expect(h.setAlarm).toHaveBeenCalledTimes(2);
+    expect([...h.records.values()]).toEqual([handoff]);
   });
 
   it("upgrades the original boolean queue record when the processor next confirms the request", async () => {

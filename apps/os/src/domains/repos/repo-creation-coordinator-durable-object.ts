@@ -84,7 +84,7 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
       // One-deploy migration from the initial coordinator, which stored only
       // a boolean. The next processor pass supplies the missing fenced input.
       this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, handoff);
-      await this.ctx.storage.setAlarm(Date.now() + CREATION_HANDOFF_DELAY_MS);
+      await this.#ensureAlarm();
       return;
     }
     if (stored !== undefined) {
@@ -98,11 +98,15 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
       ) {
         throw new Error("A different template-creation handoff is already queued for this repo.");
       }
+      // A deploy reset can preserve KV after consuming the alarm event but
+      // before either the catch path re-arms or the success path clears it.
+      // Confirm the wake-up itself, while preserving a scheduled outage retry.
+      await this.#ensureAlarm();
       return;
     }
 
     this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, handoff);
-    await this.ctx.storage.setAlarm(Date.now() + CREATION_HANDOFF_DELAY_MS);
+    await this.#ensureAlarm();
   }
 
   async alarm(): Promise<void> {
@@ -293,5 +297,10 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
       ],
       streamId,
     });
+  }
+
+  async #ensureAlarm(): Promise<void> {
+    if ((await this.ctx.storage.getAlarm()) !== null) return;
+    await this.ctx.storage.setAlarm(Date.now() + CREATION_HANDOFF_DELAY_MS);
   }
 }
