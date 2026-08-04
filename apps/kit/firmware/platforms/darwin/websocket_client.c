@@ -105,7 +105,8 @@ iterate_kit_posix_websocket_compute_accept(
 static bool parse_url(
     struct iterate_kit_posix_websocket_client *client,
     const char *url) {
-  static const char prefix[] = "wss://";
+  static const char secure_prefix[] = "wss://";
+  static const char plain_prefix[] = "ws://";
   const char *authority;
   const char *path;
   const char *host_end;
@@ -114,10 +115,15 @@ static bool parse_url(
   size_t path_length;
   char *port_end;
   unsigned long parsed_port;
-  if (strncmp(url, prefix, sizeof(prefix) - 1U) != 0) {
+  if (strncmp(url, secure_prefix, sizeof(secure_prefix) - 1U) == 0) {
+    client->secure = true;
+    authority = url + sizeof(secure_prefix) - 1U;
+  } else if (strncmp(url, plain_prefix, sizeof(plain_prefix) - 1U) == 0) {
+    client->secure = false;
+    authority = url + sizeof(plain_prefix) - 1U;
+  } else {
     return false;
   }
-  authority = url + sizeof(prefix) - 1U;
   path = strchr(authority, '/');
   host_end = path != NULL ? path : authority + strlen(authority);
   if (authority == host_end || memchr(authority, '@', (size_t)(host_end - authority)) != NULL ||
@@ -158,7 +164,7 @@ static bool parse_url(
   }
   memcpy(client->host, authority, host_length);
   client->host[host_length] = '\0';
-  client->port = 443U;
+  client->port = client->secure ? 443U : 80U;
   if (port_separator != NULL) {
     errno = 0;
     parsed_port = strtoul(port_separator + 1, &port_end, 10);
@@ -241,7 +247,9 @@ enum iterate_kit_status iterate_kit_posix_websocket_client_prepare(
   tls_options = (struct iterate_kit_posix_tls_stream_options){
     .host = client->host,
     .port = client->port,
+    .use_tls = client->secure,
     .DANGEROUS_disable_certificate_verification =
+        client->secure &&
         options->DANGEROUS_disable_certificate_verification,
   };
   status = iterate_kit_posix_tls_stream_prepare(
@@ -292,7 +300,8 @@ static bool build_request(
     return false;
   }
   key[24] = '\0';
-  request_size = client->port == 443U
+  request_size = ((client->secure && client->port == 443U) ||
+                  (!client->secure && client->port == 80U))
       ? snprintf(
             client->request,
             sizeof(client->request),

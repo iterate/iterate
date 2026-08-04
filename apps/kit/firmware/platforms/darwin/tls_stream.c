@@ -3,6 +3,7 @@
 #include <errno.h>
 #include <fcntl.h>
 #include <netdb.h>
+#include <poll.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/socket.h>
@@ -21,7 +22,7 @@
 static void remember_failure(
     struct iterate_kit_posix_tls_stream *stream) {
   stream->last_errno = errno != 0 ? errno : EIO;
-  stream->last_openssl_error = ERR_peek_last_error();
+  stream->last_openssl_error = stream->use_tls ? ERR_peek_last_error() : 0UL;
 }
 
 static bool resolve_endpoint(
@@ -41,22 +42,28 @@ static bool resolve_endpoint(
     stream->last_errno = result;
     return false;
   }
-  address = addresses;
-  while (address != NULL &&
-         address->ai_addrlen > sizeof(stream->address)) {
-    address = address->ai_next;
+  for (address = addresses; address != NULL; address = address->ai_next) {
+    struct iterate_kit_posix_tls_address *destination;
+    if (address->ai_addrlen > sizeof(destination->storage)) {
+      continue;
+    }
+    if (stream->address_count == ITERATE_KIT_POSIX_TLS_ADDRESS_CAPACITY) {
+      freeaddrinfo(addresses);
+      stream->last_errno = EAI_OVERFLOW;
+      return false;
+    }
+    destination = &stream->addresses[stream->address_count++];
+    memcpy(&destination->storage, address->ai_addr, address->ai_addrlen);
+    destination->length = address->ai_addrlen;
+    destination->family = address->ai_family;
+    destination->socktype = address->ai_socktype;
+    destination->protocol = address->ai_protocol;
   }
-  if (address == NULL) {
-    freeaddrinfo(addresses);
-    stream->last_errno = EAI_OVERFLOW;
+  freeaddrinfo(addresses);
+  if (stream->address_count == 0U) {
+    stream->last_errno = EAI_NONAME;
     return false;
   }
-  memcpy(&stream->address, address->ai_addr, address->ai_addrlen);
-  stream->address_length = address->ai_addrlen;
-  stream->address_family = address->ai_family;
-  stream->address_socktype = address->ai_socktype;
-  stream->address_protocol = address->ai_protocol;
-  freeaddrinfo(addresses);
   return true;
 }
 
@@ -76,6 +83,7 @@ void iterate_kit_posix_tls_stream_close(
   stream->tcp_connecting = false;
   stream->tls_handshaking = false;
   stream->ready = false;
+  stream->address_index = 0U;
 }
 
 void iterate_kit_posix_tls_stream_cleanup(
@@ -104,11 +112,17 @@ enum iterate_kit_status iterate_kit_posix_tls_stream_prepare(
   stream->descriptor = -1;
   memcpy(stream->host, options->host, host_length + 1U);
   stream->port = options->port;
+  stream->use_tls = options->use_tls;
   stream->dangerous_disable_certificate_verification =
       options->DANGEROUS_disable_certificate_verification;
   if (!resolve_endpoint(stream)) {
     memset(stream, 0, sizeof(*stream));
     return ITERATE_KIT_IO_ERROR;
+  }
+  if (!stream->use_tls) {
+    stream->dangerous_disable_certificate_verification = false;
+    stream->initialized = true;
+    return ITERATE_KIT_OK;
   }
   stream->context = SSL_CTX_new(TLS_client_method());
   if (stream->context == NULL ||
@@ -148,16 +162,34 @@ enum iterate_kit_status iterate_kit_posix_tls_stream_prepare(
 
 static enum iterate_kit_posix_tls_connect_result start_tcp(
     struct iterate_kit_posix_tls_stream *stream) {
+  const struct iterate_kit_posix_tls_address *address =
+      &stream->addresses[stream->address_index];
   int flags;
   int result;
   stream->descriptor = socket(
-      stream->address_family,
-      stream->address_socktype,
-      stream->address_protocol);
+      address->family,
+      address->socktype,
+      address->protocol);
   if (stream->descriptor < 0) {
     remember_failure(stream);
     return ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
   }
+#if defined(SO_NOSIGPIPE)
+  {
+    const int enabled = 1;
+    if (setsockopt(
+            stream->descriptor,
+            SOL_SOCKET,
+            SO_NOSIGPIPE,
+            &enabled,
+            sizeof(enabled)) != 0) {
+      remember_failure(stream);
+      (void)close(stream->descriptor);
+      stream->descriptor = -1;
+      return ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
+    }
+  }
+#endif
   flags = fcntl(stream->descriptor, F_GETFL, 0);
   if (flags < 0 ||
       fcntl(stream->descriptor, F_SETFL, flags | O_NONBLOCK) < 0) {
@@ -168,13 +200,16 @@ static enum iterate_kit_posix_tls_connect_result start_tcp(
   }
   result = connect(
       stream->descriptor,
-      (const struct sockaddr *)&stream->address,
-      stream->address_length);
+      (const struct sockaddr *)&address->storage,
+      address->length);
   if (result != 0 && errno != EINPROGRESS && errno != EWOULDBLOCK) {
     remember_failure(stream);
     (void)close(stream->descriptor);
     stream->descriptor = -1;
-    return ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
+    ++stream->address_index;
+    return stream->address_index < stream->address_count
+        ? ITERATE_KIT_POSIX_TLS_CONNECT_WOULD_BLOCK
+        : ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
   }
   stream->tcp_connecting = result != 0;
   return stream->tcp_connecting
@@ -184,8 +219,21 @@ static enum iterate_kit_posix_tls_connect_result start_tcp(
 
 static bool tcp_connected(
     struct iterate_kit_posix_tls_stream *stream) {
+  struct pollfd candidate = {
+    .fd = stream->descriptor,
+    .events = POLLOUT,
+  };
   int socket_error = 0;
   socklen_t length = sizeof(socket_error);
+  const int poll_result = poll(&candidate, 1U, 0);
+  if (poll_result == 0) {
+    errno = EINPROGRESS;
+    return false;
+  }
+  if (poll_result < 0 || (candidate.revents & POLLNVAL) != 0) {
+    remember_failure(stream);
+    return false;
+  }
   if (getsockopt(
           stream->descriptor,
           SOL_SOCKET,
@@ -198,6 +246,17 @@ static bool tcp_connected(
   }
   stream->tcp_connecting = false;
   return true;
+}
+
+static bool try_next_address(
+    struct iterate_kit_posix_tls_stream *stream) {
+  if (stream->descriptor >= 0) {
+    (void)close(stream->descriptor);
+    stream->descriptor = -1;
+  }
+  stream->tcp_connecting = false;
+  ++stream->address_index;
+  return stream->address_index < stream->address_count;
 }
 
 static bool begin_tls(
@@ -237,8 +296,15 @@ iterate_kit_posix_tls_stream_connect(
     if (errno == EINPROGRESS || errno == EALREADY) {
       return ITERATE_KIT_POSIX_TLS_CONNECT_WOULD_BLOCK;
     }
-    iterate_kit_posix_tls_stream_close(stream);
-    return ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
+    return try_next_address(stream)
+        ? ITERATE_KIT_POSIX_TLS_CONNECT_WOULD_BLOCK
+        : ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
+  }
+  if (!stream->use_tls) {
+    stream->last_errno = 0;
+    stream->last_openssl_error = 0UL;
+    stream->ready = true;
+    return ITERATE_KIT_POSIX_TLS_CONNECT_READY;
   }
   if (stream->ssl == NULL && !begin_tls(stream)) {
     iterate_kit_posix_tls_stream_close(stream);
@@ -254,6 +320,8 @@ iterate_kit_posix_tls_stream_connect(
       return ITERATE_KIT_POSIX_TLS_CONNECT_FAILED;
     }
     stream->tls_handshaking = false;
+    stream->last_errno = 0;
+    stream->last_openssl_error = 0UL;
     stream->ready = true;
     return ITERATE_KIT_POSIX_TLS_CONNECT_READY;
   }
@@ -280,6 +348,17 @@ static enum iterate_kit_posix_tls_io_result classify_io(
   return ITERATE_KIT_POSIX_TLS_IO_FAILED;
 }
 
+static enum iterate_kit_posix_tls_io_result classify_socket_io(
+    struct iterate_kit_posix_tls_stream *stream,
+    ssize_t result) {
+  if (result < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+    return ITERATE_KIT_POSIX_TLS_IO_WOULD_BLOCK;
+  }
+  remember_failure(stream);
+  stream->ready = false;
+  return ITERATE_KIT_POSIX_TLS_IO_FAILED;
+}
+
 enum iterate_kit_posix_tls_io_result iterate_kit_posix_tls_stream_read(
     struct iterate_kit_posix_tls_stream *stream,
     uint8_t *bytes,
@@ -292,6 +371,15 @@ enum iterate_kit_posix_tls_io_result iterate_kit_posix_tls_stream_read(
   if (stream == NULL || !stream->ready || bytes == NULL ||
       byte_capacity == 0U || bytes_read == NULL) {
     return ITERATE_KIT_POSIX_TLS_IO_FAILED;
+  }
+  if (!stream->use_tls) {
+    const ssize_t socket_result =
+        recv(stream->descriptor, bytes, byte_capacity, 0);
+    if (socket_result > 0) {
+      *bytes_read = (size_t)socket_result;
+      return ITERATE_KIT_POSIX_TLS_IO_PROGRESS;
+    }
+    return classify_socket_io(stream, socket_result);
   }
   ERR_clear_error();
   result = SSL_read_ex(stream->ssl, bytes, byte_capacity, bytes_read);
@@ -312,6 +400,15 @@ enum iterate_kit_posix_tls_io_result iterate_kit_posix_tls_stream_write(
   if (stream == NULL || !stream->ready || bytes == NULL ||
       byte_count == 0U || bytes_written == NULL) {
     return ITERATE_KIT_POSIX_TLS_IO_FAILED;
+  }
+  if (!stream->use_tls) {
+    const ssize_t socket_result =
+        send(stream->descriptor, bytes, byte_count, 0);
+    if (socket_result > 0) {
+      *bytes_written = (size_t)socket_result;
+      return ITERATE_KIT_POSIX_TLS_IO_PROGRESS;
+    }
+    return classify_socket_io(stream, socket_result);
   }
   ERR_clear_error();
   result = SSL_write_ex(stream->ssl, bytes, byte_count, bytes_written);

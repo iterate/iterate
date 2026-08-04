@@ -106,7 +106,14 @@ static void one_bad_turn_survives_into_the_summary(void)
   report.turns[17].failed = true;
   report.turns[17].frames_played = 0U;
 
-  const struct cli_report_summary summary = {1U, 2U, 3U, 0U, 13U, 12U};
+  const struct cli_report_summary summary = {
+    .session_restarts = 1U,
+    .transport_restarts = 2U,
+    .connection_recycles = 3U,
+    .back_office_sent = 13U,
+    .back_office_heard = 12U,
+    .deadline_cancelled_turns = 1U,
+  };
   const char *path = "/tmp/iterate-kit-cli-report-test.json";
   assert(cli_report_write(&report, &summary, path) == CLI_REPORT_OK);
 
@@ -117,6 +124,7 @@ static void one_bad_turn_survives_into_the_summary(void)
   body[length] = '\0';
   (void)fclose(file);
   assert(strstr(body, "\"failedTurns\":1") != NULL);
+  assert(strstr(body, "\"deadlineCancelledTurns\":1") != NULL);
   assert(strstr(body, "\"colleague\":") != NULL);
   assert(strstr(body, "\"colleagueQuestionsAsked\":13") != NULL);
   assert(strstr(body, "\"framesPlayed\":") != NULL);
@@ -132,7 +140,7 @@ static void an_awkward_utterance_name_is_escaped(void)
   cli_report_reset(&report);
   assert(cli_report_begin_turn(&report, "he said \"go\"\\now.wav", false, 0U) !=
          NULL);
-  const struct cli_report_summary summary = {0U, 0U, 0U, 0U, 0U, 0U};
+  const struct cli_report_summary summary = {0};
   const char *path = "/tmp/iterate-kit-cli-report-escape.json";
   assert(cli_report_write(&report, &summary, path) == CLI_REPORT_OK);
 
@@ -149,7 +157,7 @@ static void an_awkward_utterance_name_is_escaped(void)
 
 static void null_arguments_are_refused(void)
 {
-  const struct cli_report_summary summary = {0U, 0U, 0U, 0U, 0U, 0U};
+  const struct cli_report_summary summary = {0};
   assert(cli_report_write(NULL, &summary, "/tmp/x.json") == CLI_REPORT_ERR_ARG);
   assert(cli_report_write(&report, NULL, "/tmp/x.json") == CLI_REPORT_ERR_ARG);
   assert(cli_report_write(&report, &summary, NULL) == CLI_REPORT_ERR_ARG);

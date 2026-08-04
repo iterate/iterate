@@ -64,6 +64,7 @@ struct cli_conversation {
   uint32_t back_office_every;
   uint32_t back_office_sent;
   uint32_t back_office_heard;
+  uint32_t deadline_cancelled_turns;
   uint64_t finish_at_ms;
   uint64_t next_action_at_ms;
   struct cli_report report;

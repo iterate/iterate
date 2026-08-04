@@ -16,6 +16,7 @@ extern "C" {
 
 enum {
   ITERATE_KIT_POSIX_TLS_HOST_CAPACITY = 129,
+  ITERATE_KIT_POSIX_TLS_ADDRESS_CAPACITY = 8,
 };
 
 enum iterate_kit_posix_tls_connect_result {
@@ -33,6 +34,8 @@ enum iterate_kit_posix_tls_io_result {
 struct iterate_kit_posix_tls_stream_options {
   const char *host;
   uint16_t port;
+  /** Wraps the TCP connection in verified TLS when true. */
+  bool use_tls;
   /**
    * DANGEROUS: disables both CA and hostname verification for local-only
    * servers. Production callers must leave this false; the loud field name is
@@ -41,24 +44,33 @@ struct iterate_kit_posix_tls_stream_options {
   bool DANGEROUS_disable_certificate_verification;
 };
 
+struct iterate_kit_posix_tls_address {
+  struct sockaddr_storage storage;
+  socklen_t length;
+  int family;
+  int socktype;
+  int protocol;
+};
+
 /**
- * One-owner nonblocking TLS 1.2+ byte stream.
+ * One-owner nonblocking TCP byte stream with optional TLS 1.2+.
  *
  * OpenSSL owns opaque per-connection allocations, but this adapter owns no
  * growing application buffer or reconnect queue. connect(), read(), and
  * write() perform one bounded state transition and distinguish scheduler
  * deferral from loss. prepare() resolves the fixed endpoint once; connect()
- * therefore contains only explicitly poll-driven socket and TLS progress.
+ * therefore contains only explicitly poll-driven socket and optional TLS
+ * progress. Plain TCP exists solely to reach local ws:// development servers;
+ * deployed wss:// endpoints always select TLS in the WebSocket adapter.
  */
 struct iterate_kit_posix_tls_stream {
   char host[ITERATE_KIT_POSIX_TLS_HOST_CAPACITY];
   SSL_CTX *context;
   SSL *ssl;
-  struct sockaddr_storage address;
-  socklen_t address_length;
-  int address_family;
-  int address_socktype;
-  int address_protocol;
+  struct iterate_kit_posix_tls_address
+      addresses[ITERATE_KIT_POSIX_TLS_ADDRESS_CAPACITY];
+  size_t address_count;
+  size_t address_index;
   uint16_t port;
   int descriptor;
   int last_errno;
@@ -66,6 +78,7 @@ struct iterate_kit_posix_tls_stream {
   bool tcp_connecting;
   bool tls_handshaking;
   bool ready;
+  bool use_tls;
   bool dangerous_disable_certificate_verification;
   bool initialized;
 };

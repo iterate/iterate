@@ -63,7 +63,7 @@ static void cli_conversation_begin_report(
 
 /* Ends the complete unattended run at its configured deadline. */
 static void cli_conversation_finish_run(
-    struct cli_runtime *runtime, uint64_t now_ms);
+    struct cli_runtime *runtime);
 
 /* Counts failed turns for the human-readable shutdown summary. */
 static size_t cli_conversation_failure_count(
@@ -131,7 +131,7 @@ void cli_conversation_poll(struct cli_runtime *runtime, uint64_t now_ms)
   if (conversation->state == CLI_CONVERSATION_DISABLED ||
       conversation->state == CLI_CONVERSATION_FINISHED) return;
   if (now_ms >= conversation->finish_at_ms) {
-    cli_conversation_finish_run(runtime, now_ms);
+    cli_conversation_finish_run(runtime);
     return;
   }
   switch (conversation->state) {
@@ -202,6 +202,8 @@ enum cli_conversation_status cli_conversation_write_report(
     .calls_lost = runtime->calls_lost,
     .back_office_sent = runtime->conversation.back_office_sent,
     .back_office_heard = runtime->conversation.back_office_heard,
+    .deadline_cancelled_turns =
+        runtime->conversation.deadline_cancelled_turns,
   };
   const enum cli_report_status status = cli_report_write(
       &runtime->conversation.report, &summary, runtime->options.report_json);
@@ -210,10 +212,12 @@ enum cli_conversation_status cli_conversation_write_report(
   (void)fprintf(
       stderr,
       "conversation summary: turns=%zu failures=%zu sessions=%u transports=%u "
-      "recycles=%u callsLost=%u colleague=%u/%u report=%s playback=%s\n",
+      "recycles=%u callsLost=%u cancelled=%u colleague=%u/%u "
+      "report=%s playback=%s\n",
       runtime->conversation.report.count, failures, runtime->session_restarts,
       runtime->transport_restarts, runtime->downlink_recycles,
-      runtime->calls_lost, runtime->conversation.back_office_heard,
+      runtime->calls_lost, runtime->conversation.deadline_cancelled_turns,
+      runtime->conversation.back_office_heard,
       runtime->conversation.back_office_sent, runtime->options.report_json,
       runtime->options.speaker_wav);
   return CLI_CONVERSATION_OK;
@@ -367,13 +371,26 @@ static void cli_conversation_begin_report(
 }
 
 static void cli_conversation_finish_run(
-    struct cli_runtime *runtime, uint64_t now_ms)
+    struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
   runtime->wants_talk = false;
   runtime->wants_call = false;
   if (runtime->conversation.current_turn != NULL) {
-    cli_conversation_finish_turn(runtime, now_ms);
+    /*
+     * The operator's wall-clock bound cancels work; it does not prove the
+     * provider failed. Keep the cancellation visible without contaminating
+     * completed-turn distributions or the failure counter. The current turn
+     * is necessarily the most recently appended report row.
+     */
+    assert(runtime->conversation.report.count > 0U);
+    assert(runtime->conversation.current_turn ==
+           &runtime->conversation.report.turns[
+               runtime->conversation.report.count - 1U]);
+    --runtime->conversation.report.count;
+    runtime->conversation.current_turn = NULL;
+    ++runtime->conversation.deadline_cancelled_turns;
+    cli_runtime_log("info", "turn cancelled: configured run deadline");
   }
   runtime->conversation.state = CLI_CONVERSATION_FINISHED;
   runtime->stop_requested = true;

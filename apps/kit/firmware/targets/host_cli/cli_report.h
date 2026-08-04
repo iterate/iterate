@@ -80,6 +80,8 @@ struct cli_report_summary {
   uint32_t calls_lost;
   uint32_t back_office_sent;
   uint32_t back_office_heard;
+  /** In-progress turns intentionally stopped by the configured run deadline. */
+  uint32_t deadline_cancelled_turns;
 };
 
 /** Every turn of one run, bounded, with an honest count of what did not fit. */

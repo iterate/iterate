@@ -200,7 +200,7 @@ export async function talk(options: TalkOptions = {}) {
     );
   }
 
-  const binary = buildIfAbsent(kitDir);
+  const binary = buildHostCli(kitDir);
   const stamp = new Date().toISOString().replace(/\D/g, "").slice(8, 14);
   const playback = `/tmp/iterate-talk-${stamp}-speaker.wav`;
   const micRecord = `/tmp/iterate-talk-${stamp}-mic.wav`;
@@ -397,15 +397,14 @@ function driverArgs(options: TalkOptions, minutes: number): string[] {
   return args;
 }
 
-/** Build the host CLI on first use. A stale build is the caller's to clear. */
-function buildIfAbsent(kitDir: string): string {
+/** Incrementally build the host CLI from the current source tree. */
+function buildHostCli(kitDir: string): string {
   const firmware = path.join(kitDir, "firmware");
-  const build = path.join(firmware, "build-host");
+  const build = path.join(firmware, ".build", "voicelab");
   const binary = path.join(build, "iterate-kit-cli");
-  if (fs.existsSync(binary)) return binary;
 
   console.log(`building ${binary}…`);
-  runInherited("cmake", ["-S", firmware, "-B", build]);
+  runInherited("cmake", ["-S", firmware, "-B", build, "-DCMAKE_BUILD_TYPE=Debug"]);
   runInherited("cmake", ["--build", build, "--target", "iterate-kit-cli", "-j8"]);
   return binary;
 }

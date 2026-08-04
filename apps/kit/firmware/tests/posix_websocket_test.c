@@ -6,6 +6,9 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 
 struct raw_reader {
   const uint8_t *wire;
@@ -149,8 +152,113 @@ static void handshake_accept_key_matches_rfc_vector(void) {
   assert(strcmp(accept, "s3pPLMBiTxaQ9kYGzzhZRbK+xOo=") == 0);
 }
 
+static void websocket_url_selects_plain_or_secure_transport(void) {
+  uint8_t receive_storage[64];
+  uint8_t transmit_storage[64];
+  struct iterate_kit_posix_websocket_client client;
+  struct iterate_kit_posix_websocket_client_options options = {
+    .url = "ws://localhost:8080/api/itx",
+    .receive_storage = receive_storage,
+    .receive_storage_capacity = sizeof(receive_storage),
+    .transmit_storage = transmit_storage,
+    .transmit_storage_capacity = sizeof(transmit_storage),
+  };
+  assert(iterate_kit_posix_websocket_client_prepare(
+             &client, &options) == ITERATE_KIT_OK);
+  assert(!client.secure);
+  assert(!client.stream.use_tls);
+  assert(client.port == 8080U);
+  assert(strcmp(client.host, "localhost") == 0);
+  assert(strcmp(client.path, "/api/itx") == 0);
+  iterate_kit_posix_websocket_client_cleanup(&client);
+
+  /* URL selection does not need an external DNS dependency. */
+  options.url = "wss://127.0.0.1/socket";
+  assert(iterate_kit_posix_websocket_client_prepare(
+             &client, &options) == ITERATE_KIT_OK);
+  assert(client.secure);
+  assert(client.stream.use_tls);
+  assert(client.port == 443U);
+  iterate_kit_posix_websocket_client_cleanup(&client);
+
+  options.url = "http://localhost/api/itx";
+  assert(iterate_kit_posix_websocket_client_prepare(
+             &client, &options) == ITERATE_KIT_INVALID_ARGUMENT);
+}
+
+static void plain_stream_transfers_bytes_over_loopback(void) {
+  static const uint8_t request[] = "ping";
+  static const uint8_t response[] = "pong";
+  struct sockaddr_in address;
+  socklen_t address_length = sizeof(address);
+  struct iterate_kit_posix_tls_stream stream;
+  struct iterate_kit_posix_tls_stream_options options = {
+    /* macOS resolves ::1 first; the listener is deliberately IPv4-only. */
+    .host = "localhost",
+    .use_tls = false,
+  };
+  uint8_t bytes[sizeof(response)];
+  size_t byte_count = 0U;
+  int listener = socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
+  int peer;
+  unsigned int poll_count;
+  assert(listener >= 0);
+  memset(&address, 0, sizeof(address));
+  address.sin_family = AF_INET;
+  address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+  address.sin_port = 0;
+  assert(bind(
+             listener,
+             (const struct sockaddr *)&address,
+             sizeof(address)) == 0);
+  assert(getsockname(
+             listener,
+             (struct sockaddr *)&address,
+             &address_length) == 0);
+  assert(listen(listener, 1) == 0);
+  options.port = ntohs(address.sin_port);
+  assert(iterate_kit_posix_tls_stream_prepare(
+             &stream, &options) == ITERATE_KIT_OK);
+  for (poll_count = 0U; poll_count < 1000U; ++poll_count) {
+    const enum iterate_kit_posix_tls_connect_result result =
+        iterate_kit_posix_tls_stream_connect(&stream);
+    if (result == ITERATE_KIT_POSIX_TLS_CONNECT_READY) {
+      break;
+    }
+    assert(result == ITERATE_KIT_POSIX_TLS_CONNECT_WOULD_BLOCK);
+  }
+  assert(stream.ready);
+  peer = accept(listener, NULL, NULL);
+  assert(peer >= 0);
+  assert(iterate_kit_posix_tls_stream_write(
+             &stream,
+             request,
+             sizeof(request),
+             &byte_count) == ITERATE_KIT_POSIX_TLS_IO_PROGRESS);
+  assert(byte_count == sizeof(request));
+  assert(read(peer, bytes, sizeof(request)) == (ssize_t)sizeof(request));
+  assert(memcmp(bytes, request, sizeof(request)) == 0);
+  assert(write(peer, response, sizeof(response)) == (ssize_t)sizeof(response));
+  for (poll_count = 0U; poll_count < 1000U; ++poll_count) {
+    const enum iterate_kit_posix_tls_io_result result =
+        iterate_kit_posix_tls_stream_read(
+            &stream, bytes, sizeof(bytes), &byte_count);
+    if (result == ITERATE_KIT_POSIX_TLS_IO_PROGRESS) {
+      break;
+    }
+    assert(result == ITERATE_KIT_POSIX_TLS_IO_WOULD_BLOCK);
+  }
+  assert(byte_count == sizeof(response));
+  assert(memcmp(bytes, response, sizeof(response)) == 0);
+  iterate_kit_posix_tls_stream_cleanup(&stream);
+  assert(close(peer) == 0);
+  assert(close(listener) == 0);
+}
+
 int main(void) {
   handshake_accept_key_matches_rfc_vector();
+  websocket_url_selects_plain_or_secure_transport();
+  plain_stream_transfers_bytes_over_loopback();
   would_block_read_loop_retains_frame_boundary();
   short_write_resumes_one_outbox_slot();
   return 0;

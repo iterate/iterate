@@ -57,12 +57,13 @@ struct iterate_kit_posix_websocket_client_options {
 };
 
 /**
- * Poll-driven RFC 6455 client over one POSIX TLS stream.
+ * Poll-driven RFC 6455 client over one POSIX TCP or TLS stream.
  *
  * HTTP upgrade, frame parsing, masked transmission, and control obligations
  * all use fixed caller-visible storage. The portable websocket_rx/tx modules
- * remain the policy owners; this adapter supplies only TLS bytes and the
- * bounded HTTP/wire decoding that ESP-IDF otherwise supplies internally.
+ * remain the policy owners; this adapter supplies only transport bytes and
+ * the bounded HTTP/wire decoding that ESP-IDF otherwise supplies internally.
+ * ws:// is accepted for local development; wss:// selects verified TLS.
  */
 struct iterate_kit_posix_websocket_client {
   struct iterate_kit_posix_websocket_client_options options;
@@ -83,6 +84,7 @@ struct iterate_kit_posix_websocket_client {
   bool request_built;
   bool upgraded;
   bool peer_close_pending;
+  bool secure;
   bool initialized;
 };
 
