@@ -47,6 +47,37 @@ Store releases use the `production` profile, store distribution signing, and a
 separate EAS Submit/App Store Connect step; a successful development build is
 not silently treated as a releasable binary.
 
+## Dev ↔ preview: two builds, one phone
+
+Both builds share the bundle ID, so installing one replaces the other —
+deliberate: the keychain survives, sign-in persists, and switching is just
+opening the other build's EAS install page and tapping Install. Bookmark both
+install pages ([EAS builds list](https://expo.dev/accounts/mishanustom/projects/iterate/builds)).
+
+- **Dev**: the development client + `pnpm --dir apps/mobile start`. Metro
+  hot-reload; JS comes from your laptop.
+- **Preview**: standalone, JS bundled in, laptop off. It tracks main by
+  itself: every merge, CI publishes the JS bundle to the EAS Update `preview`
+  channel (`.depot/workflows/mobile-eas-update.yml` →
+  `scripts/ci/publish-mobile-update.ts`) and the installed app pulls it on
+  next launch. The drawer's **Build info** screen shows what's running
+  (branch, commit, who built it, update channel/time) and has a
+  check-for-update-now button.
+
+The runtime version uses the fingerprint policy: a merge that changes native
+code (new native module, Expo upgrade) produces updates old binaries ignore.
+CI notices there's no preview build for the new fingerprint and triggers one
+automatically — install that from its EAS page once, then OTA resumes. The
+same merges are the ones that need a manual dev-client rebuild
+(`build:development:ios`), as above.
+
+`eas update` publishes stamp `src/build-info.json` via
+`scripts/write-build-info.mjs` (EAS native builds run it through the
+`eas-build-pre-install` hook). The checked-in file is an all-empty
+placeholder — don't commit a stamped one. Manual publish, e.g. to push a
+branch's JS to your installed preview app without waiting for a merge:
+`pnpm --dir apps/mobile update:preview`.
+
 ## Run and test it in a browser
 
 Expo Web renders the same Expo Router screens through React Native Web, so UI
