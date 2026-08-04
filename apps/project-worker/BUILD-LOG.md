@@ -2,7 +2,8 @@
 
 Chronological log of every increment: what was built, how it was proven, the platform facts learned, and the
 commit. Design ref: `apps/os/docs/simplification/wayfinder/innermost-core/target-core.md`. Deploy target: the
-POC account, `project-worker.iterate.workers.dev` (solo mode, no control plane).
+POC account: `project-worker.iterate.workers.dev` (the inner core) + `iterate-control-plane.iterate.workers.dev`
+(the shell, from increment 11).
 
 Convention: each increment ends at a **working gate** — typecheck green + proven on the deployment + committed.
 
@@ -184,5 +185,6 @@ parent-path-then-shell fallback), **execution** (`load` a confined agent bound t
 **path-addressed contexts** (faux-URL names; deep paths inherit from their parent path), and **wake-on-call**
 (1000 devices provide capabilities via hibernatable wake sockets without pinning the DO), and the CONTROL-PLANE JOIN (a real second worker as the shell; platform secrets substituted at the outer shell). Proven on `project-worker.iterate.workers.dev` + `iterate-control-plane.iterate.workers.dev`.
 
-**Next:** the control-plane join (a real second worker as the shell, replacing DummyControlPlane → the
-self-host / hosted topologies); optional: billing-analytics verification of hibernation at scale.
+**Next (candidates):** cross-script DO sharing so the control plane names/writes project streams (D27); the
+global/`__null__` outer-scope context on the control plane; extracting the core into `packages/itx` (D26) so
+the control plane runs the same core; billing-analytics verification of hibernation at 1000-scale.
