@@ -1,11 +1,11 @@
 ---
-status: in-progress
+status: done
 size: medium
 ---
 
 # Smarter truncation for oversized script results
 
-**Status summary:** implemented; unit tests green (typecheck/lint/knip/format clean). Remaining: CI + review. Followup task filed for typed `Results<...>` handles.
+**Status summary:** implemented; unit tests green (typecheck/lint/knip/format clean). CI green on PR #2400. Followup task filed for typed `Results<...>` handles.
 
 When an agent script returns a big result, `renderScriptSettlement` slices the pretty-printed JSON at `scriptResultHistoryLimit` (30k chars) — bisecting JSON mid-key and showing only the start of the payload (often one giant array's first entries). The model learns nothing about overall shape; in [this chat](https://os.iterate.com/projects/misha/agents/streams/agents/mobile/2026-08-03t16-27-32-701z) the agent had to guess a prior result's structure and got it wrong.
 
