@@ -41,7 +41,7 @@ export default function PreviewChannelScreen() {
         <Row label="Target" value={channel} />
         <Row
           label="Running"
-          value={`${buildInfo.branch || "?"} @ ${buildInfo.commit.slice(0, 9) || "?"}`}
+          value={`${buildInfo.branch || "?"} @ ${buildInfo.commit.slice(0, 7) || "?"}`}
         />
       </View>
       {!Updates.isEnabled ? (

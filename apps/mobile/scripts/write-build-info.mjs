@@ -25,6 +25,8 @@ const git = (args) => {
 const env = process.env;
 const info = {
   commit: env.EAS_BUILD_GIT_COMMIT_HASH || git("rev-parse HEAD"),
+  // No EAS env var carries the message, so EAS's .git-less archive stamps "".
+  message: git("log -1 --format=%s").slice(0, 200),
   // GITHUB_HEAD_REF is the PR head branch (pull_request runs); GITHUB_REF_NAME
   // is "<n>/merge" there, so it only wins on push runs where it's the real branch.
   branch: env.GITHUB_HEAD_REF || env.GITHUB_REF_NAME || git("rev-parse --abbrev-ref HEAD"),

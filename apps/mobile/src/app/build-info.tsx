@@ -8,7 +8,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { buildInfo } from "../lib/build-info.ts";
@@ -16,6 +16,7 @@ import { getPreviewChannelOverride, switchChannelAndReload } from "../lib/previe
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function BuildInfoScreen() {
+  const router = useRouter();
   const installedAt = useQuery({
     queryKey: ["app-install-time"],
     // Unavailable on web; the row shows "—" there.
@@ -58,7 +59,8 @@ export default function BuildInfoScreen() {
       <Stack.Screen options={{ title: "Build info" }} />
       <Section title="Bundle">
         <Row label="Branch" value={buildInfo.branch} />
-        <Row label="Commit" value={buildInfo.commit.slice(0, 12)} />
+        <Row label="Commit" value={buildInfo.commit.slice(0, 7)} />
+        <Row label="Message" value={buildInfo.message} />
         <Row
           label="Built by"
           value={buildInfo.builtBy && `${buildInfo.builtBy}@${buildInfo.machine}`}
@@ -112,6 +114,17 @@ export default function BuildInfoScreen() {
       )}
       {check.data ? <Text style={styles.note}>{check.data}</Text> : null}
       {check.error ? <Text style={styles.errorNote}>{String(check.error)}</Text> : null}
+      {!router.canGoBack() ? (
+        // Deep-link flows (preview-channel switch) replace into this screen
+        // with no back stack, so the header has no back button.
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.replace("/")}
+          style={styles.linkButton}
+        >
+          <Text style={styles.linkLabel}>Go home</Text>
+        </Pressable>
+      ) : null}
     </ScrollView>
   );
 }
@@ -184,6 +197,8 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.6 },
   buttonLabel: { color: colors.text, fontSize: 16, fontWeight: "600" },
+  linkButton: { alignItems: "center", paddingVertical: 8 },
+  linkLabel: { color: colors.textMuted, fontSize: 14 },
   note: { color: colors.textMuted, fontSize: 13, textAlign: "center" },
   errorNote: { color: colors.danger, fontSize: 13, textAlign: "center" },
 });
