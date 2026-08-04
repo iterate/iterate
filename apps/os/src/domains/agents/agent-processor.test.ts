@@ -1272,9 +1272,69 @@ describe("AgentProcessor script execution", () => {
       'JSON.parse(await itx.workspace.readFile("/workspaces/agents/main/script-results/',
     );
     expect(rendered!.payload.content).toContain(
-      `showing the first 100 of ${spilled.length.toLocaleString("en-US")} chars`,
+      `Your script returned ${spilled.length.toLocaleString("en-US")} chars of JSON — too big to show in full.`,
     );
+    // The inferred type block tells the model the shape it cannot see.
+    expect(rendered!.payload.content).toContain("Inferred type:");
+    expect(rendered!.payload.content).toContain("type Result = {");
+    expect(rendered!.payload.content).toContain("items: string");
+    expect(rendered!.payload.content).toContain("const data: Result = JSON.parse(");
     expect(rendered!.payload.content).not.toContain("x".repeat(200)); // preview stays bounded
+  });
+
+  it("an oversized structured result renders an inferred type and an array-eliding preview", async () => {
+    const written: { path: string; content: string }[] = [];
+    const h = makeAgentHarness(undefined, {
+      writeWorkspaceFile: async (input) => {
+        written.push(input);
+        return { absolutePath: `/workspaces/agents/main/${input.path}` };
+      },
+    });
+    await h.play(
+      [
+        "append",
+        ...NEW_AGENT_EVENTS,
+        {
+          type: "events.iterate.com/agent/configured",
+          payload: { config: { scriptResultHistoryLimit: 5_000 } },
+        },
+        userMessage("fetch the rows"),
+      ],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("```ts\nasync (itx) => itx.rows()\n```"),
+    );
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
+
+    const result = {
+      rows: Array.from({ length: 400 }, (_, index) => ({
+        id: index,
+        status: index % 2 === 0 ? "open" : "closed",
+        note: `note ${index}`,
+      })),
+    };
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: { executionId, settlement: { status: "succeeded", result } },
+      },
+    ]);
+
+    const rendered = h
+      .state()
+      .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
+    const content = rendered!.payload.content;
+    // Type: element shapes merged across all 400 rows, cardinality annotated.
+    expect(content).toContain('status: "open" | "closed"');
+    expect(content).toContain("/* 400 items */");
+    // Preview: a few rows plus a marker, NOT 5_000 chars of leading rows.
+    expect(content).toContain('"id": 0');
+    expect(content).not.toContain('"id": 10');
+    expect(content).toMatch(/\[truncated 397 items; from \d+ JSON bytes\]/);
+    // History stays lean: the whole rendered item is far below the old
+    // slice-to-historyLimit behavior's floor.
+    expect(content.length).toBeLessThan(5_000);
   });
 
   it("a markdown fence inside a string literal does not truncate script extraction", async () => {

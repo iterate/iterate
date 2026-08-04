@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { truncateJsonToBytes } from "./truncate-json.ts";
+import { previewJson, truncateJsonToBytes } from "./truncate-json.ts";
 
 const jsonBytes = (value: unknown) => new TextEncoder().encode(JSON.stringify(value)).byteLength;
 
@@ -149,5 +149,92 @@ describe("truncateJsonToBytes", () => {
     expect(compacted.field_0).toBe(0);
     expect(compacted.field_999).toBeUndefined();
     expect(compacted.$iterate_truncated).toMatch(/properties/);
+  });
+});
+
+describe("previewJson", () => {
+  it("elides long arrays everywhere, not just the largest child", () => {
+    const value = {
+      users: Array.from({ length: 500 }, (_, index) => ({ id: index, name: `user-${index}` })),
+      events: Array.from({ length: 200 }, (_, index) => ({ at: index })),
+    };
+
+    const result = previewJson(value, {
+      maxArrayItems: 3,
+      maxStringChars: 500,
+      maxDepth: 5,
+      maxBytes: 8_000,
+    });
+    const preview = result.value as any;
+
+    expect(result.truncated).toBe(true);
+    expect(preview.users).toHaveLength(4); // 3 items + marker
+    expect(preview.users[3]).toMatch(/^\[truncated 497 items; from \d+ JSON bytes\]$/);
+    expect(preview.events).toHaveLength(4);
+    expect(preview.events[0]).toMatchObject({ at: 0 });
+  });
+
+  it("caps long strings with a marker", () => {
+    const result = previewJson(
+      { body: "x".repeat(50_000) },
+      {
+        maxArrayItems: 3,
+        maxStringChars: 100,
+        maxDepth: 5,
+        maxBytes: 8_000,
+      },
+    );
+    expect((result.value as any).body).toMatch(/^x{100}… \[truncated from \d+ JSON bytes\]$/);
+  });
+
+  it("collapses containers past maxDepth to summaries, keeping tiny leaves intact", () => {
+    const wide = {
+      deep: { deeper: { wide: Array.from({ length: 100 }, (_, index) => ({ index })) } },
+    };
+    const result = previewJson(wide, {
+      maxArrayItems: 3,
+      maxStringChars: 500,
+      maxDepth: 2,
+      maxBytes: 8_000,
+    });
+    expect((result.value as any).deep.deeper).toMatch(
+      /^\[object with 1 properties; \d+ JSON bytes\]$/,
+    );
+
+    const tiny = { deep: { deeper: { evenDeeper: { ok: true } } } };
+    const untouched = previewJson(tiny, {
+      maxArrayItems: 3,
+      maxStringChars: 500,
+      maxDepth: 2,
+      maxBytes: 8_000,
+    });
+    expect(untouched.truncated).toBe(false);
+    expect(untouched.value).toEqual(tiny);
+  });
+
+  it("still guarantees the byte ceiling after the policy pass", () => {
+    // Wide object of medium strings: policy alone leaves it over budget.
+    const value = Object.fromEntries(
+      Array.from({ length: 200 }, (_, index) => [`key_${index}`, "v".repeat(200)]),
+    );
+    const result = previewJson(value, {
+      maxArrayItems: 3,
+      maxStringChars: 500,
+      maxDepth: 5,
+      maxBytes: 2_000,
+    });
+    expect(result.truncated).toBe(true);
+    expect(jsonBytes(result.value)).toBeLessThanOrEqual(2_000);
+  });
+
+  it("returns small values unchanged", () => {
+    const value = { ok: true, items: [1, 2, 3] };
+    const result = previewJson(value, {
+      maxArrayItems: 3,
+      maxStringChars: 500,
+      maxDepth: 5,
+      maxBytes: 8_000,
+    });
+    expect(result).toMatchObject({ truncated: false, value });
   });
 });

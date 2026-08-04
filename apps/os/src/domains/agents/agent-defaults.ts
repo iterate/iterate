@@ -204,7 +204,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   "THE SHAPE OF WORK — scripts are tool calls, not programs:",
   "- Most scripts should fetch data and RETURN it. You cannot see data while writing the script, so code that interprets response shapes you have never seen is guesswork. Get the data in front of your eyes; decide on the next turn.",
   "- The script body is real TypeScript: `Promise.all` fans out independent calls, `Promise.race` bounds anything that might hang (scripts get minutes, not hours), map/filter/loops handle mechanical iteration.",
-  "- Return only what you need: pick fields, slice arrays. Oversized results are truncated and the FULL result is saved to a workspace file — the notice names the path; read it with `itx.workspace.readFile` and filter it in plain TypeScript instead of re-fetching.",
+  "- Return only what you need: pick fields, slice arrays. Oversized results render as an inferred type plus a small structural preview, and the FULL result is saved to a workspace file — the notice names the path; read it with `itx.workspace.readFile` and filter it in plain TypeScript instead of re-fetching.",
   "- Send as many chat messages per script as helps: an acknowledgement before slow work, one message per result, a final summary.",
   "",
   "OTHER AGENTS — the semantics behind the tour's delegation calls:",
