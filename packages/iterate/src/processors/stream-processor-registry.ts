@@ -349,6 +349,17 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
      * redacted view or fold in extras (e.g. a streams index).
      */
     getLiveState?: () => Live;
+    /**
+     * Fires after every `assembleLive` pass — with `skippedUnloadedRunners:
+     * false` when the live state was actually reassembled, `true` when the
+     * pass no-oped on the unloaded-runner wall (a fresh incarnation woken by
+     * one runner's delivery while other runners are still cold). A host that
+     * pushes live state to external watchers (the liveState socket lane)
+     * needs the skipped signal: without it, a change committed behind the
+     * wall would never reach them. A dumb callback — policy lives with the
+     * caller.
+     */
+    onLiveAssembled?: (assembly: { skippedUnloadedRunners: boolean }) => void;
   },
 ): StreamProcessorRegistry<Live> {
   const entries = new Map<string, RegistryEntry>();
@@ -448,10 +459,12 @@ export function createStreamProcessorRegistry<Live extends object = Record<strin
     // Only loadAndRefreshLive may cross storage; once it completes this
     // reassembly runs with every real fold.
     if ([...entries.values()].some((entry) => !entry.runner.isLoaded)) {
+      options.onLiveAssembled?.({ skippedUnloadedRunners: true });
       return;
     }
     const primary = [...entries.values()][0]?.runner.currentState as Live | undefined;
     live.setState(options.getLiveState?.() ?? primary ?? ({} as Live));
+    options.onLiveAssembled?.({ skippedUnloadedRunners: false });
   }
   async function loadThenAssemble(): Promise<void> {
     // Loading is all-or-nothing: publishing a projection assembled from only

@@ -25,7 +25,9 @@ const git = (args) => {
 const env = process.env;
 const info = {
   commit: env.EAS_BUILD_GIT_COMMIT_HASH || git("rev-parse HEAD"),
-  branch: env.GITHUB_REF_NAME || git("rev-parse --abbrev-ref HEAD"),
+  // GITHUB_HEAD_REF is the PR head branch (pull_request runs); GITHUB_REF_NAME
+  // is "<n>/merge" there, so it only wins on push runs where it's the real branch.
+  branch: env.GITHUB_HEAD_REF || env.GITHUB_REF_NAME || git("rev-parse --abbrev-ref HEAD"),
   builtBy: env.EAS_BUILD_USERNAME || env.GITHUB_ACTOR || userInfo().username,
   machine: env.EAS_BUILD ? "eas-build" : env.CI ? "ci" : hostname(),
   builtAt: new Date().toISOString(),
