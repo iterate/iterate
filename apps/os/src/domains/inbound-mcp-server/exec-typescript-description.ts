@@ -42,7 +42,7 @@ export const EXEC_TYPESCRIPT_DESCRIPTION = [
   "",
   "RESEARCH BEFORE GUESSING",
   '1. Search: `await itx.docs.search({ q: "many related words and synonyms" })`. It searches proven example scripts, TypeScript declarations, and this project\'s mounted capabilities — matching is simple word overlap, so `"repo file edit commit write change"` beats `"repo"`.',
-  "2. Fetch: every search hit has `{ kind, name, summary, fetchCall }`. Run its exact fetchCall next. `itx.docs.get({ name })` returns paste-ready example code, a type declaration with referenced types, or mounted-capability instructions and types. Prefer a proven example over an invented call.",
+  "2. Fetch: every search hit has `{ kind, name, summary, fetchCall, result? }`. The TOP hit arrives with its full doc already inlined in `result` — when it's the right one, skip the fetch. For the rest, run the exact fetchCall: `itx.docs.get({ name })` returns paste-ready example code, a type declaration with referenced types, or mounted-capability instructions and types. Prefer a proven example over an invented call.",
   "3. Inspect: `await itx.__describe()` returns project identity, built-in children, and mounted capabilities. Every child handle also has `__describe()` with instructions, types, and its member map.",
   "4. Check: `await itx.docs.typecheck({ code })` checks an entire `async (itx) => { ... }` script against this scope without running it. It is advisory, but catches misspelled methods and wrong argument shapes before a consequential call.",
   "",

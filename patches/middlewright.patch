@@ -1,8 +1,26 @@
 diff --git a/dist/plugins/spinner-waiter.js b/dist/plugins/spinner-waiter.js
-index f06b9e6..b3eea59 100644
+index f1c5ef8d656873b35c9c797dc4bc3263ab5cbdf6..6684dcc5fa229996cc99a7602a9c1ae4a630c8fa 100644
 --- a/dist/plugins/spinner-waiter.js
 +++ b/dist/plugins/spinner-waiter.js
-@@ -76,6 +76,14 @@ export const spinnerWaiter = Object.assign((options = {}) => {
+@@ -66,8 +66,16 @@ export const spinnerWaiter = Object.assign((options = {}) => {
+                 return next();
+             const start = Date.now();
+             settings.log(`${locator}.${method}(...) starting`);
++            // waitFor({ state: "detached" | "hidden" }) drives toward the target
++            // LEAVING the page — readiness is inverted for those: a no-longer-
++            // visible target is the success-adjacent state, not a missing one.
++            // Without this, a satisfied disappearance wait takes the 1ms
++            // fast-fail path (timeout: 1 aborts before the first evaluation can
++            // even report "already detached") and a passing wait becomes a hard
++            // fail.
++            const goal = readinessGoal(method, args);
+             // Quick check if element is already ready for the attempted action.
+-            const elementReady = await waitForReady(locator, method, { timeout: 1000 });
++            const elementReady = await waitForReady(locator, method, goal, { timeout: 1000 });
+             if (elementReady) {
+                 settings.log(`${locator} already ready, proceeding`);
+                 return next();
+@@ -77,6 +85,14 @@ export const spinnerWaiter = Object.assign((options = {}) => {
              const spinnerLocator = page.locator(spinnerSelector);
              const spinnerVisible = await anySpinnerVisible(spinnerLocator);
              if (!spinnerVisible) {
@@ -10,24 +28,113 @@ index f06b9e6..b3eea59 100644
 +                // reads. The UI can atomically replace the spinner with the target
 +                // between them, so bridge that handoff with one polling interval
 +                // before taking the intentional 1ms fast-fail path.
-+                if (await waitForReady(locator, method, { timeout: 100 })) {
++                if (await waitForReady(locator, method, goal, { timeout: 100 })) {
 +                    settings.log(`${locator} became ready during spinner handoff, proceeding`);
 +                    return next();
 +                }
                  // No spinner - call action, suggest adding one if it fails
                  settings.log(`${locator} not ready, no spinner, failing fast`);
                  try {
+@@ -90,7 +106,7 @@ export const spinnerWaiter = Object.assign((options = {}) => {
+             settings.log(`Spinner visible, waiting up to ${settings.spinnerTimeout - 2000}ms for ${locator}`);
+             // Spinner is visible — wait for the element, but bail early if the spinner
+             // disappears (the loading operation finished without producing the expected element).
+-            const waitResult = await waitForReadyWhileSpinning(locator, method, spinnerLocator, {
++            const waitResult = await waitForReadyWhileSpinning(locator, method, goal, spinnerLocator, {
+                 timeout: settings.spinnerTimeout - 2000,
+             });
+             if (waitResult === "appeared") {
+@@ -122,21 +138,38 @@ export const spinnerWaiter = Object.assign((options = {}) => {
+     /** Default settings values */
+     defaults,
+ });
+-async function locatorIsReady(locator, method) {
+-    if (!(await locator.isVisible()))
++/** Which terminal state the action drives the target toward. Everything
++ * wants the target present and interactable, except disappearance waits —
++ * waitFor({ state: "detached" | "hidden" }) — which want it GONE. */
++function readinessGoal(method, args) {
++    const options = args[0];
++    return method === "waitFor" &&
++        isOptionsObject(options) &&
++        (options.state === "detached" || options.state === "hidden")
++        ? "disappear"
++        : "appear";
++}
++async function locatorIsReady(locator, method, goal) {
++    const visible = await locator.isVisible();
++    // A no-longer-visible target satisfies a disappearance wait's heuristic
++    // (the action itself still runs with its original timeout and makes the
++    // precise detached-vs-hidden call).
++    if (goal === "disappear")
++        return !visible;
++    if (!visible)
+         return false;
+     if (!enabledActionMethods.has(method))
+         return true;
+     return await locator.isEnabled();
+ }
+-async function waitForReady(locator, method, { timeout = 1000 } = {}) {
++async function waitForReady(locator, method, goal, { timeout = 1000 } = {}) {
+     const start = Date.now();
+     while (Date.now() - start < timeout) {
+-        if (await locatorIsReady(locator, method))
++        if (await locatorIsReady(locator, method, goal))
+             return true;
+         await new Promise((resolve) => setTimeout(resolve, 100));
+     }
+-    return await locatorIsReady(locator, method);
++    return await locatorIsReady(locator, method, goal);
+ }
+ function withTimeoutOption(method, args, timeout) {
+     const optionsIndex = oneArgMethodNames.has(method) ? 1 : 0;
+@@ -158,12 +191,12 @@ function isOptionsObject(value) {
+  * Returns "appeared" if target became ready, "spinner-gone" if loading finished
+  * without the target, or "timeout" if spinner was still visible at deadline.
+  */
+-async function waitForReadyWhileSpinning(target, method, spinner, { timeout = 1000 } = {}) {
++async function waitForReadyWhileSpinning(target, method, goal, spinner, { timeout = 1000 } = {}) {
+     const start = Date.now();
+     // Give the spinner a grace period before checking — it may flicker during transitions
+     const spinnerGracePeriodMs = 3000;
+     while (Date.now() - start < timeout) {
+-        if (await locatorIsReady(target, method))
++        if (await locatorIsReady(target, method, goal))
+             return "appeared";
+         const elapsed = Date.now() - start;
+         if (elapsed > spinnerGracePeriodMs && !(await anySpinnerVisible(spinner)))
 diff --git a/src/plugins/spinner-waiter.ts b/src/plugins/spinner-waiter.ts
-index 8b29299..e41d5ec 100644
+index 74e8c248c50b2d5cc40f86c968ca671ea07b30b6..11cef0ff59aa1eb0507d8d9c40a710cb6e690de8 100644
 --- a/src/plugins/spinner-waiter.ts
 +++ b/src/plugins/spinner-waiter.ts
-@@ -106,4 +106,13 @@ export const spinnerWaiter = Object.assign(
+@@ -91,8 +91,17 @@ export const spinnerWaiter = Object.assign(
+         const start = Date.now();
+         settings.log(`${locator}.${method}(...) starting`);
+ 
++        // waitFor({ state: "detached" | "hidden" }) drives toward the target
++        // LEAVING the page — readiness is inverted for those: a no-longer-
++        // visible target is the success-adjacent state, not a missing one.
++        // Without this, a satisfied disappearance wait takes the 1ms
++        // fast-fail path (timeout: 1 aborts before the first evaluation can
++        // even report "already detached") and a passing wait becomes a hard
++        // fail.
++        const goal = readinessGoal(method, args);
++
+         // Quick check if element is already ready for the attempted action.
+-        const elementReady = await waitForReady(locator, method, { timeout: 1000 });
++        const elementReady = await waitForReady(locator, method, goal, { timeout: 1000 });
+         if (elementReady) {
+           settings.log(`${locator} already ready, proceeding`);
+           return next();
+@@ -104,6 +113,15 @@ export const spinnerWaiter = Object.assign(
+         const spinnerVisible = await anySpinnerVisible(spinnerLocator);
+ 
          if (!spinnerVisible) {
 +          // Target readiness and spinner visibility are separate browser
 +          // reads. The UI can atomically replace the spinner with the target
 +          // between them, so bridge that handoff with one polling interval
 +          // before taking the intentional 1ms fast-fail path.
-+          if (await waitForReady(locator, method, { timeout: 100 })) {
++          if (await waitForReady(locator, method, goal, { timeout: 100 })) {
 +            settings.log(`${locator} became ready during spinner handoff, proceeding`);
 +            return next();
 +          }
@@ -35,3 +142,81 @@ index 8b29299..e41d5ec 100644
            // No spinner - call action, suggest adding one if it fails
            settings.log(`${locator} not ready, no spinner, failing fast`);
            try {
+@@ -120,7 +138,7 @@ export const spinnerWaiter = Object.assign(
+ 
+         // Spinner is visible — wait for the element, but bail early if the spinner
+         // disappears (the loading operation finished without producing the expected element).
+-        const waitResult = await waitForReadyWhileSpinning(locator, method, spinnerLocator, {
++        const waitResult = await waitForReadyWhileSpinning(locator, method, goal, spinnerLocator, {
+           timeout: settings.spinnerTimeout - 2000,
+         });
+ 
+@@ -159,8 +177,31 @@ export const spinnerWaiter = Object.assign(
+   },
+ );
+ 
+-async function locatorIsReady(locator: Locator, method: ActionContext["method"]) {
+-  if (!(await locator.isVisible())) return false;
++/** Which terminal state the action drives the target toward. Everything
++ * wants the target present and interactable, except disappearance waits —
++ * waitFor({ state: "detached" | "hidden" }) — which want it GONE. */
++type ReadinessGoal = "appear" | "disappear";
++
++function readinessGoal(method: ActionContext["method"], args: unknown[]): ReadinessGoal {
++  const options = args[0];
++  return method === "waitFor" &&
++    isOptionsObject(options) &&
++    (options.state === "detached" || options.state === "hidden")
++    ? "disappear"
++    : "appear";
++}
++
++async function locatorIsReady(
++  locator: Locator,
++  method: ActionContext["method"],
++  goal: ReadinessGoal,
++) {
++  const visible = await locator.isVisible();
++  // A no-longer-visible target satisfies a disappearance wait's heuristic
++  // (the action itself still runs with its original timeout and makes the
++  // precise detached-vs-hidden call).
++  if (goal === "disappear") return !visible;
++  if (!visible) return false;
+   if (!enabledActionMethods.has(method)) return true;
+   return await locator.isEnabled();
+ }
+@@ -168,14 +209,15 @@ async function locatorIsReady(locator: Locator, method: ActionContext["method"])
+ async function waitForReady(
+   locator: Locator,
+   method: ActionContext["method"],
++  goal: ReadinessGoal,
+   { timeout = 1000 } = {},
+ ) {
+   const start = Date.now();
+   while (Date.now() - start < timeout) {
+-    if (await locatorIsReady(locator, method)) return true;
++    if (await locatorIsReady(locator, method, goal)) return true;
+     await new Promise((resolve) => setTimeout(resolve, 100));
+   }
+-  return await locatorIsReady(locator, method);
++  return await locatorIsReady(locator, method, goal);
+ }
+ 
+ function withTimeoutOption(method: ActionContext["method"], args: unknown[], timeout: number) {
+@@ -202,6 +244,7 @@ function isOptionsObject(value: unknown): value is Record<string, unknown> {
+ async function waitForReadyWhileSpinning(
+   target: Locator,
+   method: ActionContext["method"],
++  goal: ReadinessGoal,
+   spinner: Locator,
+   { timeout = 1000 } = {},
+ ): Promise<"appeared" | "spinner-gone" | "timeout"> {
+@@ -209,7 +252,7 @@ async function waitForReadyWhileSpinning(
+   // Give the spinner a grace period before checking — it may flicker during transitions
+   const spinnerGracePeriodMs = 3000;
+   while (Date.now() - start < timeout) {
+-    if (await locatorIsReady(target, method)) return "appeared";
++    if (await locatorIsReady(target, method, goal)) return "appeared";
+     const elapsed = Date.now() - start;
+     if (elapsed > spinnerGracePeriodMs && !(await anySpinnerVisible(spinner))) return "spinner-gone";
+     await new Promise((resolve) => setTimeout(resolve, 250));

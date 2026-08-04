@@ -153,7 +153,7 @@ describe("executeWorkerBuild", () => {
         devDependencies: {
           iterate: "https://pkg.pr.new/iterate/iterate/iterate@main",
           // Scoped names are matched by URL shape, never by package name.
-          "@iterate-com/tasks": "https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@main",
+          "@iterate-com/docs": "https://pkg.pr.new/iterate/iterate/@iterate-com/docs@main",
           typescript: "5.9.3",
         },
       }),
@@ -165,12 +165,12 @@ describe("executeWorkerBuild", () => {
     expect(JSON.parse(buildFiles["package.json"] ?? "null")).toEqual({
       dependencies: {
         iterate: `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
-        "@iterate-com/tasks": `https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@${sha}`,
+        "@iterate-com/docs": `https://pkg.pr.new/iterate/iterate/@iterate-com/docs@${sha}`,
         zod: "4.3.6",
       },
       devDependencies: {
         iterate: `https://pkg.pr.new/iterate/iterate/iterate@${sha}`,
-        "@iterate-com/tasks": `https://pkg.pr.new/iterate/iterate/@iterate-com/tasks@${sha}`,
+        "@iterate-com/docs": `https://pkg.pr.new/iterate/iterate/@iterate-com/docs@${sha}`,
         typescript: "5.9.3",
       },
     });

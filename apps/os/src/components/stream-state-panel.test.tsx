@@ -202,6 +202,37 @@ test("a pushed runtime update does not reload or blank a focused processor snaps
   expect(host.querySelector("[data-testid=serialized-state]")?.textContent).toBe('{"stable":true}');
 });
 
+test("stream vitals expose the memory-only ephemeral buffer and FIFO evictions", async () => {
+  const runtime = streamRuntimeState(8);
+  runtime.runtime.ephemeralEvents = {
+    maxBytes: 10 * 1024 * 1024,
+    bytes: 1_536,
+    eventCount: 3,
+    oldestOffset: 4,
+    newestOffset: 8,
+    evictedEventCount: 2,
+    evictedBytes: 512,
+  };
+  liveStateMocks.project.mockReturnValue({
+    value: runtime,
+    status: "live" as const,
+    error: undefined,
+    refresh: vi.fn(),
+  });
+  liveStateMocks.session.mockReturnValue({
+    value: undefined,
+    status: "connecting",
+    error: undefined,
+    refresh: vi.fn(),
+  });
+  const { host, root } = mountPanel();
+
+  await act(async () => root.render(<StreamStatePanel {...panelProps()} />));
+
+  expect(host.textContent).toContain("ephemeral memory3 · 1.5 KB");
+  expect(host.textContent).toContain("ephemeral evicted2 · 512 B");
+});
+
 test.each([
   ["beginning", "beginning (all history)"],
   ["now", "now (from configure time)"],
@@ -380,7 +411,15 @@ function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
           hasPendingDelivery: false,
         },
       },
+      dormantSubscribers: {},
       subscriptions: {},
+      ephemeralEvents: {
+        maxBytes: 10 * 1024 * 1024,
+        bytes: 0,
+        eventCount: 0,
+        evictedEventCount: 0,
+        evictedBytes: 0,
+      },
       metrics: {
         measuredSince: "2026-07-18T00:00:00.000Z",
         reportedAt: "2026-07-18T00:00:00.000Z",

@@ -5,7 +5,7 @@ import type { StreamDeliveryBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import type { SubscriptionConfiguredPayload } from "../streams/core-processor-contract.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
-import { truncateJsonToBytes } from "./truncate-json.ts";
+import { truncateJsonToBytes } from "../../lib/truncate-json.ts";
 
 export const POSTHOG_STREAM_EVENT_MAX_JSON_BYTES = 100 * 1_024;
 const POSTHOG_STREAM_FEED_WORKER_NAME = "os-prd";
@@ -161,7 +161,7 @@ function posthogEvents(args: {
   ])}`;
   const groups = { project: projectId };
   // Capture-side filtering is deliberate defense in depth: durable lanes
-  // never deliver ephemeral rows, but never index one in PostHog either way.
+  // never deliver ephemeral events, but never index one in PostHog either way.
   const durableEvents = batch.events.filter((event) => event.ephemeral !== true);
   const occurrences = durableEvents.map((event) => {
     const createdAt = normalizeEventTimestamp(event.createdAt);

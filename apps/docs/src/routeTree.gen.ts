@@ -16,33 +16,53 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as WIndexRouteImport } from './routes/w.index'
+import { Route as WBoardIdRouteImport } from './routes/w.$boardId'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
+const WIndexRoute = WIndexRouteImport.update({
+  id: '/w/',
+  path: '/w/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const WBoardIdRoute = WBoardIdRouteImport.update({
+  id: '/w/$boardId',
+  path: '/w/$boardId',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/w/$boardId': typeof WBoardIdRoute
+  '/w/': typeof WIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/w/$boardId': typeof WBoardIdRoute
+  '/w': typeof WIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/w/$boardId': typeof WBoardIdRoute
+  '/w/': typeof WIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/'
+  fullPaths: '/' | '/w/$boardId' | '/w/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/'
-  id: '__root__' | '/'
+  to: '/' | '/w/$boardId' | '/w'
+  id: '__root__' | '/' | '/w/$boardId' | '/w/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  WBoardIdRoute: typeof WBoardIdRoute
+  WIndexRoute: typeof WIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -54,11 +74,27 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/w/': {
+      id: '/w/'
+      path: '/w'
+      fullPath: '/w/'
+      preLoaderRoute: typeof WIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/w/$boardId': {
+      id: '/w/$boardId'
+      path: '/w/$boardId'
+      fullPath: '/w/$boardId'
+      preLoaderRoute: typeof WBoardIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  WBoardIdRoute: WBoardIdRoute,
+  WIndexRoute: WIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

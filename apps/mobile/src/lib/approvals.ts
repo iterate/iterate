@@ -30,6 +30,33 @@ export const EVENT = {
   presented: "events.iterate.com/project/approval-presented",
 } as const;
 
+/**
+ * The root-stream subscription vocabulary for live approval state — what
+ * deriveOpenBatches folds. A module-level constant on purpose: useLiveEvents
+ * folds eventTypes into its connection-hook deps, so an inline literal (fresh
+ * identity every render) would tear down and reopen the stream connection in
+ * a render loop. Shared by the chat screen's in-thread dialogs and the
+ * Notifications screen's needs-approval rows — same query key, same cache.
+ */
+export const APPROVAL_STREAM_EVENT_TYPES = [EVENT.requested, EVENT.decided, EVENT.settled];
+
+/** Every approval event on a stream, paged to the head. A single unpaged
+ * getEvents returns only the OLDEST page — on a busy project that hides
+ * exactly the recent open batches the live subscribers exist to surface. */
+export async function readAllApprovalEvents(stream: RpcStub<Stream>): Promise<StreamEvent[]> {
+  const events: StreamEvent[] = [];
+  let cursor = 0;
+  while (true) {
+    const page = await stream.getEvents({
+      afterOffset: cursor,
+      eventTypes: APPROVAL_STREAM_EVENT_TYPES,
+    });
+    if (page.length === 0) return events;
+    events.push(...page);
+    cursor = page.at(-1)!.offset;
+  }
+}
+
 export type RequestedPayload = HumanApprovalRequestedPayload;
 export type { HeldRequest };
 export type Verdict = "approve" | "reject";
@@ -263,12 +290,118 @@ export function deriveRecentResolvedBatches(
     .slice(0, limit);
 }
 
-/** Put the batch opened from a notification first without disturbing the queue's other items. */
-export function focusOpenBatch(batches: OpenBatch[], targetOffset: number | null): OpenBatch[] {
-  if (targetOffset === null) return batches;
-  const target = batches.find((batch) => batch.offset === targetOffset);
-  if (!target) return batches;
-  return [target, ...batches.filter((batch) => batch.offset !== targetOffset)];
+/**
+ * One batch's full detail, addressed by its requested-event offset — what
+ * the Notifications screen's inline expansion renders. `resolved` is null
+ * while the batch awaits its decision; `complete` is the caller's caching
+ * contract (mirrors threadContextForScriptRun's `settled`): true once the
+ * decision AND every approved index's settle are in view, after which the
+ * history is immutable and may be cached forever. Null when the requested
+ * event itself is not in the given events (wrong offset, or a stream page
+ * that missed it).
+ */
+export function deriveBatchDetail(
+  events: readonly StreamEvent[],
+  offset: number,
+): { payload: RequestedPayload; resolved: ResolvedBatch | null; complete: boolean } | null {
+  const resolved = deriveRecentResolvedBatches(events, Number.MAX_SAFE_INTEGER).find(
+    (batch) => batch.offset === offset,
+  );
+  if (resolved) {
+    return {
+      payload: resolved.payload,
+      resolved,
+      complete: resolved.verdicts.every(
+        (verdict, index) => verdict === "reject" || resolved.outcomes[index] !== null,
+      ),
+    };
+  }
+  const requested = events.find(
+    (event) => event.offset === offset && event.type === EVENT.requested,
+  );
+  if (requested === undefined) return null;
+  return { payload: requestedPayload(requested), resolved: null, complete: false };
+}
+
+/**
+ * Every batch a script execution parked, with its resolution — what the
+ * activity card's Approvals tab renders. Matching is by the batch's
+ * script-execution provenance (streamContext.executionId), the same identity
+ * the code step carries. Order follows the requested events' offsets.
+ *
+ * `nowMs` (the caller's Date.now(), threaded so the derivation stays pure)
+ * feeds the `expired` flag: an UNDECIDED batch past its `expiresAt` horizon
+ * can no longer be answered — the same wall-clock gate the decide actions
+ * and deriveOpenBatches use — even though the door's own expiry decision
+ * hasn't landed yet. That decision usually arrives shortly after and
+ * replaces the flag with a real resolution (all-reject, decidedBy "expiry");
+ * the flag covers the interim honestly so this surface doesn't claim
+ * "awaiting" for a hold every other surface already treats as closed. A
+ * resolved batch is never `expired` here — the flag names exactly the
+ * expired-but-undecided window.
+ */
+export function deriveBatchesForExecution(
+  events: readonly StreamEvent[],
+  executionId: string,
+  nowMs: number,
+): {
+  offset: number;
+  payload: RequestedPayload;
+  resolved: ResolvedBatch | null;
+  expired: boolean;
+}[] {
+  return [...events]
+    .filter((event) => {
+      if (event.type !== EVENT.requested) return false;
+      const streamContext = requestedPayload(event).streamContext;
+      return (
+        streamContext?.kind === "script-execution" && streamContext.executionId === executionId
+      );
+    })
+    .sort((left, right) => left.offset - right.offset)
+    .map((event) => {
+      const detail = deriveBatchDetail(events, event.offset);
+      const payload = detail?.payload || requestedPayload(event);
+      const resolved = detail?.resolved || null;
+      return {
+        offset: event.offset,
+        payload,
+        resolved,
+        expired: resolved === null && Date.parse(payload.expiresAt) <= nowMs,
+      };
+    });
+}
+
+/**
+ * Collapse a run's batches into the counts behind the activity card's
+ * status glyphs: open (undecided and still decidable), approved (every
+ * verdict approve), rejected (every verdict reject — the door's expiry
+ * decision included), mixed (a decision with both).
+ */
+export function summarizeBatchOutcomes(
+  batches: readonly { expired: boolean; resolved: ResolvedBatch | null }[],
+): {
+  open: number;
+  approved: number;
+  rejected: number;
+  mixed: number;
+} {
+  const counts = { open: 0, approved: 0, rejected: 0, mixed: 0 };
+  for (const batch of batches) {
+    if (batch.resolved === null) {
+      // An expired-undecided batch counts where the door's imminent expiry
+      // decision (all-reject, decidedBy "expiry") will land it, so the ✗
+      // glyph is already right and doesn't flip when that event arrives —
+      // and ◷ never advertises a hold nobody can answer.
+      if (batch.expired) counts.rejected += 1;
+      else counts.open += 1;
+    } else if (batch.resolved.verdicts.every((verdict) => verdict === "approve")) {
+      counts.approved += 1;
+    } else if (batch.resolved.verdicts.every((verdict) => verdict === "reject")) {
+      counts.rejected += 1;
+    } else counts.mixed += 1;
+  }
+  return counts;
 }
 
 /**
@@ -366,6 +499,15 @@ export async function awaitSettlement(
   }
 }
 
+/** A requested event's payload, cast in ONE place: `StreamEvent.payload` is
+ * over-the-wire JSON that TypeScript cannot narrow from the `type`
+ * discriminator, and the project processor schema-validates
+ * `human-approval-requested` payloads before commit — the event type IS the
+ * shape guarantee, so the cast is safe and unavoidable at this boundary. */
+function requestedPayload(event: StreamEvent): RequestedPayload {
+  return event.payload as RequestedPayload;
+}
+
 /** One shared pass over the approval vocabulary: batches, first decisions,
  * and per-index settles, keyed by the batch's requested event offset. */
 function indexApprovalEvents(events: readonly StreamEvent[]) {
@@ -383,7 +525,7 @@ function indexApprovalEvents(events: readonly StreamEvent[]) {
   const settledIndexes = new Map<number, Set<number>>();
   for (const event of [...events].sort((left, right) => left.offset - right.offset)) {
     if (event.type === EVENT.requested) {
-      requests.set(event.offset, event.payload as RequestedPayload);
+      requests.set(event.offset, requestedPayload(event));
       continue;
     }
     const payload = event.payload as {

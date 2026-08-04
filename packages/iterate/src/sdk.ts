@@ -371,9 +371,10 @@ function selfAlarmState<State extends DurableObjectState>(ctx: State, env: Itera
  *   committed DURABLE event on every stream in the project as checkpointed
  *   per-stream batches — in per-stream order, at-least-once. Events appended
  *   with `ephemeral: true` (LLM streaming chunks and other transient
- *   signals) never arrive here — only callbacks already opened with
- *   `openConnection()` receive them; react to the durable fact that supersedes them (e.g.
- *   an assistant-role `agents/context-added` item). The base unpacks batches
+ *   signals) never arrive here. Session callbacks can receive one while its
+ *   body remains in the Stream Durable Object's bounded memory buffer; react
+ *   here to the durable fact that supersedes it (e.g. an assistant-role
+ *   `agents/context-added` item). The base unpacks batches
  *   into one `processEvent(event)` call per event; override `processEvent` to react
  *   (one `if` per reaction, keyed on event.path + event.type). Throwing (or a worker that fails to build) leaves that
  *   stream's checkpoint in place and the whole batch is redelivered later,

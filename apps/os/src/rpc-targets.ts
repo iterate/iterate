@@ -51,6 +51,7 @@ import {
   disposeIgnoredRpcResult,
   LiveState,
   LiveStateRpcTarget,
+  LiveStateSubscriptionRpcTarget,
   type LiveStateRpc,
   type LiveStateSubscriptionHandle,
   type LiveUpdate,
@@ -204,7 +205,8 @@ import type {
   ProjectWorker,
   StatefulDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
-import { retainProcessEventBatch } from "./domains/streams/retained-event-callbacks.ts";
+import { openRelayedStreamConnection } from "./domains/streams/stream-connection-relay.ts";
+import { dialLiveStateSocket, openRelayedLiveState } from "./domains/live-state-socket.ts";
 import {
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
@@ -556,7 +558,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
 
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), openConnection(), subscribeToEventsFrom(), unsubscribeFromEvents(), kill(). Processors and agents communicate by appending and reducing events. A processor on stream A can react only to events appended to A; call subscribeToEventsFrom({ sourceStreamPath, subscriptionKey }) on the receiving stream to make the named source append matching copies here. Omit subscriptionKey only when supplying idempotencyKey for retry-safe generated-key setup. Each copy records the source stream and offset in source.copiedFrom. The source stores each durable subscription and its cursor under a source-local subscriptionKey. append({ ..., ephemeral: true }) commits a transient event: connections opened before the append receive it, while default reads and durable subscriptions always exclude it. The row may be deleted later, so append durable product truth separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), openConnection(), subscribeToEventsFrom(), unsubscribeFromEvents(), kill(). Processors and agents communicate by appending and reducing events. A processor on stream A can react only to events appended to A; call subscribeToEventsFrom({ sourceStreamPath, subscriptionKey }) on the receiving stream to make the named source append matching copies here. Omit subscriptionKey only when supplying idempotencyKey for retry-safe generated-key setup. Each copy records the source stream and offset in source.copiedFrom. The source stores each durable subscription and its cursor under a source-local subscriptionKey. append({ ..., ephemeral: true }) assigns a real offset but keeps the event body only in bounded Durable Object memory. Reads with includeEphemeral and session connections can replay it while buffered; a restart or FIFO eviction forgets it. Durable subscriptions always exclude it. Ephemeral events reject idempotency keys, so append durable product truth separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
@@ -695,8 +697,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** One event by offset or idempotencyKey; undefined when it does not exist.
-   * Point reads return ephemeral rows too — but those rows are evictable, so
-   * an offset that once resolved may later read as undefined. */
+   * An offset read returns a buffered ephemeral event too, but restart or FIFO
+   * eviction can make that same offset read as undefined later. Ephemeral
+   * events cannot have idempotency keys. */
   async getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
@@ -744,9 +747,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
-   * Durable rows after `afterOffset` are replayed. It can also match an
-   * `ephemeral: true` event appended after this wait opens, but historical
-   * ephemeral rows are never replayed.
+   * Durable events and currently buffered ephemeral events after `afterOffset`
+   * are replayed; it can also match a new event appended after this wait opens.
    */
   async waitForEvent(args: {
     afterOffset?: number;
@@ -896,13 +898,24 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
     });
   }
 
-  /** Push-driven stream runtime state for polling-free debug surfaces. */
+  /**
+   * Push-driven stream runtime state for polling-free debug surfaces.
+   *
+   * Rides the hibernatable liveState socket (domains/live-state-socket.ts) —
+   * a watched idle stream hibernates at zero duration and pushes frames only
+   * when something actually changes. Snapshot-only degrade on purpose, never
+   * the pinning fallback the generic hosts use: the DO's `liveState` property
+   * is deliberately never traversed from here (a retained diff callback
+   * would pin the stream), and `runtimeState()` is the transient read.
+   */
   get liveState(): LiveStateRpc<StreamRuntimeDebugState> {
-    return new LiveStateRelayRpcTarget<StreamRuntimeDebugState>(
-      () =>
-        this[
-          STREAM_DURABLE_OBJECT_STUB
-        ] as unknown as LiveStateDurableObjectStub<StreamRuntimeDebugState>,
+    return new RelayedLiveStateRpcTarget<StreamRuntimeDebugState>(
+      openRelayedLiveState({
+        dialSocket: () => dialLiveStateSocket(this[STREAM_DURABLE_OBJECT_STUB]),
+        readSnapshot: () => this.runtimeState(),
+        socketFailureDegrade: "snapshot-only",
+        label: `stream ${this.props.path}`,
+      }),
     );
   }
 
@@ -940,14 +953,13 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Open one session-owned callback connection to this stream.
    *
-   * `processEventBatch` first receives durable history after
-   * `replayAfterOffset`, then new commits. Transient events are delivered only
-   * when appended after this exact connection opens and are never replayed.
+   * `processEventBatch` first receives durable events plus any ephemeral events
+   * still buffered after `replayAfterOffset`, then new commits.
    * The stream forgets the connection when the session disconnects. Durable
    * event sending is configured separately by appending events to the source
    * stream.
    */
-  openConnection(args: {
+  async openConnection(args: {
     connectionKey?: string;
     processEventBatch: ProcessEventBatch;
     replayAfterOffset?: number;
@@ -997,25 +1009,14 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
      */
     ping?: StreamConnectionPing;
   }): Promise<StreamConnectionHandle> {
-    // The zero-return-frame wire guarantee, relay leg. The Stream DO retains
-    // and invokes the batch callback over Workers RPC, and Workers RPC
-    // always ships a call result — so if the DO's calls were forwarded
-    // straight through to the callback owner's Cap'n Web stub, this worker
-    // would have to PULL the callback's resolution to produce that result,
-    // putting one callback-originated resolve frame per batch on the socket
-    // (live-proven against a preview deployment; see the one-way WebSocket
-    // case in stream-connections-and-subscriptions.e2e.test.ts).
-    // Terminating the call HERE keeps the callback leg one-way: the forwarder
-    // invokes the callback owner's stub and disposes the result
-    // unpulled, and the DO's Workers RPC result is the forwarder's own
-    // synchronous `undefined`. The retained stub is session-owned — Cap'n Web
-    // disposes a session's exports when the session ends, which is exactly a
-    // session connection's lifetime.
-    const forward = retainProcessEventBatch(args.processEventBatch);
-    return this[STREAM_DURABLE_OBJECT_STUB].openConnection({
-      ...args,
-      processEventBatch: (batch) => void forward(batch),
-    });
+    // The relay (stream-connection-relay.ts) terminates the callback leg at
+    // this worker and pairs the RPC leg with a hibernatable wake socket so an
+    // idle connection stops pinning the Stream DO. The stub argument is a
+    // thunk on purpose: the getter mints a fresh stub per access, and a wake
+    // re-dial may happen hours later, across DO resets.
+    return new StreamConnectionRpcTarget(
+      await openRelayedStreamConnection({ stub: () => this[STREAM_DURABLE_OBJECT_STUB], args }),
+    );
   }
 
   /** @internal Append a trusted batch copied from another stream. */
@@ -1685,6 +1686,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   get liveState(): LiveStateRpc<RepoProcessorState> {
     return new LiveStateRelayRpcTarget<RepoProcessorState>(
       () => this.#durableObjectStub as unknown as LiveStateDurableObjectStub<RepoProcessorState>,
+      { label: `repo ${this.props.path}` },
     );
   }
 }
@@ -2738,6 +2740,7 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   get liveState(): LiveStateRpc<SecretDescription> {
     return new LiveStateRelayRpcTarget<SecretDescription>(
       () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<SecretDescription>,
+      { label: `secret ${this.props.path}` },
     );
   }
 }
@@ -2848,6 +2851,7 @@ class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
   get liveState(): LiveStateRpc<DeviceDescription> {
     return new LiveStateRelayRpcTarget<DeviceDescription>(
       () => this.durableObjectStub as unknown as LiveStateDurableObjectStub<DeviceDescription>,
+      { label: `device ${this.props.deviceId}` },
     );
   }
 }
@@ -2952,12 +2956,12 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown. TEXT generation (summarize, draft, classify, answer) is the common case: run a 'Text Generation' model from models() with { messages: [{ role, content }, …] } and read result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents — including an in-hand HTML string via new Blob([html], { type: 'text/html' }) — to Markdown. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
       children: {
         models: "List available models.",
-        run: "Run one model invocation.",
+        run: "Run one model invocation — for outputs the caller cannot produce itself (images, audio, transcription, bulk classification), not for text the caller will read or relay.",
         toMarkdown:
-          "Convert one document or an array of { name, blob } to Markdown; call with no args for supported formats.",
+          "Convert one document or an array of { name, blob } to Markdown — an in-hand HTML string converts via new Blob([html], { type: 'text/html' }); call with no args for supported formats. For emails and newsletters (mostly tracking links and giant base64 images), pass { conversionOptions: { output: { format: 'text' } } } to strip link targets and image URLs — often 10x smaller.",
       },
       parent: "a project itx (itx.ai)",
     });
@@ -2973,6 +2977,10 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   }
 
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
+   * For outputs the caller cannot produce itself — images, audio, transcription,
+   * embeddings, classification at volume. An LLM agent shouldn't run a text
+   * model over content it is about to read or relay (summarize, draft, answer):
+   * return the data and write that yourself.
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
@@ -2990,7 +2998,12 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
 
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
-  /** Convert one document (`{ name, blob }`) to Markdown. */
+  /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
+   * string (a fetched page, an email body) converts via
+   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand.
+   * `{ conversionOptions: { output: { format: "text" } } }` returns plain
+   * text with link targets and image URLs stripped — the compact choice for
+   * emails and newsletters, whose bytes are mostly tracking links. */
   toMarkdown(
     document: CfMarkdownDocument,
     options?: CfMarkdownConversionOptions,
@@ -5600,8 +5613,7 @@ type ProjectRpcTargetProps = ExistingProjectRpcTargetProps | ProspectiveProjectR
  * The project Durable Object's methods this isolate reaches — one typed view
  * instead of re-declaring each signature at every `durableObjectStub` cast.
  */
-type ProjectDurableObjectRpc = {
-  liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
+type ProjectDurableObjectRpc = LiveStateDurableObjectStub<ProjectLiveState> & {
   notificationProcessor: PromiseLike<StreamProcessorRpc>;
   incrementLiveDemo(): Promise<void>;
   indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void>;
@@ -6217,7 +6229,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
   get liveState(): LiveStateRpc<ProjectLiveState> {
-    return new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo);
+    return new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo, {
+      label: `project ${this.#projectId}`,
+    });
   }
 
   /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
@@ -6901,10 +6915,18 @@ class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision
  */
 export class StreamConnectionRpcTarget extends IterateRpcRelay<"StreamConnectionHandle"> {
   readonly #close: () => void;
-  readonly #isLive: () => boolean;
+  readonly #isLive: () => boolean | Promise<boolean>;
+  readonly #streamMaxOffset: number;
+  readonly #connectionKey: string;
   #closed = false;
 
-  constructor(args: { close: () => void; isLive: () => boolean }) {
+  constructor(args: {
+    close: () => void;
+    /** Sync inside the Stream DO; the worker relay's probe crosses RPC and is async. */
+    isLive: () => boolean | Promise<boolean>;
+    streamMaxOffset: number;
+    connectionKey: string;
+  }) {
     super();
     this.#close = args.close;
     this.#isLive = args.isLive;
@@ -6916,8 +6938,9 @@ export class StreamConnectionRpcTarget extends IterateRpcRelay<"StreamConnection
    * the connection's own open flag, not a lookup by key, so a replacement
    * connection under the same key reports `false` here.
    */
-  ping(): boolean {
-    return !this.#closed && this.#isLive();
+  ping(): boolean | Promise<boolean> {
+    if (this.#closed) return false;
+    return this.#isLive();
   }
 
   /** Close this connection; safe to call more than once. */
@@ -7129,13 +7152,13 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
     return describeNode({
       instructions:
         "Search + fetch over everything callable from this scope: working example scripts (proven ones run unattended against a live project in the platform's test suite — copy those first), the public type surface, and this scope's mounted capabilities. " +
-        'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". ' +
-        "get({ name }) fetches what a hit names: an example's full annotated code, a type declaration with its referenced types, or a mounted capability's instructions + types. " +
+        'search({ q }) with MANY related words — the matching is dumb word overlap, so q: "email gmail inbox unread messages" beats q: "email". The top hit arrives with its full doc inlined in `result`, so when it is the right one there is nothing left to fetch. ' +
+        "get({ name }) fetches what a later hit names: an example's full annotated code, a type declaration with its referenced types, or a mounted capability's instructions + types. " +
         "typecheck({ code }) compiles an `async (itx) => { … }` script against this scope's types without running it.",
       children: {
         get: "Fetch one entry by name: an example's full code, a type declaration closure, or a mount's types.",
         search:
-          "Find examples, types, and mounted capabilities by keywords (pass many related words).",
+          "Find examples, types, and mounted capabilities by keywords (pass many related words). The top hit arrives with its full doc inlined in `result` — no follow-up get needed when it's the right one ({ limit, expand } tune hit count and expansion).",
         typecheck: "Compile a script against this scope's types without running it (advisory).",
       },
       parent: "a project itx (itx.docs)",
@@ -7150,10 +7173,13 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
    * noise and a word matching a row's NAME counts double, so `"itx.docs"`,
    * `"worker"`, or `"agents"` rank their subject first instead of every row
    * that mentions the word. Example hits are working scripts — prefer copying
-   * them over writing calls from scratch. Each hit's `fetchCall` field holds
-   * the ready-made docs.get call that fetches its full doc.
+   * them over writing calls from scratch. The TOP hit arrives with its full
+   * doc inlined in `result` (tune with `expand`: how many hits to expand,
+   * default 1) — when the first hit is the right one, skip the follow-up
+   * `docs.get` round and use `result` directly. Other hits carry `fetchCall`,
+   * the ready-made docs.get call. `limit` caps the hit count (default 5).
    */
-  async search(input: { q: string }): Promise<DocsSearchHit[]> {
+  async search(input: { q: string; limit?: number; expand?: number }): Promise<DocsSearchHit[]> {
     const scored: Array<{ hit: DocsSearchHit; score: number; proven?: boolean }> = [];
 
     for (const example of PROJECT_CONTEXT_EXAMPLES) {
@@ -7234,10 +7260,12 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
     }
 
     // Equal-score tie-break mirrors the guidance: working examples first,
-    // scope-specific mounts next, type reference last; 12 hits is about one
-    // screenful for a model.
+    // scope-specific mounts next, type reference last. 5 hits default: a live
+    // trace showed 12 hits was one right answer plus eleven distractions —
+    // callers wanting the wide net pass a bigger limit.
     const kindRank: Record<DocsSearchHit["kind"], number> = { example: 0, capability: 1, type: 2 };
-    return scored
+    const limit = Number.isFinite(input.limit) ? Math.min(Math.max(input.limit!, 1), 25) : 5;
+    const hits = scored
       .sort(
         (a, b) =>
           b.score - a.score ||
@@ -7248,8 +7276,19 @@ class ItxDocsRpcTarget extends IterateRpcTarget<"Docs"> {
           Number(b.proven ?? false) - Number(a.proven ?? false) ||
           a.hit.name.localeCompare(b.hit.name),
       )
-      .slice(0, 12)
+      .slice(0, limit)
       .map((entry) => entry.hit);
+    // Inline the top hit(s)' full docs: search-then-get was costing a whole
+    // agent round when the first hit was already the right one.
+    const expand = Number.isFinite(input.expand)
+      ? Math.min(Math.max(input.expand!, 0), limit)
+      : Math.min(1, limit);
+    await Promise.all(
+      hits.slice(0, expand).map(async (hit) => {
+        hit.result = await this.get({ name: hit.name });
+      }),
+    );
+    return hits;
   }
 
   /**
@@ -7605,36 +7644,123 @@ export class ProcessorRelayRpcTarget<State, Host extends ProcessorHostStub = Pro
   }
 }
 
-/** A Durable Object stub exposing a `.liveState` node — the one property the isolate relay dials. */
-type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<LiveStateRpc<State>> };
+/** Adapts an openRelayedLiveState relay to the LiveStateRpc wire surface, for hosts with no `.liveState` stub node to fall back to. */
+class RelayedLiveStateRpcTarget<State extends object>
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<State>
+{
+  readonly #relay: ReturnType<typeof openRelayedLiveState<State>>;
+
+  constructor(relay: ReturnType<typeof openRelayedLiveState<State>>) {
+    super();
+    this.#relay = relay;
+  }
+
+  async get(): Promise<State> {
+    return await this.#relay.get();
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<State>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
+  }
+}
+
+/** A Durable Object stub exposing a `.liveState` node — plus the real `fetch()` the socket lane dials. */
+type LiveStateDurableObjectStub<State> = {
+  liveState: PromiseLike<LiveStateRpc<State>>;
+  fetch(
+    input: string,
+    init?: RequestInit,
+  ): Promise<{ status: number; webSocket?: WebSocket | null }>;
+};
 
 /**
- * Isolate-side relay for a DO-hosted `.liveState` node — awaits the DO stub's
- * `.liveState` property (a Workers RPC property read can't be pipelined through)
- * then forwards. Mirrors {@link ProcessorRelayRpcTarget}.
+ * Isolate-side relay for a DO-hosted `.liveState` node. `get()` is a
+ * transient forward that releases every stub it materialized — a one-shot
+ * read must never leave a capability pinning the DO for the session's life.
+ * `subscribe()` rides the hibernatable liveState socket
+ * (domains/live-state-socket.ts) when the host declares the lane, so a
+ * watched idle DO leaves memory; a host without the lane — and any socket
+ * failure — falls back to forwarding the subscription into the DO, which
+ * retains the callback there and pins it (exactly the pre-socket behavior,
+ * loudly logged so pinning regressions are greppable).
  */
-class LiveStateRelayRpcTarget<State>
+class LiveStateRelayRpcTarget<State extends object>
   extends IterateRpcRelay<"LiveStateRpc">
   implements LiveStateRpc<State>
 {
   readonly #stub: () =>
     | LiveStateDurableObjectStub<State>
     | PromiseLike<LiveStateDurableObjectStub<State>>;
+  readonly #relay: ReturnType<typeof openRelayedLiveState<State>> | undefined;
+  readonly #label: string | undefined;
 
   constructor(
     stub: () => LiveStateDurableObjectStub<State> | PromiseLike<LiveStateDurableObjectStub<State>>,
+    socketLane?: { label: string },
   ) {
     super();
     this.#stub = stub;
+    this.#label = socketLane?.label;
+    this.#relay =
+      socketLane === undefined
+        ? undefined
+        : openRelayedLiveState<State>({
+            dialSocket: async () => dialLiveStateSocket(await this.#stub()),
+            readSnapshot: () => this.#transientGet(),
+            socketFailureDegrade: "reject",
+            label: socketLane.label,
+          });
+  }
+
+  /**
+   * Each acquisition releases itself: the DO stub's `finally` covers a
+   * REJECTED `.liveState` property read, and separate `finally`s stop one
+   * failed release from skipping the other. Both matter because this runs
+   * inside a long-lived Cap'n Web session, where a leaked stub pins the
+   * Durable Object until the session ends — the exact leak this method fixes.
+   */
+  async #transientGet(): Promise<State> {
+    const doStub = await this.#stub();
+    try {
+      const liveState = await doStub.liveState;
+      try {
+        return await liveState.get();
+      } finally {
+        this.#release(liveState);
+      }
+    } finally {
+      this.#release(doStub);
+    }
+  }
+
+  #release(stub: unknown): void {
+    try {
+      disposeIgnoredRpcResult(stub);
+    } catch (error) {
+      console.warn("liveState read stub dispose failed", { label: this.#label, error });
+    }
   }
 
   async get(): Promise<State> {
-    return await (await (await this.#stub()).liveState).get();
+    return await this.#transientGet();
   }
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
+    if (this.#relay !== undefined) {
+      try {
+        return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
+      } catch (error) {
+        console.warn(
+          "liveState socket relay unavailable; subscription falls back to pinning the durable object",
+          { label: this.#label, error },
+        );
+      }
+    }
     return await (await (await this.#stub()).liveState).subscribe(onUpdate);
   }
 }

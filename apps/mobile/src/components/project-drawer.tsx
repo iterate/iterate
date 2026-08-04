@@ -59,7 +59,6 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
       pathname:
         | "/project/[projectId]/repos"
         | "/project/[projectId]/examples"
-        | "/project/[projectId]/approvals"
         | "/project/[projectId]/notifications",
     ) =>
     () =>
@@ -131,10 +130,6 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
                   onPress={() => close(projectRoute("/project/[projectId]/examples"))}
                 />
                 <DrawerItem
-                  label="Approvals"
-                  onPress={() => close(projectRoute("/project/[projectId]/approvals"))}
-                />
-                <DrawerItem
                   label="Notifications"
                   onPress={() => close(projectRoute("/project/[projectId]/notifications"))}
                 />
@@ -142,6 +137,10 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
                 <DrawerItem
                   label="Switch project"
                   onPress={() => close(() => router.push("/projects"))}
+                />
+                <DrawerItem
+                  label="Build info"
+                  onPress={() => close(() => router.push("/build-info"))}
                 />
               </View>
             </View>

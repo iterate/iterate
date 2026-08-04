@@ -11,7 +11,7 @@ import { test } from "./test-support/test.ts";
  *   4. See the tasks on the board — a GUEST lens on the agent's workspace.
  *
  * Opt-in only — `DEMO_RECORDING=1 VIDEO_MODE=1 pnpm spec -g "workspace lens
- * board demo"` against preview-9 (the lens-demo-live project, with its tasks
+ * board demo"` against preview-9 (the lens-demo-live project, with its docs
  * vessel knob pointed at a developer tunnel). Skipped everywhere else,
  * including the preview lane. Agent turns are real LLM turns, so waits are
  * generous — video mode speeds the dead air away.
@@ -20,7 +20,7 @@ const OS_PROJECT_URL = "https://os.iterate-preview-9.com/projects/lens-demo-live
 
 test("workspace lens board demo", async ({ page }) => {
   // NEVER in CI: this is a demo RECORDING, not a test. It drives a standing
-  // preview-9 project whose tasks vessel is a developer's tunnel, so the
+  // preview-9 project whose docs vessel is a developer's tunnel, so the
   // preview lane must not pick it up just because it holds slot 9.
   test.skip(
     process.env.DEMO_RECORDING !== "1",
@@ -80,12 +80,12 @@ test("workspace lens board demo", async ({ page }) => {
   const reply = page.getByRole("textbox", { name: "Message this agent" });
   await reply.waitFor({ timeout: 60_000 });
   await reply.fill(
-    'thanks — incorporate my feedback in jokes.md, then create 5 task files under tasks/ in /repos/config in your workspace (one per joke, do NOT commit). Then send me a board link minted with itx.worker.tasks.link({ workspace: <your workspace>, repo: "/repos/config" }) so I can review them.',
+    'thanks — incorporate my feedback in jokes.md, then create 5 task files under tasks/ in /repos/config in your workspace (one per joke, do NOT commit). Then send me a board link minted with itx.worker.docs.link({ workspace: <your workspace>, repo: "/repos/config" }) so I can review them.',
   );
   await page.getByRole("button", { name: "Send message" }).click();
   // A real board deep link, not the bare app URL: the agent occasionally
   // pastes the app root, which lands on the workspace picker.
-  const boardLink = page.locator('a[href*="tasks--lens-demo-live"][href*="workspace="]').first();
+  const boardLink = page.locator('a[href*="docs--lens-demo-live"][href*="/w?"]').first();
   await waitForAgentReply(boardLink, "a task board link");
   const boardHref = await boardLink.getAttribute("href");
   if (boardHref === null) throw new Error("the agent's reply carried no board link");

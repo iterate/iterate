@@ -41,7 +41,11 @@ import {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { RpcStub } from "capnweb";
 import type { Agent, StreamEvent } from "iterate/sdk/itx/react";
-import { ActivityCard, CodeBlock } from "../../../components/activity-card.tsx";
+import {
+  ActivityCard,
+  CodeBlock,
+  type ActivityApprovalContext,
+} from "../../../components/activity-card.tsx";
 import { Markdown } from "../../../components/markdown.tsx";
 import { base64ToUint8Array, pickImages, type PickedImage } from "../../../lib/attachments.ts";
 import { SignInRequiredError } from "../../../lib/auth.ts";
@@ -53,16 +57,15 @@ import {
   type MobileFeedItem,
 } from "../../../lib/feed.ts";
 import { getProjectItx } from "../../../lib/itx.ts";
-import { deriveOpenBatches, EVENT as APPROVAL_EVENT } from "../../../lib/approvals.ts";
-
-// Module-level constant on purpose: useLiveEvents folds eventTypes into its
-// connection-hook deps, so an inline literal (fresh identity every render)
-// would tear down and reopen the stream connection in a render loop.
-const APPROVAL_EVENT_TYPES = [
-  APPROVAL_EVENT.requested,
-  APPROVAL_EVENT.decided,
-  APPROVAL_EVENT.settled,
-];
+// APPROVAL_STREAM_EVENT_TYPES is module-level (identity-stable) on purpose:
+// useLiveEvents folds eventTypes into its connection-hook deps, so an inline
+// literal (fresh identity every render) would tear down and reopen the
+// stream connection in a render loop.
+import {
+  APPROVAL_STREAM_EVENT_TYPES,
+  deriveOpenBatches,
+  readAllApprovalEvents,
+} from "../../../lib/approvals.ts";
 import { approverKeyStatus } from "../../../lib/approver.ts";
 import { InThreadApprovalCard } from "../../../components/in-thread-approval.tsx";
 import { useLiveEvents } from "../../../lib/use-live-events.ts";
@@ -113,10 +116,10 @@ export default function ChatScreen() {
     queryKey: ["approval-events", baseUrl || "pending", projectId],
     read: async () => {
       const project = await getProjectItx(baseUrl!, projectId);
-      return await project.streams.get("/").getEvents({ eventTypes: APPROVAL_EVENT_TYPES });
+      return await readAllApprovalEvents(project.streams.get("/"));
     },
     enabled: baseUrl !== undefined,
-    eventTypes: APPROVAL_EVENT_TYPES,
+    eventTypes: APPROVAL_STREAM_EVENT_TYPES,
     projectId,
     streamPath: "/",
   });
@@ -261,7 +264,18 @@ export default function ChatScreen() {
                 ))
           }
           feed={feed}
+          // The card's Approvals tab and status glyphs derive from the same
+          // live root-stream approval events the in-thread dialogs use.
+          activityApprovals={{
+            baseUrl: baseUrl!,
+            events: approvalEvents.data || [],
+            projectId,
+            projectSlug: slug || "",
+          }}
           sendPending={send.isPending}
+          // The Meta tab replays each llm request's exact prompt from the
+          // thread's own event window (same pure fold as the os trace panel).
+          threadEvents={events.data || []}
         />
       ) : (
         <EventList events={events.data || []} />
@@ -337,13 +351,17 @@ export default function ChatScreen() {
 }
 
 function FeedList({
+  activityApprovals,
   approvals,
   feed,
   sendPending,
+  threadEvents,
 }: {
+  activityApprovals: ActivityApprovalContext;
   approvals: React.ReactNode;
   feed: ReturnType<typeof reduceFeed>;
   sendPending: boolean;
+  threadEvents: StreamEvent[];
 }) {
   // Inverted list keeps the newest item at the bottom and pinned on keyboard
   // open; data is reversed to match. The live activity is part of the feed,
@@ -378,15 +396,27 @@ function FeedList({
           </Text>
         </View>
       }
-      renderItem={({ item }) => <FeedItem item={item} />}
+      renderItem={({ item }) => (
+        <FeedItem activityApprovals={activityApprovals} item={item} threadEvents={threadEvents} />
+      )}
     />
   );
 }
 
-function FeedItem({ item }: { item: MobileFeedItem }) {
+function FeedItem({
+  activityApprovals,
+  item,
+  threadEvents,
+}: {
+  activityApprovals: ActivityApprovalContext;
+  item: MobileFeedItem;
+  threadEvents: StreamEvent[];
+}) {
   switch (item.kind) {
     case "activity":
-      return <ActivityCard activity={item} />;
+      return (
+        <ActivityCard activity={item} approvals={activityApprovals} threadEvents={threadEvents} />
+      );
     case "stream-woken":
       return (
         <Text style={styles.wakeMarker}>

@@ -440,6 +440,7 @@ function ProcessorsOverview({
   const serverEventCount = readNumber(coreState, "eventCount");
   const headOffset = readNumber(coreState, "maxOffset");
   const storageSizeBytes = streamRuntime?.runtime.storageSizeBytes;
+  const ephemeralEvents = streamRuntime?.runtime.ephemeralEvents;
   const latencyPoints = sparklinePoints(metrics.spark, 368, 44);
   const agentTokens = tokenUsage == null ? null : readAgentTokenUsageVitals(tokenUsage);
 
@@ -466,7 +467,7 @@ function ProcessorsOverview({
             />
             <MetricStat
               label="events"
-              title="Events committed over the stream's lifetime"
+              title="Durable events reduced into the stream's core state"
               value={
                 serverEventCount === null ? `${eventCount}` : serverEventCount.toLocaleString()
               }
@@ -480,6 +481,28 @@ function ProcessorsOverview({
               label="storage"
               title="Stream Durable Object SQLite size (event log + sending cursors)"
               value={storageSizeBytes === undefined ? "—" : formatFileSize(storageSizeBytes)}
+            />
+            <MetricStat
+              label="ephemeral memory"
+              title={
+                ephemeralEvents === undefined
+                  ? "Memory-only ephemeral events in the current Stream Durable Object incarnation"
+                  : `Memory-only ephemeral events in the current Stream Durable Object incarnation; FIFO limit ${formatFileSize(ephemeralEvents.maxBytes)}`
+              }
+              value={
+                ephemeralEvents === undefined
+                  ? "—"
+                  : `${ephemeralEvents.eventCount.toLocaleString()} · ${formatFileSize(ephemeralEvents.bytes)}`
+              }
+            />
+            <MetricStat
+              label="ephemeral evicted"
+              title="Memory-only ephemeral events forgotten by FIFO eviction since this Stream Durable Object incarnation began"
+              value={
+                ephemeralEvents === undefined
+                  ? "—"
+                  : `${ephemeralEvents.evictedEventCount.toLocaleString()} · ${formatFileSize(ephemeralEvents.evictedBytes)}`
+              }
             />
             <MetricStat
               label="in · 5s"

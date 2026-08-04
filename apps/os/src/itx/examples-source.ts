@@ -37,6 +37,14 @@ const ALL_RUNTIMES: ItxExampleRuntime[] = [
 /** Live providers must outlive the calls, so these stay in caller-owned sessions. */
 const LIVE_SESSION_RUNTIMES: ItxExampleRuntime[] = ["browser", "node", "cli"];
 
+/** The recursive MIME tree of a Gmail message payload (`format: "full"`);
+ * body bytes are base64url in `body.data`. Used by gmail-search-inbox. */
+type GmailMessagePart = {
+  mimeType?: string;
+  body?: { data?: string };
+  parts?: GmailMessagePart[];
+};
+
 export const ITX_EXAMPLE_SOURCES: ItxExampleSource[] = [
   sessionExample({
     id: "whoami",
@@ -179,17 +187,16 @@ return await itx.projects.get(pid).__describe();
   }),
   projectExample({
     id: "ephemeral-events",
-    title: "Ephemeral events: transient signals whose durable truth lands separately",
+    title: "Ephemeral events: memory-only signals whose durable truth lands separately",
     description:
-      "append({ ephemeral: true }) commits a transient event: callbacks already opened with openConnection() see it, getEvents() skips it unless includeEphemeral is true, and durable subscriptions never deliver it. Use them for high-volume signals such as LLM chunks and progress ticks, then append the durable fact as its own ordinary event.",
+      "append({ ephemeral: true }) assigns a real offset but keeps the event body only in bounded Durable Object memory. Reads with includeEphemeral and session connections can replay it while buffered; restart or FIFO eviction forgets it, and durable subscriptions never deliver it. Ephemeral events cannot have idempotency keys. Use them for streaming signals such as LLM chunks and progress ticks, then append the durable fact as its own ordinary event.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { path?: string }) => {
-      // Transient signal: callbacks already open see it; product state never will.
+      // Memory-only signal: session processors can reduce it while buffered.
       const stream = itx.streams.get(vars.path ?? "/repl/ephemeral-demo");
       const operationId = crypto.randomUUID();
       const [tick] = await stream.append({
         type: "events.iterate.repl/progress-ticked",
-        idempotencyKey: `ephemeral-events:${operationId}:progress-ticked`,
         ephemeral: true,
         payload: { percent: 50 },
       });
@@ -204,7 +211,7 @@ return await itx.projects.get(pid).__describe();
       const defaults = await stream.getEvents({ afterOffset: tick.offset - 1 });
       const raw = await stream.getEvents({ afterOffset: tick.offset - 1, includeEphemeral: true });
       return {
-        tickOffset: tick.offset, // ephemeral rows consume offsets like any commit
+        tickOffset: tick.offset, // memory-only events consume offsets like any commit
         doneOffset: done.offset, // the durable event landed right after it
         defaultOffsets: defaults.map((e) => e.offset), // [done.offset] — the tick is excluded
         rawOffsets: raw.map((e) => e.offset), // [tick.offset, done.offset]
@@ -942,16 +949,19 @@ return await itx.projects.get(pid).__describe();
     id: "docs-search-and-get",
     title: "Find working code + types through itx.docs",
     description:
-      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; get({ name }) fetches one — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query.",
+      "The docs door answers \"how do I X?\": search({ q }) over e2e-tested example scripts (this catalogue), type declarations, and this scope's mounted capabilities; the TOP hit arrives with its full doc inlined in `result`, so when it's the right one there is no second call to make. get({ name }) fetches any other — an example's full script body, or a type declaration with its referenced types. Matching is dumb word overlap, so pass MANY related words: recall comes from the query.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { name?: string }) => {
       // MANY related words per query — the search is dumb word matching, so
-      // synonyms are what buy recall.
+      // synonyms are what buy recall. 5 hits by default ({ limit } widens);
+      // the top hit's full doc is already inlined in `result` ({ expand }
+      // tunes how many hits get that) — usually no follow-up get needed.
       const hits = await itx.docs.search({ q: "repo file edit commit write change" });
+      const topDocInlined = typeof hits[0]?.result === "string";
 
-      // Hits are { kind: "example" | "type" | "capability", name, summary, fetchCall };
-      // each hit's fetchCall field is the literal next call. Example hits are
-      // working scripts — copy those first.
+      // Hits are { kind: "example" | "type" | "capability", name, summary, fetchCall, result? };
+      // for hits past the expansion window, fetchCall is the literal next
+      // call. Example hits are working scripts — copy those first.
       const example = await itx.docs.get({ name: vars.name ?? "describe-project" });
       // Example scripts come back paste-ready: a complete async (itx) => { ... }
       // with the annotation and a vars stub INSIDE the function.
@@ -962,7 +972,8 @@ return await itx.projects.get(pid).__describe();
 
       return {
         hitCount: hits.length,
-        firstHit: hits[0] ?? null,
+        topDocInlined,
+        firstHitName: hits[0]?.name ?? null,
         examplePasteReady: example.startsWith("async (itx) => {") && example.includes("// EXAMPLE"),
         streamTypesIncludeAppend: streamTypes.includes("append("),
       };
@@ -1483,7 +1494,10 @@ return {
             data: {
               messages?: Array<{ id: string }>;
               resultSizeEstimate?: number;
-              payload?: { headers?: Array<{ name: string; value?: string }> };
+              snippet?: string;
+              payload?: GmailMessagePart & {
+                headers?: Array<{ name: string; value?: string }>;
+              };
             };
           }>;
         };
@@ -1492,9 +1506,9 @@ return {
   }>({
     id: "gmail-search-inbox",
     e2eProven: false,
-    title: "Search the inbox through the built-in Gmail integration",
+    title: "Search the inbox and read message bodies through the built-in Gmail integration",
     description:
-      "itx.integrations.gmail.get().request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. get() selects the first connected account; pass a slug only for a specific account. List matching message ids first, then fan out metadata fetches in one Promise.all. Reads real mail — interactive-only.",
+      "itx.integrations.gmail.get().request({ path, query, method, headers, body }) proxies the Gmail REST API — paths relative to https://gmail.googleapis.com/gmail/v1. get() selects the first connected account; pass a slug only for a specific account. Do it in ONE script: list matching ids, fan out format: 'full' fetches, decode and convert every body, return the lot — don't spread list/read across turns, and don't pre-trim out of caution: an oversized return comes back as a typed preview plus a spill file you read next turn. Bodies arrive as base64url-encoded MIME parts: walk payload.parts for text/html, decode the bytes, and convert with itx.ai.toMarkdown using conversionOptions.output.format 'text' (never regex-strip HTML by hand) — email HTML is mostly tracking links and giant base64 images, and text output strips link/image URLs for ~10x smaller content. Reads real mail — interactive-only.",
     runtimes: ALL_RUNTIMES,
     fn: async (itx, vars: { q?: string }) => {
       const gmail = itx.integrations.gmail.get();
@@ -1503,21 +1517,57 @@ return {
         query: { maxResults: 5, q: vars.q ?? "in:inbox is:unread" },
       });
 
+      // One script, one return: fetch every hit in full and read all the
+      // bodies now — splitting list/read across turns wastes rounds, and an
+      // oversized return degrades safely (typed preview + spill file).
       const messages = await Promise.all(
-        (inbox.data.messages ?? []).map((message) =>
-          gmail.request({
+        (inbox.data.messages ?? []).map(async (message) => {
+          const full = await gmail.request({
             path: "/users/me/messages/" + message.id,
-            query: { format: "metadata", metadataHeaders: "Subject" },
-          }),
-        ),
+            query: { format: "full" },
+          });
+          const headers = full.data.payload?.headers ?? [];
+          const subject = headers.find((h) => h.name === "Subject")?.value;
+
+          // The body is not text — it hides in a nested MIME tree as
+          // base64url bytes. Flatten the tree, prefer html.
+          const parts = [];
+          const stack = [full.data.payload];
+          while (stack.length) {
+            const part = stack.pop();
+            if (!part) continue;
+            parts.push(part);
+            stack.push(...(part.parts ?? []));
+          }
+          const part =
+            parts.find((p) => p.mimeType === "text/html" && p.body?.data) ??
+            parts.find((p) => p.mimeType === "text/plain" && p.body?.data);
+          const encoded = part?.body?.data;
+          if (!part || !encoded) return { id: message.id, subject, snippet: full.data.snippet };
+          // base64url: swap the alphabet back and re-pad to a multiple of 4.
+          const base64 = encoded.replace(/-/g, "+").replace(/_/g, "/");
+          const padded = base64 + "=".repeat((4 - (base64.length % 4)) % 4);
+          const decoded = new TextDecoder().decode(
+            Uint8Array.from(atob(padded), (c) => c.charCodeAt(0)),
+          );
+
+          // Plain text is already readable; HTML goes to the converter —
+          // never regex-strip it yourself. output.format "text" drops link
+          // targets and image URLs (most of an email's bytes are tracking
+          // links), so whole inboxes fit in one return.
+          let text = decoded;
+          if (part.mimeType !== "text/plain") {
+            const md = await itx.ai.toMarkdown(
+              { name: "message.html", blob: new Blob([decoded], { type: "text/html" }) },
+              { conversionOptions: { output: { format: "text" } } },
+            );
+            text = md.data || text;
+          }
+          return { id: message.id, subject, text };
+        }),
       );
 
-      return {
-        resultSizeEstimate: inbox.data.resultSizeEstimate,
-        subjects: messages.map(
-          (m) => m.data.payload?.headers?.find((h) => h.name === "Subject")?.value,
-        ),
-      };
+      return { resultSizeEstimate: inbox.data.resultSizeEstimate, messages };
     },
   }),
   projectExample({
@@ -1652,15 +1702,32 @@ export default class ProjectWorker extends WorkerEntrypoint {
   projectExample({
     id: "cf-ai-to-markdown",
     e2eProven: false,
-    title: "Convert a document to Markdown with Workers AI",
+    title: "Convert a document or HTML to Markdown with Workers AI",
     description:
-      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
+      "Cloudflare Workers AI Markdown Conversion is available as itx.integrations.cf.ai.toMarkdown() and the root shortcut itx.ai.toMarkdown(). It also converts an in-hand HTML string — a fetched page, an email body — via new Blob([html], { type: 'text/html' }): never strip HTML with regex. conversionOptions.output.format 'text' returns plain text with link targets and image URLs stripped — often 10x smaller on emails and newsletters, whose bytes are mostly tracking links and base64 images. Call with no args for supported formats. Uses Cloudflare AI infrastructure — interactive-only.",
     runtimes: LIVE_SESSION_RUNTIMES,
     fn: async (itx) => {
       const supported = await itx.ai.toMarkdown();
       const csv = new Blob(["name,value\nalpha,1\nbeta,2\n"], { type: "text/csv" });
       const converted = await itx.integrations.cf.ai.toMarkdown({ name: "sample.csv", blob: csv });
-      return { supported: supported.slice(0, 10), converted };
+
+      // An HTML string already in hand (fetched page, email body) is a
+      // document too — wrap it in a Blob instead of regex-stripping tags.
+      const html =
+        '<h1>Report</h1><p><a href="https://example.com/very-long-tracking-url">Everything</a> is <em>fine</em>.</p>';
+      const doc = { name: "page.html", blob: new Blob([html], { type: "text/html" }) };
+      const fromHtml = await itx.ai.toMarkdown(doc);
+      // output.format "text": link/image URLs stripped, text kept — the
+      // compact choice when the URLs don't matter (emails, newsletters).
+      const asText = await itx.ai.toMarkdown(doc, {
+        conversionOptions: { output: { format: "text" } },
+      });
+      return {
+        supported: supported.slice(0, 10),
+        converted,
+        fromHtml: fromHtml.data,
+        asText: asText.data,
+      };
     },
   }),
   projectExample<{
@@ -1671,23 +1738,32 @@ export default class ProjectWorker extends WorkerEntrypoint {
   }>({
     id: "ai-generate-text",
     e2eProven: false,
-    title: "Generate or summarize text with a hosted LLM",
+    title: "Run a hosted text model for bulk, mechanical work",
     description:
-      "The most common model task: summarize, draft, classify, extract, rewrite, or answer questions by running a 'Text Generation' model through itx.ai.run() with { messages } (chat shape) and reading result.response. itx.ai.models() lists the catalog with prices. Uses paid/remote AI infrastructure — interactive-only.",
+      "Run a 'Text Generation' model through itx.ai.run(model, body) with { messages } (chat shape) and read result.response — for MECHANICAL text work at volume: classify hundreds of rows, extract a field from every record, tag or filter in bulk. If YOU are an LLM agent, never use it on content you are about to read or relay (summarize, draft, answer) — you are usually a more intelligent model; return the data and write it yourself. itx.ai.models() lists the catalog with prices. Uses paid/remote AI infrastructure — interactive-only.",
     runtimes: ALL_RUNTIMES,
-    fn: async (itx, vars: { text?: string }) => {
-      const text =
-        vars.text ?? "Cloudflare Workers run JavaScript close to users in hundreds of cities.";
+    fn: async (itx, vars: { reviews?: string[] }) => {
+      // The legitimate shape: one cheap model call PER ITEM, fanned out —
+      // work an agent could not do by hand at volume.
+      const reviews = vars.reviews ?? [
+        "Setup took thirty seconds, brilliant.",
+        "Support never answered my ticket.",
+        "Does what it says on the tin.",
+      ];
 
-      const result = await itx.ai.run("@cf/meta/llama-3.2-3b-instruct", {
-        messages: [
-          { role: "system", content: "Summarize the user's text in one short sentence." },
-          { role: "user", content: text },
-        ],
-      });
+      const results = await Promise.all(
+        reviews.map((review) =>
+          itx.ai.run("@cf/meta/llama-3.2-3b-instruct", {
+            messages: [
+              { role: "system", content: "Answer with one word: positive, negative, or neutral." },
+              { role: "user", content: review },
+            ],
+          }),
+        ),
+      );
 
       // Text models answer in result.response.
-      return { summary: result.response };
+      return reviews.map((review, i) => ({ review, sentiment: results[i].response?.trim() }));
     },
   }),
   projectExample<{

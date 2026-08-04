@@ -65,7 +65,16 @@ export class LiveStateRpcTarget<State extends object>
   }
 }
 
-class LiveStateSubscriptionRpcTarget extends RpcTarget implements LiveStateSubscriptionHandle {
+/**
+ * The wire handle for one subscription — `ping`/`unsubscribe` over RPC.
+ * Exported for relays that build their subscription OUTSIDE a `LiveState`
+ * engine (the worker-local liveState-socket relay) but must hand back the
+ * same handle shape `LiveStateRpcTarget.subscribe` does.
+ */
+export class LiveStateSubscriptionRpcTarget
+  extends RpcTarget
+  implements LiveStateSubscriptionHandle
+{
   readonly #subscription: LiveStateSubscription;
 
   constructor(subscription: LiveStateSubscription) {

@@ -34,16 +34,16 @@ The independent choices are:
 
 | Use                            | Stored on source | Completed offset stored by | Start position         | Receives ephemeral events |
 | ------------------------------ | ---------------- | -------------------------- | ---------------------- | ------------------------- |
-| New browser events             | no               | browser/client             | when callback opens    | yes, while open           |
-| Replay then new browser events | no               | browser/client             | explicit offset        | new ephemeral events only |
+| New browser events             | no               | browser/client             | when callback opens    | yes                       |
+| Replay then new browser events | no               | browser/client             | explicit offset        | yes, while still buffered |
 | State-only live view           | no               | browser/client             | when callback opens    | not applicable            |
-| `waitForEvent()`               | no               | caller                     | now or explicit offset | new ephemeral events only |
+| `waitForEvent()`               | no               | caller                     | now or explicit offset | yes, while still buffered |
 | Hosted processor               | yes              | hosted processor           | its checkpoint         | no                        |
 | Copy to another stream         | yes              | source stream              | beginning or now       | no                        |
 | Call an ITX method             | yes              | source stream              | beginning or now       | no                        |
 | POST a webhook                 | yes              | source stream              | beginning or now       | no                        |
 
-Durable subscriptions never deliver ephemeral rows. Only `copy-to-stream` has
+Durable subscriptions never deliver ephemeral events. Only `copy-to-stream` has
 a receiving stream; an ITX method, a webhook, and a hosted processor do not.
 
 ## Live callbacks
@@ -67,28 +67,7 @@ The open callback exists in runtime state. The stream appends
 `connection-opened` and usually `connection-closed` audit events, but it does
 not append `subscription-configured`.
 
-### High-frequency consumers must recycle their connection
-
-Measured on a deployed preview (2026-07-31, realtime-audio experiments):
-delivery to one live callback **stops silently after ~1000–1300 pushed
-batches** — the worker invocation carrying the callback leg runs out of
-subrequest budget. Appends keep succeeding, the socket stays healthy, no
-close event fires, and a Stream DO storage reset kills the callback the same
-silent way. At 50 events/s that is ~25 seconds of delivery per connection.
-
-Any consumer taking sustained event flow (voice/PCM frames, telemetry) must
-recycle make-before-break: open a successor connection under a new key
-before the budget runs out (and whenever delivery goes quiet while traffic
-is expected), dedupe the brief overlap by event offset, and pass
-`replayAfterOffset` so durable control-plane events survive the seam
-(ephemeral rows are correctly lost). A working reference with the budget
-numbers tuned is `apps/os/scripts/voicelab/resilient.ts`; with it, 2-minute
-50 events/s runs deliver 6000/6000 with no duplicates. Seed the cursor from
-the batches themselves (`scannedThroughOffset` / `streamMaxOffset`): every
-connection receives an initial, possibly empty batch on open, and the handle
-is a pure capability that carries no data properties.
-
-### Replay durable rows, then stay connected
+### Replay available events, then stay connected
 
 ```ts
 using connection = await stream.openConnection({
@@ -102,10 +81,11 @@ using connection = await stream.openConnection({
 });
 ```
 
-`replayAfterOffset` is exclusive. The stream first sends matching durable rows
-after that offset and then sends new appends without a gap. Historical
-ephemeral rows are never replayed; a matching ephemeral event appended after
-this exact callback opens can still be sent.
+`replayAfterOffset` is exclusive. The stream first sends matching durable
+events plus any matching ephemeral events still buffered in the current
+Durable Object incarnation, then sends new appends without a gap. An ephemeral
+event omitted because it was evicted or belonged to an earlier incarnation
+leaves an ordinary offset gap.
 
 The caller may also fence a reconnect to one physical stream and cap its replay:
 
@@ -458,8 +438,10 @@ await source.resumeSubscription({ subscriptionKey });
 await source.setSubscriptionCursorAndResume({ subscriptionKey, afterOffset: 42 });
 ```
 
-Ephemeral rows are never delivered by durable subscriptions. A live callback
-can see only ephemeral events appended while that exact callback is open.
+Ephemeral events are never delivered by durable subscriptions. A session
+callback can replay them after its cursor while their bodies remain in the
+current Stream Durable Object incarnation's memory buffer, then receive new
+ones live.
 
 ## Copy provenance and loop prevention
 

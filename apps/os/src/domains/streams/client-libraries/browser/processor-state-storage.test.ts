@@ -270,9 +270,9 @@ describe("browser raw events schema version reset", () => {
       ]);
 
     await insert(1);
-    // Offset 2 was an ephemeral event later evicted server-side: the offset
-    // stays consumed but there is no row to replay, so the event table must accept
-    // the gap.
+    // Offset 2 was a memory-only ephemeral event that is no longer available:
+    // the offset stays consumed but there is no event to replay, so the local
+    // durable event table must accept the gap.
     await insert(3);
     expect(await storedOffsets(sql)).toEqual([1, 3]);
     // Order still holds: a new row below the local head is a delivery bug.
@@ -280,9 +280,9 @@ describe("browser raw events schema version reset", () => {
   });
 
   it("advances across offsets omitted by an explicit scan envelope", async () => {
-    // Offset 3 was ephemeral and therefore omitted from durable catch-up. The
-    // batch's scan coordinates prove that it was examined, so durable rows
-    // after the gap can land without replaying the historical ephemeral row.
+    // Offset 3 was a memory-only ephemeral event and therefore omitted from
+    // durable catch-up. The batch's scan coordinates prove the gap was
+    // examined, so durable rows after it can land without an event body.
     const db = new DatabaseSync(":memory:");
     const load = rawEventsLoad(db);
     await load.deliver([rawEvent(1), rawEvent(2)]);

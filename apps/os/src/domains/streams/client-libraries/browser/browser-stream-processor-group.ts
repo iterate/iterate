@@ -158,7 +158,7 @@ export class BrowserStreamProcessorGroup implements AnyHostedProcessor {
                 persistedThroughOffset: volatileProcessor.acknowledgedThroughOffset,
                 scannedThroughOffset: batch.scannedThroughOffset,
               });
-        // Durable projections never receive ephemeral rows. Their progress
+        // Durable projections never receive ephemeral events. Their progress
         // still advances through the complete scan envelope, so omitted live
         // chunks cannot become replayable persistent state on reconnect.
         const durableEvents = batch.events.filter((event) => event.ephemeral !== true);

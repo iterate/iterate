@@ -10,11 +10,12 @@ import {
 import { streamDeliveryAuthContext } from "../../auth.ts";
 
 describe("StreamRpcTarget", () => {
-  it("relays the stream runtime LiveState property without polling runtimeState", async () => {
+  it("serves liveState from the socket-fed relay engine, never the DO's liveState property", async () => {
     const runtimeState = {
       coreProcessorState: { maxOffset: 4 },
       runtime: {
         connections: {},
+        dormantSubscribers: {},
         subscriptions: {},
         metrics: {
           measuredSince: new Date(0).toISOString(),
@@ -25,19 +26,23 @@ describe("StreamRpcTarget", () => {
         storageSizeBytes: 42,
       },
     };
-    const handle = { ping: () => true, unsubscribe: vi.fn() };
-    const get = vi.fn(async () => runtimeState);
-    const subscribe = vi.fn(async (onUpdate: (update: unknown) => void) => {
-      onUpdate({ type: "snapshot", revision: 0, state: runtimeState });
-      return handle;
-    });
-    const runtimeStatePoll = vi.fn();
+    // The DO's liveState property must never be traversed: subscribing there
+    // retains a diff callback inside the DO and pins it — the exact cost the
+    // state-socket lane removes.
+    const doLiveState = vi.fn();
+    const runtimeStateRead = vi.fn(async () => runtimeState);
 
     class TestStreamRpcTarget extends StreamRpcTarget {
       override get [STREAM_DURABLE_OBJECT_STUB]() {
         return {
-          liveState: Promise.resolve({ get, subscribe }),
-          runtimeState: runtimeStatePoll,
+          get liveState() {
+            doLiveState();
+            return Promise.resolve({});
+          },
+          runtimeState: runtimeStateRead,
+          // No webSocket on the response: the relay degrades to
+          // snapshot-per-read, which is all this unit needs.
+          fetch: async () => new Response(null, { status: 400 }),
         } as never;
       }
     }
@@ -47,16 +52,24 @@ describe("StreamRpcTarget", () => {
       projectId: "prj_test",
     });
 
-    await expect(stream.liveState.get()).resolves.toBe(runtimeState);
-    const updates: unknown[] = [];
-    await expect(stream.liveState.subscribe((update) => void updates.push(update))).resolves.toBe(
-      handle,
-    );
+    const live = stream.liveState;
+    await expect(live.get()).resolves.toEqual(runtimeState);
 
-    expect(get).toHaveBeenCalledOnce();
-    expect(subscribe).toHaveBeenCalledOnce();
-    expect(updates).toEqual([{ type: "snapshot", revision: 0, state: runtimeState }]);
-    expect(runtimeStatePoll).not.toHaveBeenCalled();
+    const updates: unknown[] = [];
+    const handle = await live.subscribe((update) => void updates.push(update));
+    expect(updates).toEqual([
+      { type: "snapshot", revision: expect.any(Number), state: runtimeState },
+    ]);
+    // This fixture serves the DEGRADED path (the upgrade above returns no
+    // socket), so the subscription is frozen at its first paint and must
+    // report unhealthy — that is what makes the owner's watchdog re-subscribe
+    // and try for a socket again.
+    expect(handle.ping()).toBe(false);
+    handle.unsubscribe();
+
+    // One transient snapshot read per get/subscribe; zero DO-side liveState.
+    expect(runtimeStateRead).toHaveBeenCalledTimes(2);
+    expect(doLiveState).not.toHaveBeenCalled();
   });
 
   it("detaches every plain-data result and releases its native RPC invocation", async () => {

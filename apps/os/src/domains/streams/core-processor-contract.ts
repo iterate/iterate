@@ -55,7 +55,10 @@ import { EventFilter } from "./event-filter.ts";
 // optional `jsonataTransform` became available on every push receiver (copy,
 // ITX call, webhook) — never on processor-wake, whose delivery must feed the
 // processor its committed log verbatim.
-export const CORE_STATE_VERSION = 28;
+// Version 29 makes ephemeral events advance only `maxOffset`. Their bodies and
+// all other reduced effects are memory-only, so rebuilding from the durable log
+// produces the same durable core state after the Durable Object restarts.
+export const CORE_STATE_VERSION = 29;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -325,11 +328,25 @@ export const ConnectionCloseReason = z.enum([
   "subscription-removed",
   /**
    * The stream went quiet for longer than its idle window, so the Stream DO
-   * deliberately dropped every hosted connection so both sides can
+   * deliberately dropped every idle-eligible connection so both sides can
    * hibernate instead of accruing billable duration on idle cross-isolate RPC
-   * sessions. The subscription is kept; the next append wakes the processor again.
+   * sessions. For a hosted connection the subscription is kept and the next
+   * append wakes the processor again; for a wake-socket-backed session
+   * connection the subscriber stays present on its hibernatable socket and
+   * the next matching append makes its relay re-dial (see wake-socket.ts).
+   * An idle close is therefore NOT a departure; the dormant subscriber's
+   * eventual real departure is the `"departed"` close below.
    */
   "idle",
+  /**
+   * A DORMANT subscriber's wake socket closed: the client behind an
+   * idle-closed session connection actually went away (tab closed, device
+   * offline, worker context canceled). Live connections never use this —
+   * their close paths append their own reasons; this fact exists so audit
+   * and presence consumers keying on close facts see the true departure
+   * that `"idle"` deliberately is not.
+   */
+  "departed",
 ]);
 
 export type ConnectionCloseReason = z.infer<typeof ConnectionCloseReason>;
@@ -344,13 +361,7 @@ export const CoreProcessorContract = defineProcessorContract({
     streamId: z.uuid().optional(),
     createdAt: z.string().optional(),
     incarnationId: z.string().trim().min(1).optional(),
-    /**
-     * Events folded so far — durable AND ephemeral (both reduce). A rebuild
-     * after ephemeral-row eviction counts only survivors, so this may
-     * DECREASE across a rebuild; never compare it to `maxOffset`. Its one
-     * load-bearing read is the constructor's `=== 0` birth check, which is
-     * eviction-proof (`stream/created` can never be ephemeral).
-     */
+    /** Durable events folded so far. `maxOffset` also includes ephemeral offset gaps. */
     eventCount: z.number().int().min(0).default(0),
     maxOffset: z.number().int().min(0).default(0),
     childPaths: z.array(z.string().trim().min(1)).default([]),

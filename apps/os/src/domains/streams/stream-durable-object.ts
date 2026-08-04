@@ -32,6 +32,7 @@ import {
 } from "../../rpc-targets.ts";
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
+import { LiveStateSockets } from "../live-state-socket.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
@@ -39,7 +40,9 @@ import {
   STREAM_PAUSED_ERROR_PREFIX,
   StreamCoreProcessor,
 } from "./core-processor.ts";
-import { compileEventFilter } from "./event-filter.ts";
+import { compileEventFilter, type EventFilter } from "./event-filter.ts";
+import { EphemeralEventBuffer } from "./ephemeral-event-buffer.ts";
+import { WakeSocketRegistry } from "./wake-socket.ts";
 import {
   internalStreamId,
   isInternalStreamIdempotencyKey,
@@ -50,6 +53,7 @@ import {
   clearSubscriptionCursorFailuresAfterStateRebuild,
   SqliteSubscriptionCursorStore,
   StreamEventLog,
+  type SizedStreamEvent,
 } from "./stream-storage.ts";
 import {
   computeBackoffMs,
@@ -142,6 +146,7 @@ type StreamDeliveryAlarmBoundaryHooks = {
 
 type StreamAlarmStorage = {
   setAlarm(atMs: number): Promise<void>;
+  deleteAlarm(): Promise<void>;
 };
 
 /**
@@ -184,6 +189,23 @@ export class StreamAlarmArmer {
   markFired(): void {
     this.#armedForMs = null;
   }
+
+  /**
+   * Delete the pending native alarm because the caller proved nothing needs
+   * a future turn. Safe by construction: durable obligations are visible to
+   * that recomputation (cursor rows, in-flight sets, the idle deadline), and
+   * new work only arises through an append or wake — both of which reconcile
+   * and re-arm. Without this, the in-flight watchdog armed before every
+   * successful send outlives its delivery, fires on the hibernated stream,
+   * boots it, appends `woken`, whose delivery arms the next watchdog — a
+   * perpetual ~21-second boot loop on quiet streams with subscriptions.
+   * A later armNoLaterThan in the same turn simply re-arms after the delete.
+   */
+  clearWhenQuiet(): void {
+    this.#armedForMs = null;
+    // Same posture as setAlarm: not awaited or caught; the output gate owns it.
+    void this.#storage.deleteAlarm();
+  }
 }
 
 export class StreamDeliveryAlarmBoundary {
@@ -194,6 +216,20 @@ export class StreamDeliveryAlarmBoundary {
     this.#hooks = hooks;
   }
 
+  /**
+   * True between an append turn arming its immediate work alarm and the
+   * alarm turn that runs the re-derived work. In that gap NOTHING else
+   * betrays that a wake is owed — no cursor row is due yet, no in-flight
+   * flag is set (the closure never started) — so the quiet-alarm deletion
+   * must treat this as pending work or it deletes the very alarm that was
+   * just armed to start delivery, stranding every durable send.
+   */
+  #scheduledWorkPending = false;
+
+  get hasScheduledWork(): boolean {
+    return this.#scheduledWorkPending;
+  }
+
   scheduleOrRun(work: () => Promise<unknown>): void {
     if (this.#inAlarmTurn) {
       this.#hooks.waitUntil(settleStreamCoreBackgroundWork(work));
@@ -202,12 +238,17 @@ export class StreamDeliveryAlarmBoundary {
     // setAlarm is itself an output-gated storage write. Issue it directly in
     // this append turn: wrapping it in a settling waitUntil would cross the
     // implicit-transaction boundary and could acknowledge lag without a wake.
+    this.#scheduledWorkPending = true;
     this.#hooks.armAlarm(this.#hooks.now());
   }
 
   runAlarmTurn(work: () => void): void {
     const wasInAlarmTurn = this.#inAlarmTurn;
     this.#inAlarmTurn = true;
+    // The fired alarm turn re-derives ALL owed work from durable cursors
+    // (the scheduled closure was deliberately discarded), so the owed-wake
+    // marker is satisfied the moment this turn starts.
+    this.#scheduledWorkPending = false;
     try {
       work();
     } finally {
@@ -395,6 +436,8 @@ export class StreamDurableObject extends DurableObject<Env> {
   #liveStateRefreshScheduled = false;
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
+  /** Ephemeral event bodies scoped to this one Durable Object incarnation. */
+  readonly #ephemeralEvents = new EphemeralEventBuffer();
   /**
    * Durable subscription cursor rows. A field (not inlined into the hooks)
    * because the core-state rebuild path removes rows whose configuration no
@@ -411,20 +454,17 @@ export class StreamDurableObject extends DurableObject<Env> {
     now: () => Date.now(),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
-  readonly #eventSender = new StreamEventSender({
+  readonly #eventSender: StreamEventSender = new StreamEventSender({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
-      // Straight to the sized log read: delivery needs byte lengths for its
-      // batch cap (getEvents would re-stringify to size a batch), and its
-      // limits are already bounded well under the public read clamp.
+      // Delivery needs byte lengths for its batch cap. This merges durable
+      // SQLite rows with the current incarnation's memory-only ephemeral
+      // events before subscription-specific visibility is applied.
       readEvents: (args) =>
-        this.#log.getRangeSized({
+        this.#readEventsSized({
           afterOffset: args.afterOffset,
           beforeOffset: args.beforeOffset,
           limit: args.limit,
-          // RAW, ephemeral included: durable cursors advance over every
-          // offset (skip-not-defer, like filter-excluded events); durable
-          // subscriptions never deliver them.
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
@@ -467,9 +507,38 @@ export class StreamDurableObject extends DurableObject<Env> {
       now: () => Date.now(),
       random: () => Math.random(),
       armAlarm: (atMs) => this.#alarmArmer.armNoLaterThan(atMs),
+      clearAlarm: () => {
+        // An append turn may have armed an immediate alarm for scheduled
+        // durable work that has not started yet; that owed wake is invisible
+        // to the sender's recomputation and must veto the deletion.
+        if (this.#deliveryAlarmBoundary.hasScheduledWork) return;
+        this.#alarmArmer.clearWhenQuiet();
+      },
       runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
+      wakeChannelKeys: () => this.#wakeSockets.channelKeys(),
+      onSessionsIdleClosed: (connectionKeys) => this.#wakeSockets.recordIdleClosed(connectionKeys),
+      wakeDormantSubscribers: (justCommitted) =>
+        this.#wakeSockets.wakeDormant(justCommitted.map((entry) => entry.event)),
     },
+  });
+  /** DO-side wake-socket mechanics (wake-socket.ts); the attachment is the durable state. */
+  readonly #wakeSockets = new WakeSocketRegistry({
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    maxOffset: () => this.#coreProcessorState.maxOffset,
+    hasConnection: (connectionKey) => this.#eventSender.connections.has(connectionKey),
+  });
+  /** liveState watcher sockets (live-state-socket.ts) — push-driven runtime debug state at zero pin. */
+  readonly #liveStateSockets = new LiveStateSockets({
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    readState: () => this.#readRuntimeState(),
+    // Runtime state is always materializable — no runner loading here; the
+    // refresh just requests a ping-sample round so a fresh watcher's first
+    // frame carries real connection RTTs, mirroring the getter's behavior.
+    refresh: () => this.#eventSender.connections.samplePingsSoon(),
+    waitUntil: (work) => this.ctx.waitUntil(work),
   });
   #coreProcessorState: CoreProcessorState;
   #invalidCheckpointError: unknown = undefined;
@@ -622,8 +691,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    *    and is folded through `reduce`. An event whose `idempotencyKey` already
    *    exists is skipped and the existing event is returned in its place (so
    *    the returned array stays input-aligned).
-   * 2. Event rows + the new core state are written in one await-free turn.
-   *    After this line the append has succeeded.
+   * 2. Durable event rows, the shared offset allocator high-water mark, and
+   *    the new core state are written in one await-free turn. Ephemeral event
+   *    bodies enter only the bounded in-memory buffer. After this line the
+   *    append has succeeded.
    * 3. Post-commit work reconciles runtime delivery from the new reduced state.
    *    Failures are reported and get an immediate durable repair alarm; they
    *    cannot change the already-committed append result.
@@ -902,7 +973,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     // atomic and Output Gates hold responses until writes are durable:
     // https://developers.cloudflare.com/durable-objects/api/sql-storage/
     // https://blog.cloudflare.com/sqlite-in-durable-objects/
-    // Keep this section await-free: the event rows are the append boundary.
+    // Keep this section await-free: durable rows plus the allocator high-water
+    // mark are the append boundary.
     // The KV state checkpoint is DEBOUNCED (see
     // #checkpointCoreProcessorState) — event rows are the durable truth, and
     // boot catch-up folds past a lagging checkpoint by design.
@@ -911,13 +983,27 @@ export class StreamDurableObject extends DurableObject<Env> {
       events: newEvents,
       next: workingState,
     });
-    const byteLengths = this.#log.insert(newEvents);
+    const durableEvents = newEvents.filter((event) => event.ephemeral !== true);
+    const ephemeralEvents = this.#ephemeralEvents.prepare(
+      newEvents.filter((event) => event.ephemeral === true),
+    );
+    const durableByteLengths = this.#log.insert(durableEvents);
+    this.#log.advanceHighestAssignedOffset(workingState.maxOffset);
+    this.#ephemeralEvents.commit(ephemeralEvents);
+
+    const sizedByOffset = new Map<number, SizedStreamEvent>();
+    for (const [index, event] of durableEvents.entries()) {
+      sizedByOffset.set(event.offset, { event, byteLength: durableByteLengths[index]! });
+    }
+    for (const event of ephemeralEvents) sizedByOffset.set(event.event.offset, event);
+    const justCommittedEvents = newEvents.map((event) => sizedByOffset.get(event.offset)!);
+
     this.#coreProcessorState = workingState;
     this.#checkpointCoreProcessorState(newEvents.length);
     this.#metrics.ingress.bump(
       Date.now(),
       newEvents.length,
-      byteLengths.reduce((sum, bytes) => sum + bytes, 0),
+      justCommittedEvents.reduce((sum, entry) => sum + entry.byteLength, 0),
     );
     this.#refreshLiveState();
 
@@ -926,10 +1012,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // failure gets an immediate native alarm in this same output-gated turn;
     // the alarm and a fresh incarnation both run the same level checks.
     this.#reconcileCommittedState({
-      justCommittedEvents: newEvents.map((event, index) => ({
-        event,
-        byteLength: byteLengths[index]!,
-      })),
+      justCommittedEvents,
     });
 
     return events;
@@ -945,14 +1028,39 @@ export class StreamDurableObject extends DurableObject<Env> {
   ): StreamEvent | undefined {
     if (args.idempotencyKey !== undefined)
       return this.#log.getByIdempotencyKey(args.idempotencyKey);
-    return this.#log.getByOffset(args.offset);
+    return this.#ephemeralEvents.getByOffset(args.offset) ?? this.#log.getByOffset(args.offset);
+  }
+
+  #readEventsSized(args: {
+    afterOffset: number;
+    beforeOffset: number;
+    eventTypes?: readonly string[];
+    limit: number;
+    includeEphemeral: boolean;
+  }): SizedStreamEvent[] {
+    const durableEvents = this.#log.getRangeSized({
+      afterOffset: args.afterOffset,
+      beforeOffset: args.beforeOffset,
+      eventTypes: args.eventTypes,
+      limit: args.limit,
+    });
+    if (!args.includeEphemeral) return durableEvents;
+
+    const ephemeralEvents = this.#ephemeralEvents.getRangeSized({
+      afterOffset: args.afterOffset,
+      beforeOffset: args.beforeOffset,
+      eventTypes: args.eventTypes,
+      limit: args.limit,
+    });
+    return [...durableEvents, ...ephemeralEvents]
+      .sort((left, right) => left.event.offset - right.event.offset)
+      .slice(0, args.limit);
   }
 
   /**
    * Synchronous committed-event range read. Keep await-free (see getEvent).
-   * Ephemeral rows are excluded unless `includeEphemeral` — the second-class
-   * contract: nothing reads them by accident, so the stream stays free to
-   * evict them later.
+   * Ephemeral events from the current Durable Object incarnation are excluded
+   * unless `includeEphemeral` is explicitly requested.
    */
   getEvents(
     args: {
@@ -970,13 +1078,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (limit !== undefined && limit > MAX_GET_EVENTS_LIMIT) {
       throw new Error(`getEvents limit must be at most ${MAX_GET_EVENTS_LIMIT}.`);
     }
-    return this.#log.getRange({
+    return this.#readEventsSized({
       afterOffset: args.afterOffset ?? 0,
       beforeOffset: args.beforeOffset ?? Number.MAX_SAFE_INTEGER,
       eventTypes: args.eventTypes,
       limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
-      includeEphemeral: args.includeEphemeral,
-    });
+      includeEphemeral: args.includeEphemeral === true,
+    }).map((entry) => entry.event);
   }
 
   /**
@@ -1011,7 +1119,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /**
    * Both maximum offsets in one read, for exact-offset CAS appends that also need a
-   * fold barrier: `maxOffset` is the highest assigned offset (ephemeral rows hold
+   * fold barrier: `maxOffset` is the highest assigned offset (ephemeral events hold
    * offsets too — the CAS target), while `maxDurableOffset` is the latest offset a
    * default catch-up can actually fold through — the only maximum offset a
    * `waitUntilEvent` barrier can be pinned to without wedging on a trailing
@@ -1056,9 +1164,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         ? this.#eventSender.onAlarm()
         : this.#eventSender.sendDue(args.justCommittedEvents),
     );
-    attempt("arm hosted-connection idle alarm", () =>
-      this.#eventSender.connections.armOrClearIdleAlarm(),
-    );
+    attempt("arm connection idle alarm", () => this.#eventSender.connections.armOrClearIdleAlarm());
     if (args.alarmTurn === true) {
       attempt("flush core state checkpoint", () => this.#flushCoreProcessorState());
     }
@@ -1260,12 +1366,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       afterOffset: state.maxOffset,
       beforeOffset: highestOffset + 1,
       limit: 500,
-      // Ephemeral rows folded on append (counters + circuit breaker), so the
-      // rebuild re-folds them. Exactly identical only while their rows
-      // survive: a post-eviction rebuild counts fewer events and re-burns
-      // fewer breaker tokens — bookkeeping drift, not correctness (see
-      // eventCount's doc in core-processor-contract.ts).
-      includeEphemeral: true,
     });
     if (page.length === 0) return undefined;
 
@@ -1285,11 +1385,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #applyHighestAssignedOffset(state: CoreProcessorState): CoreProcessorState {
-    // The fold recovers maxOffset from surviving rows; the assigned floor
-    // covers rows a future ephemeral eviction sweep deleted. Without it a
-    // rebuild after the latest row was evicted would reissue offsets that live
-    // open callbacks already received (the browser event table hard-ABORTs on a reused
-    // offset carrying different JSON).
+    // The fold recovers maxOffset from durable rows. The assigned floor also
+    // covers memory-only ephemeral offsets whose bodies disappeared on
+    // restart or FIFO eviction. Without it, rebuild could reissue an offset a
+    // session callback already received (the browser event table hard-ABORTs
+    // on one offset carrying different JSON).
     const assignedFloor = this.#log.highestAssignedOffset();
     return assignedFloor > state.maxOffset ? { ...state, maxOffset: assignedFloor } : state;
   }
@@ -1421,9 +1521,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    * callers still observe an async call through their stub.
    *
    * `openConnection({ connectionKey: "s", processEventBatch })` receives new events by
-   * default. `replayAfterOffset: 0` replays durable events from the first row;
-   * `3` starts durable replay at offset 4. Ephemeral rows are delivered only
-   * if appended after this exact connection opens and are never replayed.
+   * default. `replayAfterOffset: 0` replays durable events plus any ephemeral
+   * events still buffered in this incarnation; `3` starts replay at offset 4.
    * Opening the same key again replaces the old connection. Omit
    * `connectionKey` to let the stream assign a random key. Call `close()` on
    * the returned handle to stop delivery.
@@ -1441,7 +1540,15 @@ export class StreamDurableObject extends DurableObject<Env> {
    * (`subscription-configured` events); the source stream wakes a hosted
    * processor and retains the `processEventBatch` callback it returns.
    */
-  openConnection(args: Parameters<Stream["openConnection"]>[0]): StreamConnectionHandle {
+  openConnection(
+    args: Parameters<Stream["openConnection"]>[0],
+    // Internal relay plumbing (which wake socket this open binds) rides a
+    // separate parameter, never the public arg bag: the relay spreads the
+    // caller's args through, so anything merged into their shape would be
+    // client-spoofable by default. Public callers cannot reach this DO
+    // directly; the relay generates the id.
+    relay?: { wakeSocketId: string },
+  ): StreamConnectionHandle {
     const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
     if (this.#coreProcessorState.subscriptions.outbound.byKey[connectionKey] !== undefined) {
       throw new Error(`connectionKey "${connectionKey}" is reserved by a subscription`);
@@ -1500,10 +1607,11 @@ export class StreamDurableObject extends DurableObject<Env> {
 
     // One filter shape everywhere: `eventTypes` is sugar for the filter's
     // type list (compileEventFilter also validates any condition upfront).
-    const filter = compileEventFilter({
+    const filterSpec: EventFilter = {
       ...args.filter,
       ...(args.eventTypes === undefined ? {} : { eventTypes: [...args.eventTypes] }),
-    });
+    };
+    const filter = compileEventFilter(filterSpec);
 
     const connection = this.#eventSender.connections.openSession({
       connectionKey,
@@ -1521,6 +1629,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       ping: args.ping,
     });
 
+    this.#wakeSockets.bind({
+      connectionKey,
+      wakeSocketId: relay?.wakeSocketId,
+      filter: filterSpec,
+      events: args.events,
+    });
+
     return new StreamConnectionRpcTarget({
       close: () => connection.close("closed-by-owner"),
       isLive: () => connection.isLive(),
@@ -1528,12 +1643,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * One-shot convenience over `openConnection()`: replay durable events from the
-   * requested cursor, then receive newly appended events until a caller predicate accepts one.
+   * One-shot convenience over `openConnection()`: replay durable and currently
+   * buffered ephemeral events from the requested cursor, then receive new
+   * events until a caller predicate accepts one.
    *
-   * Rides a session connection, so it CAN match a transient event
-   * appended after this wait opens. It never matches a historical ephemeral
-   * row, regardless of `afterOffset`.
+   * Rides a session connection, so it can match an ephemeral event already in
+   * this incarnation's memory or one appended after the wait opens.
    *
    * Intentionally not a durable waiter. If the RPC caller or this DO
    * incarnation dies, the wait dies too; callers that need retry semantics
@@ -1640,14 +1755,18 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Materialize at most once per mutation burst, and only while observed. */
   #refreshLiveState(): void {
-    // Cursor cleanup can reach this before the constructor assigns
-    // #liveState; the optional read is therefore intentional.
+    // liveState watchers on the hibernatable socket lane: state only changes
+    // while this DO is awake, so scheduling here — the one materialization
+    // point — is complete coverage; the flusher reads state at flush time.
+    // Cursor cleanup can reach this before the constructor assigns the
+    // fields; the optional reads are therefore intentional.
+    this.#liveStateSockets?.scheduleFlush();
     const liveState = this.#liveState;
     if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
     this.#liveStateRefreshScheduled = true;
     queueMicrotask(() => {
       this.#liveStateRefreshScheduled = false;
-      if (liveState.observed) liveState.setState(this.#readRuntimeState());
+      liveState.setState(this.#readRuntimeState());
     });
   }
 
@@ -1656,11 +1775,60 @@ export class StreamDurableObject extends DurableObject<Env> {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: this.#eventSender.connections.runtimeState(),
+        dormantSubscribers: this.#wakeSockets.dormantRuntimeState(),
         subscriptions: this.#eventSender.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
+        ephemeralEvents: this.#ephemeralEvents.runtimeState(),
         storageSizeBytes: this.ctx.storage.sql.databaseSize,
       },
     };
+  }
+
+  // ===========================================================================
+  // Wake sockets: the hibernatable channel behind idle-closed session
+  // connections. All mechanics live in WakeSocketRegistry (wake-socket.ts);
+  // this class only routes the platform entry points to it.
+  // ===========================================================================
+
+  /** The Stream DO's fetch surface: the liveState-socket and wake-socket upgrades, nothing else. */
+  async fetch(request: Request): Promise<Response> {
+    return (
+      (await this.#liveStateSockets.acceptUpgrade(request)) ??
+      this.#wakeSockets.acceptUpgrade(request)
+    );
+  }
+
+  /** Wake sockets are one-way (this DO → relay); inbound frames are ignored. */
+  webSocketMessage(): void {}
+
+  /**
+   * A closed socket disappears from `getWebSockets`, which is most of the
+   * cleanup: the registry stops reporting it and the connection (if any)
+   * keeps today's non-idle-eligible session semantics. But when the socket
+   * carried a DORMANT subscriber, its closing is the subscriber's real
+   * departure — the `"idle"` close deliberately was not one — so audit and
+   * presence consumers get the durable `"departed"` fact here. Idempotent
+   * per socket; best-effort like every connection-close observation.
+   */
+  webSocketClose(ws: WebSocket): void {
+    const departed = this.#wakeSockets.departedOnClose(ws);
+    if (departed === undefined) return;
+    try {
+      this.#append({ authority: "core-event" }, [
+        {
+          type: "events.iterate.com/stream/connection-closed",
+          idempotencyKey: internalStreamId("wake-socket-departed", departed.socketId),
+          payload: { connectionKey: departed.connectionKey, reason: "departed" },
+        },
+      ]);
+    } catch (error) {
+      if (!isDurableObjectLifecycleError(error)) throw error;
+    }
+  }
+
+  /** Shared by both socket lanes; a fault is only ever explicable after the fact. */
+  webSocketError(_ws: WebSocket, error: unknown): void {
+    this.#liveStateSockets.socketError(error);
   }
 
   // ===========================================================================
@@ -1701,7 +1869,7 @@ export class StreamDurableObject extends DurableObject<Env> {
  */
 // Built ONCE: constructing a zod schema per appended event cost ~20µs/event
 // inside the synchronous commit turn (~50x the hoisted parse).
-const StreamAppendInput = StreamEventInputSchema.extend({
+const StreamAppendInput = StreamEventInputSchema.safeExtend({
   offset: z.number().int().nonnegative().optional(),
 }).strict();
 

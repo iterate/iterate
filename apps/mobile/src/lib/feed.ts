@@ -26,6 +26,9 @@ export type {
   AgentUiStep,
   AgentUiStreamWakeItem,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
+// Round grouping lives with the reducer so the os web feed groups the same
+// way (apps/os/src/components/agent-feed.tsx renders the same rounds).
+export { groupActivityRounds } from "@iterate-com/ui/components/events/agent-ui-reducer";
 
 export type AgentFeed = {
   /** Settled items in order, then queued user messages, then the live activity. */

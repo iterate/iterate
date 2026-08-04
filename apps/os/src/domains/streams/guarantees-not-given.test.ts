@@ -72,6 +72,7 @@ function durableObjectContext(name: string) {
   const values = new Map<string, unknown>();
   const backgroundWork: Promise<unknown>[] = [];
   const alarms: number[] = [];
+  const alarmDeletes: number[] = [];
   let latestInitialization: Promise<unknown> | undefined;
   const storage = {
     sql: wrapSqlStorage(db),
@@ -91,6 +92,10 @@ function durableObjectContext(name: string) {
       alarms.push(atMs);
       return Promise.resolve();
     },
+    deleteAlarm(): Promise<void> {
+      alarmDeletes.push(alarms.length);
+      return Promise.resolve();
+    },
     sync(): Promise<void> {
       return Promise.resolve();
     },
@@ -102,6 +107,9 @@ function durableObjectContext(name: string) {
     id: { name },
     storage,
     exports: {},
+    getWebSockets(): WebSocket[] {
+      return [];
+    },
     waitUntil(work: Promise<unknown>): void {
       backgroundWork.push(work);
     },
@@ -439,8 +447,12 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         now: () => now,
         random: () => 0.5,
         armAlarm: () => undefined,
+        clearAlarm: () => undefined,
         runDurable: (work) => kept.push(work()),
         keepAlive: (promise) => kept.push(promise),
+        wakeChannelKeys: () => new Set<string>(),
+        onSessionsIdleClosed: () => undefined,
+        wakeDormantSubscribers: () => undefined,
       },
     });
     async function settle() {

@@ -3,8 +3,13 @@ import { DeepLinkEmptyState } from "../components/deep-link-empty-state.tsx";
 import { WorkspaceDocumentPage } from "../components/workspace-document-page.tsx";
 
 export const Route = createFileRoute("/")({
-  validateSearch: (search: Record<string, unknown>): { path?: string; workspace?: string } => ({
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { path?: string; repo?: string; workspace?: string } => ({
     path: typeof search.path === "string" ? search.path : undefined,
+    // The docs view ignores repo; it rides along so switching back to the
+    // tasks view lands on the same board mount instead of the default.
+    repo: typeof search.repo === "string" ? search.repo : undefined,
     workspace: typeof search.workspace === "string" ? search.workspace : undefined,
   }),
   component: DocumentPage,
@@ -13,7 +18,9 @@ export const Route = createFileRoute("/")({
 function DocumentPage() {
   const search = Route.useSearch();
   if (search.workspace === undefined || search.path === undefined) {
-    return <DeepLinkEmptyState />;
+    // Workspace without document: the sidebar switcher lands here — the
+    // picker opens scoped to that workspace, choosing a document is next.
+    return <DeepLinkEmptyState workspacePath={search.workspace} />;
   }
   // A deep link owns one collab session. Switching either address must tear
   // down its live editor, refs, and attach gate before the next snapshot shows.
