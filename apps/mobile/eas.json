@@ -5,18 +5,23 @@
   "build": {
     "development": {
       "developmentClient": true,
-      "distribution": "internal"
+      "distribution": "internal",
+      "channel": "development"
     },
     "development-simulator": {
       "developmentClient": true,
       "distribution": "internal",
       "ios": {
         "simulator": true
-      }
+      },
+      "channel": "development-simulator"
     },
     "preview": {
-      "distribution": "internal"
+      "distribution": "internal",
+      "channel": "preview"
     },
-    "production": {}
+    "production": {
+      "channel": "production"
+    }
   }
 }

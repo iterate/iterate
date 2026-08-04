@@ -138,6 +138,10 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
                   label="Switch project"
                   onPress={() => close(() => router.push("/projects"))}
                 />
+                <DrawerItem
+                  label="Build info"
+                  onPress={() => close(() => router.push("/build-info"))}
+                />
               </View>
             </View>
           </Animated.View>

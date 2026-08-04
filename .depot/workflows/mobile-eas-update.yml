@@ -1,0 +1,40 @@
+name: Mobile EAS Update
+permissions:
+  contents: read
+concurrency:
+  # Updates must publish in commit order so the preview channel's latest
+  # update is always the latest main. Serialize, never cancel.
+  group: mobile-eas-update
+  cancel-in-progress: false
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .depot/workflows/mobile-eas-update.yml
+      - scripts/ci/publish-mobile-update.ts
+      - apps/mobile/**
+      - packages/ui/**
+      - packages/shared/**
+      - packages/iterate/**
+      - patches/**
+  workflow_dispatch: {}
+jobs:
+  publish:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      # EXPO_TOKEN lives in the Doppler _shared project and is inherited by
+      # os/prd; eas-cli picks it up from the environment.
+      - name: Publish update (and native build on fingerprint change)
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project os --config prd -- pnpm tsx scripts/ci/publish-mobile-update.ts
