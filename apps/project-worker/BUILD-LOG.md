@@ -234,16 +234,22 @@ half and proves both.
     it a facet of `ItxDurableObject`): a stateful worker is its own durable actor (identity, storage,
     lifecycle), so it deserves its own DO; the host shouldn't accumulate N facets; and it's workerd's prescribed
     "parent … constructs the dynamic worker and forwards to it" shape.
-- **The workerd constraint (binary-confirmed 1.20260701.1):** a stub to a Worker-Loader facet is
-  **non-transferable across the Worker boundary** — _"Entrypoints to dynamically-loaded workers cannot be
-  transferred to other Workers … have the parent Worker … forward to it."_ A custom facet-**method** result gets
-  pipelined and hands the caller a facet-stub reference → **thrown at the call, at ANY DO depth** (host→facet
-  AND host→runner→facet both fail on deployed workerd; apps/os's native `replayPath` works under local
-  miniflare). `facet.fetch()` passes a `Response` **by value**, so it works. **So the runner reaches its facet
-  over `fetch`:** a `__HostedActor` wrapper subclass adds a `/__itx_rpc` dispatch; the runner POSTs
-  `{method,args}`, **materialises the JSON, and returns plain data to the host** — the host↔runner hop carries no
-  facet stub. The WS/streaming lane is `/facet` → runner → the user class's own `fetch`. The user writes normal
-  methods. (Same "fetch is the lane RPC can't cross" as D32.)
+- **The facet-method-RPC transport (VERIFIED against apps/os prod).** apps/os calls the facet's methods
+  **natively** (`replayPath` = `await facet.method()`). I initially concluded that was fundamentally broken on
+  deployed workerd — **that was wrong.** I verified against **prod apps/os** (`itx run --context` a stateful
+  worker on os.iterate.com): a plain-`DurableObject` method returned a value (`ping(2) → {pong:20}`,
+  `bump(5)→5`). **So native facet-method RPC works on apps/os prod — no apps/os bug.** But the SAME native call
+  throws _"Durable Object Facet stubs cannot be transferred between Workers"_ on THIS deployment, reproduced at
+  every DO depth (host→facet AND host→runner→facet) after matching apps/os on: architecture, compat date+flags
+  (loaded + supervisor), env (incl. a loopback `ITX`), `globalOutbound` (loopback), native+`await`, a default
+  `WorkerEntrypoint`, transport (HTTP AND capnweb), caller topology (via host AND direct entry→runner), and
+  bundling (esbuild). Facets themselves work here (the fetch lane does), so it is specifically facet-**method**-
+  stub transfer that differs — **leading hypothesis: an account-level Worker-Loader entitlement on the POC
+  account `04b3…` vs the iterate prod account** (unconfirmed). **So for now the runner reaches its facet over
+  `fetch`:** a `__HostedActor` wrapper adds a `/__itx_rpc` dispatch; the runner POSTs `{method,args}`,
+  materialises the JSON, and returns plain data to the host (host↔runner hop carries no facet stub). WS/streaming
+  lane = `/facet` → runner → the user class's own `fetch`. The user writes normal methods. Retry native once the
+  delta is understood.
 - **Proven** (deployed `project-worker`, fresh `prj_facet_o`): a `Counter extends DurableObject` (SQLite) →
   `itx.counter.increment(2/3/5)` → **2, 5, 10** (RPC lane through the runner DO); `GET /facet` →
   `{value:10, via:"facet-fetch-lane"}` (fetch lane, same storage); put a **v2** source → `itx.counter.value`

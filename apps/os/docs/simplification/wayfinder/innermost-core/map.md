@@ -448,14 +448,18 @@ substrate: 4 spikes in `spikes/` (pipelining, fallthrough, wake, fused-1000-devi
   as a facet `"target"` with its own isolated SQLite, abort+recreate on source change). The capability host just
   forwards by name — a stateful worker is its own durable actor (identity/storage/lifecycle), so it gets its own
   DO, not a facet crammed into the per-context host. **(First cut wrongly made it a facet of the host DO — Jonas
-  corrected this.)** **Constraint (binary-confirmed workerd 1.20260701.1):** a Worker-Loader facet's **method**
-  stub is non-transferable across the Worker boundary — thrown at the call at ANY DO depth (host→facet AND
-  host→runner→facet both fail on deployed workerd; apps/os's native `replayPath` only works under local
-  miniflare). `facet.fetch()` passes a Response **by value** and works. So the runner reaches its facet over
-  `/__itx_rpc` fetch (via a `__HostedActor` wrapper), **materialises the JSON, and returns plain data** to the
-  host — the host↔runner hop carries no facet stub. WS/streaming lane = `/facet` → runner → the user class's own
-  `fetch`. Same "fetch is the lane RPC can't cross" as D32. (Deferred: a facet reaching BACK into its host via
-  `itx`; facet alarms — workerd#6810.)
+  corrected this.)** **Facet-method RPC — VERIFIED against apps/os prod, NOT a fundamental limit.** apps/os calls
+  facet methods natively (`replayPath`), and that **works on prod** (verified via `itx run` against a stateful
+  worker on os.iterate.com: `ping(2)→{pong:20}`) — **no apps/os bug.** But the same native call throws _"facet
+  stubs cannot be transferred between Workers"_ on OUR POC deployment, reproduced at every DO depth after
+  matching apps/os on architecture, compat date+flags (loaded+supervisor), env (loopback ITX), globalOutbound
+  (loopback), native+await, default WorkerEntrypoint, transport (HTTP+capnweb), caller topology, and bundling.
+  Facets work here (the fetch lane does), so it's specifically facet-**method**-stub transfer — **leading
+  hypothesis: an account-level Worker-Loader entitlement (POC account vs iterate prod), unconfirmed.** So for now
+  the runner reaches its facet over `/__itx_rpc` fetch (`__HostedActor` wrapper), materialises the JSON, and
+  returns plain data (host↔runner hop carries no facet stub). WS/streaming lane = `/facet` → runner → the user
+  class's own `fetch`. Retry native once the delta is understood. (Deferred: a facet reaching BACK into its host
+  via `itx`; facet alarms — workerd#6810.)
 - **D14 — Cost/billing is USERSPACE, not a control-plane primitive.** Budgets/spend limits are a key PRODUCT
   concern but implemented in userspace: a **stream processor that consumes cost-bearing events** across
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core

@@ -3,12 +3,16 @@
 // `{projectId}::{path}::{callPath}`, each hosting the user's `DurableObject` class as a single facet "target"
 // with its OWN isolated SQLite. The capability host reaches it by NAME (a namespace binding) and forwards.
 //
-// Facet RPC is TUNNELED over fetch, not native: a Worker-Loader facet's method stub is non-transferable across
-// the Worker boundary — a custom method result gets pipelined and hands the caller a facet-stub reference,
-// which throws on deployed workerd (verified 1.20260701.1, at ANY DO depth: host→runner→facet still fails).
-// `facet.fetch()` passes a Response BY VALUE, so the runner reaches its facet's methods over `/__itx_rpc`,
-// materialises the JSON, and returns PLAIN DATA to the host — the host↔runner hop carries no facet stub. This
-// is workerd's prescribed "forward to it" shape. (apps/os's native `replayPath` works under local miniflare.)
+// Facet RPC is TUNNELED over fetch here, not native. apps/os calls the facet's methods NATIVELY (replayPath =
+// `await facet.method()`) and that WORKS on apps/os PROD (verified: a plain-DO stateful worker's method returned
+// a value on os.iterate.com). But the SAME native call throws "Durable Object Facet stubs cannot be transferred
+// between Workers" on THIS deployment — reproduced at every DO depth (host→facet AND host→runner→facet) after
+// matching apps/os on architecture, compat date+flags, env (incl. a loopback ITX), globalOutbound (loopback),
+// native+await, a default WorkerEntrypoint, transport (HTTP AND capnweb), and bundling. Facets themselves work
+// here (this fetch lane does), so it is specifically facet-METHOD-stub transfer that differs — most likely an
+// account-level Worker-Loader entitlement on the POC account vs iterate prod (unconfirmed). `facet.fetch()`
+// passes a Response BY VALUE and works everywhere, so the runner reaches its facet's methods over `/__itx_rpc`,
+// materialises the JSON, and returns PLAIN DATA to the host. TODO: retry native once the delta is understood.
 
 import { DurableObject } from "cloudflare:workers";
 import { statefulDoRunner } from "./core/agent-runtime.ts";
