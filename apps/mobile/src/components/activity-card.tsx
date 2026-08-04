@@ -212,22 +212,31 @@ function CodeStepTabs({
   ];
   const active =
     selected !== null && tabs.some((tab) => tab.key === selected) ? selected : "script";
-  // The prompt replay folds the whole event window, so it only runs once the
-  // Meta tab is actually open. Same event filter as the os panel's SQL: the
-  // fold's consumed types, up to the request offset plus its own lifecycle.
+  // The prompt replay only needs `messages`, and those fold purely from
+  // events at or before the request offset — immutable history. So it runs
+  // once the Meta tab is open AND the window has reached the request offset,
+  // and it deliberately does NOT depend on `threadEvents`/`llm` identity:
+  // live feed reductions recreate both on every stream event, and keying on
+  // them would rerun the whole fold (filter + stringify + reduce) per event
+  // while Meta is open. The offset plus the covered flag pin the exact same
+  // input set. (Request-scoped lifecycle events feed only the replay's
+  // response/stats, which this tab doesn't show — not fetched.)
+  const requestCovered =
+    llm !== null && threadEvents.length > 0 && threadEvents.at(-1)!.offset >= llm.llmRequestOffset;
+  const llmRequestOffset = llm === null ? null : llm.llmRequestOffset;
   const promptReplay = useMemo(() => {
-    if (active !== "meta" || llm === null) return null;
+    if (active !== "meta" || llmRequestOffset === null || !requestCovered) return null;
     const relevant = threadEvents.filter(
-      (event) =>
-        LLM_REPLAY_EVENT_TYPES.includes(event.type) &&
-        (event.offset <= llm.llmRequestOffset ||
-          event.payload?.llmRequestOffset === llm.llmRequestOffset),
+      (event) => LLM_REPLAY_EVENT_TYPES.includes(event.type) && event.offset <= llmRequestOffset,
     );
     return replayLlmRequest({
       rawEventJsons: relevant.map((event) => JSON.stringify(event)),
-      llmRequestOffset: llm.llmRequestOffset,
+      llmRequestOffset,
     });
-  }, [active, llm, threadEvents]);
+    // threadEvents is read but deliberately excluded: covered history at a
+    // fixed offset cannot change (see comment above the memo).
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, llmRequestOffset, requestCovered]);
   return (
     <View style={styles.stepBody}>
       <View style={styles.tabRow}>
