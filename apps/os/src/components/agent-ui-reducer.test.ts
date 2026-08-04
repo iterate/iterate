@@ -232,6 +232,10 @@ describe("agent-ui reducer", () => {
         type: "events.iterate.com/capability-host/script-run-settled",
         payload: { executionId: "x2", settlement: { status: "succeeded", result: 2 } },
       },
+      {
+        type: "events.iterate.com/capability-host/script-run-requested",
+        payload: { executionId: "x3", code: "await round3()", expiresAt: SCRIPT_EXPIRES_AT },
+      },
     ]);
 
     const codeSteps = state.live?.steps.filter((step) => step.kind === "code");
@@ -240,6 +244,9 @@ describe("agent-ui reducer", () => {
       // x2's script appended no summary — the round's status is whatever the
       // stream's summary said as of that round.
       { executionId: "x2", activitySummary: "Running script 1 of 2" },
+      // x3 inherits from BIRTH, so live headers and inferred (deadline/idle)
+      // closes carry the status too — not only durable settles.
+      { executionId: "x3", status: "running", activitySummary: "Running script 1 of 2" },
     ]);
   });
 

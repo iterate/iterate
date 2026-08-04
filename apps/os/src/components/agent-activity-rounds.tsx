@@ -14,10 +14,7 @@ import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/b
 import { buildRoundMetaYaml, resultYaml } from "~/lib/agent-round-meta-yaml.ts";
 import { formatClockTime, formatSeconds, formatTokens, looksLikeCode } from "~/lib/feed-format.ts";
 import { LLM_REPLAY_EVENT_TYPES, replayLlmRequest } from "~/lib/llm-request-replay.ts";
-import {
-  MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS,
-  oversizedScriptResultPreview,
-} from "~/lib/script-result-preview.ts";
+import { MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS } from "~/lib/script-result-preview.ts";
 
 // The web feed's ROUND rendering: an expanded "Ran code N×" activity is a list
 // of rounds (the llm step that writes a script and the code step that runs
@@ -321,8 +318,11 @@ function RoundTabs({
 }
 
 function RoundResult({ code }: { code: AgentUiCodeStep }) {
-  const oversizedResult = useMemo(
-    () => (code.result === undefined ? null : oversizedScriptResultPreview(code.result)),
+  // One YAML fold for every size; only the RENDERER is bounded — CodeMirror
+  // is expensive near the stream event-size ceiling, so oversized results get
+  // a plain-text preview of the same YAML instead of falling back to JSON.
+  const yaml = useMemo(
+    () => (code.result === undefined ? null : resultYaml(code.result)),
     [code.result],
   );
   return (
@@ -332,22 +332,21 @@ function RoundResult({ code }: { code: AgentUiCodeStep }) {
           {code.errorMessage}
         </pre>
       )}
-      {code.result === undefined ? null : oversizedResult == null ? (
+      {yaml == null ? null : yaml.length <= MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS ? (
         <div className="max-h-80 overflow-y-auto rounded-lg">
-          <SourceCodeBlock code={resultYaml(code.result)} language="yaml" showLineNumbers={false} />
+          <SourceCodeBlock code={yaml} language="yaml" showLineNumbers={false} />
         </div>
       ) : (
         <div className="overflow-hidden rounded-lg border bg-muted/20">
           <p className="border-b px-3 py-2 text-xs text-muted-foreground">
-            This result is {oversizedResult.totalCharacters.toLocaleString()} characters. Showing
-            the first {MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS / 1024} KB without syntax
-            highlighting.
+            This result is {yaml.length.toLocaleString()} characters as YAML. Showing the first{" "}
+            {MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS / 1024} KB without syntax highlighting.
           </p>
           <pre
             className="max-h-80 overflow-auto whitespace-pre-wrap break-words px-3 py-2 font-mono text-xs leading-relaxed"
             data-testid="script-result-bounded-preview"
           >
-            {oversizedResult.preview}
+            {yaml.slice(0, MAX_HIGHLIGHTED_SCRIPT_RESULT_CHARACTERS)}
             {"\n…"}
           </pre>
         </div>

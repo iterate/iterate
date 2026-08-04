@@ -810,6 +810,9 @@ function reduceAgentUiEvent(
         code,
         startedAtMs: timestampMs,
         expiresAtMs,
+        // Inherit the stream's summary status from birth, so live headers and
+        // inferred (deadline/idle) closes carry it — not only durable settles.
+        ...(state.summaryActivity == null ? {} : { activitySummary: state.summaryActivity }),
       };
       return { ...state, live: { ...live, steps: [...live.steps, step] } };
     }
