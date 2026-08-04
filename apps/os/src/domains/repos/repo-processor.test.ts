@@ -156,6 +156,7 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
       beforeCommitOid: string | null;
       branch: string;
     }[],
+    seeded: [] as { branch: string; commitOid: string; contentHash: string }[],
   };
   const harness = makeProcessorHarness<RepoProcessorContract, RepoProcessor>({
     createProcessor: (deps) =>
@@ -189,6 +190,7 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
           return githubSync.impl();
         },
         observeArtifactPush: (input) => void headCache.observed.push(input),
+        recordSeededHead: (input) => void headCache.seeded.push(input),
       }),
     path: REPO_PATH,
     substrate,
@@ -281,6 +283,36 @@ describe("RepoProcessor creation saga", () => {
     });
     expect(h.events("events.iterate.com/repos/template-source-resolved")).toEqual([]);
     expect(h.events("events.iterate.com/repos/created")).toEqual([]);
+  });
+
+  it("adopts a coordinator-seeded head before acknowledging template birth", async () => {
+    const h = makeRepoHarness();
+    const request = {
+      type: "github-public-template" as const,
+      owner: "iterate",
+      path: "configs/with-voice",
+      ref: "main",
+      repo: "iterate",
+    };
+    const seededHead = {
+      branch: "main",
+      commitOid: "template-seed-oid",
+      contentHash: "template-content-hash",
+    };
+
+    await h.play(
+      ["append", { type: "events.iterate.com/repos/create-requested", payload: request }],
+      [
+        "append",
+        {
+          type: "events.iterate.com/repos/created",
+          payload: { ...SEEDED_ARTIFACT, request, seededHead },
+        },
+      ],
+    );
+
+    expect(h.headCache.seeded).toEqual([seededHead]);
+    expect(h.state().birthCertificate).toMatchObject({ request, seededHead });
   });
 
   it("arms template creation before a hosted delivery reaches the raw stream head", async () => {

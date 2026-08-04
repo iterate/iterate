@@ -515,6 +515,18 @@ function repoBirthCertificateSchema() {
       .min(1)
       .meta({ description: "The branch commit and task facts derive from." }),
     remote: z.string().url().meta({ description: "The artifact's Git remote URL." }),
+    seededHead: z
+      .strictObject({
+        branch: z.string().trim().min(1),
+        commitOid: z.string().trim().min(1),
+        contentHash: z.string().trim().min(1),
+      })
+      .optional()
+      .meta({
+        description:
+          "The deterministic creation push, when seeding happened outside the Repo actor. " +
+          "Its consumed fact establishes the actor's read-your-write floor before birth.",
+      }),
   });
 }
 

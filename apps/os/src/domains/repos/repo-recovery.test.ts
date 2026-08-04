@@ -45,6 +45,7 @@ function makeHarness() {
           throw new Error("must not sync a push in this scenario");
         },
         observeArtifactPush: () => {},
+        recordSeededHead: () => {},
       }),
   });
   return { ...harness, createEmpty };

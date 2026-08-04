@@ -94,6 +94,10 @@ const REPO_HEAD_TREE_KEY = "repo-head-tree:v1";
 // another mutation, so an already-landed Git commit cannot become a silent
 // no-op with no repo/commit-completed fact.
 const PENDING_COMMIT_COMPLETED_KV_KEY = "pending-commit-completed:v1";
+// The coordinator's repos/created fact may replay after later writes have
+// invalidated the branch head record. Remember that its seed floor was
+// already adopted so replay can never move local authority backwards.
+const TEMPLATE_SEED_HEAD_RECORDED_KV_KEY = "template-seed-head-recorded:v1";
 // The lazy head-record publication computes the whole-snapshot contentHash
 // (worker builds want it hot) only when the manifest is small enough for
 // that to be a cheap in-store read; bigger repos leave the record to the
@@ -160,6 +164,7 @@ export class RepoDurableObject extends DurableObject<Env> {
       createEmptyArtifact: () => this.#serializeWrite(() => this.createEmptyArtifactRepo()),
       importPublicGithubArtifact: (input) =>
         this.#serializeWrite(() => this.importPublicGithubArtifact(input)),
+      recordSeededHead: (input) => this.#recordTemplateSeededHead(input),
       linkGithub: async (input) => {
         if (this.#name.projectId === null) {
           throw new Error("GitHub-backed repos require a project-scoped repo.");
@@ -1047,6 +1052,26 @@ export class RepoDurableObject extends DurableObject<Env> {
         commitOid: result.commitOid,
       }),
     );
+  }
+
+  #recordTemplateSeededHead(input: {
+    branch: string;
+    commitOid: string;
+    contentHash: string;
+  }): void {
+    const recorded = this.ctx.storage.kv.get<unknown>(TEMPLATE_SEED_HEAD_RECORDED_KV_KEY);
+    if (recorded !== undefined) {
+      if (recorded !== input.commitOid) {
+        throw new Error("The template creation fact changed its seeded head after adoption.");
+      }
+      return;
+    }
+    this.#recordPushedHead({ branch: input.branch, commitOid: input.commitOid });
+    this.ctx.storage.kv.put(repoHeadStorageKey(input.branch), {
+      commitOid: input.commitOid,
+      contentHash: input.contentHash,
+    });
+    this.ctx.storage.kv.put(TEMPLATE_SEED_HEAD_RECORDED_KV_KEY, input.commitOid);
   }
 
   #stageCommitCompleted(input: {

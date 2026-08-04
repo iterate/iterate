@@ -59,14 +59,20 @@ beforeEach(() => {
   mocks.readFiles.mockResolvedValue([
     { bytes: new Uint8Array([1, 2, 3]), mode: "100644", path: "worker.ts" },
   ]);
-  mocks.seedArtifactRepo.mockResolvedValue({ commitOid: "seed-oid", contentHash: "hash" });
+  mocks.seedArtifactRepo.mockImplementation(async (input) => {
+    const head = { commitOid: "seed-oid", contentHash: "hash" };
+    input.onSeedHeadPrepared?.(head);
+    return head;
+  });
 });
 
 describe("createGithubTemplateArtifact", () => {
   it("materializes the immutable source into the known Artifact", async () => {
-    const onSeeded = vi.fn();
+    const onSeedHeadPrepared = vi.fn();
 
-    await expect(createGithubTemplateArtifact({ ...baseInput, onSeeded })).resolves.toEqual({
+    await expect(
+      createGithubTemplateArtifact({ ...baseInput, onSeedHeadPrepared }),
+    ).resolves.toEqual({
       artifactName: baseInput.artifactName,
       defaultBranch: "main",
       remote: "https://account.artifacts.cloudflare.net/git/namespace/prj_test--config.git",
@@ -80,24 +86,40 @@ describe("createGithubTemplateArtifact", () => {
     });
     expect(mocks.seedArtifactRepo).toHaveBeenCalledWith({
       branch: "main",
+      expectExisting: false,
       files: [{ content: new Uint8Array([1, 2, 3]), mode: "100644", path: "worker.ts" }],
+      onSeedHeadPrepared,
       remote: "https://account.artifacts.cloudflare.net/git/namespace/prj_test--config.git",
       token: "initial-token",
     });
     expect(mocks.artifactWriteToken).not.toHaveBeenCalled();
-    expect(onSeeded).toHaveBeenCalledWith({ commitOid: "seed-oid", contentHash: "hash" });
+    expect(onSeedHeadPrepared).toHaveBeenCalledWith({
+      commitOid: "seed-oid",
+      contentHash: "hash",
+    });
   });
 
-  it("leaves an already-pushed Artifact untouched", async () => {
+  it("recovers an already-pushed Artifact's exact head without permitting reinitialization", async () => {
+    const onSeedHeadPrepared = vi.fn();
     mocks.getOrCreateArtifact.mockResolvedValue({
       initialWriteToken: null,
       lastPushAt: "2026-08-04T00:00:00.000Z",
     });
 
-    await createGithubTemplateArtifact(baseInput);
+    await createGithubTemplateArtifact({ ...baseInput, onSeedHeadPrepared });
 
-    expect(mocks.readFiles).not.toHaveBeenCalled();
-    expect(mocks.seedArtifactRepo).not.toHaveBeenCalled();
-    expect(mocks.artifactWriteToken).not.toHaveBeenCalled();
+    expect(mocks.readFiles).toHaveBeenCalledOnce();
+    expect(mocks.seedArtifactRepo).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expectExisting: true,
+        onSeedHeadPrepared,
+        token: "minted-token",
+      }),
+    );
+    expect(mocks.artifactWriteToken).toHaveBeenCalledOnce();
+    expect(onSeedHeadPrepared).toHaveBeenCalledWith({
+      commitOid: "seed-oid",
+      contentHash: "hash",
+    });
   });
 });

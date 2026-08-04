@@ -6,7 +6,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
-import { createGithubTemplateArtifact } from "./github-template-creation.ts";
+import { createGithubTemplateArtifact, type SeededHead } from "./github-template-creation.ts";
 import {
   createGithubTemplateSource,
   isRetryableGithubTemplateSourceError,
@@ -32,13 +32,22 @@ const RepoTemplateCreationHandoffInput = z.strictObject({
 });
 const QueuedRepoTemplateCreation = RepoTemplateCreationHandoffInput.extend({
   failedAttempts: z.number().int().nonnegative().default(0),
+  seededHead: z
+    .strictObject({
+      commitOid: z.string().min(1),
+      contentHash: z.string().min(1),
+    })
+    .optional(),
 });
 
 type RepoTemplateCreationHandoff = {
   request: Extract<RepoCreateRequest, { type: "github-public-template" }>;
   streamId: string;
 };
-type QueuedRepoTemplateCreation = RepoTemplateCreationHandoff & { failedAttempts: number };
+type QueuedRepoTemplateCreation = RepoTemplateCreationHandoff & {
+  failedAttempts: number;
+  seededHead?: SeededHead;
+};
 
 function parseHandoff(input: unknown): RepoTemplateCreationHandoff {
   const parsed = RepoTemplateCreationHandoffInput.parse(input);
@@ -204,7 +213,7 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
     return queued;
   }
 
-  async #drive(handoff: RepoTemplateCreationHandoff): Promise<void> {
+  async #drive(handoff: QueuedRepoTemplateCreation): Promise<void> {
     const page = await this.#stream.getEventPage({
       eventTypes: [
         "events.iterate.com/repos/create-requested",
@@ -260,11 +269,22 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
       });
     }
 
+    let seededHead = handoff.seededHead;
     const artifact = await createGithubTemplateArtifact({
       artifactName: RepoArtifactNameCodec.stringify(this.#name),
       artifacts: this.env.ARTIFACTS,
       artifactsAccountId: this.env.ARTIFACTS_ACCOUNT_ID,
       artifactsNamespace: this.env.ARTIFACTS_NAMESPACE,
+      onSeedHeadPrepared: (head) => {
+        if (
+          seededHead !== undefined &&
+          (seededHead.commitOid !== head.commitOid || seededHead.contentHash !== head.contentHash)
+        ) {
+          throw new Error("Template Artifact recovered with a different deterministic seed head.");
+        }
+        seededHead = head;
+        this.ctx.storage.kv.put(QUEUED_CREATION_STORAGE_KEY, { ...handoff, seededHead: head });
+      },
       projectId: this.#name.projectId,
       repoPath: this.#name.path,
       source,
@@ -276,11 +296,18 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
       return null;
     });
     if (artifact === null) return;
+    if (seededHead === undefined) {
+      throw new Error("Template Artifact materialization did not report its seeded head.");
+    }
 
     await this.#append(handoff.streamId, {
       type: "events.iterate.com/repos/created",
       idempotencyKey: `${RepoProcessorContract.slug}/created`,
-      payload: { ...artifact, request: handoff.request },
+      payload: {
+        ...artifact,
+        request: handoff.request,
+        seededHead: { branch: artifact.defaultBranch, ...seededHead },
+      },
     });
   }
 

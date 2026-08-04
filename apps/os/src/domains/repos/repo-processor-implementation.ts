@@ -137,6 +137,17 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         }
         break;
       }
+      case "events.iterate.com/repos/created": {
+        // Template materialization happens in the independent coordinator,
+        // outside this actor's storage. Consuming its terminal fact transfers
+        // the exact pushed head into the Repo actor before the processor
+        // acknowledges birth, preserving the same read-your-write boundary as
+        // locally seeded repos. Replays are idempotent in the dependency.
+        if (event.payload.seededHead !== undefined) {
+          this.deps.recordSeededHead(event.payload.seededHead);
+        }
+        break;
+      }
       case "events.iterate.com/repo/cloudflare-artifact-event-received": {
         const push = repoArtifactPushFromEventPayload(event.payload);
         if (push === null || state.defaultBranch === null || push.branch !== state.defaultBranch) {
@@ -202,8 +213,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         );
         break;
       }
-      // created / create-failed / github-link lifecycle / mirror-push
-      // outcomes / import lifecycle / stream lifecycle: no
+      // create-failed / github-link lifecycle / mirror-push outcomes /
+      // import lifecycle / stream lifecycle: no
       // per-event effect — they matter through the reduced state below.
     }
 
@@ -525,6 +536,10 @@ type RepoProcessorDeps = {
     defaultBranch: string;
     remote: string;
   }>;
+  /** Adopt a seed performed by the independent template coordinator into
+   * this Repo actor's branch authority and durable head record. Idempotent
+   * across processor replay. */
+  recordSeededHead(input: { branch: string; commitOid: string; contentHash: string }): void;
   /** Link the repo to the GitHub repository (configure the link, arm webhook
    * webhook delivery) without pushing starter history first. */
   linkGithub(input: { connection: string; owner: string; repo: string }): Promise<void>;

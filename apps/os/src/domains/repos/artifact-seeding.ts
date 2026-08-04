@@ -4,7 +4,7 @@ import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import { readCheckoutFiles, repoContentHash } from "./checkout-files.ts";
 import { stripArtifactTokenExpiry } from "./artifact-creation.ts";
 import type { GithubTemplateFile } from "./github-template-source.ts";
-import { classifyRepoAccessError, isRepoNotSeededError } from "./utils.ts";
+import { classifyRepoAccessError, isRepoNotSeededError, RepoNotSeededError } from "./utils.ts";
 
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 // Artifact creation is an at-least-once obligation. Concurrent first drives
@@ -28,11 +28,19 @@ export async function artifactWriteToken(artifacts: Artifacts, name: string): Pr
  */
 export async function seedArtifactRepo(input: {
   branch: string;
+  /** The control plane already observed a prior push. A failed clone is then
+   * eventual consistency or infrastructure failure, never permission to
+   * initialize and push a replacement root commit. */
+  expectExisting?: boolean;
   files: Array<{
     content: string | Uint8Array;
     mode?: GithubTemplateFile["mode"];
     path: string;
   }>;
+  /** Called once the deterministic head and content hash are known, before
+   * the first push. Durable coordinators use this to checkpoint the exact
+   * read-your-write floor even if the actor is reset after the push commits. */
+  onSeedHeadPrepared?: (head: { commitOid: string; contentHash: string }) => void;
   remote: string;
   token: string;
 }): Promise<{ commitOid: string; contentHash: string }> {
@@ -50,7 +58,13 @@ export async function seedArtifactRepo(input: {
       ...credentials,
     });
     cloned = true;
-  } catch {
+  } catch (error) {
+    if (input.expectExisting === true) {
+      throw new RepoNotSeededError(
+        `Previously pushed repo branch ${input.branch} is not readable yet.`,
+        { cause: error },
+      );
+    }
     await git.init({ defaultBranch: input.branch });
     await git.remote({ add: { name: "origin", url: input.remote } });
   }
@@ -61,10 +75,12 @@ export async function seedArtifactRepo(input: {
       throw error;
     });
     if (head) {
-      return {
+      const seeded = {
         commitOid: head.oid,
         contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
       };
+      input.onSeedHeadPrepared?.(seeded);
+      return seeded;
     }
   }
 
@@ -103,15 +119,17 @@ export async function seedArtifactRepo(input: {
     if (!String(error).match(/already exists/i)) throw error;
   }
 
+  const [head] = await git.log({ depth: 1, ref: input.branch });
+  if (!head) throw new Error(`Prepared repo has no head commit on ${input.branch}.`);
+  const seeded = {
+    commitOid: head.oid,
+    contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
+  };
+  input.onSeedHeadPrepared?.(seeded);
+
   const pushed = await git.push({ ref: input.branch, remote: "origin", ...credentials });
   if (!pushed.ok) {
     throw new Error(`Failed to push ${input.branch}: ${JSON.stringify(pushed.refs)}`);
   }
-
-  const [head] = await git.log({ depth: 1, ref: input.branch });
-  if (!head) throw new Error(`Seeded repo has no head commit on ${input.branch}.`);
-  return {
-    commitOid: head.oid,
-    contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
-  };
+  return seeded;
 }

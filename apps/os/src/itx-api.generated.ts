@@ -3365,6 +3365,7 @@ export type RepoProcessorState = {
     artifactName: string;
     defaultBranch: string;
     remote: string;
+    seededHead?: { branch: string; commitOid: string; contentHash: string } | undefined;
   } | null;
   artifactName: string | null;
   defaultBranch: string | null;

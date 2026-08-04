@@ -59,6 +59,7 @@ const artifact = {
   defaultBranch: "main",
   remote: "https://account.artifacts.cloudflare.net/git/ns/prj_test.git",
 };
+const seededHead = { commitOid: "seed-oid", contentHash: "seed-content-hash" };
 
 function committedRequest() {
   return {
@@ -111,7 +112,12 @@ beforeEach(() => {
   });
   mocks.getEvent.mockResolvedValue(undefined);
   mocks.resolveSource.mockResolvedValue(resolvedSource);
-  mocks.createArtifact.mockResolvedValue(artifact);
+  mocks.createArtifact.mockImplementation(
+    async (input: { onSeedHeadPrepared?: (head: typeof seededHead) => void }) => {
+      input.onSeedHeadPrepared?.(seededHead);
+      return artifact;
+    },
+  );
 });
 
 describe("RepoCreationCoordinatorDurableObject", () => {
@@ -192,11 +198,27 @@ describe("RepoCreationCoordinatorDurableObject", () => {
       },
       {
         idempotencyKey: "repo/created",
-        payload: { ...artifact, request },
+        payload: {
+          ...artifact,
+          request,
+          seededHead: { branch: artifact.defaultBranch, ...seededHead },
+        },
         type: "events.iterate.com/repos/created",
       },
     ]);
     expect(h.records.size).toBe(0);
+  });
+
+  it("checkpoints the deterministic seed head before the terminal append", async () => {
+    mocks.appendIfStreamId
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("stream reset before created append"));
+    const h = coordinator();
+    await h.value.enqueue(handoff);
+
+    await expect(h.value.alarm()).rejects.toThrow("stream reset before created append");
+
+    expect([...h.records.values()]).toEqual([{ ...queuedHandoff, seededHead }]);
   });
 
   it("reuses the journaled immutable source after an interrupted materialization", async () => {

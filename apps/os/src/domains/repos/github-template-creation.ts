@@ -9,7 +9,7 @@ import {
 } from "./github-template-source.ts";
 import { REPO_DEFAULT_BRANCH } from "./repo-defaults.ts";
 
-type SeededHead = { commitOid: string; contentHash: string };
+export type SeededHead = { commitOid: string; contentHash: string };
 
 /**
  * Materialize one immutable public-GitHub template into a fresh Artifact.
@@ -24,7 +24,7 @@ export async function createGithubTemplateArtifact(input: {
   artifacts: Artifacts;
   artifactsAccountId: string;
   artifactsNamespace: string;
-  onSeeded?: (head: SeededHead) => void;
+  onSeedHeadPrepared?: (head: SeededHead) => void;
   projectId: string | null;
   repoPath: string;
   source: ResolvedGithubTemplateSource;
@@ -36,10 +36,6 @@ export async function createGithubTemplateArtifact(input: {
       defaultBranch: REPO_DEFAULT_BRANCH,
     }),
   );
-  if (existing.lastPushAt !== null) {
-    return { artifactName: input.artifactName, defaultBranch: REPO_DEFAULT_BRANCH, remote };
-  }
-
   const files = await timedStep("create-timing", timing, "template-read", () =>
     readGithubTemplateFiles({
       artifacts: input.artifacts,
@@ -50,15 +46,16 @@ export async function createGithubTemplateArtifact(input: {
       temporaryArtifactName: `${input.artifactName}--template-source`,
     }),
   );
-  const seeded = await seedKnownArtifact({
+  await seedKnownArtifact({
     artifact: existing,
     artifactName: input.artifactName,
     artifacts: input.artifacts,
     files,
+    expectExisting: existing.lastPushAt !== null,
+    onSeedHeadPrepared: input.onSeedHeadPrepared,
     remote,
     timing,
   });
-  input.onSeeded?.(seeded);
   return { artifactName: input.artifactName, defaultBranch: REPO_DEFAULT_BRANCH, remote };
 }
 
@@ -66,7 +63,9 @@ async function seedKnownArtifact(input: {
   artifact: GetOrCreateArtifactResult;
   artifactName: string;
   artifacts: Artifacts;
+  expectExisting: boolean;
   files: GithubTemplateFile[];
+  onSeedHeadPrepared?: (head: SeededHead) => void;
   remote: string;
   timing: { path: string; projectId: string | null };
 }): Promise<SeededHead> {
@@ -78,11 +77,13 @@ async function seedKnownArtifact(input: {
   return await timedStep("create-timing", input.timing, "artifact-seed", () =>
     seedArtifactRepo({
       branch: REPO_DEFAULT_BRANCH,
+      expectExisting: input.expectExisting,
       files: input.files.map((file) => ({
         content: file.bytes,
         mode: file.mode,
         path: file.path,
       })),
+      onSeedHeadPrepared: input.onSeedHeadPrepared,
       remote: input.remote,
       token,
     }),
