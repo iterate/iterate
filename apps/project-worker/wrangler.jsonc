@@ -21,10 +21,15 @@
     { "tag": "v2", "new_sqlite_classes": ["StreamDurableObject"] },
   ],
 
-  // The DO's fallback (target-core §4.4). Solo: a self service-binding to DummyControlPlane — a DO can't mint
-  // ctx.exports loopbacks, so it reaches the fallback via a binding. Self-host/hosted → bind CONTROL_PLANE.
+  // The DO's fallback (target-core §4.4). SELF-HOST/HOSTED: a service binding to the real control-plane shell
+  // worker (deployed from wrangler.control-plane.jsonc). SOLO would instead bind
+  // { service: "project-worker", entrypoint: "DummyControlPlane" } (this worker's own loopback).
   "services": [
-    { "binding": "FALLBACK", "service": "project-worker", "entrypoint": "DummyControlPlane" },
+    {
+      "binding": "FALLBACK",
+      "service": "iterate-control-plane",
+      "entrypoint": "ControlPlaneShell",
+    },
   ],
 
   // Per-project secret store behind the egress door (secret:<projectId>:<name>). Proves the middleware

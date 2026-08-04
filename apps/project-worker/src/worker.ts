@@ -73,9 +73,14 @@ export default {
     // postman-echo /get reflects request headers, so we can SEE the substituted secret came out the far side.
     let egress = null;
     try {
-      const r = await fetch("https://postman-echo.com/get", { headers: { Authorization: "Bearer {{secret:project:demo}}" } });
+      // TWO placeholders: a PROJECT secret (substituted at this project's DO) and a PLATFORM secret
+      // (substituted at the OUTER control-plane shell). postman-echo reflects both headers back.
+      const r = await fetch("https://postman-echo.com/get", { headers: {
+        Authorization: "Bearer {{secret:project:demo}}",
+        "X-First-Party": "Bearer {{secret:platform:exa}}",
+      } });
       const j = await r.json();
-      egress = { status: r.status, seenAuth: (j.headers || {}).authorization };
+      egress = { status: r.status, seenProjectSecret: (j.headers || {}).authorization, seenPlatformSecret: (j.headers || {})["x-first-party"] };
     } catch (e) { egress = { error: String(e && e.message || e) }; }
     return Response.json({ who, auth, egress, ranInContext: true });
   }

@@ -153,9 +153,28 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
 dormant:true}` after idle — the device stays registered while **nothing pins the DO**. (Full
   99.5%-idle-over-minutes at 1000-scale is spike-4's billing proof; identical mechanism.)
 
+## Increment 11 — the control-plane join (a real second worker as the shell; the shell onion)
+
+**Commit** `<pending>`. First multi-worker topology (self-host / hosted).
+
+- `control-plane-shell.ts` + `wrangler.control-plane.jsonc` — a SECOND worker `iterate-control-plane`
+  (`ControlPlaneShell`): `fetch` substitutes **platform / first-party** secrets (`{{secret:platform:NAME}}`
+  from `PLATFORM_SECRETS_KV`) then hits terminal; `invokeCapability` is the outer capability fallthrough
+  (auth). Minimal — no DOs/loader; the fallback contract only.
+- The project worker's `FALLBACK` service binding now points at `iterate-control-plane#ControlPlaneShell`
+  (self-host) instead of its own `DummyControlPlane` loopback (solo). So a project's egress passes DO
+  (project-secret sub) → control-plane worker (platform-secret sub) → terminal, and the auth fallthrough hits
+  the real control plane.
+- **Proven** (`/load`): an agent's `fetch` carrying BOTH `{{secret:project:demo}}` and `{{secret:platform:exa}}`
+  → `seenProjectSecret:"Bearer sk-demo-REALVALUE-9x8y7z"` (substituted at the DO) +
+  `seenPlatformSecret:"Bearer platform-exa-key-FIRSTPARTY-42"` (substituted at the SEPARATE control-plane
+  worker) + `auth:{ok:true}`. Secret substitution accretes OUTWARD through the shell onion (D13).
+- **Topology note:** this is self-host/hosted (two workers). Solo = the same project worker with `FALLBACK` →
+  its own `DummyControlPlane` (one worker). Same code, config-only difference (D26).
+
 ---
 
-## Status after increment 10 — the inner core end to end (solo)
+## Status after increment 11 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project
 secret-sub → fallback → terminal), the **capability model** (`invokeCapability`/`provideCapability` +
@@ -163,8 +182,7 @@ parent-path-then-shell fallback), **execution** (`load` a confined agent bound t
 (`itx.kv`, `itx.secrets.set`, `itx.streams` — all project-prefixed + isolated), **live providers** (capnweb
 `/connect` → dispatch back to a device/browser/worker), the **ergonomic `itx.a.b()` surface**,
 **path-addressed contexts** (faux-URL names; deep paths inherit from their parent path), and **wake-on-call**
-(1000 devices provide capabilities via hibernatable wake sockets without pinning the DO). All proven on
-`project-worker.iterate.workers.dev`.
+(1000 devices provide capabilities via hibernatable wake sockets without pinning the DO), and the CONTROL-PLANE JOIN (a real second worker as the shell; platform secrets substituted at the outer shell). Proven on `project-worker.iterate.workers.dev` + `iterate-control-plane.iterate.workers.dev`.
 
 **Next:** the control-plane join (a real second worker as the shell, replacing DummyControlPlane → the
 self-host / hosted topologies); optional: billing-analytics verification of hibernation at scale.
