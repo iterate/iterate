@@ -6668,10 +6668,68 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
         projects: "Project catalog: list(), get(projectId), create({ slug }) — each vends an itx.",
         repos: "Deployment-wide repos (admin only; projectId: null).",
         streams: "Deployment-wide streams (admin only; projectId: null).",
+        mobilePreviewChannels:
+          "Active EAS Update channels for the mobile app — the phone's PR-preview browser.",
       },
       parent: "the /api unauthenticated entrypoint, via authenticate(credentials)",
       principal: this.props.auth.principal,
     });
+  }
+
+  /**
+   * Active EAS Update channels for the iterate mobile app, newest first —
+   * the data behind the phone's preview-channel browser (each PR touching
+   * apps/mobile publishes to a channel named after its branch; `preview` is
+   * main). Proxied server-side because the EAS API needs the deployment's
+   * Expo token, which must never reach a client.
+   */
+  async mobilePreviewChannels(): Promise<{
+    available: boolean;
+    channels: Array<{
+      name: string;
+      updatedAt: string;
+      latestUpdate: { message: string; createdAt: string; runtimeVersion: string } | null;
+    }>;
+  }> {
+    const token = env.EXPO_TOKEN;
+    if (!token) return { available: false, channels: [] };
+    // The mobile app's EAS project id (apps/mobile/app.json extra.eas.projectId).
+    const appId = "cfe38002-5822-4465-94d4-7223a2002280";
+    const response = await fetch("https://api.expo.dev/graphql", {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+      body: JSON.stringify({
+        query: `query($appId: String!) { app { byId(appId: $appId) { updateChannels(offset: 0, limit: 50) {
+          name updatedAt updateBranches(offset: 0, limit: 1) { updateGroups(offset: 0, limit: 1) {
+          message createdAt runtimeVersion } } } } } }`,
+        variables: { appId },
+      }),
+    });
+    if (!response.ok) {
+      throw new Error(`EAS API responded ${response.status}: ${await response.text()}`);
+    }
+    const payload: any = await response.json();
+    if (payload.errors?.length) {
+      throw new Error(`EAS API errors: ${JSON.stringify(payload.errors)}`);
+    }
+    const channels = (payload.data?.app?.byId?.updateChannels || []).map((channel: any) => {
+      // updateGroups is an array of update-per-platform arrays; iOS-only app,
+      // so the first entry of the first group is the latest update.
+      const latest = channel.updateBranches?.[0]?.updateGroups?.flat()?.[0];
+      return {
+        name: channel.name,
+        updatedAt: channel.updatedAt,
+        latestUpdate: latest
+          ? {
+              message: latest.message,
+              createdAt: latest.createdAt,
+              runtimeVersion: latest.runtimeVersion,
+            }
+          : null,
+      };
+    });
+    channels.sort((a: any, b: any) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    return { available: true, channels };
   }
 
   /** Deployment-wide streams (admin only; projectId: null). */

@@ -142,6 +142,10 @@ export function ProjectDrawerButton({ projectId, projectSlug }: ProjectDrawerPro
                   label="Build info"
                   onPress={() => close(() => router.push("/build-info"))}
                 />
+                <DrawerItem
+                  label="Preview channels"
+                  onPress={() => close(() => router.push("/preview-channels"))}
+                />
               </View>
             </View>
           </Animated.View>

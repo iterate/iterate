@@ -60,6 +60,21 @@ export interface UnauthenticatedOs {
 export interface Session {
   /** Includes `principal` — who this session is. */
   __describe(): Promise<Description & { principal: string }>;
+  /**
+   * Active EAS Update channels for the iterate mobile app, newest first —
+   * the data behind the phone's preview-channel browser (each PR touching
+   * apps/mobile publishes to a channel named after its branch; `preview` is
+   * main). Proxied server-side because the EAS API needs the deployment's
+   * Expo token, which must never reach a client.
+   */
+  mobilePreviewChannels(): Promise<{
+    available: boolean;
+    channels: Array<{
+      name: string;
+      updatedAt: string;
+      latestUpdate: { message: string; createdAt: string; runtimeVersion: string } | null;
+    }>;
+  }>;
   /** Deployment-wide streams (admin only; projectId: null). */
   streams: StreamCollection;
   /** Deployment-wide repos (admin only; projectId: null). */

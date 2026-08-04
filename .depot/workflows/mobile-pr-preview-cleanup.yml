@@ -1,0 +1,30 @@
+name: Mobile PR Preview Cleanup
+permissions:
+  contents: write # deletes the PR's QR assets from the gh-attach-assets release
+on:
+  pull_request:
+    types:
+      - closed
+    paths:
+      - apps/mobile/**
+jobs:
+  cleanup:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 15
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      # EXPO_TOKEN lives in the Doppler _shared project and is inherited by
+      # os/prd; eas-cli picks it up from the environment.
+      - name: Delete the PR's channel, branch, and QR assets
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project os --config prd -- pnpm tsx scripts/ci/cleanup-mobile-pr-preview.ts
