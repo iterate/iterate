@@ -99,6 +99,8 @@ interface VoiceAgentSetup {
     streamPath: string;
     created: string[];
     alreadyThere: string[];
+    /** The processor's own acknowledgement that it is awake and sees the brief. */
+    warm: { ok: boolean; ms: number };
   }>;
 }
 
@@ -172,6 +174,7 @@ export async function talk(options: TalkOptions = {}) {
   console.log(`stream ${setup.streamPath}`);
   for (const item of setup.created) console.log(`  created       ${item}`);
   for (const item of setup.alreadyThere) console.log(`  already there ${item}`);
+  console.log(`  warm          processor acknowledged in ${setup.warm.ms}ms`);
   if (kitDir === null) return;
 
   const ingressKey = await itx.secrets.get("/secrets/project-api-key").reveal();

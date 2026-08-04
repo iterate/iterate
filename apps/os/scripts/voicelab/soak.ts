@@ -11,10 +11,16 @@
 // its own conclusions: an unanswered turn, a session that changed generation,
 // a bridge that had to be replaced, are all failures, and it says so.
 //
+// A soak asks whether the call survives. `stress` asks whether it survives a
+// HUNDRED turns and minutes of unbroken audio, which is a different question:
+// every turn here is a sentence and a half.
+//
 //   doppler run --config preview_3 -- pnpm cli voicelab soak \
 //     --project prj_… --minutes 60 --every 45
 import fs from "node:fs";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import { type DeviceStats, MUST_NOT_MOVE } from "./device-stats.ts";
+import { watchStream } from "./watch.ts";
 
 /** Options for `pnpm cli voicelab soak`. */
 export interface SoakOptions extends VoicelabConnectOptions {
@@ -36,52 +42,6 @@ export interface SoakOptions extends VoicelabConnectOptions {
   mic?: boolean;
 }
 
-/** One dev-stats sample, as the device reports it. */
-interface DeviceStats {
-  seq: number;
-  t: number;
-  uptimeMs?: number;
-  sessionGeneration?: number;
-  connGeneration?: number;
-  livenessRestarts?: number;
-  bridgeLosses?: number;
-  pings?: number;
-  pingFailures?: number;
-  rttMs?: number;
-  spkUnderruns?: number;
-  spkConceal?: number;
-  spkOverflow?: number;
-  spkSeqGaps?: number;
-  spkWriteFailures?: number;
-  spkFrames?: number;
-  framesSent?: number;
-  frameFailures?: number;
-  sendFailures?: number;
-  recvFailures?: number;
-  protoFailures?: number;
-  inboxDiscarded?: number;
-  outboxDiscarded?: number;
-  heapFree?: number;
-  heapMin?: number;
-  [key: string]: unknown;
-}
-
-/** Counters that must never move during a healthy soak. */
-const MUST_NOT_MOVE = [
-  "livenessRestarts",
-  "bridgeLosses",
-  "spkOverflow",
-  "spkSeqGaps",
-  "spkWriteFailures",
-  "frameFailures",
-  "sendFailures",
-  "recvFailures",
-  "protoFailures",
-  "inboxDiscarded",
-  "outboxDiscarded",
-  "pingFailures",
-] as const;
-
 const PROMPTS = [
   "In one sentence: why is the sky blue?",
   "Name one interesting fact about octopuses.",
@@ -100,7 +60,7 @@ interface DeviceCapability {
 export async function soak(options: SoakOptions) {
   const minutes = options.minutes ?? 60;
   const everyMs = (options.every ?? 45) * 1000;
-  const streamPath = options.path ?? "/voicelab/device";
+  const streamPath = options.path ?? "/agents/voice/device";
   using itx = await connectProject(options);
   const kit = (itx as unknown as { kit: Record<string, DeviceCapability> }).kit;
   const capability = kit[options.name ?? "waveshare"];
@@ -125,88 +85,60 @@ export async function soak(options: SoakOptions) {
   let answering: { resolve: (text: string) => void; text: string } | null = null;
   /* When the bridge last announced it had this call. */
   let callLiveAt = 0;
-  let lastDelivery = Date.now();
-  let watchGeneration = 0;
-  let watchReopens = 0;
   let redials = 0;
-  const openWatch = () =>
-    stream.openConnection({
-      connectionKey: `soak-${startedAt}-g${++watchGeneration}`,
-      eventTypes: [
-        "voicelab/dev-stats",
-        "voicelab/grok-event",
-        "voicelab/call-accepted",
-        "voicelab/call-ended",
-        "voicelab/bridge-redialling",
-      ],
-      /*
-       * Speaker frames are deliberately NOT subscribed. They are the bulk of
-       * the traffic, this watcher does not play them, and every one delivered
-       * here spends the connection's push budget — a measuring instrument
-       * that exhausts the thing it measures is worse than none.
-       */
-      processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
-        lastDelivery = Date.now();
-        for (const event of batch.events) {
-          const payload = (event.payload ?? {}) as Record<string, unknown>;
-          if (event.type === "voicelab/dev-stats") {
-            samples.push(payload as unknown as DeviceStats);
-            continue;
-          }
-          if (event.type === "voicelab/call-accepted") {
-            callLiveAt = Date.now();
-            note(`call-accepted by bridge ${String(payload.bridgeId)}`);
-            continue;
-          }
-          if (event.type === "voicelab/call-ended") {
-            note(`CALL ENDED: ${String(payload.reason)}`);
-            continue;
-          }
-          if (event.type === "voicelab/bridge-redialling") {
-            /*
-             * Not a failure: the provider closes its socket on its own
-             * schedule and the bridge replaces it underneath the
-             * conversation. Worth counting — a redial per turn would mean
-             * something else is wrong — but the turns are the verdict.
-             */
-            redials++;
-            note(`bridge redialling (${String(payload.reason)})`);
-            continue;
-          }
-          const inner = (payload as { event?: { type?: string; delta?: string } }).event;
-          if (inner?.type === "response.output_audio_transcript.delta" && answering) {
-            answering.text += inner.delta ?? "";
-          }
-          if (inner?.type === "response.done" && answering) answering.resolve(answering.text);
-        }
-      },
-    });
-  let connection = await openWatch();
   /*
-   * The watcher has to prove its own connection, exactly as the device does.
-   * A session connection dies quietly — the push budget runs out, the Durable
-   * Object resets — and a dead watcher does not report an error, it reports a
-   * silent call. The first run of this soak "found" four unanswered turns in
-   * a row that the bridge had in fact answered: what had actually stopped was
-   * the watching.
-   *
-   * The device appends dev-stats every 5s, so a 15s gap is evidence, and
-   * make-before-break means nothing is missed across the swap.
+   * The watcher proves its own connection, exactly as the device does — see
+   * watch.ts for why a silent instrument is worse than none. Speaker frames
+   * are deliberately NOT subscribed: they are the bulk of the traffic, this
+   * watcher plays none of them, and every one delivered here spends the
+   * connection's push budget.
    */
-  const watchdog = setInterval(() => {
-    if (Date.now() - lastDelivery < 15_000) return;
-    lastDelivery = Date.now();
-    watchReopens++;
-    note("watch went quiet — reopening (the watcher, not the call)");
-    void openWatch().then(
-      (next) => {
-        const previous = connection;
-        connection = next;
-        previous.close();
-      },
-      () => {},
-    );
-  }, 5000);
+  const watch = await watchStream({
+    eventTypes: [
+      "voicelab/dev-stats",
+      "voicelab/grok-event",
+      "voicelab/call-accepted",
+      "voicelab/call-ended",
+      "voicelab/bridge-redialling",
+    ],
+    key: `soak-${startedAt}`,
+    onNote: note,
+    stream,
+    onBatch: (batch) => {
+      for (const event of batch.events) {
+        const payload = (event.payload ?? {}) as Record<string, unknown>;
+        if (event.type === "voicelab/dev-stats") {
+          samples.push(payload as unknown as DeviceStats);
+          continue;
+        }
+        if (event.type === "voicelab/call-accepted") {
+          callLiveAt = Date.now();
+          note(`call-accepted by bridge ${String(payload.bridgeId)}`);
+          continue;
+        }
+        if (event.type === "voicelab/call-ended") {
+          note(`CALL ENDED: ${String(payload.reason)}`);
+          continue;
+        }
+        if (event.type === "voicelab/bridge-redialling") {
+          /*
+           * Not a failure: the provider closes its socket on its own
+           * schedule and the bridge replaces it underneath the
+           * conversation. Worth counting — a redial per turn would mean
+           * something else is wrong — but the turns are the verdict.
+           */
+          redials++;
+          note(`bridge redialling (${String(payload.reason)})`);
+          continue;
+        }
+        const inner = (payload as { event?: { type?: string; delta?: string } }).event;
+        if (inner?.type === "response.output_audio_transcript.delta" && answering) {
+          answering.text += inner.delta ?? "";
+        }
+        if (inner?.type === "response.done" && answering) answering.resolve(answering.text);
+      }
+    },
+  });
 
   const waitForAnswer = async (timeoutMs: number) => {
     const started = Date.now();
@@ -248,8 +180,7 @@ export async function soak(options: SoakOptions) {
     const live = callLiveAt >= pressedAt;
     note(live ? "call is live" : "CALL NEVER WENT LIVE");
     if (!live) {
-      clearInterval(watchdog);
-      connection.close();
+      watch.close();
       throw new Error("the call never went live; nothing to soak");
     }
   }
@@ -290,8 +221,7 @@ export async function soak(options: SoakOptions) {
     if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
   }
 
-  clearInterval(watchdog);
-  connection.close();
+  watch.close();
   await capability.conversation.hangUp().catch(() => {});
 
   const first = samples[0];
@@ -332,7 +262,9 @@ export async function soak(options: SoakOptions) {
     turns: turns.length,
     unanswered,
     /* Not a device fault: this is how often the WATCHER had to be replaced. */
-    watchReopens,
+    watchReopens: watch.reopens,
+    /* A device that went quiet while its connection was demonstrably alive. */
+    deviceQuietPeriods: watch.deviceQuiet,
     /* How often the bridge replaced its provider socket under the call. */
     bridgeRedials: redials,
   };

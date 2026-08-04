@@ -75,7 +75,7 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export async function reliability(options: ReliabilityOptions) {
   const attempts = options.attempts ?? 10;
   const holdSeconds = options.seconds ?? 3;
-  const streamPath = options.path ?? "/voicelab/device";
+  const streamPath = options.path ?? "/agents/voice/device";
   const capabilityName = options.name ?? "waveshare";
   /*
    * A FRESH itx session per attempt. The device reboots in the middle of this

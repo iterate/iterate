@@ -251,7 +251,12 @@ async function openCall(
     instructions?: string;
   },
 ): Promise<Call> {
-  const path = options.path ?? `/voicelab/pressure-${Date.now().toString(36)}`;
+  /*
+   * Under /agents/voice/ because a voice conversation's stream IS its agent —
+   * the same reason the device's default moved there. A path outside /agents/
+   * gives the conversation no agent identity to be the back office of.
+   */
+  const path = options.path ?? `/agents/voice/pressure-${Date.now().toString(36)}`;
   const callId = options.callId ?? `p${Date.now().toString(36).slice(-6)}`;
   const stream = itx.streams.get(path);
   const seen: StreamEventSeen[] = [];
@@ -368,7 +373,12 @@ async function openCall(
     startTimedOut,
     started,
     strayColleague: async (message) => {
-      await itx.streams.get("/agents/colleague").append({
+      /*
+       * The voice agent's own stream, not a fixed colleague path: the thinking
+       * half of a conversation lives at the conversation's path, so a stray
+       * message has to arrive where a real one would.
+       */
+      await itx.streams.get(path).append({
         payload: { message },
         type: "events.iterate.com/agents/web-message-sent",
       });

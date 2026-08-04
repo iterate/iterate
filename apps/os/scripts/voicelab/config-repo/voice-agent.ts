@@ -74,8 +74,42 @@ const HANDSHAKE_TIMEOUT_MS = 15_000;
  * ears with a ~200ms budget; anything that needs reading a repo, calling a
  * tool, or being RIGHT belongs to a text model with no clock on it.
  */
-const COLLEAGUE_PATH = "/agents/colleague";
+/*
+ * THERE IS NO SEPARATE BACK-OFFICE AGENT.
+ *
+ * This used to be a fixed `/agents/colleague`, which made the thinking half of
+ * every conversation on the deployment ONE GLOBAL SINGLETON: two devices, or
+ * one device on two conversations, shared a single agent, a single stream and a
+ * single memory. Starting a "new conversation" on the device changed the voice
+ * path and left the agent behind, still holding the last conversation.
+ *
+ * The voice agent and the back office are the same agent, living at the voice
+ * path itself. Change the voice path and the identity changes with it, which is
+ * what "new conversation" is supposed to mean.
+ */
 const VOICE_AGENT_PROCESSOR_SLUG = "voice-agent";
+/*
+ * The warm-up handshake's own revision.
+ *
+ * Separate from the processor contract's version, which is 1.0.0 and does not
+ * move when this handshake changes — so it cannot tell a caller whether the
+ * running processor speaks the protocol the caller expects. Bump this whenever
+ * the warm-up request or acknowledgement changes shape.
+ */
+const WARMUP_PROTOCOL_REVISION = "warmup/4-marked-brief";
+/**
+ * How long setup will wait for its own warm-up to be acknowledged.
+ *
+ * Deliberately generous, and deliberately NOT the 15s a call has to go live in.
+ * Those are opposite bounds: the call gate is a promise to the person holding
+ * the device, while this is setup volunteering to pay a cost so the call does
+ * not. Two cold dynamic-worker builds sit inside it — the guest out of the
+ * config repo, measured at 13.6s, and the bridge worker it warms, whose own
+ * build budget is 30s — and a run that timed out here at 15s would push both
+ * back into the first call, which is the defect this whole handshake exists to
+ * remove.
+ */
+const WARMUP_DEADLINE_MS = 45_000;
 const VOICE_AGENT_SUBSCRIPTION_KEY = "app-voice-agent#voice-agent";
 const CALL_REQUEST_FRESHNESS_MS = 30_000;
 /**
@@ -145,14 +179,65 @@ const BACK_OFFICE_BRIEF = [
   "spoken: two or three sentences of plain language, no lists, no URLs, no",
   "code. Lead with the point.",
 ].join("\n");
-/** The brief as the context event that carries it — one payload, one key. */
-const BACK_OFFICE_BRIEF_CONTEXT = {
-  content: BACK_OFFICE_BRIEF,
-  key: "voicelab/colleague-brief",
-  llmRequestPolicy: { behaviour: "dont-trigger-request" },
-  role: "system",
-} as const;
-const BACK_OFFICE_BRIEF_KEY = `voice-agent/back-office-brief:${contentHash(BACK_OFFICE_BRIEF_CONTEXT)}`;
+/** One key for every brief, so the head brief can be found and compared. */
+const BRIEF_KEY = "voicelab/voice-agent-brief";
+
+/** The brief as the context event that carries it. */
+const briefContext = (content: string) =>
+  ({
+    content,
+    key: BRIEF_KEY,
+    llmRequestPolicy: { behaviour: "dont-trigger-request" },
+    role: "system",
+  }) as const;
+/**
+ * The brief's identity follows its CONTENT, so a changed brief installs and an
+ * unchanged one deduplicates. That is what makes setup safe to re-run and what
+ * makes a device gaining a capability reach the prompt without a second path
+ * for "refresh".
+ */
+const briefKey = (context: ReturnType<typeof briefContext>) =>
+  `voice-agent/brief:${contentHash(context)}`;
+
+/**
+ * Every live capability this project provides, as the model should be told
+ * about it — read from the capabilities themselves.
+ *
+ * ONE SOURCE, DELIBERATELY. The alternative is a description of the device
+ * written here in TypeScript beside the real one written in the firmware, and
+ * two copies of a list of methods drift the first time somebody adds one. The
+ * device already advertises what it can do (its mount `instructions`), so the
+ * prompt quotes that rather than restating it. A method that does not exist
+ * therefore cannot be mentioned, and one that is added arrives on the next
+ * setup without anybody editing this file.
+ */
+async function describeProvidedCapabilities(project: Awaited<IterateWorkerEntrypoint["itx"]>) {
+  try {
+    const description = (await project.__describe()) as {
+      capabilities?: Array<{ instructions?: string; path?: string[]; type?: string }>;
+    };
+    const live = (description.capabilities ?? []).filter(
+      (entry) => entry.type === "live" && (entry.instructions ?? "").trim().length > 0,
+    );
+    if (live.length === 0) {
+      return [
+        "No device is mounted on this project right now. Do not claim to have",
+        "read anything from one; say it is not connected.",
+      ].join("\n");
+    }
+    return live
+      .map((entry) =>
+        [
+          `Capability \`itx.${(entry.path ?? []).join(".")}\` — call it with dotted paths.`,
+          entry.instructions,
+        ].join("\n"),
+      )
+      .join("\n\n");
+  } catch (error) {
+    /* Never fail setup over the prompt: an honest gap beats a wrong claim. */
+    return `The device description could not be read (${String(error)}). Do not guess at what hardware can do.`;
+  }
+}
 
 /**
  * The back office exists, and knows what it is for.
@@ -164,18 +249,129 @@ const BACK_OFFICE_BRIEF_KEY = `voice-agent/back-office-brief:${contentHash(BACK_
  * telling the model "the back office will reply when it has something" — so
  * the assistant keeps promising a colleague that never answers.
  */
-async function ensureBackOffice(agent: Agent) {
+/**
+ * Which brief is current, as a fact the processor is TOLD rather than one it
+ * goes looking for.
+ *
+ * Every readable design failed on the same rock: filtered stream reads only go
+ * forward (`StreamEventReadInput` has `afterOffset`, `beforeOffset`, `limit` —
+ * no reverse order), so "the newest matching event" is the LAST page, and every
+ * attempt to find it cheaply was a guess about how far back to look.
+ *
+ *  1. `getEvents({eventTypes, limit: 500})` reads from offset ZERO and returned
+ *     the first brief ever installed, while its comment claimed to compare the
+ *     head.
+ *  2. A bounded tail (`head - 10_000`) worked until the brief fell out of the
+ *     window: two full sessions of audio frames move the head about that far,
+ *     and session 3 of a ten-session run failed with "no brief is at the head"
+ *     seconds after refreshing one.
+ *  3. Paging the filter to the end is exact, but it still scans history that is
+ *     overwhelmingly audio, and its page cap is one more arbitrary number.
+ *
+ * So setup states the answer instead. Each setup appends the brief under a
+ * per-setup identity and then a marker naming it; the marker is a type the
+ * processor's subscription carries, so the processor learns which brief is
+ * current through the same filtered delivery a `call-requested` arrives on, and
+ * folds it into state. No history is read by anyone.
+ */
+const BRIEF_MARKER_TYPE = "voicelab/brief-current";
+
+/** The brief setup installed, and the setup that installed it. */
+export interface BriefMarker {
+  /** Unique per setup: what makes "the current brief" a checkable identity. */
+  setupId: string;
+  /** The idempotencyKey of the context event carrying the brief text. */
+  briefKey: string;
+  /** Of the brief text, so a changed prompt is visible without reading it. */
+  contentHash: string;
+}
+
+/**
+ * The marker an event carries, or null.
+ *
+ * Pure, exported and separate from `reduce` so the folding rule can be tested
+ * against a history with tens of thousands of audio events between markers —
+ * the shape that broke all three reading designs.
+ */
+export function briefMarkerFromEvent(event: {
+  type: string;
+  payload?: unknown;
+}): BriefMarker | null {
+  if (event.type !== BRIEF_MARKER_TYPE) return null;
+  const payload = event.payload as Partial<BriefMarker> | null;
+  if (
+    typeof payload?.setupId !== "string" ||
+    typeof payload.briefKey !== "string" ||
+    typeof payload.contentHash !== "string" ||
+    payload.setupId.length === 0 ||
+    payload.briefKey.length === 0
+  ) {
+    return null;
+  }
+  return {
+    setupId: payload.setupId,
+    briefKey: payload.briefKey,
+    contentHash: payload.contentHash,
+  };
+}
+
+async function ensureVoiceAgent(
+  agent: Agent,
+  capabilityBrief: string,
+  /** This setup's identity, which becomes part of the brief's own identity. */
+  setupId: string,
+) {
+  const context = briefContext(
+    [
+      BACK_OFFICE_BRIEF,
+      "",
+      "## The hardware you are speaking through",
+      "",
+      /*
+       * This stream is append-only, so an earlier description of the hardware is
+       * still sitting in the context above. Saying which one wins is cheaper and
+       * more reliable than hoping the model prefers the later text — and a
+       * device that GAINS or LOSES a method between setups is the ordinary case,
+       * not an exception.
+       */
+      "This section replaces any earlier description of this device in this",
+      "conversation. If an earlier one lists a method that is not named here,",
+      "that method no longer exists — do not call it.",
+      "",
+      capabilityBrief,
+    ].join("\n"),
+  );
   try {
     // Nothing may be appended to the agent's stream before the agent exists.
     await agent.create({});
   } catch {
     /* Already born: create over an existing agent is loud, not fatal. */
   }
-  return await agent.append({
+  /*
+   * A FRESH OCCURRENCE EVERY SETUP, AND NOTHING READ TO DECIDE IT.
+   *
+   * The key used to be a hash of the content alone, which deduplicates against
+   * ANY brief already on the stream — so a prompt that changed and then changed
+   * BACK did not reinstall, and the newest system context the model saw stayed
+   * the intermediate one. Measured: a diagnostic-only tool was removed from the
+   * device, setup reported "already there", and the newest brief still told the
+   * model the tool existed. Suffixing the key with the previous brief's offset
+   * fixed that but required FINDING the previous brief, which is the read that
+   * cannot be done cheaply or exactly (see BRIEF_MARKER_TYPE).
+   *
+   * So each setup writes its own occurrence, unconditionally. The platform's
+   * agent reducer is built for exactly this: a keyed system item is replaced in
+   * place by an update with the same `key`, and compaction keeps the latest
+   * occurrence per key. `payload.key` stays BRIEF_KEY — the slot — while the
+   * idempotencyKey carries this setup's identity, so the newest brief is always
+   * the one this setup just installed and never a survivor of an older one.
+   */
+  const installed = await agent.append({
     type: "events.iterate.com/agents/context-added",
-    idempotencyKey: BACK_OFFICE_BRIEF_KEY,
-    payload: BACK_OFFICE_BRIEF_CONTEXT,
+    idempotencyKey: `${briefKey(context)}:setup:${setupId}`,
+    payload: context,
   });
+  return installed;
 }
 
 /*
@@ -207,6 +403,20 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
   description: "Starts bounded voice bridges from fresh call requests on one configured stream.",
   stateSchema: z.object({
     birthCertificate: z.strictObject({}).nullable().default(null),
+    /**
+     * Which brief setup last marked current, as folded from delivery.
+     *
+     * Held in state rather than looked up because looking it up cannot be done
+     * exactly — see BRIEF_MARKER_TYPE for the three read designs that failed.
+     */
+    briefCurrent: z
+      .strictObject({
+        setupId: z.string(),
+        briefKey: z.string(),
+        contentHash: z.string(),
+      })
+      .nullable()
+      .default(null),
     /**
      * The call request nothing has answered yet — the OBLIGATION.
      *
@@ -248,6 +458,48 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
         reason: z.string(),
       }),
     },
+    /*
+     * WARM-UP: a token in, the same token out, through the real processor.
+     *
+     * Setup needs proof that the processor for this stream is BUILT and RUNNING,
+     * not merely that a subscription is registered — a registered subscription
+     * whose host has never been instantiated still makes the first call pay for
+     * compiling this file, measured at 8 to 16 seconds against a bridge whose own
+     * share is 1.4. Nothing structural can prove that; only the processor
+     * answering can.
+     *
+     * Deliberately inert: it starts no call, touches no provider socket, and is
+     * not a type the bridge or the device's downlink subscribes to, so it cannot
+     * reach the audio path.
+     */
+    "voicelab/brief-current": {
+      description:
+        "Names the brief setup just installed. The processor folds it, so it knows which " +
+        "prompt is current without reading history.",
+      payloadSchema: z.looseObject({
+        setupId: z.string().trim().min(1),
+        briefKey: z.string().trim().min(1),
+        contentHash: z.string(),
+      }),
+    },
+    "voicelab/warmup": {
+      description: "A readiness probe for this stream's processor. Starts nothing.",
+      payloadSchema: z.strictObject({ token: z.string().trim().min(1) }),
+    },
+    "voicelab/warmup-ready": {
+      description: "This stream's processor is built and running; echoes the token.",
+      payloadSchema: z.looseObject({ token: z.string().trim().min(1) }),
+    },
+    /*
+     * NOT an acknowledgement — the opposite. The processor woke, tried to
+     * resolve the brief and could not, so setup's deadline will expire; this
+     * exists so the reason is on the stream instead of the difference between
+     * "never woke" and "woke and failed" being invisible.
+     */
+    "voicelab/warmup-unresolved": {
+      description: "This stream's processor woke for a warm-up but could not resolve its brief.",
+      payloadSchema: z.looseObject({ token: z.string().trim().min(1) }),
+    },
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
@@ -256,8 +508,10 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
      * than a closure that an eviction takes with it. */
     "voicelab/call-accepted",
     "voicelab/call-failed",
+    "voicelab/warmup",
+    "voicelab/brief-current",
   ],
-  emits: ["voicelab/call-failed"],
+  emits: ["voicelab/call-failed", "voicelab/warmup-ready", "voicelab/warmup-unresolved"],
 });
 export type VoiceAgentProcessorContract = typeof VoiceAgentProcessorContract;
 const FORWARDED_GROK_EVENTS = new Set([
@@ -309,6 +563,37 @@ export class VoiceBridge extends IterateDurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     const mode = url.searchParams.get("mode") ?? "proxy";
+    /*
+     * WARM: BUILT AND INSTANTIATED, AND NOTHING ELSE.
+     *
+     * First, before the upgrade check and before any call bookkeeping, because
+     * this must be able to do nothing at all. It dials no provider, appends no
+     * event, and — importantly — does not supersede the call that may be
+     * building right now. Reaching this method IS the proof: getting here means
+     * this worker has been built out of the config repo and this durable
+     * instance exists.
+     *
+     * Why it has to exist: the processor's own warm-up proved the PROCESSOR was
+     * awake in 409ms, and the first call after a remount still took 16.2s to go
+     * live. The bridge is a different dynamic worker, killed by the same
+     * remount, and `startVoiceCall` reaches it with a 30s build budget.
+     * Measured on the stream: the request at 01:14:20.573 got no bridge, the
+     * device re-asked at 01:14:28.573, and BOTH bridges entered at ~01:14:29.1
+     * — the eight seconds were this build, and the older bridge died reporting
+     * "superseded by a newer bridge".
+     */
+    if (mode === "warm") {
+      return new Response(
+        JSON.stringify({
+          activeCallId: this.#activeCallId,
+          building: this.#endActiveCall !== null,
+          className: "VoiceBridge",
+          ok: true,
+          token: url.searchParams.get("token"),
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    }
     const detached = mode === "detached";
     if (!detached && request.headers.get("upgrade")?.toLowerCase() !== "websocket") {
       return new Response("voicelab bridge: expected a websocket upgrade", { status: 426 });
@@ -400,7 +685,18 @@ export class VoiceBridge extends IterateDurableObject {
       };
       return { listen, socket, status: response.status };
     };
+    /*
+     * PHASE TIMINGS FOR CALL STARTUP.
+     *
+     * A 16.2s "call live" told us nothing about which part was slow, and the
+     * event log showed the first call-requested going unaccepted for 8s before
+     * the harness pressed again. These stamps split the bridge's own share —
+     * request seen, provider dialled, provider ready — from the rest, so the
+     * next slow start names its phase instead of inviting a guess.
+     */
+    const phases: Record<string, number> = { bridgeEnteredAt: Date.now() };
     const first = await dialGrok();
+    phases.providerDialledMs = Date.now() - phases.bridgeEnteredAt;
     if (first.socket === null) {
       return new Response(`xai upgrade failed: ${first.status}`, { status: 502 });
     }
@@ -419,8 +715,18 @@ export class VoiceBridge extends IterateDurableObject {
      * counter rather than an exception thrown across a callback boundary.
      */
     let sendFailures = 0;
+    /**
+     * The last thing we said to the provider, and the last thing it said to us.
+     *
+     * Kept because a Policy Violation close (1008) is a verdict on something WE
+     * sent, and the only way to find which is to know what was in flight when
+     * the socket went. Reported in the redial telemetry.
+     */
+    let lastOutboundType = "(none)";
+    let lastInboundType = "(none)";
     const sendUpstream = (message: Record<string, unknown>): boolean => {
       try {
+        lastOutboundType = String(message.type ?? "(untyped)");
         upstream.send(JSON.stringify(message));
         return true;
       } catch {
@@ -742,7 +1048,8 @@ export class VoiceBridge extends IterateDurableObject {
      * back office is a bonus, and a bonus must never be able to stall a voice.
      */
     const backOffice = url.searchParams.get("colleague") === "1";
-    const backOfficeAgent = project.agents.get(COLLEAGUE_PATH);
+    /* The same agent as this conversation: see the note where COLLEAGUE_PATH used to be. */
+    const backOfficeAgent = project.agents.get(streamPath);
     /** Messages sent to the back office, and messages heard back. */
     let sentCount = 0;
     let backOfficeHeard = 0;
@@ -761,13 +1068,18 @@ export class VoiceBridge extends IterateDurableObject {
      */
     let backOfficeReady: Promise<boolean> | null = null;
     const ensureBackOfficeOnce = () => {
-      backOfficeReady ??= ensureBackOffice(backOfficeAgent).then(
-        () => true,
-        (error: unknown) => {
-          console.log(`colleague unavailable: ${String(error)}`);
-          return false;
-        },
-      );
+      backOfficeReady ??= describeProvidedCapabilities(project)
+        .then((brief) =>
+          /* No setup ran, so this call IS the occasion: its own identity. */
+          ensureVoiceAgent(backOfficeAgent, brief, `call:${crypto.randomUUID()}`),
+        )
+        .then(
+          () => true,
+          (error: unknown) => {
+            console.log(`colleague unavailable: ${String(error)}`);
+            return false;
+          },
+        );
       return backOfficeReady;
     };
     /** Give the back office a line of the conversation, without waking it. */
@@ -874,8 +1186,9 @@ export class VoiceBridge extends IterateDurableObject {
     const watchBackOffice = async () => {
       if (!backOffice) return;
       try {
-        await project.streams.get(COLLEAGUE_PATH).openConnection({
-          connectionKey: `voicelab-back-office-${callId}`,
+        await project.streams.get(streamPath).openConnection({
+          /* Same collision, same fix: one lane per bridge, not per callId. */
+          connectionKey: `voicelab-back-office-${bridgeId}-${callId}`,
           eventTypes: ["events.iterate.com/agents/web-message-sent"],
           processEventBatch: (batch: { events: { createdAt: string; payload?: unknown }[] }) => {
             for (const event of batch.events) {
@@ -1165,7 +1478,17 @@ export class VoiceBridge extends IterateDurableObject {
         providerJunk++;
         return;
       }
+      /*
+       * WHAT THE PROVIDER LAST SAID, and what we last said to it.
+       *
+       * A close code alone cannot tell provider policy from a fault of ours: 1008
+       * is Policy Violation, so the question is which message provoked it. These
+       * two are carried into the redial telemetry, which is the only place the
+       * pair is visible together.
+       */
+      lastInboundType = grokEvent.type;
       if (grokEvent.type === "session.created") {
+        phases.providerReadyMs ??= Date.now() - phases.bridgeEnteredAt;
         sendUpstream({
           type: "session.update",
           session: {
@@ -1263,6 +1586,8 @@ export class VoiceBridge extends IterateDurableObject {
             bridgeId,
             callId,
             model,
+            /* Which phase spent the time, from the bridge's own clock. */
+            phases: { ...phases, acceptedMs: Date.now() - phases.bridgeEnteredAt },
             redials,
           },
         });
@@ -1410,11 +1735,31 @@ export class VoiceBridge extends IterateDurableObject {
       dialed: { socket: WebSocket; listen: (handler: (event: MessageEvent) => void) => void },
       generation: number,
     ) => {
+      const dialedAt = Date.now();
       dialed.listen(onGrokMessage);
       dialed.socket.addEventListener("close", (event) => {
         // A socket that has already been replaced closes on its way out.
         if (generation !== grokGeneration || closedDown) return;
-        void redialGrok(`grok closed ${event.code}`);
+        /*
+         * EVERYTHING THE CLOSE KNOWS, because "grok closed 1008" alone cannot
+         * tell scheduled provider behaviour from a fault we caused.
+         *
+         * 1008 is Policy Violation — a deliberate close by the provider, not a
+         * dropped connection (1006) and not a normal one (1000). Whether that is
+         * expected depends on WHEN it arrives and WHAT it says, so the code, the
+         * reason text, wasClean and the socket's own lifetime all go into the
+         * telemetry rather than being flattened into one number.
+         */
+        void redialGrok(`grok closed ${event.code}`, {
+          code: event.code,
+          reason: String(event.reason ?? "").slice(0, 200),
+          wasClean: Boolean(event.wasClean),
+          socketLifetimeMs: Date.now() - dialedAt,
+          generation,
+          /* What was in flight when it closed — see lastOutboundType. */
+          lastOutbound: lastOutboundType,
+          lastInbound: lastInboundType,
+        });
       });
     };
 
@@ -1432,14 +1777,25 @@ export class VoiceBridge extends IterateDurableObject {
      * is replayed as conversation items, so the model picks the thread back
      * up rather than greeting a stranger.
      */
-    const redialGrok = async (reason: string) => {
+    const redialGrok = async (
+      reason: string,
+      close?: {
+        code: number;
+        reason: string;
+        wasClean: boolean;
+        socketLifetimeMs: number;
+        generation: number;
+        lastOutbound: string;
+        lastInbound: string;
+      },
+    ) => {
       if (closedDown) return;
       redials++;
       /* Bounded: a provider refusing us forever must end the call, not spin. */
       if (redials > 40) return teardown(`${reason}; redialled ${redials} times`);
       fireAppend({
         ephemeral: true,
-        payload: { bridgeId, callId, reason, redials },
+        payload: { bridgeId, callId, close, reason, redials },
         type: "voicelab/bridge-redialling",
       });
       responseActive = false;
@@ -1690,7 +2046,22 @@ export class VoiceBridge extends IterateDurableObject {
         generation++;
         if (generation > 1) reconnects++;
         const next = await stream.openConnection({
-          connectionKey: `voicelab-worker-bridge-${callId}-g${generation}`,
+          /*
+           * BRIDGE ID IN THE KEY, or two bridges share one connection.
+           *
+           * The key was callId + generation. A harness that reuses a callId —
+           * `wsdev`, every session — makes a NEW bridge open `-g1` while the
+           * PREVIOUS bridge's `-g1` may still exist. The stream then has one
+           * connection under that key, and the mutual pings can be answered by
+           * the stale bridge while this one sees no peer events at all. After
+           * three such lanes its watchdog concludes the device has gone and
+           * tears down a perfectly healthy call — which is what "the peer
+           * stopped answering across 3 delivery lanes" was, with the device's
+           * own pingFailures sitting at zero the whole time.
+           *
+           * bridgeId is unique per bridge, so a lane belongs to exactly one.
+           */
+          connectionKey: `voicelab-worker-bridge-${bridgeId}-${callId}-g${generation}`,
           eventTypes: [
             "voicelab/mic-frame",
             "voicelab/ping",
@@ -1936,8 +2307,9 @@ export interface StartCallOptions {
    */
   turns?: "manual" | "vad";
   /**
-   * Give the voice a genius colleague: a text agent at /agents/colleague
-   * that overhears the whole conversation as non-triggering context and is
+   * Give the voice a genius colleague: the SAME agent as this conversation,
+   * at the conversation's own voice path, which overhears everything said as
+   * non-triggering context and is
    * asked, through one tool, whenever something has to be right. Off by
    * default — a plain voice call should not create an agent.
    */
@@ -1966,6 +2338,31 @@ export interface SetupVoiceAgentResult {
   streamPath: string;
   created: string[];
   alreadyThere: string[];
+  /**
+   * Proof that setup left this stream ready, not merely configured.
+   *
+   * `acknowledged` is the processor for this stream having consumed a token and
+   * answered it — the only proof that is not structural. `briefMatched` is that
+   * answer carrying the brief setup just installed, so the running processor is
+   * known to see the current prompt. Setup throws rather than returning with
+   * either false, or with a protocol revision it does not recognise.
+   */
+  warm: {
+    ok: boolean;
+    ms: number;
+    token: string;
+    acknowledged: boolean;
+    briefMatched: boolean;
+    /** The bridge worker calls go through was built and instantiated. */
+    bridgeWarmed: boolean;
+    bridgeWarmMs?: number;
+    protocolRevision?: string;
+    expectedBriefKey: string;
+    expectedSetupId: string;
+    seenBriefKey?: string;
+    seenSetupId?: string;
+    error?: string;
+  };
 }
 
 const SubscriptionLifecyclePayload = z.object({ subscriptionKey: z.string() });
@@ -2045,6 +2442,19 @@ export class VoiceAgentProcessor extends StreamProcessor<
   {
     now(): number;
     startCall(options: StartCallOptions): Promise<Record<string, unknown>>;
+    /**
+     * Build and instantiate the bridge worker this stream's calls go through,
+     * without dialling anything.
+     *
+     * Same ref, same fetch, same build budget as `startVoiceCall` — the point is
+     * to pay the build HERE, in setup, instead of inside the first call.
+     */
+    warmBridge(options: { path: string; token: string }): Promise<{
+      ok: boolean;
+      ms: number;
+      building: boolean;
+      reason: string;
+    }>;
   }
 > {
   readonly contract = VoiceAgentProcessorContract;
@@ -2076,7 +2486,85 @@ export class VoiceAgentProcessor extends StreamProcessor<
     runInBackground,
     state,
   }: ProcessEventArgs<VoiceAgentProcessorContract>): undefined {
+    /*
+     * WARM-UP FIRST, and before the birth-certificate gate.
+     *
+     * This is the one event whose whole purpose is to prove that THIS processor,
+     * on THIS stream, is built and running — so it must be answerable the moment
+     * the host exists, and it must not depend on any other state. It starts no
+     * call and touches no socket.
+     */
     if (state.birthCertificate === null) return;
+
+    if (event?.type === "voicelab/warmup") {
+      /*
+       * THE SAME PATH A CALL TAKES, MINUS THE DIAL.
+       *
+       * Deliberately placed AFTER the birth-certificate gate and judged by the
+       * same freshness rule as a real request, because those are the two things
+       * that can silently drop a `voicelab/call-requested` — and a probe that
+       * skips them proves readiness the call path does not have. It arrives
+       * through the same subscription and the same filtered delivery, is
+       * dispatched from the same branch, and warms the same bridge worker
+       * `#startCall` would reach. What it does not do is dial: no provider
+       * socket, no device event, no audio.
+       */
+      const token = event.payload.token;
+      const path = this.path;
+      const probedAtMs = Date.parse(event.createdAt);
+      if (!this.#fresh(probedAtMs)) {
+        /* A probe recovered from history is not an acknowledgement of anything
+         * happening now — and replay must not answer a token setup has already
+         * given up on. */
+        return;
+      }
+      /*
+       * WHICH BRIEF THIS PROCESSOR HAS, from its own folded state.
+       *
+       * Not a read. The marker arrived through this subscription, in order,
+       * ahead of the token being answered. Its absence means this processor has
+       * genuinely not been told which brief is current — a failure to report,
+       * not a gap to paper over with a scan of history.
+       */
+      const marker = state.briefCurrent;
+      runInBackground(async () => {
+        if (marker === null) {
+          append({
+            type: "voicelab/warmup-unresolved",
+            payload: {
+              token,
+              streamPath: path,
+              reason: `no ${BRIEF_MARKER_TYPE} has reached this processor`,
+              stage: "brief",
+            },
+          });
+          return;
+        }
+        const bridge = await this.deps.warmBridge({ path, token });
+        if (!bridge.ok) {
+          append({
+            type: "voicelab/warmup-unresolved",
+            payload: { token, streamPath: path, reason: bridge.reason, stage: "bridge" },
+          });
+          return;
+        }
+        append({
+          type: "voicelab/warmup-ready",
+          payload: {
+            token,
+            streamPath: path,
+            briefKey: marker.briefKey,
+            briefSetupId: marker.setupId,
+            briefContentHash: marker.contentHash,
+            bridgeWarmMs: bridge.ms,
+            bridgeBuilding: bridge.building,
+            protocolRevision: WARMUP_PROTOCOL_REVISION,
+            processorSlug: VOICE_AGENT_PROCESSOR_SLUG,
+          },
+        });
+      });
+      return;
+    }
 
     if (event?.type === "voicelab/call-requested") {
       const requestedAtMs = Date.parse(event.createdAt);
@@ -2134,6 +2622,9 @@ export class VoiceAgentProcessor extends StreamProcessor<
     if (event.type === "events.iterate.com/voice-agent/created") {
       return { ...state, birthCertificate: {} };
     }
+    /* The newest marker wins, however much audio sits between markers. */
+    const marker = briefMarkerFromEvent(event);
+    if (marker !== null) return { ...state, briefCurrent: marker };
     if (event.type === "voicelab/call-requested") {
       const requestedAtMs = Date.parse(event.createdAt);
       return {
@@ -2246,6 +2737,59 @@ export class VoiceAgentProcessorHost extends IterateDurableObject {
               await this.fetchDynamicWorker(request, ref, fetchOptions),
             options,
           ),
+        /*
+         * The brief at the head of the agent's own stream — the same stream
+         * call-requested rides on, so this resolves what a real call would see.
+         * Read from the HEAD: a plain getEvents starts at offset zero and on a
+         * long stream returns the first brief ever installed instead of the
+         * current one.
+         */
+        /*
+         * THE SAME LOOKUP SETUP USES, not a second implementation of it.
+         *
+         * The point of the handshake is that these two agree: setup names the
+         * brief it installed and the processor names the brief it can resolve.
+         * Two readers with two different windows would compare nothing — and
+         * the first draft here read a 500-offset tail while setup read from
+         * offset zero, so they could disagree by hours.
+         */
+        /*
+         * The bridge, built and instantiated, dialling nothing.
+         *
+         * Deliberately the same ref, the same fetch helper and the same 30s
+         * build budget as startVoiceCall: a warm-up that reached the bridge some
+         * other way would prove some other worker was warm.
+         */
+        warmBridge: async ({ path, token }) => {
+          const at = Date.now();
+          try {
+            const response = await this.fetchDynamicWorker(
+              new Request(
+                `https://voicelab.invalid/warm?${new URLSearchParams({ mode: "warm", path, token }).toString()}`,
+              ),
+              { ...voiceBridgeRef, path },
+              { buildBudgetMs: 30_000 },
+            );
+            const ms = Date.now() - at;
+            if (!response.ok) {
+              return { ok: false, ms, building: false, reason: `bridge ${response.status}` };
+            }
+            const body = (await response.json()) as { building?: boolean; token?: string };
+            if (body.token !== token) {
+              /* Correlated at this hop too: a bridge that echoes a different
+               * token is not the one this probe just reached. */
+              return { ok: false, ms, building: false, reason: "the bridge echoed another token" };
+            }
+            return { ok: true, ms, building: body.building === true, reason: "warm" };
+          } catch (error) {
+            return {
+              ok: false,
+              ms: Date.now() - at,
+              building: false,
+              reason: String(error).slice(0, 200),
+            };
+          }
+        },
       }),
   });
 
@@ -2329,7 +2873,8 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
      * I create this?" but "is this stream actually listening?" — see below.
      */
     const stream = project.streams.get(streamPath);
-    const backOffice = project.agents.get(COLLEAGUE_PATH);
+    /* The voice agent for THIS conversation is also its back office. */
+    const backOffice = project.agents.get(streamPath);
     const birthPayload = {};
     /*
      * THE SUBSCRIPTION, as one value, because its KEY is derived from it.
@@ -2353,6 +2898,25 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
            * this list never reaches the fold at all. */
           "voicelab/call-accepted",
           "voicelab/call-failed",
+          /*
+           * The warm-up token. Hosted delivery is FILTERED, so a type missing
+           * from this list never reaches the processor at all — which is what
+           * made the first version of this handshake unanswerable. Note the
+           * shape of that dependency: the filter lives in the payload whose
+           * contentHash IS the idempotency key, so adding a type here makes a
+           * re-setup append a new subscription-configured event under the same
+           * subscriptionKey, replacing the old filter rather than running two.
+           *
+           * Neither the bridge (mic-frame, ping, turn, say, call-ended,
+           * call-accepted) nor the device's downlink (speaker-frame,
+           * grok-event, call-ended, call-accepted, pong) lists this type, so
+           * the token cannot reach the provider socket or the audio path.
+           */
+          "voicelab/warmup",
+          /* Setup's statement of which brief is current. Without this in the
+           * filter the processor would never be told, and hosted delivery is
+           * filtered — the same trap that made the first handshake silent. */
+          "voicelab/brief-current",
         ],
       },
       receiver: {
@@ -2372,6 +2936,12 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       : `${subscriptionKeyPrefix}:${contentHash(subscriptionPayload)}`;
     const birthKey = `voice-agent/created:${streamPath}:${contentHash(birthPayload)}`;
 
+    /*
+     * ONE IDENTITY FOR THIS SETUP, carried by the brief it installs and by the
+     * marker that names it, so the acknowledgement can be checked against THIS
+     * setup rather than against whatever the stream last happened to hold.
+     */
+    const setupId = crypto.randomUUID();
     const startedAt = Date.now();
     const [voiceEvents, agentEvents] = await Promise.all([
       stream.append(
@@ -2387,13 +2957,46 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
         },
       ),
       /* Born and briefed — the same helper the call path uses, so a call that
-       * never went through setup gets the same colleague. */
-      ensureBackOffice(backOffice),
+       * never went through setup gets the same colleague. The brief text comes
+       * from the project's live __describe every time, which is the whole point:
+       * a device that gained or lost a method must not be described by a prompt
+       * written before it did. */
+      describeProvidedCapabilities(project).then((brief) =>
+        ensureVoiceAgent(backOffice, brief, setupId),
+      ),
     ]);
+
+    /*
+     * THE MARKER, appended after the brief it names.
+     *
+     * Delivery is ordered, so a processor that receives the warm-up token has
+     * already folded this. Its type is in the subscription filter below, which
+     * is how the processor learns which brief is current without reading any
+     * history — the thing three successive read designs could not do exactly.
+     */
+    const installedBrief = agentEvents?.at(-1);
+    if (!installedBrief?.idempotencyKey) {
+      throw new Error(
+        `setupVoiceAgent: the brief append for ${streamPath} returned no event, so there is ` +
+          `nothing to mark current`,
+      );
+    }
+    const briefMarker = {
+      setupId,
+      briefKey: installedBrief.idempotencyKey,
+      contentHash: contentHash({
+        content: (installedBrief.payload as { content?: string }).content,
+      }),
+    } satisfies BriefMarker;
+    await stream.append({
+      type: BRIEF_MARKER_TYPE,
+      idempotencyKey: `voice-agent/brief-current:${setupId}`,
+      payload: { ...briefMarker },
+    });
 
     const created: string[] = [];
     const alreadyThere: string[] = [];
-    for (const event of [...voiceEvents, ...agentEvents]) {
+    for (const event of [...voiceEvents, ...(agentEvents ?? [])]) {
       const key = event.idempotencyKey ?? `${event.path}@${String(event.offset)}`;
       (Date.parse(event.createdAt) < startedAt ? alreadyThere : created).push(key);
     }
@@ -2417,7 +3020,159 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       });
       created.push(healKey);
     }
-    return { streamPath, created, alreadyThere };
+
+    /*
+     * AND IS IT WARM?
+     *
+     * Setup used to return with the subscription configured and the worker
+     * never instantiated, so the FIRST call paid for building it. Measured: the
+     * bridge's own share of a call start is ~1.4s (dial 0.5s, session.created
+     * 0.6-1.2s, accepted 0.8-1.4s), yet the first call after a remount took 8-16s
+     * to go live. All of that difference is pre-bridge — the dynamic worker being
+     * built and its processor woken — and a remount left it cold every time,
+     * which is why removing the harness's duplicate-press retry did not help.
+     *
+     * So setup warms the processor it just configured and does not return until
+     * it has answered. Bounded, and reported rather than swallowed: a setup that
+     * could not warm its own worker says so, because the alternative is a caller
+     * that thinks it is ready and then waits 16 seconds.
+     */
+    /*
+     * WARM-UP: A TOKEN THROUGH THE REAL PROCESSOR, AND THE BRIEF IT SEES.
+     *
+     * Nothing structural can prove readiness. A registered subscription is a
+     * fact about the STREAM; a health reply from a ref proves a wrapper answered;
+     * reading `this.processor` only fetches a function. Each of those was tried
+     * and each was vacuous. What is left is an end-to-end round trip: append a
+     * benign token, have the processor that owns this stream consume it and
+     * answer with that token plus the brief it can actually resolve, and refuse
+     * to return until the answer matches.
+     *
+     * The cost this exists to remove: the first call after a remount paid for
+     * compiling this file out of the config repo — 8 to 16 seconds to go live
+     * against a bridge whose own share is 1.4.
+     *
+     * The warm-up event starts no call and reaches neither the provider nor the
+     * device's downlink, which subscribe to different types.
+     */
+    /*
+     * WHAT THE ACKNOWLEDGEMENT MUST NAME: the brief this setup installed, by the
+     * identity this setup gave it.
+     *
+     * Nothing is read to establish this. The brief was appended under
+     * `...:setup:<setupId>` and the marker naming it was appended straight after,
+     * so the expectation is a fact this function created rather than an
+     * observation it went looking for. That closes the last hole: an earlier
+     * version derived the expectation from its own append result, which was null
+     * whenever the refresh deduplicated, and the check degraded to "the
+     * processor resolved SOME brief".
+     */
+    const expectedBriefKey = briefMarker.briefKey;
+    const token = crypto.randomUUID();
+    const warm: {
+      ok: boolean;
+      ms: number;
+      token: string;
+      acknowledged: boolean;
+      briefMatched: boolean;
+      bridgeWarmed: boolean;
+      bridgeWarmMs?: number;
+      protocolRevision?: string;
+      expectedBriefKey: string;
+      expectedSetupId: string;
+      seenBriefKey?: string;
+      seenSetupId?: string;
+      error?: string;
+    } = {
+      ok: false,
+      ms: 0,
+      token,
+      acknowledged: false,
+      briefMatched: false,
+      bridgeWarmed: false,
+      expectedBriefKey,
+      expectedSetupId: setupId,
+    };
+    const warmStartedAt = Date.now();
+    await stream.append({ type: "voicelab/warmup", payload: { token } });
+    try {
+      /*
+       * BOTH ANSWERS, so a failure is classified in milliseconds rather than
+       * being indistinguishable from a processor that never woke. The token
+       * correlates either one to THIS attempt: a stale answer from a previous
+       * setup on this long-lived stream must not satisfy or fail this one.
+       */
+      const answer = await stream.waitForEvent({
+        eventTypes: ["voicelab/warmup-ready", "voicelab/warmup-unresolved"],
+        predicate: (event) => (event.payload as { token?: string } | null)?.token === token,
+        timeoutMs: WARMUP_DEADLINE_MS,
+      });
+      const payload = (answer.payload ?? {}) as {
+        briefKey?: string;
+        briefSetupId?: string;
+        protocolRevision?: string;
+        reason?: string;
+        stage?: string;
+        bridgeWarmMs?: number;
+      };
+      if (answer.type === "voicelab/warmup-unresolved") {
+        /* Woke and failed. Never a success, whatever else matches. */
+        warm.error =
+          `the processor woke and got as far as the ${payload.stage ?? "unknown"} stage: ` +
+          `${payload.reason ?? "(no reason given)"}`;
+      } else {
+        warm.acknowledged = true;
+        warm.protocolRevision = payload.protocolRevision;
+        warm.seenBriefKey = payload.briefKey;
+        /*
+         * EXACTLY the brief at the head. Not "a brief", not "non-empty" — the
+         * same idempotencyKey, which is what makes this a proof that the prompt
+         * derived from the current __describe is the prompt the running processor
+         * will use.
+         */
+        warm.seenSetupId = payload.briefSetupId;
+        /*
+         * THIS setup's brief, by both halves of its identity.
+         *
+         * The key alone would be satisfied by an identical brief installed by
+         * some other setup; the setupId alone would not prove which context
+         * event it named. Requiring both makes the acknowledgement a statement
+         * about the prompt this call to setupVoiceAgent just derived from
+         * __describe and appended.
+         */
+        warm.briefMatched =
+          payload.briefKey === expectedBriefKey && payload.briefSetupId === setupId;
+        warm.bridgeWarmMs = payload.bridgeWarmMs;
+        /*
+         * The bridge leg is part of readiness, not a detail: an acknowledgement
+         * carrying no bridge timing came from a processor that never reached it,
+         * which is exactly the state that cost 8 seconds on the first call.
+         */
+        warm.bridgeWarmed = typeof payload.bridgeWarmMs === "number";
+        warm.ok =
+          warm.briefMatched &&
+          warm.bridgeWarmed &&
+          payload.protocolRevision === WARMUP_PROTOCOL_REVISION;
+      }
+    } catch (error) {
+      warm.error = String(error).slice(0, 160);
+    }
+    warm.ms = Date.now() - warmStartedAt;
+    /* ENFORCED, not reported: setup's contract is "ready to hold a conversation". */
+    if (!warm.ok) {
+      throw new Error(
+        `setupVoiceAgent: the processor for ${streamPath} did not acknowledge warm-up within ` +
+          `${warm.ms}ms — acknowledged=${String(warm.acknowledged)} ` +
+          `briefMatched=${String(warm.briefMatched)} ` +
+          `bridgeWarmed=${String(warm.bridgeWarmed)} ` +
+          `protocol=${warm.protocolRevision ?? "(none)"} expected=${WARMUP_PROTOCOL_REVISION} ` +
+          `expectedBrief=${expectedBriefKey} ` +
+          `seenBrief=${warm.seenBriefKey ?? "(none)"} ` +
+          `expectedSetup=${setupId} seenSetup=${warm.seenSetupId ?? "(none)"}` +
+          (warm.error ? ` lastError=${warm.error}` : ""),
+      );
+    }
+    return { streamPath, created, alreadyThere, warm };
   }
 
   async removeVoiceAgent(options: { streamPath: string }): Promise<{

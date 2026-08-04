@@ -65,6 +65,63 @@ pnpm cli voicelab bench --project prj_… --seconds 120 --rate 50
 Every command prints a JSON summary with nearest-rank percentiles; `client`
 and `direct` share a summary shape so overhead subtracts cleanly.
 
+## Endurance, against a real device
+
+Both drive one call on one stream and never restart it, take turns as text so
+nobody has to be in the room, and read the device's own `voicelab/dev-stats`
+(every 5s) rather than trusting a snapshot.
+
+```bash
+# survival: one call held open, a short question every 45s
+doppler run --config preview_3 -- pnpm cli voicelab soak \
+  --project prj_… --path /agents/voice/dev-… --minutes 60 --out /tmp/soak.json
+
+# endurance under load: 100+ turns, 90+ minutes, and long answers in the mix
+doppler run --config preview_3 -- pnpm cli voicelab stress \
+  --project prj_… --path /agents/voice/dev-… --out /tmp/stress.json
+```
+
+`soak` answers "does the call survive?". `stress` answers the harder question:
+every 20 turns it asks 11 short questions, 6 for a paragraph and 3 for minutes
+of unbroken audio ("count from one to a hundred"), waits for the SPEAKER to go
+quiet rather than for `response.done`, and reports latency, audio delivered vs
+audio played, and the heap trend per prompt class — so a failure can be pinned
+on the long turns if that is where it lives. It fails on a miss, on any counter
+a healthy call never moves, on a session change, on a heap slope, and on a run
+that never actually produced long audio.
+
+## Repeatability, against a real device
+
+`soak` and `stress` both cross the interesting boundaries exactly once, at the
+top of the run: setting the project up, getting a call live, the first answer on
+a playout that has never opened, hanging up, and coming back to a warm mount.
+`sessions` crosses them ten times instead.
+
+```bash
+# ten independent ~3-minute sessions, each: setup → call → turns → teardown → remount
+doppler run --config preview_3 -- pnpm cli voicelab sessions \
+  --project prj_… --path /agents/voice/dev-… --sessions 10 --out /tmp/sessions.json
+```
+
+Each session runs the same fixed plan of SHORT and MEDIUM turns — more
+transitions, not more speech: a turn asked the instant the call goes live,
+back-to-back turns with no settle, a one-word prompt, a blank prompt the bridge
+must drop, a barge-in over an answer that is still playing, a turn after half a
+minute of silence, and a hang-up mid-sentence; plus `conversation.start()` on a
+live call and `hangUp()` twice, which must both be no-ops. Between sessions it
+remounts (`--remount server|device|both|none`): `server` kills the bridge and
+processor DOs and removes the stream's subscription so the next session's setup
+must install it again, `device` reboots the board.
+
+The bar is 10/10 and there is no tolerated bucket: every clean turn must have
+`sent == played` (zero lost frames, not a low percentage), no counter in the
+never-moves tier may move anywhere — `spkOverflow` above all, the ring-overflow
+defect that cost one 90-minute run 30% of its audio — and the two cases that
+cancel an answer on purpose declare exactly which counters that licenses, with
+their movement attributed to the case by name in the report. Latency limits
+(`--first-audio-ms`, `--done-short-ms`, `--done-medium-ms`) come from the
+measured short-turn baseline and are options, not opinions.
+
 ## What to look at
 
 - `utteranceEndToFirstSpkFrameMs` — the human-felt answer delay.

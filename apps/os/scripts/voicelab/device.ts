@@ -134,7 +134,7 @@ export async function device(options: DeviceOptions) {
      * to the transport or the device, and a recording of the room can be
      * compared against what was sent sample for sample.
      */
-    const stream = itx.streams.get(options.path ?? "/voicelab/dev-waveshare");
+    const stream = itx.streams.get(options.path ?? "/agents/voice/device");
     const seconds = options.seconds ?? 20;
     const frames = Math.round((seconds * 1000) / 20);
     const samplesPerFrame = 320; // 20ms at 16kHz
@@ -182,7 +182,7 @@ export async function device(options: DeviceOptions) {
      */
     const outDir = options.out ?? "journey";
     fs.mkdirSync(outDir, { recursive: true });
-    const stream = itx.streams.get(options.path ?? "/voicelab/device");
+    const stream = itx.streams.get(options.path ?? "/agents/voice/device");
     const steps: { step: string; ms: number; note?: string }[] = [];
     /*
      * Every device call is time-bounded. A capability call that never

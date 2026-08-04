@@ -70,9 +70,13 @@ const CLEAN_HARMONIC_DB = -30;
  */
 function recordRoom(seconds: number, label: string): Int16Array {
   const target = path.join(os.tmpdir(), `iterate-loudness-${label}.wav`);
-  execFileSync("rec", ["-q", "-c", "1", "-r", "16000", "-b", "16", target, "trim", "0", String(seconds)], {
-    stdio: "ignore",
-  });
+  execFileSync(
+    "rec",
+    ["-q", "-c", "1", "-r", "16000", "-b", "16", target, "trim", "0", String(seconds)],
+    {
+      stdio: "ignore",
+    },
+  );
   const raw = fs.readFileSync(target);
   return new Int16Array(raw.buffer, raw.byteOffset + 44, Math.floor((raw.length - 44) / 2));
 }
@@ -135,7 +139,7 @@ export async function loudness(options: LoudnessOptions) {
   const kit = (itx as unknown as { kit: Record<string, DeviceCapability> }).kit;
   const capability = kit[options.name ?? "waveshare"];
   if (!capability) throw new Error(`no device capability named ${options.name ?? "waveshare"}`);
-  const stream = itx.streams.get(options.path ?? "/voicelab/device") as unknown as {
+  const stream = itx.streams.get(options.path ?? "/agents/voice/device") as unknown as {
     append(...events: unknown[]): Promise<unknown>;
   };
   const seconds = options.seconds ?? 4;
@@ -144,7 +148,9 @@ export async function loudness(options: LoudnessOptions) {
     .map((value) => Number(value.trim()))
     .filter((value) => Number.isFinite(value) && value > 0 && value <= 100);
 
-  console.log(`tone ${String(TONE_HZ)}Hz, ${String(seconds)}s per volume, recorded on this Mac's microphone\n`);
+  console.log(
+    `tone ${String(TONE_HZ)}Hz, ${String(seconds)}s per volume, recorded on this Mac's microphone\n`,
+  );
   console.log(`  vol  fundamental   2nd harmonic   verdict`);
   const results: { volume: number; level: number; harmonic: number }[] = [];
   for (const volume of volumes) {
@@ -157,7 +163,9 @@ export async function loudness(options: LoudnessOptions) {
     const captured = recordRoom(seconds - 1, String(volume));
     await playing;
     if (captured.length < SAMPLE_RATE) {
-      console.log(`  ${String(volume).padStart(3)}  (captured ${String(captured.length)} samples — too few to judge)`);
+      console.log(
+        `  ${String(volume).padStart(3)}  (captured ${String(captured.length)} samples — too few to judge)`,
+      );
       continue;
     }
     const fundamental = energyAt(captured, TONE_HZ);
