@@ -1,5 +1,5 @@
 ---
-status: implemented
+status: done
 size: small
 ---
 
@@ -7,7 +7,7 @@ size: small
 
 ## Status
 
-Implemented; typecheck/lint/test green. Awaiting review on
+Done. CI green, no review comments. PR:
 https://github.com/iterate/iterate/pull/2398.
 
 ## Ask
