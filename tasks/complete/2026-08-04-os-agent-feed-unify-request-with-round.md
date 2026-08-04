@@ -1,14 +1,15 @@
 ---
-status: in-progress
+status: done
 size: medium
 branch: os-agent-feed-round-meta
 ---
 
 # apps/os: show the LLM request with its round, like mobile's Meta tab
 
-> **Status summary**: implemented and verified against local dev (PR #2407,
-> screenshots in the PR body). Rounds + tabs + Meta yaml/prompt all working;
-> tests updated (12 passing). Remaining: review feedback.
+> **Status summary**: done — PR #2407 approved (Iterate linter + all bugbot/
+> review threads resolved), CI green, demo video + screenshots in the PR
+> body. Includes the follow-ups: summary-status round headers and YAML
+> results on both surfaces.
 
 Follow-up from #2398 (merged). Misha (2026-08-04, with screenshot of a 9-round
 agent turn in the os feed):
