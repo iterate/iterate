@@ -326,6 +326,40 @@ describe("openRelayedLiveState", () => {
     expect(subscription.ping()).toBe(true);
   });
 
+  it("ignores late frames from a socket released by the last unsubscribe", async () => {
+    const sockets = [fakeRelaySocket(), fakeRelaySocket()];
+    let dials = 0;
+    const relay = openRelayedLiveState<{ n: number }>({
+      dialSocket: async () => ({ status: 101, webSocket: sockets[dials++]! }),
+      readSnapshot: async () => ({ n: 0 }),
+      socketFailureDegrade: "reject",
+      label: "test",
+    });
+
+    const first = relay.subscribe(collectUpdates().sink);
+    await Promise.resolve();
+    sockets[0]!.emitFrame({ n: 1 });
+    (await first).unsubscribe();
+    // The release called close(), but no close EVENT has fired yet — an
+    // already-queued frame can still deliver. A fast resubscribe dials a
+    // fresh socket and seeds newer state; the released socket's late frame
+    // must not rewind it.
+    const { updates, sink } = collectUpdates();
+    const second = relay.subscribe(sink);
+    await Promise.resolve();
+    sockets[1]!.emitFrame({ n: 3 });
+    await second;
+    sockets[0]!.emitFrame({ n: 2 });
+    expect(updates).toEqual([{ type: "snapshot", revision: 0, state: { n: 3 } }]);
+    vi.useFakeTimers();
+    try {
+      vi.runAllTimers();
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(updates).toHaveLength(1);
+  });
+
   it("times out the seed wait, closes the socket, and ignores its late frames", async () => {
     vi.useFakeTimers();
     try {

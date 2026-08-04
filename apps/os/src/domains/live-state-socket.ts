@@ -312,11 +312,21 @@ export function openRelayedLiveState<State extends object>(input: {
   // one dial, or each opens its own DO-side socket and only the last keeps a
   // worker reference — the rest linger as watchers the DO keeps pushing to.
   let opening: Promise<void> | undefined;
+  // Every socket this relay stops trusting, marked at the moment of
+  // abandonment — seed timeout, close event, or the unwatched release below.
+  // A late in-flight frame from an abandoned socket must never touch the
+  // engine: after a fast unsubscribe→resubscribe, the fresh dial's seed could
+  // otherwise be overwritten by an older frame the closed socket had already
+  // queued — the one rewind path the one-ordered-channel design must close
+  // explicitly (there is no revision guard by design). `close()` alone is not
+  // the mark: its close EVENT fires after any already-queued frames.
+  const abandonedSockets = new WeakSet<WebSocket>();
 
   const releaseSocketIfUnwatched = () => {
     if (pendingSubscribes > 0 || engine.observed || socket === undefined) return;
     const ws = socket;
     socket = undefined;
+    abandonedSockets.add(ws);
     try {
       ws.close(1000, "no subscribers");
     } catch {
@@ -337,15 +347,9 @@ export function openRelayedLiveState<State extends object>(input: {
           throw new Error(`liveState socket upgrade refused with status ${upgrade.status}`);
         }
         ws.accept();
-        // Once this dial's socket is abandoned (seed timeout, close), a
-        // late-arriving frame from it must never touch the engine: a slow
-        // first socket flushing AFTER a second dial seeded would rewind the
-        // engine with older state — the exact stale-write family the
-        // one-ordered-channel design exists to rule out.
-        let abandoned = false;
         await new Promise<void>((resolve, reject) => {
           const fail = (reason: string) => {
-            abandoned = true;
+            abandonedSockets.add(ws);
             try {
               ws.close(1000, reason);
             } catch {
@@ -355,7 +359,9 @@ export function openRelayedLiveState<State extends object>(input: {
           };
           const timer = setTimeout(() => fail("seed frame timed out"), SEED_FRAME_TIMEOUT_MS);
           ws.addEventListener("message", (event) => {
-            if (abandoned) return;
+            // See abandonedSockets: no frame from a socket this relay stopped
+            // trusting may touch the engine, however late it arrives.
+            if (abandonedSockets.has(ws)) return;
             const frame = parseLiveStateSocketFrame(event.data);
             if (frame === undefined) return;
             // The only producer of state frames is the host DO's flusher,
@@ -369,7 +375,7 @@ export function openRelayedLiveState<State extends object>(input: {
             resolve();
           });
           ws.addEventListener("close", () => {
-            abandoned = true;
+            abandonedSockets.add(ws);
             if (socket === ws) socket = undefined;
             clearTimeout(timer);
             reject(new Error(`liveState socket closed before seeding for ${input.label}`));
