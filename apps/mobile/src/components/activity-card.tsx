@@ -13,6 +13,7 @@
 import { useId, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { Document, Scalar, visit } from "yaml";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import { llmResponseForDisplay } from "../lib/activity-display.ts";
 import {
@@ -319,12 +320,12 @@ function CodeStepTabs({
 }
 
 /**
- * The Meta tab's body: the round's stats as YAML for the highlighted
- * CodeBlock. The stat values are all bare scalars (numbers, `6.8s`
- * durations, slash-y model ids, kebab-case cancel reasons) so hand-rolled
- * emission is safe; the replayed prompt messages hold arbitrary text and
- * ride in `|-` block scalars, where indentation alone contains them.
- * Absent fields are omitted, not nulled.
+ * The Meta tab's body: the round's stats — and the replayed prompt — as one
+ * YAML document for the highlighted CodeBlock. Emitted through the `yaml`
+ * package rather than hand-rolled string building: prompt content is
+ * arbitrary text, and block-scalar edge cases (a first line with leading
+ * whitespace needs an explicit indent indicator, quoting, etc.) are the
+ * library's problem. Absent fields are omitted, not nulled.
  */
 function metaYaml(
   llm: AgentUiLlmStep | null,
@@ -332,35 +333,51 @@ function metaYaml(
   promptMessages: { role: string; content: string }[] | null,
 ): string {
   const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
-  const lines = [
+  const doc = new Document({
     ...(llm
-      ? [
-          "llm:",
-          ...(llm.model ? [`  model: ${llm.model}`] : []),
-          ...(llm.durationMs ? [`  duration: ${seconds(llm.durationMs)}`] : []),
-          ...(llm.inputTokens ? [`  inputTokens: ${llm.inputTokens}`] : []),
-          ...(llm.outputTokens ? [`  outputTokens: ${llm.outputTokens}`] : []),
-          ...(llm.outcome && llm.outcome !== "completed" ? [`  outcome: ${llm.outcome}`] : []),
-          ...(llm.cancelReason ? [`  cancelReason: ${llm.cancelReason}`] : []),
-        ]
-      : []),
-    "code:",
-    ...(code.status === "running" ? ["  status: running"] : []),
-    ...(code.durationMs ? [`  duration: ${seconds(code.durationMs)}`] : []),
-    ...(code.status === "done" && code.success === false ? ["  failed: true"] : []),
+      ? {
+          llm: {
+            ...(llm.model ? { model: llm.model } : {}),
+            ...(llm.durationMs ? { duration: seconds(llm.durationMs) } : {}),
+            ...(llm.inputTokens ? { inputTokens: llm.inputTokens } : {}),
+            ...(llm.outputTokens ? { outputTokens: llm.outputTokens } : {}),
+            ...(llm.outcome && llm.outcome !== "completed" ? { outcome: llm.outcome } : {}),
+            ...(llm.cancelReason ? { cancelReason: llm.cancelReason } : {}),
+          },
+        }
+      : {}),
+    code: {
+      ...(code.status === "running" ? { status: "running" } : {}),
+      ...(code.durationMs ? { duration: seconds(code.durationMs) } : {}),
+      ...(code.status === "done" && code.success === false ? { failed: true } : {}),
+    },
     ...(promptMessages && promptMessages.length > 0
-      ? [
-          `prompt: # ${promptMessages.length} messages, ${promptMessages.reduce((sum, message) => sum + message.content.length, 0)} chars`,
-          ...promptMessages.flatMap((message) => [
-            `  - role: ${message.role}`,
-            ...(message.content.trim() === ""
-              ? [`    content: ""`]
-              : ["    content: |-", ...message.content.split("\n").map((line) => `      ${line}`)]),
-          ]),
-        ]
-      : []),
-  ];
-  return lines.join("\n");
+      ? {
+          prompt: promptMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        }
+      : {}),
+  });
+  visit(doc, {
+    // Multiline strings as |- blocks: readable and highlightable, instead of
+    // the default quoted-with-\n form.
+    Scalar(_key, node) {
+      if (typeof node.value === "string" && node.value.includes("\n")) {
+        node.type = Scalar.BLOCK_LITERAL;
+      }
+    },
+    // The message/char tally rides as an inline comment on the prompt key.
+    Pair(_key, pair) {
+      if (promptMessages && pair.key instanceof Scalar && pair.key.value === "prompt") {
+        const chars = promptMessages.reduce((sum, message) => sum + message.content.length, 0);
+        pair.key.comment = ` ${promptMessages.length} messages, ${chars} chars`;
+      }
+    },
+  });
+  // lineWidth 0: never fold long lines — prompt text renders as written.
+  return doc.toString({ lineWidth: 0 }).trimEnd();
 }
 
 function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {
