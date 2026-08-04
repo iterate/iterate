@@ -9,7 +9,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { LiveStateSockets, liveStateLaneToken } from "../live-state-socket.ts";
+import { LiveStateSockets } from "../live-state-socket.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
 import {
@@ -85,7 +85,6 @@ export class SecretDurableObject extends DurableObject<Env> {
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     readState: () => this.#registry.live.getState(),
     refresh: () => this.#registry.loadAndRefreshLive(),
-    laneToken: () => liveStateLaneToken(this.env),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
   readonly #registry = createStreamProcessorRegistry(this.ctx, {

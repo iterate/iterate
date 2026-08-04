@@ -13,7 +13,7 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { LiveStateSockets, liveStateLaneToken } from "../live-state-socket.ts";
+import { LiveStateSockets } from "../live-state-socket.ts";
 import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
@@ -138,7 +138,6 @@ export class RepoDurableObject extends DurableObject<Env> {
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     readState: () => this.#registry.live.getState(),
     refresh: () => this.#registry.loadAndRefreshLive(),
-    laneToken: () => liveStateLaneToken(this.env),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
   readonly #registry = createStreamProcessorRegistry(this.ctx, {

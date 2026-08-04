@@ -11,7 +11,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamProcessorRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { LiveStateSockets, liveStateLaneToken } from "../live-state-socket.ts";
+import { LiveStateSockets } from "../live-state-socket.ts";
 import { deviceCreationEvents } from "./device-defaults.ts";
 import { DeviceProcessorContract } from "./device-processor-contract.ts";
 import { DeviceProcessor, type DevicePushSender } from "./device-processor-implementation.ts";
@@ -47,7 +47,6 @@ export class DeviceDurableObject extends DurableObject<Env> {
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     readState: () => this.#registry.live.getState(),
     refresh: () => this.#registry.loadAndRefreshLive(),
-    laneToken: () => liveStateLaneToken(this.env),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
   readonly #registry = createStreamProcessorRegistry(this.ctx, {

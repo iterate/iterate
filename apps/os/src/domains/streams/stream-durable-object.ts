@@ -32,7 +32,7 @@ import {
 } from "../../rpc-targets.ts";
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
-import { LiveStateSockets, liveStateLaneToken } from "../live-state-socket.ts";
+import { LiveStateSockets } from "../live-state-socket.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
@@ -537,7 +537,6 @@ export class StreamDurableObject extends DurableObject<Env> {
     // refresh just requests a ping-sample round so a fresh watcher's first
     // frame carries real connection RTTs, mirroring the getter's behavior.
     refresh: () => this.#eventSender.connections.samplePingsSoon(),
-    laneToken: () => liveStateLaneToken(this.env),
     waitUntil: (work) => this.ctx.waitUntil(work),
   });
   #coreProcessorState: CoreProcessorState;

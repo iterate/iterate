@@ -179,24 +179,28 @@ test("secret.liveState pushes description updates through the liveState socket",
 });
 
 // The project/secret DO fetch lanes also serve user-influenced egress
-// traffic, where a user script controls arbitrary headers. Presence of the
-// internal lane header must never open a liveState socket (the value is a
-// deploy-internal token user code cannot know) — and a request wearing the
-// header must be refused outright, never forwarded to the egress lanes.
-test("a user egress request wearing the liveState lane header is refused, not forwarded", async () => {
+// traffic, where a user script controls arbitrary headers. The lane header
+// CLAIMS a request for the liveState lane outright — it must never continue
+// to the egress lanes, so an internal-looking request cannot alias into a
+// real outbound fetch. (The header is deliberately a plain marker, not a
+// signed token: a script that composes a WebSocket upgrade with it watches
+// its own project's liveState, which itx already serves it.)
+test("a user egress request wearing the liveState lane header is claimed by the lane, never egressed", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
   using project = await itx.projects.get(`lane-gate-${RUN_SUFFIX}-${marker}`).create({});
   await project.__describe();
 
-  const forged = await project.egress.fetch(
+  const claimed = await project.egress.fetch(
     new Request("https://live-state.internal/", {
-      headers: { Upgrade: "websocket", "x-iterate-live-state": "guessed-token" },
+      headers: { "x-iterate-live-state": "watch" },
     }),
   );
-  expect(forged).toMatchObject({ status: 403 });
-  expect(await forged.json()).toMatchObject({ error: expect.stringContaining("lane token") });
+  expect(claimed).toMatchObject({ status: 400 });
+  expect(await claimed.json()).toMatchObject({
+    error: expect.stringContaining("WebSocket upgrades"),
+  });
 });
 
 function trackLiveState<State>(): {

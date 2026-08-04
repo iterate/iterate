@@ -911,7 +911,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   get liveState(): LiveStateRpc<StreamRuntimeDebugState> {
     return new RelayedLiveStateRpcTarget<StreamRuntimeDebugState>(
       openRelayedLiveState({
-        dialSocket: () => dialLiveStateSocket(this[STREAM_DURABLE_OBJECT_STUB], env),
+        dialSocket: () => dialLiveStateSocket(this[STREAM_DURABLE_OBJECT_STUB]),
         readSnapshot: () => this.runtimeState(),
         socketFailureDegrade: "snapshot-only",
         label: `stream ${this.props.path}`,
@@ -7696,7 +7696,7 @@ class LiveStateRelayRpcTarget<State extends object>
       socketLane === undefined
         ? undefined
         : openRelayedLiveState<State>({
-            dialSocket: async () => dialLiveStateSocket(await this.#stub(), env),
+            dialSocket: async () => dialLiveStateSocket(await this.#stub()),
             readSnapshot: () => this.#transientGet(),
             socketFailureDegrade: "reject",
             label: socketLane.label,

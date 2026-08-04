@@ -27,12 +27,20 @@ import { z } from "zod";
 import { LiveState, type LiveStateSubscription, type LiveUpdate } from "iterate/sdk/capnweb";
 
 /**
- * Internal upgrade header carrying the liveState-socket lane token. Unlike
- * the stream wake-socket header (whose hosts are unreachable from user
- * traffic), some hosting DOs' `fetch()` also serves user-influenced requests
- * (the project egress lane, the secret substitution proxy) where a user
- * script controls arbitrary headers — so presence alone can never open the
- * lane; the VALUE must match {@link liveStateLaneToken}.
+ * Internal upgrade header marking a liveState-socket dial. Presence CLAIMS
+ * the request for this lane — it never continues to the host's other fetch
+ * lanes (the project egress proxy, the secret substitution proxy), so an
+ * internal-looking request can never alias into user egress.
+ *
+ * Deliberately forgeable (a plain marker, no signed token): on the two hosts
+ * whose `fetch()` also serves user-influenced traffic, a user script that
+ * goes out of its way to compose a WebSocket egress upgrade wearing this
+ * header gets a watcher on its own project's liveState — the same data its
+ * `itx.liveState` already serves it — for the lifetime of its own run. Not a
+ * boundary worth crypto. REVISIT if lane payloads ever exceed what the
+ * caller could read via itx (e.g. capability attenuation, or facet states
+ * post-#2395): the upgrade is an unforgeable header VALUE derived from a
+ * deployment secret, added in this one gate.
  */
 export const LIVE_STATE_SOCKET_HEADER = "x-iterate-live-state";
 
@@ -52,39 +60,6 @@ const FLUSH_DEBOUNCE_MS = 50;
 
 /** How long the relay waits for the seed frame before giving up on the socket. */
 const SEED_FRAME_TIMEOUT_MS = 5_000;
-
-/**
- * The deploy-internal lane token: user code can reach some hosts' `fetch()`
- * with arbitrary headers but can never read deployment secrets, so an HMAC of
- * a fixed label under `SECRET_ENCRYPTION_KEY` is unforgeable from user space
- * while needing no new binding or storage. Memoized per isolate — both ends
- * of the dial run the same deploy.
- */
-let laneTokenMemo: Promise<string> | undefined;
-export function liveStateLaneToken(env: { SECRET_ENCRYPTION_KEY: string }): Promise<string> {
-  return (laneTokenMemo ??= (async () => {
-    const encoder = new TextEncoder();
-    const key = await crypto.subtle.importKey(
-      "raw",
-      encoder.encode(env.SECRET_ENCRYPTION_KEY),
-      { name: "HMAC", hash: "SHA-256" },
-      false,
-      ["sign"],
-    );
-    const mac = await crypto.subtle.sign("HMAC", key, encoder.encode("live-state-socket-lane"));
-    return Array.from(new Uint8Array(mac), (byte) => byte.toString(16).padStart(2, "0")).join("");
-  })());
-}
-
-/** Constant-time-ish string compare; the compared values are fixed-length HMAC hex. */
-function tokenMatches(presented: string, expected: string): boolean {
-  if (presented.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < expected.length; i += 1) {
-    diff |= presented.charCodeAt(i) ^ expected.charCodeAt(i);
-  }
-  return diff === 0;
-}
 
 /**
  * A frame sent DO → relay: the full liveState, latest-wins. Loose object on
@@ -120,8 +95,6 @@ type LiveStateSocketsHooks = {
    * {@link LiveStateSockets.refreshAfterAssembly}.
    */
   refresh(): void | PromiseLike<void>;
-  /** The deploy-internal lane token ({@link liveStateLaneToken}). */
-  laneToken(): Promise<string>;
   /** `ctx.waitUntil` for the post-accept seed and skipped-assembly reload. */
   waitUntil(work: Promise<unknown>): void;
 };
@@ -143,20 +116,16 @@ export class LiveStateSockets {
 
   /**
    * Route a liveState-socket upgrade, or return `undefined` for the host's
-   * other fetch lanes. Three-way gate: no lane header → not ours; header with
-   * a wrong token → 403 and NEVER falls through (a request wearing the
-   * internal header must not reach an egress/proxy lane); valid token →
-   * accept, then seed the new socket via refresh + flush. The seed rides the
-   * shared flusher — a full-state re-send to older sockets is latest-wins and
-   * harmless, and a fold-driven frame landing first is an equally valid seed.
+   * other fetch lanes. The lane header CLAIMS the request outright (see
+   * {@link LIVE_STATE_SOCKET_HEADER}): no header → not ours; header without a
+   * WebSocket upgrade → 400, never a fall-through to an egress/proxy lane;
+   * an upgrade → accept, then seed the new socket via refresh + flush. The
+   * seed rides the shared flusher — a full-state re-send to older sockets is
+   * latest-wins and harmless, and a fold-driven frame landing first is an
+   * equally valid seed.
    */
   async acceptUpgrade(request: Request): Promise<Response | undefined> {
-    const presented = request.headers.get(LIVE_STATE_SOCKET_HEADER);
-    if (presented === null) return undefined;
-    if (!tokenMatches(presented, await this.#hooks.laneToken())) {
-      console.warn("liveState socket upgrade presented an invalid lane token");
-      return Response.json({ error: "invalid liveState lane token" }, { status: 403 });
-    }
+    if (request.headers.get(LIVE_STATE_SOCKET_HEADER) === null) return undefined;
     if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket") {
       return Response.json(
         { error: "the liveState lane accepts only WebSocket upgrades" },
@@ -259,15 +228,11 @@ type LiveStateSocketUpgrade = { status: number; webSocket?: WebSocket | null };
  * dial-path stubs are minted per call and the established socket owns its own
  * lifetime, mirroring the stream wake-socket dial.
  */
-export async function dialLiveStateSocket(
-  stub: { fetch(input: string, init?: RequestInit): Promise<LiveStateSocketUpgrade> },
-  env: { SECRET_ENCRYPTION_KEY: string },
-): Promise<LiveStateSocketUpgrade> {
+export async function dialLiveStateSocket(stub: {
+  fetch(input: string, init?: RequestInit): Promise<LiveStateSocketUpgrade>;
+}): Promise<LiveStateSocketUpgrade> {
   return await stub.fetch(LIVE_STATE_SOCKET_URL, {
-    headers: {
-      Upgrade: "websocket",
-      [LIVE_STATE_SOCKET_HEADER]: await liveStateLaneToken(env),
-    },
+    headers: { Upgrade: "websocket", [LIVE_STATE_SOCKET_HEADER]: "watch" },
   });
 }
 

@@ -11,8 +11,6 @@ import {
   LIVE_STATE_SOCKET_HEADER,
 } from "./live-state-socket.ts";
 
-const LANE_TOKEN = "test-lane-token";
-
 type FakeSocket = WebSocket & {
   sent: string[];
   closed: { code?: number; reason?: string }[];
@@ -43,7 +41,6 @@ function socketsOver(input: {
     acceptWebSocket: () => undefined,
     readState: input.readState ?? (() => ({})),
     refresh: input.refresh ?? (() => undefined),
-    laneToken: () => Promise.resolve(LANE_TOKEN),
     waitUntil: (work) => {
       waits.push(work);
     },
@@ -65,21 +62,11 @@ describe("LiveStateSockets", () => {
     expect(response).toBeUndefined();
   });
 
-  it("rejects a wrong token with 403 and never falls through", async () => {
+  it("claims a lane-headed request without a WebSocket upgrade: 400, never a fall-through", async () => {
     const { host } = socketsOver({ sockets: [] });
     const response = await host.acceptUpgrade(
       new Request("https://x.internal/", {
-        headers: { Upgrade: "websocket", [LIVE_STATE_SOCKET_HEADER]: "wrong" },
-      }),
-    );
-    expect(response?.status).toBe(403);
-  });
-
-  it("rejects a valid token without a WebSocket upgrade", async () => {
-    const { host } = socketsOver({ sockets: [] });
-    const response = await host.acceptUpgrade(
-      new Request("https://x.internal/", {
-        headers: { [LIVE_STATE_SOCKET_HEADER]: LANE_TOKEN },
+        headers: { [LIVE_STATE_SOCKET_HEADER]: "watch" },
       }),
     );
     expect(response?.status).toBe(400);
