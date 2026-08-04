@@ -14,11 +14,15 @@
     "bindings": [
       { "name": "ITX_HOST", "class_name": "ItxDurableObject" },
       { "name": "STREAM_DO", "class_name": "StreamDurableObject" }, // backing for itx.streams (project-prefixed)
+      // The dedicated stateful-dynamic-worker runner (apps/os StatefulWorkerDurableObject). One instance per
+      // stateful capability, each hosting the user's DO class as a facet.
+      { "name": "STATEFUL_WORKER", "class_name": "StatefulWorkerDurableObject" },
     ],
   },
   "migrations": [
     { "tag": "v1", "new_sqlite_classes": ["ItxDurableObject"] },
     { "tag": "v2", "new_sqlite_classes": ["StreamDurableObject"] },
+    { "tag": "v3", "new_sqlite_classes": ["StatefulWorkerDurableObject"] },
   ],
 
   // The DO's fallback (target-core §4.4). SELF-HOST/HOSTED: a service binding to the real control-plane shell

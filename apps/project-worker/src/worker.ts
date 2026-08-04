@@ -16,6 +16,7 @@ import { parseAppConfig, type AppConfig } from "./core/config.ts";
 
 export { ItxDurableObject };
 export { StreamDurableObject } from "./stream-durable-object.ts";
+export { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 // Preserve the pre-skeleton runner exports so a live control-plane RUNNER binding keeps resolving.
 export { ProjectRunner, ProjectEntrypoint, ProjectAuth } from "./index.ts";
 
@@ -126,7 +127,7 @@ function resolveFallback(ctx: unknown, env: Env, cfg: AppConfig): Fetcher {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "stateful-tunnel-1";
+const CODE_VERSION = "stateful-runner-2";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

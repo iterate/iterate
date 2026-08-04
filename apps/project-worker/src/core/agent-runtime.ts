@@ -40,17 +40,16 @@ export default {
 };
 `;
 
-// The STATEFUL dynamic-worker wrapper (mirrors apps/os StatefulWorkerDurableObject + worker-runner). The repo
-// file `cap.js` exports a `DurableObject` subclass named `className`; this wraps it in a host-owned subclass
-// `__HostedActor` and runs THAT as a FACET (its own isolated SQLite `ctx.storage`, durable across calls).
+// The STATEFUL dynamic-worker wrapper, loaded BY the StatefulWorkerDurableObject runner. The repo file `cap.js`
+// exports a `DurableObject` subclass named `className`; this wraps it in `__HostedActor extends <className>` and
+// runs THAT as the facet, so the runner can reach it.
 //
-// Why the wrapper: a stub to a Worker-Loader facet is NON-TRANSFERABLE across the Worker boundary (workerd:
-// "Entrypoints to dynamically-loaded workers cannot be transferred to other Workers … have the parent Worker
-// expose an entrypoint which constructs the dynamic worker and forwards to it"). `facet.fetch()` works (a
-// Response passes by value); a custom facet-METHOD result gets pipelined, and the pipeline hands the caller a
-// facet-stub reference → forbidden. So the RPC lane is TUNNELED over `fetch`: the host POSTs `{method,args}`
-// to `/__itx_rpc`, the wrapper invokes the user method locally and returns the result by value. Any other path
-// falls through to the user class's own `fetch` (the WS/streaming lane), so both lanes stay a plain `fetch`.
+// Why a fetch wrapper and not native RPC: a stub to a Worker-Loader facet is NON-TRANSFERABLE across the Worker
+// boundary (workerd: "Entrypoints to dynamically-loaded workers cannot be transferred to other Workers … have
+// the parent Worker … forward to it") — a custom facet-METHOD result gets pipelined and hands the caller a
+// facet-stub reference → throws (verified on deployed workerd 1.20260701.1, at ANY DO depth). `facet.fetch()`
+// works (a Response passes BY VALUE). So the runner reaches its facet's methods over `/__itx_rpc`, materialises
+// the JSON, and returns plain data to the host. Any other path falls through to the user class's own `fetch`.
 export function statefulDoRunner(className: string): string {
   const c = JSON.stringify(className);
   return /* js */ `

@@ -19,9 +19,10 @@
 import { DurableObject } from "cloudflare:workers";
 import { newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { substituteHeaderSecrets } from "./core/egress.ts";
-import { ITX_SURFACE_MODULE, CODE_CAP_RUNNER, statefulDoRunner } from "./core/agent-runtime.ts";
+import { ITX_SURFACE_MODULE, CODE_CAP_RUNNER } from "./core/agent-runtime.ts";
 import { parseName, stringifyName, parentPath } from "./core/names.ts";
 import type { StreamDurableObject, StreamEventInput } from "./stream-durable-object.ts";
+import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 import type { ItxCallPath } from "./core/config.ts";
 
 /** A capnweb stub to a provider-supplied capability. `.dup()` retains it past a call; `onRpcBroken` fires when
@@ -65,6 +66,7 @@ interface Env {
   SECRETS_KV?: KVNamespace;
   ITX_KV?: KVNamespace; // backing for itx.kv (project-prefixed — the D8 portability proof point)
   STREAM_DO?: DurableObjectNamespace<StreamDurableObject>; // backing for itx.streams (project-prefixed)
+  STATEFUL_WORKER: DurableObjectNamespace<StatefulWorkerDurableObject>; // dedicated runner for stateful caps
   // The fallback (target-core §4.4 / D30). Solo: a self service-binding to DummyControlPlane. A DO can't mint
   // ctx.exports loopbacks, so it reaches the fallback via a binding rather than the worker's ctx.exports.
   // It IS a whole shell: `fetch` (egress → terminal) + `invokeCapability` (capability fallthrough).
@@ -82,21 +84,17 @@ function hashSource(s: string): string {
 // The two DYNAMIC-WORKER kinds mirror apps/os's `DynamicWorkerRef` discriminant:
 //   • `code` = a STATELESS worker — a repo file exporting `(itx, ...args) => result`, loaded + run per call
 //     (content-addressed, no durable identity). This is the apps/os "stateless" ref, function-shaped.
-//   • `stateful` = a STATEFUL worker — a repo file exporting a `DurableObject` class (`className`), hosted as a
-//     FACET of THIS host DO (its own isolated SQLite `ctx.storage`, durable across calls; abort+recreate on
-//     source change). BOTH lanes are a plain `fetch` into the facet (a facet-method stub is non-transferable
-//     across the Worker boundary): the RPC lane tunnels `{method,args}` over `/__itx_rpc`; the WS/streaming
-//     lane is the `/facet` native fetch straight into the user class's own `fetch`.
+//   • `stateful` = a STATEFUL worker — a repo file exporting a `DurableObject` class (`className`), run by the
+//     dedicated `StatefulWorkerDurableObject` runner (a separate DO, one instance per stateful capability, each
+//     hosting the class as a facet with its own isolated SQLite). The host just FORWARDS by name — the RPC lane
+//     is a native method call inside the runner, the WS/streaming lane is `/facet` → the runner → the facet's
+//     own `fetch`.
 // (`live` RPC-stub mounts are the capnweb path, above.)
 type Mount =
   | { type: "itx-expression"; expression: ItxCallPath }
   | { type: "static"; value: unknown }
   | { type: "code"; module: string }
   | { type: "stateful"; module: string; className: string };
-
-/** A facet stub: `ctx.facets.get(...)` returns a `Fetcher`. We only ever use `.fetch()` — it's the one operation
- *  that passes by value across the Worker boundary (WS/streaming AND the tunneled `/__itx_rpc` method lane). */
-type FacetStub = Fetcher;
 
 export type ProvideCapabilityInput = { path: ItxCallPath } & Mount;
 
@@ -162,16 +160,23 @@ export class ItxDurableObject extends DurableObject<Env> {
       );
     }
 
-    // The STATEFUL worker fetch lane (mirrors apps/os StatefulWorkerDurableObject.fetch): forward a request to
-    // a stateful mount's FACET so its own `fetch` handler serves it — the ONLY lane that can carry a WS upgrade
-    // (a 101 can't cross the RPC/method lane). `?path=<callPath>` names the mount.
+    // The STATEFUL worker fetch lane: forward to the mount's runner DO (→ the facet's own `fetch`) — the ONLY
+    // lane that can carry a WS upgrade (a 101 can't cross an RPC method). `?path=<callPath>` names the mount;
+    // module + class ride in headers.
     if (url.pathname === "/facet") {
       const callPath = url.searchParams.get("path") ?? "";
       const mount = this.#mounts.get(callPath);
       if (!mount || mount.type !== "stateful")
         return new Response(`no stateful mount at "${callPath}"\n`, { status: 404 });
-      const facet = await this.#facet(callPath, mount.module, mount.className);
-      return facet.fetch(request); // native — a WS upgrade tunnels straight into the facet
+      const headers = new Headers(request.headers);
+      headers.set("x-itx-module", mount.module);
+      headers.set("x-itx-class", mount.className);
+      const fwd = new Request(request.url, {
+        method: request.method,
+        headers,
+        body: request.method === "GET" || request.method === "HEAD" ? undefined : request.body,
+      });
+      return this.#statefulRunner(callPath).fetch(fwd);
     }
 
     // Observability: incarnation (the hibernation tell) + how much is pinning right now.
@@ -480,68 +485,28 @@ export class ItxDurableObject extends DurableObject<Env> {
     return null;
   }
 
-  /** The RPC lane for a stateful worker: TUNNEL the method call over the facet's `fetch` (a facet-method stub is
-   *  non-transferable across the Worker boundary, but a Response passes by value). POST `{method,args}` to the
-   *  wrapper's `/__itx_rpc`; it invokes the method locally and returns the result by value. */
+  /** The dedicated runner DO for a stateful capability in THIS context. One instance per (context, callPath). */
+  #statefulRunner(callPath: string) {
+    return this.env.STATEFUL_WORKER.getByName(
+      `${this.#projectId}::${this.#name.path}::${callPath}`,
+    );
+  }
+
+  /** The RPC lane for a stateful worker: FORWARD to the runner DO, which owns the facet and calls the method
+   *  NATIVELY (mirrors apps/os). The runner awaits the facet method, so a plain value returns — no facet stub
+   *  crosses back to this host. */
   async #dispatchStateful(
     callPath: string,
     mount: { module: string; className: string },
     method: string,
     args: unknown[],
   ): Promise<unknown> {
-    const facet = await this.#facet(callPath, mount.module, mount.className);
-    const resp = await facet.fetch(
-      new Request("https://facet.local/__itx_rpc", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ method, args }),
-      }),
-    );
-    const body = (await resp.json()) as {
-      __itx_ok?: boolean;
-      result?: unknown;
-      __itx_err?: string;
-    };
-    if (body.__itx_err) throw new Error(`stateful capability "${callPath}": ${body.__itx_err}`);
-    return body.result;
-  }
-
-  /** Host a stateful worker's `DurableObject` class as a FACET of THIS host DO (target-core §4.1 / apps/os
-   *  StatefulWorkerDurableObject). ONE facet per callPath (`facet:<callPath>`) so its storage is a stable
-   *  identity; when the repo source changes we abort + recreate the facet against the SAME storage (new code,
-   *  durable state kept). The class is pulled from a confined Worker Loader isolate (env.ITX = a self-stub, so
-   *  the actor can call sibling capabilities), and workerd gives the facet its own isolated SQLite. */
-  async #facet(callPath: string, module: string, className: string): Promise<FacetStub> {
-    const source = (await this.#repo("get", [module])) as string | null;
-    if (source == null)
-      throw new Error(`itx.repo: no file "${module}" for the stateful capability "${callPath}"`);
-    const version = hashSource(source);
-    const facetName = `facet:${callPath}`;
-    // Load the user source + the host-owned `__HostedActor` wrapper (adds the `/__itx_rpc` fetch-tunnel over the
-    // user's `className`). The facet gets its own isolated SQLite. (env is empty for now — a facet reaching BACK
-    // into its host via itx is deferred; the DO-stub-in-env path needs the same non-transferable-stub care.)
-    const worker = this.env.LOADER.get(
-      `stateful:${this.ctx.id.name}:${callPath}:${version}`,
-      () => ({
-        compatibilityDate: "2026-07-01",
-        mainModule: "run.js",
-        modules: {
-          "run.js": statefulDoRunner(className),
-          "cap.js": source,
-          "itx.js": ITX_SURFACE_MODULE,
-        },
-        env: {},
-      }),
-    );
-    const klass = worker.getDurableObjectClass("__HostedActor");
-    if (!klass) throw new Error(`stateful worker "${module}" does not export class "${className}"`);
-    // Restart the facet on a source change (same storage), like apps/os's version-marker abort.
-    const verKey = `facetver:${callPath}`;
-    const prev = await this.ctx.storage.get<string>(verKey);
-    if (prev !== undefined && prev !== version)
-      this.ctx.facets.abort(facetName, `stateful worker source changed for ${callPath}`);
-    if (prev !== version) await this.ctx.storage.put(verKey, version);
-    return this.ctx.facets.get(facetName, () => ({ class: klass })) as unknown as FacetStub;
+    return this.#statefulRunner(callPath).invokeCapability({
+      module: mount.module,
+      className: mount.className,
+      method,
+      args,
+    });
   }
 
   /** Run the project's config worker: load `/worker.js` from the repo and execute it in THIS context. It
