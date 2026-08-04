@@ -1284,11 +1284,12 @@ export interface Stream {
   /**
    * Push-driven stream runtime state for polling-free debug surfaces.
    *
-   * Deliberately NOT the generic DO-subscription relay: that shape retains a
-   * diff callback inside the Stream DO and pins it for the watcher's life.
-   * Stream liveState rides the hibernatable STATE socket instead
-   * (stream-connection-relay.ts) — a watched idle stream hibernates at zero
-   * duration and pushes frames only when something actually changes.
+   * Rides the hibernatable liveState socket (domains/live-state-socket.ts) —
+   * a watched idle stream hibernates at zero duration and pushes frames only
+   * when something actually changes. Snapshot-only degrade on purpose, never
+   * the pinning fallback the generic hosts use: the DO's `liveState` property
+   * is deliberately never traversed from here (a retained diff callback
+   * would pin the stream), and `runtimeState()` is the transient read.
    */
   liveState: LiveStateRpc<StreamRuntimeDebugState>;
   /** Abort the current Durable Object incarnation; the next request boots it again. */
