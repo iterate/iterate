@@ -21,7 +21,7 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.6.0",
+  version: "0.7.0",
   description: "Projects repo lifecycle, Git activity, and linked GitHub default-branch imports.",
   stateSchema: z.object({
     createRequest: repoCreateRequestSchema().nullable().default(null).meta({
@@ -120,12 +120,29 @@ export const RepoProcessorContract = defineProcessorContract({
     remote: z.string().nullable().default(null).meta({
       description: "The backing artifact's Git remote URL, recorded by repos/created.",
     }),
+    templateSource: resolvedGithubTemplateSourceSchema()
+      .nullable()
+      .default(null)
+      .meta({
+        description:
+          "The immutable source commit selected for a GitHub config-template request. " +
+          "Journaled before any file body is fetched so recovery never follows a moved ref.",
+      }),
   }),
   events: {
     "events.iterate.com/repos/create-requested": {
       description:
-        "Requests the repo creation saga: seed an empty repo, import a private GitHub repo at depth one, or import a public GitHub repo through Cloudflare Artifacts (full history unless depth is set). Terminates in repos/created or repos/create-failed.",
+        "Requests the repo creation saga: seed an empty repo, copy a public GitHub template " +
+        "subtree, import a private GitHub repo at depth one, or import a public GitHub repo " +
+        "through Cloudflare Artifacts (full history unless depth is set). Terminates in " +
+        "repos/created or repos/create-failed.",
       payloadSchema: repoCreateRequestSchema(),
+    },
+    "events.iterate.com/repos/template-source-resolved": {
+      description:
+        "Locks a public GitHub template request to one immutable source commit before file " +
+        "materialization begins. This is provenance for a one-time copy, not a GitHub link.",
+      payloadSchema: resolvedGithubTemplateSourceSchema(),
     },
     "events.iterate.com/repos/created": {
       description:
@@ -321,6 +338,7 @@ export const RepoProcessorContract = defineProcessorContract({
   processorDeps: [CoreProcessorContract],
   consumes: [
     "events.iterate.com/repos/create-requested",
+    "events.iterate.com/repos/template-source-resolved",
     "events.iterate.com/repos/created",
     "events.iterate.com/repos/create-failed",
     "events.iterate.com/repo/cloudflare-artifact-event-received",
@@ -341,6 +359,7 @@ export const RepoProcessorContract = defineProcessorContract({
     // import obligations without consuming the platform revival fact.
   ],
   emits: [
+    "events.iterate.com/repos/template-source-resolved",
     "events.iterate.com/repos/created",
     "events.iterate.com/repos/create-failed",
     "events.iterate.com/repo/commit-completed",
@@ -387,6 +406,26 @@ function repoCreateRequestSchema() {
       .meta({ description: "Seed a fresh repo with iterate's starter files." }),
     z
       .strictObject({
+        type: z.literal("github-public-template"),
+        owner: z.string().trim().min(1).meta({ description: "GitHub owner (org or user)." }),
+        path: z
+          .string()
+          .trim()
+          .min(1)
+          .optional()
+          .meta({ description: "Repository-relative directory copied as the new repo root." }),
+        ref: z.string().trim().min(1).optional().meta({
+          description: "Branch, tag, or commit to resolve once; default branch if omitted.",
+        }),
+        repo: z.string().trim().min(1).meta({ description: "GitHub repository name." }),
+      })
+      .meta({
+        description:
+          "Copy one public GitHub repository subtree at a commit resolved during the durable " +
+          "creation saga into a fresh Artifact root commit.",
+      }),
+    z
+      .strictObject({
         type: z.literal("github-private"),
         connection: z
           .string()
@@ -428,6 +467,27 @@ function repoCreateRequestSchema() {
           "through the Worker), then link it when a connection is given.",
       }),
   ]);
+}
+
+function resolvedGithubTemplateSourceSchema() {
+  return z.strictObject({
+    commitSha: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/)
+      .meta({ description: "Immutable source commit selected from the requested ref." }),
+    owner: z.string().trim().min(1).meta({ description: "GitHub owner from the request." }),
+    path: z.string().trim().min(1).optional().meta({
+      description: "Repository-relative source directory, or omitted for the repository root.",
+    }),
+    ref: z.string().trim().min(1).optional().meta({
+      description: "Requested branch, tag, or commit; omitted when the default branch was used.",
+    }),
+    repo: z.string().trim().min(1).meta({ description: "GitHub repository from the request." }),
+    treeSha: z
+      .string()
+      .regex(/^[0-9a-f]{40}$/)
+      .meta({ description: "Root tree for the resolved commit." }),
+  });
 }
 
 /**

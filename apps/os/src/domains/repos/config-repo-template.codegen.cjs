@@ -4,11 +4,11 @@ const path = require("node:path");
 /**
  * Lint-codegen preset (see config-repo-template.generated.ts): regenerates
  * the seeded project repo file map from the real, typechecked template folder
- * at apps/os/config-repo-template. Drift between the folder and the generated
+ * at configs/default. Drift between the folder and the generated
  * map is a fixable `codegen/codegen` lint error.
  */
 exports.projectRepoTemplateFiles = ({ meta }) => {
-  const templateDir = path.resolve(path.dirname(meta.filename), "../../../config-repo-template");
+  const templateDir = path.resolve(path.dirname(meta.filename), "../../../../../configs/default");
   const relativePaths = [];
   const walk = (dir) => {
     for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {

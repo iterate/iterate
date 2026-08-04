@@ -74,6 +74,11 @@ import { SingleFlightValue } from "./single-flight-value.ts";
 import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./github-sync-utils.ts";
 import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
 import {
+  createGithubTemplateSource,
+  type GithubTemplateFile,
+  type ResolvedGithubTemplateSource,
+} from "./github-template-source.ts";
+import {
   getOrCreateArtifact,
   stripArtifactTokenExpiry,
   type GetOrCreateArtifactResult,
@@ -164,8 +169,11 @@ export class RepoDurableObject extends DurableObject<Env> {
       // creation attempt is retry-safe, but it must not move the ref between a
       // mutation's checked clone and push.
       createEmptyArtifact: () => this.#serializeWrite(() => this.createEmptyArtifactRepo()),
+      createGithubTemplateArtifact: (source) =>
+        this.#serializeWrite(() => this.createGithubTemplateArtifactRepo(source)),
       importPublicGithubArtifact: (input) =>
         this.#serializeWrite(() => this.importPublicGithubArtifact(input)),
+      resolveGithubTemplateSource: (input) => this.githubTemplateSource().resolve(input),
       linkGithub: async (input) => {
         if (this.#name.projectId === null) {
           throw new Error("GitHub-backed repos require a project-scoped repo.");
@@ -1855,11 +1863,55 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   private async createEmptyArtifactRepo() {
+    return await this.createSeededArtifactRepo(projectRepoSeedFiles(parseConfig(this.env)));
+  }
+
+  private async createGithubTemplateArtifactRepo(source: ResolvedGithubTemplateSource) {
+    const artifactName = this.artifactName();
+    const existing = await this.getOrCreateArtifact(artifactName);
+    if (existing.lastPushAt !== null) {
+      return {
+        artifactName,
+        defaultBranch: REPO_DEFAULT_BRANCH,
+        remote: this.artifactRemote(artifactName),
+      };
+    }
+
+    const files = await this.githubTemplateSource().files(source);
+    return await this.createSeededArtifactRepo(
+      files.map((file) => ({ content: file.bytes, mode: file.mode, path: file.path })),
+      existing,
+    );
+  }
+
+  private githubTemplateSource() {
+    const github = parseConfig(this.env).integrations.github;
+    if (github === undefined) {
+      throw new Error(
+        "Public GitHub config templates require integrations.github OAuth credentials.",
+      );
+    }
+    return createGithubTemplateSource({
+      clientId: github.oauthClientId,
+      clientSecret: github.oauthClientSecret.exposeSecret(),
+    });
+  }
+
+  private async createSeededArtifactRepo(
+    files: Array<{
+      content: string | Uint8Array;
+      mode?: GithubTemplateFile["mode"];
+      path: string;
+    }>,
+    knownArtifact?: GetOrCreateArtifactResult,
+  ) {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
-    const artifact = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
-      this.getOrCreateArtifact(artifactName),
-    );
+    const artifact =
+      knownArtifact ??
+      (await timedStep("create-timing", timing, "artifact-get-or-create", () =>
+        this.getOrCreateArtifact(artifactName),
+      ));
     const defaultBranch = REPO_DEFAULT_BRANCH;
     const remote = this.artifactRemote(artifactName);
 
@@ -1882,7 +1934,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
       seedArtifactRepo({
         branch: defaultBranch,
-        files: projectRepoSeedFiles(parseConfig(this.env)),
+        files,
         remote,
         token,
       }),
@@ -1963,7 +2015,11 @@ async function artifactToken(artifacts: Artifacts, name: string) {
 
 async function seedArtifactRepo(input: {
   branch: string;
-  files: Array<{ content: string; path: string }>;
+  files: Array<{
+    content: string | Uint8Array;
+    mode?: GithubTemplateFile["mode"];
+    path: string;
+  }>;
   remote: string;
   token: string;
 }): Promise<{ commitOid: string; contentHash: string }> {
@@ -2009,7 +2065,20 @@ async function seedArtifactRepo(input: {
     if (dir !== REPO_DIR && !(await filesystem.exists(dir))) {
       await filesystem.mkdir(dir, { recursive: true });
     }
-    await filesystem.writeFile(`${REPO_DIR}/${file.path}`, file.content);
+    const absolutePath = `${REPO_DIR}/${file.path}`;
+    if (file.mode === "120000") {
+      const target =
+        typeof file.content === "string"
+          ? file.content
+          : new TextDecoder("utf-8", { fatal: true }).decode(file.content);
+      await filesystem.symlink(target, absolutePath);
+    } else if (typeof file.content === "string") {
+      await filesystem.writeFile(absolutePath, file.content);
+    } else {
+      await filesystem.writeFileBytes(absolutePath, file.content);
+    }
+    // InMemoryFs does not retain executable bits. A source 100755 entry is
+    // intentionally normalized to 100644; file bytes and symlinks are exact.
     await git.add({ filepath: file.path });
   }
 

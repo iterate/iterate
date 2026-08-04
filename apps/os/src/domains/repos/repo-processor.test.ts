@@ -17,8 +17,9 @@ import {
   makeProcessorHarness,
   type HarnessSubstrate,
 } from "iterate/processors/testing";
-import { RepoProcessorContract } from "./repo-processor-contract.ts";
+import { RepoProcessorContract, type RepoProcessorState } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
+import { GithubTemplateSourceError } from "./github-template-source.ts";
 
 type RepoEventInput = ConsumedInput<RepoProcessorContract>;
 
@@ -31,6 +32,14 @@ const SEEDED_ARTIFACT = {
   artifactName: "proj_harness--L3JlcG9zL2NvbmZpZw",
   defaultBranch: "main",
   remote: "https://example.artifacts.cloudflare.net/git/ns/proj_harness--L3JlcG9zL2NvbmZpZw.git",
+};
+const RESOLVED_TEMPLATE = {
+  commitSha: "a".repeat(40),
+  owner: "iterate",
+  path: "configs/with-voice",
+  ref: "main",
+  repo: "iterate",
+  treeSha: "b".repeat(40),
 };
 
 const CREATE_REQUESTED = {
@@ -132,6 +141,14 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
     calls: [] as { depth?: number; owner: string; repo: string }[],
     impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
   };
+  const createTemplate = {
+    calls: [] as NonNullable<RepoProcessorState["templateSource"]>[],
+    impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
+  };
+  const resolveTemplate = {
+    calls: [] as { owner: string; path?: string; ref?: string; repo: string }[],
+    impl: async (): Promise<typeof RESOLVED_TEMPLATE> => RESOLVED_TEMPLATE,
+  };
   const link = {
     calls: [] as { connection: string; owner: string; repo: string }[],
     impl: async (): Promise<void> => {},
@@ -161,6 +178,10 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
           createEmpty.calls += 1;
           return createEmpty.impl();
         },
+        createGithubTemplateArtifact: (source) => {
+          createTemplate.calls.push(source);
+          return createTemplate.impl();
+        },
         importPublicGithubArtifact: (input) => {
           importPublic.calls.push(input);
           return importPublic.impl();
@@ -178,6 +199,10 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
           return githubSync.impl();
         },
         observeArtifactPush: (input) => void headCache.observed.push(input),
+        resolveGithubTemplateSource: (input) => {
+          resolveTemplate.calls.push(input);
+          return resolveTemplate.impl();
+        },
       }),
     path: REPO_PATH,
     substrate,
@@ -186,6 +211,8 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
     ...harness,
     createEmpty,
     importPublic,
+    createTemplate,
+    resolveTemplate,
     link,
     syncPrivate,
     githubSync,
@@ -247,6 +274,70 @@ describe("RepoProcessor creation saga", () => {
     expect(h.createEmpty.calls).toBe(0);
     expect(h.syncPrivate.calls).toBe(0);
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
+  });
+
+  it("journals an immutable GitHub template source before materializing it", async () => {
+    const h = makeRepoHarness();
+    const request = {
+      type: "github-public-template" as const,
+      owner: "iterate",
+      path: "configs/with-voice",
+      ref: "main",
+      repo: "iterate",
+    };
+    await h.play([
+      "append",
+      { type: "events.iterate.com/repos/create-requested", payload: request },
+    ]);
+
+    expect(h.resolveTemplate.calls).toEqual([request]);
+    expect(h.events("events.iterate.com/repos/template-source-resolved")).toMatchObject([
+      {
+        idempotencyKey:
+          'iterate-internal/repo-template-source-resolved:["proj_harness","/repos/config"]',
+        payload: RESOLVED_TEMPLATE,
+      },
+    ]);
+    expect(h.createTemplate.calls).toEqual([RESOLVED_TEMPLATE]);
+    expect(h.events("events.iterate.com/repos/created")).toMatchObject([{ payload: { request } }]);
+    expect(h.state()).toMatchObject({ templateSource: RESOLVED_TEMPLATE });
+  });
+
+  it("keeps retryable GitHub failures open and settles missing template input", async () => {
+    const request = {
+      type: "github-public-template" as const,
+      owner: "iterate",
+      path: "configs/missing",
+      repo: "iterate",
+    };
+    const retry = makeRepoHarness();
+    retry.resolveTemplate.impl = async () => {
+      throw new GithubTemplateSourceError("GitHub unavailable", { retryable: true });
+    };
+    await retry.stream.append({
+      type: "events.iterate.com/repos/create-requested",
+      payload: request,
+    });
+    await retry.settle();
+    expect(retry.events("events.iterate.com/repos/create-failed")).toEqual([]);
+    retry.resolveTemplate.impl = async () => RESOLVED_TEMPLATE;
+    await retry.play([
+      "append",
+      { type: "events.iterate.com/repos/create-requested", payload: request },
+    ]);
+    expect(retry.events("events.iterate.com/repos/created")).toHaveLength(1);
+
+    const terminal = makeRepoHarness();
+    terminal.resolveTemplate.impl = async () => {
+      throw new GithubTemplateSourceError("Template path does not exist", { retryable: false });
+    };
+    await terminal.play([
+      "append",
+      { type: "events.iterate.com/repos/create-requested", payload: request },
+    ]);
+    expect(terminal.events("events.iterate.com/repos/create-failed")).toMatchObject([
+      { payload: { error: "Template path does not exist", request } },
+    ]);
   });
 
   it("seeds an Artifact, links a private GitHub repo, then performs its depth-one sync", async () => {
@@ -601,6 +692,13 @@ describe("repos/create-requested payload schema", () => {
   it.each([
     { type: "empty" },
     { type: "github-private", connection: "install-1", owner: "acme", repo: "private" },
+    {
+      type: "github-public-template",
+      owner: "iterate",
+      path: "configs/default",
+      ref: "main",
+      repo: "iterate",
+    },
     { type: "github-public", connection: "install-1", owner: "acme", repo: "public" },
     { type: "github-public", connection: "install-1", depth: 1, owner: "acme", repo: "public" },
   ])("accepts $type", (request) => {
@@ -614,6 +712,7 @@ describe("repos/create-requested payload schema", () => {
   it("requires GitHub coordinates for both GitHub modes", () => {
     expect(() => requestSchema.parse({ type: "github-public", owner: "acme" })).toThrow();
     expect(() => requestSchema.parse({ type: "github-private", repo: "private" })).toThrow();
+    expect(() => requestSchema.parse({ type: "github-public-template", owner: "acme" })).toThrow();
   });
 
   it("requires a positive public import depth", () => {

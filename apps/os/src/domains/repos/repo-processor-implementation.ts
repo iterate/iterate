@@ -1,6 +1,8 @@
 import { StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
+import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
+import { isRetryableGithubTemplateSourceError } from "./github-template-source.ts";
 import {
   RepoProcessorContract,
   type RepoCreateRequest,
@@ -20,8 +22,9 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  * HOW IT WORKS, end to end:
  *
  * A repo begins as a CREATION SAGA. `repos/create-requested` is the durable
- * intent (empty starter seed, a private GitHub pull at depth one, or a public
- * GitHub import performed by Cloudflare Artifacts outside the Worker);
+ * intent (empty starter seed, a public GitHub template subtree, a private
+ * GitHub pull at depth one, or a public GitHub import performed by Cloudflare
+ * Artifacts outside the Worker);
  * `repos/created` or `repos/create-failed` is its terminal fact. Empty seeding
  * is short must-complete work, so the at-head pass holds the stream checkpoint
  * with `blockProcessorWhile`; an interrupted attempt is redelivered by the
@@ -210,7 +213,25 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       this.#longCreationAttemptedThisIncarnation = true;
       runInBackground(async () => {
         try {
-          await append(await this.#createRepoTerminal(createRequest));
+          let templateSource = state.templateSource;
+          if (createRequest.type === "github-public-template" && templateSource === null) {
+            try {
+              templateSource = await this.deps.resolveGithubTemplateSource(createRequest);
+            } catch (error) {
+              await append(this.#creationFailureOrThrow(createRequest, error));
+              return;
+            }
+            await append({
+              type: "events.iterate.com/repos/template-source-resolved",
+              idempotencyKey: internalStreamId(
+                "repo-template-source-resolved",
+                this.projectId,
+                this.path,
+              ),
+              payload: templateSource,
+            });
+          }
+          await append(await this.#createRepoTerminal(createRequest, templateSource));
         } catch (error) {
           // No terminal fact landed, so a later at-head/revival pass in this
           // incarnation must be allowed to re-drive the obligation.
@@ -246,35 +267,54 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    */
   async #createRepoTerminal(
     request: RepoCreateRequest,
+    templateSource: RepoProcessorState["templateSource"] = null,
   ): Promise<EmittedInput<RepoProcessorContract>> {
     try {
-      const artifact = await this.#createRepo(request);
+      const artifact = await this.#createRepo(request, templateSource);
       return {
         type: "events.iterate.com/repos/created",
         idempotencyKey: this.idempotencyKey("created"),
         payload: { ...artifact, request },
       };
     } catch (error) {
-      if (
-        isRepoNotSeededError(error) ||
-        isRetryableArtifactsInfrastructureError(error) ||
-        isRetryableDurableObjectAvailabilityError(error)
-      ) {
-        throw error;
-      }
-      return {
-        type: "events.iterate.com/repos/create-failed",
-        idempotencyKey: this.idempotencyKey("create-failed"),
-        payload: {
-          error: error instanceof Error ? error.message : String(error),
-          request,
-        },
-      };
+      return this.#creationFailureOrThrow(request, error);
     }
   }
 
-  async #createRepo(request: RepoCreateRequest) {
+  #creationFailureOrThrow(
+    request: RepoCreateRequest,
+    error: unknown,
+  ): EmittedInput<RepoProcessorContract> {
+    if (
+      isRepoNotSeededError(error) ||
+      isRetryableArtifactsInfrastructureError(error) ||
+      isRetryableDurableObjectAvailabilityError(error) ||
+      isRetryableGithubTemplateSourceError(error)
+    ) {
+      throw error;
+    }
+    return {
+      type: "events.iterate.com/repos/create-failed",
+      idempotencyKey: this.idempotencyKey("create-failed"),
+      payload: {
+        error: error instanceof Error ? error.message : String(error),
+        request,
+      },
+    };
+  }
+
+  async #createRepo(
+    request: RepoCreateRequest,
+    templateSource: RepoProcessorState["templateSource"],
+  ) {
     if (request.type === "empty") return await this.deps.createEmptyArtifact();
+
+    if (request.type === "github-public-template") {
+      if (templateSource === null) {
+        throw new Error("GitHub template source was not durably resolved before materialization.");
+      }
+      return await this.deps.createGithubTemplateArtifact(templateSource);
+    }
 
     const artifact =
       request.type === "github-public"
@@ -365,6 +405,22 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
           // still normalized into durable commit facts.
           defaultBranch: REPO_DEFAULT_BRANCH,
         };
+      case "events.iterate.com/repos/template-source-resolved": {
+        const request = state.createRequest;
+        if (
+          request?.type !== "github-public-template" ||
+          state.templateSource !== null ||
+          event.idempotencyKey !==
+            internalStreamId("repo-template-source-resolved", this.projectId, this.path) ||
+          event.payload.owner !== request.owner ||
+          event.payload.repo !== request.repo ||
+          event.payload.ref !== request.ref ||
+          event.payload.path !== request.path
+        ) {
+          return state;
+        }
+        return { ...state, templateSource: event.payload };
+      }
       case "events.iterate.com/repos/created":
         // The first certificate wins — same no-op rule as the request.
         if (state.birthCertificate !== null) return state;
@@ -452,6 +508,19 @@ type RepoProcessorDeps = {
     defaultBranch: string;
     remote: string;
   }>;
+  /** Materialize a previously journaled immutable GitHub tree as a fresh
+   * Artifact root commit. Idempotent: an existing branch is left untouched. */
+  createGithubTemplateArtifact(source: NonNullable<RepoProcessorState["templateSource"]>): Promise<{
+    artifactName: string;
+    defaultBranch: string;
+    remote: string;
+  }>;
+  /** Resolve a branch, tag, commit, or default branch to immutable Git
+   * coordinates. This performs no blob downloads; the caller journals the
+   * result before materialization. */
+  resolveGithubTemplateSource(
+    input: Extract<RepoCreateRequest, { type: "github-public-template" }>,
+  ): Promise<NonNullable<RepoProcessorState["templateSource"]>>;
   /** Have Cloudflare Artifacts clone a public GitHub repository directly —
    * the history never transfers through the Worker. Throws RepoNotSeededError
    * while the import is still materializing. */

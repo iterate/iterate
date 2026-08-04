@@ -207,7 +207,7 @@ bootstrap progress pass `{ waitUntilCreated: false }`. The Project processor
 creates the root capability host, scheduler, email router, and config repo at
 `/repos/config` (an ordinary repo on its own stream — `itx.repo` is the
 shorthand). The config repo is seeded from the template folder at
-`apps/os/config-repo-template` (thin TypeScript `worker.ts` router, modular
+`configs/default` (thin TypeScript `worker.ts` router, modular
 apps under `apps/`, and `package.json` — platform types come from its
 `iterate` devDependency's `iterate/sdk` export — `AGENTS.md`, `ONBOARDING.md`;
 codegen keeps the seeded file map in

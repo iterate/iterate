@@ -18,11 +18,40 @@ const EMPTY_REQUEST = {
   type: "events.iterate.com/repos/create-requested" as const,
   payload: { type: "empty" as const },
 };
+const TEMPLATE_REQUEST = {
+  type: "events.iterate.com/repos/create-requested" as const,
+  payload: {
+    type: "github-public-template" as const,
+    owner: "iterate",
+    path: "configs/with-voice",
+    ref: "main",
+    repo: "iterate",
+  },
+};
+const RESOLVED_TEMPLATE = {
+  commitSha: "a".repeat(40),
+  owner: "iterate",
+  path: "configs/with-voice",
+  ref: "main",
+  repo: "iterate",
+  treeSha: "b".repeat(40),
+};
 
 function makeHarness() {
   const createEmpty: { impl: () => Promise<typeof CREATED_ARTIFACT> } = {
     impl: () => {
       throw new Error("must not create an artifact in this scenario");
+    },
+  };
+  const createTemplate: { impl: () => Promise<typeof CREATED_ARTIFACT> } = {
+    impl: async () => {
+      throw new Error("must not create a template artifact in this scenario");
+    },
+  };
+  const resolveTemplate: { calls: number; impl: () => Promise<typeof RESOLVED_TEMPLATE> } = {
+    calls: 0,
+    impl: async () => {
+      throw new Error("must not resolve a template in this scenario");
     },
   };
   const harness = makeProcessorHarness<RepoProcessorContract, RepoProcessor>({
@@ -32,6 +61,7 @@ function makeHarness() {
         ...deps,
         projectId: "prj_1",
         createEmptyArtifact: () => createEmpty.impl(),
+        createGithubTemplateArtifact: () => createTemplate.impl(),
         importPublicGithubArtifact: async () => {
           throw new Error("must not import in this scenario");
         },
@@ -45,9 +75,13 @@ function makeHarness() {
           throw new Error("must not sync a push in this scenario");
         },
         observeArtifactPush: () => {},
+        resolveGithubTemplateSource: async () => {
+          resolveTemplate.calls += 1;
+          return await resolveTemplate.impl();
+        },
       }),
   });
-  return { ...harness, createEmpty };
+  return { ...harness, createEmpty, createTemplate, resolveTemplate };
 }
 
 describe("RepoProcessor eviction recovery", () => {
@@ -162,5 +196,27 @@ describe("RepoProcessor eviction recovery", () => {
       },
     ]);
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
+  });
+
+  it("recovery materializes the journaled commit without resolving a moved ref again", async () => {
+    const h = makeHarness();
+    h.resolveTemplate.impl = async () => RESOLVED_TEMPLATE;
+    h.createTemplate.impl = () => new Promise<never>(() => {});
+    await h.append(TEMPLATE_REQUEST);
+
+    expect(h.events("events.iterate.com/repos/template-source-resolved")).toHaveLength(1);
+    expect(h.resolveTemplate.calls).toBe(1);
+    h.crash();
+    await h.settle();
+
+    h.resolveTemplate.impl = async () => {
+      throw new Error("recovery must not resolve the ref again");
+    };
+    h.createTemplate.impl = async () => CREATED_ARTIFACT;
+    await h.advanceTime(KEEPALIVE_ALARM_LEAD_MS + 1);
+
+    expect(h.resolveTemplate.calls).toBe(1);
+    expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
+    expect(h.state().templateSource).toEqual(RESOLVED_TEMPLATE);
   });
 });
