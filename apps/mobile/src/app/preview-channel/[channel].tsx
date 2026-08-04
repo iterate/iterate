@@ -1,8 +1,8 @@
 // Deep-link target for PR preview QRs: iterate://preview-channel/<channel>.
 // Deliberately a confirm screen, not an auto-switch — a stray link tap
 // shouldn't silently repoint the app at another PR's JS.
-import { useMutation, useQuery } from "@tanstack/react-query";
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Redirect, Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { buildInfo } from "../../lib/build-info.ts";
@@ -12,13 +12,23 @@ import { colors, radius, spacing } from "../../lib/theme.ts";
 export default function PreviewChannelScreen() {
   const { channel } = useLocalSearchParams<{ channel: string }>();
   const router = useRouter();
+  const queryClient = useQueryClient();
   const current = useQuery({
     queryKey: ["preview-channel-override"],
     queryFn: getPreviewChannelOverride,
   });
   const switchChannel = useMutation({
     mutationFn: () => switchChannelAndReload(channel),
+    // Only reaches onSuccess without a reload ("no-update"); the invalidate
+    // flips `current` and the Redirect below takes over.
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["preview-channel-override"] }),
   });
+
+  // Already on the target channel — including the relaunch after a successful
+  // switch, where the deep link URL re-opens this screen. Nothing to confirm.
+  if (current.isSuccess && current.data === channel) {
+    return <Redirect href="/build-info" />;
+  }
 
   const currentChannel = current.data || Updates.channel || "preview";
 
@@ -61,7 +71,12 @@ export default function PreviewChannelScreen() {
       {switchChannel.error ? (
         <Text style={styles.errorNote}>{String(switchChannel.error)}</Text>
       ) : null}
-      <Pressable accessibilityRole="button" onPress={() => router.back()} style={styles.linkButton}>
+      <Pressable
+        accessibilityRole="button"
+        // Deep links open this screen with no back stack.
+        onPress={() => (router.canGoBack() ? router.back() : router.replace("/"))}
+        style={styles.linkButton}
+      >
         <Text style={styles.linkLabel}>Cancel</Text>
       </Pressable>
     </View>
