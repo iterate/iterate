@@ -246,11 +246,11 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       try {
         templateSource = await this.deps.resolveGithubTemplateSource(createRequest);
       } catch (error) {
-        await this.stream.append(this.#creationFailureOrThrow(createRequest, error));
+        await this.append(this.#creationFailureOrThrow(createRequest, error));
         await this.deps.repointCreationAlarm(null);
         return;
       }
-      await this.stream.append({
+      await this.append({
         type: "events.iterate.com/repos/template-source-resolved",
         idempotencyKey: internalStreamId(
           "repo-template-source-resolved",
@@ -261,7 +261,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       });
     }
 
-    await this.stream.append(await this.#createRepoTerminal(createRequest, templateSource));
+    await this.append(await this.#createRepoTerminal(createRequest, templateSource));
     await this.deps.repointCreationAlarm(null);
   }
 
