@@ -23,7 +23,11 @@
 
   // Per-project secret store behind the egress door (secret:<projectId>:<name>). Proves the middleware
   // rebuilds a WS-upgrade Request to substitute a header without breaking the 101 (target-core §6.0 risk #4).
-  "kv_namespaces": [{ "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" }],
+  "kv_namespaces": [
+    { "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" },
+    // itx.kv backing — project-prefixed (the D8 portability proof point).
+    { "binding": "ITX_KV", "id": "08df862920b04446b3503c22f9888b04" },
+  ],
 
   "vars": {
     // DEMO shared secret the control plane presents on the cross-account HTTP dial. A real deploy supplies

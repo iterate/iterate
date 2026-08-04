@@ -161,10 +161,12 @@ export default {
     if (url.pathname === "/call") {
       const ctxName = url.searchParams.get("ctx") ?? "prj_demo";
       const path = url.searchParams.get("path") ?? "itx.whoami";
+      const argsRaw = url.searchParams.get("args"); // a JSON array, e.g. ?args=["k","v"]
+      const args = argsRaw ? (JSON.parse(argsRaw) as unknown[]) : [];
       try {
         return Response.json({
           ok: true,
-          value: await env.ITX_HOST.getByName(ctxName).invokeCapability(path),
+          value: await env.ITX_HOST.getByName(ctxName).invokeCapability(path, args),
         });
       } catch (e) {
         return Response.json({ ok: false, error: String((e as Error).message) });

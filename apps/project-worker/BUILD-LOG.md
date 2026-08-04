@@ -54,7 +54,7 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
 
 ## Increment 4 — egress unified into the DO (the DO is now the single host)
 
-**Commit** `<pending>`.
+**Commit** `5ebf3708a`.
 
 - `ItxDurableObject.fetch` for a NON-WS request now IS the egress door: substitute the project's own secrets
   (`env.SECRETS_KV`, keyed by the DO's own projectId) → delegate to `env.FALLBACK.fetch` (→ terminal). WS
@@ -67,3 +67,16 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
 - **Note (deferred):** WS-egress from a DO-loaded agent is ambiguous with WS-ingress at `DO.fetch` (same
   Upgrade header); a marker will disambiguate. Agents egress over HTTP today. The worker's `EgressEntrypoint` +
   `/egress-test` remain as the WS-egress proof.
+
+## Increment 5 — real built-in capabilities: itx.kv (project-prefixed) + itx.secrets.set
+
+**Commit** `<pending>`.
+
+- `invokeCapability` now resolves built-ins in-place (target-core §4.0): `itx.kv.{get,put,delete,list}` over
+  `env.ITX_KV`, keyed `${projectId}:${k}` — the prefix comes from the DO's OWN (unforgeable) projectId.
+  `itx.secrets.set(name,value)` writes `secret:${projectId}:${name}` to `env.SECRETS_KV` (write-only from
+  userspace; the egress door reads it via placeholder). `/call` now passes `?args=<json array>`.
+- **Proven** (`/call`): put→get round-trips `"hello-from-prj_demo"`; `list` strips the prefix; **isolation** —
+  `ctx=prj_other` reading the same key returns `null` (a different DO name → a different prefix → invisible).
+  This is the D8 portability proof point: byte-identical project code, isolated in a shared namespace, and
+  swappable for a BYO KV by config.

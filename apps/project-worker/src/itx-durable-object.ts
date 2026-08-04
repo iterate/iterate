@@ -16,6 +16,7 @@ interface Env {
   ITX_HOST: DurableObjectNamespace<ItxDurableObject>;
   LOADER: WorkerLoader;
   SECRETS_KV?: KVNamespace;
+  ITX_KV?: KVNamespace; // backing for itx.kv (project-prefixed — the D8 portability proof point)
   // The fallback (target-core §4.4 / D30). Solo: a self service-binding to DummyControlPlane. A DO can't mint
   // ctx.exports loopbacks, so it reaches the fallback via a binding rather than the worker's ctx.exports.
   // It IS a whole shell: `fetch` (egress → terminal) + `invokeCapability` (capability fallthrough).
@@ -93,8 +94,16 @@ export class ItxDurableObject extends DurableObject<Env> {
   /** THE single dynamic dispatch (target-core §4.1). Built-in (resolved in-place) → local mount (an
    *  itx-expression re-enters as an alias) → else fall back to the enclosing shell's invokeCapability. */
   async invokeCapability(callPath: string, args: unknown[] = []): Promise<unknown> {
-    // built-ins resolve in-place, no fallback (target-core §4.0)
+    // built-ins resolve in-place, no fallback (target-core §4.0). Backing is project-prefixed by the DO's own
+    // (unforgeable) projectId — so byte-identical project code is isolated in a shared namespace (D8).
     if (callPath === "itx.whoami") return { projectId: this.#projectId };
+    if (callPath.startsWith("itx.kv.")) return this.#kv(callPath.slice("itx.kv.".length), args);
+    if (callPath === "itx.secrets.set") {
+      const [name, value] = args as [string, string];
+      if (!this.env.SECRETS_KV) throw new Error("no SECRETS_KV bound");
+      await this.env.SECRETS_KV.put(`secret:${this.#projectId}:${name}`, String(value));
+      return { ok: true }; // write-only from userspace (referenced by placeholder in egress — never read back)
+    }
 
     const mount = this.#mounts.get(callPath);
     if (mount) {
@@ -104,6 +113,31 @@ export class ItxDurableObject extends DurableObject<Env> {
 
     // reads fall back — the SAME method on the fallback, which recurses to the terminal (target-core §4.4)
     return this.env.FALLBACK.invokeCapability(callPath, args);
+  }
+
+  /** itx.kv — a project-prefixed view of env.ITX_KV. `${projectId}:` prefix makes byte-identical project code
+   *  isolated in a shared namespace, and swappable for a BYO KV by config (D8 / target-core §4.5). */
+  async #kv(op: string, args: unknown[]): Promise<unknown> {
+    if (!this.env.ITX_KV) throw new Error("no ITX_KV bound");
+    const kv = this.env.ITX_KV;
+    const prefix = `${this.#projectId}:`;
+    const key = (k: unknown) => prefix + String(k);
+    switch (op) {
+      case "get":
+        return kv.get(key(args[0]));
+      case "put":
+        await kv.put(key(args[0]), String(args[1]));
+        return { ok: true };
+      case "delete":
+        await kv.delete(key(args[0]));
+        return { ok: true };
+      case "list": {
+        const r = await kv.list({ prefix: key(args[0] ?? "") });
+        return { keys: r.keys.map((k) => k.name.slice(prefix.length)) };
+      }
+      default:
+        throw new Error(`itx.kv: no op "${op}"`);
+    }
   }
 
   /** Execute code IN this context (target-core §4.1 mode 2 / D23). Loads `source` as a confined dynamic
