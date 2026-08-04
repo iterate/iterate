@@ -42,7 +42,10 @@ const CHARS_PER_TOKEN = 4;
 // 4100 → 4150 (2026-07-31): the tasks app became a lens on workspaces; one
 // line teaches sharing uncommitted task files as a live board via
 // The board form of the docs link teach — one app, one capability.
-const DEFAULT_PROMPT_TOKEN_CEILING = 4_150;
+// 4150 → 4200 (2026-08-04): THE SHAPE OF WORK gained one bullet — "YOU are
+// the LLM": a prod chat piped email content through ai.run and relayed a 3B
+// model's summary verbatim; the docs invited it and nothing forbade it.
+const DEFAULT_PROMPT_TOKEN_CEILING = 4_200;
 
 const AGENT_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,

@@ -273,6 +273,9 @@ export default function ChatScreen() {
             projectSlug: slug || "",
           }}
           sendPending={send.isPending}
+          // The Meta tab replays each llm request's exact prompt from the
+          // thread's own event window (same pure fold as the os trace panel).
+          threadEvents={events.data || []}
         />
       ) : (
         <EventList events={events.data || []} />
@@ -352,11 +355,13 @@ function FeedList({
   approvals,
   feed,
   sendPending,
+  threadEvents,
 }: {
   activityApprovals: ActivityApprovalContext;
   approvals: React.ReactNode;
   feed: ReturnType<typeof reduceFeed>;
   sendPending: boolean;
+  threadEvents: StreamEvent[];
 }) {
   // Inverted list keeps the newest item at the bottom and pinned on keyboard
   // open; data is reversed to match. The live activity is part of the feed,
@@ -391,7 +396,9 @@ function FeedList({
           </Text>
         </View>
       }
-      renderItem={({ item }) => <FeedItem activityApprovals={activityApprovals} item={item} />}
+      renderItem={({ item }) => (
+        <FeedItem activityApprovals={activityApprovals} item={item} threadEvents={threadEvents} />
+      )}
     />
   );
 }
@@ -399,13 +406,17 @@ function FeedList({
 function FeedItem({
   activityApprovals,
   item,
+  threadEvents,
 }: {
   activityApprovals: ActivityApprovalContext;
   item: MobileFeedItem;
+  threadEvents: StreamEvent[];
 }) {
   switch (item.kind) {
     case "activity":
-      return <ActivityCard activity={item} approvals={activityApprovals} />;
+      return (
+        <ActivityCard activity={item} approvals={activityApprovals} threadEvents={threadEvents} />
+      );
     case "stream-woken":
       return (
         <Text style={styles.wakeMarker}>

@@ -264,6 +264,97 @@ type TruncatedJson = {
   value: unknown;
 };
 
+type PreviewOptions = {
+  /** Arrays keep only their first N items (a truncation marker replaces the rest). */
+  maxArrayItems: number;
+  /** Strings longer than this keep a prefix plus a truncation marker. */
+  maxStringChars: number;
+  /** Containers nested at or below this depth collapse to a one-line summary string. */
+  maxDepth: number;
+  /** Hard ceiling on the serialized preview, enforced by truncateJsonToBytes. */
+  maxBytes: number;
+};
+
+/** Small subtrees survive the depth/policy cuts untouched — replacing a tiny
+ * leaf tuple with a "[truncated …]" marker would cost bytes to lose data. */
+const PREVIEW_KEEP_INTACT_BYTES = 100;
+
+/**
+ * util.inspect-flavored preview: unlike truncateJsonToBytes (which keeps as
+ * much as fits), this aggressively elides *everywhere* — a few items per
+ * array, capped strings, bounded depth — so a bounded preview shows the
+ * overall shape of a huge value instead of the start of its largest child.
+ * The result still serializes within `maxBytes`.
+ */
+export function previewJson(value: unknown, options: PreviewOptions): TruncatedJson {
+  // serialize() round-trips through JSON.stringify (throwing on undefined), so
+  // parsing its output can only yield JSON-shaped data — the cast just names
+  // what JSON.parse's `any` already guarantees here.
+  const measured = measureJson(JSON.parse(serialize(value)) as JsonValue);
+  const policied = applyPreviewPolicy(measured, options, 0);
+  const bounded = truncateJsonToBytes(policied.value, options.maxBytes);
+  return {
+    bytes: bounded.bytes,
+    originalBytes: measured.bytes,
+    truncated: policied.changed || bounded.truncated,
+    value: bounded.value,
+  };
+}
+
+function applyPreviewPolicy(
+  node: MeasuredJson,
+  options: PreviewOptions,
+  depth: number,
+): { changed: boolean; value: JsonValue } {
+  if (node.bytes <= PREVIEW_KEEP_INTACT_BYTES) return { changed: false, value: node.value };
+  if (node.kind === "primitive") return { changed: false, value: node.value };
+  if (node.kind === "string") {
+    if (node.value.length <= options.maxStringChars) return { changed: false, value: node.value };
+    // Back off one unit if the cut lands mid-surrogate-pair — a lone high
+    // surrogate would render as a \udxxx escape in the pretty-printed preview.
+    let end = options.maxStringChars;
+    const lastUnit = node.value.charCodeAt(end - 1);
+    if (lastUnit >= 0xd800 && lastUnit <= 0xdbff) end -= 1;
+    return {
+      changed: true,
+      value: `${node.value.slice(0, end)}… [truncated from ${node.bytes} JSON bytes]`,
+    };
+  }
+  if (node.kind === "array") {
+    if (depth >= options.maxDepth) {
+      return {
+        changed: true,
+        value: `[array of ${node.items.length} items; ${node.bytes} JSON bytes]`,
+      };
+    }
+    const kept = node.items
+      .slice(0, options.maxArrayItems)
+      .map((item) => applyPreviewPolicy(item, options, depth + 1));
+    const dropped = node.items.length - kept.length;
+    return {
+      changed: dropped > 0 || kept.some((item) => item.changed),
+      value: [
+        ...kept.map((item) => item.value),
+        ...(dropped > 0 ? [`[truncated ${dropped} items; from ${node.bytes} JSON bytes]`] : []),
+      ],
+    };
+  }
+  if (depth >= options.maxDepth) {
+    return {
+      changed: true,
+      value: `[object with ${node.entries.length} properties; ${node.bytes} JSON bytes]`,
+    };
+  }
+  const entries = node.entries.map((entry) => ({
+    key: entry.key,
+    result: applyPreviewPolicy(entry.value, options, depth + 1),
+  }));
+  return {
+    changed: entries.some((entry) => entry.result.changed),
+    value: Object.fromEntries(entries.map((entry) => [entry.key, entry.result.value])),
+  };
+}
+
 /**
  * Keep JSON intact until it crosses a byte boundary, then deterministically
  * chop the tail of its largest useful nested value. The input is never mutated

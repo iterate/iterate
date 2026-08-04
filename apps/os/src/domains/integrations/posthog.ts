@@ -5,7 +5,7 @@ import type { StreamDeliveryBatch } from "iterate/processors";
 import type { StreamEvent } from "iterate/processors";
 import type { SubscriptionConfiguredPayload } from "../streams/core-processor-contract.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
-import { truncateJsonToBytes } from "./truncate-json.ts";
+import { truncateJsonToBytes } from "../../lib/truncate-json.ts";
 
 export const POSTHOG_STREAM_EVENT_MAX_JSON_BYTES = 100 * 1_024;
 const POSTHOG_STREAM_FEED_WORKER_NAME = "os-prd";
