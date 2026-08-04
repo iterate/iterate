@@ -66,9 +66,6 @@ export class EgressEntrypoint extends WorkerEntrypoint<Env, { projectId: string 
     const sub = await substituteHeaderSecrets(request, "project", (name) =>
       this.env.SECRETS_KV ? this.env.SECRETS_KV.get(`secret:${projectId}:${name}`) : null,
     );
-    const isWs = (request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket";
-    const rewrote = sub !== request; // a new Request means a secret was actually substituted
-    console.log(`[egress] projectId=${projectId} isWebSocket=${isWs} substituted=${rewrote}`);
     return resolveFallback(this.ctx, this.env, parseAppConfig(this.env.APP_CONFIG)).fetch(sub);
   }
 }
@@ -110,6 +107,35 @@ export default {
     ) {
       const name = url.searchParams.get("ctx") ?? "prj_demo";
       return env.ITX_HOST.getByName(name).fetch(request);
+    }
+
+    // ── the capability model: provide a mount, then invoke a callPath (built-in / local / fallback) ──
+    if (url.pathname === "/provide") {
+      const ctxName = url.searchParams.get("ctx") ?? "prj_demo";
+      const path = url.searchParams.get("path") as `itx.${string}` | null;
+      if (!path) return Response.json({ ok: false, error: "missing ?path=itx.*" }, { status: 400 });
+      const expression = url.searchParams.get("expression");
+      const value = url.searchParams.get("value");
+      const input = expression
+        ? ({ path, type: "itx-expression", expression: expression as `itx.${string}` } as const)
+        : ({ path, type: "static", value } as const);
+      try {
+        return Response.json(await env.ITX_HOST.getByName(ctxName).provideCapability(input));
+      } catch (e) {
+        return Response.json({ ok: false, error: String((e as Error).message) });
+      }
+    }
+    if (url.pathname === "/call") {
+      const ctxName = url.searchParams.get("ctx") ?? "prj_demo";
+      const path = url.searchParams.get("path") ?? "itx.whoami";
+      try {
+        return Response.json({
+          ok: true,
+          value: await env.ITX_HOST.getByName(ctxName).invokeCapability(path),
+        });
+      } catch (e) {
+        return Response.json({ ok: false, error: String((e as Error).message) });
+      }
     }
 
     // ── deterministic proof that the egress middleware substitutes (no log-tail needed) ──

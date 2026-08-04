@@ -59,9 +59,29 @@ curl -s https://project-worker.iterate.workers.dev/egress-debug
 - Public echo servers vary: `ws.postman-echo.com/raw` and `echo.websocket.org` work; `echo.websocket.events`
   403s this path.
 
+## Increment 2 — the capability model (PROVEN)
+
+`ItxDurableObject` now carries the dispatch (target-core §4.1/§4.4):
+
+- **`invokeCapability(callPath, args)`** — built-in (resolved in-place) → local mount → else **fall back** to
+  the enclosing shell's `invokeCapability`. In solo the fallback is a self service-binding `FALLBACK` →
+  `DummyControlPlane` (a DO can't mint ctx.exports loopbacks, so it reaches the fallback via a binding).
+- **`provideCapability({ path, type })`** — mount at a `callPath`, persisted to DO storage (the event-sourced
+  fold is later). Kinds: `itx-expression` (an alias to another callPath) + `static` (a test value). Writes
+  stay local.
+
+```bash
+curl -s ".../call?path=itx.whoami"                              # {"value":{"projectId":"prj_demo"}}  (built-in)
+curl -s ".../provide?path=itx.hello&expression=itx.whoami"      # {"ok":true}                          (alias)
+curl -s ".../call?path=itx.hello"                               # {"value":{"projectId":"prj_demo"}}  (alias resolved)
+curl -s ".../call?path=itx.auth.gate"                           # {"value":{"ok":true}}                (fell back)
+curl -s ".../call?path=itx.nope"                                # {"ok":false,error:"...no capability"}(terminal)
+```
+
 ## NOT yet (next increments)
 
-- The capability model: `invokeCapability`/`provideCapability` dispatch, the mount fold, the prototype hop.
+- **`live` RPC-stub mounts + the prototype hop** (need capnweb) — the ergonomic `itx.a.b()` surface + real
+  provider stubs; longest-prefix navigation into a mount.
 - `run`/`load` living IN the DO (today the loader runs in the edge worker, as the pre-skeleton runner did).
-- `streams`/`secrets`/`kv` built-ins; the `Itx` surface.
-- The control-plane join (topology self-host/hosted) + cross-worker service-binding WS (risk #2 across accounts).
+- `streams`/`secrets`/`kv` built-ins; the `Itx` surface class.
+- The control-plane join (self-host/hosted) + cross-worker service-binding WS (risk #2 across accounts).

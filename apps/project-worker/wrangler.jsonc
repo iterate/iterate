@@ -15,6 +15,12 @@
   },
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ItxDurableObject"] }],
 
+  // The DO's fallback (target-core §4.4). Solo: a self service-binding to DummyControlPlane — a DO can't mint
+  // ctx.exports loopbacks, so it reaches the fallback via a binding. Self-host/hosted → bind CONTROL_PLANE.
+  "services": [
+    { "binding": "FALLBACK", "service": "project-worker", "entrypoint": "DummyControlPlane" },
+  ],
+
   // Per-project secret store behind the egress door (secret:<projectId>:<name>). Proves the middleware
   // rebuilds a WS-upgrade Request to substitute a header without breaking the 101 (target-core §6.0 risk #4).
   "kv_namespaces": [{ "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" }],
