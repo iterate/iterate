@@ -36,7 +36,7 @@ export function buildRoundMetaYaml(
   llm: AgentUiLlmStep | null,
   code: AgentUiCodeStep,
   promptMessages: { role: string; content: string }[] | null,
-): string {
+) {
   const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
   const doc = new Document({
     ...(llm
