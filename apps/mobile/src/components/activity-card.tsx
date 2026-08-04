@@ -4,13 +4,16 @@
 // approval marks once the run parked batches at the egress door). Expanded
 // (tap, or automatically while live-streaming): the run organized into
 // ROUNDS — the llm step that writes a script and the code step that runs it
-// — where each code step is a tabbed view: Script | Approvals | Result. The
-// Approvals tab renders the SAME shared ApprovalBatchBody the Notifications
-// expansion uses, so the in-context view can never drift from the archive.
+// — where each code step is a tabbed view: Script | Approvals | Result |
+// Meta. The Approvals tab renders the SAME shared ApprovalBatchBody the
+// Notifications expansion uses, so the in-context view can never drift from
+// the archive; Meta holds the step stat lines (model, duration, tokens) that
+// used to sit above the tab bar.
 
-import { useId, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useMutation, useQuery } from "@tanstack/react-query";
+import { Document, Scalar, visit } from "yaml";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import { llmResponseForDisplay } from "../lib/activity-display.ts";
 import {
@@ -22,6 +25,10 @@ import {
 import type { AgentUiActivity, AgentUiCodeStep, AgentUiLlmStep, AgentUiStep } from "../lib/feed.ts";
 import { groupActivityRounds, summarizeActivity } from "../lib/feed.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
+import {
+  LLM_REPLAY_EVENT_TYPES,
+  replayLlmRequest,
+} from "../../../os/src/lib/llm-request-replay.ts";
 import { ApprovalBatchBody } from "./approval-batch.tsx";
 import CodeEditor from "./code-editor.tsx";
 
@@ -37,9 +44,13 @@ export type ActivityApprovalContext = {
 export function ActivityCard({
   activity,
   approvals,
+  threadEvents,
 }: {
   activity: AgentUiActivity;
   approvals: ActivityApprovalContext;
+  /** The thread's own event window — the Meta tab replays each llm request's
+   * exact prompt from it (same pure fold as the os trace panel). */
+  threadEvents: StreamEvent[];
 }) {
   const isLive = activity.status !== "done";
   const [toggled, setToggled] = useState<boolean | null>(null);
@@ -79,7 +90,9 @@ export function ActivityCard({
                 <CodeStepTabs
                   approvals={approvals}
                   batches={batchesByExecution.get(round.code.executionId) || []}
+                  llm={round.llm}
                   step={round.code}
+                  threadEvents={threadEvents}
                 />
               ) : null}
             </View>
@@ -139,9 +152,14 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
   const responseText = llmResponseForDisplay(step.responseText, code?.code);
   return (
     <View style={styles.stepBody}>
-      <Text style={styles.stepLabel}>
-        {`llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`}
-      </Text>
+      {/* Once the round has a code step, this stat line lives in its Meta
+          tab instead; with no code step there is no tab bar, so it renders
+          here (streaming llm, or a round whose code half never arrived). */}
+      {code === null ? (
+        <Text style={styles.stepLabel}>
+          {`llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`}
+        </Text>
+      ) : null}
       {step.thinkingText !== "" ? (
         <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
       ) : null}
@@ -158,13 +176,17 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
  * run parked batches at the egress door (rendered through the shared
  * ApprovalBatchBody — the same component the Notifications expansion uses,
  * so the two can't drift); Result only once the run settled with a value or
- * an error. Tab choice follows the card's useState precedent, falling back
- * to Script whenever the chosen tab isn't offered.
+ * an error; Meta always trails, holding the stat lines (llm model, duration,
+ * tokens; code duration) that used to spend rows above the tab bar. Tab
+ * choice follows the card's useState precedent, falling back to Script
+ * whenever the chosen tab isn't offered.
  */
 function CodeStepTabs({
   approvals,
   batches,
+  llm,
   step,
+  threadEvents,
 }: {
   approvals: ActivityApprovalContext;
   batches: {
@@ -173,49 +195,71 @@ function CodeStepTabs({
     resolved: ResolvedBatch | null;
     expired: boolean;
   }[];
+  llm: AgentUiLlmStep | null;
   step: AgentUiCodeStep;
+  threadEvents: StreamEvent[];
 }) {
-  const [selected, setSelected] = useState<"script" | "approvals" | "result" | null>(null);
-  // `as const` throughout: without them the literals widen to string and
+  const [selected, setSelected] = useState<"script" | "approvals" | "result" | "meta" | null>(null);
+  // `as const` on the keys: without them the literals widen to string and
   // the inferred tab union collapses.
   const tabs = [
-    "script" as const,
-    ...(batches.length > 0 ? ["approvals" as const] : []),
+    { key: "script" as const, name: "Script" },
+    ...(batches.length > 0 ? [{ key: "approvals" as const, name: "Approvals" }] : []),
     ...(step.status === "done" && (step.result !== undefined || step.errorMessage)
-      ? ["result" as const]
+      ? [{ key: "result" as const, name: "Result" }]
       : []),
+    { key: "meta" as const, name: "Meta" },
   ];
-  const active = selected !== null && tabs.includes(selected) ? selected : "script";
+  const active =
+    selected !== null && tabs.some((tab) => tab.key === selected) ? selected : "script";
+  // The prompt replay only needs `messages`, and those fold purely from
+  // events at or before the request offset — immutable history. So it runs
+  // once the Meta tab is open AND the window has reached the request offset,
+  // and it deliberately does NOT depend on `threadEvents`/`llm` identity:
+  // live feed reductions recreate both on every stream event, and keying on
+  // them would rerun the whole fold (filter + stringify + reduce) per event
+  // while Meta is open. The offset plus the covered flag pin the exact same
+  // input set. (Request-scoped lifecycle events feed only the replay's
+  // response/stats, which this tab doesn't show — not fetched.)
+  const requestCovered =
+    llm !== null && threadEvents.length > 0 && threadEvents.at(-1)!.offset >= llm.llmRequestOffset;
+  const llmRequestOffset = llm === null ? null : llm.llmRequestOffset;
+  const promptReplay = useMemo(() => {
+    if (active !== "meta" || llmRequestOffset === null || !requestCovered) return null;
+    const relevant = threadEvents.filter(
+      (event) => LLM_REPLAY_EVENT_TYPES.includes(event.type) && event.offset <= llmRequestOffset,
+    );
+    return replayLlmRequest({
+      rawEventJsons: relevant.map((event) => JSON.stringify(event)),
+      llmRequestOffset,
+    });
+    // threadEvents is read but deliberately excluded: covered history at a
+    // fixed offset cannot change (see comment above the memo).
+    // oxlint-disable-next-line react-hooks/exhaustive-deps
+  }, [active, llmRequestOffset, requestCovered]);
   return (
     <View style={styles.stepBody}>
-      <Text style={styles.stepLabel}>
-        {`code${step.durationMs ? ` · ${(step.durationMs / 1000).toFixed(1)}s` : ""}${
-          step.status === "done" && step.success === false ? " · failed" : ""
-        }`}
-      </Text>
-      {tabs.length > 1 ? (
-        <View style={styles.tabRow}>
-          {tabs.map((tab) => (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ selected: tab === active }}
-              key={tab}
-              onPress={() => setSelected(tab)}
-              style={[styles.tab, tab === active && styles.tabActive]}
-            >
-              <Text style={[styles.tabLabel, tab === active && styles.tabLabelActive]}>
-                {tab === "script" ? "Script" : tab === "approvals" ? "Approvals" : "Result"}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
+      <View style={styles.tabRow}>
+        {tabs.map((tab) => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: tab.key === active }}
+            key={tab.key}
+            onPress={() => setSelected(tab.key)}
+            style={[styles.tab, tab.key === active && styles.tabActive]}
+          >
+            <Text style={[styles.tabLabel, tab.key === active && styles.tabLabelActive]}>
+              {tab.name}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
       {active === "script" ? (
         <>
           {step.code !== "" ? (
             <CodeBlock language="typescript" muted={false} text={step.code} />
           ) : null}
-          {tabs.includes("result") ? null : step.errorMessage ? (
+          {tabs.some((tab) => tab.key === "result") ? null : step.errorMessage ? (
             <Text style={styles.error}>{step.errorMessage}</Text>
           ) : null}
         </>
@@ -263,6 +307,14 @@ function CodeStepTabs({
             </View>
           ))}
         </View>
+      ) : active === "meta" ? (
+        <View style={styles.tabBody}>
+          <CodeBlock
+            language="yaml"
+            text={metaYaml(llm, step, promptReplay?.messages || null)}
+            muted
+          />
+        </View>
       ) : (
         <View style={styles.tabBody}>
           {step.result !== undefined ? (
@@ -273,6 +325,67 @@ function CodeStepTabs({
       )}
     </View>
   );
+}
+
+/**
+ * The Meta tab's body: the round's stats — and the replayed prompt — as one
+ * YAML document for the highlighted CodeBlock. Emitted through the `yaml`
+ * package rather than hand-rolled string building: prompt content is
+ * arbitrary text, and block-scalar edge cases (a first line with leading
+ * whitespace needs an explicit indent indicator, quoting, etc.) are the
+ * library's problem. Absent fields are omitted, not nulled.
+ */
+function metaYaml(
+  llm: AgentUiLlmStep | null,
+  code: AgentUiCodeStep,
+  promptMessages: { role: string; content: string }[] | null,
+): string {
+  const seconds = (ms: number) => `${(ms / 1000).toFixed(1)}s`;
+  const doc = new Document({
+    ...(llm
+      ? {
+          llm: {
+            ...(llm.model ? { model: llm.model } : {}),
+            ...(llm.durationMs ? { duration: seconds(llm.durationMs) } : {}),
+            ...(llm.inputTokens ? { inputTokens: llm.inputTokens } : {}),
+            ...(llm.outputTokens ? { outputTokens: llm.outputTokens } : {}),
+            ...(llm.outcome && llm.outcome !== "completed" ? { outcome: llm.outcome } : {}),
+            ...(llm.cancelReason ? { cancelReason: llm.cancelReason } : {}),
+          },
+        }
+      : {}),
+    code: {
+      ...(code.status === "running" ? { status: "running" } : {}),
+      ...(code.durationMs ? { duration: seconds(code.durationMs) } : {}),
+      ...(code.status === "done" && code.success === false ? { failed: true } : {}),
+    },
+    ...(promptMessages && promptMessages.length > 0
+      ? {
+          prompt: promptMessages.map((message) => ({
+            role: message.role,
+            content: message.content,
+          })),
+        }
+      : {}),
+  });
+  visit(doc, {
+    // Multiline strings as |- blocks: readable and highlightable, instead of
+    // the default quoted-with-\n form.
+    Scalar(_key, node) {
+      if (typeof node.value === "string" && node.value.includes("\n")) {
+        node.type = Scalar.BLOCK_LITERAL;
+      }
+    },
+    // The message/char tally rides as an inline comment on the prompt key.
+    Pair(_key, pair) {
+      if (promptMessages && pair.key instanceof Scalar && pair.key.value === "prompt") {
+        const chars = promptMessages.reduce((sum, message) => sum + message.content.length, 0);
+        pair.key.comment = ` ${promptMessages.length} messages, ${chars} chars`;
+      }
+    },
+  });
+  // lineWidth 0: never fold long lines — prompt text renders as written.
+  return doc.toString({ lineWidth: 0 }).trimEnd();
 }
 
 function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {
@@ -309,7 +422,7 @@ export function CodeBlock({
   text,
   muted,
 }: {
-  language: "json" | "typescript";
+  language: "json" | "typescript" | "yaml";
   text: string;
   muted: boolean;
 }) {
@@ -331,7 +444,7 @@ export function CodeBlock({
   // the text → editor swap cannot cause a layout jump (CodeMirror fills
   // whatever box it is given).
   const lineCount = text.split("\n").length;
-  const height = Math.min(260, Math.max(58, lineCount * 19 + 24));
+  const height = Math.min(260, Math.max(58, lineCount * 19 + 36));
   return (
     <View style={[styles.codeViewer, { height }, muted && styles.codeMuted]}>
       <View

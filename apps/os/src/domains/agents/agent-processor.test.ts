@@ -22,12 +22,11 @@ import {
 import {
   AgentProcessor,
   buildAgentCompactionRequestBody,
-  buildAgentLlmRequestBody,
   contextWindowTokens,
   prepareAgentLlmMessages,
-  projectContextAdded,
   type AgentProcessorDeps,
 } from "./agent-processor-implementation.ts";
+import { buildAgentLlmRequestBody, projectContextAdded } from "./agent-prompt-fold.ts";
 import type { WorkersAiMessage } from "./workers-ai-transport.ts";
 
 type AgentEventInput = ConsumedInput<AgentProcessorContract>;
