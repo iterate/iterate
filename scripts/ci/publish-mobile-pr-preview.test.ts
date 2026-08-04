@@ -31,8 +31,8 @@ test("a runtime-matching PR renders with the OTA details open and install collap
   });
   expect(section).toContain("**JS-only** — the installed app can run it");
   // Each summary carries its own sha - the install build is often older than the head.
-  expect(section).toContain("channel (\`abcdef123\`)");
-  expect(section).toContain("differs (\`012345678\`)");
+  expect(section).toContain("channel (`abcdef123`)");
+  expect(section).toContain("differs (`012345678`)");
   expect(section).toContain("<details open><summary>OTA");
   expect(section).toContain("<details><summary>Full install");
   // Both QRs are tappable links.
