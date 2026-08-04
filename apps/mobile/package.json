@@ -10,7 +10,7 @@
     "build:development:ios": "pnpm dlx eas-cli@21.0.1 build --platform ios --profile development",
     "build:simulator:ios": "pnpm dlx eas-cli@21.0.1 build --platform ios --profile development-simulator",
     "build:preview:ios": "pnpm dlx eas-cli@21.0.1 build --platform ios --profile preview",
-    "update:preview": "node scripts/write-build-info.mjs && pnpm dlx eas-cli@21.0.1 update --channel preview --platform ios; s=$?; git restore src/build-info.json; exit $s",
+    "update:preview": "node scripts/write-build-info.mjs && pnpm dlx eas-cli@21.0.1 update --channel preview --platform ios --clear-cache --message \"$(git log -1 --format=%s)\"; s=$?; git restore src/build-info.json; exit $s",
     "eas-build-pre-install": "node scripts/write-build-info.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run --reporter=default --reporter=../../packages/shared/src/test-support/e2e-policy/retry-telemetry-reporter.ts",
