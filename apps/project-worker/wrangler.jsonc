@@ -1,17 +1,29 @@
 {
   "name": "project-worker",
-  "main": "src/index.ts",
+  "main": "src/worker.ts",
   "compatibility_date": "2026-07-01",
   // Pure-play: NO nodejs_compat (workerd/miniflare/Raspberry-Pi portability). The runner is the lean half.
   "account_id": "04b3b57291ef2626c6a8daa9d47065a7",
   "workers_dev": true,
 
-  // The Worker Loader that runs each project's confined config worker.
+  // The Worker Loader that runs each project's confined config worker / agents.
   "worker_loaders": [{ "binding": "LOADER" }],
+
+  // The capability-host DO (target-core §4.1). One instance per {projectId, path}, addressed by name.
+  "durable_objects": {
+    "bindings": [{ "name": "ITX_HOST", "class_name": "ItxDurableObject" }],
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["ItxDurableObject"] }],
+
+  // Per-project secret store behind the egress door (secret:<projectId>:<name>). Proves the middleware
+  // rebuilds a WS-upgrade Request to substitute a header without breaking the 101 (target-core §6.0 risk #4).
+  "kv_namespaces": [{ "binding": "SECRETS_KV", "id": "6df3b8c18a624d078d1a1da66f3251c0" }],
 
   "vars": {
     // DEMO shared secret the control plane presents on the cross-account HTTP dial. A real deploy supplies
     // this as a Doppler-backed secret on BOTH workers (they must match).
     "RUNNER_DIAL_SECRET": "dial_9f3c1a7be0d24856b1f0a2c3d4e5f6079a8b7c6d5e4f3a2b1c0d9e8f7a6b5c4d",
+
+    // APP_CONFIG omitted → SOLO default (fallback → this worker's own DummyControlPlane loopback).
   },
 }
