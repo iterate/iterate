@@ -68,6 +68,15 @@ it), each a tabbed view `Script | Approvals | Result | Meta`.
 - [x] Update `agent-feed.test.tsx` for the rounds layout + new tests for tab
       content (Meta yaml, optional Result) _(12 tests passing; Meta yaml unit
       test on `buildRoundMetaYaml`)_
+- [x] Round headers show the agent's summary status as of that round
+      (Misha follow-up, 2026-08-04): reducer folds `agent/summary-updated`
+      into `state.summaryActivity` and stamps `activitySummary` onto code
+      steps (live while running, inherited at settle); os headers truncate,
+      mobile round labels gain an ellipsized suffix _(agent-ui-reducer.ts,
+      agent-activity-rounds.tsx roundHeaderMeta, activity-card.tsx)_
+- [x] Result tabs render YAML instead of JSON on both surfaces (same
+      follow-up) _(resultYaml in ~/lib/agent-round-meta-yaml.ts; mobile
+      previewResultYaml keeps the 2000-char cap)_
 
 ## Assumptions (made while Misha was AFK-ish; flag if wrong)
 
