@@ -6,6 +6,8 @@ files:
     "**/*.{ts,tsx,mts,cts}",
     "!**/*.{test,spec}.{js,jsx,mjs,cjs,ts,tsx,mts,cts}",
     "!**/{__tests__,test,tests,spec,specs}/**",
+    "!**/e2e/**",
+    "!**/*test-{helpers,harness,utils}.{ts,tsx,mts,cts}",
   ]
 ---
 

@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: in-review
 size: small
 ---
 
@@ -29,7 +29,7 @@ place to get fancy about types).
 
 ## Checklist
 
-- [ ] Add `!**/e2e/**` and `!**/*test-{helpers,harness,utils}.{ts,tsx,mts,cts}` to
+- [x] Add `!**/e2e/**` and `!**/*test-{helpers,harness,utils}.{ts,tsx,mts,cts}` to
       `rules/typescript/explain-type-cast.md`'s files globs.
 
 ## Out of scope
