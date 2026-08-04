@@ -186,8 +186,7 @@ describe("RepoCreationCoordinatorDurableObject", () => {
     expect(mocks.appendIfStreamId).toHaveBeenCalledTimes(2);
     expect(mocks.appendIfStreamId.mock.calls.map(([input]) => input.events[0])).toMatchObject([
       {
-        idempotencyKey:
-          'iterate-internal/repo-template-source-resolved:["prj_test","/repos/config"]',
+        idempotencyKey: "repo/template-source-resolved",
         payload: resolvedSource,
         type: "events.iterate.com/repos/template-source-resolved",
       },
@@ -203,7 +202,7 @@ describe("RepoCreationCoordinatorDurableObject", () => {
   it("reuses the journaled immutable source after an interrupted materialization", async () => {
     mocks.getEvent.mockResolvedValue({
       createdAt: new Date(0).toISOString(),
-      idempotencyKey: 'iterate-internal/repo-template-source-resolved:["prj_test","/repos/config"]',
+      idempotencyKey: "repo/template-source-resolved",
       offset: 2,
       path: "/repos/config",
       payload: resolvedSource,

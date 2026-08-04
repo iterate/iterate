@@ -1,6 +1,5 @@
 import { StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
-import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 import {
   RepoProcessorContract,
@@ -415,8 +414,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         if (
           request?.type !== "github-public-template" ||
           state.templateSource !== null ||
-          event.idempotencyKey !==
-            internalStreamId("repo-template-source-resolved", this.projectId, this.path) ||
+          event.idempotencyKey !== `${RepoProcessorContract.slug}/template-source-resolved` ||
           event.payload.owner !== request.owner ||
           event.payload.repo !== request.repo ||
           event.payload.ref !== request.ref ||

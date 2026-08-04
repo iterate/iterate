@@ -5,7 +5,6 @@ import { trustedInternalAuthContext } from "../../auth.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 import { createGithubTemplateArtifact } from "./github-template-creation.ts";
 import {
@@ -256,11 +255,7 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
       }
       await this.#append(handoff.streamId, {
         type: "events.iterate.com/repos/template-source-resolved",
-        idempotencyKey: internalStreamId(
-          "repo-template-source-resolved",
-          this.#name.projectId,
-          this.#name.path,
-        ),
+        idempotencyKey: `${RepoProcessorContract.slug}/template-source-resolved`,
         payload: source,
       });
     }
@@ -293,11 +288,7 @@ export class RepoCreationCoordinatorDurableObject extends DurableObject<Env> {
     request: RepoTemplateCreationHandoff["request"],
   ): Promise<NonNullable<RepoProcessorState["templateSource"]> | null> {
     const event = await this.#stream.getEvent({
-      idempotencyKey: internalStreamId(
-        "repo-template-source-resolved",
-        this.#name.projectId,
-        this.#name.path,
-      ),
+      idempotencyKey: `${RepoProcessorContract.slug}/template-source-resolved`,
     });
     if (event === undefined) return null;
     const parsed = RepoProcessorContract.parseEvent(event);
