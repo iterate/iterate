@@ -329,7 +329,7 @@ export interface Ai {
   models(): Promise<unknown>;
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
    * For outputs the caller cannot produce itself — images, audio, transcription,
-   * embeddings, classification at volume. An LLM agent should never run a text
+   * embeddings, classification at volume. An LLM agent shouldn't run a text
    * model over content it is about to read or relay (summarize, draft, answer):
    * return the data and write that yourself.
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you

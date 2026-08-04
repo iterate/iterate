@@ -1606,7 +1606,7 @@ return { supported: supported.slice(0, 10), converted, fromHtml: fromHtml.data }
     e2eProven: false,
     title: "Run a hosted text model for bulk, mechanical work",
     description:
-      "Run a 'Text Generation' model through itx.ai.run(model, body) with { messages } (chat shape) and read result.response — for MECHANICAL text work at volume: classify hundreds of rows, extract a field from every record, tag or filter in bulk. If YOU are an LLM agent, never use it on content you are about to read or relay (summarize, draft, answer) — you are a far better model; return the data and write it yourself. itx.ai.models() lists the catalog with prices. Uses paid/remote AI infrastructure — interactive-only.",
+      "Run a 'Text Generation' model through itx.ai.run(model, body) with { messages } (chat shape) and read result.response — for MECHANICAL text work at volume: classify hundreds of rows, extract a field from every record, tag or filter in bulk. If YOU are an LLM agent, never use it on content you are about to read or relay (summarize, draft, answer) — you are usually a more intelligent model; return the data and write it yourself. itx.ai.models() lists the catalog with prices. Uses paid/remote AI infrastructure — interactive-only.",
     context: "project",
     runtimes: ["browser", "node", "cli", "run-script", "project-worker"],
     code: `
