@@ -13,6 +13,7 @@ import { DurableObject } from "cloudflare:workers";
 import { newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { substituteHeaderSecrets } from "./core/egress.ts";
 import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
+import { parseName, stringifyName, parentPath } from "./core/names.ts";
 import type { StreamDurableObject, StreamEventInput } from "./stream-durable-object.ts";
 import type { ItxCallPath } from "./core/config.ts";
 
@@ -75,9 +76,12 @@ export class ItxDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Solo: the DO name IS the projectId (root path "/"). Real {projectId,path} name codec is a later increment. */
+  /** The context this DO is — parsed from its (unforgeable) faux-URL name `{projectId}.iterate{path}`. */
+  get #name(): { projectId: string; path: string } {
+    return parseName(this.ctx.id.name ?? "?");
+  }
   get #projectId(): string {
-    return this.ctx.id.name ?? "?";
+    return this.#name.projectId;
   }
 
   // ── native fetch (target-core §4.1, §6.0). Two callers, disambiguated by the Upgrade header:
@@ -158,8 +162,13 @@ export class ItxDurableObject extends DurableObject<Env> {
       return mount.value; // static
     }
 
-    // reads fall back — the SAME method on the fallback, which recurses to the terminal (target-core §4.4)
-    return this.env.FALLBACK.invokeCapability(callPath, args);
+    // reads fall back (target-core §4.4 / D21): a deep path falls back to its PARENT PATH (another context DO,
+    // so it inherits everything provided above it); the ROOT falls back to the enclosing SHELL. Both recurse
+    // until the capability resolves or the terminal shell throws.
+    const parent = parentPath(this.#name.path);
+    if (parent === null) return this.env.FALLBACK.invokeCapability(callPath, args); // root → shell
+    const parentName = stringifyName({ projectId: this.#projectId, path: parent });
+    return this.env.ITX_HOST.getByName(parentName).invokeCapability(callPath, args); // → parent path
   }
 
   /** Longest dotted-prefix live mount; the remaining segment(s) name the provider method to call. */

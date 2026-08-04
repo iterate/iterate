@@ -11,6 +11,7 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { ItxDurableObject } from "./itx-durable-object.ts";
 import { substituteHeaderSecrets } from "./core/egress.ts";
+import { canonicalName } from "./core/names.ts";
 import { parseAppConfig, type AppConfig } from "./core/config.ts";
 
 export { ItxDurableObject };
@@ -129,13 +130,13 @@ export default {
       url.pathname === "/ws" ||
       (request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket"
     ) {
-      const name = url.searchParams.get("ctx") ?? "prj_demo";
+      const name = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
       return env.ITX_HOST.getByName(name).fetch(request);
     }
 
     // ── the capability model: provide a mount, then invoke a callPath (built-in / local / fallback) ──
     if (url.pathname === "/provide") {
-      const ctxName = url.searchParams.get("ctx") ?? "prj_demo";
+      const ctxName = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
       const path = url.searchParams.get("path") as `itx.${string}` | null;
       if (!path) return Response.json({ ok: false, error: "missing ?path=itx.*" }, { status: 400 });
       const expression = url.searchParams.get("expression");
@@ -151,7 +152,7 @@ export default {
     }
     // ── execution in the DO: host.load runs a confined agent whose env.ITX is a self-stub to its host ──
     if (url.pathname === "/load") {
-      const ctxName = url.searchParams.get("ctx") ?? "prj_demo";
+      const ctxName = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
       try {
         return await env.ITX_HOST.getByName(ctxName).load(ITX_CALLBACK_AGENT);
       } catch (e) {
@@ -162,7 +163,7 @@ export default {
       }
     }
     if (url.pathname === "/call") {
-      const ctxName = url.searchParams.get("ctx") ?? "prj_demo";
+      const ctxName = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
       const path = url.searchParams.get("path") ?? "itx.whoami";
       const argsRaw = url.searchParams.get("args"); // a JSON array, e.g. ?args=["k","v"]
       const args = argsRaw ? (JSON.parse(argsRaw) as unknown[]) : [];

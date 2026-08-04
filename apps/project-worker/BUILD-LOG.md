@@ -107,15 +107,45 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
   green (`{"who":…,"auth":{"ok":true},"egress":{…,"seenAuth":"Bearer sk-demo-…"},"ranInContext":true}`). The
   injected `itx.js` + a relative `import "./itx.js"` resolve inside Worker Loader.
 
+## Increment 8 — itx.streams (a real per-path event log, project-prefixed)
+
+**Commit** `96c59c22d`.
+
+- `stream-durable-object.ts` — a minimal `StreamDurableObject` (append + monotonic AUTOINCREMENT offset +
+  poll-based replay; the delivery spine and the canonical event shape are deferred). `invokeCapability`
+  dispatches `itx.streams.append` / `itx.streams.read` to `env.STREAM_DO.getByName("${projectId}:${path}")` —
+  project-prefixed like itx.kv, so a project can only ever name its OWN streams. Added a v2 migration + the
+  STREAM_DO binding.
+- **Proven** (`/call`): two appends → offsets 1,2; `read` replayed both with `createdAt`+payload; `read` after
+  offset 1 → only offset 2; isolation — `ctx=prj_other` reading `/events` returned `[]`.
+
+## Increment 9 — path-addressed contexts + parent-path fallthrough (deep `/agents/x`)
+
+**Commit** `<pending>`.
+
+- `core/names.ts` — a minimal faux-URL codec (`{projectId}.iterate{path}`, mirroring apps/os), + `parentPath`.
+  The DO parses `{projectId, path}` from its (unforgeable) name; the worker canonicalizes any `ctx` so bare
+  `prj_demo` and full `prj_demo.iterate/agents/x` map to the right DO.
+- `invokeCapability` fallback is now two-level (target-core §4.4 / D21): a deep path falls back to its **parent
+  path** (another context DO → it inherits everything provided above it); the **root** falls back to the
+  **shell**. Recurses until resolved or the terminal throws.
+- **Proven** (`/call`): `whoami` at `/agents/x` parses `projectId:"prj_demo"`; a static cap provided at the
+  root is resolved BOTH at the root AND at `/agents/x` (inherited via fallthrough); a different project's
+  `/agents/x` can NOT inherit it (falls through its own root → shell → not found).
+- **Platform note:** DO _code_ propagates slower / more skewed than worker code after a deploy — poll for a
+  code-version marker (e.g. `whoami` parsing) before smoke-testing.
+
 ---
 
-## Status after increment 7 — the inner core end to end (solo)
+## Status after increment 9 — the inner core end to end (solo)
 
-A single `ItxDurableObject` is the host for a context: **ingress WS**, **egress** (project secret-sub → fallback
-→ terminal), the **capability model** (`invokeCapability`/`provideCapability` + fallback), **execution**
-(`load` a confined agent bound to its own host), **built-ins** (`itx.kv` project-prefixed + isolated,
-`itx.secrets.set`), **live providers** (capnweb `/connect` → dispatch back to a device/browser/worker), and the
-**ergonomic `itx.a.b()` surface**. All proven on `project-worker.iterate.workers.dev`.
+A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project
+secret-sub → fallback → terminal), the **capability model** (`invokeCapability`/`provideCapability` +
+parent-path-then-shell fallback), **execution** (`load` a confined agent bound to its own host), **built-ins**
+(`itx.kv`, `itx.secrets.set`, `itx.streams` — all project-prefixed + isolated), **live providers** (capnweb
+`/connect` → dispatch back to a device/browser/worker), the **ergonomic `itx.a.b()` surface**, and
+**path-addressed contexts** (faux-URL names; deep paths inherit from their parent path). All proven on
+`project-worker.iterate.workers.dev`.
 
-**Next:** wake-on-call for live mounts (hibernation, spikes 3-4); the real
-`DurableObjectNameCodec` + parent-path fallthrough (deep `/agents/x` contexts); then the control-plane join.
+**Next:** wake-on-call for live mounts (hibernation, spikes 3-4); then the control-plane join (self-host /
+hosted topologies).
