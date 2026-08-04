@@ -1,0 +1,102 @@
+{
+  "calibration": {
+    "artifactDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-calibration-20260804/2026-08-04T10-01-07-830Z",
+    "calibratedAt": "2026-08-04T10:02:47.598Z",
+    "codecDrive": {
+      "decibels": 0,
+      "kind": "aic3204-dac-decibels"
+    },
+    "deviceId": "home-assistant-voice-preview-edition",
+    "exactMac": "D8:3B:DA:46:20:34",
+    "levels": {
+      "maximum-non-clipping": {
+        "pcmPeakAmplitude": 12000,
+        "playoutClippedSamples": 0,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      },
+      "nominal": {
+        "pcmPeakAmplitude": 6000,
+        "playoutClippedSamples": 0,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      },
+      "quiet": {
+        "pcmPeakAmplitude": 1500,
+        "playoutClippedSamples": 0,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      }
+    },
+    "maximumBoundary": {
+      "nextRejectedAmplitude": null,
+      "nextRejectedClippedSamples": 0,
+      "safetyCeilingReached": true
+    },
+    "nearLevels": {
+      "loud": {
+        "macOutputVolumePercent": 35,
+        "sourceClippedSamples": 0
+      },
+      "nominal": {
+        "macOutputVolumePercent": 25,
+        "sourceClippedSamples": 0
+      },
+      "quiet": {
+        "macOutputVolumePercent": 15,
+        "sourceClippedSamples": 0
+      }
+    }
+  },
+  "measurements": {
+    "driveCandidates": [
+      {
+        "pcmPeakAmplitude": 1500,
+        "playoutClippedSamples": 0,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      },
+      {
+        "pcmPeakAmplitude": 3000,
+        "playoutClippedSamples": 0,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      },
+      {
+        "pcmPeakAmplitude": 6000,
+        "playoutClippedSamples": 0,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      },
+      {
+        "pcmPeakAmplitude": 9000,
+        "playoutClippedSamples": 0,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      },
+      {
+        "pcmPeakAmplitude": 12000,
+        "playoutClippedSamples": 0,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      }
+    ],
+    "nearCandidates": [
+      {
+        "macOutputVolumePercent": 15,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      },
+      {
+        "macOutputVolumePercent": 25,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      },
+      {
+        "macOutputVolumePercent": 35,
+        "rawMicClippedSamples": 0,
+        "sourceClippedSamples": 0
+      }
+    ]
+  }
+}

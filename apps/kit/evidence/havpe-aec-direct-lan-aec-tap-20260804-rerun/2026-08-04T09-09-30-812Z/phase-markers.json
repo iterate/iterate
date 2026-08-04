@@ -1,0 +1,128 @@
+{
+  "ambient": {
+    "end": {
+      "event": "ambient.assessment.completed",
+      "microphoneByteOffset": 179200,
+      "microphoneFrames": 280,
+      "observedAtMonotonicMs": 31668.455542,
+      "speakerByteOffset": 0,
+      "speakerFrames": 0
+    },
+    "start": {
+      "event": "ambient.assessment.started",
+      "microphoneByteOffset": 83200,
+      "microphoneFrames": 130,
+      "observedAtMonotonicMs": 28665.984459,
+      "speakerByteOffset": 0,
+      "speakerFrames": 0
+    }
+  },
+  "double-talk": {
+    "end": {
+      "event": "double-talk.assessment.completed",
+      "microphoneByteOffset": 1594240,
+      "microphoneFrames": 2491,
+      "observedAtMonotonicMs": 75928.746834,
+      "speakerByteOffset": 1088640,
+      "speakerFrames": 1701
+    },
+    "start": {
+      "event": "double-talk.assessment.started",
+      "microphoneByteOffset": 1499520,
+      "microphoneFrames": 2343,
+      "observedAtMonotonicMs": 72928.204917,
+      "speakerByteOffset": 992640,
+      "speakerFrames": 1551
+    }
+  },
+  "far-dual-carrier-prbs31": {
+    "end": {
+      "event": "far-dual-carrier-prbs31.assessment.completed",
+      "microphoneByteOffset": 533120,
+      "microphoneFrames": 833,
+      "observedAtMonotonicMs": 42741.284542,
+      "speakerByteOffset": 320640,
+      "speakerFrames": 501
+    },
+    "start": {
+      "event": "far-dual-carrier-prbs31.assessment.started",
+      "microphoneByteOffset": 437120,
+      "microphoneFrames": 683,
+      "observedAtMonotonicMs": 39739.568667,
+      "speakerByteOffset": 224640,
+      "speakerFrames": 351
+    }
+  },
+  "far-speech-shaped": {
+    "end": {
+      "event": "far-speech-shaped.assessment.completed",
+      "microphoneByteOffset": 757760,
+      "microphoneFrames": 1184,
+      "observedAtMonotonicMs": 49752.296959,
+      "speakerByteOffset": 512640,
+      "speakerFrames": 801
+    },
+    "start": {
+      "event": "far-speech-shaped.assessment.started",
+      "microphoneByteOffset": 661760,
+      "microphoneFrames": 1034,
+      "observedAtMonotonicMs": 46751.150459,
+      "speakerByteOffset": 416640,
+      "speakerFrames": 651
+    }
+  },
+  "far-tone": {
+    "end": {
+      "event": "far-tone.assessment.completed",
+      "microphoneByteOffset": 308480,
+      "microphoneFrames": 482,
+      "observedAtMonotonicMs": 35715.777417,
+      "speakerByteOffset": 128640,
+      "speakerFrames": 201
+    },
+    "start": {
+      "event": "far-tone.assessment.started",
+      "microphoneByteOffset": 212480,
+      "microphoneFrames": 332,
+      "observedAtMonotonicMs": 32715.773542,
+      "speakerByteOffset": 32640,
+      "speakerFrames": 51
+    }
+  },
+  "near-only": {
+    "end": {
+      "event": "near-only.assessment.completed",
+      "microphoneByteOffset": 982400,
+      "microphoneFrames": 1535,
+      "observedAtMonotonicMs": 56767.598834,
+      "speakerByteOffset": 704640,
+      "speakerFrames": 1101
+    },
+    "start": {
+      "event": "near-only.assessment.started",
+      "microphoneByteOffset": 886400,
+      "microphoneFrames": 1385,
+      "observedAtMonotonicMs": 53767.580417,
+      "speakerByteOffset": 608640,
+      "speakerFrames": 951
+    }
+  },
+  "near-repeat": {
+    "end": {
+      "event": "near-repeat.assessment.completed",
+      "microphoneByteOffset": 1288320,
+      "microphoneFrames": 2013,
+      "observedAtMonotonicMs": 66342.72625,
+      "speakerByteOffset": 896640,
+      "speakerFrames": 1401
+    },
+    "start": {
+      "event": "near-repeat.assessment.started",
+      "microphoneByteOffset": 1192320,
+      "microphoneFrames": 1863,
+      "observedAtMonotonicMs": 63341.070875,
+      "speakerByteOffset": 800640,
+      "speakerFrames": 1251
+    }
+  }
+}

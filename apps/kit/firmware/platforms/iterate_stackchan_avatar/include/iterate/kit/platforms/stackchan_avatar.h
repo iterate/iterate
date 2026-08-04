@@ -1,6 +1,9 @@
 #ifndef ITERATE_KIT_PLATFORMS_STACKCHAN_AVATAR_H
 #define ITERATE_KIT_PLATFORMS_STACKCHAN_AVATAR_H
 
+#include "iterate/kit/capabilities/screen_capture.h"
+#include "iterate/kit/conversation_lights.h"
+
 #include "esp_err.h"
 
 #include <stdbool.h>
@@ -10,6 +13,15 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/*
+ * Cap'n Web's 8 KiB control slot base64url-encodes byte results. A 5,600-byte
+ * PNG leaves more than 700 bytes for its RPC envelope while avoiding a second
+ * transport shape just for screenshots. The platform encoder owns the same
+ * ceiling as the public capability so it can compress directly into one
+ * bounded PSRAM result instead of producing a larger temporary allocation.
+ */
+#define ITERATE_KIT_STACKCHAN_CAPTURE_PNG_CAPACITY 5600U
 
 /**
  * Diagnostics for StackChan's deliberately lossy visual sidecar.
@@ -46,20 +58,34 @@ struct iterate_kit_stackchan_avatar_metrics {
   uint32_t last_display_transfer_us;
   uint32_t maximum_display_transfer_us;
   uint32_t analyzer_stack_minimum_free_bytes;
+  uint32_t input_stack_minimum_free_bytes;
   uint32_t physical_playout_sample_clock;
   uint32_t current_avatar_index;
+  uint32_t status_updates;
+  uint32_t status_overwrites;
+  uint32_t touch_samples;
+  uint32_t touch_read_failures;
+  uint32_t touch_taps;
+  uint32_t face_button_samples;
+  uint32_t face_button_read_failures;
+  uint32_t face_button_boot_events_discarded;
+  uint32_t face_button_short_clicks;
+  uint32_t face_button_long_or_ambiguous_events;
+  uint32_t last_input_sample_interval_us;
+  uint32_t maximum_input_sample_interval_us;
 };
 
 /**
  * Starts StackChan's single physical display owner and visual analyzer.
  *
- * Startup allocates one 160x120 RGB565 DMA framebuffer in internal memory.
- * ESP32-S3 SPI cannot DMA from PSRAM, so this permanent cost avoids a hidden
- * per-transfer bounce allocation. Steady-state playout observation, PCM
- * analysis, rendering, and direct LCD transfer allocate nothing. This is a
- * physical-board singleton because the CoreS3 panel is a singleton;
- * presenting it as an instantiable object would promise hardware concurrency
- * the board cannot provide.
+ * Startup allocates one 160x120 RGB565 source surface and one bounded 320x16
+ * scale/DMA strip in internal memory. ESP32-S3 SPI cannot DMA from PSRAM, so
+ * this permanent cost avoids a hidden per-transfer bounce allocation without
+ * paying for a 153.6 KiB full-screen buffer. Steady-state input polling,
+ * playout observation, analysis, rendering, and direct LCD transfer allocate
+ * nothing. This is a physical-board singleton because the CoreS3 panel and
+ * PMIC bus are singletons; presenting it as an instantiable object would
+ * promise hardware concurrency the board cannot provide.
  */
 esp_err_t iterate_kit_stackchan_avatar_start(void);
 
@@ -75,6 +101,51 @@ esp_err_t iterate_kit_stackchan_avatar_start(void);
  */
 esp_err_t iterate_kit_stackchan_avatar_request_sprite_set(
     const char *slug, size_t slug_length);
+
+/**
+ * Publishes the newest semantic conversation state to the display owner.
+ *
+ * This is a latest-state handoff rather than an event FIFO.  A transport can
+ * move through CONNECTING and READY faster than the 15 Hz panel budget; only
+ * the current truth is useful on screen.  The call never waits for rendering,
+ * SPI, or LCD DMA and therefore remains safe in the cooperative
+ * control-plane loop beside the WebSocket owners.
+ */
+esp_err_t iterate_kit_stackchan_avatar_request_status(
+    const struct iterate_kit_conversation_visual_state *status);
+
+/**
+ * Returns the capture view of the same framebuffer that owns the LCD.
+ *
+ * The driver takes one coherent source-resolution snapshot and encodes it as
+ * PNG outside the short framebuffer ownership window. It is intentionally a
+ * capability driver rather than a second display abstraction: the 160x120
+ * source maps exactly onto the 320x240 panel in 2x pixel blocks, so this is the
+ * displayed image without panel readback, camera inference, or another UI
+ * owner. Only one encoded result may be outstanding at a time.
+ */
+struct iterate_kit_screen_capture_driver
+iterate_kit_stackchan_avatar_screen_capture_driver(void);
+
+/**
+ * Reports whether physical speaker DMA has carried audible PCM recently.
+ *
+ * The body LEDs and LCD headline must use the same hardware-owned fact. A
+ * provider event or received WebSocket frame is too early and would present
+ * speaking while audio still waits downstream. The returned peak is coarse
+ * presentation state only and never feeds AEC, VAD, or flow control.
+ */
+uint32_t iterate_kit_stackchan_avatar_speaker_status_peak(void);
+
+/**
+ * Consumes one whole-screen tap, if one is pending.
+ *
+ * Coordinates are deliberately absent: every coherent press/release anywhere
+ * on the panel means start/end call. The dedicated input owner counts taps so
+ * a quick start/end pair cannot collapse into one latest-state update. This
+ * consumer is constant-time and never touches the shared I2C bus.
+ */
+bool iterate_kit_stackchan_avatar_take_call_touch_tap(void);
 
 /**
  * Accepts one 128-sample frame which has completed speaker DMA.

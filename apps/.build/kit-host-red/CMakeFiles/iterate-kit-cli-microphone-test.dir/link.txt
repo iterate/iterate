@@ -1,0 +1,1 @@
+/usr/bin/cc -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-cli-microphone-test.dir/targets/host_cli/cli_microphone.c.o" "CMakeFiles/iterate-kit-cli-microphone-test.dir/tests/cli_microphone_test.c.o" -o iterate-kit-cli-microphone-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a

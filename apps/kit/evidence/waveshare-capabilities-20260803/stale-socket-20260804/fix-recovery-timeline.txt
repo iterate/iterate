@@ -1,0 +1,13 @@
+04:43:35.194 W (332424) iterate-voicelab: no inbound call served in 90s (remount 2) — replacing the session to re-mount
+04:43:35.199 I (332429) iterate-voicelab: transport state=websocket_connecting
+04:43:35.199 E (332429) iterate-voicelab: left ready: recvStatus=0 wsClose=0 wsErrType=0 tlsErr=0 errno=0 protoFail=1 recvFail=0 sendFail=0 inboxDiscard=0 outboxDiscard=2 appCapnweb=0
+04:43:35.200 I (332430) iterate-voicelab: voicelab state=failed failure=session-ended
+04:43:36.744 I (333974) esp-x509-crt-bundle: Certificate validated
+04:43:38.603 I (335833) iterate-voicelab: transport state=mounting
+04:43:39.463 I (336693) iterate-voicelab: transport state=ready
+04:43:39.464 I (336694) iterate-voicelab: voicelab mount started (generation 4)
+04:43:39.464 I (336694) iterate-voicelab: voicelab state=authenticating failure=none
+04:43:39.537 I (336766) iterate-voicelab: voicelab state=getting-project failure=none
+04:43:39.568 I (336798) iterate-voicelab: voicelab state=getting-stream failure=none
+04:43:39.600 I (336830) iterate-voicelab: voicelab state=opening-connection failure=none
+04:43:39.673 I (336902) iterate-voicelab: voicelab state=ready failure=none

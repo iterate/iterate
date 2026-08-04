@@ -1,6 +1,7 @@
 #ifndef ITERATE_KIT_DEVICES_VOICE_SATELLITE_H
 #define ITERATE_KIT_DEVICES_VOICE_SATELLITE_H
 
+#include "iterate/kit/capabilities/aec_diagnostic_trace.h"
 #include "iterate/kit/capabilities/callback_budget.h"
 #include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/device_event_stream.h"
@@ -23,7 +24,7 @@ enum {
    * they retain a reconnect/remote-control burst while preserving a finite,
    * inspectable RAM cost and bounded work in every cooperative poll.
    */
-  ITERATE_KIT_VOICE_SATELLITE_MODULE_COUNT = 4,
+  ITERATE_KIT_VOICE_SATELLITE_MODULE_COUNT = 5,
   ITERATE_KIT_VOICE_SATELLITE_EVENTS_PER_POLL = 4,
   ITERATE_KIT_VOICE_SATELLITE_EVENT_CAPACITY = 8,
   ITERATE_KIT_VOICE_SATELLITE_EVENT_NOTIFICATION_CAPACITY = 8,
@@ -46,6 +47,7 @@ struct iterate_kit_voice_satellite_options {
   struct iterate_kit_conversation_playback_interruption_driver
       playback_interruption;
   struct iterate_kit_metrics_options metrics;
+  struct iterate_kit_aec_diagnostic_trace_capability *aec_trace;
 };
 
 /**
@@ -76,6 +78,7 @@ struct iterate_kit_voice_satellite {
   struct iterate_kit_conversation conversation;
   struct iterate_kit_leds leds;
   struct iterate_kit_metrics metrics;
+  struct iterate_kit_aec_diagnostic_trace_capability *aec_trace;
   const struct iterate_kit_device_manifest *manifest;
   struct iterate_kit_voice_satellite_control_driver control_driver;
   bool conversation_active;

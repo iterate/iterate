@@ -720,6 +720,7 @@ static void interruption_discards_every_queued_downlink_frame(void) {
   struct iterate_kit_pcm_lane_metrics metrics;
   uint8_t frame[ITERATE_KIT_PCM_V1_FRAME_BYTES] = {0};
   uint32_t discarded = 99U;
+  uint32_t discarded_items = 99U;
   size_t index;
   fixture_init(&fixture);
 
@@ -734,8 +735,11 @@ static void interruption_discards_every_queued_downlink_frame(void) {
         sizeof(frame)) == ITERATE_KIT_OK);
   }
   CHECK(iterate_kit_pcm_lane_discard_downlink(
-      &fixture.lane, &discarded) == ITERATE_KIT_OK);
+      &fixture.lane,
+      &discarded,
+      &discarded_items) == ITERATE_KIT_OK);
   CHECK(discarded == 3U);
+  CHECK(discarded_items == 3U);
 
   iterate_kit_pcm_lane_metrics(&fixture.lane, &metrics);
   CHECK(metrics.downlink_frames_discarded == 3U);

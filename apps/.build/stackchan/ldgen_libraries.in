@@ -84,15 +84,16 @@ $<TARGET_FILE:__idf_spiffs>
 $<TARGET_FILE:__idf_touch_element>
 $<TARGET_FILE:__idf_usb>
 $<TARGET_FILE:__idf_wifi_provisioning>
+$<TARGET_FILE:__idf_avatar>
 $<TARGET_FILE:__idf_capnweb>
 $<TARGET_FILE:__idf_core>
 $<TARGET_FILE:__idf_capabilities>
+$<TARGET_FILE:__idf_espressif__esp_lcd_touch>
 $<TARGET_FILE:__idf_espressif__esp_jpeg>
 $<TARGET_FILE:__idf_espressif__esp32-camera>
 $<TARGET_FILE:__idf_espressif__esp_codec_dev>
 $<TARGET_FILE:__idf_lvgl__lvgl>
 $<TARGET_FILE:__idf_espressif__esp_lcd_ili9341>
-$<TARGET_FILE:__idf_espressif__esp_lcd_touch>
 $<TARGET_FILE:__idf_espressif__esp_lcd_touch_ft5x06>
 $<TARGET_FILE:__idf_espressif__m5stack_core_s3>
 $<TARGET_FILE:__idf_espressif__cjson>
@@ -101,6 +102,8 @@ $<TARGET_FILE:__idf_espressif__esp-dsp>
 $<TARGET_FILE:__idf_espressif__esp-sr>
 $<TARGET_FILE:__idf_iterate_core_s3_audio>
 $<TARGET_FILE:__idf_iterate_esp_idf>
+$<TARGET_FILE:__idf_iterate_stackchan_avatar>
 $<TARGET_FILE:__idf_iterate_stackchan_hardware>
+$<TARGET_FILE:__idf_iterate_stackchan_body>
 $<TARGET_FILE:__idf_stackchan>
 $<TARGET_FILE:__idf_main>

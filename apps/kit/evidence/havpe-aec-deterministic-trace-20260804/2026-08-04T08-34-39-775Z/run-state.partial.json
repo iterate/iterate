@@ -1,0 +1,24 @@
+{
+  "currentPhase": null,
+  "recording": {
+    "complete": true,
+    "failure": null,
+    "frameBytes": 640,
+    "microphone": {
+      "bytes": 2024320,
+      "frames": 3163,
+      "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804/2026-08-04T08-34-39-775Z/pcm/microphone-uplink.pcm16le",
+      "sha256": "6c199935d9afea47527c72530c7119d62c0cd59548d973a5e8d5457b2cd2d976"
+    },
+    "outputDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804/2026-08-04T08-34-39-775Z/pcm",
+    "producedAt": "2026-08-04T08:36:12.753Z",
+    "sampleRateHz": 16000,
+    "speaker": {
+      "bytes": 1152000,
+      "frames": 1800,
+      "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804/2026-08-04T08-34-39-775Z/pcm/speaker-downlink.pcm16le",
+      "sha256": "88c66d41577b6c98b9402ed2be4e8a6ff858918647e827ee4c0ec7c2250e425c"
+    },
+    "timelinePath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804/2026-08-04T08-34-39-775Z/pcm/timeline.jsonl"
+  }
+}

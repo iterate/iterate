@@ -1,0 +1,105 @@
+{
+  "assessment": {
+    "acceptance": "independent-stt-provisional",
+    "boundaryWordOverage": 0,
+    "normalizedMicrophoneTranscript": "the game boy face is active and the zebra is awake",
+    "normalizedProviderTranscript": "the game boy face is active and the zebra is awake",
+    "passed": true,
+    "reasons": [],
+    "relativeActiveWindowDeficit": 0,
+    "responseToBaselineMaximumRmsRatio": 4.541233159221375
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 127.81227078219055,
+    "activeWindowCount": 13,
+    "passed": true,
+    "reasons": []
+  },
+  "microphoneStt": {
+    "durationSeconds": 5.061,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"90e82dd5-6fd9-4b3a-933d-feb8bd256f12\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The game\",\"words\":[{\"text\":\"The\",\"start\":1.236,\"end\":1.297},{\"text\":\"game\",\"start\":1.358,\"end\":1.459}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"boy face is active\",\"words\":[{\"text\":\"boy\",\"start\":1.622,\"end\":1.804},{\"text\":\"face\",\"start\":1.905,\"end\":2.189},{\"text\":\"is\",\"start\":2.25,\"end\":2.331},{\"text\":\"active\",\"start\":2.473,\"end\":2.858}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"and the zebra is awake.\",\"words\":[{\"text\":\"and\",\"start\":3.0,\"end\":3.061},{\"text\":\"the\",\"start\":3.061,\"end\":3.122},{\"text\":\"zebra\",\"start\":3.182,\"end\":3.507},{\"text\":\"is\",\"start\":3.649,\"end\":3.73},{\"text\":\"awake.\",\"start\":3.77,\"end\":4.196}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The Game Boy face is active and the zebra is awake.\",\"words\":[{\"text\":\"The\",\"start\":1.225,\"end\":1.305},{\"text\":\"Game\",\"start\":1.366,\"end\":1.607},{\"text\":\"Boy\",\"start\":1.627,\"end\":1.808},{\"text\":\"face\",\"start\":1.908,\"end\":2.189},{\"text\":\"is\",\"start\":2.249,\"end\":2.33},{\"text\":\"active\",\"start\":2.45,\"end\":2.872},{\"text\":\"and\",\"start\":2.952,\"end\":3.033},{\"text\":\"the\",\"start\":3.053,\"end\":3.133},{\"text\":\"zebra\",\"start\":3.193,\"end\":3.535},{\"text\":\"is\",\"start\":3.655,\"end\":3.736},{\"text\":\"awake.\",\"start\":3.776,\"end\":4.198}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":5.061,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":5.061}"
+    ],
+    "text": "The Game Boy face is active and the zebra is awake.",
+    "words": [
+      {
+        "text": "The",
+        "start": 1.225,
+        "end": 1.305
+      },
+      {
+        "text": "Game",
+        "start": 1.366,
+        "end": 1.607
+      },
+      {
+        "text": "Boy",
+        "start": 1.627,
+        "end": 1.808
+      },
+      {
+        "text": "face",
+        "start": 1.908,
+        "end": 2.189
+      },
+      {
+        "text": "is",
+        "start": 2.249,
+        "end": 2.33
+      },
+      {
+        "text": "active",
+        "start": 2.45,
+        "end": 2.872
+      },
+      {
+        "text": "and",
+        "start": 2.952,
+        "end": 3.033
+      },
+      {
+        "text": "the",
+        "start": 3.053,
+        "end": 3.133
+      },
+      {
+        "text": "zebra",
+        "start": 3.193,
+        "end": 3.535
+      },
+      {
+        "text": "is",
+        "start": 3.655,
+        "end": 3.736
+      },
+      {
+        "text": "awake.",
+        "start": 3.776,
+        "end": 4.198
+      }
+    ]
+  },
+  "providerOutputTranscript": "The Game Boy face is active and the zebra is awake.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 13,
+      "clippedSampleCount": 0,
+      "maximumRms": 232.170128892586,
+      "p50Rms": 40.946179105422445,
+      "p95Rms": 128.7568768389997,
+      "p99Rms": 191.78385457331908,
+      "sampleCount": 242944,
+      "windowCount": 254,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 127.81227078219055
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

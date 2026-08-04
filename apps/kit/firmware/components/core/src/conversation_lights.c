@@ -77,8 +77,12 @@ static void render_audio(
     const struct iterate_kit_conversation_visual_state *state,
     struct iterate_kit_rgb8
         pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]) {
-  if (!state->conversation_active) return;
-
+  /*
+   * Media is preconnected independently of conversation lifetime. A failure
+   * while idle is therefore still actionable device status; hiding it behind
+   * `conversation_active` made a broken Stick look ready until the user tried
+   * a call. Keep the fault branch first so every adapter preserves that fact.
+   */
   if (state->media_failed) {
     fill_sector(
         pixels,
@@ -92,6 +96,7 @@ static void render_audio(
         (struct iterate_kit_rgb8){42U, 0U, 0U});
     return;
   }
+  if (!state->conversation_active) return;
   if (!state->media_ready) {
     fill_sector(
         pixels,
@@ -108,11 +113,19 @@ static void render_audio(
 
   const uint8_t speaker_level = pcm_peak_level(state->speaker_peak);
   const uint8_t microphone_level = pcm_peak_level(state->microphone_peak);
+  /*
+   * In manual-PTT mode both sides are intentionally silent between turns. One
+   * dim blue pixel means the call's media lane is ready; without it a valid
+   * connected call and a call with no playable return path are visually
+   * identical. Speech replaces the baseline with the 1--3 pixel peak meter.
+   */
   fill_sector(
       pixels,
       SPEAKER_SECTOR_START,
-      speaker_level,
-      (struct iterate_kit_rgb8){0U, 10U, 52U});
+      speaker_level == 0U ? 1U : speaker_level,
+      speaker_level == 0U
+          ? (struct iterate_kit_rgb8){0U, 3U, 10U}
+          : (struct iterate_kit_rgb8){0U, 10U, 52U});
   /*
    * One dim microphone pixel means “capture is listening”, not “sound was
    * measured”. Speech replaces that baseline with a 1–3 pixel meter. This is

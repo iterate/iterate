@@ -1,0 +1,257 @@
+[
+  {
+    "observedAtMonotonicMs": 50641.083875,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 58610.689875,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 71162.007833,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 79130.360583,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 91382.185583,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 99351.27475,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 112398.488666,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 120368.42475,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 133297.532083,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 141268.136125,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 154194.513875,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 274165.198666,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 281554.661541,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 289524.368958,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 303315.735916,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 311285.083208,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 323954.361833,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 331922.812625,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 344963.898458,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 352935.071083,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 365713.544875,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 373683.070916,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 386238.870458,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 506207.691958,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 512621.206791,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 520589.799708,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 533369.265791,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 541338.660666,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 554351.096625,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 562321.489791,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 575014.091291,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 582983.172541,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 595186.9845,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 603155.323916,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 615651.139125,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 735620.730333,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 742091.828958,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 762060.980833,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 768512.731541,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 788480.625583,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 874489.855,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 894458.848833,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 900894.128708,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 920861.447583,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 927613.680666,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 947581.467958,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 954726.514375,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 984694.913333,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 993226.944125,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 1023194.676041,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 1029808.410041,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  }
+]

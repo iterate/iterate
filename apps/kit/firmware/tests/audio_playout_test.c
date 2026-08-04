@@ -453,6 +453,116 @@ static void tolerates_missing_arguments(void) {
                     ITERATE_KIT_PLAYOUT_REPLACE), "replace") == 0);
 }
 
+
+/*
+ * A NEW ANSWER AFTER A COMPLETED ONE COSTS NOTHING.
+ *
+ * Every answer carries a higher number than the last, so every answer takes the
+ * REPLACE path. That is ordinary, and `superseded_midplay` must stay at zero for
+ * it — the counter exists to name answers cut off while still audible, and if it
+ * moved on a clean sequence every healthy turn would look damaged.
+ */
+static void a_new_answer_after_a_drained_one_is_not_a_supersede(void)
+{
+  struct iterate_kit_playout playout;
+  const struct iterate_kit_playout_frame first = {7U, 1U, 0U};
+  const struct iterate_kit_playout_frame second = {7U, 2U, 0U};
+
+  iterate_kit_playout_reset(&playout, 7U);
+  assert(iterate_kit_playout_classify(&playout, &first) ==
+         ITERATE_KIT_PLAYOUT_REPLACE);
+  /* The speaker drained it and the sender had said it was done. */
+  iterate_kit_playout_mark_drained(&playout);
+  assert(iterate_kit_playout_classify(&playout, &second) ==
+         ITERATE_KIT_PLAYOUT_REPLACE);
+  assert(playout.replaced == 2U);
+  assert(playout.superseded_midplay == 0U);
+}
+
+/*
+ * THE CASE THAT MUST NOT BE FORGIVEN.
+ *
+ * A source that goes dry in the MIDDLE of an answer is starving, not finishing.
+ * If a newer answer then arrives, it really did cut a live one off, and clearing
+ * the audible flag on any dry wait would have hidden exactly that. Only a dry
+ * buffer AND a sender-declared end may clear it, which is why nothing calls
+ * mark_drained here.
+ */
+static void a_supersede_after_a_transient_dry_still_counts(void)
+{
+  struct iterate_kit_playout playout;
+  const struct iterate_kit_playout_frame first = {7U, 1U, 0U};
+  const struct iterate_kit_playout_frame more = {7U, 1U, 1U};
+  const struct iterate_kit_playout_frame newer = {7U, 2U, 0U};
+
+  iterate_kit_playout_reset(&playout, 7U);
+  assert(iterate_kit_playout_classify(&playout, &first) ==
+         ITERATE_KIT_PLAYOUT_REPLACE);
+  assert(iterate_kit_playout_classify(&playout, &more) ==
+         ITERATE_KIT_PLAYOUT_APPEND);
+  /* No mark_drained: the answer was never declared done. */
+  assert(iterate_kit_playout_classify(&playout, &newer) ==
+         ITERATE_KIT_PLAYOUT_REPLACE);
+  assert(playout.superseded_midplay == 1U);
+}
+
+/* A frame arriving after a drain makes the answer audible again. */
+static void audio_after_a_drain_is_audible_again(void)
+{
+  struct iterate_kit_playout playout;
+  const struct iterate_kit_playout_frame first = {7U, 1U, 0U};
+  const struct iterate_kit_playout_frame late = {7U, 1U, 1U};
+  const struct iterate_kit_playout_frame newer = {7U, 2U, 0U};
+
+  iterate_kit_playout_reset(&playout, 7U);
+  (void)iterate_kit_playout_classify(&playout, &first);
+  iterate_kit_playout_mark_drained(&playout);
+  /* A straggler for the SAME answer: there is audio to hear again. */
+  assert(iterate_kit_playout_classify(&playout, &late) ==
+         ITERATE_KIT_PLAYOUT_APPEND);
+  assert(iterate_kit_playout_classify(&playout, &newer) ==
+         ITERATE_KIT_PLAYOUT_REPLACE);
+  assert(playout.superseded_midplay == 1U);
+}
+
+
+/*
+ * WHY A NEW CALL MUST RESET THE PLAYOUT.
+ *
+ * Answer and frame numbers restart with every call, so a second call's opening
+ * frames are numerically BEHIND wherever the previous call finished. Without a
+ * reset the classifier is right to call them duplicates — that is its contract —
+ * and the owner is wrong not to have reset. Measured before the reset existed:
+ * 539 of 583 frames of a fresh call's first answer never reached the speaker,
+ * 330 of them refused here.
+ *
+ * This test pins both halves: the refusal without a reset, and the acceptance
+ * with one.
+ */
+static void a_second_call_needs_a_reset_or_its_frames_look_stale(void)
+{
+  struct iterate_kit_playout playout;
+  const struct iterate_kit_playout_frame first = {7U, 1U, 0U};
+  const struct iterate_kit_playout_frame later = {7U, 1U, 5U};
+  const struct iterate_kit_playout_frame fresh_call = {7U, 1U, 0U};
+
+  iterate_kit_playout_reset(&playout, 7U);
+  assert(iterate_kit_playout_classify(&playout, &first) ==
+         ITERATE_KIT_PLAYOUT_REPLACE);
+  assert(iterate_kit_playout_classify(&playout, &later) ==
+         ITERATE_KIT_PLAYOUT_APPEND);
+
+  /* A new call's first frame, with NO reset: behind us, so refused. */
+  assert(iterate_kit_playout_classify(&playout, &fresh_call) ==
+         ITERATE_KIT_PLAYOUT_IGNORE);
+  assert(playout.ignored_duplicate == 1U);
+
+  /* The same frame after the reset the owner owes it: played. */
+  iterate_kit_playout_reset(&playout, 7U);
+  assert(iterate_kit_playout_classify(&playout, &fresh_call) ==
+         ITERATE_KIT_PLAYOUT_REPLACE);
+}
+
 int main(void) {
   plays_one_answer_in_order();
   ignores_frames_redelivered_by_a_recycle();
@@ -467,5 +577,9 @@ int main(void) {
   a_restarted_sender_starting_at_zero_is_not_stale();
   a_sender_that_restarted_is_not_stale();
   tolerates_missing_arguments();
+  a_new_answer_after_a_drained_one_is_not_a_supersede();
+  a_supersede_after_a_transient_dry_still_counts();
+  audio_after_a_drain_is_audible_again();
+  a_second_call_needs_a_reset_or_its_frames_look_stale();
   return 0;
 }

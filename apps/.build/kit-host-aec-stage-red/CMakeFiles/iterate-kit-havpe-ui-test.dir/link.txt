@@ -1,0 +1,1 @@
+/usr/bin/cc -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-havpe-ui-test.dir/tests/havpe_ui_test.c.o" "CMakeFiles/iterate-kit-havpe-ui-test.dir/targets/home-assistant-voice-preview-edition/main/havpe_ui.c.o" -o iterate-kit-havpe-ui-test

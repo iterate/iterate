@@ -1,0 +1,1 @@
+/usr/bin/cc -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-cli-options-test.dir/targets/host_cli/cli_options.c.o" "CMakeFiles/iterate-kit-cli-options-test.dir/tests/cli_options_test.c.o" -o iterate-kit-cli-options-test

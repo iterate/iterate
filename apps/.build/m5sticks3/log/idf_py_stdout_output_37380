@@ -1,0 +1,9 @@
+[1/5] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/esp-idf/esptool_py && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/partition_table/partition-table.bin /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/iterate-kit-m5sticks3.bin
+iterate-kit-m5sticks3.bin binary size 0x12e460 bytes. Smallest app partition is 0x200000 bytes. 0xd1ba0 bytes (41%) free.
+[2/5] Performing build step for 'bootloader'
+[1/1] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esptool_py && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x0 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/bootloader.bin
+Bootloader binary size 0x5130 bytes. 0x2ed0 bytes (37%) free.
+[3/5] No install step for 'bootloader'
+[4/5] Completed 'bootloader'
+[5/5] Auditing M5StickS3 realtime ISR placement
+-- M5StickS3 realtime ELF audit passed: ISR graph in IRAM, context in DIRAM

@@ -1,0 +1,42 @@
+[
+  {
+    "observedAtMonotonicMs": 18803.802,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 24772.266125,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 25829.822292,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 31798.502667,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 32852.346583,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 38821.545125,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  },
+  {
+    "observedAtMonotonicMs": 49429.954542,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 55399.920958,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  }
+]

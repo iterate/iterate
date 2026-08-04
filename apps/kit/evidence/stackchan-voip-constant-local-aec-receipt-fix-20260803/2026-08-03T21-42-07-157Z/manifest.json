@@ -1,0 +1,61 @@
+{
+  "assessmentPassed": false,
+  "buildDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan",
+  "createdAt": "2026-08-03T21:43:24.936Z",
+  "device": "stackchan",
+  "networkClassification": "network-invalid",
+  "networkVerdict": "network-invalid",
+  "pcm": {
+    "microphoneBytes": 1800960,
+    "microphoneSha256": "30b00247f524c0d8c2a211ff2716740766475e9ce2771d0335c4bb013f03eb37",
+    "speakerBytes": 1152000,
+    "speakerSha256": "ceecbc53585568f9307bf8b2014da38d7039b205f929348a79cff688d8be1a14"
+  },
+  "port": "/dev/cu.usbmodem2101",
+  "schemaVersion": 1,
+  "stableUsbSerial": "68:EE:8F:D8:53:20",
+  "startupLifecycle": {
+    "observed": {
+      "captureFailures": 0,
+      "captureFrameDrops": 0,
+      "playbackDroppedFrames": 0,
+      "playbackIntegrityFailures": 0,
+      "playbackResets": 1,
+      "uplinkFrameDrops": 0,
+      "uplinkRestarts": 0
+    },
+    "passed": true,
+    "reasons": []
+  },
+  "stimuli": {
+    "acousticProfile": {
+      "macOutputVolumePercent": 40,
+      "matchedPathPilotAmplitude": 64,
+      "prbsCarrierAmplitude": 2250,
+      "speechRendererAmplitude": 2250,
+      "toneAmplitude": 4500
+    },
+    "doubleTalkPrbsCommitment": "c313d507e47aa2dfad5cc394665c07589c00b4266c1c1bfaf6327e9509a2e68a",
+    "farPrbsCommitment": "1269a8795120a800c5b2d38db3f76efa500ee6eabe67e8c58da95642053fd46f",
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "nearSourceSha256": "580907004292c1f4f5ada9c76ada3546847408195c22ccbdf46a832187df34ae"
+  },
+  "transportValidity": {
+    "captureFailures": 0,
+    "captureFrameDrops": 0,
+    "clockDiscontinuities": 0,
+    "networkValid": false,
+    "playbackDroppedFrames": 0,
+    "playbackIntegrityFailures": 0,
+    "playbackResets": 0,
+    "playbackUnderrunIncidents": 0,
+    "recorderComplete": true,
+    "uplinkFrameDrops": 0,
+    "uplinkRestarts": 0,
+    "websocketReconnects": 0
+  }
+}

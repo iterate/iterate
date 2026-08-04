@@ -53,6 +53,7 @@ struct fixture {
   size_t handled_count;
   size_t observed_count;
   size_t sprite_set_count;
+  size_t screen_capture_release_count;
   char last_sprite_set[32];
   size_t metrics_sample_count;
   uint32_t playback_interruption_requests;
@@ -60,6 +61,7 @@ struct fixture {
   uint32_t playback_interruption_token;
   enum iterate_kit_status playback_interruption_result;
   bool playback_interruption_complete;
+  struct iterate_kit_aec_diagnostic_trace_capability aec_trace_capability;
   struct iterate_kit_stackchan device;
 };
 
@@ -130,6 +132,26 @@ static enum iterate_kit_status change_sprite_set(
   ++fixture->sprite_set_count;
   memcpy(fixture->last_sprite_set, slug, slug_length);
   fixture->last_sprite_set[slug_length] = '\0';
+  return ITERATE_KIT_OK;
+}
+
+static void release_screen_capture(void *context) {
+  struct fixture *fixture = context;
+  ++fixture->screen_capture_release_count;
+}
+
+static enum iterate_kit_status capture_screen(
+    void *context, struct iterate_kit_captured_screen *capture) {
+  static const uint8_t png_signature[] = {
+      0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU,
+  };
+  if (capture == NULL) return ITERATE_KIT_INVALID_ARGUMENT;
+  *capture = (struct iterate_kit_captured_screen){
+      .data = png_signature,
+      .size = sizeof(png_signature),
+      .release = release_screen_capture,
+      .release_context = context,
+  };
   return ITERATE_KIT_OK;
 }
 
@@ -245,6 +267,7 @@ static void fixture_init(struct fixture *fixture) {
   struct iterate_kit_stackchan_control_driver control_driver;
   struct capnweb_session_options session_options;
   memset(fixture, 0, sizeof(*fixture));
+  fixture->aec_trace_capability.initialized = 1U;
   fixture->playback_interruption_result = ITERATE_KIT_OK;
   device_options = (struct iterate_kit_stackchan_options){
     .screen = {fixture, render_png, NULL},
@@ -253,6 +276,8 @@ static void fixture_init(struct fixture *fixture) {
     .avatar = {fixture, change_sprite_set},
     .avatar_slug_scratch = fixture->avatar_slug,
     .avatar_slug_scratch_size = sizeof(fixture->avatar_slug),
+    .screen_capture = {fixture, capture_screen},
+    .maximum_screen_capture_bytes = 8U,
     .servos = {fixture, move_servos},
     .leds = {fixture, set_led, fill_leds},
     .camera = {fixture, take_photo},
@@ -278,6 +303,7 @@ static void fixture_init(struct fixture *fixture) {
       sizeof(fixture->diagnostics_expression),
       NULL,
     },
+    .aec_trace = &fixture->aec_trace_capability,
   };
   assert(
       iterate_kit_stackchan_init(
@@ -626,6 +652,27 @@ static void full_duplex_profile_does_not_mount_push_to_talk(void) {
 }
 
 /*
+ * A screenshot is useful only if it crosses the same mounted Cap'n Web peer
+ * as the other device capabilities. Calling a test driver directly would miss
+ * the exact regression this protects: adding a physical encoder but forgetting
+ * the profile module. The release assertion also prevents every diagnostic
+ * capture from retaining scarce image memory after serialization.
+ */
+static void capture_screen_is_mounted_and_releases_encoded_bytes(void) {
+  struct fixture fixture;
+  fixture_init(&fixture);
+
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",0,[\"captureScreen\"],[]]]");
+  receive(&fixture, "[\"pull\",1]");
+  /* Cap'n Web byte values use unpadded base64url inside ["bytes", ...]. */
+  assert(captured_contains(&fixture, "[\"bytes\",\"iVBORw0KGgo\"]"));
+  assert(fixture.screen_capture_release_count == 1U);
+  fixture_close(&fixture);
+}
+
+/*
  * The manifest is operational input, not decorative metadata: userspace and
  * flash tooling use it to decide whether the mounted device owns a manual PCM
  * turn. Leaving the earlier control-only placeholder here would make a fully
@@ -648,6 +695,7 @@ int main(void) {
   change_sprite_set_reaches_the_shared_avatar_driver();
   event_and_metrics_subscriptions_share_bounded_profile_state();
   full_duplex_profile_does_not_mount_push_to_talk();
+  capture_screen_is_mounted_and_releases_encoded_bytes();
   manifest_advertises_the_shared_full_duplex_aec_contract();
   return 0;
 }

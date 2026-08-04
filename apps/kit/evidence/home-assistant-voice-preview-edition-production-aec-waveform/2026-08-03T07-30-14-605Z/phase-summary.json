@@ -1,0 +1,140 @@
+[
+  {
+    "assessment": {
+      "actualFrames": 152,
+      "acceptedFrameSpanMs": 3023,
+      "capturedAudioDurationMs": 3040,
+      "durationMs": 3039,
+      "expectedFrames": 152,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 155,
+      "minimumExpectedFrames": 149,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 3039,
+      "frames": 152,
+      "truncatedFrames": 0
+    },
+    "name": "ambient",
+    "playbackObserved": false,
+    "responseIndex": null
+  },
+  {
+    "assessment": {
+      "actualFrames": 201,
+      "acceptedFrameSpanMs": 3997,
+      "capturedAudioDurationMs": 4020,
+      "durationMs": 4050,
+      "expectedFrames": 203,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 206,
+      "minimumExpectedFrames": 200,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4050,
+      "frames": 201,
+      "truncatedFrames": 0
+    },
+    "name": "far-tone",
+    "playbackObserved": true,
+    "responseIndex": 0
+  },
+  {
+    "assessment": {
+      "actualFrames": 205,
+      "acceptedFrameSpanMs": 4029,
+      "capturedAudioDurationMs": 4100,
+      "durationMs": 4048,
+      "expectedFrames": 202,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 205,
+      "minimumExpectedFrames": 199,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4048,
+      "frames": 205,
+      "truncatedFrames": 0
+    },
+    "name": "far-dual-carrier-prbs31",
+    "playbackObserved": true,
+    "responseIndex": 1
+  },
+  {
+    "assessment": {
+      "actualFrames": 203,
+      "acceptedFrameSpanMs": 4036,
+      "capturedAudioDurationMs": 4060,
+      "durationMs": 4039,
+      "expectedFrames": 202,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 205,
+      "minimumExpectedFrames": 199,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4039,
+      "frames": 203,
+      "truncatedFrames": 0
+    },
+    "name": "far-speech-shaped",
+    "playbackObserved": true,
+    "responseIndex": 2
+  },
+  {
+    "assessment": {
+      "actualFrames": 200,
+      "acceptedFrameSpanMs": 3993,
+      "capturedAudioDurationMs": 4000,
+      "durationMs": 4045,
+      "expectedFrames": 202,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 205,
+      "minimumExpectedFrames": 199,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4045,
+      "frames": 200,
+      "truncatedFrames": 0
+    },
+    "name": "near-only",
+    "playbackObserved": true,
+    "responseIndex": 3
+  },
+  {
+    "assessment": {
+      "actualFrames": 202,
+      "acceptedFrameSpanMs": 4020,
+      "capturedAudioDurationMs": 4040,
+      "durationMs": 4037,
+      "expectedFrames": 202,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 205,
+      "minimumExpectedFrames": 199,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4037,
+      "frames": 202,
+      "truncatedFrames": 0
+    },
+    "name": "near-repeat",
+    "playbackObserved": true,
+    "responseIndex": 4
+  }
+]

@@ -1,0 +1,68 @@
+{
+  "input": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/apps/kit/evidence/stackchan-grok-uplink-incident-20260803/2026-08-03T16-10-51-174Z/accepted-uplink.pcm",
+  "interval": {
+    "endSample": 90880,
+    "startSample": 0
+  },
+  "result": {
+    "durationSeconds": 5.68,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"489b0197-9012-465a-8423-584227f40e8c\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"PayPal. Repeat exactly. UpLink diagnostic number.\",\"words\":[{\"text\":\"PayPal.\",\"start\":0.783,\"end\":1.305},{\"text\":\"Repeat\",\"start\":1.687,\"end\":2.028},{\"text\":\"exactly.\",\"start\":2.088,\"end\":2.651},{\"text\":\"UpLink\",\"start\":3.032,\"end\":3.353},{\"text\":\"diagnostic\",\"start\":3.494,\"end\":4.197},{\"text\":\"number.\",\"start\":4.237,\"end\":4.598}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":5.02,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"PayPal. Repeat exactly. UpLink diagnostic number.\",\"words\":[{\"text\":\"PayPal.\",\"start\":0.783,\"end\":1.305},{\"text\":\"Repeat\",\"start\":1.686,\"end\":2.028},{\"text\":\"exactly.\",\"start\":2.088,\"end\":2.65},{\"text\":\"UpLink\",\"start\":3.032,\"end\":3.353},{\"text\":\"diagnostic\",\"start\":3.493,\"end\":4.196},{\"text\":\"number.\",\"start\":4.236,\"end\":4.658}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":5.26,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"You can wait\",\"words\":[{\"text\":\"You\",\"start\":5.323,\"end\":5.407},{\"text\":\"can\",\"start\":5.407,\"end\":5.533},{\"text\":\"wait\",\"start\":5.596,\"end\":5.68}],\"is_final\":true,\"speech_final\":false,\"start\":5.26,\"duration\":0.42}",
+      "{\"type\":\"transcript.partial\",\"text\":\"You can wait\",\"words\":[{\"text\":\"You\",\"start\":5.323,\"end\":5.407},{\"text\":\"can\",\"start\":5.407,\"end\":5.533},{\"text\":\"wait\",\"start\":5.596,\"end\":5.68}],\"is_final\":true,\"speech_final\":true,\"start\":5.26,\"duration\":0.42}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":5.68}"
+    ],
+    "text": "PayPal. Repeat exactly. UpLink diagnostic number. You can wait",
+    "words": [
+      {
+        "text": "PayPal.",
+        "start": 0.783,
+        "end": 1.305
+      },
+      {
+        "text": "Repeat",
+        "start": 1.686,
+        "end": 2.028
+      },
+      {
+        "text": "exactly.",
+        "start": 2.088,
+        "end": 2.65
+      },
+      {
+        "text": "UpLink",
+        "start": 3.032,
+        "end": 3.353
+      },
+      {
+        "text": "diagnostic",
+        "start": 3.493,
+        "end": 4.196
+      },
+      {
+        "text": "number.",
+        "start": 4.236,
+        "end": 4.658
+      },
+      {
+        "text": "You",
+        "start": 5.323,
+        "end": 5.407
+      },
+      {
+        "text": "can",
+        "start": 5.407,
+        "end": 5.533
+      },
+      {
+        "text": "wait",
+        "start": 5.596,
+        "end": 5.68
+      }
+    ]
+  },
+  "sampleRateHz": 16000,
+  "schemaVersion": 1
+}

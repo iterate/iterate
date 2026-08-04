@@ -86,6 +86,12 @@ size_t waveshare_recorder_read(
  */
 size_t waveshare_recorder_size(const char *name);
 
+/** Whether `name` is one of the three files this device records. */
+bool waveshare_recorder_known_name(const char *name);
+
+/** Whole-file size measured by the recorder task; 0 when absent. */
+size_t waveshare_recorder_measure(const char *name);
+
 /** One line in the call log; `printf` formatting. */
 void waveshare_recorder_log(const char *format, ...)
     __attribute__((format(printf, 1, 2)));

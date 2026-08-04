@@ -93,11 +93,60 @@ static enum iterate_kit_status release_frame(
   if (status == ITERATE_KIT_OK) {
     saturating_increment_u32(
         &playback->metrics.frames_released);
+    if (playback->options.item_released != NULL) {
+      playback->options.item_released(
+          playback->options.item_released_context, 1U);
+    }
   } else {
     saturating_increment_u32(
         &playback->metrics.lane_failures);
   }
   return status;
+}
+
+/*
+ * EOS is counted in three independently owned places: accepted by the network
+ * producer, discarded by an interruption purge, and consumed by this playback
+ * owner. Comparing the monotonic totals avoids peeking into a ring slot or
+ * adding a second cross-task flag that could race ahead of the ordered audio.
+ * Widen before addition so multi-day diagnostic counters cannot wrap the
+ * unavailable total and manufacture a phantom complete response.
+ */
+static bool complete_response_is_queued(
+    const struct iterate_kit_pcm_clock_playback *playback,
+    const struct iterate_kit_pcm_lane_metrics *lane_metrics) {
+  const uint64_t unavailable_markers =
+      (uint64_t)lane_metrics->downlink_end_markers_discarded +
+      (uint64_t)playback->metrics.end_markers_consumed;
+  return (uint64_t)lane_metrics->downlink_end_markers_accepted >
+      unavailable_markers;
+}
+
+static bool wait_for_response_start(
+    struct iterate_kit_pcm_clock_playback *playback) {
+  if (playback->metrics.response_active ||
+      playback->options.minimum_start_items == 0U) {
+    return false;
+  }
+
+  struct iterate_kit_pcm_lane_metrics lane_metrics;
+  iterate_kit_pcm_lane_metrics(playback->options.lane, &lane_metrics);
+  const size_t retained_items =
+      playback->retained_offset < playback->retained_count ? 1U : 0U;
+  const size_t available_items =
+      lane_metrics.downlink.current_slots + retained_items;
+  if (available_items >=
+          playback->options.minimum_start_items ||
+      complete_response_is_queued(playback, &lane_metrics)) {
+    return false;
+  }
+
+  /*
+   * Count hardware edges rather than polling time. This makes startup delay
+   * visible without placing a timer or log call in the priority audio path.
+   */
+  saturating_increment_u32(&playback->metrics.startup_wait_edges);
+  return true;
 }
 
 enum iterate_kit_status iterate_kit_pcm_clock_playback_init(
@@ -109,7 +158,8 @@ enum iterate_kit_status iterate_kit_pcm_clock_playback_init(
       options->retained_frame_capacity <
           ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME ||
       options->maximum_frame_age_ms == 0U ||
-      options->maximum_lane_items_per_render == 0U) {
+      options->maximum_lane_items_per_render == 0U ||
+      options->minimum_start_items > options->lane->downlink->slot_count) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   memset(playback, 0, sizeof(*playback));
@@ -139,7 +189,75 @@ enum iterate_kit_status iterate_kit_pcm_clock_playback_render(
   bool ended_in_this_render = false;
 
   while (output_offset < sample_count) {
+    if (!playback->metrics.response_active &&
+        playback->retained_offset < playback->retained_count) {
+      if (now_ms < playback->retained_received_at_ms) {
+        /*
+         * A clock regression while a startup frame waits is just as corrupt as
+         * one observed at ring acquisition. Destroy it and continue the
+         * already-authorized scan; calling it fresh would conceal old audio.
+         */
+        saturating_increment_u32(
+            &playback->metrics.timestamp_regressions);
+        note_discarded_samples(
+            playback,
+            playback->retained_count - playback->retained_offset);
+        clear_retained(playback);
+        playback->startup_scan_in_progress = true;
+        final_status = remember_first_error(
+            final_status, ITERATE_KIT_STATE_ERROR);
+        continue;
+      }
+      const uint64_t retained_age_ms =
+          now_ms - playback->retained_received_at_ms;
+      if (retained_age_ms >
+          playback->options.maximum_frame_age_ms) {
+        /*
+         * The first fresh-looking frame can itself become stale while waiting
+         * for the watermark to refill. It already owns private storage and has
+         * returned its ring credit, so destroy only that private copy and keep
+         * scanning; replaying it would reintroduce outage delay off-ring.
+         */
+        saturating_increment_u32(
+            &playback->metrics.stale_frames_discarded);
+        note_discarded_samples(
+            playback,
+            playback->retained_count - playback->retained_offset);
+        clear_retained(playback);
+        playback->startup_scan_in_progress = true;
+        continue;
+      }
+    }
+
+    if (!playback->metrics.response_active &&
+        !playback->startup_scan_in_progress &&
+        wait_for_response_start(playback)) {
+      break;
+    }
+
     if (playback->retained_offset < playback->retained_count) {
+      if (!playback->metrics.response_active) {
+        playback->metrics.response_active = true;
+        playback->startup_scan_in_progress = false;
+        saturating_increment_u32(
+            &playback->metrics.response_starts);
+        result->began_response = true;
+      }
+      if (playback->retained_offset == 0U) {
+        /*
+         * Measure when the frame first contributes to the hardware edge, not
+         * when it moved from the SPSC ring into private storage. The latter can
+         * precede playback by the startup refill interval and would understate
+         * precisely the receive-to-speaker delay diagnostics are meant to find.
+         */
+        const uint32_t bounded_age = bounded_u32(
+            now_ms - playback->retained_received_at_ms);
+        playback->metrics.last_receive_to_render_ms = bounded_age;
+        if (bounded_age >
+            playback->metrics.maximum_receive_to_render_ms) {
+          playback->metrics.maximum_receive_to_render_ms = bounded_age;
+        }
+      }
       const size_t retained =
           playback->retained_count - playback->retained_offset;
       const size_t output_remaining = sample_count - output_offset;
@@ -168,6 +286,17 @@ enum iterate_kit_status iterate_kit_pcm_clock_playback_render(
         clear_retained(playback);
       }
       continue;
+    }
+
+    if (!playback->metrics.response_active &&
+        !playback->startup_scan_in_progress) {
+      /*
+       * Passing the watermark authorizes a bounded freshness scan, not
+       * playback. Preserve that authorization across stale releases and CPU
+       * budget boundaries; the first current frame is retained privately and
+       * then re-enters the watermark gate before a sample can reach I2S.
+       */
+      playback->startup_scan_in_progress = true;
     }
 
     if (lane_items_examined >=
@@ -214,11 +343,16 @@ enum iterate_kit_status iterate_kit_pcm_clock_playback_render(
             final_status, marker_release);
         break;
       }
+      if (playback->options.item_released != NULL) {
+        playback->options.item_released(
+            playback->options.item_released_context, 1U);
+      }
       saturating_increment_u32(
           &playback->metrics.end_markers_consumed);
       saturating_increment_u32(
           &playback->metrics.response_ends);
       playback->metrics.response_active = false;
+      playback->startup_scan_in_progress = false;
       result->end_of_response = true;
       ended_in_this_render = true;
       break;
@@ -238,6 +372,9 @@ enum iterate_kit_status iterate_kit_pcm_clock_playback_render(
       if (bad_release != ITERATE_KIT_OK) {
         saturating_increment_u32(
             &playback->metrics.lane_failures);
+      } else if (playback->options.item_released != NULL) {
+        playback->options.item_released(
+            playback->options.item_released_context, 1U);
       }
       final_status = remember_first_error(
           final_status, ITERATE_KIT_STATE_ERROR);
@@ -307,19 +444,7 @@ enum iterate_kit_status iterate_kit_pcm_clock_playback_render(
           final_status, release_status);
       break;
     }
-
-    const uint32_t bounded_age = bounded_u32(age_ms);
-    playback->metrics.last_receive_to_render_ms = bounded_age;
-    if (bounded_age >
-        playback->metrics.maximum_receive_to_render_ms) {
-      playback->metrics.maximum_receive_to_render_ms = bounded_age;
-    }
-    if (!playback->metrics.response_active) {
-      playback->metrics.response_active = true;
-      saturating_increment_u32(
-          &playback->metrics.response_starts);
-      result->began_response = true;
-    }
+    playback->startup_scan_in_progress = false;
   }
 
   const size_t silence_samples = sample_count - output_offset;
@@ -341,6 +466,33 @@ enum iterate_kit_status iterate_kit_pcm_clock_playback_reset(
   note_discarded_samples(playback, retained);
   clear_retained(playback);
   playback->metrics.response_active = false;
+  playback->startup_scan_in_progress = false;
+  return ITERATE_KIT_OK;
+}
+
+enum iterate_kit_status iterate_kit_pcm_clock_playback_discard_queued(
+    struct iterate_kit_pcm_clock_playback *playback,
+    uint32_t *discarded_frames,
+    uint32_t *discarded_items) {
+  enum iterate_kit_status status;
+  if (playback == NULL || !playback->initialized ||
+      discarded_frames == NULL || discarded_items == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  status = iterate_kit_pcm_lane_discard_downlink(
+      playback->options.lane,
+      discarded_frames,
+      discarded_items);
+  if (status != ITERATE_KIT_OK) {
+    saturating_increment_u32(&playback->metrics.lane_failures);
+    return status;
+  }
+  if (*discarded_items > 0U &&
+      playback->options.item_released != NULL) {
+    playback->options.item_released(
+        playback->options.item_released_context,
+        *discarded_items);
+  }
   return ITERATE_KIT_OK;
 }
 

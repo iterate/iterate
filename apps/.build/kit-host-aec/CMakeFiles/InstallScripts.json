@@ -1,0 +1,7 @@
+{
+  "InstallScripts": [
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-aec/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-aec/vendor/capnweb/cmake_install.cmake"
+  ],
+  "Parallel": false
+}

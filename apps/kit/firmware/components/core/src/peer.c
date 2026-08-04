@@ -217,6 +217,16 @@ static enum capnweb_status dispatch(
       reply == NULL) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
+  /*
+   * Count arrival, not successful business outcome. An unknown method or a
+   * driver-level error still proves the server found this live provider and
+   * delivered an RPC through its mount. Conversely, WebSocket/Cap'n Web ping
+   * traffic never enters capability dispatch and therefore cannot disguise a
+   * server-side mount that has gone offline.
+   */
+  if (peer->served_dispatches < UINT32_MAX) {
+    ++peer->served_dispatches;
+  }
   if (capnweb_call_path_equals(
           call, invoke_capability_path, 1U)) {
     return dispatch_flattened(peer, call, reply);
@@ -244,6 +254,7 @@ enum capnweb_status iterate_kit_peer_init(
     CAPNWEB_OK,
   };
   peer->subscription_callback_rejections = 0U;
+  peer->served_dispatches = 0U;
   peer->initialized = true;
   return CAPNWEB_OK;
 }
@@ -306,6 +317,14 @@ uint32_t iterate_kit_peer_subscription_callback_rejections(
     return 0U;
   }
   return peer->subscription_callback_rejections;
+}
+
+uint32_t iterate_kit_peer_served_dispatches(
+    const struct iterate_kit_peer *peer) {
+  if (peer == NULL || !peer->initialized) {
+    return 0U;
+  }
+  return peer->served_dispatches;
 }
 
 void iterate_kit_peer_session_ended(struct iterate_kit_peer *peer) {

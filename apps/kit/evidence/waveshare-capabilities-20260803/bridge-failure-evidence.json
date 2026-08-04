@@ -1,0 +1,37 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/bridge-evidence.ts
+
+{
+  "deviceHealth": {
+    "transport": "ready",
+    "voicelab": "ready",
+    "voicelabFailure": "none",
+    "callActive": false,
+    "wantsCall": false,
+    "gateOpen": true,
+    "connGeneration": 3,
+    "sessionGeneration": 1,
+    "rttMs": 71,
+    "pings": 88,
+    "pingFailures": 0,
+    "bridgeLosses": 0,
+    "livenessRestarts": 0,
+    "downlinkRecycles": 2,
+    "spkConceal": 6,
+    "spkStarvedMs": 0,
+    "spkFrames": 663,
+    "spkPlayed": 663,
+    "heapFree": 5148024,
+    "uptimeMs": 461652
+  },
+  "head": 202832,
+  "callEvents": [
+    {
+      "offset": 202748,
+      "type": "voicelab/call-ended",
+      "createdAt": "2026-08-03T23:13:03.186Z",
+      "payload": "{\"bridgeId\":\"5e08351e\",\"callId\":\"wsdev\",\"reason\":\"worker bridge: the peer stopped answering across 3 delivery lanes (appendErrors=0, reconnects=3, redials=0, providerJunk=0, handlerErrors=0, sendFailures=0, droppedSpk=0, stray=0)\"}"
+    }
+  ]
+}

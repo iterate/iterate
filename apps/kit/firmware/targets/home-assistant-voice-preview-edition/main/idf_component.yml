@@ -3,4 +3,3 @@ dependencies:
     version: ">=5.4,<5.5"
   espressif/led_strip:
     version: "==2.5.5"
-

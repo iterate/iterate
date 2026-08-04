@@ -1,0 +1,22 @@
+{
+  "assessment": {
+    "actualFrames": 177,
+    "durationMs": 4179,
+    "expectedFrames": 209,
+    "maximumExpectedFrames": 212,
+    "minimumExpectedFrames": 206,
+    "passed": false,
+    "reasons": ["Captured 177 accepted uplink frames during 4179 ms; expected 206 through 212."]
+  },
+  "capture": {
+    "durationMs": 4179,
+    "finishedAtMs": 1785719227148,
+    "frameBytes": 640,
+    "frames": 177,
+    "maximumFrames": 300,
+    "pcmSha256": "d820d40957df100370e81ed5f2e7946613e13263292960b070e279de131ec5de",
+    "schemaVersion": 1,
+    "startedAtMs": 1785719222969,
+    "truncatedFrames": 0
+  }
+}

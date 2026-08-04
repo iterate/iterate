@@ -1,0 +1,5 @@
+{
+  "message": "Timed out waiting for far-tone provider response to drain.",
+  "name": "Error",
+  "stack": "Error: Timed out waiting for far-tone provider response to drain.\n    at waitFor (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-local-aec.ts:1203:46)\n    at async runFarOnlyPhase (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-local-aec.ts:964:3)\n    at async proveLocalAec (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-local-aec.ts:529:26)"
+}

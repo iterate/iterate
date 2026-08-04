@@ -1,8 +1,6 @@
-import {
-  DualCarrierPrbs31Renderer,
-  type DualCarrierPrbs31Challenge,
-} from "../device/acoustic-prbs31-challenge.ts";
+import type { DualCarrierPrbs31Challenge } from "../device/acoustic-prbs31-challenge.ts";
 import { DeterministicPcmProvider } from "./deterministic-pcm-provider.ts";
+import { createPrbs31Pcm16LeRenderer } from "./deterministic-pcm-renderers.ts";
 
 export interface DeterministicPcmPrbs31ProviderOptions {
   challenge: DualCarrierPrbs31Challenge;
@@ -24,14 +22,7 @@ export class DeterministicPcmPrbs31Provider implements Disposable {
   constructor(options: DeterministicPcmPrbs31ProviderOptions) {
     this.#provider = new DeterministicPcmProvider({
       chunkBytes: options.chunkBytes,
-      createRenderer: () => {
-        const renderer = new DualCarrierPrbs31Renderer(options.challenge);
-        return {
-          render(sampleCount: number) {
-            return encodePcm16Le(renderer.render(sampleCount));
-          },
-        };
-      },
+      createRenderer: () => createPrbs31Pcm16LeRenderer(options.challenge),
       durationMs: options.durationMs,
       sampleRateHz: options.challenge.sampleRateHz,
     });
@@ -44,13 +35,4 @@ export class DeterministicPcmPrbs31Provider implements Disposable {
   [Symbol.dispose]() {
     this.#provider[Symbol.dispose]();
   }
-}
-
-function encodePcm16Le(samples: Int16Array) {
-  const encoded = new Uint8Array(samples.byteLength);
-  const view = new DataView(encoded.buffer);
-  for (let index = 0; index < samples.length; index += 1) {
-    view.setInt16(index * Int16Array.BYTES_PER_ELEMENT, samples[index]!, true);
-  }
-  return encoded;
 }

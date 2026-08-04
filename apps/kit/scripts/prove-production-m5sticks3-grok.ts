@@ -27,6 +27,8 @@ import {
 import { writeProductionGrokProviderEventsArtifact } from "../src/device/production-grok-provider-events-artifact.ts";
 import {
   parseProductionGrokCliOptions,
+  productionSpokenCountPlan,
+  productionSpokenCountPrompt,
   type PttAuthority,
 } from "../src/device/production-grok-cli-options.ts";
 import type { ProductionDeviceProofProvenance } from "../src/device/production-device-proof.ts";
@@ -37,6 +39,7 @@ import { MacOsPcm16Capture } from "../src/device/macos-pcm16-capture.ts";
 import {
   buildPhysicalNetworkRunArtifact,
   PhysicalNetworkRunMonitor,
+  withRemoteDnsAndConnectMeasurement,
   writePhysicalNetworkRunArtifact,
   type PhysicalNetworkMonitorCapture,
 } from "../src/device/physical-network-run.ts";
@@ -44,30 +47,43 @@ import {
   discoverDarwinDefaultGateway,
   measureRemoteDnsAndTlsConnect,
   type RemoteDnsAndTlsConnectMeasurement,
+  warmPhysicalNetworkReachability,
 } from "../src/device/physical-network-reachability.ts";
 import { inspectRetainedPcm16Artifact } from "../src/device/retained-pcm16-artifact.ts";
 import { assessProductionGrokStartupLatency } from "../src/device/production-grok-startup-latency.ts";
+import { assessOverlappingSpokenCountEvidence } from "../src/device/spoken-count-assessment.ts";
 import {
   productionPcmConversationIsIdle,
   productionPcmGenerationProgress,
   waitForProductionPcmConversationIdle,
   waitForProductionPcmMetrics,
 } from "../src/device/production-pcm-generation.ts";
+import { resolveProductionProjectApiKey } from "../src/device/production-project-api-key.ts";
 import {
+  assessProductionRoutePreflight,
+  warmProductionDeviceControlCapability,
+} from "../src/device/production-route-preflight.ts";
+import {
+  productionGrokDeviceToolPrompt,
+  PRODUCTION_GROK_DEVICE_TOOL_SPRITE_SET,
   productionGrokTurnRequiresDeviceTool,
   requiredDeviceToolCallsForVoiceProof,
 } from "../src/device/production-grok-turn-policy.ts";
 import {
-  transcribePcm16WithXaiStreamingStt,
-  type XaiStreamingSttResult,
-} from "../src/device/xai-streaming-stt.ts";
+  sliceOverlappingPcm16Windows,
+  transcribePcm16WithXaiBatchStt,
+  type XaiBatchSttResult,
+} from "../src/device/xai-batch-stt.ts";
 import type {
   KitControlDiagnostics,
   KitPlaybackMetrics,
 } from "../src/device/kit-device-contract.ts";
 import { kitVoiceWorkerRef } from "../src/userspace/config-worker/app-ref.ts";
 import type { DeviceEventSessionMetrics } from "../src/userspace/config-worker/device-events.ts";
-import type { DeviceMetricsSessionMetrics } from "../src/userspace/config-worker/device-metrics.ts";
+import {
+  deviceMetricsCallbackBracket,
+  type DeviceMetricsSessionMetrics,
+} from "../src/userspace/config-worker/device-metrics.ts";
 import {
   ITERATE_KIT_PCM_FRAME_BYTES,
   type PcmSessionMetrics,
@@ -81,6 +97,10 @@ import {
 const physicalPressTimeoutMs = 5 * 60_000;
 const physicalReleaseTimeoutMs = 30_000;
 const responseTimeoutMs = 90_000;
+const spokenCountResponseTimeoutMs = 180_000;
+const spokenCountAcousticWindowSeconds = 24;
+const spokenCountAcousticHopSeconds = 15;
+const spokenCountMinimumConsecutiveNumbers = 5;
 const ambientDurationMs = 1_000;
 const playbackIncidentFieldNames = [
   "generationFramesFlushed",
@@ -154,6 +174,21 @@ export async function proveProductionM5StickS3Grok(
   deviceProvenance?: ProductionDeviceProofProvenance,
 ) {
   const options = parseProductionGrokCliOptions(args, environment);
+  const spokenCountPlan = productionSpokenCountPlan(options.scenario);
+  if (spokenCountPlan?.interrupted) {
+    throw new Error(
+      "The Stick interrupted-count proof is not implemented; refusing to substitute a normal turn.",
+    );
+  }
+  if (spokenCountPlan && options.turns !== 1) {
+    throw new Error("A spoken-count proof must run as one independently assessed turn.");
+  }
+  const projectApiKey = await resolveProductionProjectApiKey({
+    adminApiSecret: environment.APP_CONFIG_ADMIN_API_SECRET,
+    baseUrl: options.baseUrl,
+    projectApiKey: options.projectApiKey,
+    projectId: options.projectId,
+  });
   const devicePath = ["kit", options.deviceId] as const;
   const providerEventStreamPath = kitDeviceEventStreamPath(options.deviceId);
   const routerHost = await discoverDarwinDefaultGateway();
@@ -166,7 +201,7 @@ export async function proveProductionM5StickS3Grok(
     {
       auth: {
         projectId: options.projectId,
-        secret: options.projectApiKey,
+        secret: projectApiKey,
         type: "project-secret",
       },
       baseUrl: options.baseUrl,
@@ -282,13 +317,14 @@ export async function proveProductionM5StickS3Grok(
   let providerEventEvidence: ProductionGrokProviderEvent[] | undefined;
   let providerToolCallEvidence: CompletedProviderToolCall | undefined;
   let acousticProviderOutputTranscript: string | undefined;
+  let spokenCountEvidence: ReturnType<typeof assessOverlappingSpokenCountEvidence> | undefined;
   const turnEvidence: Array<Record<string, unknown>> = [];
   let failureWorkerSnapshot: ProductionPcmMetrics | null | undefined;
   let failureDiagnosticsSnapshot: KitControlDiagnostics | undefined;
   let failureProviderEventEvidence: ProductionGrokProviderEvent[] | undefined;
   const failureSnapshotErrors: string[] = [];
   let runFailure: Error | undefined;
-  let directRedAcknowledged = false;
+  let directBaselineSpriteAcknowledged = false;
   let remoteConversationStarted = false;
   let remoteConversationEnded = false;
   let remotePttStarted = false;
@@ -372,6 +408,57 @@ export async function proveProductionM5StickS3Grok(
     baselinePlayback = await waitForStablePlayback(playbackSamples, () => playbackCallbackError);
     console.log(`pcm_lane=warm_idle session_id=${preflightWorker.sessionId}`);
 
+    /*
+     * A clean control socket and strong RSSI did not prevent the Stick from
+     * losing 13–27% of host-originated LAN probes in several retained idle
+     * windows. Beginning a paid Grok turn from that state only rediscovered the
+     * same 500 ms uplink freshness resets and speaker underruns. Require a
+     * sustained clean route before conversation.start, then keep the separate
+     * exact-interval monitor below authoritative: preflight avoids a known-bad
+     * experiment, but can never make a later loss disappear from evidence.
+     *
+     * Thirty consecutive device replies cover roughly the duration of the
+     * short landing turn. The wider sixty-attempt budget tolerates an initial
+     * ARP warm-up but does not average packet loss into health. The worker uses
+     * the shared eight-reply production gate because its anycast ICMP path is
+     * only a secondary WAN precondition; DNS and authenticated TLS are tested
+     * independently in the same artifact.
+     */
+    const [
+      preflightReachability,
+      preflightDeviceReachability,
+      preflightDnsAndConnect,
+      preflightControlCapability,
+    ] = await Promise.all([
+      warmPhysicalNetworkReachability(options.workerHost, {
+        interAttemptDelayMs: 250,
+        maximumAttempts: 16,
+        maximumHealthyRttMs: 100,
+        requiredConsecutiveHealthyReplies: 8,
+      }),
+      warmPhysicalNetworkReachability(options.deviceHost, {
+        interAttemptDelayMs: 250,
+        maximumAttempts: 60,
+        maximumHealthyRttMs: 100,
+        requiredConsecutiveHealthyReplies: 30,
+      }),
+      measureRemoteDnsAndTlsConnect(options.workerHost),
+      warmProductionDeviceControlCapability(readDiagnostics),
+    ]);
+    const routePreflight = assessProductionRoutePreflight({
+      controlCapability: preflightControlCapability,
+      createdAt: new Date().toISOString(),
+      deviceHost: options.deviceHost,
+      deviceReachability: preflightDeviceReachability,
+      dnsAndConnect: preflightDnsAndConnect,
+      reachability: preflightReachability,
+      workerHost: options.workerHost,
+    });
+    await writeExclusiveJson(join(runRoot, "network-preflight.json"), routePreflight);
+    if (!routePreflight.passed) {
+      throw new Error(`Production route preflight failed: ${routePreflight.reasons.join(" ")}`);
+    }
+
     if (options.pttAuthority === "remote") {
       remoteConversationStarted =
         (await invoke<boolean>([...devicePath, "conversation", "start"])) === true;
@@ -447,17 +534,18 @@ export async function proveProductionM5StickS3Grok(
     );
 
     /*
-     * Red is the known pre-tool state. Grok must later select green through
+     * dot-matrix-oracle is the known pre-tool state. Grok must later select
+     * Game Boy Fine Black through
      * the worker-owned `env.ITX` authority; observing the function-call counter
      * and literal device acknowledgement proves this is not merely a spoken
      * claim from the model.
      */
-    directRedAcknowledged =
-      (await invoke<boolean>([...devicePath, "changeColour"], ["red"])) === true;
-    if (!directRedAcknowledged) {
-      throw new Error("The mounted device did not acknowledge the red baseline colour.");
+    directBaselineSpriteAcknowledged =
+      (await invoke<boolean>([...devicePath, "changeSpriteSet"], ["dot-matrix-oracle"])) === true;
+    if (!directBaselineSpriteAcknowledged) {
+      throw new Error("The mounted device did not acknowledge the baseline sprite set.");
     }
-    console.log("device_colour=red source=proof-precondition");
+    console.log("device_sprite_set=dot-matrix-oracle source=proof-precondition");
 
     /*
      * Network attribution begins only after the deployed `/pcm` generation is
@@ -489,8 +577,12 @@ export async function proveProductionM5StickS3Grok(
       const turnBaselineDiagnostics = turn === 1 ? baselineDiagnostics : await readDiagnostics();
       const turnBaselinePlayback = terminalPlayback ?? baselinePlayback;
       const providerSequenceBaseline = providerEventEvidence?.at(-1)?.sequence ?? 0;
-      const requiresDeviceTool = productionGrokTurnRequiresDeviceTool(turn, configuredPhrase);
-      const expectedColour = requiresDeviceTool ? "green" : undefined;
+      const requiresDeviceTool = spokenCountPlan
+        ? false
+        : productionGrokTurnRequiresDeviceTool(turn, configuredPhrase);
+      const expectedSpriteSet = requiresDeviceTool
+        ? PRODUCTION_GROK_DEVICE_TOOL_SPRITE_SET
+        : undefined;
       remotePttStarted = false;
       remotePttStopped = false;
 
@@ -545,15 +637,15 @@ export async function proveProductionM5StickS3Grok(
       firstHeldDevice ??= turnFirstHeldDevice;
 
       const phrase =
-        configuredPhrase && options.turns === 1
-          ? configuredPhrase
-          : requiresDeviceTool
-            ? `Turn ${turn}. Use the change colour tool: ${expectedColour}. ` +
-              `Say exactly: The screen is ${expectedColour} and the zebra is awake.` +
-              (options.pttAuthority === "physical" ? " Release Button A now." : "")
-            : `Turn ${turn}. Reply in one short sentence. ` +
-              `Say exactly: The physical device completed voice turn ${turn}.` +
-              (options.pttAuthority === "physical" ? " Release Button A now." : "");
+        spokenCountPlan && !spokenCountPlan.interrupted
+          ? productionSpokenCountPrompt(spokenCountPlan.range)
+          : configuredPhrase && options.turns === 1
+            ? configuredPhrase
+            : requiresDeviceTool
+              ? productionGrokDeviceToolPrompt(options.pttAuthority === "physical")
+              : `Turn ${turn}. Reply in one short sentence. ` +
+                `Say exactly: The physical device completed voice turn ${turn}.` +
+                (options.pttAuthority === "physical" ? " Release Button A now." : "");
       console.log(`voice_prompt=started source=macos-say turn=${turn}`);
       /*
        * Render first, then use the blocking CoreAudio file player. Direct
@@ -626,8 +718,6 @@ export async function proveProductionM5StickS3Grok(
             devicePlaybackCompleted(turnBaselineDevice, device) &&
             queuesAreEmpty(device) &&
             metrics.downlinkFrames > turnBaselineWorker.downlinkFrames &&
-            (!requiresDeviceTool ||
-              metrics.providerFunctionCalls > turnBaselineWorker.providerFunctionCalls) &&
             metrics.providerFunctionCallFailures ===
               turnBaselineWorker.providerFunctionCallFailures &&
             metrics.providerFunctionCallsPending === 0 &&
@@ -650,7 +740,7 @@ export async function proveProductionM5StickS3Grok(
           );
         },
         `the Grok response and device playback boundary for turn ${turn}`,
-        responseTimeoutMs,
+        spokenCountPlan ? spokenCountResponseTimeoutMs : responseTimeoutMs,
         connectedWorker.sessionId,
       );
       let turnTerminalDevice = requireLatestWorkerDeviceMetrics(turnTerminalWorker);
@@ -682,7 +772,7 @@ export async function proveProductionM5StickS3Grok(
         try {
           turnProviderTranscript = completedProviderOutputTranscript(currentTurnEvents);
           turnProviderToolCall = requiresDeviceTool
-            ? completedProviderToolCall(currentTurnEvents, "changeColour")
+            ? completedProviderToolCall(currentTurnEvents, "changeSpriteSet")
             : undefined;
           if (!currentTurnEvents.some((event) => event.providerType === "response.done")) {
             throw new Error(`The provider stream did not retain response.done for turn ${turn}.`);
@@ -753,13 +843,13 @@ export async function proveProductionM5StickS3Grok(
         requiresDeviceTool &&
         (!turnProviderToolCall ||
           !isRecord(turnProviderToolCall.arguments) ||
-          turnProviderToolCall.arguments.colour !== expectedColour ||
+          turnProviderToolCall.arguments.spriteSet !== expectedSpriteSet ||
           !isRecord(turnProviderToolCall.output) ||
-          turnProviderToolCall.output.colour !== expectedColour ||
+          turnProviderToolCall.output.spriteSet !== expectedSpriteSet ||
           turnProviderToolCall.output.ok !== true)
       ) {
         throw new Error(
-          `The raw Grok event stream did not prove a successful ${expectedColour} tool result ` +
+          `The raw Grok event stream did not prove a successful ${expectedSpriteSet} tool result ` +
             `for turn ${turn}.`,
         );
       }
@@ -789,7 +879,7 @@ export async function proveProductionM5StickS3Grok(
       }
       turnEvidence.push({
         digital: turnDigitalAssessment,
-        expectedColour: expectedColour ?? null,
+        expectedSpriteSet: expectedSpriteSet ?? null,
         playback: {
           baseline: turnBaselinePlayback,
           terminal: turnTerminalPlayback,
@@ -811,7 +901,7 @@ export async function proveProductionM5StickS3Grok(
       terminalDiagnostics = turnTerminalDiagnostics;
       console.log(
         `production_voice_turn=passed turn=${turn} session_id=${turnTerminalWorker.sessionId} ` +
-          `colour=${expectedColour ?? "unchanged"}`,
+          `sprite_set=${expectedSpriteSet ?? "unchanged"}`,
       );
     }
 
@@ -934,7 +1024,7 @@ export async function proveProductionM5StickS3Grok(
           deviceId: options.deviceId,
           events: retainedProviderEvents,
           expectedFirstSequence: providerEventSequenceStart,
-          sensitiveValues: [options.projectApiKey, options.xaiApiKey],
+          sensitiveValues: [projectApiKey, options.xaiApiKey],
         })
       : undefined;
 
@@ -1022,7 +1112,7 @@ export async function proveProductionM5StickS3Grok(
       },
       error: serializeError(runFailure ?? new Error("The physical capture did not complete.")),
       lifecycle: {
-        directRedAcknowledged,
+        directBaselineSpriteAcknowledged,
         remoteConversationEnded,
         remoteConversationStarted,
         remotePttStarted,
@@ -1096,7 +1186,14 @@ export async function proveProductionM5StickS3Grok(
   });
   const artifactDirectory = dirname(completedCapture.artifactPath);
   const acousticTranscriptionPath = join(artifactDirectory, "acoustic-transcription.json");
-  let acousticTranscription: XaiStreamingSttResult | undefined;
+  let acousticTranscription: XaiBatchSttResult | undefined;
+  let acousticTranscriptionWindows:
+    | Array<{
+        endSample: number;
+        result: XaiBatchSttResult;
+        startSample: number;
+      }>
+    | undefined;
   let acousticTranscriptionError: Record<string, unknown> | null = null;
   let providerOutputTranscript: string | undefined;
   let physicalSpeechAssessment: ReturnType<typeof assessPhysicalSpeechTranscription> | undefined;
@@ -1111,15 +1208,56 @@ export async function proveProductionM5StickS3Grok(
     if (responseEndByte > pcm.byteLength || responseStartByte >= responseEndByte) {
       throw new Error("The causal speech interval was outside the retained microphone artifact.");
     }
-    acousticTranscription = await transcribePcm16WithXaiStreamingStt({
+    const responsePcm = pcm.subarray(responseStartByte, responseEndByte);
+    acousticTranscription = await transcribePcm16WithXaiBatchStt({
       apiKey: options.xaiApiKey,
-      pcm: pcm.subarray(responseStartByte, responseEndByte),
+      pcm: responsePcm,
       sampleRateHz: completedCapture.sampleRateHz,
     });
+    if (spokenCountPlan && !spokenCountPlan.interrupted) {
+      /*
+       * A single decoder pass over a minute of repetitive speech can skip an
+       * intact ten-number span. Re-decode overlapping views of the same raw
+       * Mac-microphone bytes, sequentially, so the oracle gets independent
+       * boundaries without adding provider load bursts or changing the
+       * physical artifact. The assessment admits only substantial consecutive
+       * runs; neither the prompt nor Grok's output ledger can fill a hole.
+       */
+      acousticTranscriptionWindows = [];
+      for (const window of sliceOverlappingPcm16Windows({
+        hopSamples: completedCapture.sampleRateHz * spokenCountAcousticHopSeconds,
+        pcm: responsePcm,
+        windowSamples: completedCapture.sampleRateHz * spokenCountAcousticWindowSeconds,
+      })) {
+        acousticTranscriptionWindows.push({
+          endSample: window.endSample,
+          result: await transcribePcm16WithXaiBatchStt({
+            apiKey: options.xaiApiKey,
+            pcm: window.pcm,
+            sampleRateHz: completedCapture.sampleRateHz,
+          }),
+          startSample: window.startSample,
+        });
+      }
+      spokenCountEvidence = assessOverlappingSpokenCountEvidence({
+        microphoneTranscripts: [
+          acousticTranscription.text,
+          ...acousticTranscriptionWindows.map(({ result }) => result.text),
+        ],
+        minimumConsecutiveNumbers: spokenCountMinimumConsecutiveNumbers,
+        providerTranscript: providerOutputTranscript,
+        range: spokenCountPlan.range,
+      });
+      if (!spokenCountEvidence.passed) {
+        runFailure ??= new Error(spokenCountEvidence.reasons.join("; "));
+      }
+    }
     physicalSpeechAssessment = assessPhysicalSpeechTranscription({
       baselineMaximumRms: baselineEnergy.maximumRms,
-      microphoneTranscript: acousticTranscription.text,
-      providerTranscript: providerOutputTranscript,
+      microphoneTranscript:
+        spokenCountEvidence?.microphone.numbers.join(" ") ?? acousticTranscription.text,
+      providerTranscript:
+        spokenCountEvidence?.provider.numbers.join(" ") ?? providerOutputTranscript,
       responseClippedSampleCount: relativeResponseEnergy.clippedSampleCount,
       responseMaximumRms: relativeResponseEnergy.maximumRms,
       responseRelativeActiveWindowCount: relativeResponseEnergy.activeWindowCount ?? 0,
@@ -1136,13 +1274,14 @@ export async function proveProductionM5StickS3Grok(
     assessment: physicalSpeechAssessment ?? null,
     fixedThresholdAssessment: fixedThresholdAcousticAssessment,
     microphoneStt: acousticTranscription ?? null,
+    microphoneSttWindows: acousticTranscriptionWindows ?? null,
     providerOutputTranscript: providerOutputTranscript ?? null,
     relativeEnergy: {
       analysis: relativeResponseEnergy,
       ambientMultiplier: provisionalRelativeAmbientMultiplier,
       thresholdRms: relativeActiveThresholdRms,
     },
-    schemaVersion: 1,
+    schemaVersion: 2,
     transcriptionError: acousticTranscriptionError,
   });
   const digitalAssessment = assessDigitalRun({
@@ -1153,7 +1292,7 @@ export async function proveProductionM5StickS3Grok(
     continuingHeldWorker,
     expectedFunctionCalls: requiredDeviceToolCallsForVoiceProof(
       options.turns,
-      environment.ITERATE_KIT_VOICE_PHRASE,
+      spokenCountPlan ? "count-scenario" : environment.ITERATE_KIT_VOICE_PHRASE,
     ),
     expectedTurns: options.turns,
     firstHeldDevice,
@@ -1248,6 +1387,7 @@ export async function proveProductionM5StickS3Grok(
         artifactPath: acousticTranscriptionPath,
         error: acousticTranscriptionError,
         microphone: acousticTranscription ?? null,
+        microphoneWindows: acousticTranscriptionWindows ?? null,
         provider: providerOutputTranscript ?? null,
       },
     },
@@ -1265,6 +1405,10 @@ export async function proveProductionM5StickS3Grok(
         firstHeld: firstHeldDevice ?? null,
         terminal: terminalDevice,
       },
+      deviceMetricsCallbackBracket: deviceMetricsCallbackBracket(
+        baselineWorker.deviceMetrics,
+        terminalWorker.deviceMetrics,
+      ),
       diagnostics: {
         baseline: baselineDiagnostics,
         terminal: terminalDiagnostics,
@@ -1300,6 +1444,8 @@ export async function proveProductionM5StickS3Grok(
       slug: options.projectSlug,
       workerHost: options.workerHost,
     },
+    scenario: options.scenario,
+    spokenCount: spokenCountEvidence ?? null,
     provenance: deviceProvenance ?? null,
     providerEventsArtifact,
     providerEvents: {
@@ -1311,7 +1457,7 @@ export async function proveProductionM5StickS3Grok(
     pttAuthority: {
       conversationEnded: remoteConversationEnded,
       conversationStarted: remoteConversationStarted,
-      directRedAcknowledged,
+      directBaselineSpriteAcknowledged,
       remoteCallsMadeByRunner: options.pttAuthority === "remote" ? 4 + options.turns * 2 : 0,
       requiredSource: options.pttAuthority,
     },
@@ -1432,7 +1578,7 @@ function assessDigitalRun(input: {
   }
   if (deltas.worker_function_calls !== expectedFunctionCalls) {
     reasons.push(
-      `Grok changeColour call delta was ${deltas.worker_function_calls}; ` +
+      `Grok changeSpriteSet call delta was ${deltas.worker_function_calls}; ` +
         `expected ${expectedFunctionCalls}.`,
     );
   }
@@ -1698,41 +1844,6 @@ function serializeError(error: Error): Record<string, unknown> {
       error.cause instanceof Error ? serializeError(error.cause) : String(error.cause);
   }
   return details;
-}
-
-function withRemoteDnsAndConnectMeasurement(
-  capture: PhysicalNetworkMonitorCapture,
-  measurement?: RemoteDnsAndTlsConnectMeasurement,
-): PhysicalNetworkMonitorCapture {
-  /*
-   * The classifier requires DNS/TLS coverage to name a remote-worker interval
-   * valid. If setup failed before the bounded probe was started, encode that
-   * absence explicitly instead of borrowing a later successful lookup or
-   * pretending this production route was direct LAN. The exact media interval
-   * remains the coverage authority in both success and failure artifacts.
-   */
-  const observed = measurement ?? {
-    connect: {
-      durationMs: null,
-      error: null,
-      maximumHealthyDurationMs: 1_000,
-      outcome: "not-observed" as const,
-    },
-    dns: {
-      durationMs: null,
-      error: null,
-      maximumHealthyDurationMs: 500,
-      outcome: "not-observed" as const,
-    },
-  };
-  return {
-    ...capture,
-    dnsAndConnect: {
-      coverage: { ...capture.audioInterval },
-      kind: "measured",
-      ...observed,
-    },
-  };
 }
 
 if (

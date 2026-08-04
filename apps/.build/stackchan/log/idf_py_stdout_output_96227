@@ -1,0 +1,42 @@
+2026-08-04 14:41:12 W (11653) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:41:13 W (12653) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:41:14 W (13653) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:41:15 W (14653) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:41:16 W (15663) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:41:16 I (16043) wifi:new:<4,0>, old:<4,0>, ap:<255,255>, sta:<4,0>, prof:1, snd_ch_cfg:0x0
+2026-08-04 14:41:16 I (16043) wifi:state: init -> auth (0xb0)
+2026-08-04 14:41:17 I (16493) wifi:state: auth -> assoc (0x0)
+2026-08-04 14:41:17 I (16533) wifi:state: assoc -> run (0x10)
+2026-08-04 14:41:17 I (16573) wifi:connected with mispwoso2, aid = 21, channel 4, BW20, bssid = 62:7f:f0:57:9d:87
+2026-08-04 14:41:17 I (16573) wifi:security: WPA3-SAE, phy: bgn, rssi: -42
+2026-08-04 14:41:17 I (16583) wifi:pm start, type: 0
+2026-08-04 14:41:17 
+2026-08-04 14:41:17 I (16583) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+2026-08-04 14:41:17 I (16583) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+2026-08-04 14:41:17 I (16643) wifi:AP's beacon interval = 102400 us, DTIM period = 1
+2026-08-04 14:41:17 I (17083) wifi:<ba-add>idx:0 (ifx:0, 62:7f:f0:57:9d:87), tid:7, ssn:3, winSize:64
+2026-08-04 14:41:17 I (17083) wifi:<ba-del>idx:0, tid:7
+2026-08-04 14:41:17 I (17093) wifi:<ba-add>idx:0 (ifx:0, 62:7f:f0:57:9d:87), tid:7, ssn:3, winSize:64
+2026-08-04 14:41:18 I (18113) esp_netif_handlers: sta ip: 192.168.0.234, mask: 255.255.255.0, gw: 192.168.0.1
+2026-08-04 14:41:18 I (18113) iterate-stackchan: control state=websocket_connecting
+2026-08-04 14:41:18 I (18113) wifi:<ba-add>idx:1 (ifx:0, 62:7f:f0:57:9d:87), tid:0, ssn:1, winSize:64
+2026-08-04 14:41:18 I (18113) wifi:<ba-del>idx:1, tid:0
+2026-08-04 14:41:18 I (18113) wifi:<ba-add>idx:1 (ifx:0, 62:7f:f0:57:9d:87), tid:0, ssn:1, winSize:64
+2026-08-04 14:41:19 I (18733) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:41:20 I (20273) iterate-stackchan: control state=mounting
+2026-08-04 14:41:22 I (22273) iterate-stackchan: control state=ready
+2026-08-04 14:41:22 I (22273) iterate-stackchan: pcm session state=connecting status=0 platform=0
+2026-08-04 14:41:24 I (23433) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:41:30 I (29363) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:41:32 I (31473) iterate-stackchan: pcm session state=ready status=0 platform=32776
+2026-08-04 14:41:45 I (45313) iterate-stackchan-avatar: capture encoded: png=968 free_psram=6750464 free_internal=23055
+2026-08-04 14:41:45 I (45313) iterate-stackchan-avatar: capture released
+2026-08-04 14:43:15 W (135253) iterate-stackchan: control capability idle lease expired: generation=1 served=3 remounts=1
+2026-08-04 14:43:15 I (135263) iterate-stackchan: control state=websocket_connecting
+2026-08-04 14:43:16 I (136193) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:43:18 I (138243) iterate-stackchan: control state=mounting
+2026-08-04 14:43:19 I (138453) iterate-stackchan: control state=ready
+2026-08-04 14:43:19 I (138453) iterate-stackchan: pcm session state=connecting status=0 platform=32776
+2026-08-04 14:43:20 I (139843) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:43:24 E (143763) transport_ws: Header size exceeded buffer size
+2026-08-04 14:43:26 I (145393) esp-x509-crt-bundle: Certificate validated

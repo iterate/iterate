@@ -3,8 +3,12 @@ idf_component_register(
   INCLUDE_DIRS "include"
   REQUIRES
     avatar
+    capabilities
+    core
+    espressif__esp_lcd_touch
     espressif__m5stack_core_s3
     esp_lcd
+    esp_rom
     esp_timer
     freertos
     heap

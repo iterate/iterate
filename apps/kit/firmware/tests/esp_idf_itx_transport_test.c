@@ -648,6 +648,19 @@ static void taskless_open_publishes_one_clean_generation(void) {
   fixture_init(&fixture);
 
   assert(wait_for_socket_generation(&fixture, 1U));
+  /*
+   * The production Stick and Mac associated to the same 2.4 GHz AP with
+   * different reported widths: the Stick used HT40 while the Mac used 20 MHz.
+   * Only the Stick then suffered repeatable multi-second packet-loss bursts.
+   * Duplex 16 kHz PCM needs far less than HT20 capacity, so the shared voice
+   * transport deliberately trades unused peak throughput for the narrower,
+   * less interference-prone channel. This assertion exists because an SDK
+   * default change or call-order refactor would otherwise silently undo the
+   * physical network fix.
+   */
+  assert(
+      iterate_kit_fake_wifi_bandwidth() ==
+      WIFI_BW_HT20);
   assert(
       __atomic_load_n(
           &fixture.transport.websocket_started,

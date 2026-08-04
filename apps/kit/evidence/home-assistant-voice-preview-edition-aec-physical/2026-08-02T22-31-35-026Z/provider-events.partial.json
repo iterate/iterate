@@ -1,0 +1,12 @@
+[
+  {
+    "observedAtMonotonicMs": 17950.970209,
+    "raw": "{\"type\":\"response.created\"}",
+    "type": "response.created"
+  },
+  {
+    "observedAtMonotonicMs": 23921.008584,
+    "raw": "{\"type\":\"response.done\"}",
+    "type": "response.done"
+  }
+]

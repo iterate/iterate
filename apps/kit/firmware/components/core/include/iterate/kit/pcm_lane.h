@@ -243,12 +243,16 @@ iterate_kit_pcm_lane_reset_downlink_producer(
     struct iterate_kit_pcm_lane *lane);
 
 /**
- * Consumer-side interruption primitive. It releases every queued downlink
- * frame and reports the exact number discarded.
+ * Consumer-side interruption primitive. It releases the bounded queue epoch
+ * visible when the call begins and reports both discarded PCM frames and
+ * ordered items. End-of-stream markers occupy real ring slots, so a paced
+ * sender needs the item count when returning capacity credit even though
+ * diagnostics normally describe the frame count.
  */
 enum iterate_kit_status iterate_kit_pcm_lane_discard_downlink(
     struct iterate_kit_pcm_lane *lane,
-    uint32_t *discarded_frames);
+    uint32_t *discarded_frames,
+    uint32_t *discarded_items);
 
 void iterate_kit_pcm_lane_metrics(
     const struct iterate_kit_pcm_lane *lane,

@@ -1,0 +1,57 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/cutevidence.ts
+
+{
+  "midAnswer": {
+    "u": 0,
+    "opening": 0,
+    "firstSend": 0,
+    "lastSend": 0,
+    "gapUs": 0,
+    "owed": 80,
+    "written": 380,
+    "sends": 20,
+    "starvedMs": 0,
+    "starveEvents": 0,
+    "played": 18,
+    "frames": 76
+  },
+  "afterBargeIn": {
+    "u": 0,
+    "opening": 11,
+    "firstSend": 0,
+    "lastSend": 0,
+    "gapUs": 0,
+    "owed": 5,
+    "written": 20,
+    "sends": 1,
+    "starvedMs": 0,
+    "starveEvents": 0,
+    "played": 89,
+    "frames": 234
+  },
+  "bargeInDelta": {
+    "u": 0,
+    "starvedMs": 0,
+    "starveEvents": 0
+  },
+  "afterHangUp": {
+    "u": 0,
+    "opening": 11,
+    "firstSend": 0,
+    "lastSend": 0,
+    "gapUs": 0,
+    "owed": 5,
+    "written": 20,
+    "sends": 1,
+    "starvedMs": 0,
+    "starveEvents": 0,
+    "played": 89,
+    "frames": 234
+  },
+  "hangUpDelta": {
+    "u": 0,
+    "starvedMs": 0
+  }
+}

@@ -4,6 +4,7 @@
 #include "iterate/kit/capabilities/device_event_stream.h"
 #include "iterate/kit/capabilities/avatar.h"
 #include "iterate/kit/capabilities/conversation.h"
+#include "iterate/kit/capabilities/logical_input.h"
 #include "iterate/kit/capabilities/metrics.h"
 #include "iterate/kit/capabilities/push_to_talk.h"
 #include "iterate/kit/capabilities/screen.h"
@@ -22,7 +23,7 @@ enum {
    * per poll so a burst of physical/remote edges cannot starve Cap'n Web or
    * audio progress; remaining accepted events stay in the bounded queue.
    */
-  ITERATE_KIT_M5STICKS3_MODULE_COUNT = 8,
+  ITERATE_KIT_M5STICKS3_MODULE_COUNT = 9,
   ITERATE_KIT_M5STICKS3_EVENTS_PER_POLL = 4,
 };
 
@@ -47,6 +48,7 @@ struct iterate_kit_m5sticks3_options {
   size_t maximum_screen_capture_bytes;
   struct iterate_kit_metrics_options metrics;
   struct iterate_kit_audio_options audio;
+  struct iterate_kit_logical_input_driver logical_input;
   struct iterate_kit_device_event *event_storage;
   size_t event_capacity;
   struct iterate_kit_device_event_stream_options event_stream;
@@ -76,6 +78,7 @@ struct iterate_kit_m5sticks3 {
   struct iterate_kit_device_event_stream event_stream;
   struct iterate_kit_conversation conversation;
   struct iterate_kit_push_to_talk push_to_talk;
+  struct iterate_kit_logical_input logical_input;
   /*
    * The profile owns the composition observer so every physical/remote edge
    * reaches the Cap'n Web stream before the optional board-specific observer.
@@ -141,6 +144,9 @@ iterate_kit_m5sticks3_audio_metrics(
     const struct iterate_kit_m5sticks3 *device);
 bool iterate_kit_m5sticks3_is_capturing(
     const struct iterate_kit_m5sticks3 *device);
+/** Records the shared PCM owner's gate without performing hardware I/O. */
+enum iterate_kit_status iterate_kit_m5sticks3_set_media_ready(
+    struct iterate_kit_m5sticks3 *device, bool ready);
 void iterate_kit_m5sticks3_event_metrics(
     const struct iterate_kit_m5sticks3 *device,
     struct iterate_kit_device_event_queue_metrics *metrics);

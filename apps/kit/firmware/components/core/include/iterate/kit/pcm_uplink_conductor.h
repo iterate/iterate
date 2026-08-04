@@ -65,7 +65,7 @@ struct iterate_kit_pcm_uplink_conductor_metrics {
   uint32_t policy_time_normalizations;
   uint32_t maximum_policy_time_adjustment_ms;
   uint32_t owner_clock_regressions;
-  uint32_t downlink_items_received;
+  uint32_t downlink_items_released;
   uint32_t downlink_items_acknowledged;
   uint32_t downlink_receipts_sent;
   uint32_t downlink_receipt_send_deferrals;
@@ -115,7 +115,7 @@ struct iterate_kit_pcm_uplink_conductor {
   uint32_t owner_clock_regressions;
   uint8_t downlink_receipt_payload[
       ITERATE_KIT_PCM_V1_DOWNLINK_RECEIPT_BYTES];
-  uint32_t downlink_items_received;
+  uint32_t downlink_items_released;
   uint32_t downlink_items_acknowledged;
   uint32_t downlink_receipt_inflight_items;
   uint32_t downlink_receipts_sent;
@@ -177,15 +177,16 @@ iterate_kit_pcm_uplink_conductor_discard_pending(
 
 /**
  * Records one complete server-to-device PCM frame or response-end marker after
- * it has been published to the playback lane.
+ * the hardware-clocked playback consumer has released its finite lane slot.
  *
  * The next poll emits a cumulative fixed-size receipt before acquiring a new
  * microphone frame. Repeated calls coalesce while a prior receipt is queued;
  * an already partially written receipt remains immutable and is followed by a
- * newer cumulative receipt. Only the connection-owner task may call this.
+ * newer cumulative receipt. Only the connection-owner task may call this; a
+ * realtime consumer must publish through a bounded platform handoff first.
  */
 enum iterate_kit_status
-iterate_kit_pcm_uplink_conductor_note_downlink_item(
+iterate_kit_pcm_uplink_conductor_note_downlink_item_released(
     struct iterate_kit_pcm_uplink_conductor *conductor);
 
 enum iterate_kit_pcm_uplink_conductor_poll_result

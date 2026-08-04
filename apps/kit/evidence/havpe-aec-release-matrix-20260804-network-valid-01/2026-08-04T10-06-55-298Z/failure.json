@@ -1,0 +1,5 @@
+{
+  "message": "Local PCM proxy failed: provider-downlink-source-underrun",
+  "name": "Error",
+  "stack": "Error: Local PCM proxy failed: provider-downlink-source-underrun\n    at DevicePcmProxySession.onVoiceFailure (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-local-aec.ts:409:31)\n    at DevicePcmProxySession.#fail (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/src/voice/device-pcm-proxy.ts:1029:10)\n    at DevicePcmProxySession.#sendNextDownlinkFrame (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/src/voice/device-pcm-proxy.ts:846:14)\n    at Timeout._onTimeout (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/src/voice/device-pcm-proxy.ts:832:12)\n    at listOnTimeout (node:internal/timers:608:17)\n    at process.processTimers (node:internal/timers:543:7)"
+}

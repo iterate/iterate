@@ -16,7 +16,7 @@ enum {
 };
 
 #define CLI_CAPABILITIES_STATS_PREFIX \
-  "[{\"type\":\"voicelab/dev-stats\",\"ephemeral\":true,\"payload\":"
+  "[{\"type\":\"voice-agent/dev-stats\",\"ephemeral\":true,\"payload\":"
 #define CLI_CAPABILITIES_DESCRIPTION \
   "{\"instructions\":\"The macOS execution target of the Iterate voice " \
   "device. It has the device's bounded queues, manual push-to-talk call, " \

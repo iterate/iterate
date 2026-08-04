@@ -13,15 +13,17 @@ list(APPEND EXTRA_COMPONENT_DIRS
   "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_core_s3_audio"
   "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_esp_idf"
   "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_stackchan_avatar"
+  "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_stackchan_body"
   "${CMAKE_CURRENT_LIST_DIR}/../../platforms/iterate_stackchan_hardware"
 )
 
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 
 # StackChan's avatar owns the LCD directly. Compile the audited CoreS3 BSP
-# without its optional LVGL/touch surface so a transitive board dependency
-# cannot silently restore the generic UI task and SRAM cost. The display.h
-# direct-panel API remains available under this first-party BSP switch.
+# without its optional LVGL task/surface. The avatar adapter owns the raw panel
+# and FT5x06 directly, so whole-screen call taps cost no generic UI task or
+# framebuffer. The explicit switch prevents a transitive dependency from
+# silently restoring LVGL's SRAM cost while keeping the direct BSP APIs.
 idf_build_set_property(
   COMPILE_DEFINITIONS "BSP_CONFIG_NO_GRAPHIC_LIB=1" APPEND)
 project(iterate-kit-stackchan)

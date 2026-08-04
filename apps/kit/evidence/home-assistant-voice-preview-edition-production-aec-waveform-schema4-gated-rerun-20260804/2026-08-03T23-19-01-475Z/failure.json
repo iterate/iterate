@@ -1,0 +1,55 @@
+{
+  "aec": null,
+  "stackChanHealth": null,
+  "voicePeHealth": null,
+  "createdAt": "2026-08-03T23:19:09.860Z",
+  "device": {
+    "deviceHost": "192.168.0.33",
+    "id": "home-assistant-voice-preview-edition",
+    "projectId": "prj_4f76ffe131f1495981afd65619f57914",
+    "projectSlug": "kit-havpe-voice-e2e-20260802",
+    "workerHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app"
+  },
+  "digital": null,
+  "error": {
+    "errors": [
+      {
+        "message": "capability \"kit.homeAssistantVoicePreviewEdition\" is offline",
+        "name": "Error",
+        "stack": "Error: capability \"kit.homeAssistantVoicePreviewEdition\" is offline\n    at Evaluator.evaluateImpl (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:947:75)\n    at Evaluator.evaluateWithDepth (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:818:28)\n    at Evaluator.evaluate (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:812:17)\n    at RpcSessionImpl.readLoop (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/rpc.ts:1059:73)"
+      },
+      {
+        "message": "The built worker would fail at startup with `No such module` — it contains imports that do not resolve:\n  Failed to resolve '../../voice/device-pcm-wire.ts' from apps/kit-voice/pcm-proxy.ts: file does not exist (kept as an external import)\nDeclare the missing dependency in package.json, or update the import if the installed package no longer provides that entry. Node builtins can be imported with the `node:` prefix.",
+        "name": "Error",
+        "stack": "Error: The built worker would fail at startup with `No such module` — it contains imports that do not resolve:\n  Failed to resolve '../../voice/device-pcm-wire.ts' from apps/kit-voice/pcm-proxy.ts: file does not exist (kept as an external import)\nDeclare the missing dependency in package.json, or update the import if the installed package no longer provides that entry. Node builtins can be imported with the `node:` prefix.\n    at Evaluator.evaluateImpl (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:947:75)\n    at Evaluator.evaluateWithDepth (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:818:28)\n    at Evaluator.evaluate (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:812:17)\n    at RpcSessionImpl.readLoop (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/rpc.ts:1059:73)"
+      }
+    ],
+    "message": "Could not restore Grok mode.",
+    "name": "AggregateError",
+    "stack": "AggregateError: Could not restore Grok mode.\n    at combineFailure (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:1281:20)\n    at proveProductionAecWaveform (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:744:20)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:1357:20)"
+  },
+  "network": null,
+  "passed": false,
+  "projectModeRestored": false,
+  "schemaVersion": 1,
+  "stimuli": {
+    "macOutputVolumePercent": 40,
+    "nearSourceSha256": null,
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "providerDurationMs": 6000
+  },
+  "worker": {
+    "baseline": null,
+    "deviceMetricsCallbackBracket": {
+      "exactMediaInterval": false,
+      "reason": "Both proof boundaries require a retained device metrics callback.",
+      "semantics": "conservative-callback-bracket",
+      "status": "unavailable"
+    },
+    "terminal": null
+  }
+}

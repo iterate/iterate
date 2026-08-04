@@ -1,0 +1,42 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/ownership.ts
+
+{
+  "beforeOrdinary": {
+    "u": 0,
+    "opening": 0,
+    "gapUs": 0,
+    "firstSend": 0,
+    "frames": 0,
+    "played": 0
+  },
+  "afterOrdinary": {
+    "u": 0,
+    "opening": 200,
+    "gapUs": 0,
+    "firstSend": 0,
+    "frames": 212,
+    "played": 212
+  },
+  "ordinaryMovedUnderruns": 0,
+  "beforeInjection": {
+    "u": 0,
+    "opening": 265,
+    "gapUs": 0,
+    "firstSend": 0,
+    "frames": 275,
+    "played": 275
+  },
+  "injected": 600,
+  "afterInjection": {
+    "u": 0,
+    "opening": 265,
+    "gapUs": 0,
+    "firstSend": 0,
+    "frames": 275,
+    "played": 275
+  },
+  "injectionMovedUnderruns": 0,
+  "verdict": "FAIL"
+}

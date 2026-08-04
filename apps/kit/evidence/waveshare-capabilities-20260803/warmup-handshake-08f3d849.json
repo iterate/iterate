@@ -1,0 +1,99 @@
+{
+  "deployedConfigCommit": "08f3d849",
+  "headBefore": 248132,
+  "headAfter": 248144,
+  "correlated": [
+    {
+      "attempt": 1,
+      "setupMs": 1145,
+      "ok": true,
+      "token": "827d971b-3f4d-4459-80ba-fb5dbf6eb761",
+      "askedAt": "2026-08-04T01:30:08.345Z",
+      "answerType": "voicelab/warmup-ready",
+      "answeredAt": "2026-08-04T01:30:09.088Z",
+      "roundTripMs": 743,
+      "briefKey": "voice-agent/brief:0l2uva5:after0",
+      "protocolRevision": "warmup/3-call-path-and-bridge",
+      "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+      "exactBriefMatch": true
+    },
+    {
+      "attempt": 2,
+      "setupMs": 527,
+      "ok": true,
+      "token": "ad4753fd-94fe-43c6-98fe-edf30b86b435",
+      "askedAt": "2026-08-04T01:30:09.369Z",
+      "answerType": "voicelab/warmup-ready",
+      "answeredAt": "2026-08-04T01:30:09.524Z",
+      "roundTripMs": 155,
+      "briefKey": "voice-agent/brief:0l2uva5:after0",
+      "protocolRevision": "warmup/3-call-path-and-bridge",
+      "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+      "exactBriefMatch": true
+    },
+    {
+      "attempt": 3,
+      "setupMs": 576,
+      "ok": true,
+      "token": "e70b3f2d-9b2a-4736-993d-f8e997df5ea2",
+      "askedAt": "2026-08-04T01:30:09.838Z",
+      "answerType": "voicelab/warmup-ready",
+      "answeredAt": "2026-08-04T01:30:10.031Z",
+      "roundTripMs": 193,
+      "briefKey": "voice-agent/brief:0l2uva5:after0",
+      "protocolRevision": "warmup/3-call-path-and-bridge",
+      "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+      "exactBriefMatch": true
+    }
+  ],
+  "attempts": [
+    {
+      "attempt": 1,
+      "setupMs": 1145,
+      "warm": {
+        "ok": true,
+        "ms": 804,
+        "token": "827d971b-3f4d-4459-80ba-fb5dbf6eb761",
+        "acknowledged": true,
+        "briefMatched": true,
+        "bridgeWarmed": true,
+        "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "protocolRevision": "warmup/3-call-path-and-bridge",
+        "seenBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "bridgeWarmMs": 545
+      }
+    },
+    {
+      "attempt": 2,
+      "setupMs": 527,
+      "warm": {
+        "ok": true,
+        "ms": 259,
+        "token": "ad4753fd-94fe-43c6-98fe-edf30b86b435",
+        "acknowledged": true,
+        "briefMatched": true,
+        "bridgeWarmed": true,
+        "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "protocolRevision": "warmup/3-call-path-and-bridge",
+        "seenBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "bridgeWarmMs": 15
+      }
+    },
+    {
+      "attempt": 3,
+      "setupMs": 576,
+      "warm": {
+        "ok": true,
+        "ms": 339,
+        "token": "e70b3f2d-9b2a-4736-993d-f8e997df5ea2",
+        "acknowledged": true,
+        "briefMatched": true,
+        "bridgeWarmed": true,
+        "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "protocolRevision": "warmup/3-call-path-and-bridge",
+        "seenBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "bridgeWarmMs": 14
+      }
+    }
+  ]
+}

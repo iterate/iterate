@@ -1,0 +1,5 @@
+{
+  "message": "esptool exited with status 2.",
+  "name": "Error",
+  "stack": "Error: esptool exited with status 2.\n    at ChildProcess.<anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/src/firmware/esptool-cli.ts:341:9)\n    at Object.onceWrapper (node:events:631:12)\n    at ChildProcess.emit (node:events:509:20)\n    at ChildProcess._handle.onexit (node:internal/child_process:294:12)"
+}

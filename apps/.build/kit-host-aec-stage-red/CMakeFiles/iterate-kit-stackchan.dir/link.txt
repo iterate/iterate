@@ -1,0 +1,2 @@
+/usr/bin/ar qc libiterate-kit-stackchan.a "CMakeFiles/iterate-kit-stackchan.dir/devices/stackchan/stackchan.c.o"
+/usr/bin/ranlib libiterate-kit-stackchan.a

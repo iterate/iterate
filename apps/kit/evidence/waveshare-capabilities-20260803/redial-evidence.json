@@ -1,0 +1,107 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/redial-evidence.ts
+
+{
+  "head": 231709,
+  "durableCount": 296,
+  "ephCount": 306,
+  "latest": [
+    {
+      "offset": 227264,
+      "at": "2026-08-04T00:09:37.037Z",
+      "type": "call-requested",
+      "payload": "{\"callId\":\"wsdev\",\"colleague\":true,\"turns\":\"manual\",\"greet\":\"Hi, I am your Iterate device. What can I do for you?\"}"
+    },
+    {
+      "offset": 227268,
+      "at": "2026-08-04T00:09:38.387Z",
+      "type": "call-accepted",
+      "payload": "{\"bridge\":\"worker-detached\",\"bridgeId\":\"c14e8cd0\",\"callId\":\"wsdev\",\"model\":\"grok-voice-think-fast-2.0\",\"redials\":0}"
+    },
+    {
+      "offset": 227269,
+      "at": "2026-08-04T00:09:38.988Z",
+      "type": "call-ended",
+      "payload": "{\"callId\":\"wsdev\",\"reason\":\"button\"}"
+    },
+    {
+      "offset": 227271,
+      "at": "2026-08-04T00:09:39.022Z",
+      "type": "call-ended",
+      "payload": "{\"bridgeId\":\"c14e8cd0\",\"callId\":\"wsdev\",\"reason\":\"worker bridge: call-ended event (appendErrors=0, reconnects=0, redials=0, providerJunk=0, handlerErrors=0, sendFailures=0, droppedSpk=0, stray=0)\"}"
+    },
+    {
+      "offset": 227279,
+      "at": "2026-08-04T00:09:45.036Z",
+      "type": "call-requested",
+      "payload": "{\"callId\":\"wsdev\",\"colleague\":true,\"turns\":\"manual\",\"greet\":\"Hi, I am your Iterate device. What can I do for you?\"}"
+    },
+    {
+      "offset": 227282,
+      "at": "2026-08-04T00:09:45.820Z",
+      "type": "call-accepted",
+      "payload": "{\"bridge\":\"worker-detached\",\"bridgeId\":\"b3740877\",\"callId\":\"wsdev\",\"model\":\"grok-voice-think-fast-2.0\",\"redials\":0}"
+    },
+    {
+      "offset": 227283,
+      "at": "2026-08-04T00:09:46.117Z",
+      "type": "call-ended",
+      "payload": "{\"callId\":\"wsdev\",\"reason\":\"button\"}"
+    },
+    {
+      "offset": 227285,
+      "at": "2026-08-04T00:09:46.148Z",
+      "type": "call-ended",
+      "payload": "{\"bridgeId\":\"b3740877\",\"callId\":\"wsdev\",\"reason\":\"worker bridge: call-ended event (appendErrors=0, reconnects=0, redials=0, providerJunk=0, handlerErrors=0, sendFailures=0, droppedSpk=0, stray=0)\"}"
+    },
+    {
+      "offset": 227302,
+      "at": "2026-08-04T00:10:12.495Z",
+      "type": "call-requested",
+      "payload": "{\"callId\":\"wsdev\",\"colleague\":true,\"turns\":\"manual\",\"greet\":\"Hi, I am your Iterate device. What can I do for you?\"}"
+    },
+    {
+      "offset": 227312,
+      "at": "2026-08-04T00:10:20.493Z",
+      "type": "call-requested",
+      "payload": "{\"callId\":\"wsdev\",\"colleague\":true,\"turns\":\"manual\",\"greet\":\"Hi, I am your Iterate device. What can I do for you?\"}"
+    },
+    {
+      "offset": 227315,
+      "at": "2026-08-04T00:10:22.247Z",
+      "type": "call-accepted",
+      "payload": "{\"bridge\":\"worker-detached\",\"bridgeId\":\"cfed3d4f\",\"callId\":\"wsdev\",\"model\":\"grok-voice-think-fast-2.0\",\"redials\":0}"
+    },
+    {
+      "offset": 227321,
+      "at": "2026-08-04T00:10:22.280Z",
+      "type": "call-failed",
+      "payload": "{\"callId\":\"wsdev\",\"reason\":\"superseded by a newer bridge\"}"
+    },
+    {
+      "offset": 227984,
+      "at": "2026-08-04T00:10:51.817Z",
+      "type": "bridge-redialling",
+      "payload": "{\"bridgeId\":\"cfed3d4f\",\"callId\":\"wsdev\",\"reason\":\"grok closed 1008\",\"redials\":1}"
+    },
+    {
+      "offset": 227986,
+      "at": "2026-08-04T00:10:53.679Z",
+      "type": "call-accepted",
+      "payload": "{\"bridge\":\"worker-detached\",\"bridgeId\":\"cfed3d4f\",\"callId\":\"wsdev\",\"model\":\"grok-voice-think-fast-2.0\",\"redials\":1}"
+    },
+    {
+      "offset": 231517,
+      "at": "2026-08-04T00:13:19.888Z",
+      "type": "call-ended",
+      "payload": "{\"callId\":\"wsdev\",\"reason\":\"button\"}"
+    },
+    {
+      "offset": 231561,
+      "at": "2026-08-04T00:13:20.090Z",
+      "type": "call-ended",
+      "payload": "{\"bridgeId\":\"cfed3d4f\",\"callId\":\"wsdev\",\"reason\":\"worker bridge: call-ended event (appendErrors=0, reconnects=0, redials=1, providerJunk=0, handlerErrors=0, sendFailures=0, droppedSpk=0, stray=0)\"}"
+    }
+  ]
+}

@@ -13,6 +13,7 @@ idf_component_register(
     iterate_core_s3_audio
     iterate_esp_idf
     iterate_stackchan_avatar
+    iterate_stackchan_body
     iterate_stackchan_hardware
     stackchan
 )

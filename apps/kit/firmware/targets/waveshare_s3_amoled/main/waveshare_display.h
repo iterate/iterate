@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#include "waveshare_image.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -31,12 +33,12 @@ enum waveshare_ui_state {
 
 enum {
   /*
-   * Options the screen has room for, which is every item the menu defines
-   * (ITERATE_KIT_MENU_ITEM_COUNT). The display checks the two agree at build
-   * time, so a fourth item is a compile error rather than an option the
-   * device offers and never draws.
+   * Options the screen has room for, which is every item the menu can ever
+   * offer (ITERATE_KIT_MENU_ITEM_COUNT) — not just the ones a given context
+   * shows. The display checks the two agree at build time, so a fifth item is
+   * a compile error rather than an option the device offers and never draws.
    */
-  WAVESHARE_MENU_ITEMS_MAX = 3,
+  WAVESHARE_MENU_ITEMS_MAX = 6,
 };
 
 /**
@@ -76,8 +78,24 @@ bool waveshare_display_init(void);
 /** Headline state. Thread-safe; may be called from any task. */
 void waveshare_display_set_state(enum waveshare_ui_state state);
 
-/** Connection/context subtitle, e.g. the stream path or an error. */
+/** Connection/context subtitle, e.g. the reason the link is down. */
 void waveshare_display_set_status(const char *text);
+
+/**
+ * Whether the device can currently do anything at all — the app's own gate:
+ * transport ready, stream mounted, generations agreed.
+ *
+ * A FLAG, PUBLISHED EVERY TIME IT CHANGES, NOT A UI STATE. It began as a state
+ * value and that was wrong: nine places in the app set the state to IDLE for
+ * their own good reasons, so "offline" survived until the next one of them ran
+ * and the screen then said "ready" while the console said "authentication
+ * rejected" every three seconds. A person pressed the call button and nothing
+ * happened, which is precisely the failure the screen existed to explain.
+ *
+ * Being a separate flag, nothing else can overwrite it, and the bar prefers it
+ * over whatever the state happens to be.
+ */
+void waveshare_display_set_link_ready(bool ready);
 
 /**
  * Publish what the menu screen should say. Thread-safe; may be called from any
@@ -89,9 +107,12 @@ void waveshare_display_set_status(const char *text);
  */
 void waveshare_display_set_menu(const struct waveshare_menu_view *view);
 
-/** Append (or replace, when `final` is false) the newest transcript line. */
-void waveshare_display_push_transcript(
-    const char *speaker, const char *text, bool final);
+/*
+ * THERE IS NO TRANSCRIPT ON THIS SCREEN. Deliberately, for now: the face is the
+ * screen, and words under it were words competing with it. Provider transcript
+ * deltas still reach the SD-card recorder, which is where they are read back.
+ * If they return here they return as a deliberate design, not as a leftover.
+ */
 
 /** Background colour as 24-bit RGB; drives the `setBackground` tool. */
 void waveshare_display_set_background(uint32_t rgb);
@@ -129,6 +150,61 @@ enum {
  * without a camera. Safe from any task; takes the LVGL lock.
  */
 bool waveshare_display_snapshot(uint8_t *out, size_t capacity);
+
+enum {
+  /*
+   * Longest an image may hold the screen, in seconds.
+   *
+   * While it is up the headline, the status line and the transcript are all
+   * behind it, so the person cannot see what their call is doing. Half a
+   * minute is longer than a picture stays interesting and short enough that a
+   * wrong number reads as a glitch rather than a device that has stopped
+   * answering; anything longer has to be asked for again.
+   */
+  WAVESHARE_IMAGE_SECONDS_MAX = 30,
+};
+
+/**
+ * Show `bitmap` full-screen for `seconds`, then reveal the UI again.
+ *
+ * The pixels are BORROWED for as long as the image is active and are never
+ * freed here: this module has no idea where they came from, and a display that
+ * freed a caller's buffer would be a double-free waiting for the day someone
+ * shows the same bitmap twice. Release them once
+ * `waveshare_display_image_active` goes false — including a bitmap a later
+ * call replaced, because the panel may still be drawing it until the LVGL task
+ * next runs.
+ *
+ * Latest wins: showing a second image while one is up replaces it and restarts
+ * the clock, without the image ever going inactive in between.
+ *
+ * Nothing is centred by cropping and nothing is scaled, so the request is
+ * refused rather than adjusted: false for a NULL bitmap or NULL pixels, a zero
+ * width or height, dimensions past the panel, `seconds` of 0, or `seconds`
+ * past WAVESHARE_IMAGE_SECONDS_MAX. A picture that appears at a size or for a
+ * length of time nobody asked for is a bug wearing a working feature's face.
+ *
+ * Thread-safe; may be called from any task.
+ */
+bool waveshare_display_show_image(
+    const struct waveshare_image_bitmap *bitmap, uint32_t seconds);
+
+/**
+ * True while the image is on screen, or still the panel's drawing source.
+ *
+ * It goes false only once the LVGL task has let the pixels go, which is the
+ * moment — and the only moment — every bitmap handed over since it was last
+ * false can be freed.
+ */
+bool waveshare_display_image_active(void);
+
+/**
+ * Take the image down now, revealing the UI again. Idempotent.
+ *
+ * Asking twice costs nothing; the second call finds nothing to take down and
+ * leaves the panel alone.
+ */
+void waveshare_display_hide_image(void);
 
 #ifdef __cplusplus
 }

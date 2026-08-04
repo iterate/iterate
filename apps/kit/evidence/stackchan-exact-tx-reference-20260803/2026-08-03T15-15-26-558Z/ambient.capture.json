@@ -1,0 +1,33 @@
+{
+  "assessment": {
+    "actualFrames": 0,
+    "acceptedFrameSpanMs": 0,
+    "capturedAudioDurationMs": 0,
+    "durationMs": 3300,
+    "expectedFrames": 165,
+    "frameConservationPassed": true,
+    "maximumExpectedFrames": 168,
+    "minimumExpectedFrames": 162,
+    "passed": false,
+    "realtimeCadencePassed": true,
+    "reasons": ["Diagnostic capture retained 0 ms of accepted PCM; at least 1000 ms is required."]
+  },
+  "capture": {
+    "acceptedFrameSpanMs": 0,
+    "capturedAudioDurationMs": 0,
+    "durationMs": 3300,
+    "finishedAtMs": 1785770142325,
+    "firstAcceptedAtMs": null,
+    "firstAcceptedUplinkFrame": null,
+    "frameBytes": 640,
+    "frames": 0,
+    "lastAcceptedAtMs": null,
+    "lastAcceptedUplinkFrame": null,
+    "maximumFrames": 300,
+    "maximumInterFrameGapMs": 0,
+    "pcmSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "schemaVersion": 2,
+    "startedAtMs": 1785770139025,
+    "truncatedFrames": 0
+  }
+}

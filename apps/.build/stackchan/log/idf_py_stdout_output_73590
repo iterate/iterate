@@ -1,0 +1,307 @@
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x2b (SPI_FAST_FLASH_BOOT)
+Saved PC:0x4037cb2e
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x16d0
+load:0x403c8700,len:0x4
+load:0x403c8704,len:0xe24
+load:0x403cb700,len:0x316c
+entry 0x403c893c
+[0;32mI (26) boot: ESP-IDF v5.4.2 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time Aug  2 2026 22:58:30[0m
+[0;32mI (27) boot: Multicore bootloader[0m
+[0;32mI (27) boot: chip revision: v0.2[0m
+[0;32mI (27) boot: efuse block revision: v1.4[0m
+[0;32mI (27) qio_mode: Enabling default flash chip QIO[0m
+[0;32mI (28) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (28) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (28) boot.esp32s3: SPI Flash Size : 16MB[0m
+[0;32mI (28) boot: Enabling RNG early entropy source...[0m
+[0;32mI (28) boot: Partition Table:[0m
+[0;32mI (29) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (29) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (29) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (30) boot:  2 factory          factory app      00 00 00010000 00500000[0m
+[0;32mI (30) boot:  3 iterate_kit      unknown          40 00 00510000 00001000[0m
+[0;32mI (31) boot: End of partition table[0m
+[0;32mI (31) esp_image: segment 0: paddr=00010020 vaddr=3c0d0020 size=458a4h (284836) map[0m
+[0;32mI (73) esp_image: segment 1: paddr=000558cc vaddr=3fc9cd00 size=0a74ch ( 42828) load[0m
+[0;32mI (81) esp_image: segment 2: paddr=00060020 vaddr=42000020 size=cd03ch (839740) map[0m
+[0;32mI (206) esp_image: segment 3: paddr=0012d064 vaddr=3fca744c size=04934h ( 18740) load[0m
+[0;32mI (210) esp_image: segment 4: paddr=001319a0 vaddr=40374000 size=18c20h (101408) load[0m
+[0;32mI (229) esp_image: segment 5: paddr=0014a5c8 vaddr=600fe000 size=0001ch (    28) load[0m
+[0;32mI (241) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (241) boot: Disabling RNG early entropy source...[0m
+[0;32mI (243) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (243) esp_psram: Speed: 80MHz[0m
+[0;32mI (274) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (364) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (364) cpu_start: Multicore app[0m
+[0;32mI (1029) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (1045) cpu_start: Pro cpu start user code[0m
+[0;32mI (1045) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (1046) app_init: Application information:[0m
+[0;32mI (1046) app_init: Project name:     iterate-kit-stackchan[0m
+[0;32mI (1046) app_init: App version:      v2026-07-28-21-00-57-159-g29be8[0m
+[0;32mI (1046) app_init: Compile time:     Aug  3 2026 16:38:01[0m
+[0;32mI (1046) app_init: ELF file SHA256:  9a6d659ee...[0m
+[0;32mI (1046) app_init: ESP-IDF:          v5.4.2[0m
+[0;32mI (1046) efuse_init: Min chip rev:     v0.0[0m
+[0;32mI (1047) efuse_init: Max chip rev:     v0.99 [0m
+[0;32mI (1047) efuse_init: Chip rev:         v0.2[0m
+[0;32mI (1047) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1047) heap_init: At 3FCC2170 len 000275A0 (157 KiB): RAM[0m
+[0;32mI (1047) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM[0m
+[0;32mI (1047) heap_init: At 600FE01C len 00001FCC (7 KiB): RTCRAM[0m
+[0;32mI (1048) esp_psram: Adding pool of 6898K of PSRAM memory to heap allocator[0m
+[0;32mI (1048) esp_psram: Adding pool of 41K of PSRAM memory gap generated due to end address alignment of drom to the heap allocator[0m
+[0;32mI (1049) spi_flash: detected chip: generic[0m
+[0;32mI (1049) spi_flash: flash io: qio[0m
+[0;32mI (1049) sleep_gpio: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1050) sleep_gpio: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1050) main_task: Started on CPU0[0m
+[0;32mI (1060) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1060) main_task: Calling app_main()[0m
+[0;33mW (1070) i2c.master: Please check pull-up resistances whether be connected properly. Otherwise unexpected behavior would happen. For more detailed information, please read docs[0m
+[0;32mI (1070) ili9341: LCD panel create success, version: 2.0.2[0m
+[0;32mI (1190) M5Stack: Setting LCD backlight: 100%[0m
+[0;32mI (1220) iterate-stackchan-avatar: ready: avatar=dot-matrix-oracle count=4 source=38400 + scale_strip=10240 bytes internal DMA; display=direct exact-2x 320x240@15Hz; handoff=latest-only 1x128 samples; visual=core1 priority2; input=whole-screen-call+PMIC-face@50Hz core1 priority3; PMIC-long=hardware-power-off; lower-key=hardware-reset[0m
+[0;32mI (1230) pp: pp rom version: e7ae62f[0m
+[0;32mI (1230) net80211: net80211 rom version: e7ae62f[0m
+[0;32mI (1240) wifi:wifi driver task: 3fce2474, prio:23, stack:6656, core=0[0m
+[0;32mI (1240) wifi:wifi firmware version: bea31f3[0m
+[0;32mI (1240) wifi:wifi certification version: v7.0[0m
+[0;32mI (1240) wifi:config NVS flash: enabled[0m
+[0;32mI (1240) wifi:config nano formatting: disabled[0m
+[0;32mI (1240) wifi:Init data frame dynamic rx buffer num: 32[0m
+[0;32mI (1240) wifi:Init static rx mgmt buffer num: 5[0m
+[0;32mI (1240) wifi:Init management short buffer num: 32[0m
+[0;32mI (1240) wifi:Init dynamic tx buffer num: 32[0m
+[0;32mI (1240) wifi:Init static tx FG buffer num: 2[0m
+[0;32mI (1240) wifi:Init static rx buffer size: 1600[0m
+[0;32mI (1240) wifi:Init static rx buffer num: 10[0m
+[0;32mI (1240) wifi:Init dynamic rx buffer num: 32[0m
+[0;32mI (1240) wifi_init: rx ba win: 6[0m
+[0;32mI (1240) wifi_init: accept mbox: 6[0m
+[0;32mI (1240) wifi_init: tcpip mbox: 32[0m
+[0;32mI (1240) wifi_init: udp mbox: 6[0m
+[0;32mI (1240) wifi_init: tcp mbox: 6[0m
+[0;32mI (1240) wifi_init: tcp tx win: 5760[0m
+[0;32mI (1240) wifi_init: tcp rx win: 5760[0m
+[0;32mI (1240) wifi_init: tcp mss: 1440[0m
+[0;32mI (1240) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (1240) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (1240) wifi:Set ps type: 0, coexist: 0[0m
+
+[0;32mI (1240) phy_init: phy_version 701,f4f1da3a,Mar  3 2025,15:50:10[0m
+[0;32mI (1280) wifi:mode : sta (68:ee:8f:d8:53:20)[0m
+[0;32mI (1280) wifi:enable tsf[0m
+[0;32mI (1320) ES7210: Work in Slave mode[0m
+[0;32mI (1330) ES7210: Enable ES7210_INPUT_MIC1[0m
+[0;32mI (1330) ES7210: Enable ES7210_INPUT_MIC2[0m
+[0;32mI (1330) ES7210: Enable ES7210_INPUT_MIC3[0m
+[0;32mI (1340) ES7210: Enable TDM mode[0m
+[0;32mI (1340) I2S_IF: Paired data: 0x3c155118, current mode: playback, paired in_enable: 0, paired out_enable: 0[0m
+[0;32mI (1340) I2S_IF: STD: TX, data_bit: 16, slot_bit: 16, ws_width: 16, slot_mode: MONO, slot_mask: 0x1[0m
+[0;32mI (1340) I2S_IF: STD: TX, sample_rate_hz: 16000, mclk_multiple: 256, clk_src: 6[0m
+[0;32mI (1350) Adev_Codec: Open codec device OK[0m
+[0;32mI (1350) I2S_IF: Peer mode playback need extend bits 32 to 64[0m
+[0;32mI (1350) I2S_IF: TDM: RX, data_bit: 16, slot_bit: 16, ws_width: 32, total_slot: 4, slot_mask: 0xf[0m
+[0;32mI (1350) I2S_IF: TDM: RX, sample_rate_hz: 16000, mclk_multiple: 256, clk_src: 6[0m
+[0;32mI (1350) I2S_IF: STD: TX, data_bit: 16, slot_bit: 32, ws_width: 32, slot_mode: MONO, slot_mask: 0x1[0m
+[0;32mI (1350) I2S_IF: STD: TX, sample_rate_hz: 16000, mclk_multiple: 256, clk_src: 6[0m
+[0;32mI (1350) ES7210: Bits 16[0m
+[0;32mI (1360) ES7210: Enable ES7210_INPUT_MIC1[0m
+[0;32mI (1360) ES7210: Enable ES7210_INPUT_MIC2[0m
+[0;32mI (1360) ES7210: Enable ES7210_INPUT_MIC3[0m
+[0;32mI (1370) ES7210: Enable TDM mode[0m
+[0;32mI (1370) ES7210: Unmuted[0m
+[0;32mI (1370) Adev_Codec: Open codec device OK[0m
+[0;32mI (1370) iterate-core-s3-audio: ready: 16 kHz; DMA=5x128 (40 ms); raw reserve=8x1024 (64 ms); VOIP AEC=256; wire=320; static owner=29264 bytes[0m
+[0;32mI (1380) iterate-core-s3-audio: capture mapping: slot2=near 24 dB; slot1 electrical speaker divider x8 is the AEC reference; exact completed TX DMA is the far-active oracle; diagnostic non-near codec inputs=0 dB[0m
+[0;32mI (1380) iterate-stackchan: runtime ready: static_bytes=87440 control_bytes=131072 pcm_ring_bytes=41728 device_bytes=1008 control_transport_bytes=26296 pcm_transport_bytes=11656 avatar_static_bytes=9136 avatar_framebuffer_bytes=48640[0m
+[0;32mI (1380) iterate-stackchan: control state=wifi_connecting[0m
+[0;33mW (1380) wifi:Haven't to connect to a suitable AP now![0m
+[0;33mW (2390) wifi:Haven't to connect to a suitable AP now![0m
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x2b (SPI_FAST_FLASH_BOOT)
+Saved PC:0x4037cb2e
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x16d0
+load:0x403c8700,len:0x4
+load:0x403c8704,len:0xe24
+load:0x403cb700,len:0x316c
+entry 0x403c893c
+[0;32mI (26) boot: ESP-IDF v5.4.2 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time Aug  2 2026 22:58:30[0m
+[0;32mI (27) boot: Multicore bootloader[0m
+[0;32mI (27) boot: chip revision: v0.2[0m
+[0;32mI (27) boot: efuse block revision: v1.4[0m
+[0;32mI (27) qio_mode: Enabling default flash chip QIO[0m
+[0;32mI (28) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (28) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (28) boot.esp32s3: SPI Flash Size : 16MB[0m
+[0;32mI (28) boot: Enabling RNG early entropy source...[0m
+[0;32mI (28) boot: Partition Table:[0m
+[0;32mI (28) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (29) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (29) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (30) boot:  2 factory          factory app      00 00 00010000 00500000[0m
+[0;32mI (30) boot:  3 iterate_kit      unknown          40 00 00510000 00001000[0m
+[0;32mI (30) boot: End of partition table[0m
+[0;32mI (30) esp_image: segment 0: paddr=00010020 vaddr=3c0d0020 size=458a4h (284836) map[0m
+[0;32mI (73) esp_image: segment 1: paddr=000558cc vaddr=3fc9cd00 size=0a74ch ( 42828) load[0m
+[0;32mI (81) esp_image: segment 2: paddr=00060020 vaddr=42000020 size=cd03ch (839740) map[0m
+[0;32mI (206) esp_image: segment 3: paddr=0012d064 vaddr=3fca744c size=04934h ( 18740) load[0m
+[0;32mI (210) esp_image: segment 4: paddr=001319a0 vaddr=40374000 size=18c20h (101408) load[0m
+[0;32mI (229) esp_image: segment 5: paddr=0014a5c8 vaddr=600fe000 size=0001ch (    28) load[0m
+[0;32mI (241) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (241) boot: Disabling RNG early entropy source...[0m
+[0;32mI (242) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (243) esp_psram: Speed: 80MHz[0m
+[0;32mI (274) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (364) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (364) cpu_start: Multicore app[0m
+[0;32mI (1029) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (1045) cpu_start: Pro cpu start user code[0m
+[0;32mI (1045) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (1045) app_init: Application information:[0m
+[0;32mI (1046) app_init: Project name:     iterate-kit-stackchan[0m
+[0;32mI (1046) app_init: App version:      v2026-07-28-21-00-57-159-g29be8[0m
+[0;32mI (1046) app_init: Compile time:     Aug  3 2026 16:38:01[0m
+[0;32mI (1046) app_init: ELF file SHA256:  9a6d659ee...[0m
+[0;32mI (1046) app_init: ESP-IDF:          v5.4.2[0m
+[0;32mI (1046) efuse_init: Min chip rev:     v0.0[0m
+[0;32mI (1047) efuse_init: Max chip rev:     v0.99 [0m
+[0;32mI (1047) efuse_init: Chip rev:         v0.2[0m
+[0;32mI (1047) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1047) heap_init: At 3FCC2170 len 000275A0 (157 KiB): RAM[0m
+[0;32mI (1047) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM[0m
+[0;32mI (1047) heap_init: At 600FE01C len 00001FCC (7 KiB): RTCRAM[0m
+[0;32mI (1048) esp_psram: Adding pool of 6898K of PSRAM memory to heap allocator[0m
+[0;32mI (1048) esp_psram: Adding pool of 41K of PSRAM memory gap generated due to end address alignment of drom to the heap allocator[0m
+[0;32mI (1049) spi_flash: detected chip: generic[0m
+[0;32mI (1049) spi_flash: flash io: qio[0m
+[0;32mI (1049) sleep_gpio: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1050) sleep_gpio: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1050) main_task: Started on CPU0[0m
+[0;32mI (1060) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1060) main_task: Calling app_main()[0m
+[0;33mW (1070) i2c.master: Please check pull-up resistances whether be connected properly. Otherwise unexpected behavior would happen. For more detailed information, please read docs[0m
+[0;32mI (1070) ili9341: LCD panel create success, version: 2.0.2[0m
+[0;32mI (1190) M5Stack: Setting LCD backlight: 100%[0m
+[0;32mI (1220) iterate-stackchan-avatar: ready: avatar=dot-matrix-oracle count=4 source=38400 + scale_strip=10240 bytes internal DMA; display=direct exact-2x 320x240@15Hz; handoff=latest-only 1x128 samples; visual=core1 priority2; input=whole-screen-call+PMIC-face@50Hz core1 priority3; PMIC-long=hardware-power-off; lower-key=hardware-reset[0m
+[0;32mI (1230) pp: pp rom version: e7ae62f[0m
+[0;32mI (1230) net80211: net80211 rom version: e7ae62f[0m
+[0;32mI (1240) wifi:wifi driver task: 3fce2474, prio:23, stack:6656, core=0[0m
+[0;32mI (1240) wifi:wifi firmware version: bea31f3[0m
+[0;32mI (1240) wifi:wifi certification version: v7.0[0m
+[0;32mI (1240) wifi:config NVS flash: enabled[0m
+[0;32mI (1240) wifi:config nano formatting: disabled[0m
+[0;32mI (1240) wifi:Init data frame dynamic rx buffer num: 32[0m
+[0;32mI (1240) wifi:Init static rx mgmt buffer num: 5[0m
+[0;32mI (1240) wifi:Init management short buffer num: 32[0m
+[0;32mI (1240) wifi:Init dynamic tx buffer num: 32[0m
+[0;32mI (1240) wifi:Init static tx FG buffer num: 2[0m
+[0;32mI (1240) wifi:Init static rx buffer size: 1600[0m
+[0;32mI (1240) wifi:Init static rx buffer num: 10[0m
+[0;32mI (1240) wifi:Init dynamic rx buffer num: 32[0m
+[0;32mI (1240) wifi_init: rx ba win: 6[0m
+[0;32mI (1240) wifi_init: accept mbox: 6[0m
+[0;32mI (1240) wifi_init: tcpip mbox: 32[0m
+[0;32mI (1240) wifi_init: udp mbox: 6[0m
+[0;32mI (1240) wifi_init: tcp mbox: 6[0m
+[0;32mI (1240) wifi_init: tcp tx win: 5760[0m
+[0;32mI (1240) wifi_init: tcp rx win: 5760[0m
+[0;32mI (1240) wifi_init: tcp mss: 1440[0m
+[0;32mI (1240) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (1240) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (1240) wifi:Set ps type: 0, coexist: 0[0m
+
+[0;32mI (1240) phy_init: phy_version 701,f4f1da3a,Mar  3 2025,15:50:10[0m
+[0;32mI (1270) wifi:mode : sta (68:ee:8f:d8:53:20)[0m
+[0;32mI (1270) wifi:enable tsf[0m
+[0;32mI (1310) ES7210: Work in Slave mode[0m
+[0;32mI (1320) ES7210: Enable ES7210_INPUT_MIC1[0m
+[0;32mI (1320) ES7210: Enable ES7210_INPUT_MIC2[0m
+[0;32mI (1330) ES7210: Enable ES7210_INPUT_MIC3[0m
+[0;32mI (1330) ES7210: Enable TDM mode[0m
+[0;32mI (1330) I2S_IF: Paired data: 0x3c155118, current mode: playback, paired in_enable: 0, paired out_enable: 0[0m
+[0;32mI (1330) I2S_IF: STD: TX, data_bit: 16, slot_bit: 16, ws_width: 16, slot_mode: MONO, slot_mask: 0x1[0m
+[0;32mI (1330) I2S_IF: STD: TX, sample_rate_hz: 16000, mclk_multiple: 256, clk_src: 6[0m
+[0;32mI (1340) Adev_Codec: Open codec device OK[0m
+[0;32mI (1340) I2S_IF: Peer mode playback need extend bits 32 to 64[0m
+[0;32mI (1340) I2S_IF: TDM: RX, data_bit: 16, slot_bit: 16, ws_width: 32, total_slot: 4, slot_mask: 0xf[0m
+[0;32mI (1340) I2S_IF: TDM: RX, sample_rate_hz: 16000, mclk_multiple: 256, clk_src: 6[0m
+[0;32mI (1340) I2S_IF: STD: TX, data_bit: 16, slot_bit: 32, ws_width: 32, slot_mode: MONO, slot_mask: 0x1[0m
+[0;32mI (1340) I2S_IF: STD: TX, sample_rate_hz: 16000, mclk_multiple: 256, clk_src: 6[0m
+[0;32mI (1340) ES7210: Bits 16[0m
+[0;32mI (1350) ES7210: Enable ES7210_INPUT_MIC1[0m
+[0;32mI (1350) ES7210: Enable ES7210_INPUT_MIC2[0m
+[0;32mI (1350) ES7210: Enable ES7210_INPUT_MIC3[0m
+[0;32mI (1360) ES7210: Enable TDM mode[0m
+[0;32mI (1360) ES7210: Unmuted[0m
+[0;32mI (1360) Adev_Codec: Open codec device OK[0m
+[0;32mI (1370) iterate-core-s3-audio: ready: 16 kHz; DMA=5x128 (40 ms); raw reserve=8x1024 (64 ms); VOIP AEC=256; wire=320; static owner=29264 bytes[0m
+[0;32mI (1370) iterate-core-s3-audio: capture mapping: slot2=near 24 dB; slot1 electrical speaker divider x8 is the AEC reference; exact completed TX DMA is the far-active oracle; diagnostic non-near codec inputs=0 dB[0m
+[0;32mI (1370) iterate-stackchan: runtime ready: static_bytes=87440 control_bytes=131072 pcm_ring_bytes=41728 device_bytes=1008 control_transport_bytes=26296 pcm_transport_bytes=11656 avatar_static_bytes=9136 avatar_framebuffer_bytes=48640[0m
+[0;32mI (1370) iterate-stackchan: control state=wifi_connecting[0m
+[0;33mW (1370) wifi:Haven't to connect to a suitable AP now![0m
+[0;33mW (2380) wifi:Haven't to connect to a suitable AP now![0m
+[0;33mW (3380) wifi:Haven't to connect to a suitable AP now![0m
+[0;32mI (3690) wifi:new:<4,1>, old:<1,0>, ap:<255,255>, sta:<4,1>, prof:1, snd_ch_cfg:0x0[0m
+[0;32mI (3690) wifi:state: init -> auth (0xb0)[0m
+[0;32mI (7920) wifi:state: auth -> init (0x200)[0m
+[0;32mI (7920) wifi:new:<4,0>, old:<4,1>, ap:<255,255>, sta:<4,1>, prof:1, snd_ch_cfg:0x0[0m
+[0;33mW (8380) wifi:Haven't to connect to a suitable AP now![0m
+[0;33mW (9380) wifi:Haven't to connect to a suitable AP now![0m
+[0;33mW (10380) wifi:Haven't to connect to a suitable AP now![0m
+[0;33mW (11380) wifi:Haven't to connect to a suitable AP now![0m
+[0;33mW (12380) wifi:Haven't to connect to a suitable AP now![0m
+[0;33mW (13380) wifi:Haven't to connect to a suitable AP now![0m
+[0;33mW (14380) wifi:Haven't to connect to a suitable AP now![0m
+[0;33mW (15380) wifi:Haven't to connect to a suitable AP now![0m
+[0;32mI (15780) wifi:new:<4,1>, old:<4,0>, ap:<255,255>, sta:<4,1>, prof:1, snd_ch_cfg:0x0[0m
+[0;32mI (15780) wifi:state: init -> auth (0xb0)[0m
+[0;32mI (16230) wifi:state: auth -> assoc (0x0)[0m
+[0;32mI (16260) wifi:state: assoc -> run (0x10)[0m
+[0;32mI (16290) wifi:connected with mispwoso2, aid = 25, channel 4, 40U, bssid = 62:7f:f0:57:9d:87[0m
+[0;32mI (16290) wifi:security: WPA3-SAE, phy: bgn, rssi: -40[0m
+[0;32mI (16290) wifi:pm start, type: 0[0m
+
+[0;32mI (16290) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us[0m
+[0;32mI (16290) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000[0m
+[0;32mI (16360) wifi:AP's beacon interval = 102400 us, DTIM period = 1[0m
+[0;32mI (16790) wifi:<ba-add>idx:0 (ifx:0, 62:7f:f0:57:9d:87), tid:7, ssn:3, winSize:64[0m
+[0;32mI (16800) wifi:<ba-del>idx:0, tid:7[0m
+[0;32mI (16800) wifi:<ba-add>idx:0 (ifx:0, 62:7f:f0:57:9d:87), tid:7, ssn:3, winSize:64[0m
+[0;32mI (17820) esp_netif_handlers: sta ip: 192.168.0.234, mask: 255.255.255.0, gw: 192.168.0.1[0m
+[0;32mI (17820) iterate-stackchan: control state=websocket_connecting[0m
+[0;32mI (17820) wifi:<ba-add>idx:1 (ifx:0, 62:7f:f0:57:9d:87), tid:0, ssn:1, winSize:64[0m
+[0;32mI (17820) wifi:<ba-del>idx:1, tid:0[0m
+[0;32mI (17820) wifi:<ba-add>idx:1 (ifx:0, 62:7f:f0:57:9d:87), tid:0, ssn:1, winSize:64[0m
+[0;32mI (18470) esp-x509-crt-bundle: Certificate validated[0m
+[0;32mI (20010) iterate-stackchan: control state=mounting[0m
+[0;32mI (20220) iterate-stackchan: control state=ready[0m
+[0;32mI (42350) iterate-stackchan: device_event type=3 source=1 result=0[0m
+[0;32mI (43170) iterate-stackchan: device_event type=2 source=1 result=0[0m
+[0;32mI (43170) iterate-stackchan: pcm state=connecting platform=0 connections=0 disconnects=0 errors=0 protocol=0 rx_calls=0 rx_chunks=0 pings=0 pongs=0 control_bp=0 ordered_losses=0 uplink_socket_restarts=0[0m
+[0;32mI (44330) esp-x509-crt-bundle: Certificate validated[0m
+[0;32mI (48020) iterate-stackchan: pcm state=ready platform=0 connections=1 disconnects=0 errors=0 protocol=0 rx_calls=2 rx_chunks=0 pings=0 pongs=0 control_bp=0 ordered_losses=0 uplink_socket_restarts=0[0m
+[0;32mI (56310) iterate-stackchan: device_event type=3 source=1 result=0[0m
+[0;32mI (56330) iterate-stackchan: pcm conversation stopped[0m
+[0;32mI (203460) iterate-stackchan: device_event type=3 source=1 result=0[0m
+[0;32mI (206510) iterate-stackchan: device_event type=2 source=1 result=0[0m
+[0;32mI (206510) iterate-stackchan: pcm state=connecting platform=0 connections=1 disconnects=1 errors=0 protocol=0 rx_calls=3065 rx_chunks=50 pings=0 pongs=0 control_bp=0 ordered_losses=0 uplink_socket_restarts=0[0m
+[0;32mI (207660) esp-x509-crt-bundle: Certificate validated[0m
+[0;32mI (210160) iterate-stackchan: pcm state=ready platform=0 connections=2 disconnects=1 errors=0 protocol=0 rx_calls=3067 rx_chunks=50 pings=0 pongs=0 control_bp=0 ordered_losses=0 uplink_socket_restarts=0[0m
+[0;32mI (237250) iterate-stackchan: pcm state=connecting platform=0 connections=2 disconnects=2 errors=0 protocol=0 rx_calls=13249 rx_chunks=343 pings=0 pongs=0 control_bp=0 ordered_losses=0 uplink_socket_restarts=0[0m
+[0;32mI (238650) esp-x509-crt-bundle: Certificate validated[0m
+[0;32mI (239300) iterate-stackchan: device_event type=3 source=1 result=0[0m
+[0;32mI (241130) iterate-stackchan: pcm conversation stopped[0m
+[0;33mW (247090) iterate-stackchan: remote capability subscription ended: callback rejected total=1[0m
+[0;33mW (247110) iterate-stackchan: remote capability subscription ended: callback rejected total=2[0m

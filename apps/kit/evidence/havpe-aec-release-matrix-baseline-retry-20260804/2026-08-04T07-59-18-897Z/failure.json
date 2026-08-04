@@ -1,0 +1,43 @@
+{
+  "aec": null,
+  "stackChanHealth": null,
+  "voicePeHealth": null,
+  "createdAt": "2026-08-04T07:59:26.400Z",
+  "device": {
+    "deviceHost": "192.168.0.33",
+    "id": "home-assistant-voice-preview-edition",
+    "projectId": "prj_4f76ffe131f1495981afd65619f57914",
+    "projectSlug": "kit-havpe-voice-e2e-20260802",
+    "workerHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app"
+  },
+  "digital": null,
+  "error": {
+    "message": "Production route preflight failed: Device control capability did not sustain 8 consecutive responses at or below 500 ms across 1 bounded attempt.",
+    "name": "Error",
+    "stack": "Error: Production route preflight failed: Device control capability did not sustain 8 consecutive responses at or below 500 ms across 1 bounded attempt.\n    at proveProductionAecWaveform (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:381:13)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:1375:20)"
+  },
+  "network": null,
+  "passed": false,
+  "projectModeRestored": true,
+  "schemaVersion": 1,
+  "stimuli": {
+    "macOutputVolumePercent": 40,
+    "nearSourceSha256": null,
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "providerDurationMs": 6000
+  },
+  "worker": {
+    "baseline": null,
+    "deviceMetricsCallbackBracket": {
+      "exactMediaInterval": false,
+      "reason": "Both proof boundaries require a retained device metrics callback.",
+      "semantics": "conservative-callback-bracket",
+      "status": "unavailable"
+    },
+    "terminal": null
+  }
+}

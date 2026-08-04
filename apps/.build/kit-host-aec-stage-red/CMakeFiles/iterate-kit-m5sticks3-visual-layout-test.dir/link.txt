@@ -1,0 +1,1 @@
+/usr/bin/c++ -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-m5sticks3-visual-layout-test.dir/tests/m5sticks3_visual_layout_test.cpp.o" -o iterate-kit-m5sticks3-visual-layout-test

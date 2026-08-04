@@ -1,0 +1,165 @@
+[
+  {
+    "assessment": {
+      "actualFrames": 165,
+      "acceptedFrameSpanMs": 3282,
+      "capturedAudioDurationMs": 3300,
+      "durationMs": 3295,
+      "expectedFrames": 165,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 168,
+      "minimumExpectedFrames": 162,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 3295,
+      "frames": 165,
+      "truncatedFrames": 0
+    },
+    "name": "ambient",
+    "playbackObserved": false,
+    "responseIndex": null
+  },
+  {
+    "assessment": {
+      "actualFrames": 215,
+      "acceptedFrameSpanMs": 4275,
+      "capturedAudioDurationMs": 4300,
+      "durationMs": 4318,
+      "expectedFrames": 216,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 219,
+      "minimumExpectedFrames": 213,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4318,
+      "frames": 215,
+      "truncatedFrames": 0
+    },
+    "name": "far-tone",
+    "playbackObserved": true,
+    "responseIndex": 0
+  },
+  {
+    "assessment": {
+      "actualFrames": 216,
+      "acceptedFrameSpanMs": 4309,
+      "capturedAudioDurationMs": 4320,
+      "durationMs": 4318,
+      "expectedFrames": 216,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 219,
+      "minimumExpectedFrames": 213,
+      "passed": false,
+      "realtimeCadencePassed": false,
+      "reasons": ["The maximum accepted-uplink gap was 62 ms; 60 ms is the fixed realtime limit."]
+    },
+    "capture": {
+      "durationMs": 4318,
+      "frames": 216,
+      "truncatedFrames": 0
+    },
+    "name": "far-dual-carrier-prbs31",
+    "playbackObserved": true,
+    "responseIndex": 1
+  },
+  {
+    "assessment": {
+      "actualFrames": 216,
+      "acceptedFrameSpanMs": 4292,
+      "capturedAudioDurationMs": 4320,
+      "durationMs": 4325,
+      "expectedFrames": 216,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 219,
+      "minimumExpectedFrames": 213,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4325,
+      "frames": 216,
+      "truncatedFrames": 0
+    },
+    "name": "far-speech-shaped",
+    "playbackObserved": true,
+    "responseIndex": 2
+  },
+  {
+    "assessment": {
+      "actualFrames": 216,
+      "acceptedFrameSpanMs": 4291,
+      "capturedAudioDurationMs": 4320,
+      "durationMs": 4295,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4295,
+      "frames": 216,
+      "truncatedFrames": 0
+    },
+    "name": "near-only",
+    "playbackObserved": true,
+    "responseIndex": 3
+  },
+  {
+    "assessment": {
+      "actualFrames": 216,
+      "acceptedFrameSpanMs": 4297,
+      "capturedAudioDurationMs": 4320,
+      "durationMs": 4301,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4301,
+      "frames": 216,
+      "truncatedFrames": 0
+    },
+    "name": "near-repeat",
+    "playbackObserved": true,
+    "responseIndex": 4
+  },
+  {
+    "assessment": {
+      "actualFrames": 217,
+      "acceptedFrameSpanMs": 4257,
+      "capturedAudioDurationMs": 4340,
+      "durationMs": 4333,
+      "expectedFrames": 217,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 220,
+      "minimumExpectedFrames": 214,
+      "passed": false,
+      "realtimeCadencePassed": false,
+      "reasons": [
+        "The retained PCM covers 4320 ms between frame starts but arrived over 4257 ms; the 63 ms compression exceeds the 60 ms realtime allowance."
+      ]
+    },
+    "capture": {
+      "durationMs": 4333,
+      "frames": 217,
+      "truncatedFrames": 0
+    },
+    "name": "double-talk",
+    "playbackObserved": true,
+    "responseIndex": 5
+  }
+]

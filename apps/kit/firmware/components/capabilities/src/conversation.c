@@ -6,9 +6,9 @@
 #include <string.h>
 
 /*
- * The top button is a call toggle, not the speech gate. `start` opens the PCM
- * generation but leaves capture stopped; the front-button PTT capability owns
- * the later capture/commit edges. `hangUp` tears down the whole generation.
+ * Conversation lifetime and microphone turns are separate actions. `start`
+ * opens the PCM generation but leaves capture stopped; the PTT capability owns
+ * later capture/commit edges. `hangUp` tears down the whole generation.
  * Both commands remain queue admissions so physical and remote transitions
  * have one observable order and the unattended rig exercises the GPIO path's
  * actual state machine rather than a test-only socket shortcut.

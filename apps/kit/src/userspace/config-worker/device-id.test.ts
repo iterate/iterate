@@ -21,11 +21,6 @@ describe("kit device identity", () => {
         "conversation",
         "interruptPlayback",
       ),
-    ).toEqual([
-      "kit",
-      "homeAssistantVoicePreviewEdition",
-      "conversation",
-      "interruptPlayback",
-    ]);
+    ).toEqual(["kit", "homeAssistantVoicePreviewEdition", "conversation", "interruptPlayback"]);
   });
 });

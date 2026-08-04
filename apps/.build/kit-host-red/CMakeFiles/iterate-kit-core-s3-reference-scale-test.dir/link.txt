@@ -1,0 +1,1 @@
+/usr/bin/cc -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-core-s3-reference-scale-test.dir/tests/core_s3_reference_scale_test.c.o" -o iterate-kit-core-s3-reference-scale-test

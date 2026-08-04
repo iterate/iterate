@@ -334,6 +334,9 @@ IDF_TOOLCHAIN:STRING=gcc
 //Install Mbed TLS headers.
 INSTALL_MBEDTLS_HEADERS:BOOL=ON
 
+//XMOS uplink tap: 0=raw, 1=AEC, 2=IC, 3=NS, 4=AGC
+ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE:STRING=3
+
 //Explicitly link Mbed TLS library to pthread.
 LINK_WITH_PTHREAD:BOOL=OFF
 

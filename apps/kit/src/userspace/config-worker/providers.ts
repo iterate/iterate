@@ -1,7 +1,35 @@
 import { ITERATE_KIT_PCM_FRAME_BYTES, ITERATE_KIT_PCM_SAMPLE_RATE_HZ } from "./pcm-proxy.ts";
+import { KIT_SPRITE_SETS } from "./sprite-sets.ts";
+import {
+  createDeterministicAecRenderer,
+  DETERMINISTIC_AEC_DURATION_MS,
+  DETERMINISTIC_AEC_SAMPLE_RATE_HZ,
+  type DeterministicAecPcmRenderer,
+} from "./deterministic-aec-fixture.ts";
 
 const XAI_API_KEY_SECRET_PATH = "/secrets/kit/xai-api-key";
 const XAI_CLIENT_SECRET_LIFETIME_SECONDS = 60 * 60;
+/**
+ * Product policy for the audio model's ambiguous short-turn boundary.
+ *
+ * The exact production PCM for a physical “Hey pal” turn is independently
+ * transcribed correctly by xAI's dedicated transcription endpoint, while the
+ * realtime model has stochastically revised the same short audio to “Hey now”,
+ * “PayPal”, and “Play now”. The last variant caused Grok to infer a sprite
+ * operation merely because that tool was present. Firmware filtering cannot
+ * repair provider-side semantic revision without also risking near speech, so
+ * this policy keeps ambiguous openers conversational and makes the optional
+ * device tool opt-in by explicit vocabulary.
+ *
+ * Do not force a canned first reply. A production count proof delivered the
+ * complete concrete instruction “start with one, end with one hundred”, yet
+ * Grok returned the old mandated greeting instead of performing it. Adding a
+ * synthetic warm-up turn would hide the defect and make ordinary first-turn
+ * latency worse. Silence before actual speech belongs to transport policy;
+ * after speech, the model must answer the complete request it received.
+ */
+export const GROK_DEFAULT_INSTRUCTIONS =
+  "Be concise, conversational, useful, and pleasantly decisive. Wait silently until the user speaks. Respond to the user's complete request, including the first turn; never replace a concrete request with a generic greeting. Prefer taking a safe, reversible action over asking a follow-up question or requesting permission. Use good judgment, make reasonable choices, and occasionally surprise the user in a delightful way; ask a question only when a missing answer materially changes the outcome or safety. If a short opening is ambiguous, treat it as a greeting and ask how you can help. Never infer a face, avatar, sprite, gesture, or hang-up from unrelated words. When the user explicitly asks to change the face, avatar, or sprite without naming one, choose an appropriate supported sprite set yourself and call changeSpriteSet instead of asking which one. On StackChan, accompany a clearly affirmative or agreeing spoken answer with the nod tool, and accompany a clearly negative, disagreeing, or refusing spoken answer with the shakeHead tool; do both naturally without announcing the gesture. For example, if the user asks “Are you there?”, call nod and say “Yes, I’m here.” Do not gesture for quoted, hypothetical, or ambiguous yes/no language. Also obey an explicit gesture request. If the user says stop, pause, be quiet, or otherwise interrupts while you are speaking, stop that reply and remain in the conversation; do not call endConversation. Call endConversation only when the user explicitly asks to end the conversation, hang up, or go back to sleep; treat “go back to sleep” as an explicit hang-up, optionally give a brief sign-off, call endConversation, and do not ask for confirmation. Do not list tools or sprite sets unless the user asks. Do not claim a physical action succeeded until its tool result says it did.";
 const GROK_CREDENTIAL_MINIMUM_REMAINING_MS = 5_000;
 const GROK_CREDENTIAL_REFRESH_LEAD_MS = 60_000;
 const supportedPcmSampleRates = new Set([8_000, 16_000, 22_050, 24_000, 32_000, 44_100, 48_000]);
@@ -31,12 +59,18 @@ export interface DeterministicToneOptions {
   sampleRateHz: number;
 }
 
-export type GrokServerVadProfile = "low-level-aec" | "xmos-aec-ns";
+export interface DeterministicAecOptions {
+  createPair?: () => AcceptedSocketPair;
+}
+
+export type GrokServerVadProfile = "low-level-aec" | "xmos-aec";
 
 export interface GrokRealtimeVoiceOptions {
   connectTimeoutMs?: number;
   createWebSocket?: (url: string, protocols: readonly string[]) => WebSocket;
   credential: GrokRealtimeCredential;
+  deviceId?: string;
+  enableSpriteSetTool?: boolean;
   instructions?: string;
   model?: string;
   onStage?: (stage: GrokRealtimeVoiceStage) => void;
@@ -251,6 +285,45 @@ export async function connectDeterministicTone(
     throw new Error("The deterministic tone requires a whole number of samples per 20 ms frame.");
   }
 
+  return connectDeterministicPcm({
+    createPair: options.createPair,
+    createRenderer: () => {
+      const render = createToneRenderer(options.frequencyHz, options.sampleRateHz);
+      return { render };
+    },
+    durationMs: options.durationMs,
+    sampleRateHz: options.sampleRateHz,
+  });
+}
+
+/**
+ * Connects the quiet six-response physical AEC fixture at the Grok seam.
+ *
+ * Full-duplex devices need materially different far-end challenges and two
+ * matched-path controls. Keeping this out of `connectDeterministicTone` is a
+ * safety boundary: the Stick's audible transport oracle retains its measured
+ * 75%-scale tone, while residential AEC runs cannot accidentally inherit that
+ * much louder source.
+ */
+export async function connectDeterministicAec(
+  options: DeterministicAecOptions = {},
+): Promise<WebSocket> {
+  return connectDeterministicPcm({
+    createPair: options.createPair,
+    createRenderer: createDeterministicAecRenderer,
+    durationMs: DETERMINISTIC_AEC_DURATION_MS,
+    sampleRateHz: DETERMINISTIC_AEC_SAMPLE_RATE_HZ,
+  });
+}
+
+interface DeterministicPcmOptions {
+  createPair?: () => AcceptedSocketPair;
+  createRenderer(responseIndex: number): DeterministicAecPcmRenderer;
+  durationMs: number;
+  sampleRateHz: number;
+}
+
+function connectDeterministicPcm(options: DeterministicPcmOptions): WebSocket {
   const pair = (options.createPair ?? nativeSocketPair)();
   /*
    * Neither half leaves this worker in a 101 Response. Workerd therefore has
@@ -262,8 +335,8 @@ export async function connectDeterministicTone(
   pair.first.accept();
   pair.second.accept();
   const provider = pair.first;
-  const renderer = createToneRenderer(options.frequencyHz, options.sampleRateHz);
   let stream: AbortController | undefined;
+  let responseIndex = 0;
   pair.second.addEventListener("message", (event) => {
     if (typeof event.data !== "string") return;
     const control = providerControl(event.data);
@@ -286,9 +359,28 @@ export async function connectDeterministicTone(
       return;
     }
     if (control !== "response.create" || stream) return;
+    let renderer: DeterministicAecPcmRenderer;
+    try {
+      renderer = options.createRenderer(responseIndex);
+    } catch (error) {
+      /*
+       * An extra response means the harness and provider disagree about the
+       * experiment. Emit a normal provider error rather than wrapping the
+       * sequence or throwing out of an EventTarget callback, either of which
+       * could leave a plausible but mislabelled acoustic capture behind.
+       */
+      pair.second.send(
+        JSON.stringify({
+          error: { message: error instanceof Error ? error.message : String(error) },
+          type: "error",
+        }),
+      );
+      return;
+    }
+    responseIndex += 1;
     stream = new AbortController();
     const current = stream;
-    void streamTone(pair.second, renderer, options, current.signal).finally(() => {
+    void streamDeterministicPcm(pair.second, renderer, options, current.signal).finally(() => {
       if (stream === current) stream = undefined;
     });
   });
@@ -377,7 +469,13 @@ export async function connectGrokRealtimeVoice(
           audio: {
             input: {
               format: { rate: options.sampleRateHz, type: "audio/pcm" },
-              transcription: { model: "grok-transcribe" },
+              /*
+               * The physical products in this proof are currently English
+               * voice agents. Supplying the provider's explicit hint avoids
+               * spending the first short greeting on language inference; it
+               * does not rewrite or locally buffer microphone audio.
+               */
+              transcription: { language_hint: "en", model: "grok-transcribe" },
               transport: "binary",
             },
             output: {
@@ -385,7 +483,7 @@ export async function connectGrokRealtimeVoice(
               transport: "binary",
             },
           },
-          instructions: options.instructions ?? "Be concise, conversational, and useful.",
+          instructions: options.instructions ?? GROK_DEFAULT_INSTRUCTIONS,
           /*
            * Button B owns the lifetime of one conversation. Grok must retain
            * preceding PTT turns for that lifetime; otherwise repeated Button A
@@ -399,22 +497,7 @@ export async function connectGrokRealtimeVoice(
            * not infer this from a device slug: that would split the shared
            * StackChan/HAVPE path and conceal firmware/worker disagreement.
            */
-          tools: [
-            {
-              description:
-                "Change the active Iterate Kit device display background to red or green.",
-              name: "changeColour",
-              parameters: {
-                additionalProperties: false,
-                properties: {
-                  colour: { enum: ["red", "green"], type: "string" },
-                },
-                required: ["colour"],
-                type: "object",
-              },
-              type: "function",
-            },
-          ],
+          tools: grokDeviceTools(options),
           turn_detection: providerTurnDetection(options.turnDetection, options.serverVadProfile),
           voice: options.voice ?? "eve",
         },
@@ -426,6 +509,59 @@ export async function connectGrokRealtimeVoice(
     socket.close(1000, "Grok connection setup failed.");
     throw error;
   }
+}
+
+function grokDeviceTools(options: GrokRealtimeVoiceOptions) {
+  if (options.enableSpriteSetTool === false) return [];
+  const emptyParameters = {
+    additionalProperties: false,
+    properties: {},
+    type: "object",
+  } as const;
+  const tools = [
+    {
+      description:
+        "Change the active Iterate Kit device to one of its compiled sprite sets. " +
+        "When the user requests a face change without naming one, choose a suitable set yourself. " +
+        "Spoken names map as follows: Dot Matrix Oracle to dot-matrix-oracle; " +
+        "Karakuri Brass to karakuri-brass; Star Byte to starbyte.",
+      name: "changeSpriteSet",
+      parameters: {
+        additionalProperties: false,
+        properties: {
+          spriteSet: { enum: KIT_SPRITE_SETS, type: "string" },
+        },
+        required: ["spriteSet"],
+        type: "object",
+      },
+      type: "function",
+    },
+  ];
+  if (options.deviceId !== "stackchan") return tools;
+  return [
+    ...tools,
+    {
+      description:
+        "End the current voice conversation when the user explicitly asks to end, hang up, or go back to sleep. Do not ask for confirmation.",
+      name: "endConversation",
+      parameters: emptyParameters,
+      type: "function",
+    },
+    {
+      description:
+        "Make StackChan physically nod its head once. Use alongside a clearly affirmative or agreeing spoken answer; for example, when asked ‘Are you there?’, nod and say ‘Yes, I’m here.’",
+      name: "nod",
+      parameters: emptyParameters,
+      type: "function",
+    },
+    {
+      description:
+        "Make StackChan physically shake its head left and right once. Use alongside a clearly negative, disagreeing, or refusing spoken answer.",
+      name: "shakeHead",
+      parameters: emptyParameters,
+      type: "function",
+    },
+  ];
 }
 
 function providerTurnDetection(
@@ -440,31 +576,34 @@ function providerTurnDetection(
   }
   if (mode === "server-vad") {
     /*
-     * The one-second tail favors complete conversational turns; 400 ms of
-     * prefix protects the first phoneme. Activation is intentionally a named
-     * platform profile instead of one global number: the two current AEC
-     * sources have materially different post-DSP levels.
+     * Four hundred milliseconds of prefix protects the first phoneme.
+     * Endpointing is one product-level latency policy: every continuous-AEC
+     * target commits after 400 ms of quiet. Keeping it independent from the
+     * named signal-level profiles prevents target-specific UX drift while the
+     * profile still owns the genuinely different gain/threshold provenance.
+     * This does not buffer or queue PCM; it tells provider VAD how long the
+     * already-continuous input must stay quiet before committing one turn.
      */
-    if (profile !== "low-level-aec" && profile !== "xmos-aec-ns") {
+    if (profile !== "low-level-aec" && profile !== "xmos-aec") {
       throw new Error("A server-VAD Grok session requires a calibrated input profile.");
     }
     return {
       prefix_padding_ms: 400,
-      silence_duration_ms: 1_000,
+      silence_duration_ms: 400,
       /*
-       * StackChan's measured clean-AEC stream needs xAI's documented 0.1
-       * floor: 0.5 received 4,930 current frames with a 12,670 peak yet emitted
-       * no speech edge. HAVPE's earlier XMOS AGC tap made 0.1 produce one
-       * 95-second ambient utterance, but that was a different signal contract:
-       * its final gain amplified near-end and echo residue roughly 100x. After
-       * moving to AEC+IC+NS, the first physical run peaked at only 557/32768
-       * and 0.85 emitted no speech edge across 4,772 losslessly forwarded
-       * frames. The documented 0.1 floor is therefore the measured next
-       * calibration point. The named profiles remain distinct because their
-       * DSP provenance and future calibration remain independently reviewable.
-       * HAVPE separately uses a measured fixed ×16 userspace multiplier; the
-       * bridge retains its gained peak/RMS and zero-tolerance clipping counter
-       * so level placement cannot become an invisible transport mutation.
+       * Threshold is part of the measured DSP profile, not an echo filter.
+       * Raising StackChan from 0.1 to 0.2 suppressed one assistant-echo false
+       * edge but also missed deliberate nearby barge-in; 0.15 merely split two
+       * known failures. The exact completed-speaker-DMA AEC reference must now
+       * remove self-talk before provider VAD. Restore the measured near-speech
+       * floor so double-talk remains audible, and reject the physical run if
+       * assistant-only playback produces any VAD edge or transcript.
+       * The production proof must still demonstrate both a real near-speech
+       * edge and zero speaker-only edges before this calibration is accepted.
+       *
+       * HAVPE keeps 0.1 because its independently measured fixed-gain XMOS AEC
+       * tap has a different envelope. Conflating the two here would conceal a
+       * hardware calibration decision behind a shared provider default.
        */
       threshold: 0.1,
       type: "server_vad",
@@ -497,10 +636,10 @@ function createToneRenderer(frequencyHz: number, sampleRateHz: number) {
   };
 }
 
-async function streamTone(
+async function streamDeterministicPcm(
   socket: WebSocket,
-  render: (sampleCount: number) => Uint8Array,
-  options: DeterministicToneOptions,
+  renderer: DeterministicAecPcmRenderer,
+  options: Pick<DeterministicPcmOptions, "durationMs" | "sampleRateHz">,
   signal: AbortSignal,
 ) {
   socket.send(JSON.stringify({ type: "response.created" }));
@@ -515,7 +654,7 @@ async function streamTone(
      * currently selects this fixture only for that same format; fail loudly if
      * a future mode changes rates without first versioning the device lane.
      */
-    const frame = render(samplesPerFrame);
+    const frame = renderer.render(samplesPerFrame);
     if (frame.byteLength !== ITERATE_KIT_PCM_FRAME_BYTES) {
       throw new Error("The deterministic provider rate does not match the PCM v1 frame.");
     }

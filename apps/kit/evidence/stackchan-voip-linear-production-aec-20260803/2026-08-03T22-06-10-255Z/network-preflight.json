@@ -1,0 +1,100 @@
+{
+  "createdAt": "2026-08-03T22:06:15.378Z",
+  "deviceHost": "192.168.0.234",
+  "deviceReachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 14.277
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 7.166
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.922
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 52.826
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 7.489
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 9.294
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.461
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.224
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "dnsAndConnect": {
+    "connect": {
+      "durationMs": 31.85395900000003,
+      "error": null,
+      "maximumHealthyDurationMs": 1000,
+      "outcome": "success"
+    },
+    "dns": {
+      "durationMs": 40.405083000000104,
+      "error": null,
+      "maximumHealthyDurationMs": 500,
+      "outcome": "success"
+    }
+  },
+  "reachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 12.694
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.483
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.584
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.533
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 16.803
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.458
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.975
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.559
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "workerHost": "kit--kit-stackchan-voice-e2e-20260801.iterate.app",
+  "passed": true,
+  "reasons": [],
+  "schemaVersion": 2
+}

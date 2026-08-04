@@ -1,0 +1,163 @@
+[
+  {
+    "assessment": {
+      "actualFrames": 166,
+      "acceptedFrameSpanMs": 3307,
+      "capturedAudioDurationMs": 3320,
+      "durationMs": 3311,
+      "expectedFrames": 166,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 169,
+      "minimumExpectedFrames": 163,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 3311,
+      "frames": 166,
+      "truncatedFrames": 0
+    },
+    "name": "ambient",
+    "playbackObserved": false,
+    "responseIndex": null
+  },
+  {
+    "assessment": {
+      "actualFrames": 215,
+      "acceptedFrameSpanMs": 4272,
+      "capturedAudioDurationMs": 4300,
+      "durationMs": 4307,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4307,
+      "frames": 215,
+      "truncatedFrames": 0
+    },
+    "name": "far-tone",
+    "playbackObserved": true,
+    "responseIndex": 0
+  },
+  {
+    "assessment": {
+      "actualFrames": 216,
+      "acceptedFrameSpanMs": 4305,
+      "capturedAudioDurationMs": 4320,
+      "durationMs": 4308,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4308,
+      "frames": 216,
+      "truncatedFrames": 0
+    },
+    "name": "far-dual-carrier-prbs31",
+    "playbackObserved": true,
+    "responseIndex": 1
+  },
+  {
+    "assessment": {
+      "actualFrames": 215,
+      "acceptedFrameSpanMs": 4283,
+      "capturedAudioDurationMs": 4300,
+      "durationMs": 4311,
+      "expectedFrames": 216,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 219,
+      "minimumExpectedFrames": 213,
+      "passed": false,
+      "realtimeCadencePassed": false,
+      "reasons": ["The maximum accepted-uplink gap was 62 ms; 60 ms is the fixed realtime limit."]
+    },
+    "capture": {
+      "durationMs": 4311,
+      "frames": 215,
+      "truncatedFrames": 0
+    },
+    "name": "far-speech-shaped",
+    "playbackObserved": true,
+    "responseIndex": 2
+  },
+  {
+    "assessment": {
+      "actualFrames": 217,
+      "acceptedFrameSpanMs": 4303,
+      "capturedAudioDurationMs": 4340,
+      "durationMs": 4322,
+      "expectedFrames": 216,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 219,
+      "minimumExpectedFrames": 213,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4322,
+      "frames": 217,
+      "truncatedFrames": 0
+    },
+    "name": "near-only",
+    "playbackObserved": true,
+    "responseIndex": 3
+  },
+  {
+    "assessment": {
+      "actualFrames": 215,
+      "acceptedFrameSpanMs": 4273,
+      "capturedAudioDurationMs": 4300,
+      "durationMs": 4292,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": false,
+      "realtimeCadencePassed": false,
+      "reasons": ["The maximum accepted-uplink gap was 66 ms; 60 ms is the fixed realtime limit."]
+    },
+    "capture": {
+      "durationMs": 4292,
+      "frames": 215,
+      "truncatedFrames": 0
+    },
+    "name": "near-repeat",
+    "playbackObserved": true,
+    "responseIndex": 4
+  },
+  {
+    "assessment": {
+      "actualFrames": 215,
+      "acceptedFrameSpanMs": 4270,
+      "capturedAudioDurationMs": 4300,
+      "durationMs": 4294,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4294,
+      "frames": 215,
+      "truncatedFrames": 0
+    },
+    "name": "double-talk",
+    "playbackObserved": true,
+    "responseIndex": 5
+  }
+]

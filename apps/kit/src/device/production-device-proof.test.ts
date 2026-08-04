@@ -1,3 +1,4 @@
+import { readFile } from "node:fs/promises";
 import { describe, expect, test } from "vitest";
 import type { DeviceConfiguration } from "../firmware/config-image.ts";
 import {
@@ -6,6 +7,7 @@ import {
 } from "./production-device-proof.ts";
 
 const packageDirectory = "/repo/apps/kit";
+const currentStickRoute = { ITERATE_KIT_PORT: "/dev/cu.usbmodem11301" } as const;
 const configuration: DeviceConfiguration = {
   schemaVersion: 1,
   iterate: {
@@ -21,15 +23,30 @@ const configuration: DeviceConfiguration = {
 };
 
 describe("unattended production device proof", () => {
-  test("preserves the reviewed no-argument Stick route", () => {
-    const options = parseProductionDeviceProofCliOptions([], {}, packageDirectory);
+  test("requires the current Stick port instead of trusting a stale hub enumeration", () => {
+    /*
+     * The former no-argument default was /dev/cu.usbmodem11201. After one hub
+     * move that path belonged to the denylisted Waveshare, so even reading the
+     * Stick configuration would have reset the wrong physical board. A stable
+     * MAC remains the identity, but the destructive outer proof must receive
+     * a freshly resolved path for this transaction.
+     */
+    expect(() => parseProductionDeviceProofCliOptions([], {}, packageDirectory)).toThrow(
+      "--port or ITERATE_KIT_PORT",
+    );
+
+    const options = parseProductionDeviceProofCliOptions(
+      ["--port", "/dev/cu.usbmodem11301"],
+      {},
+      packageDirectory,
+    );
 
     expect(options).toMatchObject({
       buildDirectory: "/repo/apps/kit/firmware/targets/m5sticks3/build",
       deviceHost: "192.168.0.21",
       deviceId: "m5sticks3",
       deviceMac: "70:04:1D:D5:45:88",
-      port: "/dev/cu.usbmodem11201",
+      port: "/dev/cu.usbmodem11301",
       projectSlug: "kit-stick-vertical-proof",
       workerHost: "kit--kit-stick-vertical-proof.iterate.app",
     });
@@ -73,6 +90,7 @@ describe("unattended production device proof", () => {
       port: "/dev/cu.usbmodem11101",
       projectId: "prj_stackchan_voice",
       projectSlug: "stackchan-voice-lab",
+      scenario: "conversation",
       turns: 1,
       workerHost: "stackchan--voice-lab.iterate.app",
     });
@@ -170,7 +188,11 @@ describe("unattended production device proof", () => {
   });
 
   test("forwards a bounded multi-turn conversation through the device-backed production proof", () => {
-    const options = parseProductionDeviceProofCliOptions(["--turns", "3"], {}, packageDirectory);
+    const options = parseProductionDeviceProofCliOptions(
+      ["--turns", "3"],
+      currentStickRoute,
+      packageDirectory,
+    );
 
     const plan = buildProductionDeviceProofPlan(options, configuration);
 
@@ -178,6 +200,64 @@ describe("unattended production device proof", () => {
     expect(plan.grokProofArgs).toContain("--turns");
     expect(plan.grokProofArgs.at(plan.grokProofArgs.indexOf("--turns") + 1)).toBe("3");
   });
+
+  test("forwards the count-to-one-hundred physical scenario", () => {
+    const options = parseProductionDeviceProofCliOptions(
+      ["--count-to-100"],
+      currentStickRoute,
+      packageDirectory,
+    );
+
+    const plan = buildProductionDeviceProofPlan(options, configuration);
+
+    expect(options.scenario).toBe("count-to-100");
+    expect(plan.grokProofArgs).toContain("--count-to-100");
+  });
+
+  test("the Stick proof consumes count scenarios at both independent evidence seams", async () => {
+    /*
+     * A production run accepted --count-to-100, returned passed:true, and had
+     * perfectly healthy transport, but the Stick proof never read the parsed
+     * scenario. It ran its default sprite-tool sentence instead. Parser tests
+     * could only prove that the flag reached the inner CLI; this architecture
+     * boundary prevents that CLI from accepting the flag unless its runtime
+     * explicitly selects the count plan, assesses provider and Mac-microphone
+     * ledgers independently, and retains the result in the manifest.
+     */
+    const source = await readFile(
+      new URL("../../scripts/prove-production-m5sticks3-grok.ts", import.meta.url),
+      "utf8",
+    );
+
+    expect(source).toContain("productionSpokenCountPlan(options.scenario)");
+    expect(source).toContain("assessOverlappingSpokenCountEvidence({");
+    expect(source).toContain("spokenCount: spokenCountEvidence ?? null");
+  });
+
+  test.each([
+    "--count-100-to-200",
+    "--count-200-to-300",
+    "--count-300-to-400-interrupted",
+  ] as const)(
+    "forwards the later physical spoken-count scenario %s without translation",
+    (flag) => {
+      /*
+       * The outer flash/provision runner must launch the exact same proof mode
+       * as the inner production harness. Losing this flag would produce a
+       * healthy short conversation while falsely labelling it an endurance
+       * gate in the surrounding device provenance.
+       */
+      const options = parseProductionDeviceProofCliOptions(
+        [flag],
+        currentStickRoute,
+        packageDirectory,
+      );
+
+      const plan = buildProductionDeviceProofPlan(options, configuration);
+
+      expect(plan.grokProofArgs).toContain(flag);
+    },
+  );
 
   test("keeps the HAVPE slug on media routes while using its identifier-safe capability mount", () => {
     /*

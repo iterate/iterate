@@ -1,0 +1,22 @@
+[1/14] Performing build step for 'bootloader'
+[1/1] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/bootloader/esp-idf/esptool_py && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x0 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/bootloader/bootloader.bin
+Bootloader binary size 0x56c0 bytes. 0x2940 bytes (32%) free.
+[2/14] No install step for 'bootloader'
+[3/14] Completed 'bootloader'
+[4/14] Building C object esp-idf/tcp_transport/CMakeFiles/__idf_tcp_transport.dir/iterate_patched/transport_ssl.c.obj
+[5/14] Building C object esp-idf/tcp_transport/CMakeFiles/__idf_tcp_transport.dir/iterate_patched/transport_ws.c.obj
+[6/14] Linking C static library esp-idf/tcp_transport/libtcp_transport.a
+[7/14] Building C object esp-idf/iterate_voice_pe_audio/CMakeFiles/__idf_iterate_voice_pe_audio.dir/voice_pe_hardware_config.c.obj
+[8/14] Building C object esp-idf/iterate_voice_pe_audio/CMakeFiles/__idf_iterate_voice_pe_audio.dir/voice_pe_pcm_format.c.obj
+[9/14] Building C object esp-idf/iterate_voice_pe_audio/CMakeFiles/__idf_iterate_voice_pe_audio.dir/voice_pe_audio_owner.c.obj
+[10/14] Linking C static library esp-idf/iterate_voice_pe_audio/libiterate_voice_pe_audio.a
+[11/14] Generating ld/sections.ld
+[12/14] Linking CXX executable iterate-kit-home-assistant-voice-preview-edition.elf
+[13/14] Generating binary image from built executable
+esptool.py v4.12.0
+Creating esp32s3 image...
+Merged 2 ELF sections
+Successfully created esp32s3 image.
+Generated /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/iterate-kit-home-assistant-voice-preview-edition.bin
+[14/14] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/esp-idf/esptool_py && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/partition_table/partition-table.bin /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/iterate-kit-home-assistant-voice-preview-edition.bin
+iterate-kit-home-assistant-voice-preview-edition.bin binary size 0x1095f0 bytes. Smallest app partition is 0x500000 bytes. 0x3f6a10 bytes (79%) free.

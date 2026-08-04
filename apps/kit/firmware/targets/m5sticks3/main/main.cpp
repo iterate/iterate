@@ -1,18 +1,22 @@
 #include "iterate/kit/control_recovery.h"
+#include "iterate/kit/device_menu.h"
 #include "iterate/kit/devices/m5sticks3.h"
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/pcm_websocket.h"
 #include "iterate/kit/platforms/esp_idf_configuration.h"
 #include "iterate/kit/platforms/esp_idf_itx_transport.h"
+#include "iterate/kit/platforms/esp_idf_pcm_session.h"
 #include "iterate/kit/platforms/esp_idf_pcm_transport.h"
 #include "iterate/kit/platforms/esp_idf_websocket_policy.h"
 #include "iterate/kit/platforms/m5sticks3_direct_audio.hpp"
 #include "iterate/kit/platforms/m5unified.hpp"
 #include "iterate/kit/spsc_ring.h"
+#include "iterate/kit/talk_button.h"
 
 #include <cinttypes>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <limits>
 
 #include "esp_attr.h"
@@ -125,6 +129,14 @@ constexpr std::size_t maximumScreenCaptureBytes = 2'800U;
  * visible device error rather than an unbounded lifecycle backlog.
  */
 constexpr std::size_t eventCapacity = 8U;
+/*
+ * A tap must be deliberately short, while the inter-tap gap must remain easy
+ * at one-handed reach. These are product grammar constants, not switch
+ * debounce: M5Unified has already delivered stable edges by this boundary.
+ */
+constexpr std::uint32_t maximumTalkTapMs = 220U;
+constexpr std::uint32_t secondTalkTapWindowMs = 320U;
+constexpr std::size_t menuItemLabelCapacity = 48U;
 /*
  * Processed button state must survive an ordinary control-socket round trip
  * without blocking capture. Matching the local event queue's eight entries
@@ -364,6 +376,7 @@ struct Runtime {
    */
   iterate_kit_esp_idf_itx_transport transport{};
   iterate_kit_esp_idf_pcm_transport pcmTransport{};
+  iterate_kit_esp_idf_pcm_session pcmSession{};
   iterate_kit_control_recovery controlRecovery{};
   iterate::kit::platforms::M5StickS3DirectAudioOwner
       audioOwner;
@@ -372,8 +385,6 @@ struct Runtime {
   iterate_kit_m5sticks3 device{};
   iterate_kit_esp_idf_itx_transport_state lastTransportState =
       ITERATE_KIT_ESP_IDF_ITX_IDLE;
-  iterate_kit_esp_idf_pcm_transport_state lastPcmTransportState =
-      ITERATE_KIT_ESP_IDF_PCM_IDLE;
   /*
    * Last-state fields suppress repetitive fault logs without suppressing the
    * underlying saturating metrics. A transition remains visible once; a
@@ -398,16 +409,39 @@ struct Runtime {
   bool uiWifiObserved = false;
   std::int32_t uiWifiRssiDbm = 0;
   std::uint64_t nextUiNetworkSampleMs = 0U;
-  bool pcmTransportStarted = false;
-  bool pcmTransportStartAttempted = false;
   /*
    * "Waiting for AI" is a conversational fact which neither the transport nor
-   * I2S state can infer: the playback owner is deliberately pre-buffer-ready
-   * before a person has spoken. The event observer sets this only after a
-   * successfully processed PTT release and clears it on the next turn/call or
-   * first returned speech. One bit avoids inventing a second event queue.
+   * I2S state can infer. A processed button release alone is insufficient: an
+   * idempotent release after a rejected press has no turn, and a release whose
+   * PCM end marker was rejected cannot ask userspace to commit anything. These
+   * two facts are written synchronously by sendAudioEvent() and consumed by
+   * the post-dispatch observer; no second queue or guessed timeout is needed.
    */
   bool turnAwaitingReply = false;
+  bool turnCaptureStarted = false;
+  bool turnEndMarkerAccepted = false;
+  /*
+   * Device input is reduced locally before it publishes semantic lifecycle
+   * events. GPIO responsiveness therefore never depends on a network round
+   * trip, and every resulting action still enters the shared device queue.
+   */
+  iterate_kit_menu menu{};
+  iterate_kit_talk_button talkButton{};
+  iterate_kit_menu_context displayedMenuContext{};
+  char menuItemLabel[menuItemLabelCapacity]{};
+  bool displayedMenuContextKnown = false;
+  bool physicalControlLevels[ITERATE_KIT_LOGICAL_CONTROL_COUNT]{};
+  bool remoteControlLevels[ITERATE_KIT_LOGICAL_CONTROL_COUNT]{};
+  bool frontButtonPressed = false;
+  bool frontButtonClaimedByMenu = false;
+  bool talkInputSuppressedUntilRelease = false;
+  iterate_kit_device_event_source lastTalkInputSource =
+      ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL;
+  bool talkStartRequested = false;
+  bool talkStopPending = false;
+  iterate_kit_device_event_source pendingTalkStopSource =
+      ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL;
+  bool talkStopFailureLogged = false;
 };
 
 Runtime runtime;
@@ -420,31 +454,35 @@ selectCallUiState(Runtime &state) {
   const bool conversationActive =
       iterate_kit_m5sticks3_is_conversation_active(&state.device);
   if (!conversationActive) {
-    if (state.pcmTransport.state ==
-        ITERATE_KIT_ESP_IDF_PCM_FAILED) {
+    if (iterate_kit_esp_idf_pcm_session_failed(
+            &state.pcmSession)) {
       return M5StickS3CallUiState::callFailed;
     }
     return state.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
-            state.pcmTransportStarted &&
-            state.pcmTransport.state ==
-                ITERATE_KIT_ESP_IDF_PCM_READY
+            iterate_kit_esp_idf_pcm_session_transport_ready(
+                &state.pcmSession)
         ? M5StickS3CallUiState::ready
         : M5StickS3CallUiState::controlConnecting;
   }
 
-  if (state.pcmTransport.state ==
-          ITERATE_KIT_ESP_IDF_PCM_FAILED ||
+  if (iterate_kit_esp_idf_pcm_session_failed(
+          &state.pcmSession) ||
       state.platform.playbackState() ==
           RealtimePlaybackState::failed) {
     return M5StickS3CallUiState::callFailed;
   }
+  if (!iterate_kit_esp_idf_pcm_session_transport_ready(
+          &state.pcmSession)) {
+    /*
+     * Transport truth outranks the local I2S bit. A socket can disappear
+     * during a held turn; capture may need one owner iteration to converge,
+     * but every frame is already being rejected. Painting MIC in that window
+     * would claim that speech is reaching userspace when it cannot.
+     */
+    return M5StickS3CallUiState::callConnecting;
+  }
   if (iterate_kit_m5sticks3_is_capturing(&state.device)) {
     return M5StickS3CallUiState::listening;
-  }
-  if (!state.pcmTransportStarted ||
-      state.pcmTransport.state !=
-          ITERATE_KIT_ESP_IDF_PCM_READY) {
-    return M5StickS3CallUiState::callConnecting;
   }
   if (state.platform.playbackState() ==
       RealtimePlaybackState::playing) {
@@ -496,11 +534,10 @@ selectConversationVisualState(const Runtime &state) {
   visual.wifi_rssi_dbm = state.uiWifiRssiDbm;
   visual.conversation_active =
       iterate_kit_m5sticks3_is_conversation_active(&state.device);
-  visual.media_ready = state.pcmTransportStarted &&
-      state.pcmTransport.state == ITERATE_KIT_ESP_IDF_PCM_READY;
+  visual.media_ready =
+      iterate_kit_esp_idf_pcm_session_media_ready(&state.pcmSession);
   visual.media_failed =
-      (state.pcmTransportStarted &&
-       state.pcmTransport.state == ITERATE_KIT_ESP_IDF_PCM_FAILED) ||
+      iterate_kit_esp_idf_pcm_session_failed(&state.pcmSession) ||
       state.platform.playbackState() ==
           iterate::kit::platforms::RealtimePlaybackState::failed;
   /*
@@ -515,6 +552,348 @@ selectConversationVisualState(const Runtime &state) {
   visual.speaker_peak = 0U;
   visual.restart_armed = false;
   return visual;
+}
+
+iterate_kit_menu_context menuContext(const Runtime &state) {
+  iterate_kit_menu_context context{};
+  context.call_active =
+      iterate_kit_m5sticks3_is_conversation_active(&state.device);
+  /*
+   * The current M5 transport is mounted on one configured stream, so it cannot
+   * truthfully offer NEW yet. Sprite selection and software reboot do have
+   * complete local implementations and are therefore projected into the menu.
+   */
+  context.new_conversation_available = false;
+  context.next_sprite_available = true;
+  context.reboot_available = true;
+  return context;
+}
+
+void showCurrentMenu(Runtime &state) {
+  const auto context = menuContext(state);
+  const auto item = iterate_kit_menu_item_at(
+      context, state.menu.selected);
+  const char *label = iterate_kit_menu_item_name(item);
+  if (item == ITERATE_KIT_MENU_NEXT_SPRITE) {
+    const char *slug = state.platform.currentSpriteSlug();
+    (void)std::snprintf(
+        state.menuItemLabel,
+        sizeof(state.menuItemLabel),
+        "face: %s",
+        slug == nullptr ? "unknown" : slug);
+    label = state.menuItemLabel;
+  }
+  state.platform.showMenu(
+      label,
+      state.menu.selected,
+      iterate_kit_menu_item_count(context));
+}
+
+iterate_kit_status publishTalkStart(
+    Runtime &state,
+    iterate_kit_device_event_source source) {
+  if (!iterate_kit_m5sticks3_is_conversation_active(&state.device)) {
+    struct iterate_kit_device_event_queue_metrics metrics{};
+    iterate_kit_m5sticks3_event_metrics(&state.device, &metrics);
+    if (metrics.current_events > eventCapacity - 2U) {
+      /*
+       * TALK from idle is one indivisible local intent: open the conversation,
+       * then start its first microphone turn. Preflight both queue slots on the
+       * sole owner task so saturation cannot accept the call while losing the
+       * speech edge that motivated it.
+       */
+      return ITERATE_KIT_BACKPRESSURE;
+    }
+    const auto conversationStatus =
+        iterate_kit_m5sticks3_publish_conversation(
+            &state.device, true, source);
+    if (conversationStatus != ITERATE_KIT_OK) {
+      return conversationStatus;
+    }
+  }
+  return iterate_kit_m5sticks3_publish_push_to_talk(
+      &state.device, true, source);
+}
+
+void suppressTalkUntilRelease(Runtime &state) {
+  (void)iterate_kit_talk_button_reset(&state.talkButton);
+  state.talkStartRequested = false;
+  state.talkStopPending = false;
+  state.talkStopFailureLogged = false;
+  state.talkInputSuppressedUntilRelease = state.frontButtonPressed;
+}
+
+iterate_kit_status publishTalkEffects(
+    Runtime &state,
+    const iterate_kit_talk_button_result &result,
+    iterate_kit_device_event_source source) {
+  for (std::size_t index = 0U; index < result.effect_count; ++index) {
+    iterate_kit_status status = ITERATE_KIT_OK;
+    switch (result.effects[index]) {
+      case ITERATE_KIT_TALK_BUTTON_EFFECT_START:
+        status = publishTalkStart(state, source);
+        if (status == ITERATE_KIT_OK) state.talkStartRequested = true;
+        break;
+      case ITERATE_KIT_TALK_BUTTON_EFFECT_STOP:
+        if (state.talkStartRequested) {
+          status = iterate_kit_m5sticks3_publish_push_to_talk(
+              &state.device, false, source);
+          if (status == ITERATE_KIT_OK) {
+            state.talkStartRequested = false;
+          } else {
+            /*
+             * A release is a safety obligation, not an edge we may discard.
+             * Keep capture intent asserted until the owner has admitted the
+             * STOP after draining the bounded queue below.
+             */
+            state.talkStopPending = true;
+            state.pendingTalkStopSource = source;
+            state.talkStopFailureLogged = true;
+          }
+        }
+        break;
+      case ITERATE_KIT_TALK_BUTTON_EFFECT_LOCKED:
+        ESP_LOGI(tag, "front button: talk locked");
+        break;
+      case ITERATE_KIT_TALK_BUTTON_EFFECT_UNLOCKED:
+        ESP_LOGI(tag, "front button: talk unlocked");
+        break;
+    }
+    if (status != ITERATE_KIT_OK) {
+      ESP_LOGE(
+          tag,
+          "logical TALK effect failed: source=%s effect=%u status=%d",
+          iterate_kit_device_event_source_name(source),
+          static_cast<unsigned int>(result.effects[index]),
+          static_cast<int>(status));
+      if (result.effects[index] != ITERATE_KIT_TALK_BUTTON_EFFECT_STOP) {
+        suppressTalkUntilRelease(state);
+      }
+      return status;
+    }
+  }
+  return ITERATE_KIT_OK;
+}
+
+bool cancelTalkForMenu(
+    Runtime &state,
+    iterate_kit_device_event_source source) {
+  if (state.talkStopPending) return false;
+  if (state.talkStartRequested) {
+    const auto status = iterate_kit_m5sticks3_publish_push_to_talk(
+        &state.device,
+        false,
+        source);
+    if (status != ITERATE_KIT_OK) {
+      ESP_LOGE(
+          tag,
+          "menu could not stop active talk: status=%d",
+          static_cast<int>(status));
+      state.talkStopPending = true;
+      state.pendingTalkStopSource = source;
+      state.talkStopFailureLogged = true;
+      return false;
+    }
+  }
+  suppressTalkUntilRelease(state);
+  return true;
+}
+
+void retryPendingTalkStop(Runtime &state) {
+  if (!state.talkStopPending) return;
+  const auto status = iterate_kit_m5sticks3_publish_push_to_talk(
+      &state.device,
+      false,
+      state.pendingTalkStopSource);
+  if (status == ITERATE_KIT_OK) {
+    /*
+     * This runs only after device_poll has had a chance to drain the queue.
+     * Once admitted, the normal dispatcher remains the sole hardware owner;
+     * suppressing the raw gesture merely prevents a held button reasserting it.
+     */
+    suppressTalkUntilRelease(state);
+  } else if (
+      status != ITERATE_KIT_BACKPRESSURE &&
+      !state.talkStopFailureLogged) {
+    ESP_LOGE(
+        tag,
+        "pending talk stop could not be admitted: status=%d",
+        static_cast<int>(status));
+    state.talkStopFailureLogged = true;
+  }
+}
+
+iterate_kit_status takeMenuAction(
+    Runtime &state,
+    iterate_kit_menu_action action,
+    iterate_kit_device_event_source source) {
+  iterate_kit_status status = ITERATE_KIT_OK;
+  switch (action) {
+    case ITERATE_KIT_MENU_ACTION_NONE:
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_MENU_ACTION_CLOSE:
+      state.platform.hideMenu();
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_MENU_ACTION_START_CALL:
+      status = iterate_kit_m5sticks3_publish_conversation(
+          &state.device,
+          true,
+          source);
+      break;
+    case ITERATE_KIT_MENU_ACTION_HANG_UP:
+      status = iterate_kit_m5sticks3_publish_conversation(
+          &state.device,
+          false,
+          source);
+      break;
+    case ITERATE_KIT_MENU_ACTION_NEXT_SPRITE:
+      if (!state.platform.selectNextSprite()) {
+        ESP_LOGE(tag, "menu could not select the next sprite");
+        state.platform.hideMenu();
+        return ITERATE_KIT_IO_ERROR;
+      }
+      iterate_kit_menu_reopen_on(
+          &state.menu,
+          menuContext(state),
+          ITERATE_KIT_MENU_NEXT_SPRITE);
+      showCurrentMenu(state);
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_MENU_ACTION_REBOOT:
+      ESP_LOGW(
+          tag,
+          "reboot chosen from menu: source=%s",
+          iterate_kit_device_event_source_name(source));
+      esp_restart();
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_MENU_ACTION_NEW:
+      /* Capability projection withholds this action on the current target. */
+      ESP_LOGE(tag, "unavailable new-conversation menu action escaped filtering");
+      status = ITERATE_KIT_STATE_ERROR;
+      break;
+  }
+  state.platform.hideMenu();
+  if (status != ITERATE_KIT_OK) {
+    ESP_LOGE(
+        tag,
+        "menu action failed: action=%u status=%d",
+        static_cast<unsigned int>(action),
+        static_cast<int>(status));
+  }
+  return status;
+}
+
+iterate_kit_status serviceTalkButton(
+    Runtime &state, std::uint64_t nowMs) {
+  if (state.talkInputSuppressedUntilRelease) {
+    if (!state.frontButtonPressed) {
+      state.talkInputSuppressedUntilRelease = false;
+      (void)iterate_kit_talk_button_reset(&state.talkButton);
+    }
+    return ITERATE_KIT_OK;
+  }
+  iterate_kit_talk_button_result result{};
+  const auto status = iterate_kit_talk_button_update(
+      &state.talkButton,
+      state.frontButtonPressed,
+      nowMs,
+      &result);
+  if (status != ITERATE_KIT_OK) {
+    ESP_LOGE(tag, "talk-button reducer failed: status=%d", static_cast<int>(status));
+    suppressTalkUntilRelease(state);
+    return status;
+  }
+  return publishTalkEffects(
+      state, result, state.lastTalkInputSource);
+}
+
+iterate_kit_status setLogicalControlPressed(
+    Runtime &state,
+    iterate_kit_logical_control control,
+    iterate_kit_device_event_source source,
+    bool pressed,
+    std::uint64_t nowMs) {
+  if (control >= ITERATE_KIT_LOGICAL_CONTROL_COUNT ||
+      (source != ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL &&
+       source != ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE)) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  bool *const sourceLevels =
+      source == ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL
+      ? state.physicalControlLevels
+      : state.remoteControlLevels;
+  const bool previousEffective =
+      state.physicalControlLevels[control] ||
+      state.remoteControlLevels[control];
+  if (sourceLevels[control] == pressed) {
+    return ITERATE_KIT_OK;
+  }
+  sourceLevels[control] = pressed;
+  const bool effective =
+      state.physicalControlLevels[control] ||
+      state.remoteControlLevels[control];
+  if (effective == previousEffective) {
+    /*
+     * Physical and remote adapters share a wired-OR logical level. One source
+     * releasing while the other still owns TALK cannot commit the turn, and a
+     * second source pressing an already-held MENU cannot advance it twice.
+     */
+    return ITERATE_KIT_OK;
+  }
+
+  if (control == ITERATE_KIT_LOGICAL_CONTROL_MENU) {
+    if (!effective) {
+      return ITERATE_KIT_OK;
+    }
+    /*
+     * MENU has one stable meaning in every call state. It cancels momentary or
+     * locked TALK before drawing the menu; otherwise the display could hide a
+     * live microphone. The source which caused this aggregate rising edge is
+     * retained on the resulting stop/action event for exact diagnostics.
+     */
+    if (!cancelTalkForMenu(state, source)) {
+      return ITERATE_KIT_BACKPRESSURE;
+    }
+    state.frontButtonClaimedByMenu = state.frontButtonPressed;
+    const auto context = menuContext(state);
+    iterate_kit_menu_cycle(&state.menu, context);
+    showCurrentMenu(state);
+    return ITERATE_KIT_OK;
+  }
+
+  state.frontButtonPressed = effective;
+  state.lastTalkInputSource = source;
+  if (!effective) {
+    state.frontButtonClaimedByMenu = false;
+  } else if (state.frontButtonClaimedByMenu) {
+    /* MENU and TALK settled together; MENU claims this press until release. */
+    return ITERATE_KIT_OK;
+  } else if (state.menu.open) {
+    state.frontButtonClaimedByMenu = true;
+    const auto action = iterate_kit_menu_activate(
+        &state.menu, menuContext(state));
+    return takeMenuAction(state, action, source);
+  }
+
+  if (!state.menu.open && !state.frontButtonClaimedByMenu) {
+    return serviceTalkButton(state, nowMs);
+  }
+  return ITERATE_KIT_OK;
+}
+
+iterate_kit_status setRemoteLogicalControlPressed(
+    void *context,
+    iterate_kit_logical_control control,
+    bool pressed) {
+  if (context == nullptr) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  auto &state = *static_cast<Runtime *>(context);
+  return setLogicalControlPressed(
+      state,
+      control,
+      ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE,
+      pressed,
+      static_cast<std::uint64_t>(esp_timer_get_time() / 1'000));
 }
 
 iterate_kit_status downlinkGenerationBarrier(
@@ -548,6 +927,10 @@ iterate_kit_status sendAudioEvent(
     iterate_kit_audio_event event) {
   auto &state = *static_cast<Runtime *>(context);
   iterate_kit_status status = ITERATE_KIT_OK;
+  if (event == ITERATE_KIT_AUDIO_CAPTURE_STARTED) {
+    state.turnCaptureStarted = true;
+    state.turnEndMarkerAccepted = false;
+  }
   /*
    * PTT release is mirrored through Cap'n Web, while PCM uses an independent
    * socket. Even healthy networks may deliver the control edge before the
@@ -565,8 +948,9 @@ iterate_kit_status sendAudioEvent(
    * than allowing userspace to commit incomplete speech.
    */
   if (event == ITERATE_KIT_AUDIO_CAPTURE_ENDED) {
-    if (state.pcmTransport.state !=
-        ITERATE_KIT_ESP_IDF_PCM_READY) {
+    state.turnEndMarkerAccepted = false;
+    if (!iterate_kit_esp_idf_pcm_session_media_ready(
+            &state.pcmSession)) {
       status = ITERATE_KIT_BACKPRESSURE;
     } else {
       status =
@@ -580,6 +964,7 @@ iterate_kit_status sendAudioEvent(
             &state.pcmTransport);
       }
     }
+    state.turnEndMarkerAccepted = status == ITERATE_KIT_OK;
   }
 
   /*
@@ -609,24 +994,6 @@ iterate_kit_status sendPcm(
           iterate::kit::platforms::M5UnifiedHalfDuplex::captureSampleRate ||
       complete == nullptr) {
     return ITERATE_KIT_INVALID_ARGUMENT;
-  }
-  if (state.pcmTransport.state !=
-      ITERATE_KIT_ESP_IDF_PCM_READY) {
-    /*
-     * DNS/TLS/WebSocket connect is intentionally bounded but can occupy the
-     * PCM owner for seconds. Publishing microphone frames during that interval
-     * would fill the 640 ms application ring even though none can be current
-     * by the time a socket exists. Reject this completed frame at the producer
-     * boundary instead. BoundedCapture releases and rearms its two DMA buffers,
-     * so capture remains live without retaining an outage backlog; the audio
-     * controller records the exact drop as expected backpressure.
-     *
-     * This callback and `pcmTransport.state` are both main-task-owned. A socket
-     * can still disappear just after READY is observed, but the network owner
-     * then purges that at-most-one scheduling-window suffix as part of its
-     * generation reset.
-     */
-    return ITERATE_KIT_BACKPRESSURE;
   }
   /*
    * Capture is already 16 kHz / 320 samples, exactly the PCM v1 wire format.
@@ -1210,7 +1577,23 @@ void observeDeviceEvent(
       iterate_kit_device_event_source_name(
           static_cast<iterate_kit_device_event_source>(event->source)),
       static_cast<int>(result));
-  if (result != ITERATE_KIT_OK) return;
+  if (result != ITERATE_KIT_OK) {
+    if (event->type == ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED) {
+      state.turnAwaitingReply = false;
+      state.turnCaptureStarted = false;
+      state.turnEndMarkerAccepted = false;
+      if (state.talkStartRequested) {
+        /*
+         * A locally accepted gesture whose hardware transition then failed is
+         * not retried every 10 ms while the button remains down. Require a
+         * release before another attempt, preserving the incident as one
+         * observed failure instead of turning it into an input-driven storm.
+         */
+        suppressTalkUntilRelease(state);
+      }
+    }
+    return;
+  }
 
   /*
    * Update the display's one-bit turn intent only after the shared dispatcher
@@ -1221,12 +1604,27 @@ void observeDeviceEvent(
    */
   switch (static_cast<iterate_kit_device_event_type>(event->type)) {
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
-      state.turnAwaitingReply = true;
+      state.turnAwaitingReply =
+          state.turnCaptureStarted && state.turnEndMarkerAccepted;
+      state.turnCaptureStarted = false;
+      state.turnEndMarkerAccepted = false;
+      if (event->source == ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE) {
+        suppressTalkUntilRelease(state);
+      }
       break;
     case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
+      state.turnAwaitingReply = false;
+      break;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
+      state.turnAwaitingReply = false;
+      state.turnCaptureStarted = false;
+      state.turnEndMarkerAccepted = false;
+      break;
     case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
       state.turnAwaitingReply = false;
+      state.turnCaptureStarted = false;
+      state.turnEndMarkerAccepted = false;
+      suppressTalkUntilRelease(state);
       break;
     case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
       /* Publishers validate this sentinel; retain fail-closed exhaustiveness. */
@@ -1242,6 +1640,36 @@ void deviceSessionEnded(void *context) {
    * cannot leak across authentication generations.
    */
   iterate_kit_peer_session_ended(&state.device.peer);
+}
+
+void pcmGenerationLost(void *context) {
+  auto &state = *static_cast<Runtime *>(context);
+  /*
+   * These flags describe Stick's manual PTT turn, not PCM socket ownership.
+   * The shared session owner calls this hook precisely when a READY media
+   * generation is lost. Keeping the reset here preserves the one genuinely
+   * target-specific policy without letting Stick implement reconnect or
+   * prewarm logic beside StackChan/HAVPE again.
+   */
+  state.turnAwaitingReply = false;
+  state.turnCaptureStarted = false;
+  state.turnEndMarkerAccepted = false;
+  suppressTalkUntilRelease(state);
+}
+
+bool pcmConversationActive(void *context) {
+  const auto &state = *static_cast<const Runtime *>(context);
+  return iterate_kit_m5sticks3_is_conversation_active(&state.device);
+}
+
+iterate_kit_status setPcmMediaReady(void *context, bool ready) {
+  auto &state = *static_cast<Runtime *>(context);
+  /*
+   * Stick's half-duplex controller is a hardware-policy adapter, not an
+   * authorization owner. It receives the exact same shared boolean as both
+   * full-duplex boards and applies it from the bounded device poll.
+   */
+  return iterate_kit_m5sticks3_set_media_ready(&state.device, ready);
 }
 
 bool initialiseRings(Runtime &state) {
@@ -1278,7 +1706,10 @@ bool initialiseRings(Runtime &state) {
              &state.pcmLane,
              &state.pcmUplinkRing,
              &state.pcmDownlinkRing) == ITERATE_KIT_OK &&
-      state.platform.bindPcmLane(&state.pcmLane) ==
+      state.platform.bindPcmLane(
+          &state.pcmLane,
+          iterate_kit_esp_idf_pcm_transport_note_downlink_item_released,
+          &state.pcmTransport) ==
           ITERATE_KIT_OK;
 }
 
@@ -1397,6 +1828,19 @@ bool initialiseConnection(Runtime &state) {
           &pcmTransportOptions) != ITERATE_KIT_OK) {
     return false;
   }
+  iterate_kit_esp_idf_pcm_session_options pcmSessionOptions{};
+  pcmSessionOptions.control_transport = &state.transport;
+  pcmSessionOptions.pcm_transport = &state.pcmTransport;
+  pcmSessionOptions.hook_context = &state;
+  pcmSessionOptions.conversation_active = pcmConversationActive;
+  pcmSessionOptions.set_media_ready = setPcmMediaReady;
+  pcmSessionOptions.generation_lost = pcmGenerationLost;
+  pcmSessionOptions.log_tag = tag;
+  if (iterate_kit_esp_idf_pcm_session_prepare(
+          &state.pcmSession,
+          &pcmSessionOptions) != ITERATE_KIT_OK) {
+    return false;
+  }
 
   iterate_kit_itx_connection_options connectionOptions{};
   connectionOptions.pending_calls = state.pendingCalls;
@@ -1466,7 +1910,12 @@ extern "C" void app_main(void) {
   }
   ESP_LOGI(tag, "provisioning configuration loaded");
 
-  if (!initialiseRings(runtime) ||
+  iterate_kit_menu_reset(&runtime.menu);
+  if (iterate_kit_talk_button_init(
+          &runtime.talkButton,
+          maximumTalkTapMs,
+          secondTalkTapWindowMs) != ITERATE_KIT_OK ||
+      !initialiseRings(runtime) ||
       !initialiseDevice(runtime) ||
       !initialiseConnection(runtime)) {
     ESP_LOGE(tag, "bounded device runtime initialization failed");
@@ -1522,59 +1971,57 @@ extern "C" void app_main(void) {
      * dedicated audio owner directly; the PCM task has a separate uplink
      * notification. This loop's 10 ms timeout is control-plane liveness and a
      * yield for ESP-IDF idle housekeeping, not the speaker service cadence.
-     */
+    */
     runtime.platform.update();
-    if (runtime.platform.takeButtonBPress()) {
-      /*
-       * Button B (the small top button on StickS3) owns call lifetime. It is
-       * deliberately edge-triggered: a press toggles one conversation, while
-       * holding it cannot oscillate the socket state as M5Unified is polled.
-       * Remote tests publish through the same event dispatcher, so the
-       * physical control is not a privileged second implementation.
-       */
-      const bool nextConversationActive =
-          !iterate_kit_m5sticks3_is_conversation_active(
-              &runtime.device);
-      const iterate_kit_status status =
-          iterate_kit_m5sticks3_publish_conversation(
-              &runtime.device,
-              nextConversationActive,
-              ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
-      if (status != ITERATE_KIT_OK) {
-        ESP_LOGE(
-            tag,
-            "physical conversation publish failed: %d",
-            static_cast<int>(status));
-      }
-    }
-
-    bool pressed = false;
-    if (runtime.platform.takeButtonAChange(&pressed)) {
-      /*
-       * Button A (the front face) is a level, not a toggle: capture begins
-       * while held and the release commits the turn. Publishing B before A
-       * makes a simultaneous call-start/hold sample deterministic. Physical
-       * and remote PTT enter the same dispatcher so tests exercise the exact
-       * audio state machine used by the GPIO.
-       */
-      const iterate_kit_status status =
-          iterate_kit_m5sticks3_publish_push_to_talk(
-              &runtime.device,
-              pressed,
-              ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
-      if (status != ITERATE_KIT_OK) {
-        ESP_LOGE(
-            tag,
-            "physical push-to-talk publish failed: %d",
-            static_cast<int>(status));
-      }
-    }
-
     const auto nowMicroseconds = esp_timer_get_time();
+    const auto nowMs =
+        static_cast<std::uint64_t>(nowMicroseconds / 1000);
+    bool pressed = false;
+    const bool frontChanged =
+        runtime.platform.takeButtonAChange(&pressed);
+    if (frontChanged) runtime.frontButtonPressed = pressed;
+    const bool topPressed = runtime.platform.takeButtonBPress();
+
+    if (topPressed) {
+      /*
+       * Button B has one stable meaning in every call state: context menu.
+       * Opening it cancels a momentary or locked talk first, since a hidden
+       * live microphone underneath a menu would make the display lie. If both
+       * buttons settle in this sample, TOP wins and claims FRONT until release
+       * rather than opening and instantly choosing CLOSE.
+       */
+      if (cancelTalkForMenu(runtime)) {
+        runtime.frontButtonClaimedByMenu = runtime.frontButtonPressed;
+        const auto context = menuContext(runtime);
+        iterate_kit_menu_cycle(&runtime.menu, context);
+        showCurrentMenu(runtime);
+      }
+    }
+
+    if (frontChanged) {
+      if (!pressed) {
+        runtime.frontButtonClaimedByMenu = false;
+      } else if (!topPressed && runtime.menu.open) {
+        /*
+         * With the menu visible, FRONT is selection, never microphone. Claim
+         * the matching release even when the action closes the menu so that
+         * one physical click cannot leak into the talk reducer afterwards.
+         */
+        runtime.frontButtonClaimedByMenu = true;
+        const auto action = iterate_kit_menu_activate(
+            &runtime.menu, menuContext(runtime));
+        takeMenuAction(runtime, action);
+      }
+    }
+
+    if (!runtime.menu.open && !runtime.frontButtonClaimedByMenu) {
+      serviceTalkButton(runtime, nowMs);
+    }
+
     const iterate_kit_poll_result devicePoll =
         iterate_kit_m5sticks3_poll(
             &runtime.device,
-            static_cast<std::uint64_t>(nowMicroseconds / 1000));
+            nowMs);
     if (devicePoll.status == ITERATE_KIT_POLL_CALLBACK_REJECTED) {
       ESP_LOGW(
           tag,
@@ -1589,6 +2036,26 @@ extern "C" void app_main(void) {
           "device poll failed: status=%d capnweb=%d",
           static_cast<int>(devicePoll.status),
           static_cast<int>(devicePoll.capnweb_status));
+    }
+    retryPendingTalkStop(runtime);
+
+    {
+      const auto context = menuContext(runtime);
+      if (!runtime.displayedMenuContextKnown) {
+        runtime.displayedMenuContext = context;
+        runtime.displayedMenuContextKnown = true;
+      } else if (
+          context.call_active !=
+          runtime.displayedMenuContext.call_active) {
+        if (runtime.menu.open) {
+          iterate_kit_menu_recontext(
+              &runtime.menu,
+              runtime.displayedMenuContext,
+              context);
+          showCurrentMenu(runtime);
+        }
+        runtime.displayedMenuContext = context;
+      }
     }
 
     const iterate_kit_status transportPoll =
@@ -1629,30 +2096,12 @@ extern "C" void app_main(void) {
           controlLifecycle.ready_socket_generation;
       recoveryObservation.fatal_latched =
           controlLifecycle.fatal_failure_latched;
-      recoveryObservation.pcm_started =
-          runtime.pcmTransportStarted;
       const auto recoveryAction =
           iterate_kit_control_recovery_poll(
               &runtime.controlRecovery,
               &recoveryObservation);
       if (recoveryAction ==
-          ITERATE_KIT_CONTROL_RECOVERY_RESTART_PCM) {
-        /*
-         * Callback exports belong to one Cap'n Web generation. A remount can
-         * therefore leave the independent /pcm socket healthy but unable to
-         * observe PTT. Replacing /pcm makes userspace create one fresh callback
-         * coordinator; retaining the old PCM conversation was rejected because
-         * it has no reliable callback-liveness signal.
-         */
-        ESP_LOGW(
-            tag,
-            "control generation %" PRIu32
-            " remounted; replacing PCM session",
-            controlLifecycle.ready_socket_generation);
-        iterate_kit_esp_idf_pcm_transport_request_restart(
-            &runtime.pcmTransport);
-      } else if (recoveryAction ==
-                 ITERATE_KIT_CONTROL_RECOVERY_RESTART_PROCESS) {
+          ITERATE_KIT_CONTROL_RECOVERY_RESTART_PROCESS) {
         ESP_LOGE(
             tag,
             "control recovery permanently latched: reason=%u "
@@ -1664,66 +2113,7 @@ extern "C" void app_main(void) {
       }
     }
 
-    if (!runtime.pcmTransportStarted &&
-        !runtime.pcmTransportStartAttempted &&
-        runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
-      /*
-       * DNS/TCP/TLS/WebSocket setup measured 5.52 seconds on the physical
-       * Stick, so it is device-readiness work, not something Button B may put
-       * on a person's interactive path. Start the independent PCM lane once
-       * after the authenticated Cap'n Web mount proves configuration. The PCM
-       * task then owns bounded reconnects and freshness resets for the device
-       * lifetime; hang-up retires only Grok in userspace and never queues or
-       * replays audio here.
-       *
-       * The one-shot flag covers only an impossible local start failure such
-       * as static-task creation failure. Retrying that from the 10 ms owner
-       * loop would be an unbounded storm; network failures after a successful
-       * start are already explicitly governed by the transport retry gate.
-       */
-      runtime.pcmTransportStartAttempted = true;
-      const iterate_kit_status startStatus =
-          iterate_kit_esp_idf_pcm_transport_start(
-              &runtime.pcmTransport);
-      if (startStatus == ITERATE_KIT_OK) {
-        runtime.pcmTransportStarted = true;
-      } else {
-        ESP_LOGE(
-            tag,
-            "pcm transport start failed: status=%d platform=%ld",
-            static_cast<int>(startStatus),
-            static_cast<long>(
-                runtime.pcmTransport.last_platform_error));
-      }
-    }
-    if (runtime.pcmTransportStarted) {
-      const iterate_kit_status pcmTransportPoll =
-          iterate_kit_esp_idf_pcm_transport_poll(
-              &runtime.pcmTransport);
-      if (pcmTransportPoll != ITERATE_KIT_OK &&
-          runtime.pcmTransport.state !=
-              runtime.lastPcmTransportState) {
-        ESP_LOGE(
-            tag,
-            "pcm transport transition failed: state=%s status=%d "
-            "platform=%ld",
-            iterate_kit_esp_idf_pcm_transport_state_name(
-                runtime.pcmTransport.state),
-            static_cast<int>(pcmTransportPoll),
-            static_cast<long>(
-                runtime.pcmTransport.last_platform_error));
-      }
-      if (runtime.pcmTransport.state !=
-          runtime.lastPcmTransportState) {
-        ESP_LOGI(
-            tag,
-            "pcm transport state=%s",
-            iterate_kit_esp_idf_pcm_transport_state_name(
-                runtime.pcmTransport.state));
-        runtime.lastPcmTransportState =
-            runtime.pcmTransport.state;
-      }
-    }
+    (void)iterate_kit_esp_idf_pcm_session_poll(&runtime.pcmSession);
 
     const auto playbackPoll = runtime.platform.pollPlayback();
     /*
@@ -1764,7 +2154,8 @@ extern "C" void app_main(void) {
         static_cast<std::uint64_t>(nowMicroseconds / 1000));
     runtime.platform.showCallUi(
         selectCallUiState(runtime),
-        selectConversationVisualState(runtime));
+        selectConversationVisualState(runtime),
+        iterate_kit_talk_button_is_locked(&runtime.talkButton));
 
     (void)ulTaskNotifyTake(pdFALSE, mainLoopDelayTicks);
     /*

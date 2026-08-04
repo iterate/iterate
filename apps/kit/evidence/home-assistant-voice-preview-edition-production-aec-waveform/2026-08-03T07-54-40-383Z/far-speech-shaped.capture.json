@@ -1,0 +1,36 @@
+{
+  "assessment": {
+    "actualFrames": 178,
+    "acceptedFrameSpanMs": 4306,
+    "capturedAudioDurationMs": 3560,
+    "durationMs": 4329,
+    "expectedFrames": 216,
+    "frameConservationPassed": true,
+    "maximumExpectedFrames": 219,
+    "minimumExpectedFrames": 213,
+    "passed": false,
+    "realtimeCadencePassed": false,
+    "reasons": [
+      "The retained PCM covers 3540 ms between frame starts but arrived over 4306 ms; the 766 ms expansion exceeds the 60 ms realtime allowance.",
+      "The maximum accepted-uplink gap was 401 ms; 60 ms is the fixed realtime limit."
+    ]
+  },
+  "capture": {
+    "acceptedFrameSpanMs": 4306,
+    "capturedAudioDurationMs": 3560,
+    "durationMs": 4329,
+    "finishedAtMs": 1785743714358,
+    "firstAcceptedAtMs": 1785743710043,
+    "firstAcceptedUplinkFrame": 1003,
+    "frameBytes": 640,
+    "frames": 178,
+    "lastAcceptedAtMs": 1785743714349,
+    "lastAcceptedUplinkFrame": 1180,
+    "maximumFrames": 300,
+    "maximumInterFrameGapMs": 401,
+    "pcmSha256": "c64f709ee2cad4bfa529e2e6d140624147b3278fe139b17b53e9e76429174df2",
+    "schemaVersion": 2,
+    "startedAtMs": 1785743710029,
+    "truncatedFrames": 0
+  }
+}

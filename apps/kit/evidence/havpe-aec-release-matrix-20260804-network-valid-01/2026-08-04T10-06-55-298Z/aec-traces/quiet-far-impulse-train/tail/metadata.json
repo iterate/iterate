@@ -1,0 +1,17 @@
+{
+  "abortedCaptures": 0,
+  "availablePlanes": 17,
+  "captureSamples": 16000,
+  "capturedSamples": 16000,
+  "completedCaptures": 15,
+  "firstFrameSequence": 5807,
+  "frameSamples": 320,
+  "generation": 15,
+  "lastFrameSequence": 5856,
+  "maximumReadSamples": 320,
+  "rejectedStarts": 0,
+  "sampleRateHz": 16000,
+  "schema": 1,
+  "startedCaptures": 15,
+  "state": 3
+}

@@ -18,6 +18,8 @@ static const char description[] =
     "\"subscribeToAecMetrics\":\"Call a callback with the board's "
     "truthful aligned AEC topology: raw and clean taps, plus same-window "
     "physical playback activity when the hardware reference is private.\","
+    "\"aecTrace\":\"Capture and retrieve one bounded trace of the AEC planes "
+    "the board actually exposes; absent planes are identified explicitly.\","
     "\"subscribeToEvents\":\"Call a callback with the current conversation "
     "snapshot and each later lifecycle transition.\","
     "\"getDiagnostics\":\"Return the latest retained transport incident "
@@ -99,6 +101,7 @@ enum capnweb_status iterate_kit_voice_satellite_init(
   struct iterate_kit_peer_options peer_options;
 
   if (device == NULL || options == NULL || options->manifest == NULL ||
+      options->aec_trace == NULL || options->aec_trace->initialized == 0U ||
       options->manifest->slug == NULL ||
       options->manifest->display_name == NULL ||
       options->manifest->audio_mode != ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC) {
@@ -106,6 +109,7 @@ enum capnweb_status iterate_kit_voice_satellite_init(
   }
   memset(device, 0, sizeof(*device));
   device->manifest = options->manifest;
+  device->aec_trace = options->aec_trace;
 
   if (iterate_kit_callback_budget_init(
           &device->callback_budget,
@@ -168,6 +172,8 @@ enum capnweb_status iterate_kit_voice_satellite_init(
   device->modules[2] =
       iterate_kit_conversation_module(&device->conversation);
   device->modules[3] = iterate_kit_leds_module(&device->leds);
+  device->modules[4] =
+      iterate_kit_aec_diagnostic_trace_module(device->aec_trace);
   peer_options = (struct iterate_kit_peer_options){
     .description_expression = description,
     .description_expression_length = sizeof(description) - 1U,

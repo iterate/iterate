@@ -1,0 +1,368 @@
+{
+  "assessmentPassed": false,
+  "buildDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition-aec-tap",
+  "createdAt": "2026-08-04T09:08:42.504Z",
+  "device": "home-assistant-voice-preview-edition",
+  "firmwareApplication": {
+    "applicationBytes": 1086960,
+    "applicationFile": "iterate-kit-home-assistant-voice-preview-edition.bin",
+    "applicationSha256": "7f0d8c7255f832f8a318c5fe42c60e1554ba391d924bfa6911fab112c6bc4259",
+    "iterateKitVoicePeXmosUplinkStage": 1,
+    "projectName": "iterate-kit-home-assistant-voice-preview-edition"
+  },
+  "networkClassification": "network-invalid",
+  "networkVerdict": "network-invalid",
+  "pcm": {
+    "microphoneBytes": 1800320,
+    "microphoneSha256": "6876c657103971cbd65a4faa0c58653a599c09482932c38e1275d06a934e49a6",
+    "speakerBytes": 1152000,
+    "speakerSha256": "70f353b3104c273f1c7247c4fa171dbbb6a76ea4082194afe17bac4f7bf4b9b3"
+  },
+  "port": "/dev/cu.usbmodem11101",
+  "schemaVersion": 1,
+  "stableUsbSerial": "D8:3B:DA:46:20:34",
+  "transport": {
+    "baseUrl": "http://192.168.0.169:8790",
+    "deviceHost": "192.168.0.33",
+    "gateway": "https://tunnels.iterate.com",
+    "kind": "direct-lan",
+    "tunnelName": null
+  },
+  "startupLifecycle": {
+    "observed": {
+      "captureFailures": 0,
+      "captureFrameDrops": 0,
+      "playbackDroppedFrames": 0,
+      "playbackIntegrityFailures": 0,
+      "playbackResets": 0,
+      "uplinkFrameDrops": 0,
+      "uplinkRestarts": 0
+    },
+    "passed": true,
+    "reasons": []
+  },
+  "stimuli": {
+    "acousticProfile": {
+      "macOutputVolumePercent": 40,
+      "matchedPathPilotAmplitude": 64,
+      "prbsCarrierAmplitude": 2250,
+      "speechRendererAmplitude": 2250,
+      "toneAmplitude": 4500
+    },
+    "doubleTalkPrbsCommitment": "712743d40ffb74006497634bc7b69f4cd6fd44b3eabc8c12f749e8f9e98be8d2",
+    "farPrbsCommitment": "03e6e523db9ac08e4dece83aab131ea3b33678b188b4d2f93a203d1dcc92521a",
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "nearSourceSha256": "580907004292c1f4f5ada9c76ada3546847408195c22ccbdf46a832187df34ae",
+    "nearSourceWindow": {
+      "durationSamples": 48000,
+      "offsetSamples": 16000
+    }
+  },
+  "diagnosticTraces": {
+    "ambient": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 1,
+        "firstFrameSequence": 373,
+        "frameSamples": 320,
+        "generation": 1,
+        "lastFrameSequence": 422,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 1,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/ambient/raw-microphone.pcm16le",
+          "sha256": "0183ae175a2396d054460a259d60d711ab3d3ed97157892fca8f2e904152ce1c"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/ambient/clean.pcm16le",
+          "sha256": "5beb6e6d622d504bb11a8ed66720196d5fb3ad4ba8e1161d2874be3c5e349ba9"
+        },
+        "fixtureDownlink": {
+          "bytes": 0,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/ambient/fixture-downlink.pcm16le",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "pcmUplink": {
+          "bytes": 96640,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/ambient/pcm-uplink.pcm16le",
+          "sha256": "c0f60a358579d5cdf0c9b6d159030e4e6dfc68c7ffddd0248962672f544f7730"
+        }
+      }
+    },
+    "far-tone": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 2,
+        "firstFrameSequence": 574,
+        "frameSamples": 320,
+        "generation": 2,
+        "lastFrameSequence": 623,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 2,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-tone/raw-microphone.pcm16le",
+          "sha256": "728e909ebee049cebad4c67166c1dbe11c7a5e2d0be723f070e21514f08a6185"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-tone/clean.pcm16le",
+          "sha256": "b3caec8c002bf61d776090ef487b4df24a448cce05fad1028befab355249f4d5"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-tone/fixture-downlink.pcm16le",
+          "sha256": "ad415414357632455712df1360e34826c636ecc704bec5b7b14c7722ddc295b8"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-tone/pcm-uplink.pcm16le",
+          "sha256": "92f453f430488cdf3437ab83460eb5ae215ac85907c5fe72ba63fea8fdb72c7c"
+        }
+      }
+    },
+    "far-dual-carrier-prbs31": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 3,
+        "firstFrameSequence": 925,
+        "frameSamples": 320,
+        "generation": 3,
+        "lastFrameSequence": 974,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 3,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-dual-carrier-prbs31/raw-microphone.pcm16le",
+          "sha256": "ea1b64032836d5d4c58b1df124535d98958942a91b557097cd0aae0b7668288f"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-dual-carrier-prbs31/clean.pcm16le",
+          "sha256": "87c3a80435ff442cf40fe9045663a276c88ec0dde8814adf6ed03227ed5f24ac"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-dual-carrier-prbs31/fixture-downlink.pcm16le",
+          "sha256": "5232177dbfcc9a27cc4b9ad4b523c468f9702f4f92d4ee52bdc0477eeef86195"
+        },
+        "pcmUplink": {
+          "bytes": 95360,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-dual-carrier-prbs31/pcm-uplink.pcm16le",
+          "sha256": "d7f14fd94887a3a9373f53c2cb3961eb13574e4dd0e25675cb72d6192e153b9a"
+        }
+      }
+    },
+    "far-speech-shaped": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 4,
+        "firstFrameSequence": 1276,
+        "frameSamples": 320,
+        "generation": 4,
+        "lastFrameSequence": 1325,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 4,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-speech-shaped/raw-microphone.pcm16le",
+          "sha256": "b6c45c3702742344e901f31eac78cecc66ee9af6a2a7d07e0d3f5fbb66d43762"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-speech-shaped/clean.pcm16le",
+          "sha256": "1f0a946a3e9a18c258a175d2bffe7fe4ecb11a5d7236f3225d631b5995360db5"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-speech-shaped/fixture-downlink.pcm16le",
+          "sha256": "880c105a9fe8bd7a0e4aa237eb8bf28574b3992797ec3f7cfc19f39587091b94"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/far-speech-shaped/pcm-uplink.pcm16le",
+          "sha256": "5e0be5367776878caa5892f7ea4e568196c65da6217b6cda58fe601e68023887"
+        }
+      }
+    },
+    "near-only": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 5,
+        "firstFrameSequence": 1627,
+        "frameSamples": 320,
+        "generation": 5,
+        "lastFrameSequence": 1676,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 5,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/near-only/raw-microphone.pcm16le",
+          "sha256": "1bea7ca3b48f6f6f5fda8172d7b6925e47ff3a2fc9bb4cbe58a605009617584a"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/near-only/clean.pcm16le",
+          "sha256": "2418d134ccf1c7d2b1c49ffd843bf9e848b3929d064c5865c48eed63378bc8f2"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/near-only/fixture-downlink.pcm16le",
+          "sha256": "44e8550efe620357850c1954bef7da2fb7013548c70abd27ff92c84eff8d5799"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/near-only/pcm-uplink.pcm16le",
+          "sha256": "983cded86839d30e57a8271eb740406e0398af22207aaf33146b65011f4157f5"
+        }
+      }
+    },
+    "near-repeat": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 6,
+        "firstFrameSequence": 2107,
+        "frameSamples": 320,
+        "generation": 6,
+        "lastFrameSequence": 2156,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 6,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/near-repeat/raw-microphone.pcm16le",
+          "sha256": "7a36f749df1aa096df1c9963d86dab9a96be613e9eb5d66f60bde4b2bc73327b"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/near-repeat/clean.pcm16le",
+          "sha256": "1ae5f8b6f673a2c062fe1c58987e71d7e19e91b8e198f1d77c4fbb4c86b16298"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/near-repeat/fixture-downlink.pcm16le",
+          "sha256": "44e8550efe620357850c1954bef7da2fb7013548c70abd27ff92c84eff8d5799"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/near-repeat/pcm-uplink.pcm16le",
+          "sha256": "fcf85da1549f72f7d14d94b410440839220e523be8afab32ef997b1bfa85d9e0"
+        }
+      }
+    },
+    "double-talk": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 7,
+        "firstFrameSequence": 2584,
+        "frameSamples": 320,
+        "generation": 7,
+        "lastFrameSequence": 2633,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 7,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/double-talk/raw-microphone.pcm16le",
+          "sha256": "ad1c11c559511caa12e4e83de35c13c5f857d21c5e7c099cb06c2f5eab5a7e31"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/double-talk/clean.pcm16le",
+          "sha256": "ff4d3862a687d03cbac58e25a26e69f97cbf140ce0e5cd041fb75c46fcafdeba"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/double-talk/fixture-downlink.pcm16le",
+          "sha256": "a6a21a4b1bd59b31ff1280b999df559fb8089b6a5a30eb98bfbadf3878ffb6d0"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/aec-traces/double-talk/pcm-uplink.pcm16le",
+          "sha256": "419aed9b5ffdd4bb9814832b278ec72371226b375b1655169a41515f876c2c08"
+        }
+      }
+    }
+  },
+  "transportValidity": {
+    "captureFailures": 0,
+    "captureFrameDrops": 0,
+    "clockDiscontinuities": 0,
+    "networkValid": false,
+    "playbackDroppedFrames": 0,
+    "playbackIntegrityFailures": 0,
+    "playbackResets": 0,
+    "playbackUnderrunIncidents": 0,
+    "recorderComplete": true,
+    "uplinkFrameDrops": 0,
+    "uplinkRestarts": 0,
+    "websocketReconnects": 0
+  }
+}

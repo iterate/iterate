@@ -1,0 +1,600 @@
+{
+  "samples": [
+    {
+      "transport": "ready",
+      "voicelab": "ready",
+      "voicelabFailure": "none",
+      "callActive": false,
+      "callPending": false,
+      "wantsCall": true,
+      "talking": false,
+      "gateOpen": true,
+      "t": 39388,
+      "uptimeMs": 39388,
+      "connectionState": 2,
+      "seq": 3,
+      "framesSent": 0,
+      "frameFailures": 0,
+      "micCaptured": 1944,
+      "micDropped": 0,
+      "micIdle": 1944,
+      "micGated": 0,
+      "spkFrames": 0,
+      "spkPlayed": 0,
+      "spkOverflow": 0,
+      "spkUnderruns": 0,
+      "dmaUnderruns": 0,
+      "dmaOpening": 0,
+      "dmaDraining": 0,
+      "dmaUnderrunFirstSend": 0,
+      "dmaUnderrunLastSend": 0,
+      "dmaUnderrunGapUs": 0,
+      "dmaOwedMs": 0,
+      "dmaSends": 0,
+      "dmaWrittenMs": 0,
+      "spkStarvedMs": 0,
+      "spkStarveEvents": 0,
+      "spkConceal": 0,
+      "spkCatchup": 0,
+      "spkDebtPaid": 0,
+      "spkWriteFailures": 0,
+      "lowerReadFailures": 0,
+      "spkMarginMaxMs": 0,
+      "spkLagMaxMs": 0,
+      "spkMarginMinMs": 0,
+      "spkMarginP10Ms": 0,
+      "spkWrites": 0,
+      "spkBadFrames": 0,
+      "spkSeqGaps": 0,
+      "spkDecodeFailures": 0,
+      "spkDiscarded": 0,
+      "spkIgnoredCall": 0,
+      "spkIgnoredStale": 0,
+      "spkIgnoredDup": 0,
+      "spkAnswerStarts": 0,
+      "spkSupersededMidplay": 0,
+      "spkWaitPriming": 7760,
+      "spkAnswerDrains": 0,
+      "bargeIns": 0,
+      "batches": 0,
+      "connGeneration": 2,
+      "rttMs": 51,
+      "pings": 4,
+      "pingFailures": 0,
+      "livenessRestarts": 0,
+      "bridgeLosses": 0,
+      "bridgeAgeMs": 0,
+      "downlinkRecycles": 1,
+      "batchAgeMs": 254,
+      "resetReason": 11,
+      "heapFree": 5148736,
+      "heapMin": 5129584,
+      "psramFree": 5122748,
+      "dmaLargest": 40960,
+      "wsSent": 46,
+      "outboxDiscarded": 0,
+      "outboxUsed": 0,
+      "outboxSlots": 64,
+      "inboxPublished": 26,
+      "inboxConsumed": 26,
+      "inboxDiscarded": 0,
+      "inboxHighWater": 4,
+      "inboxDeferrals": 0,
+      "sessionGeneration": 1,
+      "protoFailures": 0,
+      "recvFailures": 0,
+      "sendFailures": 0,
+      "lastAppStatus": 0,
+      "atMs": 4390,
+      "session": 1
+    }
+  ],
+  "sessions": [
+    {
+      "atMs": 0,
+      "connGenerations": [],
+      "durationMs": 311873,
+      "failures": [
+        "turn 1 (cold-first-turn): no fresh dev-stats sample closed this turn's window — nothing measured",
+        "turn 1 (cold-first-turn): the model answered and the speaker never started",
+        "turn 1 (cold-first-turn): nothing was played: the device wrote no audio to its speaker",
+        "turn 2 (back-to-back): no fresh dev-stats sample closed this turn's window — nothing measured",
+        "turn 2 (back-to-back): the model answered and the speaker never started",
+        "turn 2 (back-to-back): nothing was played: the device wrote no audio to its speaker",
+        "turn 3 (one-word): no fresh dev-stats sample closed this turn's window — nothing measured",
+        "turn 3 (one-word): the model answered and the speaker never started",
+        "turn 3 (one-word): nothing was played: the device wrote no audio to its speaker",
+        "turn 4 (whitespace-prompt): no fresh dev-stats sample closed this turn's window — nothing measured",
+        "turn 5 (barge-in): no fresh dev-stats sample closed this turn's window — nothing measured",
+        "turn 5 (barge-in): the model answered and the speaker never started",
+        "turn 5 (barge-in): nothing was played: the device wrote no audio to its speaker",
+        "turn 6 (after-idle): no fresh dev-stats sample closed this turn's window — nothing measured",
+        "turn 6 (after-idle): the model answered and the speaker never started",
+        "turn 6 (after-idle): nothing was played: the device wrote no audio to its speaker",
+        "turn 7 (hangup-mid-playout): no fresh dev-stats sample closed this turn's window — nothing measured",
+        "turn 7 (hangup-mid-playout): nothing was played: the device wrote no audio to its speaker",
+        "the device published no usable dev-stats — nothing here was measured"
+      ],
+      "index": 1,
+      "noted": {},
+      "probes": [
+        {
+          "atMs": 42165,
+          "detail": "callActive=true sessionGeneration=1 call-ended events=0",
+          "id": "start-twice",
+          "ok": true,
+          "proves": "pressing call on a call that is already live changes nothing: same conversation, no teardown, no second bridge answering alongside the first."
+        },
+        {
+          "atMs": 308654,
+          "detail": "two hang-ups, no error",
+          "id": "hang-up-twice",
+          "ok": true,
+          "proves": "hanging up a call that is already down is a no-op, not an error."
+        },
+        {
+          "atMs": 311801,
+          "detail": "transport=ready voicelab=ready failure=none gateOpen=true callActive=false callPending=false wantsCall=false",
+          "id": "left-clean",
+          "ok": true,
+          "proves": "the session leaves no stuck call and no wedged capability: the device answers, its gate is open, it reports no failure, and it wants no call."
+        }
+      ],
+      "reboots": 0,
+      "sessionGenerations": [],
+      "statsSamples": 1,
+      "bridgeRedials": 0,
+      "deviceQuietPeriods": 0,
+      "turns": [
+        {
+          "atMs": 9030,
+          "failures": [
+            "no fresh dev-stats sample closed this turn's window — nothing measured",
+            "the model answered and the speaker never started",
+            "nothing was played: the device wrote no audio to its speaker"
+          ],
+          "id": "cold-first-turn",
+          "index": 1,
+          "prompt": "In one sentence: why is the sky blue?",
+          "promptClass": "short",
+          "proves": "the first answer of a fresh call, asked the instant the bridge says the call is live: a playout that has never opened, a codec that has never been driven, and — from session two on — a mount that was remounted seconds ago. This is where a device that refuses a whole answer as duplicate audio refuses it.",
+          "firstAudioMs": 690,
+          "playout": "never started",
+          "thinkingMs": 356,
+          "answeredMs": 2948,
+          "transcript": "Rayleigh scattering makes shorter blue wavelengths bend more than longer ones as sunlight passes through the atmosphere. That's why we see a blue sky, especially away from the sun.",
+          "playedOutMs": 33135
+        },
+        {
+          "atMs": 45395,
+          "failures": [
+            "no fresh dev-stats sample closed this turn's window — nothing measured",
+            "the model answered and the speaker never started",
+            "nothing was played: the device wrote no audio to its speaker"
+          ],
+          "id": "back-to-back",
+          "index": 2,
+          "prompt": "Name one bird that cannot fly. One sentence.",
+          "promptClass": "short",
+          "proves": "queueing: the next question goes in the moment the previous answer finishes playing, with no settle at all, so a device that needs a breath between turns has nowhere to take it.",
+          "firstAudioMs": 884,
+          "playout": "never started",
+          "thinkingMs": 341,
+          "answeredMs": 2219,
+          "transcript": "The ostrich is a well-known flightless bird. Penguins and emus are others if you're curious.",
+          "playedOutMs": 32404
+        },
+        {
+          "atMs": 80973,
+          "failures": [
+            "no fresh dev-stats sample closed this turn's window — nothing measured",
+            "the model answered and the speaker never started",
+            "nothing was played: the device wrote no audio to its speaker"
+          ],
+          "id": "one-word",
+          "index": 3,
+          "prompt": "Hi.",
+          "promptClass": "short",
+          "proves": "a degenerate prompt still gets a real turn: one word in, an answer out, and no difference in the audio path.",
+          "firstAudioMs": 645,
+          "playout": "never started",
+          "thinkingMs": 301,
+          "answeredMs": 1501,
+          "transcript": "Hello there! How can I help you today?",
+          "playedOutMs": 31691
+        },
+        {
+          "atMs": 115749,
+          "failures": ["no fresh dev-stats sample closed this turn's window — nothing measured"],
+          "id": "whitespace-prompt",
+          "index": 4,
+          "prompt": "   ",
+          "promptClass": "silent",
+          "proves": "a blank turn disturbs nothing. The bridge drops a say whose text trims to empty, so the right outcome is silence: no response, no frames, no counter movement — and the next turn unaffected.",
+          "playout": "not awaited",
+          "transcript": "",
+          "playedOutMs": 25173
+        },
+        {
+          "atMs": 144053,
+          "cut": "barge-in",
+          "failures": [
+            "no fresh dev-stats sample closed this turn's window — nothing measured",
+            "the model answered and the speaker never started",
+            "nothing was played: the device wrote no audio to its speaker"
+          ],
+          "id": "barge-in",
+          "index": 5,
+          "prompt": "In about five sentences, and in your own words, explain how a microphone works.",
+          "promptClass": "medium",
+          "proves": "interrupting an answer that is still playing. The paragraph is cancelled on purpose, so this case is licensed to lose the audio the listener was never going to hear — and the answer that displaces it must still arrive, play, and leave the call healthy.",
+          "firstAudioMs": 735,
+          "interruptPrompt": "Actually, stop — just tell me one word for the colour of the sea.",
+          "interruptFirstAudioMs": 25,
+          "playout": "never started",
+          "thinkingMs": 762,
+          "answeredMs": 1719,
+          "transcript": "Blue. That's the simple answer.",
+          "playedOutMs": 55413
+        },
+        {
+          "atMs": 229521,
+          "failures": [
+            "no fresh dev-stats sample closed this turn's window — nothing measured",
+            "the model answered and the speaker never started",
+            "nothing was played: the device wrote no audio to its speaker"
+          ],
+          "id": "after-idle",
+          "index": 6,
+          "prompt": "In one sentence, what is thunder?",
+          "promptClass": "short",
+          "proves": "a call that sat saying nothing for half a minute and then had to answer at once. Idle is where a connection quietly dies and where a device parks buffers it will need back.",
+          "firstAudioMs": 675,
+          "playout": "never started",
+          "thinkingMs": 366,
+          "answeredMs": 2212,
+          "transcript": "Thunder is the sound wave created when lightning rapidly heats the air, causing it to expand explosively.",
+          "playedOutMs": 32415
+        },
+        {
+          "atMs": 264990,
+          "cut": "hangup",
+          "failures": [
+            "no fresh dev-stats sample closed this turn's window — nothing measured",
+            "nothing was played: the device wrote no audio to its speaker"
+          ],
+          "id": "hangup-mid-playout",
+          "index": 7,
+          "prompt": "Describe a rainy afternoon in a harbour town, in a paragraph of your own.",
+          "promptClass": "medium",
+          "proves": "tearing the call down mid-sentence, which is what a person does when they have heard enough. Licensed to lose the rest of the answer; NOT licensed to leave a stuck call, a wedged playout, or a counter in the never-moves tier moved.",
+          "firstAudioMs": 772,
+          "hangUpAtMs": 268264,
+          "playout": "not awaited",
+          "thinkingMs": 355,
+          "transcript": "The rain falls steadily on the harbour town, turning the cobblestone streets slick and dark. Boats bob gently at their moorings, their hulls glistening under the grey sky, while gulls wheel overhead with mournful cries. Shopkeepers pull in their awnings, and a few fishermen linger in doorways, shari",
+          "playedOutMs": 43663
+        }
+      ],
+      "unattributed": {},
+      "verdict": "FAIL",
+      "watchReopens": 0,
+      "setup": {
+        "alreadyThere": 2,
+        "created": ["voice-agent/brief:0vv6ot8:after193970"],
+        "ms": 528
+      },
+      "callLiveMs": 8262
+    }
+  ],
+  "summary": {
+    "verdict": "FAIL",
+    "proof": "NOT A PROOF: 1 full-plan session(s) run with 19 failure(s); the bar is 10 sessions and zero failures. One or two sessions is a smoke test of the harness, not of the device.",
+    "failures": [
+      "session 1: turn 1 (cold-first-turn): no fresh dev-stats sample closed this turn's window — nothing measured",
+      "session 1: turn 1 (cold-first-turn): the model answered and the speaker never started",
+      "session 1: turn 1 (cold-first-turn): nothing was played: the device wrote no audio to its speaker",
+      "session 1: turn 2 (back-to-back): no fresh dev-stats sample closed this turn's window — nothing measured",
+      "session 1: turn 2 (back-to-back): the model answered and the speaker never started",
+      "session 1: turn 2 (back-to-back): nothing was played: the device wrote no audio to its speaker",
+      "session 1: turn 3 (one-word): no fresh dev-stats sample closed this turn's window — nothing measured",
+      "session 1: turn 3 (one-word): the model answered and the speaker never started",
+      "session 1: turn 3 (one-word): nothing was played: the device wrote no audio to its speaker",
+      "session 1: turn 4 (whitespace-prompt): no fresh dev-stats sample closed this turn's window — nothing measured",
+      "session 1: turn 5 (barge-in): no fresh dev-stats sample closed this turn's window — nothing measured",
+      "session 1: turn 5 (barge-in): the model answered and the speaker never started",
+      "session 1: turn 5 (barge-in): nothing was played: the device wrote no audio to its speaker",
+      "session 1: turn 6 (after-idle): no fresh dev-stats sample closed this turn's window — nothing measured",
+      "session 1: turn 6 (after-idle): the model answered and the speaker never started",
+      "session 1: turn 6 (after-idle): nothing was played: the device wrote no audio to its speaker",
+      "session 1: turn 7 (hangup-mid-playout): no fresh dev-stats sample closed this turn's window — nothing measured",
+      "session 1: turn 7 (hangup-mid-playout): nothing was played: the device wrote no audio to its speaker",
+      "session 1: the device published no usable dev-stats — nothing here was measured"
+    ],
+    "sessions": 1,
+    "passed": 0,
+    "minutes": 5.2,
+    "remount": "server",
+    "thresholds": {
+      "doneMediumMs": 60000,
+      "callLiveMs": 15000,
+      "doneShortMs": 6000,
+      "firstAudioMs": 2000,
+      "cutAfterMs": 2500,
+      "drainMs": 90000,
+      "idleMs": 30000,
+      "settleMs": 3000
+    },
+    "audio": {
+      "cleanTurns": 4,
+      "cleanLostFrames": 0,
+      "sentSeconds": 0,
+      "playedSeconds": 0
+    },
+    "latencyMs": {
+      "firstAudio": {
+        "count": 4,
+        "max": 884,
+        "median": 690,
+        "min": 645,
+        "p95": 884
+      },
+      "answered": {
+        "count": 4,
+        "max": 2948,
+        "median": 2219,
+        "min": 1501,
+        "p95": 2948
+      }
+    },
+    "attributedByCase": {},
+    "noted": {},
+    "perSession": [
+      {
+        "index": 1,
+        "verdict": "FAIL",
+        "durationSeconds": 312,
+        "turns": 7,
+        "callLiveMs": 8262,
+        "failures": [
+          "turn 1 (cold-first-turn): no fresh dev-stats sample closed this turn's window — nothing measured",
+          "turn 1 (cold-first-turn): the model answered and the speaker never started",
+          "turn 1 (cold-first-turn): nothing was played: the device wrote no audio to its speaker",
+          "turn 2 (back-to-back): no fresh dev-stats sample closed this turn's window — nothing measured",
+          "turn 2 (back-to-back): the model answered and the speaker never started",
+          "turn 2 (back-to-back): nothing was played: the device wrote no audio to its speaker",
+          "turn 3 (one-word): no fresh dev-stats sample closed this turn's window — nothing measured",
+          "turn 3 (one-word): the model answered and the speaker never started",
+          "turn 3 (one-word): nothing was played: the device wrote no audio to its speaker",
+          "turn 4 (whitespace-prompt): no fresh dev-stats sample closed this turn's window — nothing measured",
+          "turn 5 (barge-in): no fresh dev-stats sample closed this turn's window — nothing measured",
+          "turn 5 (barge-in): the model answered and the speaker never started",
+          "turn 5 (barge-in): nothing was played: the device wrote no audio to its speaker",
+          "turn 6 (after-idle): no fresh dev-stats sample closed this turn's window — nothing measured",
+          "turn 6 (after-idle): the model answered and the speaker never started",
+          "turn 6 (after-idle): nothing was played: the device wrote no audio to its speaker",
+          "turn 7 (hangup-mid-playout): no fresh dev-stats sample closed this turn's window — nothing measured",
+          "turn 7 (hangup-mid-playout): nothing was played: the device wrote no audio to its speaker",
+          "the device published no usable dev-stats — nothing here was measured"
+        ]
+      }
+    ],
+    "plan": [
+      {
+        "id": "cold-first-turn",
+        "proves": "the first answer of a fresh call, asked the instant the bridge says the call is live: a playout that has never opened, a codec that has never been driven, and — from session two on — a mount that was remounted seconds ago. This is where a device that refuses a whole answer as duplicate audio refuses it."
+      },
+      {
+        "id": "back-to-back",
+        "proves": "queueing: the next question goes in the moment the previous answer finishes playing, with no settle at all, so a device that needs a breath between turns has nowhere to take it."
+      },
+      {
+        "id": "one-word",
+        "proves": "a degenerate prompt still gets a real turn: one word in, an answer out, and no difference in the audio path."
+      },
+      {
+        "id": "whitespace-prompt",
+        "proves": "a blank turn disturbs nothing. The bridge drops a say whose text trims to empty, so the right outcome is silence: no response, no frames, no counter movement — and the next turn unaffected."
+      },
+      {
+        "id": "barge-in",
+        "proves": "interrupting an answer that is still playing. The paragraph is cancelled on purpose, so this case is licensed to lose the audio the listener was never going to hear — and the answer that displaces it must still arrive, play, and leave the call healthy."
+      },
+      {
+        "id": "after-idle",
+        "proves": "a call that sat saying nothing for half a minute and then had to answer at once. Idle is where a connection quietly dies and where a device parks buffers it will need back."
+      },
+      {
+        "id": "hangup-mid-playout",
+        "proves": "tearing the call down mid-sentence, which is what a person does when they have heard enough. Licensed to lose the rest of the answer; NOT licensed to leave a stuck call, a wedged playout, or a counter in the never-moves tier moved."
+      }
+    ],
+    "counterPolicy": [
+      {
+        "key": "spkOverflow",
+        "tier": "never",
+        "why": "the known defect: sustained audio overflows the playout ring and the listener hears a truncated answer. A 90-minute run lost 30% of its audio here. Never allowed, not even inside a cut — raising this is how that run would have 'passed'."
+      },
+      {
+        "key": "spkSeqGaps",
+        "tier": "never",
+        "why": "a hole in the frame sequence — audio that never arrived at all."
+      },
+      {
+        "key": "spkWriteFailures",
+        "tier": "never",
+        "why": "frames the DAC would not take."
+      },
+      {
+        "key": "spkBadFrames",
+        "tier": "never",
+        "why": "frames the device could not parse."
+      },
+      {
+        "key": "spkDecodeFailures",
+        "tier": "never",
+        "why": "frames the device could not decode."
+      },
+      {
+        "key": "frameFailures",
+        "tier": "never",
+        "why": "microphone frames the device could not send."
+      },
+      {
+        "key": "sendFailures",
+        "tier": "never",
+        "why": "transport writes that failed."
+      },
+      {
+        "key": "recvFailures",
+        "tier": "never",
+        "why": "transport reads that failed."
+      },
+      {
+        "key": "protoFailures",
+        "tier": "never",
+        "why": "a message neither side could make sense of."
+      },
+      {
+        "key": "inboxDiscarded",
+        "tier": "never",
+        "why": "inbound work dropped for want of room."
+      },
+      {
+        "key": "outboxDiscarded",
+        "tier": "never",
+        "why": "outbound work dropped for want of room."
+      },
+      {
+        "key": "pingFailures",
+        "tier": "never",
+        "why": "a liveness probe that went unanswered."
+      },
+      {
+        "key": "livenessRestarts",
+        "tier": "never",
+        "why": "the device restarted its own transport — the session under test was replaced underneath it."
+      },
+      {
+        "key": "bridgeLosses",
+        "tier": "never",
+        "why": "the device lost the bridge holding its call."
+      },
+      {
+        "key": "micDropped",
+        "tier": "never",
+        "why": "captured speech the device threw away."
+      },
+      {
+        "key": "lowerReadFailures",
+        "tier": "never",
+        "why": "button reads the device could not complete (older firmware calls it talkReadFailures)."
+      },
+      {
+        "key": "talkReadFailures",
+        "tier": "never",
+        "why": "the pre-rename name of lowerReadFailures."
+      },
+      {
+        "key": "spkUnderruns",
+        "tier": "cut-only",
+        "why": "an audible gap: the ring ran dry while the DAC was open. Cancelling an answer empties that ring by design, so the two cut cases may move it; a clean turn may not."
+      },
+      {
+        "key": "spkConceal",
+        "tier": "cut-only",
+        "why": "concealment papering over a missing frame — audible. Same licence as underruns, for the same reason."
+      },
+      {
+        "key": "spkStarvedMs",
+        "tier": "never",
+        "why": "milliseconds the DAC spent with an empty ring while the device was meant to be feeding it — measured on the writing task against an absolute audio-empty deadline, so it does not depend on the DMA driver issuing callbacks during a gap. This is THE starvation gate: a listener heard silence where speech should have been."
+      },
+      {
+        "key": "spkStarveEvents",
+        "tier": "never",
+        "why": "how many separate times the ring ran dry mid-answer. Same gate, counted rather than summed."
+      },
+      {
+        "key": "dmaUnderruns",
+        "tier": "never",
+        "why": "the DAC was handed a cleared buffer MID-ANSWER — audible starvation, and now that the answer-end drain is counted separately (dmaDraining) there is no innocent explanation left for it. Fatal on any turn, cut or not."
+      },
+      {
+        "key": "dmaDraining",
+        "tier": "noted",
+        "why": "cleared descriptors the hardware sent after the source went dry — the normal end of every answer. The ring is 90ms deep and the speaker task waits 60ms for a frame that is not coming, so this moves 5-12 times per short turn on a turn where every frame sent was played. It used to land in dmaUnderruns, which is what disqualified session 1."
+      },
+      {
+        "key": "spkDiscarded",
+        "tier": "cut-only",
+        "why": "frames the playout threw away. On a cut that is the answer being abandoned; on a clean turn it is a truncated answer."
+      },
+      {
+        "key": "spkAnswerStarts",
+        "tier": "noted",
+        "why": "one per answer, always: every answer begins by displacing the last, so the device's own REPLACE path fires on a perfect turn. This was published as spkReplaced and tiered as a fault, which made every clean turn look damaged. The subset that actually costs audio is spkSupersededMidplay."
+      },
+      {
+        "key": "spkSupersededMidplay",
+        "tier": "cut-only",
+        "why": "an answer displaced while it was STILL PLAYING — queued audio thrown away. This is what a barge-in does deliberately and what nothing else may do."
+      },
+      {
+        "key": "spkIgnoredStale",
+        "tier": "cut-only",
+        "why": "frames refused for belonging to an answer that has been superseded."
+      },
+      {
+        "key": "spkIgnoredCall",
+        "tier": "cut-only",
+        "why": "frames refused for belonging to a call that has ended — the hang-up case in one number."
+      },
+      {
+        "key": "spkIgnoredDup",
+        "tier": "cut-only",
+        "why": "frames refused as duplicates. Measured once eating a WHOLE first answer of a call started right after a previous one, which is precisely the boundary this command crosses ten times — so on a clean turn it fails the run."
+      },
+      {
+        "key": "spkCatchup",
+        "tier": "cut-only",
+        "why": "the playout skipped ahead to pay off lag: heard as a stutter, so never acceptable on a clean turn."
+      },
+      {
+        "key": "spkDebtPaid",
+        "tier": "cut-only",
+        "why": "the other half of catch-up accounting; same reasoning."
+      },
+      {
+        "key": "spkAnswerDrains",
+        "tier": "noted",
+        "why": "one per answer, always: the source going dry IS how an answer ends. Published as spkWaitDry and tiered as a fault on the belief it measured zero across a 26-minute call; it measured 62 across 62 turns, which is once each."
+      },
+      {
+        "key": "bargeIns",
+        "tier": "cut-only",
+        "why": "the device counting its own interruptions. Expected on the barge-in case and nowhere else."
+      },
+      {
+        "key": "dmaOpening",
+        "tier": "noted",
+        "why": "the DAC opens once per answer; it moves on every healthy turn."
+      },
+      {
+        "key": "spkWaitPriming",
+        "tier": "noted",
+        "why": "ticks while the playout waits to prime; already in the hundreds of thousands on an idle device."
+      },
+      {
+        "key": "inboxDeferrals",
+        "tier": "noted",
+        "why": "work deferred to the next tick rather than dropped — back-pressure working as designed."
+      },
+      {
+        "key": "downlinkRecycles",
+        "tier": "noted",
+        "why": "make-before-break replacement of the downlink connection. It loses nothing, and if it ever did, the sent-equals-played gate would say so."
+      }
+    ]
+  }
+}

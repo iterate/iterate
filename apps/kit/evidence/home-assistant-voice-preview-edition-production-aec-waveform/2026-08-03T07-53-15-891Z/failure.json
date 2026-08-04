@@ -1,0 +1,35 @@
+{
+  "aec": null,
+  "createdAt": "2026-08-03T07:53:22.254Z",
+  "device": {
+    "deviceHost": "192.168.1.159",
+    "id": "home-assistant-voice-preview-edition",
+    "projectId": "prj_4f76ffe131f1495981afd65619f57914",
+    "projectSlug": "kit-havpe-voice-e2e-20260802",
+    "workerHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app"
+  },
+  "digital": null,
+  "error": {
+    "message": "Production route preflight failed: Worker reachability did not sustain 8 consecutive replies at or below 100 ms across 8 bounded attempts.",
+    "name": "Error",
+    "stack": "Error: Production route preflight failed: Worker reachability did not sustain 8 consecutive replies at or below 100 ms across 8 bounded attempts.\n    at proveProductionAecWaveform (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:339:13)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:1256:20)"
+  },
+  "network": null,
+  "passed": false,
+  "projectModeRestored": true,
+  "schemaVersion": 1,
+  "stimuli": {
+    "macOutputVolumePercent": 40,
+    "nearSourceSha256": null,
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "providerDurationMs": 6000
+  },
+  "worker": {
+    "baseline": null,
+    "terminal": null
+  }
+}

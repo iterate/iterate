@@ -1,0 +1,71 @@
+[
+  {
+    "assessment": {
+      "actualFrames": 165,
+      "acceptedFrameSpanMs": 3277,
+      "capturedAudioDurationMs": 3300,
+      "durationMs": 3285,
+      "expectedFrames": 164,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 167,
+      "minimumExpectedFrames": 161,
+      "passed": false,
+      "realtimeCadencePassed": false,
+      "reasons": ["The maximum accepted-uplink gap was 152 ms; 60 ms is the fixed realtime limit."]
+    },
+    "capture": {
+      "durationMs": 3285,
+      "frames": 165,
+      "truncatedFrames": 0
+    },
+    "name": "ambient",
+    "playbackObserved": false,
+    "responseIndex": null
+  },
+  {
+    "assessment": {
+      "actualFrames": 215,
+      "acceptedFrameSpanMs": 4291,
+      "capturedAudioDurationMs": 4300,
+      "durationMs": 4297,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": false,
+      "realtimeCadencePassed": false,
+      "reasons": ["The maximum accepted-uplink gap was 191 ms; 60 ms is the fixed realtime limit."]
+    },
+    "capture": {
+      "durationMs": 4297,
+      "frames": 215,
+      "truncatedFrames": 0
+    },
+    "name": "far-tone",
+    "playbackObserved": true,
+    "responseIndex": 0
+  },
+  {
+    "assessment": {
+      "actualFrames": 211,
+      "acceptedFrameSpanMs": 4211,
+      "capturedAudioDurationMs": 4220,
+      "durationMs": 4295,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": false,
+      "realtimeCadencePassed": false,
+      "reasons": ["The maximum accepted-uplink gap was 99 ms; 60 ms is the fixed realtime limit."]
+    },
+    "capture": {
+      "durationMs": 4295,
+      "frames": 211,
+      "truncatedFrames": 0
+    },
+    "name": "far-dual-carrier-prbs31",
+    "playbackObserved": true,
+    "responseIndex": 1
+  }
+]

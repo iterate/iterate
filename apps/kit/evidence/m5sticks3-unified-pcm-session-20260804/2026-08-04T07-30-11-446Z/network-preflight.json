@@ -1,0 +1,227 @@
+{
+  "controlCapability": {
+    "attempts": [
+      {
+        "durationMs": 66.953207999999,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 58.112207999998645,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 108.73687500000233,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 111.22741700000188,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 76.8302079999994,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 68.64883299999929,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 113.18466600000102,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 79.48187499999767,
+        "outcome": "success"
+      }
+    ],
+    "maximumHealthyDurationMs": 500,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "createdAt": "2026-08-04T07:30:27.535Z",
+  "deviceHost": "192.168.0.21",
+  "deviceReachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 16.353
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 35.092
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 8.448
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 23.881
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.388
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.306
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.57
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.288
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 18.402
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 38.822
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.195
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.181
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 15.246
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.847
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.173
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.397
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.242
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.383
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.625
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.238
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.62
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.518
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.848
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.314
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.78
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 12.809
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.866
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.263
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.336
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.563
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 30
+  },
+  "dnsAndConnect": {
+    "connect": {
+      "durationMs": 44.73975000000064,
+      "error": null,
+      "maximumHealthyDurationMs": 1000,
+      "outcome": "success"
+    },
+    "dns": {
+      "durationMs": 30.596457999999984,
+      "error": null,
+      "maximumHealthyDurationMs": 500,
+      "outcome": "success"
+    }
+  },
+  "reachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 11.382
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 22.089
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.904
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 14.682
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.501
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 18.518
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.286
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.805
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "workerHost": "kit--kit-stick-voice-e2e-20260731.iterate.app",
+  "passed": true,
+  "reasons": [],
+  "schemaVersion": 3
+}

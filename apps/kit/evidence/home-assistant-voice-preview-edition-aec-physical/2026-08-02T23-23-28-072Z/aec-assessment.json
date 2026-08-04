@@ -1,0 +1,105 @@
+{
+  "ambient": {
+    "dbfs": -93.00790814790744,
+    "peak": 3,
+    "rms": 0.7329165482281503
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -69.88438228696184,
+      "peak": 48,
+      "rms": 10.50100392026083
+    },
+    "farEndResidualDb": -54.76088330177512,
+    "farEndSimilarity": 0.01226776472785758,
+    "nearEndGain": 0.7615615717329233,
+    "nearEndSimilarity": 0.9005545611933287,
+    "passed": false,
+    "residualDegradationFromRepeatDb": 6.7636002802801,
+    "residualToNearEndDb": -8.69144807115136,
+    "similarityLossFromRepeat": 0.08127454507843856
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -92.7531082832893,
+        "peak": 3,
+        "rms": 0.7547350528496739
+      },
+      "kind": "tone",
+      "passed": true,
+      "source": {
+        "dbfs": -19.339884567655986,
+        "peak": 5000,
+        "rms": 3535.53960513809
+      },
+      "sourceSimilarity": 0.0031156223253512197
+    },
+    {
+      "clean": {
+        "dbfs": -86.62094063713134,
+        "peak": 10,
+        "rms": 1.5289838673663847
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": true,
+      "source": {
+        "dbfs": -22.350138854101736,
+        "peak": 4268,
+        "rms": 2500.017174941004
+      },
+      "sourceSimilarity": 0.009229998753376606
+    },
+    {
+      "clean": {
+        "dbfs": -80.48275350858674,
+        "peak": 14,
+        "rms": 3.0996471573390414
+      },
+      "kind": "speech-shaped",
+      "passed": true,
+      "source": {
+        "dbfs": -22.056464522318358,
+        "peak": 8702,
+        "rms": 2585.989212278511
+      },
+      "sourceSimilarity": 0.006732069715966265
+    }
+  ],
+  "nearEnd": {
+    "aboveAmbientDb": 24.582439704423045,
+    "clean": {
+      "dbfs": -68.4254684434844,
+      "peak": 49,
+      "rms": 12.421570619960532
+    },
+    "passed": true,
+    "pathReferenceObserved": true,
+    "repeat": {
+      "clean": {
+        "dbfs": -69.4380600509777,
+        "peak": 47,
+        "rms": 11.054699264969907
+      },
+      "gain": 0.8730964845900209,
+      "passed": true,
+      "pathReferenceObserved": true,
+      "residualToReferenceDb": -15.45504835143146,
+      "similarity": 0.9818291062717672
+    },
+    "source": {
+      "dbfs": -15.176950127467181,
+      "peak": 26072,
+      "rms": 5709.55720506014
+    },
+    "sourceSimilarity": 0.6463285958612296
+  },
+  "passed": false,
+  "reasons": [
+    "Double-talk degraded beyond repeated near-end control: similarity loss 0.081, residual degradation 6.76 dB."
+  ],
+  "validity": {
+    "passed": true,
+    "reasons": []
+  }
+}

@@ -1,0 +1,2 @@
+/usr/bin/ar qc libiterate-kit-posix.a "CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/tls_stream.c.o" "CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/websocket_client.c.o" "CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/posix_itx_transport.c.o"
+/usr/bin/ranlib libiterate-kit-posix.a

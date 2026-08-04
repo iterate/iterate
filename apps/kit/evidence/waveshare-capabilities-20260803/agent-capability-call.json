@@ -1,0 +1,29 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/trace4.ts
+
+{
+  "scanned": 51,
+  "hits": [
+    {
+      "offset": 25576,
+      "type": "script-run-requested",
+      "payload": "{\"code\":\"async (itx) => {\\n  const [_, worker, files, capability] = await Promise.all([\\n    itx.agent.append({\\n      type: \\\"events.iterate.com/agent/summary-updated\\\",\\n      payload: { title: \\\"Live Waveshare metrics\\\", activity: \\\"Discovering the physical device's live metrics interface\\\" },\\n    }),\\n    itx.repo.readFile({ path: \\\"worker.ts\\\" }),\\n    itx.workspace.glob(\\\"/repos/config/**/*voice*\\\"),\\n    itx.kit.waveshare.__describe(),\\n  ]);\\n  return { worker: worker.content, files, capability };\\n}\",\"executionId\":\"agent-output:25573\",\"expiresAt\":1785788253110}"
+    },
+    {
+      "offset": 25579,
+      "type": "script-run-settled",
+      "payload": "{\"executionId\":\"agent-output:25573\",\"settlement\":{\"status\":\"succeeded\",\"result\":{\"worker\":\"import { DocsApp } from \\\"@iterate-com/docs\\\";\\nimport { GithubAiLinter } from \\\"iterate/starter-apps/github-ai-linter\\\";\\nimport { GuestbookApp } from \\\"iterate/starter-apps/guestbook\\\";\\nimport { IterateWorkerEntrypoint, type StreamEvent } from \\\"iterate/sdk\\\";\\nimport { TodoApp } from \\\"iterate/starter-apps/todo\\\";\\n\\n// An iterate project is, in the abstract, just a fetch function.\\n// HTTP clients on the internet can send us Requests, and we will send responses and\\n// occasionally send HTTP requests outwards to the world to take influence on it.\\n//\\n// Internally, different parts of a project communicate by appending and subscribing to append-only\\n// event streams.\\n//\\n// Hence, the essence of an iterate project can be expressed as two functions:\\n// { fetch, processEvent }\\n\\nexport default class ProjectWorker extends IterateWorkerEntrypoint {\\n  #aiLintApp = GithubAiLinter.create(this.env, {\\n    policyVersion: \\\"2\\\",\\n    rules: {\\n      paths: [\\n        \\\"rules/structure/no-small-single-use-helper.md\\\",\\n        \\\"rules/typescript/explain-type-cast.md\\\",\\n        \\\"rules/typescript/no-inferable-type-annotation.md\\\",\\n      ],\\n      repoPath: \\\"/repos/config\\\",\\n    },\\n  });\\n  #docsApp = DocsApp.create(this.env, {\\n    auth: { policy: \\\"project-member\\\" },\\n    proxy: {\\n      origin: \\\"https://docs.iterate.workers.dev\\\",\\n      originOverrideKvKey: \\\"docs-app-origin\\\",\\n    },\\n  });\\n  #guestbookApp = GuestbookApp.create(this.env);\\n  #todoApp = TodoApp.create(this.env);\\n\\n  /** Agent-callable Docs helpers, including `itx.worker.docs.link({ workspace, path })`. */\\n  get docs() {\\n    return this.#docsApp.rpc;\\n  }\\n\\n  /**\\n   * STANDING AGENT CONTEXT — the pat"
+    },
+    {
+      "offset": 25668,
+      "type": "script-run-requested",
+      "payload": "{\"code\":\"async (itx) => {\\n  const [_, health] = await Promise.all([\\n    itx.agent.append({\\n      type: \\\"events.iterate.com/agent/summary-updated\\\",\\n      payload: { activity: \\\"Reading live Waveshare hardware health metrics\\\" },\\n    }),\\n    itx.kit.waveshare.health(),\\n  ]);\\n  return health;\\n}\",\"executionId\":\"agent-output:25665\",\"expiresAt\":1785788267942}"
+    },
+    {
+      "offset": 25671,
+      "type": "script-run-settled",
+      "payload": "{\"executionId\":\"agent-output:25665\",\"settlement\":{\"status\":\"succeeded\",\"result\":{\"transport\":\"ready\",\"voicelab\":\"ready\",\"voicelabFailure\":\"none\",\"callActive\":false,\"callPending\":false,\"wantsCall\":false,\"talking\":false,\"gateOpen\":true,\"t\":61838,\"uptimeMs\":61838,\"connectionState\":2,\"seq\":11,\"framesSent\":0,\"frameFailures\":0,\"micCaptured\":3066,\"micDropped\":0,\"micIdle\":3066,\"micGated\":0,\"spkFrames\":0,\"spkPlayed\":0,\"spkOverflow\":0,\"spkUnderruns\":0,\"dmaUnderruns\":0,\"dmaOpening\":0,\"spkConceal\":0,\"spkCatchup\":0,\"spkDebtPaid\":0,\"spkWriteFailures\":0,\"lowerReadFailures\":0,\"spkMarginMaxMs\":0,\"spkLagMaxMs\":0,\"spkMarginMinMs\":0,\"spkMarginP10Ms\":0,\"spkWrites\":0,\"spkBadFrames\":0,\"spkSeqGaps\":0,\"spkDecodeFailures\":0,\"spkDiscarded\":0,\"spkIgnoredCall\":0,\"spkIgnoredStale\":0,\"spkIgnoredDup\":0,\"spkReplaced\":0,\"spkWaitPriming\":12250,\"spkWaitDry\":0,\"bargeIns\":0,\"batches\":0,\"connGeneration\":1,\"rttMs\":71,\"pings\":11,\"pingFailures\":0,\"livenessRestarts\":0,\"bridgeLosses\":0,\"bridgeAgeMs\":0,\"downlinkRecycles\":0,\"batchAgeMs\":52739,\"resetReason\":11,\"heapFree\":5149376,\"heapMin\":5129992,\"psramFree\":5122748,\"dmaLargest\":40960,\"wsSent\":78,\"outboxDiscarded\":0,\"outboxUsed\":0,\"outboxSlots\":64,\"inboxPublished\":25,\"inboxConsumed\":23,\"inboxDiscarded\":0,\"inboxHighWater\":3,\"inboxDeferrals\":0,\"sessionGeneration\":1,\"protoFailures\":0,\"recvFailures\":0,\"sendFailures\":0,\"lastAppStatus\":0}}}"
+    }
+  ]
+}

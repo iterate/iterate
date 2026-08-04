@@ -162,6 +162,7 @@ const kitMetricFields = [
   ["freePsramBytes", "psram"],
   ["taskStackHighWaterBytes", "main_stack_headroom"],
   ["cpuPermille", "cpu_permille"],
+  ["subscriptionEnds", "subscription_callback_rejections"],
 ] as const;
 const kitAudioMetricFields = [
   [["capture", "sent"], "audio_sent"],

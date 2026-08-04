@@ -1,0 +1,33 @@
+{
+  "assessment": {
+    "actualFrames": 153,
+    "acceptedFrameSpanMs": 3068,
+    "capturedAudioDurationMs": 3060,
+    "durationMs": 3088,
+    "expectedFrames": 154,
+    "frameConservationPassed": true,
+    "maximumExpectedFrames": 157,
+    "minimumExpectedFrames": 151,
+    "passed": true,
+    "realtimeCadencePassed": true,
+    "reasons": []
+  },
+  "capture": {
+    "acceptedFrameSpanMs": 3068,
+    "capturedAudioDurationMs": 3060,
+    "durationMs": 3088,
+    "finishedAtMs": 1785736962051,
+    "firstAcceptedAtMs": 1785736958980,
+    "firstAcceptedUplinkFrame": 105,
+    "frameBytes": 640,
+    "frames": 153,
+    "lastAcceptedAtMs": 1785736962048,
+    "lastAcceptedUplinkFrame": 257,
+    "maximumFrames": 300,
+    "maximumInterFrameGapMs": 156,
+    "pcmSha256": "14f9a7d33ca77c5051406bc39a00a242d385526e27ff3c5d035fc7d3e7740a1e",
+    "schemaVersion": 2,
+    "startedAtMs": 1785736958963,
+    "truncatedFrames": 0
+  }
+}

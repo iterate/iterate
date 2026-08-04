@@ -2,6 +2,7 @@ idf_component_register(
   SRCS
     "configuration.c"
     "itx_transport.c"
+    "pcm_session.c"
     "pcm_transport.c"
     "websocket_connection.c"
   INCLUDE_DIRS "include"

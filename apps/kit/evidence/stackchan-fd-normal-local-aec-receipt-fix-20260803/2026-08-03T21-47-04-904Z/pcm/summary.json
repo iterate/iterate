@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "failure": null,
+  "frameBytes": 640,
+  "microphone": {
+    "bytes": 1767680,
+    "frames": 2762,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-fd-normal-local-aec-receipt-fix-20260803/2026-08-03T21-47-04-904Z/pcm/microphone-uplink.pcm16le",
+    "sha256": "3ce6fe8e67657e6a03a13ec810c9b519eff58420d82587df55b1832592a11a0d"
+  },
+  "outputDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-fd-normal-local-aec-receipt-fix-20260803/2026-08-03T21-47-04-904Z/pcm",
+  "producedAt": "2026-08-03T21:48:09.502Z",
+  "sampleRateHz": 16000,
+  "speaker": {
+    "bytes": 1152000,
+    "frames": 1800,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-fd-normal-local-aec-receipt-fix-20260803/2026-08-03T21-47-04-904Z/pcm/speaker-downlink.pcm16le",
+    "sha256": "247998bcb28fcb38a65d9792a3528c92a52f60e3ec3bc23b05a6e3e909ea54fb"
+  },
+  "timelinePath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-fd-normal-local-aec-receipt-fix-20260803/2026-08-03T21-47-04-904Z/pcm/timeline.jsonl"
+}

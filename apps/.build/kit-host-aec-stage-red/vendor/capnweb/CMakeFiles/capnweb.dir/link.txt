@@ -1,0 +1,2 @@
+/usr/bin/ar qc libcapnweb.a CMakeFiles/capnweb.dir/src/call.c.o CMakeFiles/capnweb.dir/src/expression.c.o CMakeFiles/capnweb.dir/src/json.c.o CMakeFiles/capnweb.dir/src/reply.c.o CMakeFiles/capnweb.dir/src/responder.c.o CMakeFiles/capnweb.dir/src/session.c.o CMakeFiles/capnweb.dir/src/value.c.o CMakeFiles/capnweb.dir/src/writer.c.o
+/usr/bin/ranlib libcapnweb.a

@@ -1,0 +1,188 @@
+{
+  "input": "evidence/stackchan-volume90-grok-20260803-rerun/2026-08-03T15-43-21-281Z/iterate-kit-acoustic-OuId92/microphone.pcm16le",
+  "interval": {
+    "endSample": 415744,
+    "startSample": 0
+  },
+  "result": {
+    "durationSeconds": 8.661,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"083173a0-9926-4202-b6e4-8e32cd9e2986\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"As, you know, like by the way, this is like your Pomodoro timer going off\",\"words\":[{\"text\":\"As,\",\"start\":0.02,\"end\":0.121},{\"text\":\"you\",\"start\":0.482,\"end\":0.563},{\"text\":\"know,\",\"start\":0.563,\"end\":0.683},{\"text\":\"like,\",\"start\":0.764,\"end\":1.025},{\"text\":\"by\",\"start\":1.266,\"end\":1.407},{\"text\":\"the\",\"start\":1.447,\"end\":1.507},{\"text\":\"way,\",\"start\":1.547,\"end\":1.668},{\"text\":\"this\",\"start\":1.748,\"end\":1.869},{\"text\":\"is\",\"start\":1.909,\"end\":1.989},{\"text\":\"like\",\"start\":2.029,\"end\":2.23},{\"text\":\"your\",\"start\":2.23,\"end\":2.351},{\"text\":\"Pomodoro\",\"start\":2.371,\"end\":2.913},{\"text\":\"timer\",\"start\":2.994,\"end\":3.315},{\"text\":\"going\",\"start\":3.416,\"end\":3.677},{\"text\":\"off\",\"start\":3.737,\"end\":3.918}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.32,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"As, you know, like by the way, this is like your Pomodoro timer going off\",\"words\":[{\"text\":\"As,\",\"start\":0.02,\"end\":0.121},{\"text\":\"you\",\"start\":0.482,\"end\":0.562},{\"text\":\"know,\",\"start\":0.562,\"end\":0.683},{\"text\":\"like,\",\"start\":0.763,\"end\":1.025},{\"text\":\"by\",\"start\":1.266,\"end\":1.406},{\"text\":\"the\",\"start\":1.446,\"end\":1.507},{\"text\":\"way,\",\"start\":1.547,\"end\":1.667},{\"text\":\"this\",\"start\":1.748,\"end\":1.868},{\"text\":\"is\",\"start\":1.908,\"end\":1.989},{\"text\":\"like\",\"start\":2.029,\"end\":2.23},{\"text\":\"your\",\"start\":2.23,\"end\":2.35},{\"text\":\"Pomodoro\",\"start\":2.37,\"end\":2.913},{\"text\":\"timer\",\"start\":2.993,\"end\":3.315},{\"text\":\"going\",\"start\":3.415,\"end\":3.676},{\"text\":\"off\",\"start\":3.737,\"end\":3.917}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":4.52,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Has the, has the thing finished? Check in on the sub agent, whatever. And that, that'll be like\",\"words\":[{\"text\":\"Has\",\"start\":4.54,\"end\":4.681},{\"text\":\"the,\",\"start\":4.681,\"end\":4.761},{\"text\":\"has\",\"start\":4.962,\"end\":5.103},{\"text\":\"the\",\"start\":5.123,\"end\":5.204},{\"text\":\"thing\",\"start\":5.224,\"end\":5.405},{\"text\":\"finished?\",\"start\":5.465,\"end\":5.887},{\"text\":\"Check\",\"start\":5.988,\"end\":6.168},{\"text\":\"in\",\"start\":6.189,\"end\":6.249},{\"text\":\"on\",\"start\":6.289,\"end\":6.349},{\"text\":\"the\",\"start\":6.37,\"end\":6.43},{\"text\":\"sub\",\"start\":6.47,\"end\":6.611},{\"text\":\"agent,\",\"start\":6.691,\"end\":6.932},{\"text\":\"whatever.\",\"start\":7.013,\"end\":7.334},{\"text\":\"And\",\"start\":7.917,\"end\":7.998},{\"text\":\"that,\",\"start\":7.998,\"end\":8.119},{\"text\":\"that'll\",\"start\":8.199,\"end\":8.44},{\"text\":\"be\",\"start\":8.44,\"end\":8.5},{\"text\":\"like\",\"start\":8.581,\"end\":8.661}],\"is_final\":true,\"speech_final\":false,\"start\":4.52,\"duration\":4.141,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Has the, has the thing finished? Check in on the sub agent, whatever. And that, that'll be like\",\"words\":[{\"text\":\"Has\",\"start\":4.54,\"end\":4.681},{\"text\":\"the,\",\"start\":4.681,\"end\":4.761},{\"text\":\"has\",\"start\":4.962,\"end\":5.103},{\"text\":\"the\",\"start\":5.123,\"end\":5.204},{\"text\":\"thing\",\"start\":5.224,\"end\":5.405},{\"text\":\"finished?\",\"start\":5.465,\"end\":5.887},{\"text\":\"Check\",\"start\":5.988,\"end\":6.168},{\"text\":\"in\",\"start\":6.189,\"end\":6.249},{\"text\":\"on\",\"start\":6.289,\"end\":6.349},{\"text\":\"the\",\"start\":6.37,\"end\":6.43},{\"text\":\"sub\",\"start\":6.47,\"end\":6.611},{\"text\":\"agent,\",\"start\":6.691,\"end\":6.932},{\"text\":\"whatever.\",\"start\":7.013,\"end\":7.334},{\"text\":\"And\",\"start\":7.917,\"end\":7.998},{\"text\":\"that,\",\"start\":7.998,\"end\":8.119},{\"text\":\"that'll\",\"start\":8.199,\"end\":8.44},{\"text\":\"be\",\"start\":8.44,\"end\":8.5},{\"text\":\"like\",\"start\":8.581,\"end\":8.661}],\"is_final\":true,\"speech_final\":true,\"start\":4.52,\"duration\":4.141,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":8.661}"
+    ],
+    "text": "As, you know, like, by the way, this is like your Pomodoro timer going off Has the, has the thing finished? Check in on the sub agent, whatever. And that, that'll be like",
+    "words": [
+      {
+        "text": "As,",
+        "start": 0.02,
+        "end": 0.121
+      },
+      {
+        "text": "you",
+        "start": 0.482,
+        "end": 0.562
+      },
+      {
+        "text": "know,",
+        "start": 0.562,
+        "end": 0.683
+      },
+      {
+        "text": "like,",
+        "start": 0.763,
+        "end": 1.025
+      },
+      {
+        "text": "by",
+        "start": 1.266,
+        "end": 1.406
+      },
+      {
+        "text": "the",
+        "start": 1.446,
+        "end": 1.507
+      },
+      {
+        "text": "way,",
+        "start": 1.547,
+        "end": 1.667
+      },
+      {
+        "text": "this",
+        "start": 1.748,
+        "end": 1.868
+      },
+      {
+        "text": "is",
+        "start": 1.908,
+        "end": 1.989
+      },
+      {
+        "text": "like",
+        "start": 2.029,
+        "end": 2.23
+      },
+      {
+        "text": "your",
+        "start": 2.23,
+        "end": 2.35
+      },
+      {
+        "text": "Pomodoro",
+        "start": 2.37,
+        "end": 2.913
+      },
+      {
+        "text": "timer",
+        "start": 2.993,
+        "end": 3.315
+      },
+      {
+        "text": "going",
+        "start": 3.415,
+        "end": 3.676
+      },
+      {
+        "text": "off",
+        "start": 3.737,
+        "end": 3.917
+      },
+      {
+        "text": "Has",
+        "start": 4.54,
+        "end": 4.681
+      },
+      {
+        "text": "the,",
+        "start": 4.681,
+        "end": 4.761
+      },
+      {
+        "text": "has",
+        "start": 4.962,
+        "end": 5.103
+      },
+      {
+        "text": "the",
+        "start": 5.123,
+        "end": 5.204
+      },
+      {
+        "text": "thing",
+        "start": 5.224,
+        "end": 5.405
+      },
+      {
+        "text": "finished?",
+        "start": 5.465,
+        "end": 5.887
+      },
+      {
+        "text": "Check",
+        "start": 5.988,
+        "end": 6.168
+      },
+      {
+        "text": "in",
+        "start": 6.189,
+        "end": 6.249
+      },
+      {
+        "text": "on",
+        "start": 6.289,
+        "end": 6.349
+      },
+      {
+        "text": "the",
+        "start": 6.37,
+        "end": 6.43
+      },
+      {
+        "text": "sub",
+        "start": 6.47,
+        "end": 6.611
+      },
+      {
+        "text": "agent,",
+        "start": 6.691,
+        "end": 6.932
+      },
+      {
+        "text": "whatever.",
+        "start": 7.013,
+        "end": 7.334
+      },
+      {
+        "text": "And",
+        "start": 7.917,
+        "end": 7.998
+      },
+      {
+        "text": "that,",
+        "start": 7.998,
+        "end": 8.119
+      },
+      {
+        "text": "that'll",
+        "start": 8.199,
+        "end": 8.44
+      },
+      {
+        "text": "be",
+        "start": 8.44,
+        "end": 8.5
+      },
+      {
+        "text": "like",
+        "start": 8.581,
+        "end": 8.661
+      }
+    ]
+  },
+  "sampleRateHz": 48000,
+  "schemaVersion": 1
+}

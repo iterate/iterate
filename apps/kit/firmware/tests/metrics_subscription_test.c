@@ -1,11 +1,11 @@
-#include "iterate/kit/capabilities/metrics.h"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+
+#include "iterate/kit/capabilities/metrics.h"
 
 enum {
   TOKEN_CAPACITY = 128,
@@ -16,11 +16,10 @@ enum {
   MAXIMUM_OWNER_LOOP_CONTROL_BURST = 8,
 };
 
-static void test_assert(
-    bool condition,
-    const char *expression,
-    const char *file,
-    int line) {
+static void test_assert(bool condition,
+                        const char *expression,
+                        const char *file,
+                        int line) {
   if (condition) {
     return;
   }
@@ -80,21 +79,17 @@ static enum capnweb_status capture_fragment(
     return CAPNWEB_OK;
   }
   if (kind == CAPNWEB_TEXT_DATA) {
-    if (!fixture->message_open ||
-        data == NULL ||
-        length == 0U) {
+    if (!fixture->message_open || data == NULL || length == 0U) {
       return CAPNWEB_E_STATE;
     }
-    captured_length =
-        &fixture->captured_lengths[fixture->captured_count];
+    captured_length = &fixture->captured_lengths[fixture->captured_count];
     if (length >= MESSAGE_CAPACITY ||
         *captured_length >= MESSAGE_CAPACITY - length) {
       return CAPNWEB_E_LIMIT;
     }
-    memcpy(
-        fixture->captured[fixture->captured_count] + *captured_length,
-        data,
-        length);
+    memcpy(fixture->captured[fixture->captured_count] + *captured_length,
+           data,
+           length);
     *captured_length += length;
     return CAPNWEB_OK;
   }
@@ -102,8 +97,7 @@ static enum capnweb_status capture_fragment(
     if (!fixture->message_open) {
       return CAPNWEB_E_STATE;
     }
-    captured_length =
-        &fixture->captured_lengths[fixture->captured_count];
+    captured_length = &fixture->captured_lengths[fixture->captured_count];
     fixture->captured[fixture->captured_count][*captured_length] = '\0';
     fixture->captured_count++;
     fixture->message_open = false;
@@ -116,85 +110,83 @@ static enum iterate_kit_status sample_metrics(
     void *context, struct iterate_kit_metrics_sample *sample) {
   const struct fixture *fixture = context;
   const struct iterate_kit_buffer_metrics maximum_observed_buffer = {
-    ITERATE_KIT_BUFFER_OBSERVED,
-    UINT32_MAX,
-    UINT32_MAX,
-    UINT32_MAX,
+      ITERATE_KIT_BUFFER_OBSERVED,
+      UINT32_MAX,
+      UINT32_MAX,
+      UINT32_MAX,
   };
-  const int64_t uptime =
-      fixture->maximum_metrics ? INT64_MAX : 1;
-  const uint32_t maximum_counter =
-      fixture->maximum_metrics ? UINT32_MAX : 0U;
+  const int64_t uptime = fixture->maximum_metrics ? INT64_MAX : 1;
+  const uint32_t maximum_counter = fixture->maximum_metrics ? UINT32_MAX : 0U;
   *sample = (struct iterate_kit_metrics_sample){
-    uptime,
-    fixture->maximum_metrics ? UINT32_MAX : 2U,
-    fixture->maximum_metrics ? UINT32_MAX : 3U,
-    fixture->maximum_metrics ? UINT32_MAX : 4U,
-    fixture->maximum_metrics ? UINT32_MAX : 5U,
-    fixture->maximum_metrics ? UINT32_MAX : 6U,
-    fixture->maximum_metrics ? UINT32_MAX : 7U,
-    fixture->maximum_metrics ? INT64_C(1000) : 8,
-    true,
-    {
+      uptime,
+      fixture->maximum_metrics ? UINT32_MAX : 2U,
+      fixture->maximum_metrics ? UINT32_MAX : 3U,
+      fixture->maximum_metrics ? UINT32_MAX : 4U,
+      fixture->maximum_metrics ? UINT32_MAX : 5U,
+      fixture->maximum_metrics ? UINT32_MAX : 6U,
+      fixture->maximum_metrics ? UINT32_MAX : 7U,
+      fixture->maximum_metrics ? INT64_C(1000) : 8,
+      true,
       {
-        fixture->maximum_metrics ? UINT32_MAX : 9U,
-        fixture->maximum_metrics ? UINT32_MAX : 10U,
-        fixture->maximum_metrics ? UINT32_MAX : 11U,
+          {
+              fixture->maximum_metrics ? UINT32_MAX : 9U,
+              fixture->maximum_metrics ? UINT32_MAX : 10U,
+              fixture->maximum_metrics ? UINT32_MAX : 11U,
+          },
+          {
+              fixture->maximum_metrics ? UINT32_MAX : 12U,
+              fixture->maximum_metrics ? UINT32_MAX : 13U,
+              fixture->maximum_metrics ? UINT32_MAX : 14U,
+              fixture->maximum_metrics ? UINT32_MAX : 15U,
+              fixture->maximum_metrics ? UINT32_MAX : 16U,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              0,
+              NULL,
+              0,
+          },
+          {
+              fixture->maximum_metrics ? UINT32_MAX : 17U,
+              fixture->maximum_metrics ? UINT32_MAX : 18U,
+              fixture->maximum_metrics ? UINT32_MAX : 19U,
+              fixture->maximum_metrics ? UINT32_MAX : 20U,
+              fixture->maximum_metrics ? UINT32_MAX : 21U,
+          },
+          {
+              fixture->maximum_metrics ? UINT32_MAX : 22U,
+              fixture->maximum_metrics ? UINT32_MAX : 23U,
+              fixture->maximum_metrics ? UINT32_MAX : 24U,
+              fixture->maximum_metrics ? UINT32_MAX : 25U,
+              fixture->maximum_metrics ? UINT32_MAX : 26U,
+              fixture->maximum_metrics ? UINT32_MAX : 27U,
+          },
+          fixture->maximum_metrics ? UINT32_MAX : 28U,
+          false,
+          {0},
+          false,
       },
-      {
-        fixture->maximum_metrics ? UINT32_MAX : 12U,
-        fixture->maximum_metrics ? UINT32_MAX : 13U,
-        fixture->maximum_metrics ? UINT32_MAX : 14U,
-        fixture->maximum_metrics ? UINT32_MAX : 15U,
-        fixture->maximum_metrics ? UINT32_MAX : 16U,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        0,
-        NULL,
-        0,
-      },
-      {
-        fixture->maximum_metrics ? UINT32_MAX : 17U,
-        fixture->maximum_metrics ? UINT32_MAX : 18U,
-        fixture->maximum_metrics ? UINT32_MAX : 19U,
-        fixture->maximum_metrics ? UINT32_MAX : 20U,
-        fixture->maximum_metrics ? UINT32_MAX : 21U,
-      },
-      {
-        fixture->maximum_metrics ? UINT32_MAX : 22U,
-        fixture->maximum_metrics ? UINT32_MAX : 23U,
-        fixture->maximum_metrics ? UINT32_MAX : 24U,
-        fixture->maximum_metrics ? UINT32_MAX : 25U,
-        fixture->maximum_metrics ? UINT32_MAX : 26U,
-        fixture->maximum_metrics ? UINT32_MAX : 27U,
-      },
-      fixture->maximum_metrics ? UINT32_MAX : 28U,
       false,
       {0},
       false,
-    },
-    false,
-    {0},
-    false,
-    {0},
-    false,
-    {0},
-    false,
-    {0},
-    false,
-    {0},
-    0U,
+      {0},
+      false,
+      {0},
+      false,
+      {0},
+      false,
+      {0},
+      0U,
   };
   sample->audio.uplink.send_deferrals =
       fixture->maximum_metrics ? maximum_counter : 29U;
@@ -225,9 +217,7 @@ static enum iterate_kit_status sample_metrics(
   sample->audio.uplink.last_restart_oldest_capture_age_ms =
       fixture->maximum_metrics ? maximum_counter : 40U;
   sample->audio.uplink.last_restart_reason =
-      fixture->maximum_metrics
-          ? "transport_disconnected"
-          : "capture_stale";
+      fixture->maximum_metrics ? "transport_disconnected" : "capture_stale";
   sample->audio.uplink.last_restart_frames_discarded =
       fixture->maximum_metrics ? maximum_counter : 41U;
   sample->subscription_callback_rejections =
@@ -250,14 +240,11 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 46U;
   sample->audio.buffers.websocket_transmitter.capacity_bytes =
       fixture->maximum_metrics ? UINT32_MAX : 47U;
-  sample->audio.buffers.lwip_send.evidence =
-      ITERATE_KIT_BUFFER_CAPACITY_ONLY;
+  sample->audio.buffers.lwip_send.evidence = ITERATE_KIT_BUFFER_CAPACITY_ONLY;
   sample->audio.buffers.lwip_send.capacity_bytes =
       fixture->maximum_metrics ? UINT32_MAX : 48U;
-  sample->audio.buffers.tls_egress.evidence =
-      ITERATE_KIT_BUFFER_UNAVAILABLE;
-  sample->audio.buffers.wifi_egress.evidence =
-      ITERATE_KIT_BUFFER_UNAVAILABLE;
+  sample->audio.buffers.tls_egress.evidence = ITERATE_KIT_BUFFER_UNAVAILABLE;
+  sample->audio.buffers.wifi_egress.evidence = ITERATE_KIT_BUFFER_UNAVAILABLE;
   if (fixture->maximum_metrics) {
     /*
      * TLS and Wi-Fi occupancy are unavailable today, but making them exactly
@@ -266,10 +253,8 @@ static enum iterate_kit_status sample_metrics(
      * layer instead of letting today's ESP-IDF limitations make this budget
      * test accidentally optimistic.
      */
-    sample->audio.buffers.uplink_application =
-        maximum_observed_buffer;
-    sample->audio.buffers.websocket_transmitter =
-        maximum_observed_buffer;
+    sample->audio.buffers.uplink_application = maximum_observed_buffer;
+    sample->audio.buffers.websocket_transmitter = maximum_observed_buffer;
     sample->audio.buffers.lwip_send = maximum_observed_buffer;
     sample->audio.buffers.tls_egress = maximum_observed_buffer;
     sample->audio.buffers.wifi_egress = maximum_observed_buffer;
@@ -294,23 +279,17 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 57U;
   sample->playback_detail.playback.underrun_incidents =
       fixture->maximum_metrics ? UINT32_MAX : 58U;
-  sample->playback_detail.playback
-      .underrun_silence_frames_submitted =
+  sample->playback_detail.playback.underrun_silence_frames_submitted =
       fixture->maximum_metrics ? UINT32_MAX : 59U;
-  sample->playback_detail.playback
-      .underrun_silence_frames_completed =
+  sample->playback_detail.playback.underrun_silence_frames_completed =
       fixture->maximum_metrics ? UINT32_MAX : 60U;
-  sample->playback_detail.playback
-      .underrun_silence_frames_retired =
+  sample->playback_detail.playback.underrun_silence_frames_retired =
       fixture->maximum_metrics ? UINT32_MAX : 61U;
-  sample->playback_detail.playback
-      .underrun_late_frames_dropped =
+  sample->playback_detail.playback.underrun_late_frames_dropped =
       fixture->maximum_metrics ? UINT32_MAX : 62U;
-  sample->playback_detail.playback
-      .write_backpressure_destructive_resets =
+  sample->playback_detail.playback.write_backpressure_destructive_resets =
       fixture->maximum_metrics ? UINT32_MAX : 62U;
-  sample->playback_detail.playback
-      .successful_refill_timing_samples =
+  sample->playback_detail.playback.successful_refill_timing_samples =
       fixture->maximum_metrics ? UINT32_MAX : 63U;
   sample->playback_detail.playback.receive_to_dma_start_samples =
       fixture->maximum_metrics ? UINT32_MAX : 64U;
@@ -320,14 +299,11 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 66U;
   sample->playback_detail.playback.maximum_downlink_interarrival_ms =
       fixture->maximum_metrics ? UINT32_MAX : 67U;
-  sample->playback_detail.playback
-      .maximum_eof_to_successful_refill_us =
+  sample->playback_detail.playback.maximum_eof_to_successful_refill_us =
       fixture->maximum_metrics ? UINT32_MAX : 61U;
-  sample->playback_detail.playback
-      .maximum_write_call_duration_us =
+  sample->playback_detail.playback.maximum_write_call_duration_us =
       fixture->maximum_metrics ? UINT32_MAX : 62U;
-  sample->playback_detail.playback
-      .minimum_reuse_lead_at_successful_refill_us =
+  sample->playback_detail.playback.minimum_reuse_lead_at_successful_refill_us =
       fixture->maximum_metrics ? UINT32_MAX : 63U;
   sample->playback_detail.runtime.audio_owner_stack_headroom_bytes =
       fixture->maximum_metrics ? UINT32_MAX : 64U;
@@ -335,11 +311,9 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 65U;
   sample->playback_detail.runtime.cpu_permille =
       fixture->maximum_metrics ? INT64_C(1000) : 66;
-  sample->playback_detail.runtime
-      .generation_fence_acknowledgement_timeouts =
+  sample->playback_detail.runtime.generation_fence_acknowledgement_timeouts =
       fixture->maximum_metrics ? UINT32_MAX : 67U;
-  sample->playback_detail.runtime
-      .lifecycle_acknowledgement_timeouts =
+  sample->playback_detail.runtime.lifecycle_acknowledgement_timeouts =
       fixture->maximum_metrics ? UINT32_MAX : 68U;
   sample->playback_detail.runtime.pcm_receive_calls =
       fixture->maximum_metrics ? UINT32_MAX : 69U;
@@ -350,63 +324,79 @@ static enum iterate_kit_status sample_metrics(
   sample->playback_detail.runtime.pcm_network_max_work_cycles =
       fixture->maximum_metrics ? UINT32_MAX : 72U;
   sample->has_aec_detail = fixture->include_aec;
-  sample->aec_detail.schema_version = 3U;
-  sample->aec_detail.sequence =
-      fixture->maximum_metrics ? UINT32_MAX : 73U;
+  sample->aec_detail.schema_version = 11U;
+  sample->aec_detail.sequence = fixture->maximum_metrics ? UINT32_MAX : 73U;
   sample->aec_detail.window_started_at_ms =
       fixture->maximum_metrics ? INT64_MAX : 74;
-  sample->aec_detail.produced_at_ms =
-      fixture->maximum_metrics ? INT64_MAX : 75;
-  sample->aec_detail.sample_stride =
-      fixture->maximum_metrics ? UINT32_MAX : 8U;
+  sample->aec_detail.produced_at_ms = fixture->maximum_metrics ? INT64_MAX : 75;
+  sample->aec_detail.sample_stride = fixture->maximum_metrics ? UINT32_MAX : 8U;
   sample->aec_detail.sampled_samples =
       fixture->maximum_metrics ? UINT32_MAX : 2000U;
-  sample->aec_detail.near_peak =
-      fixture->maximum_metrics ? UINT32_MAX : 12000U;
+  sample->aec_detail.near_peak = fixture->maximum_metrics ? UINT32_MAX : 12000U;
   sample->aec_detail.reference_peak =
       fixture->maximum_metrics ? UINT32_MAX : 9000U;
-  sample->aec_detail.linear_peak =
-      fixture->maximum_metrics ? UINT32_MAX : 4000U;
-  sample->aec_detail.clean_peak =
-      fixture->maximum_metrics ? UINT32_MAX : 5000U;
+  sample->aec_detail.clean_peak = fixture->maximum_metrics ? UINT32_MAX : 5000U;
   sample->aec_detail.near_mean_absolute =
       fixture->maximum_metrics ? UINT32_MAX : 1100U;
   sample->aec_detail.reference_mean_absolute =
       fixture->maximum_metrics ? UINT32_MAX : 800U;
-  sample->aec_detail.linear_mean_absolute =
-      fixture->maximum_metrics ? UINT32_MAX : 500U;
   sample->aec_detail.clean_mean_absolute =
       fixture->maximum_metrics ? UINT32_MAX : 250U;
+  /*
+   * StackChan's first profile-5 image booted and mounted, but this serializer
+   * still accepted only profiles 1..4. A detailed subscriber then made every
+   * sampling pass fail before either its AEC or avatar callback was emitted.
+   * Exercise the newest public profile here so adding a DSP experiment cannot
+   * silently blind the production physical oracle again.
+   */
+  sample->aec_detail.engine_profile = fixture->maximum_metrics ? 5U : 1U;
+  sample->aec_detail.processing_frame_samples =
+      fixture->maximum_metrics ? 512U : 256U;
+  sample->aec_detail.near_window_gain_multiplier =
+      fixture->maximum_metrics ? UINT32_MAX : 6U;
+  sample->aec_detail.far_window_gain_multiplier =
+      fixture->maximum_metrics ? UINT32_MAX : 8U;
+  sample->aec_detail.speaker_volume_percent =
+      fixture->maximum_metrics ? 100U : 90U;
+  sample->aec_detail.microphone_gain_db =
+      fixture->maximum_metrics ? 37U : 24U;
+  sample->aec_detail.reference_gain_db =
+      fixture->maximum_metrics ? 37U : 0U;
   sample->aec_detail.lifetime_frames_processed =
       fixture->maximum_metrics ? UINT32_MAX : 76U;
   sample->aec_detail.lifetime_recreates =
       fixture->maximum_metrics ? UINT32_MAX : 77U;
   sample->aec_detail.lifetime_recreate_failures =
       fixture->maximum_metrics ? UINT32_MAX : 78U;
-  sample->aec_detail.last_linear_us =
+  sample->aec_detail.last_process_us =
       fixture->maximum_metrics ? UINT32_MAX : 79U;
-  sample->aec_detail.maximum_linear_us =
+  sample->aec_detail.maximum_process_us =
       fixture->maximum_metrics ? UINT32_MAX : 80U;
-  sample->aec_detail.last_nlp_us =
-      fixture->maximum_metrics ? UINT32_MAX : 81U;
-  sample->aec_detail.maximum_nlp_us =
-      fixture->maximum_metrics ? UINT32_MAX : 82U;
   sample->aec_detail.last_capture_to_uplink_us =
       fixture->maximum_metrics ? UINT32_MAX : 83U;
   sample->aec_detail.maximum_capture_to_uplink_us =
       fixture->maximum_metrics ? UINT32_MAX : 84U;
   sample->aec_detail.lifetime_capture_reserve_dropped_chunks =
       fixture->maximum_metrics ? UINT32_MAX : 85U;
-  sample->aec_detail.lifetime_capture_bridge_errors =
+  sample->aec_detail.lifetime_capture_chunks_with_playback_content =
       fixture->maximum_metrics ? UINT32_MAX : 86U;
-  sample->aec_detail.lifetime_signal_measurement_failures =
+  sample->aec_detail.lifetime_capture_chunks_without_playback_content =
       fixture->maximum_metrics ? UINT32_MAX : 87U;
+  sample->aec_detail.lifetime_capture_bridge_errors =
+      fixture->maximum_metrics ? UINT32_MAX : 87U;
+  sample->aec_detail.lifetime_signal_measurement_failures =
+      fixture->maximum_metrics ? UINT32_MAX : 88U;
+  sample->aec_detail.lifetime_reference_scale_clipped_samples =
+      fixture->maximum_metrics ? UINT32_MAX : 89U;
+  sample->aec_detail.lifetime_near_high_pass_clipped_samples =
+      fixture->maximum_metrics ? UINT32_MAX : 90U;
+  sample->aec_detail.lifetime_uplink_gain_clipped_samples =
+      fixture->maximum_metrics ? UINT32_MAX : 91U;
   sample->aec_detail.playback_health.lifetime_content_samples =
       fixture->maximum_metrics ? UINT32_MAX : 88U;
   sample->aec_detail.playback_health.lifetime_resets =
       fixture->maximum_metrics ? UINT32_MAX : 89U;
-  sample->aec_detail.playback_health
-      .lifetime_frames_discarded_by_reset =
+  sample->aec_detail.playback_health.lifetime_frames_discarded_by_reset =
       fixture->maximum_metrics ? UINT32_MAX : 90U;
   sample->aec_detail.playback_health.lifetime_write_failures =
       fixture->maximum_metrics ? UINT32_MAX : 91U;
@@ -454,8 +444,7 @@ static enum iterate_kit_status sample_metrics(
   sample->avatar_detail.maximum_analyzer_us = maximum_counter;
   sample->avatar_detail.maximum_render_us = maximum_counter;
   sample->avatar_detail.maximum_display_transfer_us = maximum_counter;
-  sample->avatar_detail.analyzer_stack_minimum_free_bytes =
-      maximum_counter;
+  sample->avatar_detail.analyzer_stack_minimum_free_bytes = maximum_counter;
   sample->avatar_detail.physical_playout_sample_clock = maximum_counter;
   sample->avatar_detail.current_avatar_index = maximum_counter;
   sample->avatar_detail.framebuffer_bytes = maximum_counter;
@@ -501,8 +490,7 @@ static enum iterate_kit_status sample_metrics(
       fixture->maximum_metrics ? UINT32_MAX : 97U;
   sample->raw_clean_aec_detail.playback_health =
       sample->aec_detail.playback_health;
-  sample->has_control_diagnostics =
-      fixture->include_control_diagnostics;
+  sample->has_control_diagnostics = fixture->include_control_diagnostics;
   sample->control_diagnostics.schema_version = 4U;
   sample->control_diagnostics.produced_at_ms = uptime;
   sample->control_diagnostics.websocket_start_attempts =
@@ -582,12 +570,10 @@ static enum iterate_kit_status sample_metrics(
    * storage independent so the omission test exercises that distinction
    * through the real retained Cap'n Web reply.
    */
-  sample->control_diagnostics.network.wifi_connected =
-      fixture->wifi_connected;
+  sample->control_diagnostics.network.wifi_connected = fixture->wifi_connected;
   sample->control_diagnostics.network.has_wifi_rssi_dbm =
       fixture->has_wifi_rssi_dbm;
-  sample->control_diagnostics.network.wifi_rssi_dbm =
-      fixture->wifi_rssi_dbm;
+  sample->control_diagnostics.network.wifi_rssi_dbm = fixture->wifi_rssi_dbm;
   sample->control_diagnostics.network.pcm_websocket_connections =
       fixture->maximum_metrics ? UINT32_MAX : 92U;
   sample->control_diagnostics.network.pcm_websocket_disconnects =
@@ -613,86 +599,76 @@ static enum iterate_kit_status sample_metrics(
   return ITERATE_KIT_OK;
 }
 
-static enum capnweb_status dispatch(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
+static enum capnweb_status dispatch(void *context,
+                                    const struct capnweb_call *call,
+                                    struct capnweb_reply *reply) {
   struct fixture *fixture = context;
   return fixture->module.methods[fixture->dispatch_method_index].dispatch(
       fixture->module.context, call, reply);
 }
 
-static void fixture_init_with_aec_topology(
-    struct fixture *fixture,
-    size_t subscription_count,
-    bool raw_clean_aec,
-    bool avatar,
-    size_t callback_budget_capacity) {
+static void fixture_init_with_aec_topology(struct fixture *fixture,
+                                           size_t subscription_count,
+                                           bool raw_clean_aec,
+                                           bool avatar,
+                                           size_t callback_budget_capacity) {
   struct iterate_kit_metrics_options metrics_options;
   struct capnweb_session_options session_options;
   struct iterate_kit_callback_budget *callback_budget = NULL;
   memset(fixture, 0, sizeof(*fixture));
   fixture->capture_limit = CAPTURE_CAPACITY;
   fixture->include_playback = true;
-  assert(
-      subscription_count > 0U &&
-      subscription_count <=
-          sizeof(fixture->subscriptions) /
-              sizeof(fixture->subscriptions[0]));
+  assert(subscription_count > 0U &&
+         subscription_count <= sizeof(fixture->subscriptions) /
+                                   sizeof(fixture->subscriptions[0]));
   if (callback_budget_capacity > 0U) {
-    assert(
-        iterate_kit_callback_budget_init(
-            &fixture->callback_budget, callback_budget_capacity) ==
-        ITERATE_KIT_OK);
+    assert(iterate_kit_callback_budget_init(&fixture->callback_budget,
+                                            callback_budget_capacity) ==
+           ITERATE_KIT_OK);
     callback_budget = &fixture->callback_budget;
   }
 
   metrics_options = (struct iterate_kit_metrics_options){
-    .session = &fixture->session,
-    .driver = {fixture, sample_metrics},
-    .subscriptions = fixture->subscriptions,
-    .subscription_count = subscription_count,
-    .interval_ms = 1000U,
-    .enable_playback_view = true,
-    .enable_aec_view = !raw_clean_aec,
-    .enable_raw_clean_aec_view = raw_clean_aec,
-    .enable_avatar_view = avatar,
-    .diagnostics_expression_buffer = fixture->diagnostics_expression,
-    .diagnostics_expression_capacity =
-        sizeof(fixture->diagnostics_expression),
-    .callback_budget = callback_budget,
+      .session = &fixture->session,
+      .driver = {fixture, sample_metrics},
+      .subscriptions = fixture->subscriptions,
+      .subscription_count = subscription_count,
+      .interval_ms = 1000U,
+      .enable_playback_view = true,
+      .enable_aec_view = !raw_clean_aec,
+      .enable_raw_clean_aec_view = raw_clean_aec,
+      .enable_avatar_view = avatar,
+      .diagnostics_expression_buffer = fixture->diagnostics_expression,
+      .diagnostics_expression_capacity =
+          sizeof(fixture->diagnostics_expression),
+      .callback_budget = callback_budget,
   };
-  assert(
-      iterate_kit_metrics_init(
-          &fixture->metrics, &metrics_options) ==
-      ITERATE_KIT_OK);
+  assert(iterate_kit_metrics_init(&fixture->metrics, &metrics_options) ==
+         ITERATE_KIT_OK);
   fixture->module = iterate_kit_metrics_module(&fixture->metrics);
 
   session_options = (struct capnweb_session_options){
-    {dispatch, fixture, NULL},
-    capture_fragment,
-    fixture,
-    fixture->pending_calls,
-    CALL_CAPACITY,
-    fixture->exports,
-    CALL_CAPACITY,
-    fixture->imports,
-    CALL_CAPACITY,
-    fixture->tokens,
-    TOKEN_CAPACITY,
-    fixture->output_buffer,
-    OUTPUT_CAPACITY,
+      {dispatch, fixture, NULL},
+      capture_fragment,
+      fixture,
+      fixture->pending_calls,
+      CALL_CAPACITY,
+      fixture->exports,
+      CALL_CAPACITY,
+      fixture->imports,
+      CALL_CAPACITY,
+      fixture->tokens,
+      TOKEN_CAPACITY,
+      fixture->output_buffer,
+      OUTPUT_CAPACITY,
   };
-  assert(
-      capnweb_session_init(
-          &fixture->session, &session_options) ==
-      CAPNWEB_OK);
+  assert(capnweb_session_init(&fixture->session, &session_options) ==
+         CAPNWEB_OK);
 }
 
-static void fixture_init_with_subscription_count(
-    struct fixture *fixture, size_t subscription_count) {
-  fixture_init_with_aec_topology(
-      fixture, subscription_count, false, false, 0U);
+static void fixture_init_with_subscription_count(struct fixture *fixture,
+                                                 size_t subscription_count) {
+  fixture_init_with_aec_topology(fixture, subscription_count, false, false, 0U);
 }
 
 static void fixture_init(struct fixture *fixture) {
@@ -708,10 +684,8 @@ static void fixture_init_avatar(struct fixture *fixture) {
 }
 
 static void receive(struct fixture *fixture, const char *message) {
-  assert(
-      capnweb_session_receive(
-          &fixture->session, message, strlen(message)) ==
-      CAPNWEB_OK);
+  assert(capnweb_session_receive(&fixture->session, message, strlen(message)) ==
+         CAPNWEB_OK);
 }
 
 /*
@@ -726,10 +700,9 @@ static void rejected_callback_is_released_before_slot_reuse(void) {
   struct iterate_kit_poll_result poll_result;
   fixture_init(&fixture);
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-1]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-1]]]]");
   receive(&fixture, "[\"pull\",1]");
   assert(fixture.captured_count == 1U);
   assert(strcmp(fixture.captured[0], "[\"resolve\",1,null]") == 0);
@@ -741,21 +714,17 @@ static void rejected_callback_is_released_before_slot_reuse(void) {
   assert(strcmp(fixture.captured[2], "[\"pull\",1]") == 0);
 
   receive(&fixture, "[\"release\",1,1]");
-  receive(
-      &fixture,
-      "[\"reject\",1,[\"error\",\"Error\",\"subscriber failed\"]]");
+  receive(&fixture,
+          "[\"reject\",1,[\"error\",\"Error\",\"subscriber failed\"]]");
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-2]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-2]]]]");
   receive(&fixture, "[\"pull\",2]");
   assert(fixture.captured_count == 6U);
   assert(strcmp(fixture.captured[4], "[\"release\",-2,1]") == 0);
-  assert(
-      strstr(
-          fixture.captured[5],
-          "metrics subscription limit reached") != NULL);
+  assert(strstr(fixture.captured[5], "metrics subscription limit reached") !=
+         NULL);
 
   poll_result = fixture.module.poll(fixture.module.context, 1U);
   assert(poll_result.status == ITERATE_KIT_POLL_CALLBACK_REJECTED);
@@ -785,42 +754,32 @@ static void stable_owner_key_replaces_its_stale_metrics_callback(void) {
   size_t captured_before_replacement;
   fixture_init(&fixture);
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-1],\"iterate-kit-voice-pcm-v1\"]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-1],\"iterate-kit-voice-pcm-v1\"]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      fixture.module.poll(fixture.module.context, 0U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 0U).status ==
+         ITERATE_KIT_POLL_OK);
   receive(&fixture, "[\"release\",1,1]");
   receive(&fixture, "[\"resolve\",1,null]");
   captured_before_replacement = fixture.captured_count;
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-2],\"iterate-kit-voice-pcm-v1\"]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-2],\"iterate-kit-voice-pcm-v1\"]]]");
   receive(&fixture, "[\"pull\",2]");
 
   assert(fixture.subscriptions[0].callback.id == -2);
   assert(fixture.captured_count == captured_before_replacement + 2U);
-  assert(
-      strcmp(
-          fixture.captured[captured_before_replacement],
-          "[\"release\",-1,1]") == 0);
-  assert(
-      strcmp(
-          fixture.captured[captured_before_replacement + 1U],
-          "[\"resolve\",2,null]") == 0);
+  assert(strcmp(fixture.captured[captured_before_replacement],
+                "[\"release\",-1,1]") == 0);
+  assert(strcmp(fixture.captured[captured_before_replacement + 1U],
+                "[\"resolve\",2,null]") == 0);
 
-  assert(
-      fixture.module.poll(fixture.module.context, 1U).status ==
-      ITERATE_KIT_POLL_OK);
-  assert(
-      strstr(
-          fixture.captured[captured_before_replacement + 2U],
-          "[\"pipeline\",-2,[]") != NULL);
+  assert(fixture.module.poll(fixture.module.context, 1U).status ==
+         ITERATE_KIT_POLL_OK);
+  assert(strstr(fixture.captured[captured_before_replacement + 2U],
+                "[\"pipeline\",-2,[]") != NULL);
 
   capnweb_session_close(&fixture.session);
   fixture.module.session_ended(fixture.module.context);
@@ -837,10 +796,9 @@ static void session_end_discards_callbacks_before_session_reuse(void) {
   struct capnweb_session_options session_options;
   fixture_init(&fixture);
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-41]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-41]]]]");
   receive(&fixture, "[\"pull\",1]");
   assert(fixture.subscriptions[0].occupied);
 
@@ -853,28 +811,25 @@ static void session_end_discards_callbacks_before_session_reuse(void) {
   assert(fixture.subscriptions[0].owner == &fixture.metrics);
 
   session_options = (struct capnweb_session_options){
-    {dispatch, &fixture, NULL},
-    capture_fragment,
-    &fixture,
-    fixture.pending_calls,
-    CALL_CAPACITY,
-    fixture.exports,
-    CALL_CAPACITY,
-    fixture.imports,
-    CALL_CAPACITY,
-    fixture.tokens,
-    TOKEN_CAPACITY,
-    fixture.output_buffer,
-    OUTPUT_CAPACITY,
-  };
-  assert(
-      capnweb_session_init(
-          &fixture.session, &session_options) ==
-      CAPNWEB_OK);
-  receive(
+      {dispatch, &fixture, NULL},
+      capture_fragment,
       &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-42]]]]");
+      fixture.pending_calls,
+      CALL_CAPACITY,
+      fixture.exports,
+      CALL_CAPACITY,
+      fixture.imports,
+      CALL_CAPACITY,
+      fixture.tokens,
+      TOKEN_CAPACITY,
+      fixture.output_buffer,
+      OUTPUT_CAPACITY,
+  };
+  assert(capnweb_session_init(&fixture.session, &session_options) ==
+         CAPNWEB_OK);
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-42]]]]");
   receive(&fixture, "[\"pull\",1]");
   assert(fixture.subscriptions[0].occupied);
   assert(fixture.subscriptions[0].callback.id == -42);
@@ -892,45 +847,38 @@ static void audio_metrics_fit_one_control_message(void) {
   struct fixture fixture;
   fixture_init(&fixture);
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-1]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-1]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      fixture.module.poll(fixture.module.context, 0U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 0U).status ==
+         ITERATE_KIT_POLL_OK);
   assert(fixture.captured_count == 3U);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"subscriptionEnds\":44") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"audio\":{\"capture\":{\"sent\":9,\"dropped\":10,"
-          "\"failures\":11},\"uplink\":{\"sent\":12,\"dropped\":13,"
-          "\"depth\":14,\"highWater\":15,\"sendDeferrals\":29,"
-          "\"consecutiveSendDeferrals\":30,"
-          "\"maximumConsecutiveSendDeferrals\":31,\"failures\":16,"
-          "\"restartIncidents\":32,"
-          "\"inPlaceFreshnessRecoveries\":42,"
-          "\"socketRestarts\":43,"
-          "\"producerBackpressureRestarts\":33,"
-          "\"transportDisconnectRestarts\":34,"
-          "\"noProgressTimeoutRestarts\":35,"
-          "\"frameSendTimeoutRestarts\":36,"
-          "\"captureStaleRestarts\":37,"
-          "\"lastTransportAcceptAgeMs\":38,"
-          "\"maximumTransportAcceptAgeMs\":39,"
-          "\"lastRestartOldestCaptureAgeMs\":40,"
-          "\"lastRestartReason\":\"capture_stale\","
-          "\"lastRestartFramesDiscarded\":41},"
-          "\"downlink\":{\"received\":17,\"dropped\":18,\"depth\":19,"
-          "\"highWater\":20,\"failures\":21},\"playback\":{"
-          "\"submitted\":22,\"completed\":23,\"flushed\":24,"
-          "\"depth\":25,\"highWater\":26,\"failures\":27},"
-          "\"protocolFailures\":28}") != NULL);
+  assert(strstr(fixture.captured[1], "\"subscriptionEnds\":44") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"audio\":{\"capture\":{\"sent\":9,\"dropped\":10,"
+                "\"failures\":11},\"uplink\":{\"sent\":12,\"dropped\":13,"
+                "\"depth\":14,\"highWater\":15,\"sendDeferrals\":29,"
+                "\"consecutiveSendDeferrals\":30,"
+                "\"maximumConsecutiveSendDeferrals\":31,\"failures\":16,"
+                "\"restartIncidents\":32,"
+                "\"inPlaceFreshnessRecoveries\":42,"
+                "\"socketRestarts\":43,"
+                "\"producerBackpressureRestarts\":33,"
+                "\"transportDisconnectRestarts\":34,"
+                "\"noProgressTimeoutRestarts\":35,"
+                "\"frameSendTimeoutRestarts\":36,"
+                "\"captureStaleRestarts\":37,"
+                "\"lastTransportAcceptAgeMs\":38,"
+                "\"maximumTransportAcceptAgeMs\":39,"
+                "\"lastRestartOldestCaptureAgeMs\":40,"
+                "\"lastRestartReason\":\"capture_stale\","
+                "\"lastRestartFramesDiscarded\":41},"
+                "\"downlink\":{\"received\":17,\"dropped\":18,\"depth\":19,"
+                "\"highWater\":20,\"failures\":21},\"playback\":{"
+                "\"submitted\":22,\"completed\":23,\"flushed\":24,"
+                "\"depth\":25,\"highWater\":26,\"failures\":27},"
+                "\"protocolFailures\":28}") != NULL);
   assert(fixture.captured_lengths[1] < MESSAGE_CAPACITY);
 
   capnweb_session_close(&fixture.session);
@@ -960,14 +908,12 @@ static void maximum_audio_counters_fit_one_control_message(void) {
   fixture.maximum_metrics = true;
   fixture.include_buffers = true;
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-9223372036854775807]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-9223372036854775807]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      fixture.module.poll(fixture.module.context, 0U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 0U).status ==
+         ITERATE_KIT_POLL_OK);
   assert(fixture.captured_count == 3U);
   assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
 
@@ -993,98 +939,68 @@ static void playback_metrics_use_a_bounded_dedicated_view(void) {
   fixture.dispatch_method_index = 1U;
 
   assert(fixture.module.method_count == 4U);
-  assert(
-      strcmp(
-          fixture.module.methods[1].path[0],
-          "subscribeToPlaybackMetrics") == 0);
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToPlaybackMetrics\"],"
-      "[[\"export\",-9223372036854775807]]]]");
+  assert(strcmp(fixture.module.methods[1].path[0],
+                "subscribeToPlaybackMetrics") == 0);
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToPlaybackMetrics\"],"
+          "[[\"export\",-9223372036854775807]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      fixture.module.poll(fixture.module.context, 0U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 0U).status ==
+         ITERATE_KIT_POLL_OK);
   assert(fixture.captured_count == 3U);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"schemaVersion\":5,"
-          "\"sequence\":4294967295,"
-          "\"producedAtMs\":9223372036854775807,"
-          "\"downlinkAccepted\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"receiveToDmaStartSamples\":4294967295,"
-          "\"maximumReceiveToDmaStartMs\":4294967295,"
-          "\"downlinkInterarrivalSamples\":4294967295,"
-          "\"maximumDownlinkInterarrivalMs\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"underrunSilenceFramesSubmitted\":4294967295,"
-          "\"underrunSilenceFramesCompleted\":4294967295,"
-          "\"underrunSilenceFramesRetired\":4294967295,"
-          "\"underrunLateFramesDropped\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"maximumEofToSuccessfulRefillUs\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"maximumWriteCallDurationUs\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"minimumReuseLeadAtSuccessfulRefillUs\":4294967295") !=
-      NULL);
+  assert(strstr(fixture.captured[1],
+                "\"schemaVersion\":5,"
+                "\"sequence\":4294967295,"
+                "\"producedAtMs\":9223372036854775807,"
+                "\"downlinkAccepted\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"receiveToDmaStartSamples\":4294967295,"
+                "\"maximumReceiveToDmaStartMs\":4294967295,"
+                "\"downlinkInterarrivalSamples\":4294967295,"
+                "\"maximumDownlinkInterarrivalMs\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"underrunSilenceFramesSubmitted\":4294967295,"
+                "\"underrunSilenceFramesCompleted\":4294967295,"
+                "\"underrunSilenceFramesRetired\":4294967295,"
+                "\"underrunLateFramesDropped\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"maximumEofToSuccessfulRefillUs\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"maximumWriteCallDurationUs\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"minimumReuseLeadAtSuccessfulRefillUs\":4294967295") != NULL);
   /*
    * The fixed-size view spends its wire budget on causal maxima. The three
    * latest-sample values remain available inside firmware but are deliberately
    * not serialized: a one-second callback can miss the incident that matters,
    * whereas the lifetime maximum/minimum cannot.
    */
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"lastEofToSuccessfulRefillUs\"") == NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"lastWriteCallDurationUs\"") == NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"lastReuseLeadAtSuccessfulRefillUs\"") == NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"generationFenceAcknowledgementTimeouts\":4294967295,"
-          "\"lifecycleAcknowledgementTimeouts\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1], "\"lastEofToSuccessfulRefillUs\"") ==
+         NULL);
+  assert(strstr(fixture.captured[1], "\"lastWriteCallDurationUs\"") == NULL);
+  assert(strstr(fixture.captured[1], "\"lastReuseLeadAtSuccessfulRefillUs\"") ==
+         NULL);
+  assert(strstr(fixture.captured[1],
+                "\"generationFenceAcknowledgementTimeouts\":4294967295,"
+                "\"lifecycleAcknowledgementTimeouts\":4294967295") != NULL);
   /*
    * The endurance load stage cannot distinguish a healthy busy network task
    * from a starved one using aggregate CPU alone. These owner-loop maxima were
    * already sampled by the target but vanished at serialization, creating dead
    * instrumentation exactly where the acceptance rig needs it.
    */
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"pcmReceiveCalls\":4294967295,"
-          "\"pcmReceiveChunks\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"pcmReceiveCalls\":4294967295,"
+                "\"pcmReceiveChunks\":4294967295") != NULL);
   /*
    * These counters already exist at the ESP transport boundary. Publishing
    * them must stay a passive snapshot: their diagnostic value comes from
    * comparing cumulative stages after a stall, not from adding a telemetry
    * queue or serial logging to the high-volume PCM task.
    */
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"controlNetworkMaximumWorkCycles\":4294967295,"
-          "\"pcmNetworkMaximumWorkCycles\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"controlNetworkMaximumWorkCycles\":4294967295,"
+                "\"pcmNetworkMaximumWorkCycles\":4294967295") != NULL);
   assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
 
   capnweb_session_close(&fixture.session);
@@ -1112,80 +1028,70 @@ static void aec_metrics_are_mounted_as_a_dedicated_view(void) {
   fixture.dispatch_method_index = 2U;
 
   assert(fixture.module.method_count == 4U);
-  assert(
-      strcmp(
-          fixture.module.methods[2].path[0],
-          "subscribeToAecMetrics") == 0);
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToAecMetrics\"],"
-      "[[\"export\",-9223372036854775807]]]]");
+  assert(strcmp(fixture.module.methods[2].path[0], "subscribeToAecMetrics") ==
+         0);
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToAecMetrics\"],"
+          "[[\"export\",-9223372036854775807]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      fixture.module.poll(fixture.module.context, 0U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 0U).status ==
+         ITERATE_KIT_POLL_OK);
   assert(fixture.captured_count == 3U);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"schemaVersion\":3,"
-          "\"sequence\":4294967295,"
-          "\"windowStartedAtMs\":9223372036854775807,"
-          "\"producedAtMs\":9223372036854775807,"
-          "\"sampleStride\":4294967295,"
-          "\"sampledSamples\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"nearPeak\":4294967295,"
-          "\"referencePeak\":4294967295,"
-          "\"linearPeak\":4294967295,"
-          "\"cleanPeak\":4294967295,"
-          "\"nearMeanAbsolute\":4294967295,"
-          "\"referenceMeanAbsolute\":4294967295,"
-          "\"linearMeanAbsolute\":4294967295,"
-          "\"cleanMeanAbsolute\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"lifetimeFramesProcessed\":4294967295,"
-          "\"lifetimeRecreates\":4294967295,"
-          "\"lifetimeRecreateFailures\":4294967295,"
-          "\"lastLinearUs\":4294967295,"
-          "\"maximumLinearUs\":4294967295,"
-          "\"lastNlpUs\":4294967295,"
-          "\"maximumNlpUs\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"lastCaptureToUplinkUs\":4294967295,"
-          "\"maximumCaptureToUplinkUs\":4294967295,"
-          "\"lifetimeCaptureReserveDroppedChunks\":4294967295,"
-          "\"lifetimeCaptureBridgeErrors\":4294967295,"
-          "\"lifetimeSignalMeasurementFailures\":4294967295") !=
-      NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"lifetimePlaybackContentSamples\":4294967295,"
-          "\"lifetimePlaybackResets\":4294967295,"
-          "\"lifetimePlaybackFramesDiscardedByReset\":4294967295,"
-          "\"lifetimePlaybackWriteFailures\":4294967295,"
-          "\"lifetimePlaybackQueueOverflows\":4294967295,"
-          "\"lifetimePlaybackPolicyErrors\":4294967295,"
-          "\"lifetimePlaybackResetFailures\":4294967295,"
-          "\"lifetimePlaybackObservationFailures\":4294967295,"
-          "\"lifetimePlaybackUnderrunIncidents\":4294967295,"
-          "\"lifetimePlaybackUnderrunSilenceSamples\":4294967295,"
-          "\"lifetimePlaybackStaleFramesDiscarded\":4294967295") !=
-      NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"lastPlaybackWriteUs\":4294967295,"
-          "\"maximumPlaybackWriteUs\":4294967295,"
-          "\"lastReceiveToRenderMs\":4294967295,"
-          "\"maximumReceiveToRenderMs\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"schemaVersion\":11,"
+                "\"sequence\":4294967295,"
+                "\"windowStartedAtMs\":9223372036854775807,"
+                "\"producedAtMs\":9223372036854775807,"
+                "\"sampleStride\":4294967295,"
+                "\"sampledSamples\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"nearPeak\":4294967295,"
+                "\"referencePeak\":4294967295,"
+                "\"cleanPeak\":4294967295,"
+                "\"nearMeanAbsolute\":4294967295,"
+                "\"referenceMeanAbsolute\":4294967295,"
+                "\"cleanMeanAbsolute\":4294967295,"
+                "\"engineProfile\":5,"
+                "\"processingFrameSamples\":512,"
+                "\"nearWindowGainMultiplier\":4294967295,"
+                "\"farWindowGainMultiplier\":4294967295,"
+                "\"speakerVolumePercent\":100,"
+                "\"microphoneGainDb\":37,"
+                "\"referenceGainDb\":37") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"lifetimeFramesProcessed\":4294967295,"
+                "\"lifetimeRecreates\":4294967295,"
+                "\"lifetimeRecreateFailures\":4294967295,"
+                "\"lastProcessUs\":4294967295,"
+                "\"maximumProcessUs\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"lastCaptureToUplinkUs\":4294967295,"
+                "\"maximumCaptureToUplinkUs\":4294967295,"
+                "\"lifetimeCaptureReserveDroppedChunks\":4294967295,"
+                "\"lifetimeCaptureChunksWithPlaybackContent\":4294967295,"
+                "\"lifetimeCaptureChunksWithoutPlaybackContent\":4294967295,"
+                "\"lifetimeCaptureBridgeErrors\":4294967295,"
+                "\"lifetimeSignalMeasurementFailures\":4294967295,"
+                "\"lifetimeReferenceScaleClippedSamples\":4294967295,"
+                "\"lifetimeNearHighPassClippedSamples\":4294967295,"
+                "\"lifetimeUplinkGainClippedSamples\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"lifetimePlaybackContentSamples\":4294967295,"
+                "\"lifetimePlaybackResets\":4294967295,"
+                "\"lifetimePlaybackFramesDiscardedByReset\":4294967295,"
+                "\"lifetimePlaybackWriteFailures\":4294967295,"
+                "\"lifetimePlaybackQueueOverflows\":4294967295,"
+                "\"lifetimePlaybackPolicyErrors\":4294967295,"
+                "\"lifetimePlaybackResetFailures\":4294967295,"
+                "\"lifetimePlaybackObservationFailures\":4294967295,"
+                "\"lifetimePlaybackUnderrunIncidents\":4294967295,"
+                "\"lifetimePlaybackUnderrunSilenceSamples\":4294967295,"
+                "\"lifetimePlaybackStaleFramesDiscarded\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"lastPlaybackWriteUs\":4294967295,"
+                "\"maximumPlaybackWriteUs\":4294967295,"
+                "\"lastReceiveToRenderMs\":4294967295,"
+                "\"maximumReceiveToRenderMs\":4294967295") != NULL);
   assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
 
   capnweb_session_close(&fixture.session);
@@ -1208,53 +1114,39 @@ static void avatar_metrics_are_mounted_as_a_bounded_dedicated_view(void) {
   fixture.dispatch_method_index = 3U;
 
   assert(fixture.module.method_count == 5U);
-  assert(
-      strcmp(
-          fixture.module.methods[3].path[0],
-          "subscribeToAvatarMetrics") == 0);
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToAvatarMetrics\"],"
-      "[[\"export\",-9223372036854775807]]]]");
+  assert(strcmp(fixture.module.methods[3].path[0],
+                "subscribeToAvatarMetrics") == 0);
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToAvatarMetrics\"],"
+          "[[\"export\",-9223372036854775807]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      fixture.module.poll(fixture.module.context, 0U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 0U).status ==
+         ITERATE_KIT_POLL_OK);
   assert(fixture.captured_count == 3U);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"schemaVersion\":1,"
-          "\"producedAtMs\":9223372036854775807,"
-          "\"ready\":true,"
-          "\"playoutObservations\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"analyzerSequenceGaps\":4294967295,"
-          "\"mouthOpenRenderedFrames\":4294967295,"
-          "\"snapshotRaces\":4294967295,"
-          "\"renderedFrames\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"displayTransfers\":4294967295,"
-          "\"displayTransferFailures\":4294967295,"
-          "\"displayTransferTimeouts\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"maximumHandoffDelayUs\":4294967295,"
-          "\"maximumAnalyzerUs\":4294967295,"
-          "\"maximumRenderUs\":4294967295,"
-          "\"maximumDisplayTransferUs\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"analyzerStackMinimumFreeBytes\":4294967295,"
-          "\"physicalPlayoutSampleClock\":4294967295,"
-          "\"currentAvatarIndex\":4294967295,"
-          "\"framebufferBytes\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"schemaVersion\":1,"
+                "\"producedAtMs\":9223372036854775807,"
+                "\"ready\":true,"
+                "\"playoutObservations\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"analyzerSequenceGaps\":4294967295,"
+                "\"mouthOpenRenderedFrames\":4294967295,"
+                "\"snapshotRaces\":4294967295,"
+                "\"renderedFrames\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"displayTransfers\":4294967295,"
+                "\"displayTransferFailures\":4294967295,"
+                "\"displayTransferTimeouts\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"maximumHandoffDelayUs\":4294967295,"
+                "\"maximumAnalyzerUs\":4294967295,"
+                "\"maximumRenderUs\":4294967295,"
+                "\"maximumDisplayTransferUs\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"analyzerStackMinimumFreeBytes\":4294967295,"
+                "\"physicalPlayoutSampleClock\":4294967295,"
+                "\"currentAvatarIndex\":4294967295,"
+                "\"framebufferBytes\":4294967295") != NULL);
   assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
 
   capnweb_session_close(&fixture.session);
@@ -1280,67 +1172,52 @@ static void raw_clean_aec_metrics_preserve_the_truthful_topology(void) {
   fixture.dispatch_method_index = 2U;
 
   assert(fixture.module.method_count == 4U);
-  assert(
-      strcmp(
-          fixture.module.methods[2].path[0],
-          "subscribeToAecMetrics") == 0);
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToAecMetrics\"],"
-      "[[\"export\",-9223372036854775807]]]]");
+  assert(strcmp(fixture.module.methods[2].path[0], "subscribeToAecMetrics") ==
+         0);
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToAecMetrics\"],"
+          "[[\"export\",-9223372036854775807]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      fixture.module.poll(fixture.module.context, 0U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 0U).status ==
+         ITERATE_KIT_POLL_OK);
   assert(fixture.captured_count == 3U);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"schemaVersion\":4,\"topology\":\"raw-clean\","
-          "\"sequence\":4294967295,"
-          "\"windowStartedAtMs\":9223372036854775807,"
-          "\"producedAtMs\":9223372036854775807") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"rawPeak\":4294967295,\"cleanPeak\":4294967295,"
-          "\"rawMeanAbsolute\":4294967295,"
-          "\"cleanMeanAbsolute\":4294967295,"
-          "\"rawAbsoluteSum\":9223372036854775807,"
-          "\"cleanAbsoluteSum\":9223372036854775807,"
-          "\"playbackContentSamples\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"lifetimeCaptureFrames\":4294967295,"
-          "\"lifetimeCleanUplinkFrames\":4294967295,"
-          "\"lifetimeCleanUplinkDrops\":4294967295,"
-          "\"lifetimeCaptureFailures\":4294967295,"
-          "\"lifetimeSignalMeasurementFailures\":4294967295,"
-          "\"lastCaptureToUplinkUs\":4294967295,"
-          "\"maximumCaptureToUplinkUs\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"lifetimePlaybackContentSamples\":4294967295,"
-          "\"lifetimePlaybackResets\":4294967295,"
-          "\"lifetimePlaybackFramesDiscardedByReset\":4294967295,"
-          "\"lifetimePlaybackWriteFailures\":4294967295,"
-          "\"lifetimePlaybackQueueOverflows\":4294967295,"
-          "\"lifetimePlaybackPolicyErrors\":4294967295,"
-          "\"lifetimePlaybackResetFailures\":4294967295,"
-          "\"lifetimePlaybackObservationFailures\":4294967295,"
-          "\"lifetimePlaybackUnderrunIncidents\":4294967295,"
-          "\"lifetimePlaybackUnderrunSilenceSamples\":4294967295,"
-          "\"lifetimePlaybackStaleFramesDiscarded\":4294967295") !=
-      NULL);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"lastPlaybackWriteUs\":4294967295,"
-          "\"maximumPlaybackWriteUs\":4294967295,"
-          "\"lastReceiveToRenderMs\":4294967295,"
-          "\"maximumReceiveToRenderMs\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"schemaVersion\":4,\"topology\":\"raw-clean\","
+                "\"sequence\":4294967295,"
+                "\"windowStartedAtMs\":9223372036854775807,"
+                "\"producedAtMs\":9223372036854775807") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"rawPeak\":4294967295,\"cleanPeak\":4294967295,"
+                "\"rawMeanAbsolute\":4294967295,"
+                "\"cleanMeanAbsolute\":4294967295,"
+                "\"rawAbsoluteSum\":9223372036854775807,"
+                "\"cleanAbsoluteSum\":9223372036854775807,"
+                "\"playbackContentSamples\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"lifetimeCaptureFrames\":4294967295,"
+                "\"lifetimeCleanUplinkFrames\":4294967295,"
+                "\"lifetimeCleanUplinkDrops\":4294967295,"
+                "\"lifetimeCaptureFailures\":4294967295,"
+                "\"lifetimeSignalMeasurementFailures\":4294967295,"
+                "\"lastCaptureToUplinkUs\":4294967295,"
+                "\"maximumCaptureToUplinkUs\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"lifetimePlaybackContentSamples\":4294967295,"
+                "\"lifetimePlaybackResets\":4294967295,"
+                "\"lifetimePlaybackFramesDiscardedByReset\":4294967295,"
+                "\"lifetimePlaybackWriteFailures\":4294967295,"
+                "\"lifetimePlaybackQueueOverflows\":4294967295,"
+                "\"lifetimePlaybackPolicyErrors\":4294967295,"
+                "\"lifetimePlaybackResetFailures\":4294967295,"
+                "\"lifetimePlaybackObservationFailures\":4294967295,"
+                "\"lifetimePlaybackUnderrunIncidents\":4294967295,"
+                "\"lifetimePlaybackUnderrunSilenceSamples\":4294967295,"
+                "\"lifetimePlaybackStaleFramesDiscarded\":4294967295") != NULL);
+  assert(strstr(fixture.captured[1],
+                "\"lastPlaybackWriteUs\":4294967295,"
+                "\"maximumPlaybackWriteUs\":4294967295,"
+                "\"lastReceiveToRenderMs\":4294967295,"
+                "\"maximumReceiveToRenderMs\":4294967295") != NULL);
   assert(strstr(fixture.captured[1], "\"referencePeak\"") == NULL);
   assert(fixture.captured_lengths[1] <= MESSAGE_CAPACITY - 64U);
 
@@ -1365,33 +1242,28 @@ static void raw_clean_aec_metrics_preserve_the_truthful_topology(void) {
  */
 static void callback_budget_rotates_past_a_backpressured_subscriber(void) {
   struct fixture fixture;
-  fixture_init_with_aec_topology(
-      &fixture, 3U, false, true, 2U);
+  fixture_init_with_aec_topology(&fixture, 3U, false, true, 2U);
   fixture.include_aec = true;
   fixture.include_avatar = true;
 
   fixture.dispatch_method_index = 2U;
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToAecMetrics\"],"
-      "[[\"export\",-1]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToAecMetrics\"],"
+          "[[\"export\",-1]]]]");
   receive(&fixture, "[\"pull\",1]");
   fixture.dispatch_method_index = 3U;
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToAvatarMetrics\"],"
-      "[[\"export\",-2]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToAvatarMetrics\"],"
+          "[[\"export\",-2]]]]");
   receive(&fixture, "[\"pull\",2]");
   fixture.dispatch_method_index = 0U;
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-3]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-3]]]]");
   receive(&fixture, "[\"pull\",3]");
 
-  assert(
-      fixture.module.poll(fixture.module.context, 0U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 0U).status ==
+         ITERATE_KIT_POLL_OK);
   assert(fixture.subscriptions[0].call_in_flight);
   assert(fixture.subscriptions[1].call_in_flight);
   assert(!fixture.subscriptions[2].call_in_flight);
@@ -1403,9 +1275,8 @@ static void callback_budget_rotates_past_a_backpressured_subscriber(void) {
   receive(&fixture, "[\"resolve\",2,null]");
   assert(fixture.callback_budget.in_flight == 0U);
 
-  assert(
-      fixture.module.poll(fixture.module.context, 1000U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 1000U).status ==
+         ITERATE_KIT_POLL_OK);
   assert(fixture.subscriptions[2].call_in_flight);
   assert(fixture.callback_budget.in_flight == 2U);
 
@@ -1427,39 +1298,28 @@ static void callback_budget_rotates_past_a_backpressured_subscriber(void) {
  * Eight is a one-owner-pass reserve, not a retry queue; failure to serialize
  * within it must remain a visible terminal generation error.
  */
-static void metrics_fanout_and_inbound_resolutions_fit_one_owner_burst(
-    void) {
+static void metrics_fanout_and_inbound_resolutions_fit_one_owner_burst(void) {
   struct fixture fixture;
   struct iterate_kit_poll_result poll_result;
   fixture_init_with_subscription_count(&fixture, 2U);
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-1]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-1]]]]");
   receive(&fixture, "[\"pull\",1]");
   receive(&fixture, "[\"release\",1,1]");
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToPlaybackMetrics\"],"
-      "[[\"export\",-2]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToPlaybackMetrics\"],"
+          "[[\"export\",-2]]]]");
   receive(&fixture, "[\"pull\",2]");
   receive(&fixture, "[\"release\",2,1]");
 
   fixture.include_control_diagnostics = true;
   fixture.dispatch_method_index = 3U;
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
 
   /*
    * The capture sink represents an empty profiled outbox at the start of this
@@ -1477,17 +1337,11 @@ static void metrics_fanout_and_inbound_resolutions_fit_one_owner_burst(
   receive(&fixture, "[\"pull\",5]");
   receive(&fixture, "[\"pull\",6]");
   assert(fixture.captured_count == MAXIMUM_OWNER_LOOP_CONTROL_BURST);
-  assert(
-      capnweb_session_get_state(&fixture.session) ==
-      CAPNWEB_SESSION_OPEN);
-  assert(
-      strstr(
-          fixture.captured[4],
-          "\"control\":{\"websocketStartAttempts\":73") != NULL);
-  assert(
-      strstr(
-          fixture.captured[7],
-          "control diagnostics snapshot already in flight") != NULL);
+  assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
+  assert(strstr(fixture.captured[4],
+                "\"control\":{\"websocketStartAttempts\":73") != NULL);
+  assert(strstr(fixture.captured[7],
+                "control diagnostics snapshot already in flight") != NULL);
 
   capnweb_session_close(&fixture.session);
   fixture.module.session_ended(fixture.module.context);
@@ -1511,52 +1365,45 @@ static void control_diagnostics_are_available_as_a_one_shot_snapshot(void) {
   fixture.wifi_rssi_dbm = -67;
 
   assert(fixture.module.method_count == 4U);
-  assert(
-      strcmp(
-          fixture.module.methods[3].path[0],
-          "getDiagnostics") == 0);
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  assert(strcmp(fixture.module.methods[3].path[0], "getDiagnostics") == 0);
+  receive(&fixture, "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
   receive(&fixture, "[\"pull\",1]");
   assert(fixture.captured_count == 1U);
-  assert(
-      strstr(
-          fixture.captured[0],
-          "\"schemaVersion\":4,\"producedAtMs\":1,"
-          "\"control\":{\"websocketStartAttempts\":73,"
-          "\"websocketConnections\":74,\"websocketDisconnects\":75,"
-          "\"websocketErrors\":76,\"wifiDisconnects\":77,"
-          "\"protocolFailures\":78,\"receiveFailures\":79,"
-          "\"sendFailures\":80,\"lastWifiDisconnectReason\":81,"
-          "\"lastErrorGeneration\":82,\"lastErrorType\":2,"
-          "\"lastTlsError\":83,\"lastTlsStackError\":-84,"
-          "\"lastTransportErrno\":85,\"lastHandshakeStatusCode\":429,"
-          "\"lastCloseStatusCode\":4008,"
-          "\"protocolFailureGeneration\":83,"
-          "\"lastApplicationCapnwebGeneration\":84,"
-          "\"lastApplicationCapnwebStatus\":-4,"
-          "\"lastControlReceiveStatus\":0,\"messagesSent\":85,"
-          "\"messagesDiscarded\":86,\"inboxDiscarded\":87,"
-          "\"outboxDiscarded\":88,"
-          "\"inbox\":{\"capacitySlots\":4,\"messagesPublished\":89,"
-          "\"messagesConsumed\":90,\"producerBackpressure\":0,"
-          "\"highWaterSlots\":3,\"currentSlots\":0},"
-          "\"outbox\":{\"capacitySlots\":8,\"messagesPublished\":91,"
-          "\"messagesConsumed\":90,\"producerBackpressure\":1,"
-          "\"highWaterSlots\":8,\"currentSlots\":1}},"
-          "\"network\":{\"wifiConnected\":true,\"wifiRssiDbm\":-67,"
-          "\"pcmWebsocketConnections\":92,"
-          "\"pcmWebsocketDisconnects\":93,"
-          "\"pcmWebsocketErrors\":94,"
-          "\"pcmWebsocketRawWriteFailures\":95,"
-          "\"pcmTransportFailureIncidents\":96,"
-          "\"pcmLastFailureOperation\":3,"
-          "\"pcmLastRawResult\":-1,"
-          "\"pcmLastSocketErrno\":104,"
-          "\"pcmLastEspTlsError\":32776,"
-          "\"pcmLastTlsStackError\":-29312,"
-          "\"pcmLastTlsCertFlags\":0}") != NULL);
+  assert(strstr(fixture.captured[0],
+                "\"schemaVersion\":4,\"producedAtMs\":1,"
+                "\"control\":{\"websocketStartAttempts\":73,"
+                "\"websocketConnections\":74,\"websocketDisconnects\":75,"
+                "\"websocketErrors\":76,\"wifiDisconnects\":77,"
+                "\"protocolFailures\":78,\"receiveFailures\":79,"
+                "\"sendFailures\":80,\"lastWifiDisconnectReason\":81,"
+                "\"lastErrorGeneration\":82,\"lastErrorType\":2,"
+                "\"lastTlsError\":83,\"lastTlsStackError\":-84,"
+                "\"lastTransportErrno\":85,\"lastHandshakeStatusCode\":429,"
+                "\"lastCloseStatusCode\":4008,"
+                "\"protocolFailureGeneration\":83,"
+                "\"lastApplicationCapnwebGeneration\":84,"
+                "\"lastApplicationCapnwebStatus\":-4,"
+                "\"lastControlReceiveStatus\":0,\"messagesSent\":85,"
+                "\"messagesDiscarded\":86,\"inboxDiscarded\":87,"
+                "\"outboxDiscarded\":88,"
+                "\"inbox\":{\"capacitySlots\":4,\"messagesPublished\":89,"
+                "\"messagesConsumed\":90,\"producerBackpressure\":0,"
+                "\"highWaterSlots\":3,\"currentSlots\":0},"
+                "\"outbox\":{\"capacitySlots\":8,\"messagesPublished\":91,"
+                "\"messagesConsumed\":90,\"producerBackpressure\":1,"
+                "\"highWaterSlots\":8,\"currentSlots\":1}},"
+                "\"network\":{\"wifiConnected\":true,\"wifiRssiDbm\":-67,"
+                "\"pcmWebsocketConnections\":92,"
+                "\"pcmWebsocketDisconnects\":93,"
+                "\"pcmWebsocketErrors\":94,"
+                "\"pcmWebsocketRawWriteFailures\":95,"
+                "\"pcmTransportFailureIncidents\":96,"
+                "\"pcmLastFailureOperation\":3,"
+                "\"pcmLastRawResult\":-1,"
+                "\"pcmLastSocketErrno\":104,"
+                "\"pcmLastEspTlsError\":32776,"
+                "\"pcmLastTlsStackError\":-29312,"
+                "\"pcmLastTlsCertFlags\":0}") != NULL);
   /*
    * The eight-slot physical run still lost a resolution after 21 seconds.
    * These retained counters are the minimum evidence needed to tell a full
@@ -1565,10 +1412,8 @@ static void control_diagnostics_are_available_as_a_one_shot_snapshot(void) {
    * counter would disappear when the rig intentionally avoids attaching a
    * timing-perturbing monitor.
    */
-  assert(
-      strstr(
-          fixture.captured[0],
-          "\"lastApplicationCapnwebStatus\":-4") != NULL);
+  assert(strstr(fixture.captured[0], "\"lastApplicationCapnwebStatus\":-4") !=
+         NULL);
   assert(fixture.captured_lengths[0] < MESSAGE_CAPACITY);
 
   capnweb_session_close(&fixture.session);
@@ -1590,25 +1435,21 @@ static void network_diagnostics_omit_unobserved_wifi_rssi(void) {
   fixture.wifi_connected = true;
   fixture.wifi_rssi_dbm = -21;
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      strstr(
-          fixture.captured[0],
-          "\"network\":{\"wifiConnected\":true,"
-          "\"pcmWebsocketConnections\":92,"
-          "\"pcmWebsocketDisconnects\":93,"
-          "\"pcmWebsocketErrors\":94,"
-          "\"pcmWebsocketRawWriteFailures\":95,"
-          "\"pcmTransportFailureIncidents\":96,"
-          "\"pcmLastFailureOperation\":3,"
-          "\"pcmLastRawResult\":-1,"
-          "\"pcmLastSocketErrno\":104,"
-          "\"pcmLastEspTlsError\":32776,"
-          "\"pcmLastTlsStackError\":-29312,"
-          "\"pcmLastTlsCertFlags\":0}") != NULL);
+  assert(strstr(fixture.captured[0],
+                "\"network\":{\"wifiConnected\":true,"
+                "\"pcmWebsocketConnections\":92,"
+                "\"pcmWebsocketDisconnects\":93,"
+                "\"pcmWebsocketErrors\":94,"
+                "\"pcmWebsocketRawWriteFailures\":95,"
+                "\"pcmTransportFailureIncidents\":96,"
+                "\"pcmLastFailureOperation\":3,"
+                "\"pcmLastRawResult\":-1,"
+                "\"pcmLastSocketErrno\":104,"
+                "\"pcmLastEspTlsError\":32776,"
+                "\"pcmLastTlsStackError\":-29312,"
+                "\"pcmLastTlsCertFlags\":0}") != NULL);
   assert(strstr(fixture.captured[0], "wifiRssiDbm") == NULL);
 
   capnweb_session_close(&fixture.session);
@@ -1628,24 +1469,16 @@ static void control_diagnostics_do_not_overwrite_an_unpulled_snapshot(void) {
   fixture.include_control_diagnostics = true;
   fixture.dispatch_method_index = 3U;
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
   assert(fixture.metrics.diagnostics_reply_in_flight);
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
   receive(&fixture, "[\"pull\",2]");
-  assert(
-      strstr(
-          fixture.captured[0],
-          "control diagnostics snapshot already in flight") != NULL);
+  assert(strstr(fixture.captured[0],
+                "control diagnostics snapshot already in flight") != NULL);
   assert(fixture.metrics.diagnostics_reply_in_flight);
 
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      strstr(fixture.captured[1], "\"lastErrorGeneration\":82") !=
-      NULL);
+  assert(strstr(fixture.captured[1], "\"lastErrorGeneration\":82") != NULL);
   assert(!fixture.metrics.diagnostics_reply_in_flight);
 
   capnweb_session_close(&fixture.session);
@@ -1668,37 +1501,28 @@ static void maximum_control_diagnostics_fit_the_static_reply_budget(void) {
   fixture.has_wifi_rssi_dbm = true;
   fixture.wifi_rssi_dbm = INT32_MIN;
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
+  receive(&fixture, "[\"push\",[\"pipeline\",0,[\"getDiagnostics\"],[]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      strlen(fixture.diagnostics_expression) <=
-      sizeof(fixture.diagnostics_expression) - 64U);
-  assert(
-      strstr(
-          fixture.captured[0],
-          "\"websocketStartAttempts\":4294967295") != NULL);
-  assert(
-      strstr(
-          fixture.captured[0],
-          "\"lastTlsStackError\":-2147483648") != NULL);
-  assert(
-      strstr(
-          fixture.captured[0],
-          "\"network\":{\"wifiConnected\":true,"
-          "\"wifiRssiDbm\":-2147483648,"
-          "\"pcmWebsocketConnections\":4294967295,"
-          "\"pcmWebsocketDisconnects\":4294967295,"
-          "\"pcmWebsocketErrors\":4294967295,"
-          "\"pcmWebsocketRawWriteFailures\":4294967295,"
-          "\"pcmTransportFailureIncidents\":4294967295,"
-          "\"pcmLastFailureOperation\":4294967295,"
-          "\"pcmLastRawResult\":-2147483648,"
-          "\"pcmLastSocketErrno\":-2147483648,"
-          "\"pcmLastEspTlsError\":-2147483648,"
-          "\"pcmLastTlsStackError\":-2147483648,"
-          "\"pcmLastTlsCertFlags\":-2147483648}") != NULL);
+  assert(strlen(fixture.diagnostics_expression) <=
+         sizeof(fixture.diagnostics_expression) - 64U);
+  assert(strstr(fixture.captured[0], "\"websocketStartAttempts\":4294967295") !=
+         NULL);
+  assert(strstr(fixture.captured[0], "\"lastTlsStackError\":-2147483648") !=
+         NULL);
+  assert(strstr(fixture.captured[0],
+                "\"network\":{\"wifiConnected\":true,"
+                "\"wifiRssiDbm\":-2147483648,"
+                "\"pcmWebsocketConnections\":4294967295,"
+                "\"pcmWebsocketDisconnects\":4294967295,"
+                "\"pcmWebsocketErrors\":4294967295,"
+                "\"pcmWebsocketRawWriteFailures\":4294967295,"
+                "\"pcmTransportFailureIncidents\":4294967295,"
+                "\"pcmLastFailureOperation\":4294967295,"
+                "\"pcmLastRawResult\":-2147483648,"
+                "\"pcmLastSocketErrno\":-2147483648,"
+                "\"pcmLastEspTlsError\":-2147483648,"
+                "\"pcmLastTlsStackError\":-2147483648,"
+                "\"pcmLastTlsCertFlags\":-2147483648}") != NULL);
 
   capnweb_session_close(&fixture.session);
   fixture.module.session_ended(fixture.module.context);
@@ -1706,41 +1530,36 @@ static void maximum_control_diagnostics_fit_the_static_reply_budget(void) {
 
 /*
  * A dashboard that sees `current: 0` without knowing how it was measured
- * will call an opaque TLS or Wi-Fi queue empty and hide delayed speech. Exercise
- * the real callback serializer with all four evidence classes so the public
- * API preserves the difference between exact occupancy, configured capacity,
- * and no trustworthy observation. A WebSocket PONG is deliberately not used
- * to synthesize a lower-layer PCM depth because it cannot observe proxy or
- * provider queues.
+ * will call an opaque TLS or Wi-Fi queue empty and hide delayed speech.
+ * Exercise the real callback serializer with all four evidence classes so the
+ * public API preserves the difference between exact occupancy, configured
+ * capacity, and no trustworthy observation. A WebSocket PONG is deliberately
+ * not used to synthesize a lower-layer PCM depth because it cannot observe
+ * proxy or provider queues.
  */
 static void buffer_metrics_preserve_the_strength_of_their_evidence(void) {
   struct fixture fixture;
   fixture_init(&fixture);
   fixture.include_buffers = true;
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-1]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-1]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      fixture.module.poll(fixture.module.context, 0U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 0U).status ==
+         ITERATE_KIT_POLL_OK);
   assert(fixture.captured_count == 3U);
-  assert(
-      strstr(
-          fixture.captured[1],
-          "\"buffers\":{\"uplinkApplication\":{\"evidence\":\"observed\","
-          "\"current\":42,\"highWater\":43,\"capacity\":44},"
-          "\"websocketTransmitter\":{\"evidence\":\"observed\","
-          "\"current\":45,\"highWater\":46,\"capacity\":47},"
-          "\"lwipSend\":{\"evidence\":\"capacityOnly\","
-          "\"current\":0,\"highWater\":0,\"capacity\":48},"
-          "\"tlsEgress\":{\"evidence\":\"unavailable\","
-          "\"current\":0,\"highWater\":0,\"capacity\":0},"
-          "\"wifiEgress\":{\"evidence\":\"unavailable\","
-          "\"current\":0,\"highWater\":0,\"capacity\":0}}") !=
-      NULL);
+  assert(strstr(fixture.captured[1],
+                "\"buffers\":{\"uplinkApplication\":{\"evidence\":\"observed\","
+                "\"current\":42,\"highWater\":43,\"capacity\":44},"
+                "\"websocketTransmitter\":{\"evidence\":\"observed\","
+                "\"current\":45,\"highWater\":46,\"capacity\":47},"
+                "\"lwipSend\":{\"evidence\":\"capacityOnly\","
+                "\"current\":0,\"highWater\":0,\"capacity\":48},"
+                "\"tlsEgress\":{\"evidence\":\"unavailable\","
+                "\"current\":0,\"highWater\":0,\"capacity\":0},"
+                "\"wifiEgress\":{\"evidence\":\"unavailable\","
+                "\"current\":0,\"highWater\":0,\"capacity\":0}}") != NULL);
 
   capnweb_session_close(&fixture.session);
   fixture.module.session_ended(fixture.module.context);
@@ -1758,14 +1577,12 @@ static void unavailable_playback_evidence_is_omitted_not_zero_filled(void) {
   fixture_init(&fixture);
   fixture.include_playback = false;
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-1]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-1]]]]");
   receive(&fixture, "[\"pull\",1]");
-  assert(
-      fixture.module.poll(fixture.module.context, 0U).status ==
-      ITERATE_KIT_POLL_OK);
+  assert(fixture.module.poll(fixture.module.context, 0U).status ==
+         ITERATE_KIT_POLL_OK);
   assert(fixture.captured_count == 3U);
   assert(strstr(fixture.captured[1], "\"capture\":") != NULL);
   assert(strstr(fixture.captured[1], "\"downlink\":") != NULL);
@@ -1790,10 +1607,9 @@ static void invalid_buffer_evidence_is_a_visible_driver_error(void) {
   fixture.include_buffers = true;
   fixture.invalid_buffer_evidence = true;
 
-  receive(
-      &fixture,
-      "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
-      "[[\"export\",-1]]]]");
+  receive(&fixture,
+          "[\"push\",[\"pipeline\",0,[\"subscribeToMetrics\"],"
+          "[[\"export\",-1]]]]");
   receive(&fixture, "[\"pull\",1]");
   result = fixture.module.poll(fixture.module.context, 0U);
   assert(result.status == ITERATE_KIT_POLL_DRIVER_ERROR);

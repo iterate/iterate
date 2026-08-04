@@ -180,6 +180,14 @@ iterate_kit_status change_sprite_set(
   return ITERATE_KIT_OK;
 }
 
+iterate_kit_status capture_screen(
+    void *, iterate_kit_captured_screen *capture) {
+  if (capture == nullptr) return ITERATE_KIT_INVALID_ARGUMENT;
+  *capture = {};
+  /* The servo benchmark never invokes screenshots; expose a valid driver. */
+  return ITERATE_KIT_UNAVAILABLE;
+}
+
 iterate_kit_status move_servos(
     void *context,
     std::int32_t yaw_degrees,
@@ -310,6 +318,9 @@ int main() {
   CountingTransport transport{};
   BenchmarkHardware hardware{};
   iterate_kit_stackchan stackchan{};
+  iterate_kit_aec_diagnostic_trace_capability aec_trace_capability{
+    .initialized = 1U,
+  };
 
   /*
    * Build the real StackChan composition with no-op hardware. `maximum_photo`
@@ -325,6 +336,8 @@ int main() {
     {&hardware, change_sprite_set},
     avatar_slug_scratch,
     sizeof(avatar_slug_scratch),
+    {&hardware, capture_screen},
+    1U,
     {&hardware, move_servos},
     {&hardware, set_led, fill_leds},
     {&hardware, take_photo},
@@ -349,6 +362,7 @@ int main() {
       0U,
       nullptr,
     },
+    &aec_trace_capability,
   };
   if (iterate_kit_stackchan_init(
           &stackchan, &stackchan_options) != CAPNWEB_OK) {

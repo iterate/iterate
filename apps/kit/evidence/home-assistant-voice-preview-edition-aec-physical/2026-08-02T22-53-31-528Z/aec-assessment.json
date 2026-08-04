@@ -1,0 +1,89 @@
+{
+  "ambient": {
+    "dbfs": -92.99319108857652,
+    "peak": 2,
+    "rms": 0.7341594283431668
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -78.84204315916213,
+      "peak": 19,
+      "rms": 3.744102908286288
+    },
+    "nearEndGain": 0.6250207508805247,
+    "nearEndSimilarity": 0.7459803369326943,
+    "passed": false,
+    "residualToFarEndDb": -59.858167799273915,
+    "residualToNearEndDb": -5.067592037365233
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -81.33428566191566,
+        "peak": 58,
+        "rms": 2.810189791929838
+      },
+      "kind": "tone",
+      "passed": true,
+      "source": {
+        "dbfs": -19.339884567655986,
+        "peak": 5000,
+        "rms": 3535.53960513809
+      },
+      "sourceSimilarity": 0.010322859203140853
+    },
+    {
+      "clean": {
+        "dbfs": -87.20034042081323,
+        "peak": 7,
+        "rms": 1.430319020358745
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": true,
+      "source": {
+        "dbfs": -22.350138854101736,
+        "peak": 4268,
+        "rms": 2500.017174941004
+      },
+      "sourceSimilarity": 0.010791707103335678
+    },
+    {
+      "clean": {
+        "dbfs": -80.4054676331524,
+        "peak": 16,
+        "rms": 3.1273504673998316
+      },
+      "kind": "speech-shaped",
+      "passed": true,
+      "source": {
+        "dbfs": -22.056464522318358,
+        "peak": 8702,
+        "rms": 2585.989212278511
+      },
+      "sourceSimilarity": 0.01903351137887095
+    }
+  ],
+  "nearEnd": {
+    "clean": {
+      "dbfs": -77.36057167761727,
+      "peak": 19,
+      "rms": 4.440392404275479
+    },
+    "passed": true,
+    "source": {
+      "dbfs": -15.176950127467181,
+      "peak": 26072,
+      "rms": 5709.55720506014
+    },
+    "sourceSimilarity": 0.6545826893602807
+  },
+  "passed": false,
+  "reasons": [
+    "The physical network interval was not valid.",
+    "Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.746, gain 0.625, residual -5.07 dB."
+  ],
+  "validity": {
+    "passed": false,
+    "reasons": ["The physical network interval was not valid."]
+  }
+}

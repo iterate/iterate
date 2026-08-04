@@ -67,7 +67,7 @@ static void distinguishes_listening_silence_from_idle(void) {
   };
 
   iterate_kit_conversation_lights_render(&state, pixels);
-  assert(is_colour(&pixels[3], 0U, 0U, 0U));
+  assert(pixels[3].blue > 0U);
   assert(pixels[6].green > 0U);
 
   state.conversation_active = false;
@@ -75,6 +75,27 @@ static void distinguishes_listening_silence_from_idle(void) {
   for (uint8_t index = 3U; index < 9U; ++index) {
     assert(is_colour(&pixels[index], 0U, 0U, 0U));
   }
+}
+
+/*
+ * Stick is deliberately silent between manual PTT turns, but that silence
+ * must not look identical to a call whose /pcm lane never connected. The
+ * speaker sector therefore carries one dim blue readiness pixel for the
+ * lifetime of an active, media-ready call. Amplitude may grow that meter; it
+ * is not required merely to prove the lane is alive.
+ */
+static void keeps_one_media_ready_pixel_visible_between_ptt_turns(void) {
+  struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  const struct iterate_kit_conversation_visual_state state = {
+    .network = ITERATE_KIT_NETWORK_CONNECTED,
+    .conversation_active = true,
+    .media_ready = true,
+  };
+
+  iterate_kit_conversation_lights_render(&state, pixels);
+  assert(pixels[3].blue > 0U);
+  assert(is_colour(&pixels[4], 0U, 0U, 0U));
+  assert(is_colour(&pixels[5], 0U, 0U, 0U));
 }
 
 /*
@@ -110,6 +131,28 @@ static void makes_media_failure_unambiguously_red(void) {
   const struct iterate_kit_conversation_visual_state state = {
     .network = ITERATE_KIT_NETWORK_CONNECTED,
     .conversation_active = true,
+    .media_failed = true,
+  };
+
+  iterate_kit_conversation_lights_render(&state, pixels);
+  for (uint8_t index = 3U; index < 9U; ++index) {
+    assert(pixels[index].red > 0U);
+    assert(pixels[index].green == 0U && pixels[index].blue == 0U);
+  }
+}
+
+/*
+ * /pcm is preconnected before a person starts a call. A terminal media fault
+ * can therefore happen while the conversation bit is false; hiding it until
+ * TOP is pressed made a dead Stick present the same idle ring as a healthy
+ * one. Failure is a transport fact, so both audio sectors must stay red even
+ * outside a conversation.
+ */
+static void keeps_media_failure_visible_while_idle(void) {
+  struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  const struct iterate_kit_conversation_visual_state state = {
+    .network = ITERATE_KIT_NETWORK_CONNECTED,
+    .conversation_active = false,
     .media_failed = true,
   };
 
@@ -171,8 +214,10 @@ static void treats_rssi_changes_inside_one_bar_as_same_visual_output(void) {
 int main(void) {
   renders_one_shared_three_sector_grammar();
   distinguishes_listening_silence_from_idle();
+  keeps_one_media_ready_pixel_visible_between_ptt_turns();
   keeps_half_duplex_microphone_dark_until_capture();
   makes_media_failure_unambiguously_red();
+  keeps_media_failure_visible_while_idle();
   restart_arm_supersedes_all_status();
   treats_rssi_changes_inside_one_bar_as_same_visual_output();
   return 0;

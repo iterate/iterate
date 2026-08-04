@@ -339,14 +339,14 @@ static void end_of_turn_marker_follows_final_pcm_on_the_wire(void) {
  * slot; otherwise a permanently busy PTT stream could starve receipts and let
  * the server rebuild the exact opaque backlog this protocol removes.
  */
-static void downlink_receipt_preempts_a_new_microphone_frame(void) {
+static void playback_release_receipt_preempts_a_new_microphone_frame(void) {
   struct fixture fixture;
   struct parsed_frame frame;
   size_t offset = 0U;
   uint32_t accepted_items = 0U;
   fixture_init(&fixture);
   begin_generation(&fixture, 1U);
-  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item(
+  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item_released(
             &fixture.conductor) == ITERATE_KIT_OK);
   submit_frame(&fixture, 0x4cU, 20U);
 
@@ -386,14 +386,14 @@ static void partial_receipt_is_immutable_and_later_progress_coalesces(void) {
   fixture.raw.maximum_write = 3U;
   fixture.conductor.maximum_work_steps = 1U;
   begin_generation(&fixture, 1U);
-  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item(
+  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item_released(
             &fixture.conductor) == ITERATE_KIT_OK);
   CHECK(iterate_kit_pcm_uplink_conductor_poll(
             &fixture.conductor, 0U) ==
       ITERATE_KIT_PCM_UPLINK_CONDUCTOR_PROGRESS);
-  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item(
+  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item_released(
             &fixture.conductor) == ITERATE_KIT_OK);
-  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item(
+  CHECK(iterate_kit_pcm_uplink_conductor_note_downlink_item_released(
             &fixture.conductor) == ITERATE_KIT_OK);
   submit_frame(&fixture, 0x5cU, 20U);
 
@@ -1119,7 +1119,7 @@ static void legal_tunnel_faults_never_latch_local_failure(void) {
 int main(void) {
   continuous_fresh_audio_needs_no_peer_pong();
   end_of_turn_marker_follows_final_pcm_on_the_wire();
-  downlink_receipt_preempts_a_new_microphone_frame();
+  playback_release_receipt_preempts_a_new_microphone_frame();
   partial_receipt_is_immutable_and_later_progress_coalesces();
   newer_capture_timestamp_does_not_poison_conductor();
   true_owner_clock_regression_is_not_normalized();

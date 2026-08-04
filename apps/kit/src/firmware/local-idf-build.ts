@@ -30,7 +30,7 @@ export async function prepareLocalEspIdfFlashPlan(input: {
 
   const buildDirectory = resolve(input.buildDirectory);
   const metadata = await readFlasherMetadata(buildDirectory);
-  assertBuildMatchesDevice(metadata.chip, input.device);
+  assertBuildMatchesDevice(metadata.chip, metadata.projectName, input.device);
 
   const parts = await Promise.all(
     metadata.files.map(async ({ address, relativePath }): Promise<LocalPart> => {
@@ -95,7 +95,7 @@ export async function readLocalEspIdfNamedPartition(input: {
   }
   const buildDirectory = resolve(input.buildDirectory);
   const metadata = await readFlasherMetadata(buildDirectory);
-  assertBuildMatchesDevice(metadata.chip, input.device);
+  assertBuildMatchesDevice(metadata.chip, metadata.projectName, input.device);
   const partitionTable = metadata.files.find(({ relativePath }) =>
     relativePath.split("\\").join("/").endsWith("partition_table/partition-table.bin"),
   );
@@ -104,6 +104,46 @@ export async function readLocalEspIdfNamedPartition(input: {
   }
   const path = resolveBuildPath(buildDirectory, partitionTable.relativePath);
   return findCompiledPartition(new Uint8Array(await readFile(path)), input.partitionLabel);
+}
+
+/**
+ * Captures immutable application provenance for physical evidence.
+ *
+ * A build directory is mutable and therefore cannot identify the bytes that
+ * ran a test. The app hash is the authority; the small allowlisted cache value
+ * additionally names HAVPE's cumulative XMOS tap so two byte-distinct A/B
+ * builds remain human-auditable. This performs no USB access and deliberately
+ * ignores every unrelated CMake cache value, which may contain machine-local
+ * paths and does not belong in retained evidence.
+ */
+export async function readLocalEspIdfApplicationProvenance(input: {
+  buildDirectory: string;
+  device: FirmwareDevice;
+}) {
+  const buildDirectory = resolve(input.buildDirectory);
+  const metadata = await readFlasherMetadata(buildDirectory);
+  assertBuildMatchesDevice(metadata.chip, metadata.projectName, input.device);
+  if (!metadata.applicationFile) {
+    throw new Error("ESP-IDF project_description.json is missing app_bin metadata.");
+  }
+  if (!metadata.files.some(({ relativePath }) => relativePath === metadata.applicationFile)) {
+    throw new Error("ESP-IDF application binary is not present in flasher metadata.");
+  }
+  const applicationPath = resolveBuildPath(buildDirectory, metadata.applicationFile);
+  const [application, cache] = await Promise.all([
+    readFile(applicationPath),
+    readFile(resolve(buildDirectory, "CMakeCache.txt"), "utf8"),
+  ]);
+  const stageMatch = cache.match(
+    /^ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE:(?:STRING|UNINITIALIZED)=([0-4])$/mu,
+  );
+  return {
+    applicationBytes: application.byteLength,
+    applicationFile: metadata.applicationFile,
+    applicationSha256: createHash("sha256").update(application).digest("hex"),
+    iterateKitVoicePeXmosUplinkStage: stageMatch ? Number(stageMatch[1]) : null,
+    projectName: metadata.projectName,
+  };
 }
 
 /**
@@ -150,7 +190,7 @@ function findCompiledPartition(bytes: Uint8Array, requestedLabel: string) {
   return result;
 }
 
-function assertBuildMatchesDevice(chip: string, device: FirmwareDevice): void {
+function assertBuildMatchesDevice(chip: string, projectName: string, device: FirmwareDevice): void {
   if (device.installMethod.kind !== "esp-serial") {
     throw new Error(`${device.name} is not an ESP serial device.`);
   }
@@ -158,14 +198,26 @@ function assertBuildMatchesDevice(chip: string, device: FirmwareDevice): void {
   if (chip !== expectedChip) {
     throw new Error(`ESP-IDF build targets ${chip}; ${device.name} requires ${expectedChip}.`);
   }
+  const expectedProjectName = `iterate-kit-${device.id}`;
+  if (projectName !== expectedProjectName) {
+    throw new Error(
+      `ESP-IDF build is ${projectName}; ${device.name} requires ${expectedProjectName}.`,
+    );
+  }
 }
 
 async function readFlasherMetadata(buildDirectory: string) {
   let value: unknown;
+  let projectDescription: unknown;
   try {
-    value = JSON.parse(await readFile(resolve(buildDirectory, "flasher_args.json"), "utf8"));
+    const [flasherArguments, projectDescriptionText] = await Promise.all([
+      readFile(resolve(buildDirectory, "flasher_args.json"), "utf8"),
+      readFile(resolve(buildDirectory, "project_description.json"), "utf8"),
+    ]);
+    value = JSON.parse(flasherArguments);
+    projectDescription = JSON.parse(projectDescriptionText);
   } catch (error) {
-    throw new Error("Could not read ESP-IDF flasher_args.json.", {
+    throw new Error("Could not read ESP-IDF build metadata.", {
       cause: error,
     });
   }
@@ -180,6 +232,13 @@ async function readFlasherMetadata(buildDirectory: string) {
     !isRecord(flashFiles)
   ) {
     throw new Error("ESP-IDF flasher_args.json is missing chip or flash-file metadata.");
+  }
+  if (!isRecord(projectDescription) || typeof projectDescription.project_name !== "string") {
+    throw new Error("ESP-IDF project_description.json is missing project_name metadata.");
+  }
+  const applicationFile = projectDescription.app_bin;
+  if (applicationFile !== undefined && typeof applicationFile !== "string") {
+    throw new Error("ESP-IDF project_description.json has invalid app_bin metadata.");
   }
 
   const files = Object.entries(flashFiles).map(([rawAddress, relativePath]) => {
@@ -203,7 +262,12 @@ async function readFlasherMetadata(buildDirectory: string) {
     throw new Error("ESP-IDF flasher_args.json contains no flash parts.");
   }
   files.sort((left, right) => left.address - right.address);
-  return { chip: extraArguments.chip, files };
+  return {
+    applicationFile,
+    chip: extraArguments.chip,
+    files,
+    projectName: projectDescription.project_name,
+  };
 }
 
 function resolveBuildPath(buildDirectory: string, relativePath: string) {

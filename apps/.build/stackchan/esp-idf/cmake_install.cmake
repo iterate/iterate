@@ -554,6 +554,11 @@ endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
+  include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/avatar/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
   include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/capnweb/cmake_install.cmake")
 endif()
 
@@ -565,6 +570,11 @@ endif()
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
   include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/capabilities/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp_lcd_touch/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
@@ -600,11 +610,6 @@ endif()
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
   include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp_lcd_ili9341/cmake_install.cmake")
-endif()
-
-if(NOT CMAKE_INSTALL_LOCAL_ONLY)
-  # Include the install script for the subdirectory.
-  include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp_lcd_touch/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
@@ -649,7 +654,17 @@ endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
+  include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/iterate_stackchan_avatar/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
   include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/iterate_stackchan_hardware/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
+  include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/iterate_stackchan_body/cmake_install.cmake")
 endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)

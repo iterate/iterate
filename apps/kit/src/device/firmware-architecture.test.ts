@@ -691,12 +691,14 @@ describe("firmware architecture boundaries", () => {
      * sides of that ordering: the owner is live before either socket starts,
      * and microphone release hands shared clocks back to that same owner.
      */
-    expect(bindFunction).toContain("audioOwner_.begin(lane)");
+    expect(bindFunction).toMatch(
+      /audioOwner_\.begin\(\s*lane,\s*itemReleased,\s*itemReleasedContext\s*\)/u,
+    );
     expect(targetSource.indexOf("initialiseRings(runtime)")).toBeLessThan(
       targetSource.indexOf("iterate_kit_esp_idf_itx_transport_start("),
     );
     expect(targetSource.indexOf("initialiseRings(runtime)")).toBeLessThan(
-      targetSource.indexOf("iterate_kit_esp_idf_pcm_transport_start("),
+      targetSource.indexOf("iterate_kit_esp_idf_pcm_session_poll("),
     );
     expect(stopCaptureFunction).toContain("audioOwner_.resumeAfterCapture()");
   });
@@ -803,22 +805,22 @@ describe("firmware architecture boundaries", () => {
     expect(beginFunction).toContain("iterate_kit_cpu_usage_meter_sample");
   });
 
-  test("the M5StickS3 display calibration preserves the colours seen by a person", () => {
+  test("the M5StickS3 display selects exact public avatar slugs", () => {
     const platformSource = readFileSync(
       resolve(firmwareDirectory, "platforms/iterate_m5unified/m5unified.cpp"),
       "utf8",
     );
 
     /*
-     * TFT_RED/TFT_GREEN are 16-bit RGB565 constants. Storing either in this
-     * adapter's uint32_t retained colour and passing it to M5GFX's 32-bit
-     * overload reinterprets the bits as RGB888: the first physical deployment
-     * consequently rendered requested red as green and a guessed constant swap
-     * then rendered it blue. Keep this boundary explicitly RGB888; framebuffer
-     * capture can verify the bytes while the nearby person verifies the panel.
+     * The initial red/green proof exposed an M5GFX colour-width trap but was
+     * not a useful product abstraction. A sprite set is a stable exact slug;
+     * selecting it through the shared registry keeps atlas order private and
+     * makes the same capability meaningful on Stick and StackChan.
      */
-    expect(platformSource).toContain("m5StickS3PhysicalRed = 0xFF0000U");
-    expect(platformSource).toContain("m5StickS3PhysicalGreen = 0x00FF00U");
+    expect(platformSource).toContain("face_avatar_registry_select_slug");
+    expect(platformSource).toContain("M5UnifiedHalfDuplex::changeSpriteSet");
+    expect(platformSource).not.toContain("m5StickS3PhysicalRed");
+    expect(platformSource).not.toContain("m5StickS3PhysicalGreen");
   });
 
   test("the M5StickS3 screen explains the physical call controls and follows real lifecycle state", () => {
@@ -836,13 +838,13 @@ describe("firmware architecture boundaries", () => {
      * the Stick cannot discover its two-button call model. The display must be
      * driven from reconciled device/socket/audio state, not merely from button
      * edges: an optimistic "connected" label during TLS failure would be more
-     * misleading than no UI. Requiring the colour capability to repaint the
-     * current view also prevents a Grok tool call from erasing the controls.
+     * misleading than no UI. A sprite change repaints through the same retained
+     * view, so a Grok tool call cannot erase the status rail.
      */
-    expect(platformSource).toContain("TOP: start call");
-    expect(platformSource).toContain("Hold FRONT to talk");
-    expect(platformSource).toContain("Release FRONT to send");
-    expect(platformSource).toContain("AI SPEAKING");
+    expect(platformSource).toContain('"TOP"');
+    expect(platformSource).toContain('"FRN"');
+    expect(platformSource).toContain('"MIC"');
+    expect(platformSource).toContain('"AI"');
     expect(platformSource).toContain("renderCallUi(true)");
     /*
      * A rendered screen is not evidence that later lifecycle transitions can
@@ -857,33 +859,202 @@ describe("firmware architecture boundaries", () => {
       /callUiState_ = state;[\s\S]*?callUiDrawn_ = false;[\s\S]*?renderCallUi\(false\);/,
     );
     expect(targetSource).toContain("selectCallUiState(runtime)");
-    expect(targetSource).toContain("runtime.pcmTransport.state");
+    expect(targetSource).toContain("iterate_kit_esp_idf_pcm_session_transport_ready(");
     expect(targetSource).toContain("iterate_kit_m5sticks3_is_capturing(&state.device)");
     expect(targetSource).toContain("RealtimePlaybackState::playing");
   });
 
-  test("the Stick establishes its PCM lane before a person starts a call", () => {
-    const targetSource = readFileSync(
-      resolve(firmwareDirectory, "targets/m5sticks3/main/main.cpp"),
+  test("screen targets render one shared dozing state only outside a conversation", () => {
+    const stickSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_m5unified/m5unified.cpp"),
       "utf8",
     );
-    const transportLifecycle = sourceSection(
-      targetSource,
-      "const iterate_kit_status transportPoll =",
-      "const auto playbackPoll =",
+    const stackChanSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_stackchan_avatar/stackchan_avatar.c"),
+      "utf8",
     );
 
     /*
-     * A physical trace measured only 33 ms in userspace and 1.48 s through
-     * Grok, but 5.52 s from Button B to a newly opened device socket. TLS and
-     * WebSocket setup therefore belong to device readiness, not interactive
-     * call setup. Reintroducing conversation-owned start/stop would preserve
-     * functional tests while restoring exactly the delay a person reported.
+     * Closed-eye controls were once target-local and had no pixel oracle, so
+     * the physical StackChan could still look awake while idle. Both screens
+     * must consume the same code-native doze preparation and Z overlay; target
+     * code may decide conversation activity but may not redraw its own variant.
      */
-    expect(transportLifecycle).toContain("iterate_kit_esp_idf_pcm_transport_start(");
-    expect(transportLifecycle).not.toContain("iterate_kit_esp_idf_pcm_transport_request_stop(");
-    expect(transportLifecycle).not.toContain("conversationActive &&");
-    expect(targetSource).not.toContain("pcmTransportStartAttemptedForConversation");
+    for (const source of [stickSource, stackChanSource]) {
+      expect(source).toContain("face_doze_prepare_render_key");
+      expect(source).toContain("face_doze_apply_overlay");
+    }
+    expect(stackChanSource).toContain(
+      "const bool dozing = !owner.latest_status.conversation_active;",
+    );
+    expect(stickSource).toContain("const bool dozing = callUiIsDozing(callUiState_);");
+  });
+
+  test("StackChan capture reuses the sole framebuffer owner without entering the audio path", () => {
+    const platformSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_stackchan_avatar/stackchan_avatar.c"),
+      "utf8",
+    );
+    const profileSource = readFileSync(
+      resolve(firmwareDirectory, "devices/stackchan/stackchan.c"),
+      "utf8",
+    );
+    const targetSource = readFileSync(
+      resolve(firmwareDirectory, "targets/stackchan/main/main.c"),
+      "utf8",
+    );
+
+    /*
+     * A camera photograph or LCD readback would be a second, misleading UI
+     * oracle. A second framebuffer owner would race the avatar. Pin capture to
+     * the exact source surface, a bounded ownership window, and the S3 ROM
+     * encoder. A zero-tick lock made capture race most 15 Hz renders and fail
+     * spuriously; the explicit 100 ms ceiling is still finite and exists only
+     * on the control owner while independent high-priority audio owners run.
+     */
+    expect(platformSource).toContain("owner.framebuffer[index]");
+    expect(platformSource).toContain("STACKCHAN_SCREEN_CAPTURE_LOCK_TIMEOUT_MS 100U");
+    expect(platformSource).toContain("pdMS_TO_TICKS(STACKCHAN_SCREEN_CAPTURE_LOCK_TIMEOUT_MS)");
+    const prepareFrame = platformSource.indexOf("prepare_avatar_frame_under_lock(");
+    const releaseFrame = platformSource.indexOf(
+      "(void)xSemaphoreGive(owner.framebuffer_access);",
+      prepareFrame,
+    );
+    const transferFrame = platformSource.indexOf(
+      "return transfer_avatar_frame(&render_key, render_cpu_us);",
+      prepareFrame,
+    );
+    expect(prepareFrame).toBeGreaterThanOrEqual(0);
+    expect(releaseFrame).toBeGreaterThan(prepareFrame);
+    expect(transferFrame).toBeGreaterThan(releaseFrame);
+    expect(platformSource).toContain("MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT");
+    expect(platformSource).toContain("tdefl_init(");
+    expect(platformSource).toContain("tdefl_compress(");
+    expect(platformSource).toContain("TDEFL_RLE_MATCHES");
+    expect(platformSource).toContain("sizeof(tdefl_compressor)");
+    expect(platformSource).not.toContain("tdefl_write_image_to_png_file_in_memory_ex");
+    expect(platformSource).not.toContain("lv_snapshot");
+    expect(platformSource).not.toContain("esp_camera_fb_get");
+    expect(profileSource).toContain("iterate_kit_screen_capture_module(&device->screen_capture)");
+    expect(targetSource).toContain("iterate_kit_stackchan_avatar_screen_capture_driver()");
+    expect(targetSource).toContain("ITERATE_KIT_STACKCHAN_CAPTURE_PNG_CAPACITY");
+  });
+
+  test("every voice target delegates PCM lifetime and media admission to one shared session owner", () => {
+    const targets = [
+      {
+        path: "targets/m5sticks3/main/main.cpp",
+        mediaGateSink: "iterate_kit_m5sticks3_set_media_ready(",
+      },
+      {
+        path: "targets/stackchan/main/main.c",
+        mediaGateSink: "iterate_kit_audio_intent_reconciler_set_media_ready(",
+      },
+      {
+        path: "targets/home-assistant-voice-preview-edition/main/main.c",
+        mediaGateSink: "iterate_kit_audio_intent_reconciler_set_media_ready(",
+      },
+    ];
+
+    for (const target of targets) {
+      /*
+       * Scan the whole target, not only main.c. Otherwise a future board could
+       * move its private owner into target_lifecycle.c and make this test green
+       * without restoring the architecture. Third-party managed components
+       * are included deliberately: target-local code gets no privileged route
+       * to the raw transport regardless of which subdirectory contains it.
+       */
+      const targetSource = sourceFiles(resolve(firmwareDirectory, dirname(dirname(target.path))))
+        .map((path) => readFileSync(path, "utf8"))
+        .join("\n");
+      const executableTargetSource = sourceWithoutComments(targetSource);
+
+      /*
+       * Equivalent target-local loops already diverged once: Stick prewarmed
+       * credentials at boot while both server-VAD boards paid 3,293 ms on the
+       * first conversational edge. Pin the ownership boundary, not three
+       * implementations which happen to contain similar conditionals today.
+       * Targets may prepare the transport and operate their hardware lanes,
+       * but only the shared session owner may start, poll, restart, or stop its
+       * lifetime. This deliberately catches copied lifecycle code even when it
+       * remains functionally green in a short test.
+       */
+      expect(targetSource).toContain("esp_idf_pcm_session.h");
+      expect(executableTargetSource.match(/iterate_kit_esp_idf_pcm_session_poll\(/gu)).toHaveLength(
+        1,
+      );
+      expect(
+        executableTargetSource.match(/iterate_kit_esp_idf_pcm_session_prepare\(/gu),
+      ).toHaveLength(1);
+      expect(executableTargetSource).not.toMatch(/iterate_kit_esp_idf_pcm_session_poll\([^)]*,/u);
+      /*
+       * The session callback must be the sole hardware gate writer. A second
+       * call site would let a target recreate the old private state machine by
+       * racing or overriding the shared decision, even though it still calls
+       * pcm_session_poll() once and superficially satisfies the ownership API.
+       */
+      expect(executableTargetSource.split(target.mediaGateSink).length - 1).toBe(1);
+      expect(targetSource).not.toContain("pcm_transport_lifecycle.h");
+      expect(targetSource).not.toMatch(
+        /iterate_kit_esp_idf_pcm_transport_(?:start|poll|request_restart|request_stop|finish_stop|stop)\(/u,
+      );
+      expect(targetSource).not.toMatch(
+        /\bbool\s+(?:pcm_started|pcm_start_attempted|pcmTransportStarted|pcmTransportStartAttempted)\b|\b(?:last_pcm_state|lastPcmTransportState)\b/u,
+      );
+      expect(executableTargetSource).not.toMatch(/(?:pcm_transport|pcmTransport)\.state/u);
+      expect(executableTargetSource).not.toMatch(
+        /conversation_active\s*&&\s*(?:status\.)?media_ready|conversationActive\s*&&\s*(?:status\.)?mediaReady/u,
+      );
+      expect(executableTargetSource).not.toContain("ITERATE_KIT_CONTROL_RECOVERY_RESTART_PCM");
+      expect(executableTargetSource).toMatch(
+        /pcm(?:_s|S)ession(?:_o|O)ptions\.conversation_active\s*=/u,
+      );
+      expect(executableTargetSource).toMatch(
+        /pcm(?:_s|S)ession(?:_o|O)ptions\.set_media_ready\s*=/u,
+      );
+    }
+
+    const publicTransportHeader = readFileSync(
+      resolve(
+        firmwareDirectory,
+        "platforms/iterate_esp_idf/include/iterate/kit/platforms/esp_idf_pcm_transport.h",
+      ),
+      "utf8",
+    );
+    /*
+     * A source scan alone could be evaded by hiding start/poll behind a new
+     * target-local wrapper. Keep lifecycle declarations out of the public
+     * component include path entirely: board code can prepare the transport
+     * and operate hardware-facing lanes, but bypassing the session owner then
+     * fails at compilation instead of depending on a naming convention.
+     */
+    expect(publicTransportHeader).not.toContain("iterate_kit_esp_idf_pcm_transport_start(");
+    expect(publicTransportHeader).not.toContain("iterate_kit_esp_idf_pcm_transport_poll(");
+    expect(publicTransportHeader).not.toContain(
+      "iterate_kit_esp_idf_pcm_transport_request_restart(",
+    );
+
+    const publicSessionHeader = readFileSync(
+      resolve(
+        firmwareDirectory,
+        "platforms/iterate_esp_idf/include/iterate/kit/platforms/esp_idf_pcm_session.h",
+      ),
+      "utf8",
+    );
+    expect(publicSessionHeader).not.toContain("iterate_kit_esp_idf_pcm_session_request_restart(");
+    expect(publicSessionHeader).toContain("(*conversation_active)(void *context)");
+    expect(publicSessionHeader).toContain("(*set_media_ready)(");
+
+    const ownerSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_esp_idf/pcm_session.c"),
+      "utf8",
+    );
+    expect(ownerSource).toContain("iterate_kit_esp_idf_pcm_transport_start(");
+    expect(ownerSource).toContain("iterate_kit_esp_idf_pcm_transport_poll(");
+    expect(ownerSource).toContain("iterate_kit_esp_idf_pcm_transport_request_restart(");
+    expect(ownerSource).toContain("control_ready && conversation_active && transport_ready");
+    expect(ownerSource).not.toContain("ITERATE_KIT_AUDIO_PUSH_TO_TALK");
+    expect(ownerSource).not.toContain("ITERATE_KIT_AUDIO_FULL_DUPLEX_AEC");
   });
 
   test("the M5 audio owner performs no serial or display I/O in its steady-state loop", () => {
@@ -896,6 +1067,179 @@ describe("firmware architecture boundaries", () => {
     expect(targetSource).toContain("sampleRuntimeMetrics");
     expect(steadyStateLoop).not.toContain("reportMetrics(runtime)");
     expect(steadyStateLoop).not.toContain("runtime.platform.showStatus(");
+  });
+
+  test("StackChan retains one processed uplink through an AEC engine with double-talk protection", () => {
+    const audioOwnerSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_core_s3_audio/core_s3_audio_owner.c"),
+      "utf8",
+    );
+
+    const targetSource = readFileSync(
+      resolve(firmwareDirectory, "targets/stackchan/main/main.c"),
+      "utf8",
+    );
+
+    /*
+     * A person saying “bye bye” at normal volume during StackChan playback was
+     * almost entirely removed by profile 5; only a later shouted “STOP PLEASE”
+     * survived. The retained profile-5 trace measured only 3--9% of raw near
+     * speech reaching the clean wire during overlap, with zero clipping,
+     * drops, resets, underruns or transport faults. ESP-SR 2.4.7's FD engines
+     * have no double-talk detector, so lowering speaker volume cannot turn
+     * that engine into a valid conversational topology. The VOIP engine is the
+     * first-party path which actually runs its DTD on every frame. Keep its
+     * constant processed output to avoid the old raw/processed playback-edge
+     * switch, and retain the independently measured 18 dB input-headroom and
+     * 80% speaker operating point. This tripwire prevents a future acoustic
+     * experiment from silently shipping a no-DTD engine again.
+     */
+    expect(targetSource).toMatch(
+      /#define STACKCHAN_AEC_PROFILE(?:\s|\\)+ITERATE_KIT_CORE_S3_AEC_VOIP_CONSTANT/u,
+    );
+    expect(targetSource).toContain("audio_options.aec_profile = STACKCHAN_AEC_PROFILE");
+    expect(targetSource).toMatch(
+      /\.frame_samples\s*=\s*iterate_kit_core_s3_aec_processing_frame_samples\(\s*STACKCHAN_AEC_PROFILE\s*\)/u,
+    );
+    expect(targetSource).not.toContain(
+      ".frame_samples = ITERATE_KIT_CORE_S3_AEC_VOIP_FRAME_SAMPLES",
+    );
+    expect(audioOwnerSource).toContain("AEC_MODE_FD_LOW_COST");
+    expect(audioOwnerSource).toContain("AEC_MODE_FD_HIGH_PERF");
+    expect(audioOwnerSource).toContain("AEC_NLP_LEVEL_NORMAL");
+    expect(audioOwnerSource).toContain("ITERATE_KIT_CORE_S3_AEC_MAX_FRAME_SAMPLES");
+    expect(audioOwnerSource).toContain("owner.aec_frame_samples");
+    expect(audioOwnerSource).toContain("aec_process(");
+    expect(audioOwnerSource).toContain("aec_linear_process(");
+    expect(audioOwnerSource).not.toMatch(/^\s*aec_nlp_process\(/mu);
+    const ownerHeader = readFileSync(
+      resolve(
+        firmwareDirectory,
+        "platforms/iterate_core_s3_audio/include/iterate/kit/platforms/core_s3_audio_owner.h",
+      ),
+      "utf8",
+    );
+    expect(ownerHeader).toContain("#define ITERATE_KIT_CORE_S3_AEC_MAX_FRAME_SAMPLES 512U");
+    expect(ownerHeader).toContain("ITERATE_KIT_CORE_S3_AEC_FD_NORMAL_CONSTANT");
+    expect(ownerHeader).toContain("ITERATE_KIT_CORE_S3_AEC_VOIP_SELECTOR");
+    expect(ownerHeader).toContain("ITERATE_KIT_CORE_S3_AEC_VOIP_CONSTANT");
+    expect(ownerHeader).toContain("ITERATE_KIT_CORE_S3_AEC_VOIP_LINEAR_CONSTANT");
+    expect(ownerHeader).toContain("ITERATE_KIT_CORE_S3_AEC_FD_HIGH_PERF_CONSTANT");
+    expect(ownerHeader).toContain("ITERATE_KIT_CORE_S3_AEC_FD_HIGH_PERF_LINEAR_CONSTANT");
+    expect(ownerHeader).toContain("iterate_kit_core_s3_aec_processing_frame_samples(");
+  });
+
+  test("StackChan reserves Wi-Fi DMA memory before constructing VOIP AEC", () => {
+    const targetSource = readFileSync(
+      resolve(firmwareDirectory, "targets/stackchan/main/main.c"),
+      "utf8",
+    );
+    const appMain = targetSource.slice(targetSource.indexOf("void app_main(void)"));
+
+    /*
+     * VOIP AEC booted successfully when it ran first, but left room for only
+     * three of ESP-IDF Wi-Fi's ten mandatory static RX buffers. This order is
+     * therefore a resource contract, not cosmetic startup sequencing. The
+     * main poll loop still starts after both calls, so reserving network DMA
+     * first cannot mount a callable device before its audio owner is ready.
+     */
+    expect(appMain.indexOf("iterate_kit_esp_idf_itx_transport_start(")).toBeLessThan(
+      appMain.indexOf("iterate_kit_core_s3_audio_owner_start("),
+    );
+    expect(appMain.indexOf("iterate_kit_core_s3_audio_owner_start(")).toBeLessThan(
+      appMain.indexOf("for (;;) {"),
+    );
+  });
+
+  test("the StackChan microphone cannot be starved by a missing speaker callback", () => {
+    const ownerHeader = readFileSync(
+      resolve(
+        firmwareDirectory,
+        "platforms/iterate_core_s3_audio/include/iterate/kit/platforms/core_s3_audio_owner.h",
+      ),
+      "utf8",
+    );
+    const ownerSource = readFileSync(
+      resolve(firmwareDirectory, "platforms/iterate_core_s3_audio/core_s3_audio_owner.c"),
+      "utf8",
+    );
+    const targetSource = readFileSync(
+      resolve(firmwareDirectory, "targets/stackchan/main/main.c"),
+      "utf8",
+    );
+
+    /*
+     * CoreS3 records the electrical amplifier divider in the same RX DMA edge
+     * as the near microphone. That is the actual AEC reference. An earlier
+     * design nevertheless waited for a second TX-descriptor FIFO merely to
+     * decide whether the selector should publish raw or processed audio. A
+     * speaker write failure then stopped TX callbacks and silently stopped an
+     * otherwise healthy microphone. Pin the simpler ownership rule: RX alone
+     * clocks capture, while the high-priority playback owner attaches one
+     * bounded far-active bit to each capture edge.
+     */
+    expect(ownerHeader).toContain("int reference_gain_db;");
+    expect(ownerHeader).not.toContain("core_s3_playback_reference_reserve");
+    expect(ownerSource).toContain("owner.reference_gain_db");
+    expect(ownerSource).not.toContain("iterate_kit_core_s3_playback_reference_reserve");
+    expect(ownerSource).toContain("owner.capture_chunk.playback_content_active");
+    expect(ownerSource).toContain("owner.playback_content_active");
+    expect(ownerSource).toContain("owner.reference_dma");
+    expect(ownerSource).not.toContain("iterate_kit_core_s3_scale_reference");
+    expect(ownerSource).toMatch(
+      /esp_codec_dev_set_in_channel_gain\(\s*owner\.microphone,\s*ESP_CODEC_DEV_MAKE_CHANNEL_MASK\(2\),\s*\(float\)owner\.reference_gain_db\)/,
+    );
+    expect(targetSource).toContain("audio_options.reference_gain_db = 0;");
+    expect(targetSource).not.toContain("reference_scale_multiplier");
+  });
+
+  test("StackChan keeps the speaker below the measured nonlinear full-scale operating point", () => {
+    const targetSource = readFileSync(
+      resolve(firmwareDirectory, "targets/stackchan/main/main.c"),
+      "utf8",
+    );
+
+    /*
+     * At logical 100 the custom CoreS3 curve programs the AW88298 at 0 dB.
+     * A retained real-Grok reply then railed the near microphone even though
+     * the exact completed-TX reference peaked well below full scale. That is
+     * an acoustic/amplifier nonlinearity which no linear echo filter can
+     * reconstruct. The actual codec mapping later showed logical 90 was only
+     * about 1 dB below that cliff. The 85% profile-5 physical run avoided
+     * self-triggering but still lost both ends of the exact double-talk phrase.
+     * Logical 80 is the last bounded high-volume operating-point experiment
+     * before changing topology. Pin the choice because returning to 85/90/100
+     * silently invalidates the evidence identity.
+     */
+    expect(targetSource).toContain("audio_options.speaker_volume_percent = 80;");
+    expect(targetSource).not.toContain("audio_options.speaker_volume_percent = 85;");
+    expect(targetSource).not.toContain("audio_options.speaker_volume_percent = 90;");
+    expect(targetSource).not.toContain("audio_options.speaker_volume_percent = 100;");
+  });
+
+  test("StackChan improves pickup after AEC without sacrificing analogue headroom", () => {
+    const targetSource = readFileSync(
+      resolve(firmwareDirectory, "targets/stackchan/main/main.c"),
+      "utf8",
+    );
+    const ownerHeader = readFileSync(
+      resolve(
+        firmwareDirectory,
+        "platforms/iterate_core_s3_audio/include/iterate/kit/platforms/core_s3_audio_owner.h",
+      ),
+      "utf8",
+    );
+
+    /*
+     * The constant-processed profile reached 31,932/32,767 at the near ADC
+     * during far playback. Any analogue rail contact creates harmonics which
+     * no linear AEC reference can represent. Keep the proven 18 dB codec PGA,
+     * then make ordinary speech only 1.94 dB louder after AEC. This pins the
+     * user's sensitivity fix to the observable saturating output stage instead
+     * of quietly undoing the input-headroom correction.
+     */
+    expect(targetSource).toContain("audio_options.microphone_gain_db = 18;");
+    expect(ownerHeader).toContain("#define ITERATE_KIT_CORE_S3_AEC_PROCESSED_GAIN_MULTIPLIER 10U");
   });
 
   test("the default TypeScript suite executes assertion-enabled native tests", () => {

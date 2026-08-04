@@ -269,7 +269,7 @@ describe("physical network run evidence", () => {
       rawPcmEvidence: {
         kind: "device-observed",
       },
-      schemaVersion: 2,
+      schemaVersion: 3,
     });
   });
 
@@ -381,9 +381,42 @@ describe("physical network run evidence", () => {
     ];
 
     expect(buildPhysicalNetworkRunArtifact(input)).toMatchObject({
-      classification: "indeterminate",
+      classification: "network-invalid",
       network: {
-        verdict: "indeterminate",
+        reasons: expect.arrayContaining([
+          expect.objectContaining({ code: "device-control-round-trip-failed" }),
+        ]),
+        verdict: "network-invalid",
+      },
+    });
+  });
+
+  test("classifies a late production capability response even when every ping replies", () => {
+    /*
+     * A reachable ESP can still starve the real Cap'n Web path long enough to
+     * trigger the firmware's 500 ms stale-uplink policy. This is the exact
+     * failure signature seen on the physical Stick, and keeping all ping lanes
+     * green here prevents the test from accidentally passing for the easier
+     * ICMP reason instead of the application-path reason.
+     */
+    const input = healthyInput();
+    input.diagnostics = [
+      input.diagnostics[0]!,
+      {
+        completedAtMonotonicMs: 2_900,
+        diagnostics: diagnostics({ producedAtMs: 1_900 }),
+        outcome: "success",
+        startedAtMonotonicMs: 2_350,
+      },
+    ];
+
+    expect(buildPhysicalNetworkRunArtifact(input)).toMatchObject({
+      classification: "network-invalid",
+      network: {
+        reasons: expect.arrayContaining([
+          expect.objectContaining({ code: "device-control-round-trip-duration-exceeded" }),
+        ]),
+        verdict: "network-invalid",
       },
     });
   });

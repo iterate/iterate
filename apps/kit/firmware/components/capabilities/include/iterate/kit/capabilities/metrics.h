@@ -1,15 +1,15 @@
 #ifndef ITERATE_KIT_CAPABILITIES_METRICS_H
 #define ITERATE_KIT_CAPABILITIES_METRICS_H
 
-#include "iterate/kit/capabilities/callback_budget.h"
-#include "iterate/kit/buffer_metrics.h"
-#include "iterate/kit/peer.h"
-#include "iterate/kit/status.h"
-#include "iterate/kit/capabilities/subscription.h"
-
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "iterate/kit/buffer_metrics.h"
+#include "iterate/kit/capabilities/callback_budget.h"
+#include "iterate/kit/capabilities/subscription.h"
+#include "iterate/kit/peer.h"
+#include "iterate/kit/status.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -125,8 +125,8 @@ struct iterate_kit_playback_metrics_sample {
  * One bounded AEC signal window from a full-duplex audio owner.
  *
  * Peaks and mean absolute amplitudes describe the same sampled positions in
- * the pre-AEC near/reference streams and the post-AEC clean stream. That
- * alignment matters: three unrelated lifetime peaks cannot tell whether a
+ * the pre-AEC near/reference streams and the integrated post-AEC clean stream.
+ * That alignment matters: three unrelated lifetime peaks cannot tell whether a
  * physical utterance reached the microphone or whether AEC removed it. The
  * device intentionally publishes integer mean absolute amplitude rather than
  * RMS. It avoids square-root/floating-point work on the audio target while the
@@ -192,24 +192,69 @@ struct iterate_kit_aec_metrics_sample {
   uint32_t sampled_samples;
   uint32_t near_peak;
   uint32_t reference_peak;
-  uint32_t linear_peak;
   uint32_t clean_peak;
   uint32_t near_mean_absolute;
   uint32_t reference_mean_absolute;
-  uint32_t linear_mean_absolute;
   uint32_t clean_mean_absolute;
+  /*
+   * Schema 10 identifies the engine/frame/publication profile and exposes the
+   * exact effective gain for the two physical oracle windows. The fields are
+   * window semantics, not implementation taps: a constant-output FD profile
+   * uses the same gain for near-only and far-active intervals, while the
+   * retained VOIP control may publish different signals/gains in each.
+   */
+  uint32_t engine_profile;
+  uint32_t processing_frame_samples;
+  uint32_t near_window_gain_multiplier;
+  uint32_t far_window_gain_multiplier;
+  /*
+   * These are the codec operating point actually programmed at boot. A
+   * physical A/B that changes analogue headroom is otherwise impossible to
+   * identify from a retained callback: a local build path is not proof of
+   * which image produced the microphone samples.
+   */
+  uint32_t speaker_volume_percent;
+  uint32_t microphone_gain_db;
+  uint32_t reference_gain_db;
   uint32_t lifetime_frames_processed;
   uint32_t lifetime_recreates;
   uint32_t lifetime_recreate_failures;
-  uint32_t last_linear_us;
-  uint32_t maximum_linear_us;
-  uint32_t last_nlp_us;
-  uint32_t maximum_nlp_us;
+  /*
+   * ESP-SR VOIP owns linear cancellation, delay estimation, double-talk
+   * detection and residual suppression behind one call. Reporting invented
+   * per-stage timings would be false precision, so schema 5 exposes only the
+   * measured end-to-end DSP call duration. Schema 6 additionally proves that
+   * every near chunk was paired with the exact completed speaker-DMA chunk;
+   * loss or time skew resets the acoustic epoch instead of guessing. Schema 7
+   * defines `clean` as the actual selected uplink: raw near input while the
+   * exact speaker reference is silent, and processed AEC output while the
+   * speaker or its bounded acoustic tail is active. That distinction prevents
+   * diagnostics from describing a destructive internal tap that was not sent.
+   * Schema 8 publishes both selector gains so evidence can normalize those
+   * branches without weakening its preservation or suppression thresholds.
+   * Schema 9 removes the exact-TX pairing fiction: the electrical reference is
+   * capture-clock synchronous, and a playback-owned activity bit selects the
+   * published branch without allowing TX failure to block microphone capture.
+   * Schema 10 adds the explicit A/B profile/frame and generalizes gain names so
+   * one stable FD output is not misreported as a raw/processed selector.
+   * Schema 11 exposes every saturating conditioning/gain boundary and the
+   * programmed analogue operating point. Physical waveform evidence is
+   * invalid if any counter changes: exact delivery of a clipped signal is
+   * still information loss. Evidence from different codec gains must never be
+   * merged into one apparent run.
+   */
+  uint32_t last_process_us;
+  uint32_t maximum_process_us;
   uint32_t last_capture_to_uplink_us;
   uint32_t maximum_capture_to_uplink_us;
   uint32_t lifetime_capture_reserve_dropped_chunks;
+  uint32_t lifetime_capture_chunks_with_playback_content;
+  uint32_t lifetime_capture_chunks_without_playback_content;
   uint32_t lifetime_capture_bridge_errors;
   uint32_t lifetime_signal_measurement_failures;
+  uint32_t lifetime_reference_scale_clipped_samples;
+  uint32_t lifetime_near_high_pass_clipped_samples;
+  uint32_t lifetime_uplink_gain_clipped_samples;
   struct iterate_kit_synchronous_playback_health_sample playback_health;
 };
 
@@ -220,9 +265,9 @@ struct iterate_kit_aec_metrics_sample {
  * Some audio coprocessors expose the original microphone and a selected
  * processed AEC+IC+NS output on the same I2S capture edge, but do not
  * expose the internal far-end reference. The processed path has intentional
- * different transfer, so equal-gain raw/processed division is not an AEC metric;
- * the acceptance harness first measures that transfer on live near-end speech.
- * This is not a degraded three-tap sample: it is a different, truthful
+ * different transfer, so equal-gain raw/processed division is not an AEC
+ * metric; the acceptance harness first measures that transfer on live near-end
+ * speech. This is not a degraded three-tap sample: it is a different, truthful
  * topology. `playback_content_samples` counts physically submitted non-silence
  * in the same monotonic window, which lets a harness identify a speaker-only
  * interval without labelling intended playback as a measured AEC reference.
@@ -476,8 +521,7 @@ struct iterate_kit_metrics_sample {
   bool has_control_diagnostics;
   struct iterate_kit_control_diagnostics_sample control_diagnostics;
   bool has_raw_clean_aec_detail;
-  struct iterate_kit_raw_clean_aec_metrics_sample
-      raw_clean_aec_detail;
+  struct iterate_kit_raw_clean_aec_metrics_sample raw_clean_aec_detail;
   bool has_avatar_detail;
   struct iterate_kit_avatar_metrics_sample avatar_detail;
   /*
@@ -496,8 +540,8 @@ struct iterate_kit_metrics_driver {
    * I/O. It runs only when at least one subscriber is ready, so expensive
    * collection would otherwise steal time from the device/audio owner loop.
    */
-  enum iterate_kit_status (*sample)(
-      void *context, struct iterate_kit_metrics_sample *sample);
+  enum iterate_kit_status (*sample)(void *context,
+                                    struct iterate_kit_metrics_sample *sample);
 };
 
 struct iterate_kit_metrics;

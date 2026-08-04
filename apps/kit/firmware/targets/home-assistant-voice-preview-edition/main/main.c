@@ -8,6 +8,7 @@
 #include "iterate/kit/platforms/voice_pe_audio_owner.h"
 #include "iterate/kit/platforms/esp_idf_configuration.h"
 #include "iterate/kit/platforms/esp_idf_itx_transport.h"
+#include "iterate/kit/platforms/esp_idf_pcm_session.h"
 #include "iterate/kit/platforms/esp_idf_pcm_transport.h"
 #include "iterate/kit/platforms/esp_idf_websocket_policy.h"
 #include "iterate/kit/spsc_ring.h"
@@ -119,6 +120,9 @@
 #define HAVPE_PCM_DOWNLINK_RING_SLOTS \
   (HAVPE_PCM_DOWNLINK_RESERVE_MS / HAVPE_PCM_FRAME_DURATION_MS)
 #define HAVPE_MAIN_LOOP_DELAY_MS 10U
+#define HAVPE_AEC_TRACE_SAMPLES ITERATE_KIT_VOICE_PE_CAPTURE_RATE_HZ
+#define HAVPE_AEC_TRACE_READ_SAMPLES \
+  ITERATE_KIT_VOICE_PE_CAPTURE_FRAME_SAMPLES
 
 static const char *const TAG = "iterate-havpe";
 /*
@@ -186,6 +190,17 @@ EXT_RAM_BSS_ATTR static uint8_t
 EXT_RAM_BSS_ATTR static uint8_t
     control_outbox_storage[HAVPE_CONTROL_OUTBOX_SLOTS]
                             [HAVPE_CONTROL_SLOT_CAPACITY];
+/*
+ * XMOS exports same-time raw and clean microphone taps only. These two
+ * one-second PSRAM planes cost 64,000 bytes. Reference/playout/linear remain
+ * absent rather than becoming zero-filled storage misreported as real taps.
+ */
+EXT_RAM_BSS_ATTR static int16_t
+    aec_trace_near[HAVPE_AEC_TRACE_SAMPLES];
+EXT_RAM_BSS_ATTR static int16_t
+    aec_trace_clean[HAVPE_AEC_TRACE_SAMPLES];
+EXT_RAM_BSS_ATTR static int16_t
+    aec_trace_read_scratch[HAVPE_AEC_TRACE_READ_SAMPLES * 5U];
 
 struct havpe_runtime {
   struct iterate_kit_configuration configuration;
@@ -218,8 +233,11 @@ struct havpe_runtime {
 
   struct iterate_kit_esp_idf_itx_transport control_transport;
   struct iterate_kit_esp_idf_pcm_transport pcm_transport;
+  struct iterate_kit_esp_idf_pcm_session pcm_session;
   led_strip_handle_t leds;
   struct iterate_kit_voice_satellite device;
+  struct iterate_kit_aec_diagnostic_trace aec_trace;
+  struct iterate_kit_aec_diagnostic_trace_capability aec_trace_capability;
   struct iterate_kit_audio_intent_reconciler audio_intent;
   struct iterate_kit_cpu_usage_meter cpu_usage;
   struct iterate_kit_debounced_button center_button;
@@ -232,15 +250,12 @@ struct havpe_runtime {
   uint64_t next_ring_network_sample_ms;
   uint64_t ring_manual_override_until_ms;
   enum iterate_kit_esp_idf_itx_transport_state last_control_state;
-  enum iterate_kit_esp_idf_pcm_transport_state last_pcm_state;
   enum iterate_kit_status last_audio_intent_status;
   int32_t wifi_rssi_dbm;
   bool wifi_observed;
   bool ring_power_enabled;
   bool ring_frame_valid;
   bool ring_write_failure_latched;
-  bool pcm_started;
-  bool pcm_start_attempted_for_conversation;
 };
 
 static struct havpe_runtime runtime;
@@ -637,6 +652,27 @@ static void request_playback_reset(void *context) {
   iterate_kit_voice_pe_audio_owner_request_playback_reset();
 }
 
+static bool pcm_conversation_active(void *context) {
+  const struct havpe_runtime *state = context;
+  return state != NULL &&
+      iterate_kit_voice_satellite_is_conversation_active(&state->device);
+}
+
+static enum iterate_kit_status set_pcm_media_ready(
+    void *context, bool ready) {
+  struct havpe_runtime *state = context;
+  if (state == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  /*
+   * XMOS capture remains a target-owned physical pipeline; authorization to
+   * publish it does not. The shared owner supplies the same gate used by Stick
+   * and StackChan, while this hook only records it for the audio task.
+   */
+  return iterate_kit_audio_intent_reconciler_set_media_ready(
+      &state->audio_intent, ready);
+}
+
 static void notify_uplink(void *context) {
   struct havpe_runtime *state = context;
   if (state != NULL) {
@@ -847,12 +883,11 @@ static void update_status_ring(
   input.wifi_rssi_dbm = state->wifi_rssi_dbm;
   input.conversation_active =
       iterate_kit_voice_satellite_is_conversation_active(&state->device);
-  input.media_ready = state->pcm_started &&
-      state->pcm_transport.state == ITERATE_KIT_ESP_IDF_PCM_READY;
-  input.media_failed = state->pcm_started &&
-      state->pcm_transport.state == ITERATE_KIT_ESP_IDF_PCM_FAILED;
-  input.microphone_listening =
-      input.conversation_active && input.media_ready;
+  input.media_ready = iterate_kit_esp_idf_pcm_session_media_ready(
+      &state->pcm_session);
+  input.media_failed = iterate_kit_esp_idf_pcm_session_failed(
+      &state->pcm_session);
+  input.microphone_listening = input.media_ready;
   input.microphone_peak = activity.microphone_peak;
   input.speaker_peak = activity.speaker_peak;
   input.restart_armed = state->center_button_gesture.restart_armed;
@@ -1027,6 +1062,17 @@ static bool initialise_device(struct havpe_runtime *state) {
   struct iterate_kit_voice_satellite_options device_options;
   struct iterate_kit_audio_intent_ops audio_ops;
   struct iterate_kit_voice_satellite_control_driver control_driver;
+  const struct iterate_kit_aec_diagnostic_trace_options trace_options = {
+      .sample_rate_hz = ITERATE_KIT_VOICE_PE_CAPTURE_RATE_HZ,
+      .frame_samples = ITERATE_KIT_VOICE_PE_CAPTURE_FRAME_SAMPLES,
+      .capture_samples = HAVPE_AEC_TRACE_SAMPLES,
+      .available_planes = ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_NEAR |
+          ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_CLEAN,
+      .near_samples = aec_trace_near,
+      .clean_samples = aec_trace_clean,
+  };
+  struct iterate_kit_aec_diagnostic_trace_capability_options
+      trace_capability_options;
 
   /*
    * HAVPE exposes only hardware it really owns. Screen/camera/servo methods
@@ -1034,6 +1080,24 @@ static bool initialise_device(struct havpe_runtime *state) {
    * physical capability and doubles as an unattended remote-call oracle.
    */
   if (!initialise_leds(state)) {
+    return false;
+  }
+  if (iterate_kit_aec_diagnostic_trace_init(
+          &state->aec_trace, &trace_options) != ITERATE_KIT_OK) {
+    return false;
+  }
+  trace_capability_options =
+      (struct iterate_kit_aec_diagnostic_trace_capability_options){
+          .trace = &state->aec_trace,
+          .read_scratch = aec_trace_read_scratch,
+          .read_scratch_values =
+              sizeof(aec_trace_read_scratch) /
+              sizeof(aec_trace_read_scratch[0]),
+          .maximum_read_samples = HAVPE_AEC_TRACE_READ_SAMPLES,
+      };
+  if (iterate_kit_aec_diagnostic_trace_capability_init(
+          &state->aec_trace_capability,
+          &trace_capability_options) != ITERATE_KIT_OK) {
     return false;
   }
 
@@ -1074,6 +1138,7 @@ static bool initialise_device(struct havpe_runtime *state) {
       state->diagnostics_expression;
   device_options.metrics.diagnostics_expression_capacity =
       sizeof(state->diagnostics_expression);
+  device_options.aec_trace = &state->aec_trace_capability;
   if (iterate_kit_voice_satellite_init(
           &state->device, &device_options) != CAPNWEB_OK) {
     return false;
@@ -1107,6 +1172,7 @@ static bool initialise_device(struct havpe_runtime *state) {
 static bool initialise_connections(struct havpe_runtime *state) {
   struct iterate_kit_esp_idf_itx_transport_options control_options;
   struct iterate_kit_esp_idf_pcm_transport_options pcm_options;
+  struct iterate_kit_esp_idf_pcm_session_options pcm_session_options;
   struct iterate_kit_itx_connection_options connection_options;
 
   memset(&control_options, 0, sizeof(control_options));
@@ -1137,6 +1203,17 @@ static bool initialise_connections(struct havpe_runtime *state) {
           &state->pcm_transport, &pcm_options) != ITERATE_KIT_OK) {
     return false;
   }
+  memset(&pcm_session_options, 0, sizeof(pcm_session_options));
+  pcm_session_options.control_transport = &state->control_transport;
+  pcm_session_options.pcm_transport = &state->pcm_transport;
+  pcm_session_options.hook_context = state;
+  pcm_session_options.conversation_active = pcm_conversation_active;
+  pcm_session_options.set_media_ready = set_pcm_media_ready;
+  pcm_session_options.log_tag = TAG;
+  if (iterate_kit_esp_idf_pcm_session_prepare(
+          &state->pcm_session, &pcm_session_options) != ITERATE_KIT_OK) {
+    return false;
+  }
 
   memset(&connection_options, 0, sizeof(connection_options));
   connection_options.pending_calls = state->pending_calls;
@@ -1162,116 +1239,6 @@ static bool initialise_connections(struct havpe_runtime *state) {
   connection_options.session_ended_context = state;
   return iterate_kit_itx_connection_init(
              &state->connection, &connection_options) == CAPNWEB_OK;
-}
-
-static void reconcile_pcm_conversation(struct havpe_runtime *state) {
-  const bool active =
-      iterate_kit_voice_satellite_is_conversation_active(&state->device);
-
-  if (state->pcm_started &&
-      state->pcm_transport.state == ITERATE_KIT_ESP_IDF_PCM_STOPPING) {
-    const enum iterate_kit_status status =
-        iterate_kit_esp_idf_pcm_transport_finish_stop(
-            &state->pcm_transport);
-    if (status == ITERATE_KIT_OK) {
-      state->pcm_started = false;
-      state->pcm_start_attempted_for_conversation = false;
-      ESP_LOGI(TAG, "pcm conversation stopped");
-    } else if (status != ITERATE_KIT_UNAVAILABLE) {
-      ESP_LOGE(TAG, "pcm stop reap failed: status=%d", (int)status);
-    }
-  } else if (!active && state->pcm_started) {
-    enum iterate_kit_status status =
-        iterate_kit_esp_idf_pcm_transport_request_stop(
-            &state->pcm_transport);
-    if (status == ITERATE_KIT_OK) {
-      status = iterate_kit_esp_idf_pcm_transport_finish_stop(
-          &state->pcm_transport);
-    }
-    if (status == ITERATE_KIT_OK) {
-      state->pcm_started = false;
-      state->pcm_start_attempted_for_conversation = false;
-      ESP_LOGI(TAG, "pcm conversation stopped");
-    } else if (status != ITERATE_KIT_UNAVAILABLE) {
-      ESP_LOGE(TAG, "pcm stop failed: status=%d", (int)status);
-    }
-  } else if (!active) {
-    /*
-     * A failed initial connect retries only after a deliberate new
-     * conversation. This prevents a 10 ms DNS/TLS retry storm during outage.
-     */
-    state->pcm_start_attempted_for_conversation = false;
-  }
-
-  if (active && !state->pcm_started &&
-      !state->pcm_start_attempted_for_conversation &&
-      state->control_transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
-    const enum iterate_kit_status status =
-        iterate_kit_esp_idf_pcm_transport_start(&state->pcm_transport);
-    state->pcm_start_attempted_for_conversation = true;
-    if (status == ITERATE_KIT_OK) {
-      state->pcm_started = true;
-    } else {
-      ESP_LOGE(
-          TAG,
-          "pcm start failed: status=%d platform=%ld",
-          (int)status,
-          (long)state->pcm_transport.last_platform_error);
-    }
-  }
-
-  if (state->pcm_started &&
-      state->pcm_transport.state != ITERATE_KIT_ESP_IDF_PCM_STOPPING) {
-    const enum iterate_kit_status status =
-        iterate_kit_esp_idf_pcm_transport_poll(&state->pcm_transport);
-    if (status != ITERATE_KIT_OK &&
-        state->pcm_transport.state != state->last_pcm_state) {
-      ESP_LOGE(
-          TAG,
-          "pcm transition failed: state=%s status=%d platform=%ld",
-          iterate_kit_esp_idf_pcm_transport_state_name(
-              state->pcm_transport.state),
-          (int)status,
-          (long)state->pcm_transport.last_platform_error);
-    }
-    if (state->pcm_transport.state != state->last_pcm_state) {
-      struct iterate_kit_esp_idf_pcm_transport_metrics pcm;
-      memset(&pcm, 0, sizeof(pcm));
-      iterate_kit_esp_idf_pcm_transport_metrics(
-          &state->pcm_transport, &pcm);
-      /*
-       * Connection churn has several materially different causes: a peer
-       * CLOSE, a lower-transport read/write failure, local ordered-item loss,
-       * or a deliberate freshness restart. A bare "connecting" line erased
-       * that distinction and encouraged guessing from the later 1006 observed
-       * by userspace. Emit one bounded transition record with the counters
-       * needed to classify the interval; never log per PCM frame or per idle
-       * socket probe because serial output itself can perturb audio deadlines.
-       */
-      ESP_LOGI(
-          TAG,
-          "pcm state=%s platform=%ld connections=%lu disconnects=%lu "
-          "errors=%lu protocol=%lu rx_calls=%lu rx_chunks=%lu "
-          "pings=%lu pongs=%lu control_bp=%lu ordered_losses=%lu "
-          "uplink_socket_restarts=%lu",
-          iterate_kit_esp_idf_pcm_transport_state_name(
-              state->pcm_transport.state),
-          (long)pcm.last_platform_error,
-          (unsigned long)pcm.websocket_connections,
-          (unsigned long)pcm.websocket_disconnects,
-          (unsigned long)pcm.websocket_errors,
-          (unsigned long)pcm.protocol_failures,
-          (unsigned long)pcm.websocket_receive_calls,
-          (unsigned long)pcm.websocket_receive_chunks,
-          (unsigned long)pcm.websocket_pings_received,
-          (unsigned long)pcm.websocket_pongs_received,
-          (unsigned long)pcm.websocket_control_backpressure,
-          (unsigned long)pcm.downlink_ordered_item_losses,
-          (unsigned long)pcm.uplink_socket_restarts);
-      state->last_pcm_state = state->pcm_transport.state;
-    }
-  }
-
 }
 
 void app_main(void) {
@@ -1317,8 +1284,13 @@ void app_main(void) {
       HAVPE_MAXIMUM_DOWNLINK_FRAME_AGE_MS;
   audio_options.maximum_lane_items_per_playback_edge =
       HAVPE_MAXIMUM_LANE_ITEMS_PER_PLAYBACK_EDGE;
+  audio_options.diagnostic_trace = &runtime.aec_trace;
   audio_options.notify_uplink = notify_uplink;
   audio_options.notify_uplink_context = &runtime;
+  audio_options.downlink_item_released =
+      iterate_kit_esp_idf_pcm_transport_note_downlink_item_released;
+  audio_options.downlink_item_released_context =
+      &runtime.pcm_transport;
   if (iterate_kit_voice_pe_audio_owner_start(&audio_options) != ESP_OK) {
     ESP_LOGE(TAG, "HAVPE audio owner failed to start");
     return;
@@ -1354,7 +1326,6 @@ void app_main(void) {
         iterate_kit_voice_satellite_poll(
             &runtime.device, now_ms);
     enum iterate_kit_status intent_status;
-    enum iterate_kit_status media_readiness_status;
     enum iterate_kit_status control_status;
 
     if (device_poll.status == ITERATE_KIT_POLL_CALLBACK_REJECTED) {
@@ -1372,39 +1343,6 @@ void app_main(void) {
           (int)device_poll.status,
           (int)device_poll.capnweb_status);
     }
-
-    /*
-     * The control event makes the conversation logically active before the
-     * independent media WebSocket is ready. Gate clean publication on the
-     * conjunction here: opening early previously lost one 20 ms frame on
-     * every call, while retaining frames would create exactly the latency
-     * backlog this firmware forbids. Conversation inactivity also closes the
-     * gate before the transport owner begins its bounded stop.
-     */
-    media_readiness_status =
-        iterate_kit_audio_intent_reconciler_set_media_ready(
-            &runtime.audio_intent,
-            iterate_kit_voice_satellite_is_conversation_active(
-                &runtime.device) &&
-            runtime.pcm_transport.state ==
-                ITERATE_KIT_ESP_IDF_PCM_READY);
-    if (media_readiness_status != ITERATE_KIT_OK) {
-      ESP_LOGE(
-          TAG,
-          "media readiness reconcile failed: status=%d",
-          (int)media_readiness_status);
-    }
-    intent_status =
-        iterate_kit_audio_intent_reconciler_poll(&runtime.audio_intent);
-    if (intent_status != ITERATE_KIT_OK &&
-        intent_status != ITERATE_KIT_BACKPRESSURE &&
-        intent_status != runtime.last_audio_intent_status) {
-      ESP_LOGE(
-          TAG,
-          "audio intent failed: status=%d",
-          (int)intent_status);
-    }
-    runtime.last_audio_intent_status = intent_status;
 
     control_status = iterate_kit_esp_idf_itx_transport_poll(
         &runtime.control_transport,
@@ -1428,7 +1366,23 @@ void app_main(void) {
       runtime.last_control_state = runtime.control_transport.state;
     }
 
-    reconcile_pcm_conversation(&runtime);
+    /*
+     * HAVPE supplies only its call-state fact and the hardware intent adapter.
+     * Boot prewarm, control-generation fencing, bounded raw reconnect, and the
+     * exact conversation/media conjunction all belong to the shared owner.
+     */
+    (void)iterate_kit_esp_idf_pcm_session_poll(&runtime.pcm_session);
+    intent_status =
+        iterate_kit_audio_intent_reconciler_poll(&runtime.audio_intent);
+    if (intent_status != ITERATE_KIT_OK &&
+        intent_status != ITERATE_KIT_BACKPRESSURE &&
+        intent_status != runtime.last_audio_intent_status) {
+      ESP_LOGE(
+          TAG,
+          "audio intent failed: status=%d",
+          (int)intent_status);
+    }
+    runtime.last_audio_intent_status = intent_status;
     update_status_ring(&runtime, now_ms);
     /*
      * Audio owners are already blocked on physical codec/DMA clocks at higher

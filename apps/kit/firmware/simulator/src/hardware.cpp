@@ -62,7 +62,6 @@ iterate_kit_status changeSpriteSet(
    */
   static constexpr const char *known[] = {
     "dot-matrix-oracle",
-    "gameboy-fine-black",
     "karakuri-brass",
     "starbyte",
   };
@@ -158,7 +157,14 @@ iterate_kit_status sampleMetrics(
    */
   sample->has_aec_detail = true;
   auto &aec = sample->aec_detail;
-  aec.schema_version = 3U;
+  aec.schema_version = 11U;
+  aec.engine_profile = 1U;
+  aec.processing_frame_samples = 256U;
+  aec.near_window_gain_multiplier = 6U;
+  aec.far_window_gain_multiplier = 8U;
+  aec.speaker_volume_percent = 90U;
+  aec.microphone_gain_db = 24U;
+  aec.reference_gain_db = 0U;
   aec.sequence = detail.sequence;
   aec.window_started_at_ms = sample->uptime_ms;
   aec.produced_at_ms = sample->uptime_ms;
@@ -166,24 +172,31 @@ iterate_kit_status sampleMetrics(
   aec.sampled_samples = 2'000U;
   aec.near_peak = 12'000U;
   aec.reference_peak = 10'000U;
-  aec.linear_peak = 4'000U;
   aec.clean_peak = 1'500U;
   aec.near_mean_absolute = 2'400U;
   aec.reference_mean_absolute = 2'000U;
-  aec.linear_mean_absolute = 800U;
   aec.clean_mean_absolute = 300U;
   aec.lifetime_frames_processed = 31U;
   aec.lifetime_recreates = 1U;
   aec.lifetime_recreate_failures = 0U;
-  aec.last_linear_us = 1'100U;
-  aec.maximum_linear_us = 1'300U;
-  aec.last_nlp_us = 240U;
-  aec.maximum_nlp_us = 280U;
+  aec.last_process_us = 1'340U;
+  aec.maximum_process_us = 1'580U;
   aec.last_capture_to_uplink_us = 3'100U;
   aec.maximum_capture_to_uplink_us = 3'500U;
   aec.lifetime_capture_reserve_dropped_chunks = 0U;
+  aec.lifetime_capture_chunks_with_playback_content = 18U;
+  aec.lifetime_capture_chunks_without_playback_content = 44U;
   aec.lifetime_capture_bridge_errors = 0U;
   aec.lifetime_signal_measurement_failures = 0U;
+  /*
+   * Saturation is an audio-integrity failure, not an implementation detail:
+   * once a sample clips, no later AEC oracle can distinguish the original
+   * waveform. Keep these fixtures at zero so the simulator proves the fields
+   * traverse Cap'n Web without pretending that host-only data validates DSP.
+   */
+  aec.lifetime_reference_scale_clipped_samples = 0U;
+  aec.lifetime_near_high_pass_clipped_samples = 0U;
+  aec.lifetime_uplink_gain_clipped_samples = 0U;
   /*
    * These are serializer fixtures, not simulated acoustics. Non-zero progress
    * plus zero incident counters prove that the shared synchronous-playback

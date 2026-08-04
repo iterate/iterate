@@ -1,5 +1,9 @@
 import { createWebSocketResponse, WebSocketPair } from "captun";
 import { z } from "zod";
+import {
+  decodePcmDownlinkReleaseReceipt,
+  ITERATE_KIT_PCM_DOWNLINK_RELEASE_RECEIPT_BYTES,
+} from "./device-pcm-wire.ts";
 import { nextPcmFrameDeadline } from "./pcm-frame-pacer.ts";
 
 export const ITERATE_KIT_PCM_SUBPROTOCOL = "iterate.kit.pcm.v1";
@@ -570,7 +574,11 @@ class DevicePcmProxySession implements Disposable {
       this.#relayDeviceBytes(bytes);
       return;
     }
-    if (!(data instanceof Blob) || data.size !== this.#frameBytes) {
+    if (
+      !(data instanceof Blob) ||
+      (data.size !== this.#frameBytes &&
+        data.size !== ITERATE_KIT_PCM_DOWNLINK_RELEASE_RECEIPT_BYTES)
+    ) {
       this.#fail("invalid-pcm-uplink-frame-size", applicationCloseCode.protocolError);
       return;
     }
@@ -592,7 +600,14 @@ class DevicePcmProxySession implements Disposable {
   }
 
   #relayDeviceBytes(bytes: Uint8Array) {
-    if (!bytes || bytes.byteLength !== this.#frameBytes) {
+    /*
+     * Production userspace turns this cumulative hardware fact into finite
+     * playback credit. This local proxy deliberately owns no such ledger—it
+     * can pace its deterministic source independently—but it shares the exact
+     * device wire and must keep the control message out of provider PCM.
+     */
+    if (decodePcmDownlinkReleaseReceipt(bytes) !== null) return;
+    if (bytes.byteLength !== this.#frameBytes) {
       this.#fail("invalid-pcm-uplink-frame-size", applicationCloseCode.protocolError);
       return;
     }
@@ -668,13 +683,19 @@ class DevicePcmProxySession implements Disposable {
     });
     if (event.data.type === "response.created") {
       this.#responseActive = true;
-      if (this.#inputMode === "push-to-talk") {
-        if (this.#inputActive) {
-          this.#sendProviderControl("response.cancel");
-        } else if (this.#responseRequested) {
-          this.#responseRequested = false;
-          this.#suppressDownlink = false;
-        }
+      if (this.#inputMode === "push-to-talk" && this.#inputActive) {
+        this.#sendProviderControl("response.cancel");
+      } else if (this.#responseRequested) {
+        /*
+         * `requestTextResponse()` is a control-plane interruption primitive,
+         * not a push-to-talk primitive. It suppresses all old provider audio
+         * before requesting a new generation, then this exact provider event
+         * releases only that generation. Server-VAD AEC experiments use the
+         * same primitive while microphone PCM remains live, so coupling the
+         * release to input mode discarded their entire deterministic source.
+         */
+        this.#responseRequested = false;
+        this.#suppressDownlink = false;
       }
     }
     if (event.data.type === "response.done") {

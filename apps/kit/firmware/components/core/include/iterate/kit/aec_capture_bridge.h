@@ -12,7 +12,7 @@ extern "C" {
 #endif
 
 /**
- * Processes one device-native, clock-aligned near/reference frame.
+ * Processes one device-native, clock-aligned near/reference/playout frame.
  *
  * The callback is synchronous, single-owner, non-blocking, and allocation
  * free. It must write exactly sample_count clean samples. A non-OK result is
@@ -23,6 +23,7 @@ typedef enum iterate_kit_status (*iterate_kit_aec_process_fn)(
     void *context,
     const int16_t *near_samples,
     const int16_t *reference_samples,
+    const int16_t *playout_samples,
     int16_t *clean_samples,
     size_t sample_count);
 
@@ -58,13 +59,20 @@ struct iterate_kit_aec_capture_bridge_options {
   size_t egress_frame_samples;
 
   /*
-   * All four buffers are caller-owned, non-overlapping, and retained for the
-   * bridge lifetime. Near/reference/clean need processing_frame_capacity;
-   * egress needs egress_frame_capacity. This explicit storage envelope keeps
-   * internal-RAM cost visible in the target's resource report.
+   * All five buffers are caller-owned, non-overlapping, and retained for the
+   * bridge lifetime. Near/reference/playout/clean need
+   * processing_frame_capacity; egress needs egress_frame_capacity. Reference
+   * is the capture-clock-synchronous physical loudspeaker feedback presented
+   * to AEC. Playout is a caller-defined, capture-aligned far-active signal;
+   * CoreS3 currently fills it with a one/zero activity mask rather than
+   * pretending the bridge contains exact amplifier output. Keeping that
+   * policy signal separate from analogue feedback prevents noise or nonlinear
+   * distortion from selecting the uplink branch. This explicit storage
+   * envelope keeps internal-RAM cost visible in the target's resource report.
    */
   int16_t *near_frame;
   int16_t *reference_frame;
+  int16_t *playout_frame;
   int16_t *clean_frame;
   size_t processing_frame_capacity;
   int16_t *egress_frame;
@@ -99,12 +107,16 @@ struct iterate_kit_aec_capture_bridge_metrics {
 /**
  * Allocation-free bridge between a board's AEC cadence and PCM v1 cadence.
  *
- * CoreS3 is the motivating case: its standalone AEC processes 512 samples
- * while PCM v1 sends 320. Keeping either as a FIFO of whole frames produces a
+ * CoreS3 is the motivating case: its VOIP AEC processes 256 samples while PCM
+ * v1 sends 320. Keeping either as a FIFO of whole frames produces a
  * beat-pattern backlog. Instead, one owner copies aligned DMA chunks into one
  * DSP frame and drains clean samples through one partial wire frame. Storage
- * is therefore exactly three DSP frames plus one wire frame, with no task,
- * lock, allocation, retry, or hidden capacity.
+ * is therefore exactly four DSP frames plus one wire frame, with no task,
+ * lock, allocation, retry, or hidden capacity. The fourth frame is deliberate:
+ * aliasing the synchronous physical feedback with playback-activity metadata
+ * would make either AEC quality or far-active selection depend on the wrong
+ * signal. The bridge carries both without claiming the activity mask is an
+ * exact copy of the PCM that physically left the amplifier.
  *
  * A non-contiguous DMA sequence destroys both raw and clean partial epochs and
  * resets the processor before the new chunk is accepted. An egress rejection
@@ -133,14 +145,19 @@ enum iterate_kit_status iterate_kit_aec_capture_bridge_init(
     const struct iterate_kit_aec_capture_bridge_options *options);
 
 /**
- * Copies one clock-contiguous pair of near/reference DMA chunks.
+ * Copies one clock-contiguous near/reference set plus its far-active policy.
  *
  * sequence identifies the capture DMA completion and must increment once per
- * call (uint32 wrap is valid). The two pointers must describe samples from the
- * same hardware completion; this abstraction cannot prove electrical or
- * cross-peripheral alignment. captured_through_at_us timestamps the final
- * sample. The call may synchronously process/copy multiple output frames but
- * never waits for a consumer.
+ * call (uint32 wrap is valid). Near and reference must describe samples from
+ * the same capture completion. Playout is deliberately only a caller-defined,
+ * capture-aligned far-active policy signal; the bridge must not make capture
+ * wait for a speaker-completion callback in an attempt to manufacture a third
+ * clock domain. CoreS3 therefore supplies an activity mask sampled by the RX
+ * callback, while another adapter may supply a more exact capture-aligned tap.
+ * This abstraction cannot prove electrical or acoustic alignment.
+ * captured_through_at_us timestamps the final near/reference sample. The call
+ * may synchronously process/copy multiple output frames but never waits for a
+ * consumer.
  */
 enum iterate_kit_status iterate_kit_aec_capture_bridge_push_aligned(
     struct iterate_kit_aec_capture_bridge *bridge,
@@ -148,6 +165,7 @@ enum iterate_kit_status iterate_kit_aec_capture_bridge_push_aligned(
     uint64_t captured_through_at_us,
     const int16_t *near_samples,
     const int16_t *reference_samples,
+    const int16_t *playout_samples,
     size_t sample_count);
 
 /**

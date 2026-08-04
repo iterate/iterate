@@ -24,7 +24,11 @@ interface InstallProject {
   };
   secrets: {
     get(path: string): {
-      __describe(): Promise<{ created: boolean }>;
+      __describe(): Promise<{
+        created: boolean;
+        egress?: { urls: string[] };
+        hasMaterial?: boolean;
+      }>;
       create(input: { egress: { urls: string[] }; material: unknown }): Promise<unknown>;
       update(input: { egress: { urls: string[] }; material: unknown }): Promise<unknown>;
     };
@@ -60,7 +64,8 @@ export interface InstallKitVoiceResult {
  *
  * On apply, the order is deliberate:
  *
- * 1. Pin the provider key before any source can reference it.
+ * 1. Prove that the provider key already exists with the correct egress pin,
+ *    or write the supplied replacement, before source can reference it.
  * 2. Commit the complete worker source as one repository mutation.
  * 3. Flip the tiny mode knob last.
  * 4. Abort the old stateful incarnation so the next device reconnect must
@@ -99,15 +104,32 @@ export async function installKitVoiceUserspace(
 
   if (plan.requiresGrokSecret) {
     const xaiApiKey = options.xaiApiKey?.trim();
-    if (!xaiApiKey) {
-      throw new Error("XAI_API_KEY is required when applying Grok mode.");
-    }
     const secret = options.project.secrets.get(KIT_VOICE_XAI_SECRET_PATH);
     const description = await secret.__describe();
-    if (description.created) {
-      await secret.update({ egress: XAI_EGRESS_POLICY, material: xaiApiKey });
+    if (xaiApiKey) {
+      if (description.created) {
+        await secret.update({ egress: XAI_EGRESS_POLICY, material: xaiApiKey });
+      } else {
+        await secret.create({ egress: XAI_EGRESS_POLICY, material: xaiApiKey });
+      }
     } else {
-      await secret.create({ egress: XAI_EGRESS_POLICY, material: xaiApiKey });
+      /*
+       * Secret material is intentionally write-only. A source-only upgrade
+       * must not demand plaintext merely to write the same credential again;
+       * the public description is sufficient to prove both availability and
+       * the immutable egress boundary. Refuse any ambiguous state before the
+       * repo mutation so a failed install remains completely non-partial.
+       */
+      if (!description.created || description.hasMaterial !== true) {
+        throw new Error("XAI_API_KEY is required when no populated Grok secret exists.");
+      }
+      if (
+        description.egress !== undefined &&
+        (description.egress.urls.length !== XAI_EGRESS_POLICY.urls.length ||
+          description.egress.urls[0] !== XAI_EGRESS_POLICY.urls[0])
+      ) {
+        throw new Error("The existing Grok secret is not pinned exclusively to https://api.x.ai.");
+      }
     }
   }
 

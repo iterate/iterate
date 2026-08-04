@@ -38,6 +38,15 @@ extern "C" {
 struct iterate_kit_core_s3_capture_chunk {
   uint32_t sequence;
   uint64_t captured_through_at_us;
+  /*
+   * This is metadata from the playback owner, not another PCM timeline. The
+   * owner renders and writes one speaker edge immediately before reading the
+   * matching microphone edge, so it can attach whether that edge contained
+   * response audio without making capture wait for a TX-completion callback.
+   * A stale or conservative true only selects the already-current AEC output;
+   * it can never queue, delay, or suppress the captured edge itself.
+   */
+  bool playback_content_active;
   int16_t interleaved[ITERATE_KIT_CORE_S3_DMA_INTERLEAVED_SAMPLES];
 };
 
@@ -133,6 +142,7 @@ iterate_kit_core_s3_capture_reserve_push_raw(
     struct iterate_kit_core_s3_capture_reserve *reserve,
     uint32_t sequence,
     uint64_t captured_through_at_us,
+    bool playback_content_active,
     const void *pcm,
     size_t bytes);
 

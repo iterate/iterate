@@ -12,6 +12,10 @@
 extern "C" {
 #endif
 
+typedef void (*iterate_kit_pcm_clock_playback_item_released_fn)(
+    void *context,
+    uint32_t released_items);
+
 struct iterate_kit_pcm_clock_playback_options {
   struct iterate_kit_pcm_lane *lane;
 
@@ -37,6 +41,45 @@ struct iterate_kit_pcm_clock_playback_options {
    * deep queue cannot consume an entire hardware deadline in one call.
    */
   size_t maximum_lane_items_per_render;
+
+  /*
+   * Minimum number of complete ordered lane items required before an inactive
+   * response may begin. WebSocket delivery exposes complete messages one at a
+   * time even when userspace already owns a healthy response reservoir. If the
+   * codec starts on the first message, ordinary packetization can turn the
+   * following hardware edge into an audible underrun.
+   *
+   * This is a finite startup cushion, not a jitter queue: it is consulted only
+   * while no response is active and never refills or delays an active response.
+   * A first current frame may be held in the single retained-frame workspace
+   * while the producer refills the slots freed by a bounded stale-epoch scan;
+   * that private frame counts as one item toward this watermark.
+   * A queued ordered EOS bypasses it because EOS proves that every frame in a
+   * shorter response is already local. Zero preserves immediate-start behavior
+   * for platforms or tests that deliberately do not need a cushion.
+   */
+  size_t minimum_start_items;
+
+  /*
+   * Optional capacity-credit seam invoked after ordered lane items are
+   * successfully released by the hardware-clocked consumer. Ordinary render
+   * calls report one; an interruption purge reports its bounded epoch in one
+   * bulk call so the priority audio task does not issue one task wake per item.
+   * This is not an
+   * audible-sample acknowledgement: a PCM frame has first been copied into the
+   * fixed retained_frame above, and an EOS marker carries no samples. It does
+   * prove that exactly one finite downlink-ring slot is reusable.
+   *
+   * The callback runs inside the highest-priority playback task. It must be
+   * bounded, allocation-free, nonblocking, and must never perform networking,
+   * logging, or lock acquisition. A platform adapter may use an atomic counter
+   * here and let its lower-priority network owner emit coalesced flow-control
+   * later. Socket-ingress receipts were rejected because they let a remote
+   * timer, rather than the codec clock, control supply and caused physical
+   * choppiness when a Cloudflare timer woke 380 ms late.
+   */
+  iterate_kit_pcm_clock_playback_item_released_fn item_released;
+  void *item_released_context;
 };
 
 struct iterate_kit_pcm_clock_playback_result {
@@ -62,6 +105,7 @@ struct iterate_kit_pcm_clock_playback_metrics {
   uint32_t end_markers_consumed;
   uint32_t response_starts;
   uint32_t response_ends;
+  uint32_t startup_wait_edges;
   uint32_t underrun_incidents;
   uint32_t stale_scan_budget_exhaustions;
   uint32_t timestamp_regressions;
@@ -83,8 +127,9 @@ struct iterate_kit_pcm_clock_playback_metrics {
  * unavailable suffix with silence immediately. It never waits, retries, or
  * accumulates silence/debt for a later clock edge.
  *
- * An ordered zero-length lane item ends a response. Missing audio before that
- * marker is classified as an underrun; silence while no response is active is
+ * An ordered zero-length lane item ends a response. Once a response starts,
+ * missing audio before that marker is classified as an underrun; finite
+ * startup-watermark silence and silence while no response is active are
  * ordinary idle. This distinction keeps expected always-on full-duplex clock
  * service out of error telemetry without concealing a clipped response.
  *
@@ -98,6 +143,15 @@ struct iterate_kit_pcm_clock_playback {
   size_t retained_offset;
   size_t retained_count;
   uint64_t retained_received_at_ms;
+  /*
+   * Once a full startup watermark exposes stale outage history, scanning must
+   * remain authorized across hardware edges until the first current frame is
+   * privately retained. Rechecking the watermark after every discard creates
+   * a permanent N-1-slot deadlock under a slow trickle. This state never lets
+   * audio play below the watermark; it only authorizes bounded destruction of
+   * known-old items so the network producer can refill with current audio.
+   */
+  bool startup_scan_in_progress;
   bool initialized;
 };
 
@@ -129,6 +183,21 @@ enum iterate_kit_status iterate_kit_pcm_clock_playback_render(
  */
 enum iterate_kit_status iterate_kit_pcm_clock_playback_reset(
     struct iterate_kit_pcm_clock_playback *playback);
+
+/**
+ * Purges complete queued items and returns their finite sender capacity.
+ *
+ * This is the consumer-side companion to reset(). A response interruption
+ * invalidates both the retained suffix and every complete item already queued
+ * behind it. Calling pcm_lane_discard_downlink() directly would free those
+ * ring slots without invoking the playback capacity callback, stranding the
+ * remote sender's credit ledger. The work is bounded by the lane's initial
+ * depth, performs no allocation or blocking, and emits at most one callback.
+ */
+enum iterate_kit_status iterate_kit_pcm_clock_playback_discard_queued(
+    struct iterate_kit_pcm_clock_playback *playback,
+    uint32_t *discarded_frames,
+    uint32_t *discarded_items);
 
 const struct iterate_kit_pcm_clock_playback_metrics *
 iterate_kit_pcm_clock_playback_metrics(

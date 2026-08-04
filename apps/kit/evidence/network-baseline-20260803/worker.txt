@@ -1,0 +1,2 @@
+PING kit--kit-stackchan-voice-e2e-20260801.iterate.app (104.18.14.203): 56 data bytes
+64 bytes from 104.18.14.203: icmp_seq=0 ttl=54 time=18.177 ms

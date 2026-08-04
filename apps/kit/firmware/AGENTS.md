@@ -10,6 +10,8 @@ Before changing firmware code, read
 Before probing or flashing a locally attached board, resolve it through
 [docs/connected-device-inventory.md](docs/connected-device-inventory.md);
 `/dev/cu.*` names are not device identities.
+Before running or changing StackChan/HAVPE AEC qualification, follow
+[the deterministic Mac fixture runbook](../docs/aec-release-qualification.md).
 
 - Treat comments as part of the correctness proof. Non-obvious modules, public
   APIs, state machines, concurrency boundaries, resource budgets, and policy

@@ -1,0 +1,12 @@
+[
+  {
+    "close": {
+      "classification": "normal",
+      "code": 1000,
+      "origin": "provider",
+      "reason": "lifecycle-provider-generation-change"
+    },
+    "expectedByHarness": true,
+    "observedAtMonotonicMs": 991446.295208
+  }
+]

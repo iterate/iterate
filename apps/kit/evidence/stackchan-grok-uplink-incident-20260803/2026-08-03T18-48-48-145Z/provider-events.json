@@ -1,0 +1,310 @@
+[
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "session.created",
+      "raw": "{\"type\":\"session.created\",\"event_id\":\"f078a268-1d1f-4dea-8110-cd24293e4796\",\"session\":{\"id\":\"392227402048493fb054ac0c7ae3f6e7\",\"object\":\"realtime.session\",\"instructions\":\"\",\"voice\":\"xai_ara\",\"modalities\":[\"audio\"],\"turn_detection\":{\"type\":null},\"tools\":[],\"model\":\"grok-voice-think-fast-2.0\"}}",
+      "receivedAtMs": 1785782923699,
+      "sequence": 1,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:1",
+    "offset": 15728,
+    "createdAt": "2026-08-03T18:48:43.731Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "conversation.created",
+      "raw": "{\"type\":\"conversation.created\",\"event_id\":\"87b27263-9f3d-4e59-bf7c-c4f9beeb3d78\",\"conversation\":{\"id\":\"e1a190b3-7e26-4367-8ca8-83cefa9154db\",\"object\":\"realtime.conversation\"},\"previous_item_id\":null}",
+      "receivedAtMs": 1785782923699,
+      "sequence": 2,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:2",
+    "offset": 15729,
+    "createdAt": "2026-08-03T18:48:43.764Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "ping",
+      "raw": "{\"type\":\"ping\",\"event_id\":\"267689d3-21ee-42fb-8828-008e75492d0b\",\"timestamp\":1785782923653,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782923699,
+      "sequence": 3,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:3",
+    "offset": 15730,
+    "createdAt": "2026-08-03T18:48:43.764Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "session.updated",
+      "raw": "{\"session\":{\"instructions\":\"Be concise, conversational, and useful. When the user greets you, greet them back and ask how you can help. Do not claim a request is complete unless the user actually made one.\",\"enable_noise_suppression\":true,\"turn_detection\":{\"type\":\"server_vad\",\"threshold\":0.1,\"silence_duration_ms\":500,\"prefix_padding_ms\":400},\"model\":\"grok-voice-think-fast-2.0\",\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"changeSpriteSet\",\"description\":\"Change the active Iterate Kit device to one of its compiled sprite sets.\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"spriteSet\":{\"enum\":[\"dot-matrix-oracle\",\"gameboy-fine-black\",\"karakuri-brass\",\"starbyte\"],\"type\":\"string\"}},\"required\":[\"spriteSet\"],\"type\":\"object\"}}}],\"keep_context\":true,\"enable_phonetic_spelling\":false,\"input_audio_transcription\":{\"language_hint\":\"en\",\"model\":\"grok-transcribe\"},\"modalities\":[\"audio\"],\"input_audio_format\":\"not specified\",\"output_audio_format\":\"not specified\",\"tool_choice\":\"auto\",\"temperature\":-1.0,\"max_response_output_tokens\":\"inf\",\"audio\":{\"input\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":16000},\"transport\":\"binary\",\"transcription\":{\"language_hint\":\"en\",\"model\":\"grok-transcribe\"}},\"output\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":16000},\"transport\":\"binary\"}},\"language_hint\":\"en\"},\"type\":\"session.updated\",\"event_id\":\"4e365be5-e637-4043-90ab-5637f1e2cbd5\",\"previous_item_id\":null}",
+      "receivedAtMs": 1785782923828,
+      "sequence": 4,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:4",
+    "offset": 15731,
+    "createdAt": "2026-08-03T18:48:43.866Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "input_audio_buffer.speech_started",
+      "raw": "{\"type\":\"input_audio_buffer.speech_started\",\"event_id\":\"ca4084e5-389b-47d9-ba01-7969e1d06a5c\",\"item_id\":\"8c9e16e3-5254-4979-be27-35b09db08ca3\",\"audio_start_ms\":1333,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782925172,
+      "sequence": 5,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:5",
+    "offset": 15732,
+    "createdAt": "2026-08-03T18:48:45.189Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "conversation.item.added",
+      "raw": "{\"type\":\"conversation.item.added\",\"event_id\":\"b556a66e-5a1b-429c-b3e5-945add9988f4\",\"item\":{\"id\":\"8c9e16e3-5254-4979-be27-35b09db08ca3\",\"object\":\"realtime.item\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"user\",\"content\":[{\"type\":\"input_audio\",\"transcript\":\"\"}]},\"previous_item_id\":null}",
+      "receivedAtMs": 1785782925670,
+      "sequence": 6,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:6",
+    "offset": 15733,
+    "createdAt": "2026-08-03T18:48:45.677Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "conversation.item.input_audio_transcription.updated",
+      "raw": "{\"type\":\"conversation.item.input_audio_transcription.updated\",\"event_id\":\"608c51c2-322d-4cbf-83af-d4cc772be5ba\",\"item_id\":\"8c9e16e3-5254-4979-be27-35b09db08ca3\",\"transcript\":\"Hey pal.\",\"content_index\":0,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782925670,
+      "sequence": 7,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:7",
+    "offset": 15734,
+    "createdAt": "2026-08-03T18:48:45.710Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "conversation.item.input_audio_transcription.completed",
+      "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"c5b79f29-83fb-4063-a0ac-635d7d243ba0\",\"item_id\":\"8c9e16e3-5254-4979-be27-35b09db08ca3\",\"transcript\":\"Hey pal.\",\"content_index\":0,\"status\":\"in_progress\",\"previous_item_id\":null}",
+      "receivedAtMs": 1785782925670,
+      "sequence": 8,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:8",
+    "offset": 15735,
+    "createdAt": "2026-08-03T18:48:45.710Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "input_audio_buffer.speech_stopped",
+      "raw": "{\"type\":\"input_audio_buffer.speech_stopped\",\"event_id\":\"37fc3d56-e7fa-4d6c-9315-2e3e191d95f5\",\"item_id\":\"8c9e16e3-5254-4979-be27-35b09db08ca3\",\"audio_end_ms\":3138,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782926979,
+      "sequence": 9,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:9",
+    "offset": 15736,
+    "createdAt": "2026-08-03T18:48:46.993Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "input_audio_buffer.committed",
+      "raw": "{\"type\":\"input_audio_buffer.committed\",\"event_id\":\"10b597e1-21c3-4193-b44b-e9bc65400004\",\"item_id\":\"8c9e16e3-5254-4979-be27-35b09db08ca3\",\"previous_item_id\":null}",
+      "receivedAtMs": 1785782926979,
+      "sequence": 10,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:10",
+    "offset": 15737,
+    "createdAt": "2026-08-03T18:48:47.025Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "conversation.item.input_audio_transcription.completed",
+      "raw": "{\"type\":\"conversation.item.input_audio_transcription.completed\",\"event_id\":\"8c1ba587-b16c-4ff7-9eda-9ec85d7f4926\",\"item_id\":\"8c9e16e3-5254-4979-be27-35b09db08ca3\",\"transcript\":\"Hey now.\",\"content_index\":0,\"status\":\"completed\",\"previous_item_id\":null}",
+      "receivedAtMs": 1785782927134,
+      "sequence": 11,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:11",
+    "offset": 15738,
+    "createdAt": "2026-08-03T18:48:47.143Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "response.created",
+      "raw": "{\"type\":\"response.created\",\"event_id\":\"baa9a871-5302-469e-9ddd-2bf66af22b39\",\"response\":{\"id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"object\":\"realtime.response\",\"output\":[],\"status\":\"in_progress\",\"status_details\":\"unimplemented\",\"usage\":{}},\"previous_item_id\":null}",
+      "receivedAtMs": 1785782927137,
+      "sequence": 12,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:12",
+    "offset": 15739,
+    "createdAt": "2026-08-03T18:48:47.178Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "response.output_item.added",
+      "raw": "{\"type\":\"response.output_item.added\",\"event_id\":\"a6150b38-3ece-4694-b882-f6833f679859\",\"item\":{\"id\":\"1b6b402b-6afc-4ffc-9ec3-e2e68b1260b3\",\"object\":\"realtime.item\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\"},\"response_id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"output_index\":0,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782927336,
+      "sequence": 13,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:13",
+    "offset": 15740,
+    "createdAt": "2026-08-03T18:48:47.329Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "conversation.item.added",
+      "raw": "{\"type\":\"conversation.item.added\",\"event_id\":\"7854968f-8089-4b8b-a21f-fbfe72b9c0b7\",\"item\":{\"id\":\"1b6b402b-6afc-4ffc-9ec3-e2e68b1260b3\",\"object\":\"realtime.item\",\"type\":\"message\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]},\"previous_item_id\":\"8c9e16e3-5254-4979-be27-35b09db08ca3\"}",
+      "receivedAtMs": 1785782927336,
+      "sequence": 14,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:14",
+    "offset": 15741,
+    "createdAt": "2026-08-03T18:48:47.425Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "response.content_part.added",
+      "raw": "{\"type\":\"response.content_part.added\",\"event_id\":\"c5661300-16f1-406e-b308-74f9292a2f48\",\"item_id\":\"1b6b402b-6afc-4ffc-9ec3-e2e68b1260b3\",\"previous_item_id\":\"0\",\"part\":{\"type\":\"audio\",\"transcript\":\"\"},\"response_id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"content_index\":0,\"output_index\":0}",
+      "receivedAtMs": 1785782927336,
+      "sequence": 15,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:15",
+    "offset": 15742,
+    "createdAt": "2026-08-03T18:48:47.425Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "response.output_audio_transcript.delta",
+      "raw": "{\"type\":\"response.output_audio_transcript.delta\",\"event_id\":\"620aa7fd-ed74-4211-bbc4-a46ce9b6f260\",\"item_id\":\"1b6b402b-6afc-4ffc-9ec3-e2e68b1260b3\",\"response_id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"delta\":\"Hey there! How can I help you\",\"content_index\":0,\"output_index\":0,\"rid\":\"620aa7fd-ed74-4211-bbc4-a46ce9b6f260\",\"start_time\":0.0,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782927544,
+      "sequence": 16,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:16",
+    "offset": 15743,
+    "createdAt": "2026-08-03T18:48:47.567Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "response.output_audio_transcript.delta",
+      "raw": "{\"type\":\"response.output_audio_transcript.delta\",\"event_id\":\"11484f5a-c380-4d7f-bd86-093b8c06f4e0\",\"item_id\":\"1b6b402b-6afc-4ffc-9ec3-e2e68b1260b3\",\"response_id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"delta\":\" today?\",\"content_index\":0,\"output_index\":0,\"rid\":\"11484f5a-c380-4d7f-bd86-093b8c06f4e0\",\"start_time\":0.76,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782927554,
+      "sequence": 17,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:17",
+    "offset": 15744,
+    "createdAt": "2026-08-03T18:48:47.603Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "response.output_audio_transcript.done",
+      "raw": "{\"type\":\"response.output_audio_transcript.done\",\"event_id\":\"72f02a00-beea-45ea-8352-57ff06bd150e\",\"item_id\":\"1b6b402b-6afc-4ffc-9ec3-e2e68b1260b3\",\"transcript\":\"Hey there! How can I help you today?\",\"response_id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"content_index\":0,\"output_index\":0,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782927845,
+      "sequence": 18,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:18",
+    "offset": 15745,
+    "createdAt": "2026-08-03T18:48:47.849Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "response.content_part.done",
+      "raw": "{\"type\":\"response.content_part.done\",\"event_id\":\"3fc6e0cc-6c1e-4e8f-95ac-132ea744f95a\",\"item_id\":\"1b6b402b-6afc-4ffc-9ec3-e2e68b1260b3\",\"response_id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"content_index\":0,\"output_index\":0,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782927845,
+      "sequence": 19,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:19",
+    "offset": 15746,
+    "createdAt": "2026-08-03T18:48:47.884Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "response.output_audio.done",
+      "raw": "{\"type\":\"response.output_audio.done\",\"event_id\":\"48d96244-564b-437e-aa4b-0fbce4345c17\",\"item_id\":\"1b6b402b-6afc-4ffc-9ec3-e2e68b1260b3\",\"response_id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"content_index\":0,\"output_index\":0,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782927845,
+      "sequence": 20,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:20",
+    "offset": 15747,
+    "createdAt": "2026-08-03T18:48:47.884Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "response.output_item.done",
+      "raw": "{\"type\":\"response.output_item.done\",\"event_id\":\"eb624e57-1bc8-4f7e-b3e5-17a798e6f5ce\",\"item\":{\"id\":\"1b6b402b-6afc-4ffc-9ec3-e2e68b1260b3\",\"object\":\"realtime.item\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\"},\"response_id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"output_index\":0,\"previous_item_id\":null}",
+      "receivedAtMs": 1785782927845,
+      "sequence": 21,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:21",
+    "offset": 15748,
+    "createdAt": "2026-08-03T18:48:47.884Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "response.done",
+      "raw": "{\"type\":\"response.done\",\"event_id\":\"83bb4539-0f02-4c76-8eb4-456e9c5c788f\",\"response\":{\"id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"object\":\"realtime.response\",\"output\":[{\"id\":\"1b6b402b-6afc-4ffc-9ec3-e2e68b1260b3\",\"object\":\"realtime.item\",\"type\":\"message\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"audio\",\"transcript\":\"Hey there! How can I help you today?\"}]}],\"status\":\"completed\",\"status_details\":\"unimplemented\",\"usage\":{}},\"response_id\":\"a5488447-b72a-4ade-aa82-5e6d949772ec\",\"usage\":{\"input_tokens\":126,\"input_token_details\":{\"text_tokens\":6,\"audio_tokens\":120,\"grok_tokens\":0},\"output_tokens\":118,\"output_token_details\":{\"text_tokens\":10,\"audio_tokens\":108,\"grok_tokens\":0},\"total_tokens\":244,\"output_audio_seconds\":2.1496666666666666,\"billable_audio_seconds\":4},\"previous_item_id\":null}",
+      "receivedAtMs": 1785782927845,
+      "sequence": 22,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:6fe4f10d-c0c4-4682-acf4-f953801a8587:22",
+    "offset": 15749,
+    "createdAt": "2026-08-03T18:48:47.884Z",
+    "path": "/devices/stackchan"
+  }
+]

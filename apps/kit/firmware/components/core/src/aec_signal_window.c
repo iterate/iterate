@@ -20,14 +20,12 @@ static uint32_t maximum_u32(uint32_t left, uint32_t right) {
 enum iterate_kit_status iterate_kit_aec_signal_window_measure(
     const int16_t *near_samples,
     const int16_t *reference_samples,
-    const int16_t *linear_samples,
     const int16_t *clean_samples,
     size_t sample_count,
     size_t sample_stride,
     struct iterate_kit_aec_signal_window *window) {
   size_t index;
   if (near_samples == NULL || reference_samples == NULL ||
-      linear_samples == NULL ||
       clean_samples == NULL || window == NULL || sample_count == 0U ||
       sample_stride == 0U) {
     return ITERATE_KIT_INVALID_ARGUMENT;
@@ -38,17 +36,14 @@ enum iterate_kit_status iterate_kit_aec_signal_window_measure(
     const uint32_t near = sample_magnitude(near_samples[index]);
     const uint32_t reference =
         sample_magnitude(reference_samples[index]);
-    const uint32_t linear = sample_magnitude(linear_samples[index]);
     const uint32_t clean = sample_magnitude(clean_samples[index]);
     window->sampled_samples++;
     window->near_absolute_sum += near;
     window->reference_absolute_sum += reference;
-    window->linear_absolute_sum += linear;
     window->clean_absolute_sum += clean;
     window->near_peak = maximum_u32(window->near_peak, near);
     window->reference_peak =
         maximum_u32(window->reference_peak, reference);
-    window->linear_peak = maximum_u32(window->linear_peak, linear);
     window->clean_peak = maximum_u32(window->clean_peak, clean);
   }
   return ITERATE_KIT_OK;
@@ -73,16 +68,12 @@ void iterate_kit_aec_signal_window_merge(
   aggregate->reference_absolute_sum = saturating_add_u64(
       aggregate->reference_absolute_sum,
       observation->reference_absolute_sum);
-  aggregate->linear_absolute_sum = saturating_add_u64(
-      aggregate->linear_absolute_sum, observation->linear_absolute_sum);
   aggregate->clean_absolute_sum = saturating_add_u64(
       aggregate->clean_absolute_sum, observation->clean_absolute_sum);
   aggregate->near_peak = maximum_u32(
       aggregate->near_peak, observation->near_peak);
   aggregate->reference_peak = maximum_u32(
       aggregate->reference_peak, observation->reference_peak);
-  aggregate->linear_peak = maximum_u32(
-      aggregate->linear_peak, observation->linear_peak);
   aggregate->clean_peak = maximum_u32(
       aggregate->clean_peak, observation->clean_peak);
 }
@@ -120,14 +111,11 @@ enum iterate_kit_status iterate_kit_aec_signal_window_summarize(
         : (uint32_t)window->sampled_samples,
     .near_peak = window->near_peak,
     .reference_peak = window->reference_peak,
-    .linear_peak = window->linear_peak,
     .clean_peak = window->clean_peak,
     .near_mean_absolute = bounded_mean(
         window->near_absolute_sum, window->sampled_samples),
     .reference_mean_absolute = bounded_mean(
         window->reference_absolute_sum, window->sampled_samples),
-    .linear_mean_absolute = bounded_mean(
-        window->linear_absolute_sum, window->sampled_samples),
     .clean_mean_absolute = bounded_mean(
         window->clean_absolute_sum, window->sampled_samples),
   };

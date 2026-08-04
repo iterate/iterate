@@ -35,11 +35,16 @@ Userspace/project route:
   --project-slug <slug>
   --output-directory <path>
   --turns <1..20>          Repeated PTT turns on one deployed /pcm session
+  --count-to-100           One unbroken 1..100 physical speaker acceptance run
+  --count-100-to-200       One unbroken 100..200 physical speaker acceptance run
+  --count-200-to-300       One unbroken 200..300 physical speaker acceptance run
+  --count-300-to-400-interrupted
+                           Substantial exact 300..400 prefix, then physical barge-in
   --install-userspace
   --flash-firmware
 
-Secrets remain environment-only. The historical no-argument Stick defaults
-are retained; non-Stick targets require their current port and LAN host.`;
+Secrets remain environment-only. Every target requires a freshly resolved
+serial port; only the Stick retains its non-destructive default LAN host.`;
 
 /**
  * Runs the unattended physical proof for one catalogued ESP target.
@@ -176,8 +181,7 @@ export async function proveProductionGrokFromDevice(
   }
 
   const result =
-    options.deviceId === "stackchan" ||
-    options.deviceId === "home-assistant-voice-preview-edition"
+    options.deviceId === "stackchan" || options.deviceId === "home-assistant-voice-preview-edition"
       ? await proveProductionStackChanGrok(plan.grokProofArgs, proofEnvironment, plan.provenance)
       : await proveProductionM5StickS3Grok(plan.grokProofArgs, proofEnvironment, plan.provenance);
   return { ...result, provenance: plan.provenance };

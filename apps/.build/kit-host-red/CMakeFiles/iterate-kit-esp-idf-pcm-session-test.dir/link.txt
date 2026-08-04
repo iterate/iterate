@@ -1,0 +1,1 @@
+/usr/bin/cc -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/tests/esp_idf_pcm_session_test.c.o" "CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/platforms/iterate_esp_idf/pcm_session.c.o" -o iterate-kit-esp-idf-pcm-session-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a

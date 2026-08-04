@@ -1,0 +1,1 @@
+/usr/bin/cc -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/tests/voice_pe_hardware_config_test.c.o" "CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.o" -o iterate-kit-voice-pe-hardware-config-test

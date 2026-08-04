@@ -1,0 +1,1 @@
+/usr/bin/cc -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-cli-audio-in-test.dir/targets/host_cli/cli_audio_in.c.o" "CMakeFiles/iterate-kit-cli-audio-in-test.dir/tests/cli_audio_in_test.c.o" -o iterate-kit-cli-audio-in-test  libiterate-kit-core.a -framework AudioToolbox vendor/capnweb/libcapnweb.a

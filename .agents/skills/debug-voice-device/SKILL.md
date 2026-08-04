@@ -5,6 +5,33 @@ description: Diagnose the Waveshare ESP32-S3 voice device and its userspace voic
 
 # Debugging the voice device
 
+## Deterministic AEC qualification is a Mac fixture job
+
+Do not use Grok to qualify StackChan or HAVPE AEC. Follow
+[`apps/kit/docs/aec-release-qualification.md`](../../../apps/kit/docs/aec-release-qualification.md)
+for the release-blocking path: a purpose-built authenticated Kit process on the
+Mac owns the exact playback/near-end bytes, `/api` peer, `/pcm` server,
+recorder, interval-aligned network monitor, raw/reference/clean artifacts, and
+offline scorer. The device reaches it through a random Captun URL under
+`tunnels.iterate.com`; the public URL alone is insufficient because both lanes
+require the run's fresh project secret. Direct LAN is an explicit diagnostic
+isolation mode, not a replacement release proof.
+
+Run `pnpm aec:calibrate`, materialize the immutable 32-phase fixture bundle,
+run `pnpm aec:physical`, then independently run `pnpm aec:score`. Normal and
+exception cleanup restores Mac output volume and the saved device configuration;
+never interrupt the temporary configuration interval with `kill -9` or USB
+unplug. Grok follows only as the independent production conversation,
+self-trigger, server-VAD, and interruption gate. A Grok success cannot qualify
+DSP, and a deterministic AEC success cannot qualify Grok.
+
+The retained matrix uses independent real speech voices: Daniel through the
+device speaker, Samantha through the Mac. Speech and double-talk qualification
+must use those byte-identical retained sources; artificial tones/noise are
+diagnostic probes only. Otherwise a provider may simply distinguish speech
+from a convenient interference pattern and give a false impression that echo
+was cancelled.
+
 The device is an ESP32-S3 that holds one Cap'n Web session to `/api` and
 rides the streams abstraction for audio. Its server side is userspace code:
 `apps/os/scripts/voicelab/config-repo/worker.ts`, deployed into the project's
@@ -159,6 +186,17 @@ Note `watchReopens` in the summary: that is the soak replacing its OWN
 watcher, not a device fault. A dead watcher does not report an error, it
 reports a silent call — the first run of this soak "found" four unanswered
 turns that the bridge had in fact answered.
+
+## StackChan/HAVPE AEC uses the deterministic Mac fixture first
+
+Do not use Grok audio to qualify AEC on StackChan or Home Assistant Voice
+Preview Edition. Follow
+[`apps/kit/docs/aec-release-qualification.md`](../../../apps/kit/docs/aec-release-qualification.md):
+materialize byte-exact far/near fixtures, expose the same authenticated local
+`/api` and `/pcm` handler through Captun at `tunnels.iterate.com`, retain raw /
+reference / clean outputs, and score offline. Grok is a later independent
+conversational/self-trigger gate. This separation prevents provider generation
+and network variability from being misclassified as DSP behavior.
 
 ## Building and flashing
 

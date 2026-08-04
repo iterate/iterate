@@ -6,7 +6,11 @@ import {
   type DeviceEventSubscriptionDiagnostic,
   subscribePcmBridgeToDeviceEvents,
 } from "./device-events.ts";
-import { DeviceMetricsSessionTracker, type DeviceMetricsSessionMetrics } from "./device-metrics.ts";
+import {
+  deviceDownlinkDepth,
+  DeviceMetricsSessionTracker,
+  type DeviceMetricsSessionMetrics,
+} from "./device-metrics.ts";
 import {
   DeviceSubscriptionCoordinator,
   type DeviceSubscriptionMetrics,
@@ -15,6 +19,7 @@ import { kitDeviceCapabilityPath } from "./device-id.ts";
 import { interruptKitDevicePlayback } from "./device-control.ts";
 import { executeKitDeviceTool } from "./device-tools.ts";
 import {
+  ITERATE_KIT_PCM_FRAME_BYTES,
   ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
   ITERATE_KIT_PCM_SUBPROTOCOL,
   PcmSessionBridge,
@@ -23,11 +28,17 @@ import {
   type PcmSessionMetrics,
 } from "./pcm-proxy.ts";
 import {
+  canStartPcmDiagnosticCapture,
+  PcmDiagnosticCapture,
+  type PcmDiagnosticCaptureStatus,
+} from "./pcm-diagnostic-capture.ts";
+import {
   ProviderEventStreamJournal,
   kitDeviceEventStreamPath,
   type ProviderEventStreamMetrics,
 } from "./provider-event-stream.ts";
 import {
+  connectDeterministicAec,
   connectDeterministicTone,
   connectGrokRealtimeVoice,
   GrokCredentialPrewarmer,
@@ -47,6 +58,8 @@ import {
 import { kitDeviceServerVadPolicy } from "./server-vad-policy.ts";
 const PCM_MODE_KEY = "kit-pcm-mode";
 const PCM_SOCKET_BACKLOG_LIMIT_BYTES = 16 * 640;
+/* Six seconds at 20 ms/frame: enough for one isolated acoustic phase. */
+const PCM_DIAGNOSTIC_CAPTURE_MAXIMUM_FRAMES = 300;
 const PREVIOUS_PCM_SESSION_KEY = "kit:previous-pcm-session";
 /*
  * `/pcm` generations are disposable while the device's Cap'n Web session is
@@ -79,6 +92,7 @@ interface ActivePcmSession {
   deviceMetrics: DeviceMetricsSessionTracker;
   deviceId: string;
   deviceSubscriptions: DeviceSubscriptionCoordinator<Project & Disposable>;
+  diagnosticCapture?: PcmDiagnosticCapture;
   grokCredentialPrewarmer?: GrokCredentialPrewarmer;
   lastProviderConnectError: string | null;
   mode: KitVoiceMode;
@@ -98,6 +112,7 @@ interface ClosedPcmSessionReport extends PcmSessionMetrics {
   deviceMetrics: DeviceMetricsSessionMetrics;
   deviceId: string;
   deviceSubscriptions: DeviceSubscriptionMetrics;
+  diagnosticCapture: PcmDiagnosticCaptureStatus | null;
   deviceEventSubscriptionAttempts: number;
   deviceEventSubscriptionFailures: number;
   endedAtMs: number;
@@ -144,6 +159,78 @@ export class KitVoiceWorker extends IterateDurableObject {
   }
 
   /**
+   * Starts one bounded capture of the exact gained microphone frames accepted
+   * by the deterministic provider lane.
+   *
+   * This is deliberately opt-in even during Grok calls: raw conversational
+   * audio must not become ordinary Durable Object state. A physical harness
+   * opts in for at most six seconds, receives a fixed allocation, and must
+   * finish that phase before starting another. Supporting the real provider is
+   * essential because only its exact accepted waveform can distinguish a bad
+   * post-AEC uplink from provider-side VAD/transcription fragmentation.
+   */
+  startPcmDiagnosticCapture(maximumFrames: number): boolean {
+    if (
+      !Number.isSafeInteger(maximumFrames) ||
+      maximumFrames <= 0 ||
+      maximumFrames > PCM_DIAGNOSTIC_CAPTURE_MAXIMUM_FRAMES
+    ) {
+      throw new Error(
+        `maximumFrames must be from 1 through ${PCM_DIAGNOSTIC_CAPTURE_MAXIMUM_FRAMES}.`,
+      );
+    }
+    const active = this.#activePcm;
+    if (
+      active === undefined ||
+      active.diagnosticCapture !== undefined ||
+      !canStartPcmDiagnosticCapture({
+        audioMode: active.audioMode,
+        conversationActive: active.bridge.metrics().conversationActive,
+      })
+    ) {
+      return false;
+    }
+    active.diagnosticCapture = new PcmDiagnosticCapture({
+      frameBytes: ITERATE_KIT_PCM_FRAME_BYTES,
+      maximumFrames,
+      startedAtMonotonicMs: Math.floor(performance.now()),
+      startedAtMs: Date.now(),
+    });
+    this.#log("pcm-diagnostic-capture-started", "info", {
+      maximumFrames,
+      sessionId: active.sessionId,
+    });
+    return true;
+  }
+
+  finishPcmDiagnosticCapture() {
+    const active = this.#activePcm;
+    const capture = active?.diagnosticCapture;
+    if (active === undefined || capture === undefined) return null;
+    active.diagnosticCapture = undefined;
+    const snapshot = capture.snapshot(Date.now(), Math.floor(performance.now()));
+    this.#log("pcm-diagnostic-capture-finished", "info", {
+      ...capture.status(),
+      sessionId: active.sessionId,
+    });
+    return snapshot;
+  }
+
+  /** Ask only the in-process tone provider for one ordinary paced response. */
+  requestDeterministicResponse(): boolean {
+    const active = this.#activePcm;
+    if (active === undefined || active.mode !== "tone" || active.audioMode !== "full-duplex-aec") {
+      return false;
+    }
+    const accepted = active.bridge.requestDiagnosticResponse();
+    this.#log("deterministic-response-requested", accepted ? "info" : "warn", {
+      accepted,
+      sessionId: active.sessionId,
+    });
+    return accepted;
+  }
+
+  /**
    * Deliberately crash this userspace incarnation so every attached socket is
    * severed by the Durable Object runtime, not merely asked to close politely.
    *
@@ -181,6 +268,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       deviceId: active.deviceId,
       deviceMetrics: active.deviceMetrics.metrics(),
       deviceSubscriptions,
+      diagnosticCapture: active.diagnosticCapture?.status() ?? null,
       deviceEventSubscriptionAttempts: deviceSubscriptions.eventAttempts,
       deviceEventSubscriptionFailures: deviceSubscriptions.eventFailures,
       endedAtMs: null,
@@ -317,6 +405,23 @@ export class KitVoiceWorker extends IterateDurableObject {
       device: server,
       maximumSocketBufferedBytes: PCM_SOCKET_BACKLOG_LIMIT_BYTES,
       onDiagnostic: (diagnostic) => this.#onPcmDiagnostic(diagnostic),
+      onAcceptedUplinkPcm: (frame, acceptedUplinkFrame) => {
+        const capture = active?.diagnosticCapture;
+        /*
+         * Date.now() is paid only during an explicitly armed physical proof,
+         * never on ordinary Grok traffic. Sampling at the synchronous
+         * provider-acceptance callback reveals event-loop/network bunching;
+         * sampling in the later finish RPC would collapse that queue into one
+         * misleading control duration.
+         */
+        /*
+         * Epoch time aligns this sample with router/device evidence, while
+         * monotonic time alone decides realtime cadence. NTP correction may
+         * move Date.now() backward and must remain visible without disabling
+         * the recorder or manufacturing a negative media gap.
+         */
+        capture?.observe(frame, acceptedUplinkFrame, Date.now(), Math.floor(performance.now()));
+      },
       onPlaybackInterruption: () => {
         const deviceProject = project;
         if (deviceProject === undefined || projectSessionClosed) {
@@ -491,6 +596,8 @@ export class KitVoiceWorker extends IterateDurableObject {
       }
       return await connectGrokRealtimeVoice({
         credential,
+        deviceId: active.deviceId,
+        enableSpriteSetTool: active.deviceId === "m5sticks3" || active.deviceId === "stackchan",
         onStage,
         sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
         serverVadProfile,
@@ -499,6 +606,8 @@ export class KitVoiceWorker extends IterateDurableObject {
     }
     return await connectGrokRealtimeVoice({
       credential,
+      deviceId: active.deviceId,
+      enableSpriteSetTool: active.deviceId === "m5sticks3" || active.deviceId === "stackchan",
       onStage,
       sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
       turnDetection: "manual",
@@ -557,11 +666,13 @@ export class KitVoiceWorker extends IterateDurableObject {
       try {
         const provider =
           active.mode === "tone"
-            ? await connectDeterministicTone({
-                durationMs: 2_000,
-                frequencyHz: 1_000,
-                sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
-              })
+            ? active.audioMode === "full-duplex-aec"
+              ? await connectDeterministicAec()
+              : await connectDeterministicTone({
+                  durationMs: 2_000,
+                  frequencyHz: 1_000,
+                  sampleRateHz: ITERATE_KIT_PCM_SAMPLE_RATE_HZ,
+                })
             : await this.#connectGrok(active, (stage) => {
                 if (this.#activePcm === active) observeGrokStartupStage(active.startup, stage);
               });
@@ -691,6 +802,10 @@ export class KitVoiceWorker extends IterateDurableObject {
             });
             return;
           }
+          const downlinkDepth = deviceDownlinkDepth(observation.sample);
+          if (downlinkDepth !== null) {
+            active.bridge.observeDeviceDownlinkDepth(downlinkDepth);
+          }
           /*
            * This is the metrics half of the MVP stream seam. Retaining one
            * defensive latest snapshot gives `pcmMetrics()` a synchronous view;
@@ -762,6 +877,7 @@ export class KitVoiceWorker extends IterateDurableObject {
       deviceMetrics: active.deviceMetrics.metrics(),
       deviceId: active.deviceId,
       deviceSubscriptions,
+      diagnosticCapture: active.diagnosticCapture?.status() ?? null,
       deviceEventSubscriptionAttempts: deviceSubscriptions.eventAttempts,
       deviceEventSubscriptionFailures: deviceSubscriptions.eventFailures,
       endedAtMs: Date.now(),

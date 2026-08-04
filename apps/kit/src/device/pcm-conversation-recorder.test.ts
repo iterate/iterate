@@ -19,7 +19,13 @@ describe("PCM conversation recorder", () => {
       sampleRateHz: 16_000,
     });
 
-    recorder.recordEvent("pushToTalk.started", { source: "physical", turn: 1 });
+    const marker = recorder.recordEvent("pushToTalk.started", { source: "physical", turn: 1 });
+    expect(marker).toMatchObject({
+      microphoneByteOffset: 0,
+      microphoneFrames: 0,
+      speakerByteOffset: 0,
+      speakerFrames: 0,
+    });
     recorder.observeFrame({
       bytes: Uint8Array.of(1, 2, 3, 4),
       direction: "microphone-uplink",
@@ -48,7 +54,15 @@ describe("PCM conversation recorder", () => {
       .split("\n")
       .map((line) => JSON.parse(line) as Record<string, unknown>);
     expect(timeline).toEqual([
-      expect.objectContaining({ event: "pushToTalk.started", source: "physical", turn: 1 }),
+      expect.objectContaining({
+        event: "pushToTalk.started",
+        microphoneByteOffset: 0,
+        microphoneFrames: 0,
+        source: "physical",
+        speakerByteOffset: 0,
+        speakerFrames: 0,
+        turn: 1,
+      }),
       expect.objectContaining({
         byteLength: 4,
         byteOffset: 0,

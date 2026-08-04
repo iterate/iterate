@@ -730,10 +730,16 @@ std::uint32_t M5StickS3AvatarOutput::packBytes(
 }
 
 iterate_kit_status M5StickS3DirectAudioOwner::begin(
-    iterate_kit_pcm_lane *lane) {
+    iterate_kit_pcm_lane *lane,
+    RealtimePlaybackItemReleasedFn itemReleased,
+    void *itemReleasedContext) {
   if (lane == nullptr || !lane->initialized ||
-      lane_ != nullptr || task_ != nullptr) {
+      itemReleased == nullptr || lane_ != nullptr || task_ != nullptr) {
     return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  if (playback_.bindItemReleased(
+          itemReleased, itemReleasedContext) != ITERATE_KIT_OK) {
+    return ITERATE_KIT_STATE_ERROR;
   }
   if (!output_.initialise()) {
     return ITERATE_KIT_STATE_ERROR;
@@ -960,12 +966,15 @@ void M5StickS3DirectAudioOwner::taskLoop() {
     if (suspended_) {
       prebufferDeadline_.observe(0U, false);
       std::uint32_t discarded = 0U;
+      std::uint32_t discardedItems = 0U;
       if (lane_ != nullptr) {
         const auto discardStatus =
             iterate_kit_pcm_lane_discard_downlink(
-            lane_, &discarded);
+                lane_, &discarded, &discardedItems);
         if (discardStatus == ITERATE_KIT_OK) {
           suspendedFramesFlushed_.add(discarded);
+          playback_.noteExternallyDiscardedItems(
+              discardedItems);
         } else {
           /*
            * A malformed consumer state is not an expected interruption. Keep
@@ -1025,11 +1034,14 @@ M5StickS3DirectAudioOwner::executeGenerationFenceCommand(
          * continuously discard its downlink until microphone release.
          */
         std::uint32_t discarded = 0U;
+        std::uint32_t discardedItems = 0U;
         const auto discardStatus =
             iterate_kit_pcm_lane_discard_downlink(
-                lane_, &discarded);
+                lane_, &discarded, &discardedItems);
         if (discardStatus == ITERATE_KIT_OK) {
           suspendedFramesFlushed_.add(discarded);
+          playback_.noteExternallyDiscardedItems(
+              discardedItems);
           currentGeneration_ = generation;
         }
         return discardStatus;
@@ -1188,8 +1200,14 @@ M5StickS3DirectAudioOwner::stopAndDiscard() {
    * frames which arrived between stop_playback, flush_playback, and Mic.begin.
    */
   std::uint32_t discarded = 0U;
-  return iterate_kit_pcm_lane_discard_downlink(
-      lane_, &discarded);
+  std::uint32_t discardedItems = 0U;
+  const auto discardStatus =
+      iterate_kit_pcm_lane_discard_downlink(
+          lane_, &discarded, &discardedItems);
+  if (discardStatus == ITERATE_KIT_OK) {
+    playback_.noteExternallyDiscardedItems(discardedItems);
+  }
+  return discardStatus;
 }
 
 void M5StickS3DirectAudioOwner::publishPumpResult(

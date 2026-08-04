@@ -1,0 +1,1 @@
+/usr/bin/cc -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-posix-websocket-test.dir/tests/posix_websocket_test.c.o" -o iterate-kit-posix-websocket-test  libiterate-kit-posix.a libiterate-kit-core.a vendor/capnweb/libcapnweb.a /opt/homebrew/opt/openssl@3/lib/libssl.dylib /opt/homebrew/opt/openssl@3/lib/libcrypto.dylib

@@ -1,0 +1,872 @@
+{
+  "createdAt": "2026-08-04T10:29:42.965Z",
+  "farSpeechArtifact": {
+    "bytes": 453926,
+    "pcmPath": "far-speech/synthesized-once.pcm16le",
+    "pcmSha256": "1e57883427a5edb5b7e158b542388c72eeafbfb8d777d86398789dc6454164ea",
+    "rateWordsPerMinute": 165,
+    "sourceClippedSamples": 0,
+    "synthesisWaveBytes": 458022,
+    "synthesisWavePath": "far-speech/synthesized-once.wav",
+    "synthesisWaveSha256": "8ed1ab2aff33a9f039916ce54656bf643fdba1c749963f9b39a5d1b494fdcacb",
+    "text": "This retained voice is coming from the device speaker and must not return through its clean microphone channel. The phrase changes rhythm and consonants so the echo canceller must follow real nonstationary speech rather than classify a convenient test noise.",
+    "voice": "Daniel"
+  },
+  "nearArtifact": {
+    "bytes": 640000,
+    "durationMs": 20000,
+    "pcmPath": "near/deterministic-speech.pcm16le",
+    "pcmSha256": "7ada222735ca032792a65cfd9f995b47793a91526faab47de52991f636f8f56f",
+    "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in every comparison phase.",
+    "voice": "Samantha",
+    "rateWordsPerMinute": 180,
+    "sourceClippedSamples": 0,
+    "synthesisWaveBytes": 249306,
+    "synthesisWavePath": "near/synthesized-once.wav",
+    "synthesisWaveSha256": "dc1098f8355f85d36c9a1aed8fc32c7d08e2a8891f9211a817078bf6c1c3c063",
+    "waveBytes": 640044,
+    "wavePath": "near/deterministic-speech.wav",
+    "waveSha256": "a4fc0f249da1bcaee5ac68399b657c3f96c4218f8bdbe582061478da8e02e362"
+  },
+  "phaseArtifacts": [
+    {
+      "farArtifact": null,
+      "id": "ambient-silence",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 1500,
+        "path": "far/quiet-far-tone.pcm16le",
+        "sha256": "7fc6422f2332a317084ac7adeec6dc4ad0b14b6a7dcd83c0fa16bb01f5882a7a"
+      },
+      "id": "quiet-far-tone",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 1500,
+        "path": "far/quiet-far-multi-tone.pcm16le",
+        "sha256": "a57b6993e3816e1d14007968388c0f544e499be86adc37562fd7f29a557ba584"
+      },
+      "id": "quiet-far-multi-tone",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 1500,
+        "path": "far/quiet-far-chirp.pcm16le",
+        "sha256": "b478502bd360cacef5ce3e1e8088502c6bd5b14b5073e6a640c9cb3bc6613987"
+      },
+      "id": "quiet-far-chirp",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 1500,
+        "path": "far/quiet-far-impulse-train.pcm16le",
+        "sha256": "4e6f8235b02800e52905edcc3d86e14cd2eda1f47ea7eabbc5ed87db7e3d2e0d"
+      },
+      "id": "quiet-far-impulse-train",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 1500,
+        "path": "far/quiet-far-speech-shaped.pcm16le",
+        "sha256": "cbdd48c22bd5a16306308a557c5d628e550c6c89806161f5e5351929574d69e4"
+      },
+      "id": "quiet-far-speech-shaped",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 3840000,
+        "measuredPeak": 1500,
+        "path": "far/quiet-far-speech-long.pcm16le",
+        "sha256": "e4abe99ae6e4de780fe98ee114bb74f73624678e88c97279b64e051ce62ba4d3"
+      },
+      "id": "quiet-far-speech-long",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 6000,
+        "path": "far/nominal-far-tone.pcm16le",
+        "sha256": "05d2c9063e32e3b04238d636c338b7d60c77e663458ae1bafc860f4746356761"
+      },
+      "id": "nominal-far-tone",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 6000,
+        "path": "far/nominal-far-multi-tone.pcm16le",
+        "sha256": "bae14815645de3d5d99850b4f4df2103642b265df69e46f3874a95227da1b18f"
+      },
+      "id": "nominal-far-multi-tone",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 6000,
+        "path": "far/nominal-far-chirp.pcm16le",
+        "sha256": "eb8248de7342fa09e08dba71af94bf9f8966439212125032036f40be53eb10a2"
+      },
+      "id": "nominal-far-chirp",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 6000,
+        "path": "far/nominal-far-impulse-train.pcm16le",
+        "sha256": "925ec5747219214b4ccc01ca81b676bf1cb1acdb10b277947370863ac760ce05"
+      },
+      "id": "nominal-far-impulse-train",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 6000,
+        "path": "far/nominal-far-speech-shaped.pcm16le",
+        "sha256": "74a3a35a48508db469db99d48fe365da6fb6e03b2e34ed56e2f81fc6a5e78af7"
+      },
+      "id": "nominal-far-speech-shaped",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 3840000,
+        "measuredPeak": 6000,
+        "path": "far/nominal-far-speech-long.pcm16le",
+        "sha256": "33fab409d807d7db15c9885852d9136a14e8bfdbff19b432a3e00075c40aca6c"
+      },
+      "id": "nominal-far-speech-long",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 12000,
+        "path": "far/maximum-non-clipping-far-tone.pcm16le",
+        "sha256": "7e531f2fe2b11b0bf351c28b365255235593f54b04b289e2e4d6e5e21414c576"
+      },
+      "id": "maximum-non-clipping-far-tone",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 12000,
+        "path": "far/maximum-non-clipping-far-multi-tone.pcm16le",
+        "sha256": "912bb089cf87225c97a328215dbea850250a760409f9fff9f62603857bf7a4dd"
+      },
+      "id": "maximum-non-clipping-far-multi-tone",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 12000,
+        "path": "far/maximum-non-clipping-far-chirp.pcm16le",
+        "sha256": "f9e60ff74eeed9394fec398b08954b8551c1b3b6402f8614a921f14b9d386c7d"
+      },
+      "id": "maximum-non-clipping-far-chirp",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 12000,
+        "path": "far/maximum-non-clipping-far-impulse-train.pcm16le",
+        "sha256": "7f18fcdc2cc4a5dae4eb91e09d6ecbb4ff26217350a63ba9dd2a62d99170b5fa"
+      },
+      "id": "maximum-non-clipping-far-impulse-train",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 256000,
+        "measuredPeak": 12000,
+        "path": "far/maximum-non-clipping-far-speech-shaped.pcm16le",
+        "sha256": "711ad5db5b6eeea981692a515824b4c16dc8287cec565246bc5cb3c0c36417b1"
+      },
+      "id": "maximum-non-clipping-far-speech-shaped",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 3840000,
+        "measuredPeak": 12000,
+        "path": "far/maximum-non-clipping-far-speech-long.pcm16le",
+        "sha256": "04d924fdc5da57cc2457c6238d0911f3ac1596e6ab15d538ba200be556ca798b"
+      },
+      "id": "maximum-non-clipping-far-speech-long",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 640000,
+        "measuredPeak": 6000,
+        "path": "far/nominal-far-speech-repeat-a.pcm16le",
+        "sha256": "8eddd3177ff8e132e8bd6f5980edb4ea97d49f6ca72893a047f39281e7ebe864"
+      },
+      "id": "nominal-far-speech-repeat-a",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 640000,
+        "measuredPeak": 6000,
+        "path": "far/nominal-far-speech-repeat-b.pcm16le",
+        "sha256": "8eddd3177ff8e132e8bd6f5980edb4ea97d49f6ca72893a047f39281e7ebe864"
+      },
+      "id": "nominal-far-speech-repeat-b",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": null,
+      "id": "quiet-near-deterministic-speech",
+      "nearArtifact": {
+        "macOutputVolumePercent": 15,
+        "pcmPath": "near/deterministic-speech.pcm16le",
+        "pcmSha256": "7ada222735ca032792a65cfd9f995b47793a91526faab47de52991f636f8f56f",
+        "wavePath": "near/deterministic-speech.wav",
+        "waveSha256": "a4fc0f249da1bcaee5ac68399b657c3f96c4218f8bdbe582061478da8e02e362"
+      }
+    },
+    {
+      "farArtifact": null,
+      "id": "nominal-near-deterministic-speech",
+      "nearArtifact": {
+        "macOutputVolumePercent": 25,
+        "pcmPath": "near/deterministic-speech.pcm16le",
+        "pcmSha256": "7ada222735ca032792a65cfd9f995b47793a91526faab47de52991f636f8f56f",
+        "wavePath": "near/deterministic-speech.wav",
+        "waveSha256": "a4fc0f249da1bcaee5ac68399b657c3f96c4218f8bdbe582061478da8e02e362"
+      }
+    },
+    {
+      "farArtifact": null,
+      "id": "loud-near-deterministic-speech",
+      "nearArtifact": {
+        "macOutputVolumePercent": 35,
+        "pcmPath": "near/deterministic-speech.pcm16le",
+        "pcmSha256": "7ada222735ca032792a65cfd9f995b47793a91526faab47de52991f636f8f56f",
+        "wavePath": "near/deterministic-speech.wav",
+        "waveSha256": "a4fc0f249da1bcaee5ac68399b657c3f96c4218f8bdbe582061478da8e02e362"
+      }
+    },
+    {
+      "farArtifact": {
+        "bytes": 640000,
+        "measuredPeak": 12000,
+        "path": "far/double-talk-far-loud-near-quiet.pcm16le",
+        "sha256": "b9e2d5a97468c91c32a5930726d89f2ac48eebdd9a8624a81d140f1841335145"
+      },
+      "id": "double-talk-far-loud-near-quiet",
+      "nearArtifact": {
+        "macOutputVolumePercent": 15,
+        "pcmPath": "near/deterministic-speech.pcm16le",
+        "pcmSha256": "7ada222735ca032792a65cfd9f995b47793a91526faab47de52991f636f8f56f",
+        "wavePath": "near/deterministic-speech.wav",
+        "waveSha256": "a4fc0f249da1bcaee5ac68399b657c3f96c4218f8bdbe582061478da8e02e362"
+      }
+    },
+    {
+      "farArtifact": {
+        "bytes": 640000,
+        "measuredPeak": 6000,
+        "path": "far/double-talk-far-nominal-near-nominal.pcm16le",
+        "sha256": "8eddd3177ff8e132e8bd6f5980edb4ea97d49f6ca72893a047f39281e7ebe864"
+      },
+      "id": "double-talk-far-nominal-near-nominal",
+      "nearArtifact": {
+        "macOutputVolumePercent": 25,
+        "pcmPath": "near/deterministic-speech.pcm16le",
+        "pcmSha256": "7ada222735ca032792a65cfd9f995b47793a91526faab47de52991f636f8f56f",
+        "wavePath": "near/deterministic-speech.wav",
+        "waveSha256": "a4fc0f249da1bcaee5ac68399b657c3f96c4218f8bdbe582061478da8e02e362"
+      }
+    },
+    {
+      "farArtifact": {
+        "bytes": 640000,
+        "measuredPeak": 1500,
+        "path": "far/double-talk-far-quiet-near-loud.pcm16le",
+        "sha256": "fc0cac0779aa8d2e079edd965f35274ee1ef6392ff5582bbcf752e718d9a5d31"
+      },
+      "id": "double-talk-far-quiet-near-loud",
+      "nearArtifact": {
+        "macOutputVolumePercent": 35,
+        "pcmPath": "near/deterministic-speech.pcm16le",
+        "pcmSha256": "7ada222735ca032792a65cfd9f995b47793a91526faab47de52991f636f8f56f",
+        "wavePath": "near/deterministic-speech.wav",
+        "waveSha256": "a4fc0f249da1bcaee5ac68399b657c3f96c4218f8bdbe582061478da8e02e362"
+      }
+    },
+    {
+      "farArtifact": {
+        "bytes": 960000,
+        "measuredPeak": 6000,
+        "path": "far/lifecycle-conversation-stop-start.pcm16le",
+        "sha256": "eaa6fd2c5182af230ce3bf81bfcbd90b80a0a3ae3a9b7faa4fed4b6fe36ec570"
+      },
+      "id": "lifecycle-conversation-stop-start",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 960000,
+        "measuredPeak": 6000,
+        "path": "far/lifecycle-provider-generation-change.pcm16le",
+        "sha256": "eaa6fd2c5182af230ce3bf81bfcbd90b80a0a3ae3a9b7faa4fed4b6fe36ec570"
+      },
+      "id": "lifecycle-provider-generation-change",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 960000,
+        "measuredPeak": 6000,
+        "path": "far/lifecycle-playback-underrun-recovery.pcm16le",
+        "sha256": "eaa6fd2c5182af230ce3bf81bfcbd90b80a0a3ae3a9b7faa4fed4b6fe36ec570"
+      },
+      "id": "lifecycle-playback-underrun-recovery",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 960000,
+        "measuredPeak": 6000,
+        "path": "far/lifecycle-aec-restart-reconvergence.pcm16le",
+        "sha256": "eaa6fd2c5182af230ce3bf81bfcbd90b80a0a3ae3a9b7faa4fed4b6fe36ec570"
+      },
+      "id": "lifecycle-aec-restart-reconvergence",
+      "nearArtifact": null
+    },
+    {
+      "farArtifact": {
+        "bytes": 19200000,
+        "measuredPeak": 6000,
+        "path": "far/lifecycle-long-duration-changing-playback.pcm16le",
+        "sha256": "64c7b5b4510930a75af5a6aae8f0f3bf3ce9a71d9af0c4770a3b68bfc1378e53"
+      },
+      "id": "lifecycle-long-duration-changing-playback",
+      "nearArtifact": null
+    }
+  ],
+  "plan": {
+    "calibration": {
+      "artifactDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-calibration-network-witness-fix-20260804/2026-08-04T10-04-22-402Z",
+      "calibratedAt": "2026-08-04T10:06:02.272Z",
+      "codecDrive": {
+        "decibels": 0,
+        "kind": "aic3204-dac-decibels"
+      },
+      "deviceId": "home-assistant-voice-preview-edition",
+      "exactMac": "D8:3B:DA:46:20:34",
+      "levels": {
+        "maximum-non-clipping": {
+          "pcmPeakAmplitude": 12000,
+          "playoutClippedSamples": 0,
+          "rawMicClippedSamples": 0,
+          "sourceClippedSamples": 0
+        },
+        "nominal": {
+          "pcmPeakAmplitude": 6000,
+          "playoutClippedSamples": 0,
+          "rawMicClippedSamples": 0,
+          "sourceClippedSamples": 0
+        },
+        "quiet": {
+          "pcmPeakAmplitude": 1500,
+          "playoutClippedSamples": 0,
+          "rawMicClippedSamples": 0,
+          "sourceClippedSamples": 0
+        }
+      },
+      "maximumBoundary": {
+        "nextRejectedAmplitude": null,
+        "nextRejectedClippedSamples": 0,
+        "safetyCeilingReached": true
+      },
+      "nearLevels": {
+        "loud": {
+          "macOutputVolumePercent": 35,
+          "sourceClippedSamples": 0
+        },
+        "nominal": {
+          "macOutputVolumePercent": 25,
+          "sourceClippedSamples": 0
+        },
+        "quiet": {
+          "macOutputVolumePercent": 15,
+          "sourceClippedSamples": 0
+        }
+      }
+    },
+    "phases": [
+      {
+        "durationMs": 10000,
+        "farSource": null,
+        "id": "ambient-silence",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "ambient",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 1500,
+          "sampleRateHz": 16000,
+          "kind": "tone"
+        },
+        "id": "quiet-far-tone",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 1500,
+          "sampleRateHz": 16000,
+          "kind": "multi-tone"
+        },
+        "id": "quiet-far-multi-tone",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 1500,
+          "sampleRateHz": 16000,
+          "kind": "chirp"
+        },
+        "id": "quiet-far-chirp",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 1500,
+          "sampleRateHz": 16000,
+          "kind": "impulse-train"
+        },
+        "id": "quiet-far-impulse-train",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 1500,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "quiet-far-speech-shaped",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 120000,
+        "farSource": {
+          "peakAmplitude": 1500,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "quiet-far-speech-long",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "tone"
+        },
+        "id": "nominal-far-tone",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "multi-tone"
+        },
+        "id": "nominal-far-multi-tone",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "chirp"
+        },
+        "id": "nominal-far-chirp",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "impulse-train"
+        },
+        "id": "nominal-far-impulse-train",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "nominal-far-speech-shaped",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 120000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "nominal-far-speech-long",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 12000,
+          "sampleRateHz": 16000,
+          "kind": "tone"
+        },
+        "id": "maximum-non-clipping-far-tone",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 12000,
+          "sampleRateHz": 16000,
+          "kind": "multi-tone"
+        },
+        "id": "maximum-non-clipping-far-multi-tone",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 12000,
+          "sampleRateHz": 16000,
+          "kind": "chirp"
+        },
+        "id": "maximum-non-clipping-far-chirp",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 12000,
+          "sampleRateHz": 16000,
+          "kind": "impulse-train"
+        },
+        "id": "maximum-non-clipping-far-impulse-train",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 8000,
+        "farSource": {
+          "peakAmplitude": 12000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "maximum-non-clipping-far-speech-shaped",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 120000,
+        "farSource": {
+          "peakAmplitude": 12000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "maximum-non-clipping-far-speech-long",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 20000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "nominal-far-speech-repeat-a",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 20000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "nominal-far-speech-repeat-b",
+        "lifecycleAction": null,
+        "nearSource": null,
+        "scenario": "far-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 20000,
+        "farSource": null,
+        "id": "quiet-near-deterministic-speech",
+        "lifecycleAction": null,
+        "nearSource": {
+          "kind": "deterministic-speech-wave",
+          "level": "quiet",
+          "macOutputVolumePercent": 15
+        },
+        "scenario": "near-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 20000,
+        "farSource": null,
+        "id": "nominal-near-deterministic-speech",
+        "lifecycleAction": null,
+        "nearSource": {
+          "kind": "deterministic-speech-wave",
+          "level": "nominal",
+          "macOutputVolumePercent": 25
+        },
+        "scenario": "near-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 20000,
+        "farSource": null,
+        "id": "loud-near-deterministic-speech",
+        "lifecycleAction": null,
+        "nearSource": {
+          "kind": "deterministic-speech-wave",
+          "level": "loud",
+          "macOutputVolumePercent": 35
+        },
+        "scenario": "near-end-only",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 20000,
+        "farSource": {
+          "peakAmplitude": 12000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "double-talk-far-loud-near-quiet",
+        "lifecycleAction": null,
+        "nearSource": {
+          "kind": "deterministic-speech-wave",
+          "level": "quiet",
+          "macOutputVolumePercent": 15
+        },
+        "scenario": "double-talk",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 20000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "double-talk-far-nominal-near-nominal",
+        "lifecycleAction": null,
+        "nearSource": {
+          "kind": "deterministic-speech-wave",
+          "level": "nominal",
+          "macOutputVolumePercent": 25
+        },
+        "scenario": "double-talk",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 20000,
+        "farSource": {
+          "peakAmplitude": 1500,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "double-talk-far-quiet-near-loud",
+        "lifecycleAction": null,
+        "nearSource": {
+          "kind": "deterministic-speech-wave",
+          "level": "loud",
+          "macOutputVolumePercent": 35
+        },
+        "scenario": "double-talk",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 30000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "lifecycle-conversation-stop-start",
+        "lifecycleAction": "conversation-stop-start",
+        "nearSource": null,
+        "scenario": "lifecycle",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 30000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "lifecycle-provider-generation-change",
+        "lifecycleAction": "provider-generation-change",
+        "nearSource": null,
+        "scenario": "lifecycle",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 30000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "lifecycle-playback-underrun-recovery",
+        "lifecycleAction": "playback-underrun-recovery",
+        "nearSource": null,
+        "scenario": "lifecycle",
+        "sourcePauses": [
+          {
+            "afterSamples": 80000,
+            "durationMs": 250
+          }
+        ]
+      },
+      {
+        "durationMs": 30000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "retained-speech",
+          "sourceId": "far-voice"
+        },
+        "id": "lifecycle-aec-restart-reconvergence",
+        "lifecycleAction": "aec-restart-reconvergence",
+        "nearSource": null,
+        "scenario": "lifecycle",
+        "sourcePauses": []
+      },
+      {
+        "durationMs": 600000,
+        "farSource": {
+          "peakAmplitude": 6000,
+          "sampleRateHz": 16000,
+          "kind": "changing-spectrum",
+          "seed": 881126428
+        },
+        "id": "lifecycle-long-duration-changing-playback",
+        "lifecycleAction": "long-duration-changing-playback",
+        "nearSource": null,
+        "scenario": "lifecycle",
+        "sourcePauses": []
+      }
+    ],
+    "runId": "havpe-release-real-speech-device-clocked-20260804-01",
+    "sampleRateHz": 16000,
+    "schemaVersion": 2
+  },
+  "schemaVersion": 2,
+  "sourceCalibration": "havpe-D8-3B-DA-46-20-34-rerun.json"
+}

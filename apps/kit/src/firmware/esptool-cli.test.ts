@@ -3,6 +3,7 @@ import {
   buildEsptoolReadFlashArguments,
   buildEsptoolRunApplicationArguments,
   buildEsptoolWriteFlashArguments,
+  type EsptoolFlashPlan,
   type PreparedFlashFile,
 } from "./esptool-cli.ts";
 import type { FirmwareFlashPlan } from "./prepare-flash-plan.ts";
@@ -75,6 +76,36 @@ describe("buildEsptoolWriteFlashArguments", () => {
       }),
     ).toThrow("does not match the prepared firmware plan");
   });
+
+  it("rewrites one diagnostic partition without silently erasing the device", () => {
+    /*
+     * The physical AEC harness borrows the provisioning partition, points the
+     * device at a local recorder, then restores the exact original bytes. A
+     * whole-chip erase here would turn a reversible test into destructive
+     * reflashing and would make an AEC failure indistinguishable from a stale
+     * or different firmware build.
+     */
+    const boundedPlan: EsptoolFlashPlan = {
+      chipFamily: "ESP32-S3",
+      eraseAll: false,
+      parts: [
+        {
+          address: 0x21_0000,
+          data: Uint8Array.of(1, 2, 3),
+          label: "temporary iterate-kit/v1 configuration",
+        },
+      ],
+    };
+    const args = buildEsptoolWriteFlashArguments({
+      baudrate: 921_600,
+      files: [{ address: 0x21_0000, path: "/private/tmp/iterate-kit/config.bin" }],
+      plan: boundedPlan,
+      port: "/dev/cu.usbmodem101",
+    });
+
+    expect(args).not.toContain("--erase-all");
+    expect(args.slice(-2)).toEqual(["0x210000", "/private/tmp/iterate-kit/config.bin"]);
+  });
 });
 
 describe("buildEsptoolReadFlashArguments", () => {
@@ -132,7 +163,7 @@ describe("buildEsptoolRunApplicationArguments", () => {
       "--before",
       "usb_reset",
       "--after",
-      "hard_reset",
+      "watchdog_reset",
       "run",
     ]);
   });
@@ -143,11 +174,12 @@ describe("buildEsptoolRunApplicationArguments", () => {
      * UART-bridge boards would trade the observed S3 failure for a different
      * class of boards that cannot perform a 1200-baud USB reset at all.
      */
-    expect(
-      buildEsptoolRunApplicationArguments({
-        chipFamily: "ESP32",
-        port: "/dev/cu.usbserial101",
-      }),
-    ).toContain("default_reset");
+    const args = buildEsptoolRunApplicationArguments({
+      chipFamily: "ESP32",
+      port: "/dev/cu.usbserial101",
+    });
+    expect(args).toContain("default_reset");
+    expect(args).toContain("hard_reset");
+    expect(args).not.toContain("watchdog_reset");
   });
 });

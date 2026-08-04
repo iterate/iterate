@@ -1,0 +1,61 @@
+{
+  "passed": true,
+  "reasons": [],
+  "windows": {
+    "received": 57,
+    "unique": 56,
+    "firstSequence": 415,
+    "lastSequence": 470
+  },
+  "ambient": {
+    "observed": true,
+    "sequences": [416, 417, 418, 419],
+    "rawMeanAbsolute": 0.8942401960784314,
+    "rawPeak": 5
+  },
+  "farEnd": {
+    "observed": true,
+    "sequence": 422,
+    "sequences": [
+      422, 423, 424, 425, 426, 428, 429, 430, 431, 432, 433, 435, 436, 437, 438, 439, 440
+    ],
+    "gainNormalizedEchoSuppressionDb": 23.398707119178724,
+    "processedToRawRatio": 0.06804819530015725,
+    "rawMeanAbsolute": 62.63921568627451,
+    "processedMeanAbsolute": 4.2624855824682815,
+    "playbackContentSamples": 267040
+  },
+  "nearEnd": {
+    "observed": true,
+    "sequence": 449,
+    "sequences": [449, 458, 459],
+    "processedToRawRatio": 1.0063567589340785,
+    "rawMeanAbsolute": 12.980882352941176,
+    "processedMeanAbsolute": 13.063398692810457,
+    "minimumQualifiedRawMeanAbsolute": 1.7884803921568628,
+    "minimumQualifiedRawPeak": 20
+  },
+  "lifecycleDeltas": {
+    "captureFrames": 2807,
+    "cleanUplinkFrames": 2807,
+    "cleanUplinkDrops": 0,
+    "captureFailures": 0,
+    "signalMeasurementFailures": 0,
+    "playbackContentSamples": 576000,
+    "playbackResets": 0,
+    "playbackFramesDiscardedByReset": 0,
+    "playbackWriteFailures": 0,
+    "playbackQueueOverflows": 0,
+    "playbackPolicyErrors": 0,
+    "playbackResetFailures": 0,
+    "playbackObservationFailures": 0,
+    "playbackUnderrunIncidents": 0,
+    "playbackUnderrunSilenceSamples": 0,
+    "playbackStaleFramesDiscarded": 0
+  },
+  "timing": {
+    "maximumObservedCaptureToUplinkUs": 105,
+    "maximumObservedPlaybackWriteUs": 9952,
+    "maximumObservedReceiveToRenderMs": 302
+  }
+}

@@ -1,0 +1,9 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx agent-smoke --project prj_0adef0e51c1648c99bfb1cd54d5e2a66 --agent-path /agents/colleague --message 'Please check on the physical Waveshare voice device in this project and report its CURRENT metrics. I want concrete numbers: free heap, free PSRAM, how many speaker frames it has received versus actually played, its connection generation and session generation, its round-trip time, and how long it has been up. Discover whatever device capability you have available and read them yourself, then report the actual values.'
+
+Error: No assistant response within 180000ms
+    at Timeout._onTimeout (/Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os/scripts/itx.ts:180:31)
+    at listOnTimeout (node:internal/timers:608:17)
+    at process.processTimers (node:internal/timers:543:7)
+ ELIFECYCLE  Command failed with exit code 1.

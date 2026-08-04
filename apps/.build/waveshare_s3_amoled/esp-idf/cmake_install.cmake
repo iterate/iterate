@@ -554,6 +554,11 @@ endif()
 
 if(NOT CMAKE_INSTALL_LOCAL_ONLY)
   # Include the install script for the subdirectory.
+  include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/avatar/cmake_install.cmake")
+endif()
+
+if(NOT CMAKE_INSTALL_LOCAL_ONLY)
+  # Include the install script for the subdirectory.
   include("/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/capnweb/cmake_install.cmake")
 endif()
 

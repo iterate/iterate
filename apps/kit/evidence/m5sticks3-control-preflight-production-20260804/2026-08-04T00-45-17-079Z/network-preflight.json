@@ -1,0 +1,347 @@
+{
+  "controlCapability": {
+    "attempts": [
+      {
+        "durationMs": 101.47833399999945,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 64.66391599999952,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 75.73612500000127,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 115.14379199999894,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 71.42074999999932,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 108.99970899999971,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 1001.9347499999967,
+        "error": "capability timed out after 1000 ms",
+        "outcome": "failure"
+      }
+    ],
+    "maximumHealthyDurationMs": 500,
+    "passed": false,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "createdAt": "2026-08-04T00:45:57.373Z",
+  "deviceHost": "192.168.0.21",
+  "deviceReachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 49.42
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.203
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.704
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 7.216
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 52.477
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.42
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.618
+      },
+      {
+        "detail": "no ICMP reply within 500 ms",
+        "outcome": "timeout"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 7.69
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 17.993
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.846
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.042
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.945
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.834
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 9.397
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 8.786
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 8.223
+      },
+      {
+        "detail": "no ICMP reply within 500 ms",
+        "outcome": "timeout"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 38.631
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.061
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.969
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 8.105
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 244.86
+      },
+      {
+        "detail": "no ICMP reply within 500 ms",
+        "outcome": "timeout"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.917
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.735
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.27
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.329
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.552
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.081
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.655
+      },
+      {
+        "detail": "no ICMP reply within 500 ms",
+        "outcome": "timeout"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.787
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 80.779
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 7.161
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.572
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.836
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.765
+      },
+      {
+        "detail": "no ICMP reply within 500 ms",
+        "outcome": "timeout"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.772
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 12.496
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 7
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.588
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.81
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.518
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.748
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.39
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.005
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.745
+      },
+      {
+        "detail": "no ICMP reply within 500 ms",
+        "outcome": "timeout"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.98
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.444
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 6.482
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 9.023
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 118.713
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 247.212
+      },
+      {
+        "detail": "no ICMP reply within 500 ms",
+        "outcome": "timeout"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 17.514
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.53
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 34.589
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": false,
+    "requiredConsecutiveHealthyReplies": 30
+  },
+  "dnsAndConnect": {
+    "connect": {
+      "durationMs": 38.05987500000083,
+      "error": null,
+      "maximumHealthyDurationMs": 1000,
+      "outcome": "success"
+    },
+    "dns": {
+      "durationMs": 21.20637500000157,
+      "error": null,
+      "maximumHealthyDurationMs": 500,
+      "outcome": "success"
+    }
+  },
+  "reachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 20.365
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.911
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 12.228
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.546
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 20.631
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.962
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 12.357
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 17.213
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "workerHost": "kit--kit-stick-voice-e2e-20260731.iterate.app",
+  "passed": false,
+  "reasons": [
+    "Device control capability did not sustain 8 consecutive responses at or below 500 ms across 7 bounded attempts.",
+    "Device reachability did not sustain 30 consecutive replies at or below 100 ms across 60 bounded attempts."
+  ],
+  "schemaVersion": 3
+}

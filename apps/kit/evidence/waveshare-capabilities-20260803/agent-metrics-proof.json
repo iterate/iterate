@@ -1,0 +1,21 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/ask2.ts
+
+{
+  "agentReply": "Live read from the physical Waveshare just now: free heap is 5,149,376 bytes and free PSRAM is 5,122,748 bytes. It has received 0 speaker frames and played 0; connection generation is 1, session generation is 1, round-trip time is 71 milliseconds, and uptime is 61.838 seconds.",
+  "replyOffset": 25835,
+  "askedAt": 1785787642009,
+  "direct": {
+    "heapFree": 5149376,
+    "psramFree": 5122748,
+    "spkFrames": 0,
+    "spkPlayed": 0,
+    "connGeneration": 1,
+    "sessionGeneration": 1,
+    "rttMs": 71,
+    "uptimeMs": 76848,
+    "micCaptured": 3816
+  },
+  "directAt": 1785787685104
+}

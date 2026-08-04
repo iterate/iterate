@@ -1,0 +1,113 @@
+{
+  "controlCapability": {
+    "attempts": [
+      {
+        "durationMs": 697.4470419999998,
+        "outcome": "success"
+      }
+    ],
+    "maximumHealthyDurationMs": 500,
+    "passed": false,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "createdAt": "2026-08-04T07:51:02.335Z",
+  "deviceHost": "192.168.0.33",
+  "deviceReachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 20.243
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.591
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.764
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.232
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.077
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 12.713
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.512
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.13
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "dnsAndConnect": {
+    "connect": {
+      "durationMs": 37.872167000000445,
+      "error": null,
+      "maximumHealthyDurationMs": 1000,
+      "outcome": "success"
+    },
+    "dns": {
+      "durationMs": 0.8815409999997428,
+      "error": null,
+      "maximumHealthyDurationMs": 500,
+      "outcome": "success"
+    }
+  },
+  "reachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 17.529
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.337
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.696
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.788
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.648
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.117
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.651
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.344
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "workerHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app",
+  "passed": false,
+  "reasons": [
+    "Device control capability did not sustain 8 consecutive responses at or below 500 ms across 1 bounded attempt."
+  ],
+  "schemaVersion": 3
+}

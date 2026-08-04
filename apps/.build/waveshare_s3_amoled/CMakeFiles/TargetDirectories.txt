@@ -836,6 +836,13 @@
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/wifi_provisioning/CMakeFiles/install.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/wifi_provisioning/CMakeFiles/install/local.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/wifi_provisioning/CMakeFiles/install/strip.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/avatar/CMakeFiles/__idf_avatar.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/avatar/CMakeFiles/edit_cache.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/avatar/CMakeFiles/rebuild_cache.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/avatar/CMakeFiles/list_install_components.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/avatar/CMakeFiles/install.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/avatar/CMakeFiles/install/local.dir
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/avatar/CMakeFiles/install/strip.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/capnweb/CMakeFiles/__idf_capnweb.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/capnweb/CMakeFiles/edit_cache.dir
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/waveshare_s3_amoled/esp-idf/capnweb/CMakeFiles/rebuild_cache.dir

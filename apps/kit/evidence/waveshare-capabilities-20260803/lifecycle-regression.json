@@ -1,0 +1,39 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/lifecycle.ts
+
+{
+  "cycles": [
+    {
+      "cycle": 1,
+      "remove": "kill requested",
+      "subscriptionGone": true,
+      "setupStreamPath": "/agents/voice/dev-621cd7aa562613aa",
+      "identityPreserved": true,
+      "callWentLive": true,
+      "starvedMs": 0,
+      "starveEvents": 0
+    },
+    {
+      "cycle": 2,
+      "remove": "kill requested",
+      "subscriptionGone": true,
+      "setupStreamPath": "/agents/voice/dev-621cd7aa562613aa",
+      "identityPreserved": true,
+      "callWentLive": true,
+      "starvedMs": 0,
+      "starveEvents": 0
+    },
+    {
+      "cycle": 3,
+      "remove": "kill requested",
+      "subscriptionGone": true,
+      "setupStreamPath": "/agents/voice/dev-621cd7aa562613aa",
+      "identityPreserved": true,
+      "callWentLive": true,
+      "starvedMs": 0,
+      "starveEvents": 0
+    }
+  ],
+  "verdict": "PASS: remove/setup/call survived three cycles on one identity"
+}

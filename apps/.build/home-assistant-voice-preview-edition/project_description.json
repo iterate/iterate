@@ -1,7 +1,7 @@
 {
   "version": "1.2",
   "project_name": "iterate-kit-home-assistant-voice-preview-edition",
-  "project_version": "v2026-07-28-21-00-57-109-gf80a27794-dirty",
+  "project_version": "v2026-07-28-21-00-57-161-g4f60f1d51-dirty",
   "project_path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/home-assistant-voice-preview-edition",
   "idf_path": "/Users/jonastemplestein/esp/esp-idf",
   "build_dir": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition",
@@ -407,6 +407,8 @@
       "managed_priv_reqs": [],
       "file": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/esp-idf/capabilities/libcapabilities.a",
       "sources": [
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/aec_diagnostic_trace.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/avatar.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/callback_budget.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/conversation.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/camera.c",
@@ -511,13 +513,20 @@
       "file": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/esp-idf/core/libcore.a",
       "sources": [
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_capture_bridge.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_diagnostic_trace.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_reference_scaler.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_signal_window.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_uplink_selector.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio_intent_reconciler.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio_playout.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/device_menu.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/configuration.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/conversation_lights.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/control_recovery.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/speaker_abandon.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/cpu_usage.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/debounced_button.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/device_events.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_connection.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_outbox_sender.c",
@@ -525,6 +534,7 @@
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_clock_playback.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_capture_turn.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_generation_fence.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_high_pass.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_lane.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_playback_interruption.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_uplink_conductor.c",
@@ -534,6 +544,7 @@
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/retry_gate.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/runtime_diagnostics.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/spsc_ring.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/touch_tap.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/voicelab_stream.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/voice_playback_clock.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_frame_writer.c",
@@ -2111,6 +2122,7 @@
       "sources": [
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/platforms/iterate_esp_idf/configuration.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/platforms/iterate_esp_idf/itx_transport.c",
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/platforms/iterate_esp_idf/pcm_session.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/platforms/iterate_esp_idf/pcm_transport.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/platforms/iterate_esp_idf/websocket_connection.c"
       ],
@@ -2330,6 +2342,7 @@
       "managed_priv_reqs": ["espressif__led_strip"],
       "file": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/esp-idf/main/libmain.a",
       "sources": [
+        "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/home-assistant-voice-preview-edition/main/havpe_ui.c",
         "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/home-assistant-voice-preview-edition/main/main.c"
       ],
       "include_dirs": ["."]

@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "failure": null,
+  "frameBytes": 640,
+  "microphone": {
+    "bytes": 1800960,
+    "frames": 2814,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-voip-constant-local-aec-receipt-fix-20260803/2026-08-03T21-42-07-157Z/pcm/microphone-uplink.pcm16le",
+    "sha256": "30b00247f524c0d8c2a211ff2716740766475e9ce2771d0335c4bb013f03eb37"
+  },
+  "outputDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-voip-constant-local-aec-receipt-fix-20260803/2026-08-03T21-42-07-157Z/pcm",
+  "producedAt": "2026-08-03T21:43:24.829Z",
+  "sampleRateHz": 16000,
+  "speaker": {
+    "bytes": 1152000,
+    "frames": 1800,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-voip-constant-local-aec-receipt-fix-20260803/2026-08-03T21-42-07-157Z/pcm/speaker-downlink.pcm16le",
+    "sha256": "ceecbc53585568f9307bf8b2014da38d7039b205f929348a79cff688d8be1a14"
+  },
+  "timelinePath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-voip-constant-local-aec-receipt-fix-20260803/2026-08-03T21-42-07-157Z/pcm/timeline.jsonl"
+}

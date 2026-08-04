@@ -1,0 +1,11 @@
+[
+  {
+    "close": {
+      "classification": "unexpected",
+      "code": 1005,
+      "origin": "device",
+      "reason": ""
+    },
+    "observedAtMonotonicMs": 55027.120083
+  }
+]

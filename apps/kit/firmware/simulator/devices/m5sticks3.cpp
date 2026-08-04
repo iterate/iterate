@@ -495,6 +495,11 @@ capnweb_status initialize(
   const capnweb_status status =
       iterate_kit_m5sticks3_init(&simulation.m5sticks3, &options);
   if (status != CAPNWEB_OK) return status;
+  /* The simulator has no ESP-IDF session owner, so model its accepted gate. */
+  if (iterate_kit_m5sticks3_set_media_ready(
+          &simulation.m5sticks3, true) != ITERATE_KIT_OK) {
+    return CAPNWEB_E_STATE;
+  }
   simulation.profile =
       iterate_kit_m5sticks3_device(&simulation.m5sticks3);
   /*

@@ -1,0 +1,103 @@
+{
+  "ambient": {
+    "dbfs": -82.11757851408181,
+    "peak": 11,
+    "rms": 2.567858031034751
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -62.56953000795059,
+      "peak": 107,
+      "rms": 24.37661704037977
+    },
+    "farEndResidualDb": -46.60607684103738,
+    "farEndSimilarity": 0.007161083816140163,
+    "nearEndGain": 0.9494586092711369,
+    "nearEndSimilarity": 0.9022176305091318,
+    "passed": true,
+    "residualDegradationFromRepeatDb": 6.159436161238344,
+    "residualToNearEndDb": -6.861497857971176,
+    "similarityLossFromRepeat": 0.07066815730998655
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -76.6288082052201,
+        "peak": 19,
+        "rms": 4.830693963258971
+      },
+      "kind": "tone",
+      "passed": true,
+      "source": {
+        "dbfs": -20.255037277522632,
+        "peak": 4500,
+        "rms": 3181.9845827329204
+      },
+      "sourceSimilarity": 0.005107185951294002
+    },
+    {
+      "clean": {
+        "dbfs": -76.3870620526943,
+        "peak": 23,
+        "rms": 4.9670305633697955
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": true,
+      "source": {
+        "dbfs": -23.265100635326633,
+        "peak": 3841,
+        "rms": 2250.0641657517235
+      },
+      "sourceSimilarity": 0.013964654605468559
+    },
+    {
+      "clean": {
+        "dbfs": -73.93646615078481,
+        "peak": 34,
+        "rms": 6.586074323904947
+      },
+      "kind": "speech-shaped",
+      "passed": true,
+      "source": {
+        "dbfs": -22.971610308836556,
+        "peak": 7832,
+        "rms": 2327.3913694708717
+      },
+      "sourceSimilarity": 0.014710406333549506
+    }
+  ],
+  "nearEnd": {
+    "aboveAmbientDb": 19.09878978485723,
+    "clean": {
+      "dbfs": -63.01878872922458,
+      "peak": 84,
+      "rms": 23.147841422041928
+    },
+    "passed": true,
+    "pathReferenceObserved": true,
+    "repeat": {
+      "clean": {
+        "dbfs": -63.3220864542882,
+        "peak": 83,
+        "rms": 22.353504106366263
+      },
+      "gain": 0.9394327384486649,
+      "passed": true,
+      "pathReferenceObserved": true,
+      "residualToReferenceDb": -13.02093401920952,
+      "similarity": 0.9728857878191184
+    },
+    "source": {
+      "dbfs": -15.176950127467181,
+      "peak": 26072,
+      "rms": 5709.55720506014
+    },
+    "sourceSimilarity": 0.641491563385406
+  },
+  "passed": false,
+  "reasons": ["The physical network interval was not valid."],
+  "validity": {
+    "passed": false,
+    "reasons": ["The physical network interval was not valid."]
+  }
+}

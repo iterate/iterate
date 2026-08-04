@@ -1,0 +1,23 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/trace3.ts
+
+{
+  "events": [
+    {
+      "offset": 25832,
+      "type": "script-run-requested",
+      "payload": "{\"code\":\"async (itx) => {\\n  await Promise.all([\\n    itx.agent.append({\\n      type: \\\"events.iterate.com/agent/summary-updated\\\",\\n      payload: { activity: \\\"Reported live Waveshare hardware metrics\\\", waitingFor: \\\"user_input\\\" },\\n    }),\\n    itx.chat.sendMessage(\\\"Live read from the physical Waveshare just now: free heap is 5,149,376 bytes and free PSRAM is 5,122,748 bytes. It has received 0 speaker frames and played 0; connection generation is 1, session generation is 1, round-trip time is 71 milliseconds, and uptime is 61.838 seconds.\\\"),\\n  ]);\\n  return;\\n}\",\"executionId\":\"agent-output:25829\",\"expiresAt\":1785788282464}"
+    },
+    {
+      "offset": 25835,
+      "type": "web-message-sent",
+      "payload": "{\"message\":\"Live read from the physical Waveshare just now: free heap is 5,149,376 bytes and free PSRAM is 5,122,748 bytes. It has received 0 speaker frames and played 0; connection generation is 1, session generation is 1, round-trip time is 71 milliseconds, and uptime is 61.838 seconds.\"}"
+    },
+    {
+      "offset": 25839,
+      "type": "script-run-settled",
+      "payload": "{\"executionId\":\"agent-output:25829\",\"settlement\":{\"status\":\"succeeded\"}}"
+    }
+  ]
+}

@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "failure": null,
+  "frameBytes": 640,
+  "microphone": {
+    "bytes": 1800320,
+    "frames": 2813,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/pcm/microphone-uplink.pcm16le",
+    "sha256": "6876c657103971cbd65a4faa0c58653a599c09482932c38e1275d06a934e49a6"
+  },
+  "outputDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/pcm",
+  "producedAt": "2026-08-04T09:08:42.409Z",
+  "sampleRateHz": 16000,
+  "speaker": {
+    "bytes": 1152000,
+    "frames": 1800,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/pcm/speaker-downlink.pcm16le",
+    "sha256": "70f353b3104c273f1c7247c4fa171dbbb6a76ea4082194afe17bac4f7bf4b9b3"
+  },
+  "timelinePath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-aec-tap-20260804/2026-08-04T09-07-31-973Z/pcm/timeline.jsonl"
+}

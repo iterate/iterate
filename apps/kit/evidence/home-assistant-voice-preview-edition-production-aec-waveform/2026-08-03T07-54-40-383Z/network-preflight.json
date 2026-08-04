@@ -1,0 +1,64 @@
+{
+  "createdAt": "2026-08-03T07:54:46.641Z",
+  "dnsAndConnect": {
+    "connect": {
+      "durationMs": 791.9121249999994,
+      "error": null,
+      "maximumHealthyDurationMs": 1000,
+      "outcome": "success"
+    },
+    "dns": {
+      "durationMs": 0.8280830000003334,
+      "error": null,
+      "maximumHealthyDurationMs": 500,
+      "outcome": "success"
+    }
+  },
+  "reachability": {
+    "attempts": [
+      {
+        "detail": "ping completed without an RTT reply",
+        "outcome": "error"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 18.522
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 14.369
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 14.214
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 14.618
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.772
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 14.73
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 14.021
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.968
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "workerHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app",
+  "passed": true,
+  "reasons": [],
+  "schemaVersion": 1
+}

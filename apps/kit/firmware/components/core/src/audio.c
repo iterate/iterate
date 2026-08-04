@@ -145,6 +145,22 @@ static struct iterate_kit_poll_result audio_poll(
     result.status = ITERATE_KIT_POLL_DRIVER_ERROR;
     return result;
   }
+  if (controller->options.mode == ITERATE_KIT_AUDIO_PUSH_TO_TALK &&
+      controller->capture_active && !controller->media_ready) {
+    /*
+     * A generation can disappear while the front button remains physically
+     * held. The shared gate rejects completed frames immediately; this bounded
+     * owner step then closes the microphone and ends the unusable turn instead
+     * of waiting for a release edge which may never arrive.
+     */
+    capture_status = stop_capture(controller);
+    if (capture_status != ITERATE_KIT_OK) {
+      result.status = ITERATE_KIT_POLL_DRIVER_ERROR;
+      return result;
+    }
+    controller->push_to_talk_active = false;
+    return result;
+  }
   if (!controller->capture_active ||
       controller->capture_frame_in_flight) {
     return result;
@@ -204,6 +220,15 @@ enum iterate_kit_status iterate_kit_audio_controller_init(
   controller->options = *options;
   controller->last_status = ITERATE_KIT_OK;
   controller->initialized = true;
+  return ITERATE_KIT_OK;
+}
+
+enum iterate_kit_status iterate_kit_audio_set_media_ready(
+    struct iterate_kit_audio_controller *controller, bool ready) {
+  if (controller == NULL || !controller->initialized) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  controller->media_ready = ready;
   return ITERATE_KIT_OK;
 }
 
@@ -312,6 +337,17 @@ enum iterate_kit_status iterate_kit_audio_push_to_talk(
   }
 
   if (pressed) {
+    /*
+     * A manual turn is useful only if its first frame has somewhere to go.
+     * Check before flushing speaker state or opening I2S capture so a failed
+     * press is side-effect-free and can be retried once the bounded reconnect
+     * completes. This is intentionally a single observation, not a promise:
+     * a socket may still fail after capture starts, and the egress then drops
+     * the current frame rather than accumulating a non-real-time backlog.
+     */
+    if (!controller->media_ready) {
+      return remember(controller, ITERATE_KIT_BACKPRESSURE);
+    }
     status = iterate_kit_audio_interrupt_playback(controller);
     if (status != ITERATE_KIT_OK) {
       return status;
@@ -348,6 +384,10 @@ enum iterate_kit_status iterate_kit_audio_submit_capture(
   }
   if (!controller->capture_active) {
     return remember(controller, ITERATE_KIT_STATE_ERROR);
+  }
+  if (!controller->media_ready) {
+    controller->metrics.capture_frames_dropped++;
+    return remember(controller, ITERATE_KIT_BACKPRESSURE);
   }
   if (controller->capture_frame_in_flight) {
     controller->metrics.capture_frames_dropped++;

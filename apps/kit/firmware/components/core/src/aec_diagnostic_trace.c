@@ -45,12 +45,27 @@ static bool storage_is_distinct(
     for (size_t right = left + 1U;
          right < sizeof(storage) / sizeof(storage[0]);
          ++right) {
-      if (storage[left] == storage[right]) {
+      if (storage[left] != NULL && storage[left] == storage[right]) {
         return false;
       }
     }
   }
   return true;
+}
+
+static bool plane_is_available(
+    const struct iterate_kit_aec_diagnostic_trace_options *options,
+    enum iterate_kit_aec_diagnostic_plane plane) {
+  return (options->available_planes & (uint32_t)plane) != 0U;
+}
+
+static bool available_plane_has_storage(
+    const struct iterate_kit_aec_diagnostic_trace_options *options,
+    enum iterate_kit_aec_diagnostic_plane plane,
+    const int16_t *storage) {
+  return plane_is_available(options, plane)
+      ? storage != NULL
+      : storage == NULL;
 }
 
 enum iterate_kit_status iterate_kit_aec_diagnostic_trace_init(
@@ -62,11 +77,32 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_init(
       options->capture_samples == 0U ||
       options->capture_samples % options->frame_samples != 0U ||
       options->capture_samples > UINT32_MAX ||
-      options->near_samples == NULL ||
-      options->reference_samples == NULL ||
-      options->playout_samples == NULL ||
-      options->linear_samples == NULL ||
-      options->clean_samples == NULL ||
+      (options->available_planes &
+       ~ITERATE_KIT_AEC_DIAGNOSTIC_ALL_PLANES) != 0U ||
+      !plane_is_available(
+          options, ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_NEAR) ||
+      !plane_is_available(
+          options, ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_CLEAN) ||
+      !available_plane_has_storage(
+          options,
+          ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_NEAR,
+          options->near_samples) ||
+      !available_plane_has_storage(
+          options,
+          ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_REFERENCE,
+          options->reference_samples) ||
+      !available_plane_has_storage(
+          options,
+          ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_PLAYOUT,
+          options->playout_samples) ||
+      !available_plane_has_storage(
+          options,
+          ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_LINEAR,
+          options->linear_samples) ||
+      !available_plane_has_storage(
+          options,
+          ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_CLEAN,
+          options->clean_samples) ||
       !storage_is_distinct(options)) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -127,9 +163,26 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_record(
     const int16_t *clean_samples,
     size_t sample_count) {
   if (trace == NULL || trace->initialized == 0U ||
-      near_samples == NULL || reference_samples == NULL ||
-      playout_samples == NULL || linear_samples == NULL ||
-      clean_samples == NULL ||
+      (plane_is_available(
+           &trace->options,
+           ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_NEAR) &&
+       near_samples == NULL) ||
+      (plane_is_available(
+           &trace->options,
+           ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_REFERENCE) &&
+       reference_samples == NULL) ||
+      (plane_is_available(
+           &trace->options,
+           ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_PLAYOUT) &&
+       playout_samples == NULL) ||
+      (plane_is_available(
+           &trace->options,
+           ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_LINEAR) &&
+       linear_samples == NULL) ||
+      (plane_is_available(
+           &trace->options,
+           ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_CLEAN) &&
+       clean_samples == NULL) ||
       sample_count != trace->options.frame_samples) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -175,26 +228,36 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_record(
    * init. There is therefore no tail branch and no partial DSP frame which a
    * host analyzer could accidentally treat as a different acoustic epoch.
    */
-  memcpy(
-      trace->options.near_samples + captured,
-      near_samples,
-      sample_count * sizeof(*near_samples));
-  memcpy(
-      trace->options.reference_samples + captured,
-      reference_samples,
-      sample_count * sizeof(*reference_samples));
-  memcpy(
-      trace->options.playout_samples + captured,
-      playout_samples,
-      sample_count * sizeof(*playout_samples));
-  memcpy(
-      trace->options.linear_samples + captured,
-      linear_samples,
-      sample_count * sizeof(*linear_samples));
-  memcpy(
-      trace->options.clean_samples + captured,
-      clean_samples,
-      sample_count * sizeof(*clean_samples));
+#define COPY_AVAILABLE_PLANE(plane, destination, source) \
+  do { \
+    if (plane_is_available(&trace->options, (plane))) { \
+      memcpy( \
+          (destination) + captured, \
+          (source), \
+          sample_count * sizeof(*(source))); \
+    } \
+  } while (0)
+  COPY_AVAILABLE_PLANE(
+      ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_NEAR,
+      trace->options.near_samples,
+      near_samples);
+  COPY_AVAILABLE_PLANE(
+      ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_REFERENCE,
+      trace->options.reference_samples,
+      reference_samples);
+  COPY_AVAILABLE_PLANE(
+      ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_PLAYOUT,
+      trace->options.playout_samples,
+      playout_samples);
+  COPY_AVAILABLE_PLANE(
+      ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_LINEAR,
+      trace->options.linear_samples,
+      linear_samples);
+  COPY_AVAILABLE_PLANE(
+      ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_CLEAN,
+      trace->options.clean_samples,
+      clean_samples);
+#undef COPY_AVAILABLE_PLANE
   captured += (uint32_t)sample_count;
   __atomic_store_n(
       &trace->captured_samples, captured, __ATOMIC_RELEASE);
@@ -254,6 +317,7 @@ void iterate_kit_aec_diagnostic_trace_snapshot(
   }
   snapshot->state = (enum iterate_kit_aec_diagnostic_trace_state)
       __atomic_load_n(&trace->state, __ATOMIC_ACQUIRE);
+  snapshot->available_planes = trace->options.available_planes;
   snapshot->generation =
       __atomic_load_n(&trace->generation, __ATOMIC_RELAXED);
   snapshot->captured_samples =
@@ -298,26 +362,43 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_read_planar(
    * release. Five planar copies are substantially cheaper than interleaving
    * on-device and preserve direct FFT-friendly layout for the host oracle.
    */
-  memcpy(
-      destination,
-      trace->options.near_samples + sample_offset,
-      sample_count * sizeof(*destination));
-  memcpy(
-      destination + sample_count,
-      trace->options.reference_samples + sample_offset,
-      sample_count * sizeof(*destination));
-  memcpy(
-      destination + sample_count * 2U,
-      trace->options.playout_samples + sample_offset,
-      sample_count * sizeof(*destination));
-  memcpy(
-      destination + sample_count * 3U,
-      trace->options.linear_samples + sample_offset,
-      sample_count * sizeof(*destination));
-  memcpy(
-      destination + sample_count * 4U,
-      trace->options.clean_samples + sample_offset,
-      sample_count * sizeof(*destination));
+#define READ_OR_ZERO_PLANE(plane, plane_index, source) \
+  do { \
+    int16_t *const plane_destination = \
+        destination + sample_count * (plane_index); \
+    if (plane_is_available(&trace->options, (plane))) { \
+      memcpy( \
+          plane_destination, \
+          (source) + sample_offset, \
+          sample_count * sizeof(*destination)); \
+    } else { \
+      memset( \
+          plane_destination, \
+          0, \
+          sample_count * sizeof(*destination)); \
+    } \
+  } while (0)
+  READ_OR_ZERO_PLANE(
+      ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_NEAR,
+      0U,
+      trace->options.near_samples);
+  READ_OR_ZERO_PLANE(
+      ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_REFERENCE,
+      1U,
+      trace->options.reference_samples);
+  READ_OR_ZERO_PLANE(
+      ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_PLAYOUT,
+      2U,
+      trace->options.playout_samples);
+  READ_OR_ZERO_PLANE(
+      ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_LINEAR,
+      3U,
+      trace->options.linear_samples);
+  READ_OR_ZERO_PLANE(
+      ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_CLEAN,
+      4U,
+      trace->options.clean_samples);
+#undef READ_OR_ZERO_PLANE
   atomic_saturating_increment(&trace->read_calls);
   return ITERATE_KIT_OK;
 }

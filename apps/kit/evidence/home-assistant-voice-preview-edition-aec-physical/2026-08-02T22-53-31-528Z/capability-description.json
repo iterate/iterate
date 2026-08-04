@@ -1,0 +1,15 @@
+{
+  "instructions": "A full-duplex Iterate voice satellite with local AEC, provider-side VAD, health metrics, lifecycle events, and RGB LEDs. PCM media uses a separate realtime WebSocket lane.",
+  "children": {
+    "subscribeToMetrics": "Call a callback immediately and once per configured interval with bounded runtime metrics.",
+    "subscribeToAecMetrics": "Call a callback with the board's truthful aligned AEC topology: raw and clean taps, plus same-window physical playback activity when the hardware reference is private.",
+    "subscribeToEvents": "Call a callback with the current conversation snapshot and each later lifecycle transition.",
+    "getDiagnostics": "Return the latest retained transport incident snapshot.",
+    "conversation": {
+      "start": "Open the PCM conversation intent.",
+      "hangUp": "End the PCM conversation intent.",
+      "interruptPlayback": "Purge assistant speech and acknowledge only after the physical speaker owner has reset."
+    },
+    "leds": "RGB LEDs; call leds.set(...) or leds.fill(...)."
+  }
+}

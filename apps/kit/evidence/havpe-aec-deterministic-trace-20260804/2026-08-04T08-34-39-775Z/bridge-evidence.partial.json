@@ -1,0 +1,9 @@
+{
+  "closeEvents": [],
+  "openEvents": [],
+  "progress": {
+    "microphoneBytes": 2024320,
+    "speakerBytes": 1152000,
+    "speakerFrames": 1800
+  }
+}

@@ -55,7 +55,7 @@ enum iterate_kit_status iterate_kit_voice_pe_expand_playback(
  * Splits XMOS stereo capture into portable PCM16 and an AEC comparison lane.
  *
  * Channel zero uses the cumulative uplink stage selected by the hardware
- * policy (currently AEC, excluding the downstream IC/NS/AGC transforms).
+ * policy (currently the cumulative NS tap: AEC, IC, and NS, excluding AGC).
  * Channel one is
  * configured as NONE: the XMOS source defines that as its original
  * microphone tap, before AEC or any later DSP stage. This same-time raw

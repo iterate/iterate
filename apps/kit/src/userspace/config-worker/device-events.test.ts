@@ -18,11 +18,15 @@ describe("device push-to-talk event subscription", () => {
     const inputStopped = vi.fn(() => true);
     const setConversationActive = vi.fn(() => true);
 
-    await subscribePcmBridgeToDeviceEvents(device, {
-      inputStarted,
-      inputStopped,
-      setConversationActive,
-    }, "push-to-talk");
+    await subscribePcmBridgeToDeviceEvents(
+      device,
+      {
+        inputStarted,
+        inputStopped,
+        setConversationActive,
+      },
+      "push-to-talk",
+    );
     callback?.({
       conversationActive: false,
       result: 0,

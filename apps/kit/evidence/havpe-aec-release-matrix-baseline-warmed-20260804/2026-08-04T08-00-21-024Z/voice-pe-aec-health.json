@@ -1,0 +1,65 @@
+{
+  "passed": false,
+  "reasons": [
+    "No playback-quiet near-end window cleared the ambient-referenced microphone floor.",
+    "Gain-normalized local echo suppression was unmeasured dB; expected at least 3 dB."
+  ],
+  "windows": {
+    "received": 57,
+    "unique": 56,
+    "firstSequence": 1442,
+    "lastSequence": 1497
+  },
+  "ambient": {
+    "observed": true,
+    "sequences": [1444, 1445, 1446],
+    "rawMeanAbsolute": 2.6398692810457516,
+    "rawPeak": 50
+  },
+  "farEnd": {
+    "observed": true,
+    "sequence": 1449,
+    "sequences": [
+      1449, 1450, 1451, 1452, 1453, 1454, 1455, 1456, 1457, 1458, 1459, 1460, 1462, 1463, 1464,
+      1465, 1466, 1467
+    ],
+    "gainNormalizedEchoSuppressionDb": null,
+    "processedToRawRatio": 0.020382531129936078,
+    "rawMeanAbsolute": 59.88804466230937,
+    "processedMeanAbsolute": 1.220669934640523,
+    "playbackContentSamples": 280000
+  },
+  "nearEnd": {
+    "observed": false,
+    "sequence": null,
+    "sequences": [],
+    "processedToRawRatio": null,
+    "rawMeanAbsolute": null,
+    "processedMeanAbsolute": null,
+    "minimumQualifiedRawMeanAbsolute": 5.279738562091503,
+    "minimumQualifiedRawPeak": 200
+  },
+  "lifecycleDeltas": {
+    "captureFrames": 2802,
+    "cleanUplinkFrames": 2802,
+    "cleanUplinkDrops": 0,
+    "captureFailures": 0,
+    "signalMeasurementFailures": 0,
+    "playbackContentSamples": 576000,
+    "playbackResets": 0,
+    "playbackFramesDiscardedByReset": 0,
+    "playbackWriteFailures": 0,
+    "playbackQueueOverflows": 0,
+    "playbackPolicyErrors": 0,
+    "playbackResetFailures": 0,
+    "playbackObservationFailures": 0,
+    "playbackUnderrunIncidents": 0,
+    "playbackUnderrunSilenceSamples": 0,
+    "playbackStaleFramesDiscarded": 0
+  },
+  "timing": {
+    "maximumObservedCaptureToUplinkUs": 105,
+    "maximumObservedPlaybackWriteUs": 10009,
+    "maximumObservedReceiveToRenderMs": 312
+  }
+}

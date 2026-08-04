@@ -1,0 +1,97 @@
+{
+  "assessment": {
+    "acceptance": "failed",
+    "boundaryWordOverage": -1,
+    "normalizedMicrophoneTranscript": "the game boy face is active and zebra is awake",
+    "normalizedProviderTranscript": "the game boy face is active and the zebra is awake",
+    "passed": false,
+    "reasons": [
+      "The independent microphone transcript did not match Grok's completed output transcript."
+    ],
+    "relativeActiveWindowDeficit": 0,
+    "responseToBaselineMaximumRmsRatio": 230.74317293189915
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 199.20408034224602,
+    "activeWindowCount": 28,
+    "passed": true,
+    "reasons": []
+  },
+  "microphoneStt": {
+    "durationSeconds": 6.256,
+    "rawEvents": [
+      "{\"text\":\"The Game Boy face is active and Zebra is awake.\",\"language\":\"en\",\"duration\":6.256,\"words\":[{\"text\":\"The\",\"start\":1.183,\"end\":1.263},{\"text\":\"Game\",\"start\":1.343,\"end\":1.604},{\"text\":\"Boy\",\"start\":1.644,\"end\":1.845},{\"text\":\"face\",\"start\":1.945,\"end\":2.266},{\"text\":\"is\",\"start\":2.326,\"end\":2.406},{\"text\":\"active\",\"start\":2.547,\"end\":3.008},{\"text\":\"and\",\"start\":3.148,\"end\":3.268},{\"text\":\"Zebra\",\"start\":3.369,\"end\":3.689},{\"text\":\"is\",\"start\":3.83,\"end\":3.91},{\"text\":\"awake.\",\"start\":3.95,\"end\":4.391}]}"
+    ],
+    "text": "The Game Boy face is active and Zebra is awake.",
+    "words": [
+      {
+        "text": "The",
+        "start": 1.183,
+        "end": 1.263
+      },
+      {
+        "text": "Game",
+        "start": 1.343,
+        "end": 1.604
+      },
+      {
+        "text": "Boy",
+        "start": 1.644,
+        "end": 1.845
+      },
+      {
+        "text": "face",
+        "start": 1.945,
+        "end": 2.266
+      },
+      {
+        "text": "is",
+        "start": 2.326,
+        "end": 2.406
+      },
+      {
+        "text": "active",
+        "start": 2.547,
+        "end": 3.008
+      },
+      {
+        "text": "and",
+        "start": 3.148,
+        "end": 3.268
+      },
+      {
+        "text": "Zebra",
+        "start": 3.369,
+        "end": 3.689
+      },
+      {
+        "text": "is",
+        "start": 3.83,
+        "end": 3.91
+      },
+      {
+        "text": "awake.",
+        "start": 3.95,
+        "end": 4.391
+      }
+    ]
+  },
+  "providerOutputTranscript": "The Game Boy face is active and the zebra is awake.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 28,
+      "clippedSampleCount": 0,
+      "maximumRms": 18385.99262366032,
+      "p50Rms": 69.24348645660952,
+      "p95Rms": 2018.4187651372877,
+      "p99Rms": 10854.14272817258,
+      "sampleCount": 300288,
+      "windowCount": 313,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 199.20408034224602
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

@@ -1,8 +1,6 @@
-
 ---
 events:
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineSystem.cmake:12 (find_program)"
       - "CMakeLists.txt:3 (project)"
@@ -101,15 +99,13 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "message-v1"
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineSystem.cmake:212 (message)"
       - "CMakeLists.txt:3 (project)"
     message: |
       The system is: Darwin - 24.6.0 - arm64
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeUnixFindMake.cmake:5 (find_program)"
       - "CMakeLists.txt:3 (project)"
@@ -236,8 +232,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompiler.cmake:73 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:64 (_cmake_find_compiler)"
@@ -343,8 +338,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:462 (find_file)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:500 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
@@ -408,8 +402,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "message-v1"
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
@@ -420,18 +413,17 @@ events:
       Compiler: /usr/bin/cc 
       Build flags: 
       Id flags:  
-      
+
       The output was:
       0
-      
-      
+
+
       Compilation of the C compiler identification source "CMakeCCompilerId.c" produced "a.out"
-      
+
       The C compiler identification is AppleClang, found in:
         /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/4.2.3/CompilerIdC/a.out
-      
-  -
-    kind: "message-v1"
+
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:290 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:122 (CMAKE_DETERMINE_COMPILER_ID)"
@@ -471,8 +463,7 @@ events:
         
         
       Found apple sysroot: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -558,8 +549,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -645,8 +635,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -732,8 +721,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -819,8 +807,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -906,8 +893,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -993,8 +979,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -1107,8 +1092,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -1221,8 +1205,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -1335,8 +1318,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -1449,8 +1431,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeFindBinUtils.cmake:243 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCCompiler.cmake:200 (include)"
@@ -1563,8 +1544,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompiler.cmake:54 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:69 (_cmake_find_compiler)"
@@ -1631,8 +1611,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:462 (find_file)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:500 (CMAKE_DETERMINE_COMPILER_ID_WRITE)"
@@ -1696,8 +1675,7 @@ events:
         - "/Applications/Ghostty.app/Contents/MacOS"
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
-  -
-    kind: "message-v1"
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:17 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:64 (__determine_compiler_id_test)"
@@ -1708,18 +1686,17 @@ events:
       Compiler: /usr/bin/c++ 
       Build flags: 
       Id flags:  
-      
+
       The output was:
       0
-      
-      
+
+
       Compilation of the CXX compiler identification source "CMakeCXXCompilerId.cpp" produced "a.out"
-      
+
       The CXX compiler identification is AppleClang, found in:
         /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/4.2.3/CompilerIdCXX/a.out
-      
-  -
-    kind: "message-v1"
+
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerId.cmake:290 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCXXCompiler.cmake:125 (CMAKE_DETERMINE_COMPILER_ID)"
@@ -1759,8 +1736,7 @@ events:
         
         
       Found apple sysroot: /Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk
-  -
-    kind: "find-v1"
+  - kind: "find-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/Platform/Darwin.cmake:76 (find_program)"
       - "/opt/homebrew/share/cmake/Modules/CMakeSystemSpecificInformation.cmake:32 (include)"
@@ -1861,8 +1837,7 @@ events:
         - "/Users/jonastemplestein/.orbstack/bin"
         - "/Users/jonastemplestein/.orbstack/bin"
       CMAKE_INSTALL_PREFIX: "/usr/local"
-  -
-    kind: "try_compile-v1"
+  - kind: "try_compile-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
       - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
@@ -1884,7 +1859,7 @@ events:
       cached: true
       stdout: |
         Change Dir: '/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/CMakeScratch/TryCompile-oLqAks'
-        
+
         Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_751e2/fast
         /Applications/Xcode.app/Contents/Developer/usr/bin/make  -f CMakeFiles/cmTC_751e2.dir/build.make CMakeFiles/cmTC_751e2.dir/build
         Building C object CMakeFiles/cmTC_751e2.dir/CMakeCCompilerABI.c.o
@@ -1926,10 +1901,9 @@ events:
         Framework search paths:
         	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks
         /usr/bin/cc  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names  -v -Wl,-v CMakeFiles/cmTC_751e2.dir/CMakeCCompilerABI.c.o -o cmTC_751e2
-        
+
       exitCode: 0
-  -
-    kind: "message-v1"
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:122 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
@@ -1937,8 +1911,7 @@ events:
     message: |
       Effective list of requested architectures (possibly empty)  : ""
       Effective list of architectures found in the ABI info binary: "arm64"
-  -
-    kind: "message-v1"
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:217 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
@@ -1955,10 +1928,8 @@ events:
         collapse include dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include]
         collapse include dir [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include] ==> [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
         implicit include dirs: [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/17/include;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include;/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
-      
-      
-  -
-    kind: "message-v1"
+
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeTestCCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
@@ -2035,10 +2006,8 @@ events:
         implicit objs: []
         implicit dirs: [/usr/local/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/swift]
         implicit fwks: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks]
-      
-      
-  -
-    kind: "message-v1"
+
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
@@ -2052,8 +2021,7 @@ events:
       will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
       LTO support using: LLVM version 17.0.0 (static support for 29, runtime is 29)
       TAPI support using: Apple TAPI version 17.0.0 (tapi-1700.0.3.5)
-  -
-    kind: "try_compile-v1"
+  - kind: "try_compile-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:83 (try_compile)"
       - "/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
@@ -2076,7 +2044,7 @@ events:
       cached: true
       stdout: |
         Change Dir: '/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/CMakeScratch/TryCompile-ZvFyi0'
-        
+
         Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_85c07/fast
         /Applications/Xcode.app/Contents/Developer/usr/bin/make  -f CMakeFiles/cmTC_85c07.dir/build.make CMakeFiles/cmTC_85c07.dir/build
         Building CXX object CMakeFiles/cmTC_85c07.dir/CMakeCXXCompilerABI.cpp.o
@@ -2120,10 +2088,9 @@ events:
         Framework search paths:
         	/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks
         /usr/bin/c++  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names  -v -Wl,-v CMakeFiles/cmTC_85c07.dir/CMakeCXXCompilerABI.cpp.o -o cmTC_85c07
-        
+
       exitCode: 0
-  -
-    kind: "message-v1"
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:122 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
@@ -2131,8 +2098,7 @@ events:
     message: |
       Effective list of requested architectures (possibly empty)  : ""
       Effective list of architectures found in the ABI info binary: "arm64"
-  -
-    kind: "message-v1"
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:217 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
@@ -2151,10 +2117,8 @@ events:
         collapse include dir [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include] ==> [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include]
         collapse include dir [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include] ==> [/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
         implicit include dirs: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include/c++/v1;/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/clang/17/include;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/include;/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/include]
-      
-      
-  -
-    kind: "message-v1"
+
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:253 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeTestCXXCompiler.cmake:26 (CMAKE_DETERMINE_COMPILER_ABI)"
@@ -2234,10 +2198,8 @@ events:
         implicit objs: []
         implicit dirs: [/usr/local/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib;/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/swift]
         implicit fwks: [/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks]
-      
-      
-  -
-    kind: "message-v1"
+
+  - kind: "message-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/Internal/CMakeDetermineLinkerId.cmake:38 (message)"
       - "/opt/homebrew/share/cmake/Modules/CMakeDetermineCompilerABI.cmake:299 (cmake_determine_linker_id)"
@@ -2251,8 +2213,7 @@ events:
       will use ld-classic for: armv6 armv7 armv7s i386 armv6m armv7k armv7m armv7em
       LTO support using: LLVM version 17.0.0 (static support for 29, runtime is 29)
       TAPI support using: Apple TAPI version 17.0.0 (tapi-1700.0.3.5)
-  -
-    kind: "try_compile-v1"
+  - kind: "try_compile-v1"
     backtrace:
       - "/opt/homebrew/share/cmake/Modules/Internal/CheckSourceCompiles.cmake:104 (try_compile)"
       - "/opt/homebrew/share/cmake/Modules/CheckCSourceCompiles.cmake:103 (cmake_check_source_compiles)"
@@ -2276,7 +2237,7 @@ events:
       cached: true
       stdout: |
         Change Dir: '/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles/CMakeScratch/TryCompile-UYiT41'
-        
+
         Run Build Command(s): /opt/homebrew/bin/cmake -E env VERBOSE=1 /usr/bin/make -f Makefile cmTC_889b3/fast
         /Applications/Xcode.app/Contents/Developer/usr/bin/make  -f CMakeFiles/cmTC_889b3.dir/build.make CMakeFiles/cmTC_889b3.dir/build
         Building C object CMakeFiles/cmTC_889b3.dir/src.c.o
@@ -2284,6 +2245,859 @@ events:
         Linking C executable cmTC_889b3
         /opt/homebrew/bin/cmake -E cmake_link_script CMakeFiles/cmTC_889b3.dir/link.txt --verbose=1
         /usr/bin/cc  -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names CMakeFiles/cmTC_889b3.dir/src.c.o -o cmTC_889b3
-        
+
       exitCode: 0
+...
+---
+events:
+  - kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindPkgConfig.cmake:517 (find_program)"
+      - "/opt/homebrew/share/cmake/Modules/FindOpenSSL.cmake:295 (find_package)"
+      - "CMakeLists.txt:13 (find_package)"
+    mode: "program"
+    variable: "PKG_CONFIG_EXECUTABLE"
+    description: "pkg-config executable"
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "pkg-config"
+      - "pkgconf"
+    candidate_directories:
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path/"
+      - "/Users/jonastemplestein/.grok/bin/"
+      - "/Users/jonastemplestein/.opencode/bin/"
+      - "/opt/homebrew/opt/ruby/bin/"
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin/"
+      - "/Users/jonastemplestein/.codeium/windsurf/bin/"
+      - "/Users/jonastemplestein/.bun/bin/"
+      - "/Users/jonastemplestein/bin/"
+      - "/Users/jonastemplestein/.local/bin/"
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/sbin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin/"
+      - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ/"
+      - "/Users/jonastemplestein/.deno/bin/"
+      - "/Users/jonastemplestein/Library/pnpm/"
+      - "/Applications/Ghostty.app/Contents/MacOS/"
+      - "/Users/jonastemplestein/.orbstack/bin/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/bin/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/sbin/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/"
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/sbin/"
+      - "/opt/homebrew/"
+      - "/usr/local/bin/"
+      - "/usr/local/sbin/"
+      - "/usr/local/"
+      - "/usr/bin/"
+      - "/usr/sbin/"
+      - "/usr/"
+      - "/bin/"
+      - "/sbin/"
+      - "/usr/X11R6/bin/"
+      - "/usr/X11R6/sbin/"
+      - "/usr/X11R6/"
+      - "/usr/pkg/bin/"
+      - "/usr/pkg/sbin/"
+      - "/usr/pkg/"
+      - "/opt/bin/"
+      - "/opt/sbin/"
+      - "/opt/"
+      - "/sw/bin/"
+      - "/sw/sbin/"
+      - "/sw/"
+      - "/opt/local/bin/"
+      - "/opt/local/sbin/"
+      - "/opt/local/"
+      - "/Users/jonastemplestein/Applications/"
+      - "/Applications/"
+      - "/Applications/Xcode.app/Contents/Applications/"
+      - "/Applications/Xcode.app/Contents/Developer/Applications/"
+    searched_directories:
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path/pkg-config"
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path/pkgconf"
+      - "/Users/jonastemplestein/.grok/bin/pkg-config"
+      - "/Users/jonastemplestein/.grok/bin/pkgconf"
+      - "/Users/jonastemplestein/.opencode/bin/pkg-config"
+      - "/Users/jonastemplestein/.opencode/bin/pkgconf"
+      - "/opt/homebrew/opt/ruby/bin/pkg-config"
+      - "/opt/homebrew/opt/ruby/bin/pkgconf"
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin/pkg-config"
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin/pkgconf"
+      - "/Users/jonastemplestein/.codeium/windsurf/bin/pkg-config"
+      - "/Users/jonastemplestein/.codeium/windsurf/bin/pkgconf"
+      - "/Users/jonastemplestein/.bun/bin/pkg-config"
+      - "/Users/jonastemplestein/.bun/bin/pkgconf"
+      - "/Users/jonastemplestein/bin/pkg-config"
+      - "/Users/jonastemplestein/bin/pkgconf"
+      - "/Users/jonastemplestein/.local/bin/pkg-config"
+      - "/Users/jonastemplestein/.local/bin/pkgconf"
+    found: "/opt/homebrew/bin/pkg-config"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr"
+        - "/"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr/X11R6"
+        - "/usr/pkg"
+        - "/opt"
+        - "/sw"
+        - "/opt/local"
+      CMAKE_SYSTEM_APPBUNDLE_PATH:
+        - "/Users/jonastemplestein/Applications"
+        - "/Applications"
+        - "/Applications/Xcode.app/Contents/Applications"
+        - "/Applications/Xcode.app/Contents/Developer/Applications"
+  - kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindPkgConfig.cmake:761 (find_library)"
+      - "/opt/homebrew/share/cmake/Modules/FindPkgConfig.cmake:811 (_pkg_find_libs)"
+      - "/opt/homebrew/share/cmake/Modules/FindPkgConfig.cmake:1149 (_pkg_recalculate)"
+      - "/opt/homebrew/share/cmake/Modules/FindPkgConfig.cmake:1166 (_pkg_check_modules_internal)"
+      - "/opt/homebrew/share/cmake/Modules/FindOpenSSL.cmake:297 (pkg_check_modules)"
+      - "CMakeLists.txt:13 (find_package)"
+    mode: "library"
+    variable: "pkgcfg_lib__OPENSSL_ssl"
+    description: "Path to a library."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ssl"
+    candidate_directories:
+      - "/opt/homebrew/Cellar/openssl@3/3.6.3/lib/"
+    found: "/opt/homebrew/Cellar/openssl@3/3.6.3/lib/libssl.dylib"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr"
+        - "/"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr/X11R6"
+        - "/usr/pkg"
+        - "/opt"
+        - "/sw"
+        - "/opt/local"
+      CMAKE_SYSTEM_LIBRARY_PATH:
+        - "/usr/lib/X11"
+      CMAKE_SYSTEM_FRAMEWORK_PATH:
+        - "~/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Network/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Library/Frameworks"
+        - "/Library/Frameworks"
+        - "/Network/Library/Frameworks"
+        - "/System/Library/Frameworks"
+  - kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindPkgConfig.cmake:761 (find_library)"
+      - "/opt/homebrew/share/cmake/Modules/FindPkgConfig.cmake:811 (_pkg_find_libs)"
+      - "/opt/homebrew/share/cmake/Modules/FindPkgConfig.cmake:1149 (_pkg_recalculate)"
+      - "/opt/homebrew/share/cmake/Modules/FindPkgConfig.cmake:1166 (_pkg_check_modules_internal)"
+      - "/opt/homebrew/share/cmake/Modules/FindOpenSSL.cmake:297 (pkg_check_modules)"
+      - "CMakeLists.txt:13 (find_package)"
+    mode: "library"
+    variable: "pkgcfg_lib__OPENSSL_crypto"
+    description: "Path to a library."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "crypto"
+    candidate_directories:
+      - "/opt/homebrew/Cellar/openssl@3/3.6.3/lib/"
+    found: "/opt/homebrew/Cellar/openssl@3/3.6.3/lib/libcrypto.dylib"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr"
+        - "/"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr/X11R6"
+        - "/usr/pkg"
+        - "/opt"
+        - "/sw"
+        - "/opt/local"
+      CMAKE_SYSTEM_LIBRARY_PATH:
+        - "/usr/lib/X11"
+      CMAKE_SYSTEM_FRAMEWORK_PATH:
+        - "~/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Network/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Library/Frameworks"
+        - "/Library/Frameworks"
+        - "/Network/Library/Frameworks"
+        - "/System/Library/Frameworks"
+  - kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindOpenSSL.cmake:370 (find_path)"
+      - "CMakeLists.txt:13 (find_package)"
+    mode: "path"
+    variable: "OPENSSL_INCLUDE_DIR"
+    description: "Path to a file."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "openssl/ssl.h"
+    candidate_directories:
+      - "/opt/homebrew/opt/openssl@3/include/"
+      - "/opt/homebrew/opt/openssl@3/"
+      - "/opt/homebrew/Cellar/openssl@3/3.6.3/include/include/"
+      - "/opt/homebrew/Cellar/openssl@3/3.6.3/include/"
+    searched_directories:
+      - "/opt/homebrew/opt/openssl@3/include/openssl.framework/Headers/ssl.h"
+      - "/opt/homebrew/opt/openssl@3/openssl.framework/Headers/ssl.h"
+      - "/opt/homebrew/Cellar/openssl@3/3.6.3/include/include/openssl.framework/Headers/ssl.h"
+      - "/opt/homebrew/Cellar/openssl@3/3.6.3/include/openssl.framework/Headers/ssl.h"
+    found: "/opt/homebrew/opt/openssl@3/include/"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr"
+        - "/"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr/X11R6"
+        - "/usr/pkg"
+        - "/opt"
+        - "/sw"
+        - "/opt/local"
+      CMAKE_SYSTEM_INCLUDE_PATH:
+        - "/usr/include/X11"
+      CMAKE_SYSTEM_FRAMEWORK_PATH:
+        - "~/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Network/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Library/Frameworks"
+        - "/Library/Frameworks"
+        - "/Network/Library/Frameworks"
+        - "/System/Library/Frameworks"
+  - kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindOpenSSL.cmake:628 (find_library)"
+      - "CMakeLists.txt:13 (find_package)"
+    mode: "library"
+    variable: "OPENSSL_SSL_LIBRARY"
+    description: "Path to a library."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "ssl"
+      - "ssleay32"
+      - "ssleay32MD"
+    candidate_directories:
+      - "/opt/homebrew/opt/openssl@3/lib/"
+      - "/opt/homebrew/opt/openssl@3/"
+      - "/opt/homebrew/Cellar/openssl@3/3.6.3/lib/"
+    found: "/opt/homebrew/opt/openssl@3/lib/libssl.dylib"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr"
+        - "/"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr/X11R6"
+        - "/usr/pkg"
+        - "/opt"
+        - "/sw"
+        - "/opt/local"
+      CMAKE_SYSTEM_LIBRARY_PATH:
+        - "/usr/lib/X11"
+      CMAKE_SYSTEM_FRAMEWORK_PATH:
+        - "~/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Network/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Library/Frameworks"
+        - "/Library/Frameworks"
+        - "/Network/Library/Frameworks"
+        - "/System/Library/Frameworks"
+  - kind: "find-v1"
+    backtrace:
+      - "/opt/homebrew/share/cmake/Modules/FindOpenSSL.cmake:642 (find_library)"
+      - "CMakeLists.txt:13 (find_package)"
+    mode: "library"
+    variable: "OPENSSL_CRYPTO_LIBRARY"
+    description: "Path to a library."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "crypto"
+    candidate_directories:
+      - "/opt/homebrew/opt/openssl@3/lib/"
+      - "/opt/homebrew/opt/openssl@3/"
+      - "/opt/homebrew/Cellar/openssl@3/3.6.3/lib/"
+    found: "/opt/homebrew/opt/openssl@3/lib/libcrypto.dylib"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr"
+        - "/"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr/X11R6"
+        - "/usr/pkg"
+        - "/opt"
+        - "/sw"
+        - "/opt/local"
+      CMAKE_SYSTEM_LIBRARY_PATH:
+        - "/usr/lib/X11"
+      CMAKE_SYSTEM_FRAMEWORK_PATH:
+        - "~/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Network/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Library/Frameworks"
+        - "/Library/Frameworks"
+        - "/Network/Library/Frameworks"
+        - "/System/Library/Frameworks"
+  - kind: "find-v1"
+    backtrace:
+      - "CMakeLists.txt:111 (find_library)"
+    mode: "library"
+    variable: "ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK"
+    description: "Path to a library."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "AudioToolbox"
+    candidate_directories:
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path/"
+      - "/Users/jonastemplestein/.grok/bin/"
+      - "/Users/jonastemplestein/.opencode/bin/"
+      - "/opt/homebrew/opt/ruby/bin/"
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin/"
+      - "/Users/jonastemplestein/.codeium/windsurf/bin/"
+      - "/Users/jonastemplestein/.bun/bin/"
+      - "/Users/jonastemplestein/bin/"
+      - "/Users/jonastemplestein/.local/bin/"
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/sbin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ/"
+      - "/Users/jonastemplestein/.deno/bin/"
+      - "/Users/jonastemplestein/Library/pnpm/"
+      - "/Applications/Ghostty.app/Contents/MacOS/"
+      - "/Users/jonastemplestein/.orbstack/bin/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/"
+      - "/opt/homebrew/lib/"
+      - "/opt/homebrew/"
+      - "/usr/local/"
+      - "/usr/lib/"
+      - "/usr/"
+      - "/opt/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks/"
+      - "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/"
+      - "/Library/Frameworks/"
+      - "/System/Library/Frameworks/"
+    found: "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/AudioToolbox.framework"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr"
+        - "/"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr/X11R6"
+        - "/usr/pkg"
+        - "/opt"
+        - "/sw"
+        - "/opt/local"
+      CMAKE_SYSTEM_LIBRARY_PATH:
+        - "/usr/lib/X11"
+      CMAKE_SYSTEM_FRAMEWORK_PATH:
+        - "~/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Network/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Library/Frameworks"
+        - "/Library/Frameworks"
+        - "/Network/Library/Frameworks"
+        - "/System/Library/Frameworks"
+  - kind: "find-v1"
+    backtrace:
+      - "CMakeLists.txt:112 (find_library)"
+    mode: "library"
+    variable: "ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK"
+    description: "Path to a library."
+    settings:
+      SearchFramework: "FIRST"
+      SearchAppBundle: "FIRST"
+      CMAKE_FIND_USE_CMAKE_PATH: true
+      CMAKE_FIND_USE_CMAKE_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_SYSTEM_ENVIRONMENT_PATH: true
+      CMAKE_FIND_USE_CMAKE_SYSTEM_PATH: true
+      CMAKE_FIND_USE_INSTALL_PREFIX: true
+    names:
+      - "CoreFoundation"
+    candidate_directories:
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path/"
+      - "/Users/jonastemplestein/.grok/bin/"
+      - "/Users/jonastemplestein/.opencode/bin/"
+      - "/opt/homebrew/opt/ruby/bin/"
+      - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin/"
+      - "/Users/jonastemplestein/.codeium/windsurf/bin/"
+      - "/Users/jonastemplestein/.bun/bin/"
+      - "/Users/jonastemplestein/bin/"
+      - "/Users/jonastemplestein/.local/bin/"
+      - "/opt/homebrew/bin/"
+      - "/opt/homebrew/sbin/"
+      - "/usr/local/bin/"
+      - "/System/Cryptexes/App/usr/bin/"
+      - "/usr/bin/"
+      - "/bin/"
+      - "/usr/sbin/"
+      - "/sbin/"
+      - "/Library/Apple/usr/bin/"
+      - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ/"
+      - "/Users/jonastemplestein/.deno/bin/"
+      - "/Users/jonastemplestein/Library/pnpm/"
+      - "/Applications/Ghostty.app/Contents/MacOS/"
+      - "/Users/jonastemplestein/.orbstack/bin/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/lib/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr/"
+      - "/opt/homebrew/lib/"
+      - "/opt/homebrew/"
+      - "/usr/local/"
+      - "/usr/lib/"
+      - "/usr/"
+      - "/opt/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/"
+      - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks/"
+      - "/Applications/Xcode.app/Contents/Developer/Library/Frameworks/"
+      - "/Library/Frameworks/"
+      - "/System/Library/Frameworks/"
+    found: "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks/CoreFoundation.framework"
+    search_context:
+      ENV{PATH}:
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/opt/homebrew/bin"
+        - "/opt/homebrew/sbin"
+        - "/usr/local/bin"
+        - "/System/Cryptexes/App/usr/bin"
+        - "/usr/bin"
+        - "/bin"
+        - "/usr/sbin"
+        - "/sbin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/local/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/bin"
+        - "/var/run/com.apple.security.cryptexd/codex.system/bootstrap/usr/appleinternal/bin"
+        - "/Library/Apple/usr/bin"
+        - "/Users/jonastemplestein/.codex/tmp/arg0/codex-arg03WfXJQ"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/lib/node_modules/@openai/codex/node_modules/@openai/codex-darwin-arm64/vendor/aarch64-apple-darwin/codex-path"
+        - "/Users/jonastemplestein/.grok/bin"
+        - "/Users/jonastemplestein/.opencode/bin"
+        - "/opt/homebrew/opt/ruby/bin"
+        - "/Users/jonastemplestein/.nvm/versions/node/v24.4.0/bin"
+        - "/Users/jonastemplestein/.codeium/windsurf/bin"
+        - "/Users/jonastemplestein/.bun/bin"
+        - "/Users/jonastemplestein/bin"
+        - "/Users/jonastemplestein/.local/bin"
+        - "/Users/jonastemplestein/.deno/bin"
+        - "/Users/jonastemplestein/Library/pnpm"
+        - "/Applications/Ghostty.app/Contents/MacOS"
+        - "/Users/jonastemplestein/.orbstack/bin"
+        - "/Users/jonastemplestein/.orbstack/bin"
+      CMAKE_INSTALL_PREFIX: "/usr/local"
+      CMAKE_SYSTEM_PREFIX_PATH:
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/usr"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr"
+        - "/"
+        - "/opt/homebrew"
+        - "/usr/local"
+        - "/usr/X11R6"
+        - "/usr/pkg"
+        - "/opt"
+        - "/sw"
+        - "/opt/local"
+      CMAKE_SYSTEM_LIBRARY_PATH:
+        - "/usr/lib/X11"
+      CMAKE_SYSTEM_FRAMEWORK_PATH:
+        - "~/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/Network/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk/System/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/Library/Frameworks"
+        - "/Applications/Xcode.app/Contents/Developer/Library/Frameworks"
+        - "/Library/Frameworks"
+        - "/Network/Library/Frameworks"
+        - "/System/Library/Frameworks"
 ...

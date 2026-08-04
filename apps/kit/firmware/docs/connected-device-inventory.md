@@ -5,6 +5,27 @@ This is both the current four-board inventory and the safety procedure for
 finding the boards again after the shared USB hub is unplugged, moved, or
 enumerated in a different order.
 
+## Current attachment state — 2026-08-04 13:25 Europe/London
+
+A non-disruptive `serial.tools.list_ports -v` inventory sees all four known
+boards. StackChan `68:EE:8F:D8:53:20` is `/dev/cu.usbmodem2101`, M5StickS3
+`70:04:1D:D5:45:88` is `/dev/cu.usbmodem11301`, HAVPE
+`D8:3B:DA:46:20:34` is `/dev/cu.usbmodem11101`, and the denylisted Waveshare
+`1C:DB:D4:7A:16:C8` is `/dev/cu.usbmodem11201`. These path names are only the
+current observations; the exact serial remains the selection authority.
+
+The exact StackChan has since been rebuilt and flashed with its body adapter.
+Production capability calls have acknowledged its physical servo nod and
+head-shake trajectories, and its 12 body LEDs now consume the same logical
+12-pixel conversation-light frame as HAVPE. The Waveshare was enumerated only;
+it was not opened, reset, or flashed.
+
+On 2026-08-04 the exact M5StickS3 was re-resolved by stable serial and flashed
+with the TALK/MENU control model. Esptool independently reported MAC
+`70:04:1D:D5:45:88` and verified every written region; post-flash serial
+evidence reached both control-transport `ready` and PCM-session `ready`. The
+HAVPE and denylisted Waveshare were not opened by that operation.
+
 ## Selection invariant
 
 Never select a flash target from `/dev/cu.usbmodemNNN` alone. That suffix is
@@ -38,12 +59,12 @@ also reports the `/dev/cu.*` path needed by ESP-IDF tools.
 
 ## Connected boards
 
-| Board                                  | Stable USB serial / ROM MAC | Observed port           | Observed location | Current-firmware evidence                                                          |
-| -------------------------------------- | --------------------------- | ----------------------- | ----------------- | ---------------------------------------------------------------------------------- |
-| StackChan / M5Stack CoreS3             | `68:EE:8F:D8:53:20`         | `/dev/cu.usbmodem2101`  | `2-1`             | Separately connected; Iterate voice/AEC/avatar firmware, face physically confirmed |
-| M5StickS3                              | `70:04:1D:D5:45:88`         | `/dev/cu.usbmodem11301` | `1-1.3`           | Iterate voice firmware and first physical Iterate Kit firmware target              |
-| Waveshare ESP32-S3 AMOLED touch-screen device (**inventory only; never flash**) | `1C:DB:D4:7A:16:C8` | `/dev/cu.usbmodem11201` | `1-1.2` | Explicitly excluded from this firmware campaign                                    |
-| Home Assistant Voice Preview Edition   | `D8:3B:DA:46:20:34`         | `/dev/cu.usbmodem11101` | `1-1.1`           | Iterate voice/AEC firmware                                                         |
+| Board                                                                           | Stable USB serial / ROM MAC | Observed port           | Observed location | Current-firmware evidence                                                          |
+| ------------------------------------------------------------------------------- | --------------------------- | ----------------------- | ----------------- | ---------------------------------------------------------------------------------- |
+| StackChan / M5Stack CoreS3                                                      | `68:EE:8F:D8:53:20`         | `/dev/cu.usbmodem2101`  | `2-1`             | Separately connected; Iterate voice/AEC/avatar firmware, face physically confirmed |
+| M5StickS3                                                                       | `70:04:1D:D5:45:88`         | `/dev/cu.usbmodem11301` | `1-1.3`           | Iterate voice firmware and first physical Iterate Kit firmware target              |
+| Waveshare ESP32-S3 AMOLED touch-screen device (**inventory only; never flash**) | `1C:DB:D4:7A:16:C8`         | `/dev/cu.usbmodem11201` | `1-1.2`           | Explicitly excluded from this firmware campaign                                    |
+| Home Assistant Voice Preview Edition                                            | `D8:3B:DA:46:20:34`         | `/dev/cu.usbmodem11101` | `1-1.1`           | Iterate voice/AEC firmware                                                         |
 
 The ports and locations in this table are observations from the most recent
 enumeration, not arguments to save in a script. The 2026-08-01 hub reconnect
@@ -61,14 +82,14 @@ configuration. Network credentials are intentionally never recorded here.
 The following addresses are observations for diagnostics, not stable device
 identifiers:
 
-| Board | Address on 2026-08-03 |
-| --- | --- |
-| M5StickS3 | `192.168.1.51` |
-| StackChan / M5Stack CoreS3 | `192.168.1.46` |
-| Home Assistant Voice Preview Edition | `192.168.1.43` |
-| Waveshare ESP32-S3 touch-screen device | `192.168.1.36` |
-| Test Mac | `192.168.1.31` |
-| Router | `192.168.1.1` |
+| Board                                  | Address on 2026-08-03 |
+| -------------------------------------- | --------------------- |
+| M5StickS3                              | `192.168.1.51`        |
+| StackChan / M5Stack CoreS3             | `192.168.1.46`        |
+| Home Assistant Voice Preview Edition   | `192.168.1.43`        |
+| Waveshare ESP32-S3 touch-screen device | `192.168.1.36`        |
+| Test Mac                               | `192.168.1.31`        |
+| Router                                 | `192.168.1.1`         |
 
 A short zero-loss ping sample is useful only as a reachability check. Guest
 Wi-Fi latency has varied enough to invalidate a prior physical audio interval,

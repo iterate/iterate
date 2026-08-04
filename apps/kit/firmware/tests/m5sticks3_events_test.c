@@ -292,6 +292,10 @@ static void fixture_init(struct fixture *fixture) {
   assert(
       iterate_kit_m5sticks3_init(
           &fixture->device, &device_options) == CAPNWEB_OK);
+  /* This is a device/event fixture; model the shared session's ready edge. */
+  assert(
+      iterate_kit_m5sticks3_set_media_ready(
+          &fixture->device, true) == ITERATE_KIT_OK);
   session_options = (struct capnweb_session_options){
     iterate_kit_m5sticks3_capability(&fixture->device),
     capture_text,
@@ -765,9 +769,9 @@ static void flattened_host_invocation_reaches_the_static_method_table(void) {
 
 /*
  * A call and a microphone turn are deliberately different state machines.
- * The top button (or conversation capability) owns the disposable provider
- * lifetime in userspace, while the front button (or pushToTalk capability)
- * alone owns the microphone. The target keeps its `/pcm` transport warm, but
+ * Conversation actions own the disposable provider lifetime in userspace,
+ * while TALK actions (physical or pushToTalk capability) alone own the
+ * microphone. The target keeps its `/pcm` transport warm, but
  * this device profile deliberately knows nothing about that transport.
  * Collapsing call and PTT states previously turned provider VAD on and made
  * every call capture continuously, violating the product decision and making

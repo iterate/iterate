@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "failure": null,
+  "frameBytes": 640,
+  "microphone": {
+    "bytes": 32279040,
+    "frames": 50436,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-release-matrix-20260804-network-valid-01/2026-08-04T10-06-55-298Z/pcm/microphone-uplink.pcm16le",
+    "sha256": "258f45207cc53e90bcf408276ce69c50a038dbb38a886b15e868d6c47dd8ffa0"
+  },
+  "outputDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-release-matrix-20260804-network-valid-01/2026-08-04T10-06-55-298Z/pcm",
+  "producedAt": "2026-08-04T10:24:19.769Z",
+  "sampleRateHz": 16000,
+  "speaker": {
+    "bytes": 20640000,
+    "frames": 32250,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-release-matrix-20260804-network-valid-01/2026-08-04T10-06-55-298Z/pcm/speaker-downlink.pcm16le",
+    "sha256": "2fe2f97191074936c10a3f1aaddabd98801634bb1d2988332d9ec18a2ee07811"
+  },
+  "timelinePath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-release-matrix-20260804-network-valid-01/2026-08-04T10-06-55-298Z/pcm/timeline.jsonl"
+}

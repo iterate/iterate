@@ -64,6 +64,17 @@ export interface Pcm16ArtifactInspection {
   sampleRateHz: number;
 }
 
+export interface Pcm16ArtifactWindow {
+  artifactPath: string;
+  byteLength: number;
+  endByte: number;
+  endSample: number;
+  sampleCount: number;
+  sampleRateHz: number;
+  startByte: number;
+  startSample: number;
+}
+
 export interface CompletedPcm16Capture extends Pcm16ArtifactInspection {
   captureProvenance: MacOsCaptureProvenance;
 }
@@ -81,7 +92,15 @@ const startupEvidenceMs = 50;
 const startupTimeoutMs = 5_000;
 const shutdownTimeoutMs = 5_000;
 const forcedShutdownTimeoutMs = 2_000;
-const ffmpegVersionTimeoutMs = 2_000;
+/*
+ * Recorder discovery starts a separate short-lived process before CoreAudio
+ * acquisition. Under the full parallel firmware/voice suite, macOS can leave
+ * that healthy child runnable but unscheduled for slightly over two seconds.
+ * Ten seconds remains a hard failure bound while keeping host scheduler load
+ * outside the audio-device diagnosis; the later five-second readiness bound
+ * still independently catches a recorder which launches but produces no PCM.
+ */
+const recorderVersionTimeoutMs = 10_000;
 const maximumDiagnosticBytes = 32 * 1_024;
 const execFileAsync = promisify(execFile);
 const unknownProcessingProvenance: MacOsCaptureProcessingProvenance = Object.freeze({
@@ -173,6 +192,14 @@ export class MacOsPcm16Capture {
     if (process.platform !== "darwin") {
       throw new Error("The physical acoustic recorder requires macOS AVFoundation.");
     }
+    /*
+     * Provenance labels are an authority boundary, so reject an unverifiable
+     * caller claim before version probes, device discovery, or microphone
+     * acquisition. Deferring this check until after the recorder opened made
+     * a pure validation error consume the full five-second startup budget and
+     * briefly seize the physical oracle from other tests.
+     */
+    assertCaptureProcessingClaimCanBeVerified(options);
     const sampleRateHz = options.sampleRateHz ?? defaultSampleRateHz;
     if (!Number.isSafeInteger(sampleRateHz) || sampleRateHz <= 0) {
       throw new Error("The acoustic capture sample rate must be a positive integer.");
@@ -407,6 +434,51 @@ export async function inspectPcm16Artifact(
   };
 }
 
+/**
+ * Converts two live file-position observations into a replayable PCM interval.
+ *
+ * The physical harness uses these observations to slice one continuously
+ * streamed recording. Persisting only derived energy and STT loses the source
+ * coordinates needed to audit a recognizer or threshold fix later. Validate
+ * that both markers describe the same PCM clock before returning byte offsets;
+ * silently mixing captures or sample rates would produce plausible but false
+ * acoustic evidence.
+ */
+export function describePcm16ArtifactWindow(
+  start: Pcm16ArtifactInspection,
+  end: Pcm16ArtifactInspection,
+): Pcm16ArtifactWindow {
+  const bytesPerSample = Int16Array.BYTES_PER_ELEMENT;
+  if (start.artifactPath !== end.artifactPath) {
+    throw new Error("A PCM16 evidence window must belong to one acoustic artifact.");
+  }
+  if (start.sampleRateHz !== end.sampleRateHz) {
+    throw new Error("A PCM16 evidence window must use one sample clock.");
+  }
+  for (const marker of [start, end]) {
+    if (
+      marker.capturedSampleCount < 0 ||
+      !Number.isSafeInteger(marker.capturedSampleCount) ||
+      marker.capturedByteLength !== marker.capturedSampleCount * bytesPerSample
+    ) {
+      throw new Error("A PCM16 evidence marker has inconsistent byte and sample positions.");
+    }
+  }
+  if (end.capturedSampleCount < start.capturedSampleCount) {
+    throw new Error("A PCM16 evidence window cannot run backwards.");
+  }
+  return {
+    artifactPath: start.artifactPath,
+    byteLength: end.capturedByteLength - start.capturedByteLength,
+    endByte: end.capturedByteLength,
+    endSample: end.capturedSampleCount,
+    sampleCount: end.capturedSampleCount - start.capturedSampleCount,
+    sampleRateHz: start.sampleRateHz,
+    startByte: start.capturedByteLength,
+    startSample: start.capturedSampleCount,
+  };
+}
+
 async function resolveCaptureInput(
   options: MacOsPcm16CaptureOptions,
   ffmpegExecutable: string,
@@ -473,14 +545,7 @@ function assertCaptureInputIdentity(input: MacOsCaptureInputIdentity) {
 async function resolveCaptureProcessing(
   options: MacOsPcm16CaptureOptions,
 ): Promise<MacOsCaptureProcessingProvenance> {
-  const claim = options.processing ?? unknownProcessingProvenance;
-  assertCaptureProcessingProvenance(claim);
-  if (
-    !options.verifyProcessing &&
-    options.processing?.verification === "host-resolved-avfoundation-microphone-mode"
-  ) {
-    throw new Error("Host-resolved acoustic microphone mode requires a processing verifier.");
-  }
+  const claim = assertCaptureProcessingClaimCanBeVerified(options);
   const verifier = options.verifyProcessing ?? (() => readMacOsAvFoundationProcessingProvenance());
   const resolved = await verifier(structuredClone(claim));
   assertCaptureProcessingProvenance(resolved);
@@ -491,6 +556,20 @@ async function resolveCaptureProcessing(
     );
   }
   return structuredClone(resolved);
+}
+
+function assertCaptureProcessingClaimCanBeVerified(
+  options: MacOsPcm16CaptureOptions,
+): MacOsCaptureProcessingProvenance {
+  const claim = options.processing ?? unknownProcessingProvenance;
+  assertCaptureProcessingProvenance(claim);
+  if (
+    !options.verifyProcessing &&
+    options.processing?.verification === "host-resolved-avfoundation-microphone-mode"
+  ) {
+    throw new Error("Host-resolved acoustic microphone mode requires a processing verifier.");
+  }
+  return claim;
 }
 
 function assertCaptureProcessingProvenance(provenance: MacOsCaptureProcessingProvenance) {
@@ -525,7 +604,7 @@ async function readRecorderVersion(executable: string) {
     const { stdout } = await execFileAsync(executable, ["--version"], {
       encoding: "utf8",
       maxBuffer: 8 * 1_024,
-      timeout: ffmpegVersionTimeoutMs,
+      timeout: recorderVersionTimeoutMs,
     });
     const version = stdout.split(/\r?\n/, 1)[0]?.trim();
     if (!version) throw new Error("version output was empty");

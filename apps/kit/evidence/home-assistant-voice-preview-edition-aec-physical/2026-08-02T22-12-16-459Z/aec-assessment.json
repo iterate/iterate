@@ -1,0 +1,91 @@
+{
+  "ambient": {
+    "dbfs": -93.10278578367894,
+    "peak": 2,
+    "rms": 0.7249543260333282
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -45.12904993899237,
+      "peak": 1459,
+      "rms": 181.5504952715176
+    },
+    "nearEndGain": 0.6281553750865078,
+    "nearEndSimilarity": 0.547831717852672,
+    "passed": false,
+    "residualToFarEndDb": -34.61728723964513,
+    "residualToNearEndDb": -0.3613634844615318
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -68.75454323571475,
+        "peak": 259,
+        "rms": 11.959768496923342
+      },
+      "kind": "tone",
+      "passed": true,
+      "source": {
+        "dbfs": -5.715077012672406,
+        "peak": 24000,
+        "rms": 16970.556513738728
+      },
+      "sourceSimilarity": 0.01581420656676471
+    },
+    {
+      "clean": {
+        "dbfs": -80.66426131730366,
+        "peak": 17,
+        "rms": 3.0355463538985314
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": true,
+      "source": {
+        "dbfs": -11.056844287220695,
+        "peak": 15663,
+        "rms": 9175.034809198274
+      },
+      "sourceSimilarity": 0.011486471303565494
+    },
+    {
+      "clean": {
+        "dbfs": -61.196678535480146,
+        "peak": 179,
+        "rms": 28.550650532576896
+      },
+      "kind": "speech-shaped",
+      "passed": true,
+      "source": {
+        "dbfs": -3.4239737327558255,
+        "peak": 32768,
+        "rms": 22092.824788972775
+      },
+      "sourceSimilarity": 0.002418996870646555
+    }
+  ],
+  "nearEnd": {
+    "clean": {
+      "dbfs": -46.34707341068033,
+      "peak": 927,
+      "rms": 157.79609970887535
+    },
+    "passed": false,
+    "source": {
+      "dbfs": -3.428260683478808,
+      "peak": 32768,
+      "rms": 22081.923489674857
+    },
+    "sourceSimilarity": 0.004609468037998673
+  },
+  "passed": false,
+  "reasons": [
+    "The run observed 1 uplink frame drop.",
+    "The run observed 1 playback reset.",
+    "Mac-only clean uplink had only 0.005 similarity to the retained Mac stimulus.",
+    "Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.548, gain 0.628, residual -0.36 dB."
+  ],
+  "validity": {
+    "passed": false,
+    "reasons": ["The run observed 1 uplink frame drop.", "The run observed 1 playback reset."]
+  }
+}

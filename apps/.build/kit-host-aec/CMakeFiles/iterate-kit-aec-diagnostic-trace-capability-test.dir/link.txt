@@ -1,0 +1,1 @@
+/usr/bin/cc -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-aec-diagnostic-trace-capability-test.dir/tests/aec_diagnostic_trace_capability_test.c.o" -o iterate-kit-aec-diagnostic-trace-capability-test  libiterate-kit-capabilities.a libiterate-kit-core.a vendor/capnweb/libcapnweb.a

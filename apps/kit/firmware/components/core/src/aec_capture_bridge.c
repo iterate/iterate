@@ -37,10 +37,14 @@ static bool distinct_buffers(
    * configuration mistake; the public lifetime contract forbids all overlap.
    */
   return options->near_frame != options->reference_frame &&
+      options->near_frame != options->playout_frame &&
       options->near_frame != options->clean_frame &&
       options->near_frame != options->egress_frame &&
+      options->reference_frame != options->playout_frame &&
       options->reference_frame != options->clean_frame &&
       options->reference_frame != options->egress_frame &&
+      options->playout_frame != options->clean_frame &&
+      options->playout_frame != options->egress_frame &&
       options->clean_frame != options->egress_frame;
 }
 
@@ -177,6 +181,7 @@ static enum iterate_kit_status process_frame(
       bridge->options.processor_context,
       bridge->options.near_frame,
       bridge->options.reference_frame,
+      bridge->options.playout_frame,
       bridge->options.clean_frame,
       bridge->options.processing_frame_samples);
   if (result != ITERATE_KIT_OK) {
@@ -231,6 +236,7 @@ enum iterate_kit_status iterate_kit_aec_capture_bridge_init(
       options->egress_frame_samples == 0U ||
       options->near_frame == NULL ||
       options->reference_frame == NULL ||
+      options->playout_frame == NULL ||
       options->clean_frame == NULL ||
       options->egress_frame == NULL ||
       options->processing_frame_capacity <
@@ -255,9 +261,11 @@ enum iterate_kit_status iterate_kit_aec_capture_bridge_push_aligned(
     uint64_t captured_through_at_us,
     const int16_t *near_samples,
     const int16_t *reference_samples,
+    const int16_t *playout_samples,
     size_t sample_count) {
   if (bridge == NULL || !bridge->initialized ||
       near_samples == NULL || reference_samples == NULL ||
+      playout_samples == NULL ||
       sample_count == 0U) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
@@ -312,6 +320,10 @@ enum iterate_kit_status iterate_kit_aec_capture_bridge_push_aligned(
         bridge->options.reference_frame + bridge->input_fill,
         reference_samples + source_offset,
         copied * sizeof(*reference_samples));
+    memcpy(
+        bridge->options.playout_frame + bridge->input_fill,
+        playout_samples + source_offset,
+        copied * sizeof(*playout_samples));
     bridge->input_fill += copied;
     source_offset += copied;
     saturating_add_u64(

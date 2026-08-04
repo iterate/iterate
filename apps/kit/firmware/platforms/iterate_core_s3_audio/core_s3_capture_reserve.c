@@ -139,6 +139,7 @@ iterate_kit_core_s3_capture_reserve_push_raw(
     struct iterate_kit_core_s3_capture_reserve *reserve,
     uint32_t sequence,
     uint64_t captured_through_at_us,
+    bool playback_content_active,
     const void *pcm,
     size_t bytes) {
   if (reserve == NULL || !reserve->initialized) {
@@ -191,6 +192,7 @@ iterate_kit_core_s3_capture_reserve_push_raw(
           write_count % ITERATE_KIT_CORE_S3_CAPTURE_RESERVE_CHUNKS];
   chunk->sequence = sequence;
   chunk->captured_through_at_us = captured_through_at_us;
+  chunk->playback_content_active = playback_content_active;
   memcpy(chunk->interleaved, pcm, ITERATE_KIT_CORE_S3_DMA_BYTES);
 
   /*

@@ -1,0 +1,43 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/shortanswer.ts
+
+{
+  "shortAnswers": [
+    {
+      "prompt": "Say the single word: cat.",
+      "softDryTicks": 0,
+      "softDryRefills": 0,
+      "starvedMs": 0,
+      "starveEvents": 0,
+      "sent": 27,
+      "played": 27
+    },
+    {
+      "prompt": "Reply with just: yes.",
+      "softDryTicks": 0,
+      "softDryRefills": 0,
+      "starvedMs": 0,
+      "starveEvents": 0,
+      "sent": 35,
+      "played": 35
+    },
+    {
+      "prompt": "Say only: hello.",
+      "softDryTicks": 0,
+      "softDryRefills": 0,
+      "starvedMs": 0,
+      "starveEvents": 0,
+      "sent": 35,
+      "played": 35
+    }
+  ],
+  "total": {
+    "softDryTicks": 0,
+    "softDryRefills": 0,
+    "starvedMs": 0,
+    "sent": 97,
+    "played": 97
+  },
+  "verdict": "PASS: short answers crossed the software boundary with zero listener starvation and no lost audio"
+}

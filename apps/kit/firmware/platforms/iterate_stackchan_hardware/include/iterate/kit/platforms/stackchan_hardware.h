@@ -5,6 +5,7 @@
 #include "iterate/kit/capabilities/leds.h"
 #include "iterate/kit/capabilities/screen.h"
 #include "iterate/kit/capabilities/servos.h"
+#include "iterate/kit/conversation_lights.h"
 #include "iterate/kit/status.h"
 
 #include <stdbool.h>
@@ -20,10 +21,8 @@ enum {
    * This count comes from the official StackChan body's PY32 LED controller,
    * not the CoreS3 itself. The controller stores one RGB565 word per pixel at
    * registers 0x30..0x47 and exposes the count in register 0x24.
-   */
+  */
   ITERATE_KIT_STACKCHAN_LED_COUNT = 12,
-  /* The official SCS0009 body faces forward at its 150-degree yaw position. */
-  ITERATE_KIT_STACKCHAN_YAW_CENTRE_DEGREES = 150,
 };
 
 /**
@@ -61,8 +60,8 @@ struct iterate_kit_stackchan_hardware_ops {
       size_t pixel_count);
   enum iterate_kit_status (*move_head)(
       void *context,
-      int16_t absolute_yaw_degrees,
-      int16_t absolute_pitch_degrees,
+      int16_t yaw_degrees,
+      int16_t pitch_degrees,
       uint16_t duration_ms);
   enum iterate_kit_status (*capture_jpeg)(
       void *context,
@@ -100,6 +99,19 @@ struct iterate_kit_servo_driver iterate_kit_stackchan_servo_driver(
     struct iterate_kit_stackchan_hardware *hardware);
 struct iterate_kit_camera_driver iterate_kit_stackchan_camera_driver(
     struct iterate_kit_stackchan_hardware *hardware);
+
+/**
+ * Renders the shared twelve-pixel conversation grammar onto the body LEDs.
+ *
+ * StackChan physically exposes two runs of six rather than HAVPE's ring, but
+ * they are one linear twelve-pixel PY32 framebuffer. Keeping this conversion
+ * beside the normal LED capability makes both status and remote writes pass
+ * through one complete-write shadow and one I/O owner; target code must never
+ * grow an independent interpretation of network/speaker/microphone state.
+ */
+enum iterate_kit_status iterate_kit_stackchan_hardware_show_status(
+    struct iterate_kit_stackchan_hardware *hardware,
+    const struct iterate_kit_conversation_visual_state *state);
 
 #ifdef __cplusplus
 }

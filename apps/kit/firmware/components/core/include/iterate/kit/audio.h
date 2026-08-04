@@ -110,11 +110,24 @@ struct iterate_kit_audio_controller {
   bool playback_flush_pending;
   bool push_to_talk_active;
   bool capture_frame_in_flight;
+  bool media_ready;
 };
 
 enum iterate_kit_status iterate_kit_audio_controller_init(
     struct iterate_kit_audio_controller *controller,
     const struct iterate_kit_audio_options *options);
+
+/**
+ * Applies the shared PCM session's media-admission decision.
+ *
+ * This is desired-state publication only: it performs no hardware or network
+ * I/O. In PTT mode the next bounded module poll stops an already-open capture
+ * after a false edge, while submit_capture() rejects any intervening completed
+ * frame. Full-duplex owners may keep their local AEC clock running; this gate
+ * controls whether cleaned frames can leave the device.
+ */
+enum iterate_kit_status iterate_kit_audio_set_media_ready(
+    struct iterate_kit_audio_controller *controller, bool ready);
 
 /**
  * Starts always-on capture for a full-duplex AEC profile. Push-to-talk

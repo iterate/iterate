@@ -148,7 +148,7 @@ int main(void) {
   static struct fixture fixture;
   static const char *const append_path[] = {"append"};
   static const char arguments[] =
-      "[{\"type\":\"voicelab/mic-frame\",\"ephemeral\":true,"
+      "[{\"type\":\"voice-agent/mic-frame\",\"ephemeral\":true,"
       "\"payload\":{\"seq\":1,\"pcm\":\"QUJDRA\"}}]";
   const struct capnweb_remote_capability main_capability = {0};
 
@@ -168,7 +168,7 @@ int main(void) {
       strcmp(
           fixture.captured[0],
           "[\"push\",[\"pipeline\",0,[\"append\"],"
-          "[{\"type\":\"voicelab/mic-frame\",\"ephemeral\":true,"
+          "[{\"type\":\"voice-agent/mic-frame\",\"ephemeral\":true,"
           "\"payload\":{\"seq\":1,\"pcm\":\"QUJDRA\"}}]]]") == 0);
   assert(strcmp(fixture.captured[1], "[\"release\",1,1]") == 0);
   assert(occupied_imports(&fixture) == 0U);

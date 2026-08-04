@@ -1,0 +1,1 @@
+/usr/bin/cc -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-voice-satellite-test.dir/tests/voice_satellite_test.c.o" -o iterate-kit-voice-satellite-test  libiterate-kit-voice-satellite.a libiterate-kit-capabilities.a libiterate-kit-core.a vendor/capnweb/libcapnweb.a

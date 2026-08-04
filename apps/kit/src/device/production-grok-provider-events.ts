@@ -26,6 +26,20 @@ const CompletedOutputAudioTranscript = z.object({
   type: z.literal("response.output_audio_transcript.done"),
 });
 
+const OutputAudioTranscriptDelta = z.object({
+  delta: z.string(),
+  response_id: z.string().min(1),
+  type: z.literal("response.output_audio_transcript.delta"),
+});
+
+const CompletedResponse = z.object({
+  response: z.object({
+    id: z.string().min(1),
+    status: z.literal("completed"),
+  }),
+  type: z.literal("response.done"),
+});
+
 const CompletedInputAudioTranscript = z.object({
   status: z.literal("completed"),
   transcript: z.string(),
@@ -144,19 +158,53 @@ export function completedProviderOutputTranscript(
   const event = events.findLast(
     (candidate) => candidate.providerType === "response.output_audio_transcript.done",
   );
-  if (!event) {
-    throw new Error("The Grok stream did not retain a completed output-audio transcript.");
-  }
-  let value: unknown;
-  try {
-    value = JSON.parse(event.raw);
-  } catch (error) {
-    throw new Error("The completed output-audio transcript was not valid JSON.", {
-      cause: error,
+  let transcript: string;
+  if (event) {
+    let value: unknown;
+    try {
+      value = JSON.parse(event.raw);
+    } catch (error) {
+      throw new Error("The completed output-audio transcript was not valid JSON.", {
+        cause: error,
+      });
+    }
+    transcript = CompletedOutputAudioTranscript.parse(value).transcript.trim();
+  } else {
+    /*
+     * grok-voice-think-fast-2.0 does not consistently emit the convenience
+     * transcript-done event. It does consistently fence a successful response
+     * with response.done. Reconstruct only deltas carrying that exact response
+     * id and only after the completion fence exists; loose delta aggregation
+     * could join two turns or bless a sentence cut short by disconnect.
+     */
+    const completed = events.findLast((candidate) => {
+      if (candidate.providerType !== "response.done") return false;
+      try {
+        return CompletedResponse.safeParse(JSON.parse(candidate.raw)).success;
+      } catch {
+        return false;
+      }
     });
+    if (!completed) {
+      throw new Error("The Grok stream did not retain a completed output-audio transcript.");
+    }
+    const responseId = CompletedResponse.parse(JSON.parse(completed.raw)).response.id;
+    transcript = events
+      .filter((candidate) => candidate.sequence < completed.sequence)
+      .flatMap((candidate) => {
+        if (candidate.providerType !== "response.output_audio_transcript.delta") return [];
+        try {
+          const parsed = OutputAudioTranscriptDelta.safeParse(JSON.parse(candidate.raw));
+          return parsed.success && parsed.data.response_id === responseId
+            ? [parsed.data.delta]
+            : [];
+        } catch {
+          return [];
+        }
+      })
+      .join("")
+      .trim();
   }
-  const parsed = CompletedOutputAudioTranscript.parse(value);
-  const transcript = parsed.transcript.trim();
   if (!transcript) {
     throw new Error("The completed output-audio event contained no non-empty transcript.");
   }

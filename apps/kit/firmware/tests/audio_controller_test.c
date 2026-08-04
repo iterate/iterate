@@ -174,6 +174,97 @@ static struct iterate_kit_audio_options options(
 }
 
 /*
+ * A physical PTT edge can arrive during a bounded /pcm reconnect. Opening the
+ * microphone anyway gives the user a green listening indicator while every
+ * frame is deliberately discarded, then tempts the UI to wait forever for a
+ * reply to a turn that could not be committed. Readiness is checked before
+ * flushing playback or touching capture hardware; once the same live egress
+ * recovers, the next press follows the ordinary half-duplex path.
+ */
+static void ptt_rejects_a_disconnected_capture_egress_before_opening_mic(void) {
+  struct fake_audio audio = {0};
+  struct iterate_kit_audio_controller controller = {0};
+  const struct iterate_kit_audio_options audio_options =
+      options(&audio, ITERATE_KIT_AUDIO_PUSH_TO_TALK);
+
+  assert(
+      iterate_kit_audio_controller_init(
+          &controller,
+          &audio_options) == ITERATE_KIT_OK);
+  assert(
+      iterate_kit_audio_push_to_talk(&controller, true) ==
+      ITERATE_KIT_BACKPRESSURE);
+  assert(audio.operation_count == 0U);
+  assert(!controller.capture_active);
+  assert(!controller.push_to_talk_active);
+
+  assert(
+      iterate_kit_audio_set_media_ready(&controller, true) ==
+      ITERATE_KIT_OK);
+  assert(
+      iterate_kit_audio_push_to_talk(&controller, true) ==
+      ITERATE_KIT_OK);
+  assert(audio.operation_count == 3U);
+  assert(memcmp(audio.operations, "FCB", 3U) == 0);
+  assert(controller.capture_active);
+  assert(controller.push_to_talk_active);
+}
+
+/*
+ * A valid PTT turn can outlive the exact PCM socket generation on which it
+ * began. Waiting for the person to release the button would leave the mic hot
+ * and could retain stale intent across a long reconnect; continuing to poll
+ * capture would manufacture one dropped frame every 20 ms. The session owner
+ * therefore closes one shared desired-state gate. The hardware controller
+ * rejects any frame completed before its next bounded poll, then that poll
+ * closes capture and clears the local PTT latch exactly once.
+ */
+static void shared_media_loss_ends_an_active_ptt_turn_without_backlog(void) {
+  struct fake_audio audio = {0};
+  struct iterate_kit_audio_controller controller = {0};
+  const struct iterate_kit_audio_options audio_options =
+      options(&audio, ITERATE_KIT_AUDIO_PUSH_TO_TALK);
+  int16_t frame[320] = {0};
+
+  assert(
+      iterate_kit_audio_controller_init(
+          &controller,
+          &audio_options) == ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
+  assert(
+      iterate_kit_audio_push_to_talk(&controller, true) ==
+      ITERATE_KIT_OK);
+  assert(memcmp(audio.operations, "FCB", 3U) == 0);
+
+  assert(iterate_kit_audio_set_media_ready(&controller, false) ==
+         ITERATE_KIT_OK);
+  assert(
+      iterate_kit_audio_submit_capture(
+          &controller, frame, 320U, 16000U) ==
+      ITERATE_KIT_BACKPRESSURE);
+  assert(audio.send_count == 0U);
+  assert(controller.metrics.capture_frames_dropped == 1U);
+
+  const struct iterate_kit_module module =
+      iterate_kit_audio_module(&controller);
+  assert(module.poll(module.context, 0U).status == ITERATE_KIT_POLL_OK);
+  assert(!controller.capture_active);
+  assert(!controller.push_to_talk_active);
+  assert(audio.operation_count == 5U);
+  assert(memcmp(audio.operations, "FCBXE", 5U) == 0);
+
+  /* Further owner polls are quiet: no capture, retry loop, or fake loss. */
+  for (size_t poll = 0U; poll < 100U; ++poll) {
+    assert(module.poll(module.context, poll + 1U).status ==
+           ITERATE_KIT_POLL_OK);
+  }
+  assert(audio.operation_count == 5U);
+  assert(audio.capture_poll_count == 0U);
+  assert(controller.metrics.capture_frames_dropped == 1U);
+}
+
+/*
  * Hanging up must purge queued speech immediately, but the next Button-B call
  * has to restore speaker ownership before userspace can send its opening
  * greeting. Previously only PTT release resumed the half-duplex output, so a
@@ -193,6 +284,8 @@ static void next_conversation_prepares_playback_after_hang_up(void) {
           &controller,
           &audio_options) ==
       ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
   assert(
       iterate_kit_audio_interrupt_playback(&controller) ==
       ITERATE_KIT_OK);
@@ -224,6 +317,8 @@ static void ptt_is_half_duplex_and_never_queues_mic_frames(void) {
           &controller,
           &audio_options) ==
       ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
   assert(
       iterate_kit_audio_note_playback_started(&controller) ==
       ITERATE_KIT_OK);
@@ -289,6 +384,8 @@ static void full_duplex_aec_keeps_capture_running_during_interruption(void) {
           &controller,
           &audio_options) ==
       ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
   assert(iterate_kit_audio_start(&controller) == ITERATE_KIT_OK);
   assert(
       iterate_kit_audio_note_playback_started(&controller) ==
@@ -325,6 +422,8 @@ static void capture_started_event_failure_cannot_leave_mic_hot(void) {
           &controller,
           &audio_options) ==
       ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
   assert(
       iterate_kit_audio_push_to_talk(&controller, true) ==
       ITERATE_KIT_OK);
@@ -360,6 +459,8 @@ static void capture_ended_event_failure_cannot_block_next_press(void) {
           &controller,
           &audio_options) ==
       ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
   assert(
       iterate_kit_audio_push_to_talk(&controller, true) ==
       ITERATE_KIT_OK);
@@ -402,6 +503,8 @@ static void failed_playback_flush_is_retried_before_capture(void) {
           &controller,
           &audio_options) ==
       ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
   assert(
       iterate_kit_audio_note_playback_started(&controller) ==
       ITERATE_KIT_OK);
@@ -437,6 +540,8 @@ static void queued_playback_is_flushed_before_first_ptt_capture(void) {
           &controller,
           &audio_options) ==
       ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
   assert(!controller.playback_active);
   assert(
       iterate_kit_audio_push_to_talk(&controller, true) ==
@@ -464,6 +569,8 @@ static void methodless_audio_module_closes_active_capture(void) {
           &controller,
           &audio_options) ==
       ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
   assert(
       iterate_kit_audio_push_to_talk(&controller, true) ==
       ITERATE_KIT_OK);
@@ -502,6 +609,8 @@ static void audio_module_poll_never_captures_a_second_in_flight_frame(void) {
           &controller,
           &audio_options) ==
       ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
   assert(
       iterate_kit_audio_push_to_talk(&controller, true) ==
       ITERATE_KIT_OK);
@@ -552,6 +661,8 @@ static void disconnected_egress_drops_current_frames_without_driver_failure(
           &controller,
           &audio_options) ==
       ITERATE_KIT_OK);
+  assert(iterate_kit_audio_set_media_ready(&controller, true) ==
+         ITERATE_KIT_OK);
   assert(
       iterate_kit_audio_push_to_talk(&controller, true) ==
       ITERATE_KIT_OK);
@@ -579,6 +690,8 @@ static void disconnected_egress_drops_current_frames_without_driver_failure(
 
 int main(void) {
   next_conversation_prepares_playback_after_hang_up();
+  ptt_rejects_a_disconnected_capture_egress_before_opening_mic();
+  shared_media_loss_ends_an_active_ptt_turn_without_backlog();
   ptt_is_half_duplex_and_never_queues_mic_frames();
   full_duplex_aec_keeps_capture_running_during_interruption();
   capture_started_event_failure_cannot_leave_mic_hot();

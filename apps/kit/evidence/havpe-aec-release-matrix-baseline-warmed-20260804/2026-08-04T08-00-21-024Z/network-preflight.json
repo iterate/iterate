@@ -1,0 +1,139 @@
+{
+  "controlCapability": {
+    "attempts": [
+      {
+        "durationMs": 76.38187500000004,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 66.52070800000001,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 83.08554200000071,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 65.80879100000038,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 69.75054200000068,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 70.63708399999996,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 63.96854100000019,
+        "outcome": "success"
+      },
+      {
+        "durationMs": 68.80241699999988,
+        "outcome": "success"
+      }
+    ],
+    "maximumHealthyDurationMs": 500,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "createdAt": "2026-08-04T08:00:28.546Z",
+  "deviceHost": "192.168.0.33",
+  "deviceReachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 5.645
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.489
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 16.849
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.434
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.636
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.85
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.272
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.78
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "dnsAndConnect": {
+    "connect": {
+      "durationMs": 36.13745800000015,
+      "error": null,
+      "maximumHealthyDurationMs": 1000,
+      "outcome": "success"
+    },
+    "dns": {
+      "durationMs": 0.8992920000000595,
+      "error": null,
+      "maximumHealthyDurationMs": 500,
+      "outcome": "success"
+    }
+  },
+  "reachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 10.796
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.377
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.53
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 15.261
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.182
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 10.966
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.118
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.727
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "workerHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app",
+  "passed": true,
+  "reasons": [],
+  "schemaVersion": 3
+}

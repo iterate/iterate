@@ -1,0 +1,163 @@
+[
+  {
+    "assessment": {
+      "actualFrames": 152,
+      "acceptedFrameSpanMs": 3010,
+      "capturedAudioDurationMs": 3040,
+      "durationMs": 3048,
+      "expectedFrames": 152,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 155,
+      "minimumExpectedFrames": 149,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 3048,
+      "frames": 152,
+      "truncatedFrames": 0
+    },
+    "name": "ambient",
+    "playbackObserved": false,
+    "responseIndex": null
+  },
+  {
+    "assessment": {
+      "actualFrames": 201,
+      "acceptedFrameSpanMs": 4009,
+      "capturedAudioDurationMs": 4020,
+      "durationMs": 4052,
+      "expectedFrames": 203,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 206,
+      "minimumExpectedFrames": 200,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4052,
+      "frames": 201,
+      "truncatedFrames": 0
+    },
+    "name": "far-tone",
+    "playbackObserved": true,
+    "responseIndex": 0
+  },
+  {
+    "assessment": {
+      "actualFrames": 201,
+      "acceptedFrameSpanMs": 4027,
+      "capturedAudioDurationMs": 4020,
+      "durationMs": 4052,
+      "expectedFrames": 203,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 206,
+      "minimumExpectedFrames": 200,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4052,
+      "frames": 201,
+      "truncatedFrames": 0
+    },
+    "name": "far-dual-carrier-prbs31",
+    "playbackObserved": true,
+    "responseIndex": 1
+  },
+  {
+    "assessment": {
+      "actualFrames": 202,
+      "acceptedFrameSpanMs": 3961,
+      "capturedAudioDurationMs": 4040,
+      "durationMs": 4046,
+      "expectedFrames": 202,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 205,
+      "minimumExpectedFrames": 199,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4046,
+      "frames": 202,
+      "truncatedFrames": 0
+    },
+    "name": "far-speech-shaped",
+    "playbackObserved": true,
+    "responseIndex": 2
+  },
+  {
+    "assessment": {
+      "actualFrames": 203,
+      "acceptedFrameSpanMs": 4026,
+      "capturedAudioDurationMs": 4060,
+      "durationMs": 4045,
+      "expectedFrames": 202,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 205,
+      "minimumExpectedFrames": 199,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4045,
+      "frames": 203,
+      "truncatedFrames": 0
+    },
+    "name": "near-only",
+    "playbackObserved": true,
+    "responseIndex": 3
+  },
+  {
+    "assessment": {
+      "actualFrames": 203,
+      "acceptedFrameSpanMs": 4032,
+      "capturedAudioDurationMs": 4060,
+      "durationMs": 4052,
+      "expectedFrames": 203,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 206,
+      "minimumExpectedFrames": 200,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4052,
+      "frames": 203,
+      "truncatedFrames": 0
+    },
+    "name": "near-repeat",
+    "playbackObserved": true,
+    "responseIndex": 4
+  },
+  {
+    "assessment": {
+      "actualFrames": 204,
+      "acceptedFrameSpanMs": 4035,
+      "capturedAudioDurationMs": 4080,
+      "durationMs": 4046,
+      "expectedFrames": 202,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 205,
+      "minimumExpectedFrames": 199,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4046,
+      "frames": 204,
+      "truncatedFrames": 0
+    },
+    "name": "double-talk",
+    "playbackObserved": true,
+    "responseIndex": 5
+  }
+]

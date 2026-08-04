@@ -1,0 +1,385 @@
+{
+  "capture": {
+    "ambientEnd": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-shared-pcm-session-clean-network-20260804/2026-08-04T06-54-20-002Z/iterate-kit-acoustic-6agIJb/microphone.pcm16le",
+      "capturedByteLength": 131072,
+      "capturedSampleCount": 65536,
+      "sampleRateHz": 48000
+    },
+    "ambientStart": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-shared-pcm-session-clean-network-20260804/2026-08-04T06-54-20-002Z/iterate-kit-acoustic-6agIJb/microphone.pcm16le",
+      "capturedByteLength": 40960,
+      "capturedSampleCount": 20480,
+      "sampleRateHz": 48000
+    },
+    "completed": {
+      "artifactPath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-shared-pcm-session-clean-network-20260804/2026-08-04T06-54-20-002Z/iterate-kit-acoustic-6agIJb/microphone.pcm16le",
+      "capturedByteLength": 1708032,
+      "capturedSampleCount": 854016,
+      "sampleRateHz": 48000,
+      "captureProvenance": {
+        "input": {
+          "avFoundationSpecifier": ":0",
+          "displayName": "MacBook Pro Microphone",
+          "stableId": "BuiltInMicrophoneDevice",
+          "verification": "host-resolved-coreaudio-uid"
+        },
+        "processing": {
+          "activeMicrophoneMode": "standard",
+          "preferredMicrophoneMode": "standard",
+          "verification": "host-resolved-avfoundation-microphone-mode"
+        },
+        "recorder": {
+          "arguments": [
+            "-q",
+            "-t",
+            "coreaudio",
+            "MacBook Pro Microphone",
+            "-t",
+            "raw",
+            "-L",
+            "-c",
+            "1",
+            "-r",
+            "48000",
+            "-b",
+            "16",
+            "-e",
+            "signed-integer",
+            "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/m5sticks3-shared-pcm-session-clean-network-20260804/2026-08-04T06-54-20-002Z/iterate-kit-acoustic-6agIJb/microphone.pcm16le"
+          ],
+          "executable": "/opt/homebrew/bin/sox",
+          "version": "/opt/homebrew/bin/sox:      SoX v"
+        }
+      }
+    }
+  },
+  "deviceDiagnostics": {
+    "schemaVersion": 4,
+    "producedAtMs": 59078,
+    "control": {
+      "websocketStartAttempts": 1,
+      "websocketConnections": 1,
+      "websocketDisconnects": 0,
+      "websocketErrors": 0,
+      "wifiDisconnects": 2,
+      "protocolFailures": 0,
+      "receiveFailures": 0,
+      "sendFailures": 0,
+      "lastWifiDisconnectReason": 205,
+      "lastErrorGeneration": 0,
+      "lastErrorType": 0,
+      "lastTlsError": 0,
+      "lastTlsStackError": 0,
+      "lastTransportErrno": 0,
+      "lastHandshakeStatusCode": 0,
+      "lastCloseStatusCode": 0,
+      "protocolFailureGeneration": 0,
+      "lastApplicationCapnwebGeneration": 0,
+      "lastApplicationCapnwebStatus": 0,
+      "lastControlReceiveStatus": 0,
+      "messagesSent": 64,
+      "messagesDiscarded": 0,
+      "inboxDiscarded": 0,
+      "outboxDiscarded": 0,
+      "inbox": {
+        "capacitySlots": 8,
+        "messagesPublished": 30,
+        "messagesConsumed": 28,
+        "producerBackpressure": 0,
+        "highWaterSlots": 2,
+        "currentSlots": 2
+      },
+      "outbox": {
+        "capacitySlots": 8,
+        "messagesPublished": 64,
+        "messagesConsumed": 64,
+        "producerBackpressure": 0,
+        "highWaterSlots": 1,
+        "currentSlots": 0
+      }
+    },
+    "network": {
+      "wifiConnected": true,
+      "wifiRssiDbm": -46,
+      "pcmWebsocketConnections": 0,
+      "pcmWebsocketDisconnects": 0,
+      "pcmWebsocketErrors": 6,
+      "pcmWebsocketRawWriteFailures": 0,
+      "pcmTransportFailureIncidents": 6,
+      "pcmLastFailureOperation": 1,
+      "pcmLastRawResult": -1,
+      "pcmLastSocketErrno": 0,
+      "pcmLastEspTlsError": 0,
+      "pcmLastTlsStackError": 0,
+      "pcmLastTlsCertFlags": 0
+    }
+  },
+  "deviceRoute": {
+    "deviceId": "m5sticks3",
+    "eventStreamPath": "/devices/m5sticks3",
+    "mountPath": ["kit", "m5sticks3"]
+  },
+  "error": {
+    "message": "Timed out waiting for one stable warm device PCM lane before call start.",
+    "name": "ProductionPcmWaitTimeoutError",
+    "stack": "ProductionPcmWaitTimeoutError: Timed out waiting for one stable warm device PCM lane before call start.\n    at waitForProductionPcmConversationIdle (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/src/device/production-pcm-generation.ts:148:9)\n    at async proveProductionM5StickS3Grok (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-m5sticks3-grok.ts:370:23)\n    at async proveProductionGrokFromDevice (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-grok-from-device.ts:186:9)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-grok-from-device.ts:198:22)",
+    "lastObservedMetrics": {
+      "awaitingCommitAcknowledgement": false,
+      "closed": true,
+      "downlinkDroppedBytes": 0,
+      "downlinkFrames": 0,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 0,
+      "interrupted": false,
+      "lastProviderError": {
+        "code": "timeout",
+        "message": "Conversation timed out after 900.0 seconds due to inactivity"
+      },
+      "lastProviderEventType": "ping",
+      "lastSocketClose": {
+        "code": 1001,
+        "reason": "Conversation timed out due to inactivity",
+        "source": "provider"
+      },
+      "providerAvailable": false,
+      "providerConnections": 7,
+      "providerControlEvents": 633,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 6,
+      "uplinkDroppedBytes": 0,
+      "uplinkFrames": 0,
+      "uplinkUnavailableFrames": 0,
+      "deviceEvents": {
+        "acceptedEvents": 1,
+        "lastEvent": {
+          "sequence": 2,
+          "source": "system",
+          "type": "pushToTalk.stopped"
+        },
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteStarts": 0,
+        "remoteStops": 0
+      },
+      "deviceEventSubscriptionAttempts": 4,
+      "deviceEventSubscriptionFailures": 3,
+      "endedAtMs": 1785525745738,
+      "providerConnectAttempts": 7,
+      "providerConnectFailures": 0,
+      "sessionId": "prj_65441737530642949cadaf7fe399368b:39ceac88-2079-4dae-8a76-2fddc6b15793"
+    }
+  },
+  "lifecycle": {
+    "directBaselineSpriteAcknowledged": false,
+    "remoteConversationEnded": false,
+    "remoteConversationStarted": false,
+    "remotePttStarted": false,
+    "remotePttStopped": false
+  },
+  "networkArtifact": null,
+  "provenance": {
+    "device": {
+      "buildDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3",
+      "currentPort": "/dev/cu.usbmodem11301",
+      "host": "192.168.0.21",
+      "id": "m5sticks3",
+      "name": "M5Stack M5StickS3",
+      "stableUsbSerial": "70:04:1D:D5:45:88"
+    },
+    "project": {
+      "baseUrl": "https://os.iterate.com",
+      "id": "prj_65441737530642949cadaf7fe399368b",
+      "slug": "kit-stick-voice-e2e-20260731",
+      "workerHost": "kit--kit-stick-voice-e2e-20260731.iterate.app"
+    },
+    "routes": {
+      "capabilityMountPath": ["kit", "m5sticks3"],
+      "pcmUrl": "https://kit--kit-stick-voice-e2e-20260731.iterate.app/pcm",
+      "providerEventStreamPath": "/devices/m5sticks3"
+    },
+    "schemaVersion": 1
+  },
+  "playback": {
+    "baseline": {
+      "schemaVersion": 5,
+      "sequence": 3,
+      "producedAtMs": 40536,
+      "downlinkAccepted": 0,
+      "playback": {
+        "submitted": 0,
+        "completed": 0,
+        "generationFramesFlushed": 0,
+        "freshnessFramesDropped": 0,
+        "partialPrebufferFramesDropped": 0,
+        "underrunFramesFlushed": 0,
+        "underrunIncidents": 0,
+        "underrunSilenceFramesSubmitted": 0,
+        "underrunSilenceFramesCompleted": 0,
+        "underrunSilenceFramesRetired": 0,
+        "underrunLateFramesDropped": 0,
+        "dmaDeadlineMissIncidents": 0,
+        "freshnessIncidents": 0,
+        "partialPrebufferIncidents": 0,
+        "endOfStreamMarkersConsumed": 0,
+        "endOfStreamResponses": 0,
+        "endOfStreamSilenceDescriptors": 0,
+        "endOfStreamPaddingDescriptorsCompleted": 0,
+        "driverQueueOverflowIncidents": 0,
+        "driverFailures": 0,
+        "driverStopFailures": 0,
+        "fatalFramesFlushed": 0,
+        "writeBackpressureIncidents": 0,
+        "writeBackpressureDestructiveResets": 0,
+        "writeBackpressureFramesDropped": 0,
+        "invalidFrames": 0,
+        "stateErrors": 0,
+        "ownerClockRegressions": 0,
+        "receiveToDmaStartSamples": 0,
+        "maximumReceiveToDmaStartMs": 0,
+        "downlinkInterarrivalSamples": 0,
+        "maximumDownlinkInterarrivalMs": 0,
+        "maximumEofToSuccessfulRefillUs": 0,
+        "maximumWriteCallDurationUs": 0,
+        "minimumReuseLeadAtSuccessfulRefillUs": 0
+      },
+      "runtime": {
+        "audioOwnerStackHeadroomBytes": 6644,
+        "mainStackHeadroomBytes": 2008,
+        "controlNetworkStackHeadroomBytes": 4576,
+        "pcmNetworkStackHeadroomBytes": 4528,
+        "freeInternalHeapBytes": 72427,
+        "minimumFreeInternalHeapBytes": 55483,
+        "freeDmaHeapBytes": 72427,
+        "minimumFreeDmaHeapBytes": 55483,
+        "largestFreeInternalHeapBlockBytes": 31744,
+        "largestFreeDmaBlockBytes": 31744,
+        "generationFenceAcknowledgementTimeouts": 0,
+        "lifecycleAcknowledgementTimeouts": 0,
+        "controlNetworkStackExhaustions": 0,
+        "pcmNetworkStackExhaustions": 0,
+        "pcmReceiveCalls": 0,
+        "pcmReceiveChunks": 0,
+        "controlNetworkMaximumWorkCycles": 393467204,
+        "pcmNetworkMaximumWorkCycles": 625699066,
+        "cpuPermille": 332
+      }
+    },
+    "incidentsBeforeCleanup": [],
+    "latestBeforeCleanup": {
+      "schemaVersion": 5,
+      "sequence": 18,
+      "producedAtMs": 59066,
+      "downlinkAccepted": 0,
+      "playback": {
+        "submitted": 0,
+        "completed": 0,
+        "generationFramesFlushed": 0,
+        "freshnessFramesDropped": 0,
+        "partialPrebufferFramesDropped": 0,
+        "underrunFramesFlushed": 0,
+        "underrunIncidents": 0,
+        "underrunSilenceFramesSubmitted": 0,
+        "underrunSilenceFramesCompleted": 0,
+        "underrunSilenceFramesRetired": 0,
+        "underrunLateFramesDropped": 0,
+        "dmaDeadlineMissIncidents": 0,
+        "freshnessIncidents": 0,
+        "partialPrebufferIncidents": 0,
+        "endOfStreamMarkersConsumed": 0,
+        "endOfStreamResponses": 0,
+        "endOfStreamSilenceDescriptors": 0,
+        "endOfStreamPaddingDescriptorsCompleted": 0,
+        "driverQueueOverflowIncidents": 0,
+        "driverFailures": 0,
+        "driverStopFailures": 0,
+        "fatalFramesFlushed": 0,
+        "writeBackpressureIncidents": 0,
+        "writeBackpressureDestructiveResets": 0,
+        "writeBackpressureFramesDropped": 0,
+        "invalidFrames": 0,
+        "stateErrors": 0,
+        "ownerClockRegressions": 0,
+        "receiveToDmaStartSamples": 0,
+        "maximumReceiveToDmaStartMs": 0,
+        "downlinkInterarrivalSamples": 0,
+        "maximumDownlinkInterarrivalMs": 0,
+        "maximumEofToSuccessfulRefillUs": 0,
+        "maximumWriteCallDurationUs": 0,
+        "minimumReuseLeadAtSuccessfulRefillUs": 0
+      },
+      "runtime": {
+        "audioOwnerStackHeadroomBytes": 6644,
+        "mainStackHeadroomBytes": 2008,
+        "controlNetworkStackHeadroomBytes": 4576,
+        "pcmNetworkStackHeadroomBytes": 4528,
+        "freeInternalHeapBytes": 89775,
+        "minimumFreeInternalHeapBytes": 55483,
+        "freeDmaHeapBytes": 89775,
+        "minimumFreeDmaHeapBytes": 55483,
+        "largestFreeInternalHeapBlockBytes": 31744,
+        "largestFreeDmaBlockBytes": 31744,
+        "generationFenceAcknowledgementTimeouts": 0,
+        "lifecycleAcknowledgementTimeouts": 0,
+        "controlNetworkStackExhaustions": 0,
+        "pcmNetworkStackExhaustions": 0,
+        "pcmReceiveCalls": 0,
+        "pcmReceiveChunks": 0,
+        "controlNetworkMaximumWorkCycles": 393467204,
+        "pcmNetworkMaximumWorkCycles": 625699066,
+        "cpuPermille": 391
+      }
+    }
+  },
+  "schemaVersion": 2,
+  "snapshotErrors": [],
+  "worker": {
+    "latestBeforeCleanup": {
+      "awaitingCommitAcknowledgement": false,
+      "closed": true,
+      "downlinkDroppedBytes": 0,
+      "downlinkFrames": 0,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 0,
+      "interrupted": false,
+      "lastProviderError": {
+        "code": "timeout",
+        "message": "Conversation timed out after 900.0 seconds due to inactivity"
+      },
+      "lastProviderEventType": "ping",
+      "lastSocketClose": {
+        "code": 1001,
+        "reason": "Conversation timed out due to inactivity",
+        "source": "provider"
+      },
+      "providerAvailable": false,
+      "providerConnections": 7,
+      "providerControlEvents": 633,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 6,
+      "uplinkDroppedBytes": 0,
+      "uplinkFrames": 0,
+      "uplinkUnavailableFrames": 0,
+      "deviceEvents": {
+        "acceptedEvents": 1,
+        "lastEvent": {
+          "sequence": 2,
+          "source": "system",
+          "type": "pushToTalk.stopped"
+        },
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteStarts": 0,
+        "remoteStops": 0
+      },
+      "deviceEventSubscriptionAttempts": 4,
+      "deviceEventSubscriptionFailures": 3,
+      "endedAtMs": 1785525745738,
+      "providerConnectAttempts": 7,
+      "providerConnectFailures": 0,
+      "sessionId": "prj_65441737530642949cadaf7fe399368b:39ceac88-2079-4dae-8a76-2fddc6b15793"
+    }
+  }
+}

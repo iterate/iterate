@@ -1,0 +1,62 @@
+{
+  "createdAt": "2026-08-03T05:16:42.889Z",
+  "dnsAndConnect": {
+    "connect": {
+      "durationMs": 62.018708000000515,
+      "error": null,
+      "maximumHealthyDurationMs": 1000,
+      "outcome": "success"
+    },
+    "dns": {
+      "durationMs": 1.3870420000002923,
+      "error": null,
+      "maximumHealthyDurationMs": 500,
+      "outcome": "success"
+    }
+  },
+  "reachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 19.408
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 17.694
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 26.791
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 25.824
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 23.693
+      },
+      {
+        "detail": "ping completed without an RTT reply",
+        "outcome": "error"
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 26.172
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 29.921
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": false,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "workerHost": "kit--kit-stackchan-voice-e2e-20260801.iterate.app",
+  "passed": false,
+  "reasons": [
+    "Worker reachability did not sustain 8 consecutive replies at or below 100 ms across 8 bounded attempts."
+  ],
+  "schemaVersion": 1
+}

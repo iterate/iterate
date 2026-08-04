@@ -1,0 +1,69 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/trace2.ts
+
+{
+  "count": 21,
+  "events": [
+    {
+      "offset": 25237,
+      "type": "agents/context-added",
+      "payload": "{\"role\":\"assistant\",\"content\":\"```ts\\nasync (itx) => {\\n  await Promise.all([\\n    itx.agent.append({\\n      type: \\\"events.iterate.com/agent/summary-updated\\\",\\n      payload: { activity: \\\"Reporting the latest available physical-device telemetry\\\", waitingFor: \\\"user_input\\\" },\\n    }),\\n    itx.chat.sendMessage(\\\"I found the device telemetry, but it has not reported since 15:29 UTC, so these are the latest actual device values rather than a fresh reading: free heap was 5,177,912 bytes, speaker frames received and played were both zero, connection generation 1, session generation 1, round-trip time 71 milliseconds, and uptime 35.867 seconds. That report did not include a free-PSRAM field; the device is not presently sending current telemetry, so I can’t honestly give a current PSRAM number.\\\"),\\n  ]);\\n  return;\\n}\\n```\",\"llmRequestPolicy\":{\"behaviour\":\"after-current-request\"},\"llmRequestOffset\":25041}"
+    },
+    {
+      "offset": 25240,
+      "type": "capability-host/script-run-requested",
+      "payload": "{\"code\":\"async (itx) => {\\n  await Promise.all([\\n    itx.agent.append({\\n      type: \\\"events.iterate.com/agent/summary-updated\\\",\\n      payload: { activity: \\\"Reporting the latest available physical-device telemetry\\\", waitingFor: \\\"user_input\\\" },\\n    }),\\n    itx.chat.sendMessage(\\\"I found the device telemetry, but it has not reported since 15:29 UTC, so these are the latest actual device values rather than a fresh reading: free heap was 5,177,912 bytes, speaker frames received and played were both zero, connection generation 1, session generation 1, round-trip time 71 milliseconds, and uptime 35.867 seconds. That report did not include a free-PSRAM field; the device is not presently sending current telemetry, so I can’t honestly give a current PSRAM number.\\\"),\\n  ]);\\n  return;\\n}\",\"executionId\":\"agent-output:25237\",\"expiresAt\":1785788041539}"
+    },
+    {
+      "offset": 25242,
+      "type": "capability-host/script-run-started",
+      "payload": "{\"executionId\":\"agent-output:25237\"}"
+    },
+    {
+      "offset": 25244,
+      "type": "agents/web-message-sent",
+      "payload": "{\"message\":\"I found the device telemetry, but it has not reported since 15:29 UTC, so these are the latest actual device values rather than a fresh reading: free heap was 5,177,912 bytes, speaker frames received and played were both zero, connection generation 1, session generation 1, round-trip time 71 milliseconds, and uptime 35.867 seconds. That report did not include a free-PSRAM field; the device is not presently sending current telemetry, so I can’t honestly give a current PSRAM number.\"}"
+    },
+    {
+      "offset": 25247,
+      "type": "agents/context-added",
+      "payload": "{\"role\":\"assistant\",\"content\":\"The assistant sent this visible web-chat message: I found the device telemetry, but it has not reported since 15:29 UTC, so these are the latest actual device values rather than a fresh reading: free heap was 5,177,912 bytes, speaker frames received and played were both zero, connection generation 1, session generation 1, round-trip time 71 milliseconds, and uptime 35.867 seconds. That report did not include a free-PSRAM field; the device is not presently sending current telemetry, so I can’t honestly give a current PSRAM number.\",\"llmRequestPolicy\":{\"behaviour\":\"after-current-request\"}}"
+    },
+    {
+      "offset": 25248,
+      "type": "capability-host/script-run-settled",
+      "payload": "{\"executionId\":\"agent-output:25237\",\"settlement\":{\"status\":\"succeeded\"}}"
+    },
+    {
+      "offset": 25429,
+      "type": "agents/context-added",
+      "payload": "{\"role\":\"assistant\",\"content\":\"```ts\\nasync (itx) => {\\n  await Promise.all([\\n    itx.agent.append({\\n      type: \\\"events.iterate.com/agent/summary-updated\\\",\\n      payload: {\\n        title: \\\"Waveshare device metrics\\\",\\n        activity: \\\"Reported latest available device telemetry\\\",\\n        waitingFor: \\\"user_input\\\",\\n      },\\n    }),\\n    itx.chat.sendMessage(\\\"I found the latest device telemetry, but it stopped reporting at 15:29 UTC, so this is not a live current sample. Its last values were 5,177,912 bytes free heap, no free-PSRAM value reported, zero speaker frames received and zero played, connection generation 1, session generation 1, 71 milliseconds round-trip time, and 35.867 seconds uptime. The device is not currently emitting fresh statistics.\\\"),\\n  ]);\\n  return;\\n}\\n```\",\"llmRequestPolicy\":{\"behaviour\":\"after-current-request\"},\"llmRequestOffset\":25241}"
+    },
+    {
+      "offset": 25432,
+      "type": "capability-host/script-run-requested",
+      "payload": "{\"code\":\"async (itx) => {\\n  await Promise.all([\\n    itx.agent.append({\\n      type: \\\"events.iterate.com/agent/summary-updated\\\",\\n      payload: {\\n        title: \\\"Waveshare device metrics\\\",\\n        activity: \\\"Reported latest available device telemetry\\\",\\n        waitingFor: \\\"user_input\\\",\\n      },\\n    }),\\n    itx.chat.sendMessage(\\\"I found the latest device telemetry, but it stopped reporting at 15:29 UTC, so this is not a live current sample. Its last values were 5,177,912 bytes free heap, no free-PSRAM value reported, zero speaker frames received and zero played, connection generation 1, session generation 1, 71 milliseconds round-trip time, and 35.867 seconds uptime. The device is not currently emitting fresh statistics.\\\"),\\n  ]);\\n  return;\\n}\",\"executionId\":\"agent-output:25429\",\"expiresAt\":1785788059233}"
+    },
+    {
+      "offset": 25433,
+      "type": "capability-host/script-run-started",
+      "payload": "{\"executionId\":\"agent-output:25429\"}"
+    },
+    {
+      "offset": 25435,
+      "type": "agents/web-message-sent",
+      "payload": "{\"message\":\"I found the latest device telemetry, but it stopped reporting at 15:29 UTC, so this is not a live current sample. Its last values were 5,177,912 bytes free heap, no free-PSRAM value reported, zero speaker frames received and zero played, connection generation 1, session generation 1, 71 milliseconds round-trip time, and 35.867 seconds uptime. The device is not currently emitting fresh statistics.\"}"
+    },
+    {
+      "offset": 25436,
+      "type": "capability-host/script-run-settled",
+      "payload": "{\"executionId\":\"agent-output:25429\",\"settlement\":{\"status\":\"succeeded\"}}"
+    },
+    {
+      "offset": 25437,
+      "type": "agents/context-added",
+      "payload": "{\"role\":\"assistant\",\"content\":\"The assistant sent this visible web-chat message: I found the latest device telemetry, but it stopped reporting at 15:29 UTC, so this is not a live current sample. Its last values were 5,177,912 bytes free heap, no free-PSRAM value reported, zero speaker frames received and zero played, connection generation 1, session generation 1, 71 milliseconds round-trip time, and 35.867 seconds uptime. The device is not currently emitting fresh statistics.\",\"llmRequestPolicy\":{\"behaviour\":\"after-current-request\"}}"
+    }
+  ]
+}

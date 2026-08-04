@@ -1,0 +1,10 @@
+{"bytes":7830,"index":0,"protocol_event":"binary_audio_frame","received_seconds":8.17749979099608,"sample_end":3915,"sample_start":0}
+{"bytes":20552,"index":1,"protocol_event":"binary_audio_frame","received_seconds":8.320339415993658,"sample_end":14191,"sample_start":3915}
+{"bytes":22510,"index":2,"protocol_event":"binary_audio_frame","received_seconds":8.452962165996723,"sample_end":25446,"sample_start":14191}
+{"bytes":8808,"index":3,"protocol_event":"binary_audio_frame","received_seconds":8.453010249999352,"sample_end":29850,"sample_start":25446}
+{"bytes":11744,"index":4,"protocol_event":"binary_audio_frame","received_seconds":9.004943332998664,"sample_end":35722,"sample_start":29850}
+{"bytes":19574,"index":5,"protocol_event":"binary_audio_frame","received_seconds":9.104142999996839,"sample_end":45509,"sample_start":35722}
+{"bytes":15660,"index":6,"protocol_event":"binary_audio_frame","received_seconds":9.216129458000069,"sample_end":53339,"sample_start":45509}
+{"bytes":25446,"index":7,"protocol_event":"binary_audio_frame","received_seconds":9.304775040996901,"sample_end":66062,"sample_start":53339}
+{"bytes":10766,"index":8,"protocol_event":"binary_audio_frame","received_seconds":9.307172832996002,"sample_end":71445,"sample_start":66062}
+{"bytes":2396,"index":9,"protocol_event":"binary_audio_frame","received_seconds":9.310227915993892,"sample_end":72643,"sample_start":71445}

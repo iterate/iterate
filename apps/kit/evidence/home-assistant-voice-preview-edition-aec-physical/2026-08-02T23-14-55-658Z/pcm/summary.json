@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "failure": null,
+  "frameBytes": 640,
+  "microphone": {
+    "bytes": 1505920,
+    "frames": 2353,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/home-assistant-voice-preview-edition-aec-physical/2026-08-02T23-14-55-658Z/pcm/microphone-uplink.pcm16le",
+    "sha256": "316cee7cc5f981f27d586fb97214a72e4f8e6af16d0cbe344d9f4829ae8b49c7"
+  },
+  "outputDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/home-assistant-voice-preview-edition-aec-physical/2026-08-02T23-14-55-658Z/pcm",
+  "producedAt": "2026-08-02T23:15:55.608Z",
+  "sampleRateHz": 16000,
+  "speaker": {
+    "bytes": 960000,
+    "frames": 1500,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/home-assistant-voice-preview-edition-aec-physical/2026-08-02T23-14-55-658Z/pcm/speaker-downlink.pcm16le",
+    "sha256": "0869914d13de1132edfee9ba29d8d856a7546fa7ad5b6a9c2d8549c447955190"
+  },
+  "timelinePath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/home-assistant-voice-preview-edition-aec-physical/2026-08-02T23-14-55-658Z/pcm/timeline.jsonl"
+}

@@ -1,0 +1,41 @@
+file(REMOVE_RECURSE
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_audio_in.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_audio_in.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_audio_out.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_audio_out.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_capabilities.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_capabilities.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_conversation.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_conversation.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_delivery_fault.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_delivery_fault.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_device_profile.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_device_profile.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_fault_schedule.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_fault_schedule.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_keyboard.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_keyboard.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_microphone.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_microphone.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_options.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_options.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_paced_sink.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_paced_sink.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_report.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_report.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_speaker.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_speaker.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_virtual_clock.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_virtual_clock.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_wav.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_wav.c.o.d"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/main.c.o"
+  "CMakeFiles/iterate-kit-cli.dir/targets/host_cli/main.c.o.d"
+  "iterate-kit-cli"
+  "iterate-kit-cli.pdb"
+)
+
+# Per-language clean rules from dependency scanning.
+foreach(lang C)
+  include(CMakeFiles/iterate-kit-cli.dir/cmake_clean_${lang}.cmake OPTIONAL)
+endforeach()

@@ -25,12 +25,7 @@ describe("kit device control", () => {
     ).resolves.toBeUndefined();
     expect(invokeCapability).toHaveBeenLastCalledWith({
       args: [],
-      path: [
-        "kit",
-        "homeAssistantVoicePreviewEdition",
-        "conversation",
-        "interruptPlayback",
-      ],
+      path: ["kit", "homeAssistantVoicePreviewEdition", "conversation", "interruptPlayback"],
     });
 
     invokeCapability.mockResolvedValueOnce(false);

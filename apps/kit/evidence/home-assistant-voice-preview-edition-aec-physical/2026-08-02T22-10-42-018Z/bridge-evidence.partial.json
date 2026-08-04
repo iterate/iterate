@@ -1,0 +1,1026 @@
+{
+  "closeEvents": [
+    {
+      "closedAtMonotonicMs": 12678.443917,
+      "metrics": {
+        "closeCode": 1006,
+        "closeReason": "",
+        "controlMessageTrace": [
+          {
+            "command": "push",
+            "id": null,
+            "method": "authenticate",
+            "direction": "deviceToWorker",
+            "elapsedMs": 10.109666000000288,
+            "payloadBytes": 160
+          },
+          {
+            "command": "pull",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 16.78979100000106,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 17.91112500000054,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 27.13683300000048,
+            "payloadBytes": 15
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "get",
+            "direction": "deviceToWorker",
+            "elapsedMs": 32.9940000000006,
+            "payloadBytes": 72
+          },
+          {
+            "command": "pull",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 36.57325000000128,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 2,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 36.694541000000754,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 49.67550000000119,
+            "payloadBytes": 15
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 55.22762500000135,
+            "payloadBytes": 16
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "provideCapability",
+            "direction": "deviceToWorker",
+            "elapsedMs": 55.69445800000176,
+            "payloadBytes": 169
+          },
+          {
+            "command": "pull",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 55.89570800000001,
+            "payloadBytes": 10
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 57.64729100000113,
+            "payloadBytes": 16
+          },
+          {
+            "command": "reject",
+            "id": 3,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 57.94850000000042,
+            "payloadBytes": 89
+          },
+          {
+            "command": "release",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 92.99183300000004,
+            "payloadBytes": 15
+          }
+        ],
+        "deviceSocketCloseDisposition": "alreadyClosed",
+        "deviceSocketMaximumBufferedBytes": 0,
+        "deviceSocketMaximumPayloadBytesInFlight": 105,
+        "deviceSocketMaximumSendCallbackLatencyMs": 0.712707999999111,
+        "deviceSocketMaximumSendCallbacksInFlight": 2,
+        "deviceSocketOldestSendCallbackAgeMsAtClose": 0,
+        "deviceSocketPayloadBytesInFlightAtClose": 0,
+        "deviceSocketSendCallbacksInFlightAtClose": 0,
+        "deviceToWorkerBytes": 492,
+        "deviceToWorkerMessages": 10,
+        "elapsedMs": 95.09416600000077,
+        "endpoint": "/api",
+        "maximumBufferedBytes": 5120,
+        "protocol": "",
+        "workerToDeviceBytes": 159,
+        "workerToDeviceMaximumInterarrivalMs": 20.95275000000038,
+        "workerToDeviceMessages": 4
+      }
+    },
+    {
+      "closedAtMonotonicMs": 13103.876917,
+      "metrics": {
+        "closeCode": 1006,
+        "closeReason": "",
+        "controlMessageTrace": [
+          {
+            "command": "push",
+            "id": null,
+            "method": "authenticate",
+            "direction": "deviceToWorker",
+            "elapsedMs": 18.784082999998645,
+            "payloadBytes": 160
+          },
+          {
+            "command": "pull",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 18.87987499999872,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 19.13133299999936,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 39.207415999999284,
+            "payloadBytes": 15
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "get",
+            "direction": "deviceToWorker",
+            "elapsedMs": 41.94024999999965,
+            "payloadBytes": 72
+          },
+          {
+            "command": "pull",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 42.02262499999961,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 2,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 43.11908299999959,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 56.95658299999923,
+            "payloadBytes": 15
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 57.000457999998616,
+            "payloadBytes": 16
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "provideCapability",
+            "direction": "deviceToWorker",
+            "elapsedMs": 63.03562499999862,
+            "payloadBytes": 169
+          },
+          {
+            "command": "pull",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 63.09299999999894,
+            "payloadBytes": 10
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 63.533416000000216,
+            "payloadBytes": 16
+          },
+          {
+            "command": "reject",
+            "id": 3,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 63.986957999999504,
+            "payloadBytes": 89
+          },
+          {
+            "command": "release",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 78.94045799999913,
+            "payloadBytes": 15
+          }
+        ],
+        "deviceSocketCloseDisposition": "alreadyClosed",
+        "deviceSocketMaximumBufferedBytes": 0,
+        "deviceSocketMaximumPayloadBytesInFlight": 105,
+        "deviceSocketMaximumSendCallbackLatencyMs": 0.7070000000003347,
+        "deviceSocketMaximumSendCallbacksInFlight": 2,
+        "deviceSocketOldestSendCallbackAgeMsAtClose": 0,
+        "deviceSocketPayloadBytesInFlightAtClose": 0,
+        "deviceSocketSendCallbacksInFlightAtClose": 0,
+        "deviceToWorkerBytes": 492,
+        "deviceToWorkerMessages": 10,
+        "elapsedMs": 79.65799999999945,
+        "endpoint": "/api",
+        "maximumBufferedBytes": 5120,
+        "protocol": "",
+        "workerToDeviceBytes": 159,
+        "workerToDeviceMaximumInterarrivalMs": 23.987750000000233,
+        "workerToDeviceMessages": 4
+      }
+    },
+    {
+      "closedAtMonotonicMs": 13715.605917,
+      "metrics": {
+        "closeCode": 1006,
+        "closeReason": "",
+        "controlMessageTrace": [
+          {
+            "command": "push",
+            "id": null,
+            "method": "authenticate",
+            "direction": "deviceToWorker",
+            "elapsedMs": 15.363916999998764,
+            "payloadBytes": 160
+          },
+          {
+            "command": "pull",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 15.453166999999667,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 16.01629200000025,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 44.12608399999954,
+            "payloadBytes": 15
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "get",
+            "direction": "deviceToWorker",
+            "elapsedMs": 44.153041999999914,
+            "payloadBytes": 72
+          },
+          {
+            "command": "pull",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 44.174291999999696,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 2,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 44.39729199999965,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 56.62670900000012,
+            "payloadBytes": 15
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 56.63749999999891,
+            "payloadBytes": 16
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "provideCapability",
+            "direction": "deviceToWorker",
+            "elapsedMs": 62.051416999998764,
+            "payloadBytes": 169
+          },
+          {
+            "command": "pull",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 62.073999999998705,
+            "payloadBytes": 10
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 62.25966700000026,
+            "payloadBytes": 16
+          },
+          {
+            "command": "reject",
+            "id": 3,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 62.404458999999406,
+            "payloadBytes": 89
+          },
+          {
+            "command": "release",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 79.5649169999997,
+            "payloadBytes": 15
+          }
+        ],
+        "deviceSocketCloseDisposition": "alreadyClosed",
+        "deviceSocketMaximumBufferedBytes": 0,
+        "deviceSocketMaximumPayloadBytesInFlight": 105,
+        "deviceSocketMaximumSendCallbackLatencyMs": 0.4147919999995793,
+        "deviceSocketMaximumSendCallbacksInFlight": 2,
+        "deviceSocketOldestSendCallbackAgeMsAtClose": 0,
+        "deviceSocketPayloadBytesInFlightAtClose": 0,
+        "deviceSocketSendCallbacksInFlightAtClose": 0,
+        "deviceToWorkerBytes": 492,
+        "deviceToWorkerMessages": 10,
+        "elapsedMs": 80.2745419999992,
+        "endpoint": "/api",
+        "maximumBufferedBytes": 5120,
+        "protocol": "",
+        "workerToDeviceBytes": 159,
+        "workerToDeviceMaximumInterarrivalMs": 28.380999999999403,
+        "workerToDeviceMessages": 4
+      }
+    },
+    {
+      "closedAtMonotonicMs": 14835.154917,
+      "metrics": {
+        "closeCode": 1006,
+        "closeReason": "",
+        "controlMessageTrace": [
+          {
+            "command": "push",
+            "id": null,
+            "method": "authenticate",
+            "direction": "deviceToWorker",
+            "elapsedMs": 11.152208999999857,
+            "payloadBytes": 160
+          },
+          {
+            "command": "pull",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 11.219250000000102,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 11.440667000000758,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 34.91241699999955,
+            "payloadBytes": 15
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "get",
+            "direction": "deviceToWorker",
+            "elapsedMs": 34.92699999999968,
+            "payloadBytes": 72
+          },
+          {
+            "command": "pull",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 34.938625000000684,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 2,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 35.07099999999991,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 49.42583399999967,
+            "payloadBytes": 15
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 49.84633399999984,
+            "payloadBytes": 16
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "provideCapability",
+            "direction": "deviceToWorker",
+            "elapsedMs": 62.52000000000044,
+            "payloadBytes": 169
+          },
+          {
+            "command": "pull",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 62.540499999999156,
+            "payloadBytes": 10
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 62.74920899999961,
+            "payloadBytes": 16
+          },
+          {
+            "command": "reject",
+            "id": 3,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 62.9185839999991,
+            "payloadBytes": 89
+          },
+          {
+            "command": "release",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 92.97987499999908,
+            "payloadBytes": 15
+          }
+        ],
+        "deviceSocketCloseDisposition": "alreadyClosed",
+        "deviceSocketMaximumBufferedBytes": 0,
+        "deviceSocketMaximumPayloadBytesInFlight": 105,
+        "deviceSocketMaximumSendCallbackLatencyMs": 0.2251670000005106,
+        "deviceSocketMaximumSendCallbacksInFlight": 2,
+        "deviceSocketOldestSendCallbackAgeMsAtClose": 0,
+        "deviceSocketPayloadBytesInFlightAtClose": 0,
+        "deviceSocketSendCallbacksInFlightAtClose": 0,
+        "deviceToWorkerBytes": 492,
+        "deviceToWorkerMessages": 10,
+        "elapsedMs": 93.98450000000048,
+        "endpoint": "/api",
+        "maximumBufferedBytes": 5120,
+        "protocol": "",
+        "workerToDeviceBytes": 159,
+        "workerToDeviceMaximumInterarrivalMs": 27.678208999999697,
+        "workerToDeviceMessages": 4
+      }
+    },
+    {
+      "closedAtMonotonicMs": 16931.988209,
+      "metrics": {
+        "closeCode": 1006,
+        "closeReason": "",
+        "controlMessageTrace": [
+          {
+            "command": "push",
+            "id": null,
+            "method": "authenticate",
+            "direction": "deviceToWorker",
+            "elapsedMs": 12.69800000000032,
+            "payloadBytes": 160
+          },
+          {
+            "command": "pull",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 12.742792000000918,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 12.934667000001355,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 34.511875000000146,
+            "payloadBytes": 15
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "get",
+            "direction": "deviceToWorker",
+            "elapsedMs": 34.57629200000156,
+            "payloadBytes": 72
+          },
+          {
+            "command": "pull",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 37.8171250000014,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 2,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 38.03795900000114,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 52.952291999998124,
+            "payloadBytes": 15
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 53.87366699999984,
+            "payloadBytes": 16
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "provideCapability",
+            "direction": "deviceToWorker",
+            "elapsedMs": 57.12012500000128,
+            "payloadBytes": 169
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 57.298125000001164,
+            "payloadBytes": 16
+          },
+          {
+            "command": "pull",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 58.809667000001355,
+            "payloadBytes": 10
+          },
+          {
+            "command": "reject",
+            "id": 3,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 58.86754199999996,
+            "payloadBytes": 89
+          },
+          {
+            "command": "release",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 74.61537500000122,
+            "payloadBytes": 15
+          }
+        ],
+        "deviceSocketCloseDisposition": "alreadyClosed",
+        "deviceSocketMaximumBufferedBytes": 0,
+        "deviceSocketMaximumPayloadBytesInFlight": 89,
+        "deviceSocketMaximumSendCallbackLatencyMs": 0.24570899999889662,
+        "deviceSocketMaximumSendCallbacksInFlight": 1,
+        "deviceSocketOldestSendCallbackAgeMsAtClose": 0,
+        "deviceSocketPayloadBytesInFlightAtClose": 0,
+        "deviceSocketSendCallbacksInFlightAtClose": 0,
+        "deviceToWorkerBytes": 492,
+        "deviceToWorkerMessages": 10,
+        "elapsedMs": 74.80166699999972,
+        "endpoint": "/api",
+        "maximumBufferedBytes": 5120,
+        "protocol": "",
+        "workerToDeviceBytes": 159,
+        "workerToDeviceMaximumInterarrivalMs": 25.103291999999783,
+        "workerToDeviceMessages": 4
+      }
+    },
+    {
+      "closedAtMonotonicMs": 21034.043459,
+      "metrics": {
+        "closeCode": 1006,
+        "closeReason": "",
+        "controlMessageTrace": [
+          {
+            "command": "push",
+            "id": null,
+            "method": "authenticate",
+            "direction": "deviceToWorker",
+            "elapsedMs": 13.154500000000553,
+            "payloadBytes": 160
+          },
+          {
+            "command": "pull",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 13.246250000000146,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 13.646916999998211,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 34.54383400000006,
+            "payloadBytes": 15
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "get",
+            "direction": "deviceToWorker",
+            "elapsedMs": 34.62258400000064,
+            "payloadBytes": 72
+          },
+          {
+            "command": "pull",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 36.68670899999779,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 2,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 36.853416999998444,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 53.55374999999913,
+            "payloadBytes": 15
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 53.846042000001034,
+            "payloadBytes": 16
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "provideCapability",
+            "direction": "deviceToWorker",
+            "elapsedMs": 57.442542000000685,
+            "payloadBytes": 169
+          },
+          {
+            "command": "pull",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 57.49274999999761,
+            "payloadBytes": 10
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 57.905791999997746,
+            "payloadBytes": 16
+          },
+          {
+            "command": "reject",
+            "id": 3,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 58.37641699999949,
+            "payloadBytes": 89
+          },
+          {
+            "command": "release",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 76.19274999999834,
+            "payloadBytes": 15
+          }
+        ],
+        "deviceSocketCloseDisposition": "alreadyClosed",
+        "deviceSocketMaximumBufferedBytes": 0,
+        "deviceSocketMaximumPayloadBytesInFlight": 105,
+        "deviceSocketMaximumSendCallbackLatencyMs": 0.6432080000013229,
+        "deviceSocketMaximumSendCallbacksInFlight": 2,
+        "deviceSocketOldestSendCallbackAgeMsAtClose": 0,
+        "deviceSocketPayloadBytesInFlightAtClose": 0,
+        "deviceSocketSendCallbacksInFlightAtClose": 0,
+        "deviceToWorkerBytes": 492,
+        "deviceToWorkerMessages": 10,
+        "elapsedMs": 76.94145899999785,
+        "endpoint": "/api",
+        "maximumBufferedBytes": 5120,
+        "protocol": "",
+        "workerToDeviceBytes": 159,
+        "workerToDeviceMaximumInterarrivalMs": 23.206500000000233,
+        "workerToDeviceMessages": 4
+      }
+    },
+    {
+      "closedAtMonotonicMs": 29139.823709,
+      "metrics": {
+        "closeCode": 1006,
+        "closeReason": "",
+        "controlMessageTrace": [
+          {
+            "command": "push",
+            "id": null,
+            "method": "authenticate",
+            "direction": "deviceToWorker",
+            "elapsedMs": 11.085667000003014,
+            "payloadBytes": 160
+          },
+          {
+            "command": "pull",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 11.162250000001222,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 11.510833000000275,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 31.094542000002548,
+            "payloadBytes": 15
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "get",
+            "direction": "deviceToWorker",
+            "elapsedMs": 34.389250000000175,
+            "payloadBytes": 72
+          },
+          {
+            "command": "pull",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 34.43391700000211,
+            "payloadBytes": 10
+          },
+          {
+            "command": "resolve",
+            "id": 2,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 34.67591700000048,
+            "payloadBytes": 27
+          },
+          {
+            "command": "release",
+            "id": 2,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 51.796917000003305,
+            "payloadBytes": 15
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 52.351458000001,
+            "payloadBytes": 16
+          },
+          {
+            "command": "push",
+            "id": null,
+            "method": "provideCapability",
+            "direction": "deviceToWorker",
+            "elapsedMs": 59.02491700000246,
+            "payloadBytes": 169
+          },
+          {
+            "command": "pull",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 59.073333000000275,
+            "payloadBytes": 10
+          },
+          {
+            "command": "release",
+            "id": -1,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 59.32412500000282,
+            "payloadBytes": 16
+          },
+          {
+            "command": "reject",
+            "id": 3,
+            "method": "",
+            "direction": "workerToDevice",
+            "elapsedMs": 59.481792000002315,
+            "payloadBytes": 89
+          },
+          {
+            "command": "release",
+            "id": 3,
+            "method": "",
+            "direction": "deviceToWorker",
+            "elapsedMs": 79.32104200000322,
+            "payloadBytes": 15
+          }
+        ],
+        "deviceSocketCloseDisposition": "alreadyClosed",
+        "deviceSocketMaximumBufferedBytes": 0,
+        "deviceSocketMaximumPayloadBytesInFlight": 105,
+        "deviceSocketMaximumSendCallbackLatencyMs": 0.3045830000010028,
+        "deviceSocketMaximumSendCallbacksInFlight": 2,
+        "deviceSocketOldestSendCallbackAgeMsAtClose": 0,
+        "deviceSocketPayloadBytesInFlightAtClose": 0,
+        "deviceSocketSendCallbacksInFlightAtClose": 0,
+        "deviceToWorkerBytes": 492,
+        "deviceToWorkerMessages": 10,
+        "elapsedMs": 80.48020800000086,
+        "endpoint": "/api",
+        "maximumBufferedBytes": 5120,
+        "protocol": "",
+        "workerToDeviceBytes": 159,
+        "workerToDeviceMaximumInterarrivalMs": 24.64820800000234,
+        "workerToDeviceMessages": 4
+      }
+    }
+  ],
+  "openEvents": [
+    {
+      "endpoint": "/api",
+      "protocol": "",
+      "remoteAddress": "192.168.1.159",
+      "remotePort": 57503,
+      "startedAtMonotonicMs": 12583.304959
+    },
+    {
+      "endpoint": "/api",
+      "protocol": "",
+      "remoteAddress": "192.168.1.159",
+      "remotePort": 57504,
+      "startedAtMonotonicMs": 13024.212084
+    },
+    {
+      "endpoint": "/api",
+      "protocol": "",
+      "remoteAddress": "192.168.1.159",
+      "remotePort": 57505,
+      "startedAtMonotonicMs": 13635.325875
+    },
+    {
+      "endpoint": "/api",
+      "protocol": "",
+      "remoteAddress": "192.168.1.159",
+      "remotePort": 57506,
+      "startedAtMonotonicMs": 14741.163375
+    },
+    {
+      "endpoint": "/api",
+      "protocol": "",
+      "remoteAddress": "192.168.1.159",
+      "remotePort": 57507,
+      "startedAtMonotonicMs": 16857.18375
+    },
+    {
+      "endpoint": "/api",
+      "protocol": "",
+      "remoteAddress": "192.168.1.159",
+      "remotePort": 57508,
+      "startedAtMonotonicMs": 20957.094375
+    },
+    {
+      "endpoint": "/api",
+      "protocol": "",
+      "remoteAddress": "192.168.1.159",
+      "remotePort": 57509,
+      "startedAtMonotonicMs": 29059.337792
+    }
+  ],
+  "progress": {
+    "microphoneBytes": 0,
+    "speakerBytes": 0,
+    "speakerFrames": 0
+  }
+}

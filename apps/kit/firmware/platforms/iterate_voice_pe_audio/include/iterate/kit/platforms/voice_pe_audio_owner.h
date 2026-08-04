@@ -2,7 +2,9 @@
 #define ITERATE_KIT_PLATFORMS_VOICE_PE_AUDIO_OWNER_H
 
 #include "iterate/kit/aec_signal_window.h"
+#include "iterate/kit/aec_diagnostic_trace.h"
 #include "iterate/kit/pcm_capture_turn.h"
+#include "iterate/kit/pcm_clock_playback.h"
 #include "iterate/kit/pcm_generation_fence.h"
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/pcm_playback_interruption.h"
@@ -28,6 +30,8 @@ struct iterate_kit_voice_pe_audio_owner_options {
   struct iterate_kit_pcm_lane *lane;
   uint32_t maximum_downlink_frame_age_ms;
   size_t maximum_lane_items_per_playback_edge;
+  /* See CoreS3's matching hook: this is a bounded realtime sink, not RPC. */
+  struct iterate_kit_aec_diagnostic_trace *diagnostic_trace;
 
   /*
    * The capture task calls this only after a complete current 20 ms frame is
@@ -36,13 +40,17 @@ struct iterate_kit_voice_pe_audio_owner_options {
    */
   iterate_kit_pcm_capture_turn_notify_fn notify_uplink;
   void *notify_uplink_context;
+  iterate_kit_pcm_clock_playback_item_released_fn
+      downlink_item_released;
+  void *downlink_item_released_context;
 };
 
 /**
  * One low-rate view over the board's two exact same-time XMOS output taps.
  *
  * `raw` is pipeline stage NONE (the original microphone); `clean` is the
- * hardware policy's selected cumulative tap (currently AEC, before IC/NS/AGC).
+ * hardware policy's selected cumulative tap (currently NS, after AEC and IC
+ * but before AGC).
  * This intentionally does not manufacture an aligned speaker-reference
  * channel: the board does not expose the XMOS
  * reference on its capture I2S bus. A speaker-only physical interval can

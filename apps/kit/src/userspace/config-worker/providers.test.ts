@@ -1,12 +1,14 @@
 import { WebSocketPair } from "captun";
 import { describe, expect, test, vi } from "vitest";
 import {
+  connectDeterministicAec,
   connectDeterministicTone,
   connectGrokRealtimeVoice,
   GrokCredentialPrewarmer,
   mintGrokRealtimeCredential,
   type AcceptedSocketPair,
 } from "./providers.ts";
+import { createDeterministicAecRenderer } from "./deterministic-aec-fixture.ts";
 
 function unacceptedSocketPair(): AcceptedSocketPair {
   const pair = new WebSocketPair();
@@ -100,7 +102,7 @@ describe("userspace PCM providers", () => {
           audio: {
             input: {
               format: { rate: 16_000, type: "audio/pcm" },
-              transcription: { model: "grok-transcribe" },
+              transcription: { language_hint: "en", model: "grok-transcribe" },
               transport: "binary",
             },
             output: {
@@ -108,19 +110,26 @@ describe("userspace PCM providers", () => {
               transport: "binary",
             },
           },
-          instructions: "Be concise, conversational, and useful.",
+          instructions:
+            "Be concise, conversational, useful, and pleasantly decisive. Wait silently until the user speaks. Respond to the user's complete request, including the first turn; never replace a concrete request with a generic greeting. Prefer taking a safe, reversible action over asking a follow-up question or requesting permission. Use good judgment, make reasonable choices, and occasionally surprise the user in a delightful way; ask a question only when a missing answer materially changes the outcome or safety. If a short opening is ambiguous, treat it as a greeting and ask how you can help. Never infer a face, avatar, sprite, gesture, or hang-up from unrelated words. When the user explicitly asks to change the face, avatar, or sprite without naming one, choose an appropriate supported sprite set yourself and call changeSpriteSet instead of asking which one. On StackChan, accompany a clearly affirmative or agreeing spoken answer with the nod tool, and accompany a clearly negative, disagreeing, or refusing spoken answer with the shakeHead tool; do both naturally without announcing the gesture. For example, if the user asks “Are you there?”, call nod and say “Yes, I’m here.” Do not gesture for quoted, hypothetical, or ambiguous yes/no language. Also obey an explicit gesture request. If the user says stop, pause, be quiet, or otherwise interrupts while you are speaking, stop that reply and remain in the conversation; do not call endConversation. Call endConversation only when the user explicitly asks to end the conversation, hang up, or go back to sleep; treat “go back to sleep” as an explicit hang-up, optionally give a brief sign-off, call endConversation, and do not ask for confirmation. Do not list tools or sprite sets unless the user asks. Do not claim a physical action succeeded until its tool result says it did.",
           keep_context: true,
           tools: [
             {
               description:
-                "Change the active Iterate Kit device display background to red or green.",
-              name: "changeColour",
+                "Change the active Iterate Kit device to one of its compiled sprite sets. " +
+                "When the user requests a face change without naming one, choose a suitable set yourself. " +
+                "Spoken names map as follows: Dot Matrix Oracle to dot-matrix-oracle; " +
+                "Karakuri Brass to karakuri-brass; Star Byte to starbyte.",
+              name: "changeSpriteSet",
               parameters: {
                 additionalProperties: false,
                 properties: {
-                  colour: { enum: ["red", "green"], type: "string" },
+                  spriteSet: {
+                    enum: ["dot-matrix-oracle", "karakuri-brass", "starbyte"],
+                    type: "string",
+                  },
                 },
-                required: ["colour"],
+                required: ["spriteSet"],
                 type: "object",
               },
               type: "function",
@@ -133,7 +142,55 @@ describe("userspace PCM providers", () => {
     );
   });
 
-  test("configures provider-owned VAD explicitly for a continuous AEC session", async () => {
+  test("offers StackChan's bounded physical gestures and hang-up without exposing ITX", async () => {
+    const socket = new FakeProviderSocket("wss://api.x.ai/v1/realtime");
+    await connectGrokRealtimeVoice({
+      createWebSocket: () => {
+        queueMicrotask(() => socket.open());
+        return socket as unknown as WebSocket;
+      },
+      credential: {
+        expiresAtEpochSeconds: Math.ceil(Date.now() / 1_000) + 3_600,
+        value: "stackchan-tool-secret",
+      },
+      deviceId: "stackchan",
+      sampleRateHz: 16_000,
+      serverVadProfile: "low-level-aec",
+      turnDetection: "server-vad",
+    });
+
+    const update = JSON.parse(String(socket.sent[0])) as {
+      session: {
+        tools: Array<{
+          description: string;
+          name: string;
+          parameters: unknown;
+        }>;
+      };
+    };
+    expect(update.session.tools.map((tool) => tool.name)).toEqual([
+      "changeSpriteSet",
+      "endConversation",
+      "nod",
+      "shakeHead",
+    ]);
+    expect(update.session.tools.slice(1).map((tool) => tool.parameters)).toEqual([
+      { additionalProperties: false, properties: {}, type: "object" },
+      { additionalProperties: false, properties: {}, type: "object" },
+      { additionalProperties: false, properties: {}, type: "object" },
+    ]);
+    /*
+     * These examples are behavioral policy, not decoration: vague gesture and
+     * lifecycle descriptions previously led the model to answer verbally but
+     * omit the physical action, or ask permission before honoring “sleep”.
+     */
+    expect(update.session.tools[1]?.description).toContain("go back to sleep");
+    expect(update.session.tools[1]?.description).toContain("Do not ask for confirmation");
+    expect(update.session.tools[2]?.description).toContain("Are you there?");
+    expect(update.session.tools[2]?.description).toContain("Yes, I’m here.");
+  });
+
+  test("uses the shared 400 ms endpoint policy for StackChan", async () => {
     const socket = new FakeProviderSocket("wss://api.x.ai/v1/realtime");
     await connectGrokRealtimeVoice({
       createWebSocket: () => {
@@ -160,28 +217,34 @@ describe("userspace PCM providers", () => {
       };
     };
     /*
-     * xAI's documented 0.85 default and our first explicit 0.5 setting both
-     * failed to detect a production StackChan prompt. That exact 0.5 run sent
-     * 4,930 current PCM frames, reached a device-observed clean peak of 12,670,
-     * and retained zero speech_started events. Use 0.2 as the next bounded
-     * hardware calibration point; it remains above xAI's documented minimum
-     * of 0.1 and avoids hiding the failure behind firmware gain or resampling.
+     * A provider threshold cannot distinguish assistant echo from double-talk:
+     * physical 0.1 false-triggered on echo, while 0.2 missed real barge-in.
+     * Keep the near-speech-sensitive floor and require the device AEC plus the
+     * speaker-only semantic oracle to remove self-talk before this boundary.
+     *
+     * Endpoint latency is a product contract shared by every continuous-AEC
+     * target. Signal profiles remain named because gain and DSP provenance
+     * differ, but they must not silently create different conversational UX.
      */
     expect(update.session.turn_detection).toEqual({
       prefix_padding_ms: 400,
-      silence_duration_ms: 1_000,
+      silence_duration_ms: 400,
       threshold: 0.1,
       type: "server_vad",
     });
   });
 
-  test("uses the measured VAD floor for HAVPE's low-level pre-AGC tap", async () => {
+  test("keeps HAVPE's AEC tap at the measured low-level server-VAD floor", async () => {
     /*
      * The prior HAVPE AGC tap made 0.1 turn ordinary background conversation
-     * into one 95-second utterance. Moving to NS removed that final ~100x gain;
-     * with the unchanged 0.85 threshold, a physical prompt peaked at 557 and
-     * produced no speech edge across 4,772 losslessly forwarded frames. Use
-     * xAI's documented 0.1 floor for this newly measured low-level contract.
+     * into one 95-second utterance. Fixed-gain downstream taps removed that
+     * amplification, but ×16 userspace gain later made first-convergence
+     * residue open false turns in two count proofs. The current firmware uses
+     * XMOS's AEC tap because the matched-path oracle found negligible speaker
+     * leakage and better near-speech preservation than IC/NS. Keep the next
+     * bounded ladder rung at ×8 and xAI's supported 0.1 floor. The 500 ms
+     * endpoint tail is independent: it affects when a real turn closes, not
+     * whether echo opens one.
      */
     const socket = new FakeProviderSocket("wss://api.x.ai/v1/realtime");
     await connectGrokRealtimeVoice({
@@ -194,7 +257,7 @@ describe("userspace PCM providers", () => {
         value: "xmos-server-vad-client-secret",
       },
       sampleRateHz: 16_000,
-      serverVadProfile: "xmos-aec-ns",
+      serverVadProfile: "xmos-aec",
       turnDetection: "server-vad",
     });
 
@@ -203,7 +266,7 @@ describe("userspace PCM providers", () => {
     };
     expect(update.session.turn_detection).toEqual({
       prefix_padding_ms: 400,
-      silence_duration_ms: 1_000,
+      silence_duration_ms: 400,
       threshold: 0.1,
       type: "server_vad",
     });
@@ -364,6 +427,31 @@ describe("userspace PCM providers", () => {
 
     provider.send(JSON.stringify({ type: "response.create" }));
     await vi.runAllTimersAsync();
+    expect(messages.at(-1)).toBe('{"type":"response.done"}');
+    provider.close();
+    vi.useRealTimers();
+  });
+
+  test("streams the quiet ordered AEC sources through the same provider protocol", async () => {
+    vi.useFakeTimers();
+    const pair = unacceptedSocketPair();
+    const messages: unknown[] = [];
+    pair.first.addEventListener("message", (event) => messages.push(event.data));
+    const provider = await connectDeterministicAec({ createPair: () => pair });
+
+    provider.send(JSON.stringify({ type: "response.create" }));
+    await vi.runAllTimersAsync();
+    expect(messages[0]).toBe('{"type":"response.created"}');
+    expect(messages[1]).toEqual(createDeterministicAecRenderer(0).render(320));
+    expect(messages.at(-1)).toBe('{"type":"response.done"}');
+
+    const secondResponseStart = messages.length;
+    provider.send(JSON.stringify({ type: "response.create" }));
+    await vi.runAllTimersAsync();
+    expect(messages[secondResponseStart]).toBe('{"type":"response.created"}');
+    expect(messages[secondResponseStart + 1]).toEqual(
+      createDeterministicAecRenderer(1).render(320),
+    );
     expect(messages.at(-1)).toBe('{"type":"response.done"}');
     provider.close();
     vi.useRealTimers();

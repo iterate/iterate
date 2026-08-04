@@ -32,6 +32,25 @@ function healthyDirectLanEvidence(): PhysicalNetworkValidityEvidence {
         },
       ],
     },
+    deviceControlRoundTrips: {
+      coverage,
+      expectedSampleCount: 2,
+      maximumHealthyDurationMs: 500,
+      samples: [
+        {
+          completedAtMonotonicMs: 1_050,
+          durationMs: 50,
+          outcome: "success",
+          startedAtMonotonicMs: 1_000,
+        },
+        {
+          completedAtMonotonicMs: 3_000,
+          durationMs: 50,
+          outcome: "success",
+          startedAtMonotonicMs: 2_950,
+        },
+      ],
+    },
     dnsAndConnect: {
       kind: "not-applicable",
       reason: "direct-lan",
@@ -237,6 +256,37 @@ describe("physical network validity", () => {
         },
       ]),
     );
+  });
+
+  test("rejects a successful device capability round trip that exceeds the audio freshness budget", () => {
+    /*
+     * ICMP is supporting evidence, not the application path used by the
+     * device. The production Stick run proved why this distinction matters:
+     * its router and worker probes stayed healthy while getDiagnostics took
+     * hundreds of milliseconds on the same interval as a device ping miss.
+     * A successful-but-late capability response therefore cannot certify the
+     * route merely because its payload eventually arrived.
+     */
+    const evidence = healthyDirectLanEvidence();
+    evidence.deviceControlRoundTrips!.samples = [
+      evidence.deviceControlRoundTrips!.samples[0]!,
+      {
+        completedAtMonotonicMs: 3_000,
+        durationMs: 550,
+        outcome: "success",
+        startedAtMonotonicMs: 2_450,
+      },
+    ];
+
+    expect(classifyPhysicalNetworkValidity(evidence)).toMatchObject({
+      reasons: expect.arrayContaining([
+        {
+          code: "device-control-round-trip-duration-exceeded",
+          message: "Device control round trip took 550 ms, exceeding its 500 ms healthy budget.",
+        },
+      ]),
+      verdict: "network-invalid",
+    });
   });
 
   test("calls an otherwise healthy interval indeterminate when device evidence is absent", () => {

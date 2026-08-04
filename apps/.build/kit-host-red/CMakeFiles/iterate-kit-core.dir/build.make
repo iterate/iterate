@@ -86,10 +86,38 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/aec_capture_bridge.c.s: cmak
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/aec_capture_bridge.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_capture_bridge.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/aec_capture_bridge.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_diagnostic_trace.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_diagnostic_trace.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_diagnostic_trace.c > CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_diagnostic_trace.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.s
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_reference_scaler.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_reference_scaler.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_reference_scaler.c > CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_reference_scaler.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_signal_window.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_signal_window.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.i: cmake_force
@@ -100,10 +128,24 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.s: cmake
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_signal_window.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_uplink_selector.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_uplink_selector.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_uplink_selector.c > CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/aec_uplink_selector.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio_intent_reconciler.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio_intent_reconciler.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.i: cmake_force
@@ -114,10 +156,38 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.s:
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio_intent_reconciler.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio_playout.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio_playout.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio_playout.c > CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio_playout.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.s
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/device_menu.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/device_menu.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/device_menu.c > CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/device_menu.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/audio.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.i: cmake_force
@@ -131,7 +201,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.s: cmake_force
 CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/configuration.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/configuration.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.i: cmake_force
@@ -142,10 +212,24 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.s: cmake_for
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/configuration.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/conversation_lights.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/conversation_lights.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/conversation_lights.c > CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/conversation_lights.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/control_recovery.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/control_recovery.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.i: cmake_force
@@ -156,10 +240,24 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.s: cmake_
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/control_recovery.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/speaker_abandon.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/speaker_abandon.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/speaker_abandon.c > CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/speaker_abandon.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/cpu_usage.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/cpu_usage.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.i: cmake_force
@@ -170,10 +268,24 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/cpu_usage.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/debounced_button.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/debounced_button.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/debounced_button.c > CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/debounced_button.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/device_events.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_16) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/device_events.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.i: cmake_force
@@ -187,7 +299,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.s: cmake_for
 CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_connection.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_connection.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.i: cmake_force
@@ -198,10 +310,24 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.s: cmake_fo
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_connection.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_outbox_sender.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_18) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_outbox_sender.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_outbox_sender.c > CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_outbox_sender.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_mount.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_19) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/itx_mount.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.i: cmake_force
@@ -215,7 +341,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.s: cmake_force
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_clock_playback.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_20) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_clock_playback.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.i: cmake_force
@@ -229,7 +355,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.s: cmak
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_capture_turn.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_21) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_capture_turn.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.i: cmake_force
@@ -243,7 +369,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.s: cmake_
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_generation_fence.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_22) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_generation_fence.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.i: cmake_force
@@ -254,10 +380,24 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.s: cm
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_generation_fence.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_high_pass.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_23) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_high_pass.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_high_pass.c > CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_high_pass.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_lane.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_24) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_lane.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.i: cmake_force
@@ -271,7 +411,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.s: cmake_force
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_playback_interruption.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_15) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_25) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_playback_interruption.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.i: cmake_force
@@ -285,7 +425,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_uplink_conductor.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_16) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_26) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_uplink_conductor.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.i: cmake_force
@@ -299,7 +439,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.s: cm
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_uplink_sender.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_17) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_27) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_uplink_sender.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.i: cmake_force
@@ -313,7 +453,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_sender.c.s: cmake
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_websocket.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_websocket.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_websocket.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_websocket.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_18) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_websocket.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_28) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_websocket.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_websocket.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_websocket.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_websocket.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/pcm_websocket.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_websocket.c.i: cmake_force
@@ -327,7 +467,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_websocket.c.s: cmake_for
 CMakeFiles/iterate-kit-core.dir/components/core/src/peer.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/peer.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/peer.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/peer.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_19) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/peer.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_29) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/peer.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/peer.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/peer.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/peer.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/peer.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/peer.c.i: cmake_force
@@ -341,7 +481,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/peer.c.s: cmake_force
 CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/retry_gate.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_20) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_30) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/retry_gate.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.i: cmake_force
@@ -355,7 +495,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.s: cmake_force
 CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/runtime_diagnostics.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_21) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_31) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/runtime_diagnostics.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.i: cmake_force
@@ -369,7 +509,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.s: cma
 CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/spsc_ring.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_22) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_32) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/spsc_ring.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.i: cmake_force
@@ -380,10 +520,38 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.s: cmake_force
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/spsc_ring.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/talk_button.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_33) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/talk_button.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/talk_button.c > CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/talk_button.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.s
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/touch_tap.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_34) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/touch_tap.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/touch_tap.c > CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/touch_tap.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/voicelab_stream.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_23) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_35) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/voicelab_stream.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.i: cmake_force
@@ -394,10 +562,24 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.s: cmake_f
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/voicelab_stream.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/voice_playback_clock.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_36) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/voice_playback_clock.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/voice_playback_clock.c > CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/voice_playback_clock.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_frame_writer.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_24) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_37) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_frame_writer.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.i: cmake_force
@@ -408,10 +590,24 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.s: 
 	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.s"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_frame_writer.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.s
 
+CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
+CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_frame_reader.c
+CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_38) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_frame_reader.c
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_frame_reader.c > CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.i
+
+CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_frame_reader.c -o CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.s
+
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_rx.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_25) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_39) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_rx.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.i: cmake_force
@@ -425,7 +621,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.s: cmake_forc
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_tx.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_26) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_40) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_tx.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.i: cmake_force
@@ -439,7 +635,7 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.s: cmake_forc
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.o: CMakeFiles/iterate-kit-core.dir/flags.make
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_text.c
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.o: CMakeFiles/iterate-kit-core.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_27) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_41) "Building C object CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.o -MF CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.o.d -o CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/core/src/websocket_text.c
 
 CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.i: cmake_force
@@ -453,18 +649,28 @@ CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.s: cmake_fo
 # Object files for target iterate-kit-core
 iterate__kit__core_OBJECTS = \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/aec_capture_bridge.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o" \
@@ -474,8 +680,12 @@ iterate__kit__core_OBJECTS = \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.o" \
+"CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.o" \
 "CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.o"
@@ -484,18 +694,28 @@ iterate__kit__core_OBJECTS = \
 iterate__kit__core_EXTERNAL_OBJECTS =
 
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/aec_capture_bridge.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/audio.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/configuration.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/itx_connection.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_clock_playback.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_capture_turn.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_lane.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_playback_interruption.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_uplink_conductor.c.o
@@ -505,14 +725,18 @@ libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/peer.
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/retry_gate.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_writer.c.o
+libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_rx.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_tx.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_text.c.o
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/build.make
 libiterate-kit-core.a: CMakeFiles/iterate-kit-core.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_28) "Linking C static library libiterate-kit-core.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_42) "Linking C static library libiterate-kit-core.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/iterate-kit-core.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/iterate-kit-core.dir/link.txt --verbose=$(VERBOSE)
 

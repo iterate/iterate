@@ -91,4 +91,52 @@ describe("deterministic PCM tone provider", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(messages.filter((message) => typeof message.data !== "string")).toHaveLength(2);
   });
+
+  test("serves sequential diagnostic responses on one device PCM generation", async () => {
+    /*
+     * The physical AEC protocol alternates speaker-active and speaker-quiet
+     * phases without reconnecting the device. A fixture which permanently
+     * latches after response.done would force a reconnect between stimuli and
+     * make the AEC state, socket counters, and network interval incomparable.
+     */
+    const provider = new DeterministicPcmToneProvider({
+      amplitude: 12_000,
+      chunkBytes: 640,
+      durationMs: 40,
+      frequencyHz: 997,
+      sampleRateHz: 16_000,
+    });
+    providers.push(provider);
+    const socket = await provider.connect();
+    const controls: string[] = [];
+    let completedResponses = 0;
+    const bothComplete = Promise.withResolvers<void>();
+    socket.addEventListener("message", (event) => {
+      if (typeof event.data !== "string") return;
+      const type = JSON.parse(event.data).type as string;
+      controls.push(type);
+      if (type !== "response.done") return;
+      completedResponses += 1;
+      if (completedResponses === 1) {
+        socket.send(JSON.stringify({ type: "response.create" }));
+      } else {
+        bothComplete.resolve();
+      }
+    });
+
+    socket.send(JSON.stringify({ type: "response.create" }));
+    await Promise.race([
+      bothComplete.promise,
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error("Second deterministic response never started.")), 500),
+      ),
+    ]);
+
+    expect(controls).toEqual([
+      "response.created",
+      "response.done",
+      "response.created",
+      "response.done",
+    ]);
+  });
 });

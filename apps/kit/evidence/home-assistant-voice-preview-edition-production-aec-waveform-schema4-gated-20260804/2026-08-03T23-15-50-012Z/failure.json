@@ -1,0 +1,55 @@
+{
+  "aec": null,
+  "stackChanHealth": null,
+  "voicePeHealth": null,
+  "createdAt": "2026-08-03T23:16:58.479Z",
+  "device": {
+    "deviceHost": "192.168.0.33",
+    "id": "home-assistant-voice-preview-edition",
+    "projectId": "prj_4f76ffe131f1495981afd65619f57914",
+    "projectSlug": "kit-havpe-voice-e2e-20260802",
+    "workerHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app"
+  },
+  "digital": null,
+  "error": {
+    "errors": [
+      {
+        "message": "Timed out waiting for the deployed deterministic full-duplex PCM generation.",
+        "name": "ProductionPcmWaitTimeoutError",
+        "stack": "ProductionPcmWaitTimeoutError: Timed out waiting for the deployed deterministic full-duplex PCM generation.\n    at waitForProductionPcmMetrics (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/src/device/production-pcm-generation.ts:225:9)\n    at async proveProductionAecWaveform (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:378:22)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:1357:20)"
+      },
+      {
+        "message": "capability \"kit.homeAssistantVoicePreviewEdition\" is offline",
+        "name": "Error",
+        "stack": "Error: capability \"kit.homeAssistantVoicePreviewEdition\" is offline\n    at Evaluator.evaluateImpl (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:947:75)\n    at Evaluator.evaluateWithDepth (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:818:28)\n    at Evaluator.evaluate (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:812:17)\n    at RpcSessionImpl.readLoop (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/rpc.ts:1059:73)"
+      }
+    ],
+    "message": "Remote conversation cleanup failed.",
+    "name": "AggregateError",
+    "stack": "AggregateError: Remote conversation cleanup failed.\n    at combineFailure (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:1281:20)\n    at proveProductionAecWaveform (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:725:22)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:1357:20)"
+  },
+  "network": null,
+  "passed": false,
+  "projectModeRestored": true,
+  "schemaVersion": 1,
+  "stimuli": {
+    "macOutputVolumePercent": 40,
+    "nearSourceSha256": null,
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "providerDurationMs": 6000
+  },
+  "worker": {
+    "baseline": null,
+    "deviceMetricsCallbackBracket": {
+      "exactMediaInterval": false,
+      "reason": "Both proof boundaries require a retained device metrics callback.",
+      "semantics": "conservative-callback-bracket",
+      "status": "unavailable"
+    },
+    "terminal": null
+  }
+}

@@ -1,0 +1,43 @@
+{
+  "aec": null,
+  "stackChanHealth": null,
+  "voicePeHealth": null,
+  "createdAt": "2026-08-03T23:21:39.582Z",
+  "device": {
+    "deviceHost": "192.168.0.33",
+    "id": "home-assistant-voice-preview-edition",
+    "projectId": "prj_4f76ffe131f1495981afd65619f57914",
+    "projectSlug": "kit-havpe-voice-e2e-20260802",
+    "workerHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app"
+  },
+  "digital": null,
+  "error": {
+    "message": "capability \"kit.homeAssistantVoicePreviewEdition\" is offline",
+    "name": "Error",
+    "stack": "Error: capability \"kit.homeAssistantVoicePreviewEdition\" is offline\n    at Evaluator.evaluateImpl (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:947:75)\n    at Evaluator.evaluateWithDepth (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:818:28)\n    at Evaluator.evaluate (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:812:17)\n    at RpcSessionImpl.readLoop (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/rpc.ts:1059:73)"
+  },
+  "network": null,
+  "passed": false,
+  "projectModeRestored": true,
+  "schemaVersion": 1,
+  "stimuli": {
+    "macOutputVolumePercent": 40,
+    "nearSourceSha256": null,
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "providerDurationMs": 6000
+  },
+  "worker": {
+    "baseline": null,
+    "deviceMetricsCallbackBracket": {
+      "exactMediaInterval": false,
+      "reason": "Both proof boundaries require a retained device metrics callback.",
+      "semantics": "conservative-callback-bracket",
+      "status": "unavailable"
+    },
+    "terminal": null
+  }
+}

@@ -237,6 +237,46 @@ esp_err_t bsp_i2c_init(void);
  */
 esp_err_t bsp_i2c_deinit(void);
 
+/**
+ * Enables and verifies CoreS3's externally switched M-BUS power rail.
+ *
+ * The BSP owns the AW9523 output-register shadow, so module drivers must use
+ * this operation rather than independently touching BUS_OUT_EN or BOOST_EN.
+ * The operation preserves every unrelated output and reads the latch and
+ * direction registers back before returning success.
+ *
+ * @return ESP_OK when BUS_OUT_EN and BOOST_EN are latched as outputs and high.
+ */
+esp_err_t bsp_external_power_enable(void);
+
+/**
+ * Latched AXP2101 power-key events.
+ *
+ * CoreS3 has no ordinary GPIO button (`BSP_CAPS_BUTTONS == 0`); its side
+ * power key terminates at the PMIC.  Exposing the PMIC event bits here keeps
+ * applications on the audited BSP's I2C handle instead of making them reach
+ * through ESP-IDF private bus APIs or install a second device handle behind
+ * the BSP's back.  These values are flags because the PMIC can latch more
+ * than one event before software samples the register.
+ */
+typedef enum {
+    BSP_POWER_BUTTON_EVENT_NONE = 0,
+    BSP_POWER_BUTTON_EVENT_LONG_PRESS = 1 << 0,
+    BSP_POWER_BUTTON_EVENT_SHORT_PRESS = 1 << 1,
+} bsp_power_button_event_t;
+
+/**
+ * Reads and acknowledges the power-key events latched by the AXP2101.
+ *
+ * This is a nonblocking state sample, not a gesture timer.  The PMIC remains
+ * responsible for its configured long-hold power policy; consumers should
+ * use the short-press bit for ordinary application actions.
+ *
+ * @param[out] events Latched event flags, or NONE when no event is pending.
+ * @return ESP_OK on success, otherwise the underlying I2C transaction error.
+ */
+esp_err_t bsp_power_button_take_events(bsp_power_button_event_t *events);
+
 /** @} */ // end of i2c
 
 /** \addtogroup g08_camera

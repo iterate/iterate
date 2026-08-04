@@ -34,11 +34,19 @@ struct fixture {
   int16_t clean[capture_samples];
 };
 
+#define ALL_TRACE_PLANES ( \
+    ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_NEAR | \
+    ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_REFERENCE | \
+    ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_PLAYOUT | \
+    ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_LINEAR | \
+    ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_CLEAN)
+
 static void initialise(struct fixture *fixture) {
   const struct iterate_kit_aec_diagnostic_trace_options options = {
     .sample_rate_hz = 16000U,
     .frame_samples = frame_samples,
     .capture_samples = capture_samples,
+    .available_planes = ALL_TRACE_PLANES,
     .near_samples = fixture->near,
     .reference_samples = fixture->reference,
     .playout_samples = fixture->playout,
@@ -63,6 +71,7 @@ static void electrical_and_playout_references_cannot_alias(void) {
     .sample_rate_hz = 16000U,
     .frame_samples = frame_samples,
     .capture_samples = capture_samples,
+    .available_planes = ALL_TRACE_PLANES,
     .near_samples = fixture.near,
     .reference_samples = fixture.reference,
     .playout_samples = fixture.reference,
@@ -73,6 +82,70 @@ static void electrical_and_playout_references_cannot_alias(void) {
   TEST_ASSERT(
       iterate_kit_aec_diagnostic_trace_init(
           &fixture.trace, &options) == ITERATE_KIT_INVALID_ARGUMENT);
+}
+
+/*
+ * HAVPE exposes simultaneous raw and XMOS-clean taps but not the XMOS-private
+ * electrical reference. Requiring five fake pointers would waste RAM and,
+ * worse, encourage a target to label intended downlink or zeros as measured
+ * hardware. The trace must retain only truthful planes while keeping a stable
+ * five-plane read layout whose absent channels are explicitly zero-filled.
+ */
+static void unavailable_hardware_planes_are_explicit_not_fabricated(void) {
+  struct iterate_kit_aec_diagnostic_trace trace;
+  int16_t near[capture_samples] = {0};
+  int16_t clean[capture_samples] = {0};
+  int16_t planar[capture_samples * 5U] = {0};
+  const int16_t near_frame[frame_samples] = {1, 2, 3, 4};
+  const int16_t clean_frame[frame_samples] = {5, 6, 7, 8};
+  const struct iterate_kit_aec_diagnostic_trace_options options = {
+    .sample_rate_hz = 16000U,
+    .frame_samples = frame_samples,
+    .capture_samples = frame_samples,
+    .available_planes =
+        ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_NEAR |
+        ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_CLEAN,
+    .near_samples = near,
+    .clean_samples = clean,
+  };
+  struct iterate_kit_aec_diagnostic_trace_snapshot snapshot;
+  uint32_t generation = 0U;
+
+  TEST_ASSERT(
+      iterate_kit_aec_diagnostic_trace_init(&trace, &options) ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(
+      iterate_kit_aec_diagnostic_trace_start(&trace, &generation) ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(
+      iterate_kit_aec_diagnostic_trace_record(
+          &trace,
+          9U,
+          near_frame,
+          NULL,
+          NULL,
+          NULL,
+          clean_frame,
+          frame_samples) == ITERATE_KIT_OK);
+  iterate_kit_aec_diagnostic_trace_snapshot(&trace, &snapshot);
+  TEST_ASSERT(
+      snapshot.available_planes ==
+      (ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_NEAR |
+       ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_CLEAN));
+  TEST_ASSERT(
+      iterate_kit_aec_diagnostic_trace_read_planar(
+          &trace,
+          0U,
+          frame_samples,
+          planar,
+          sizeof(planar) / sizeof(planar[0])) == ITERATE_KIT_OK);
+  for (size_t index = 0U; index < frame_samples; ++index) {
+    TEST_ASSERT(planar[index] == near_frame[index]);
+    TEST_ASSERT(planar[frame_samples + index] == 0);
+    TEST_ASSERT(planar[frame_samples * 2U + index] == 0);
+    TEST_ASSERT(planar[frame_samples * 3U + index] == 0);
+    TEST_ASSERT(planar[frame_samples * 4U + index] == clean_frame[index]);
+  }
 }
 
 /*
@@ -262,6 +335,7 @@ static void discontinuity_aborts_without_reusing_a_partial_generation(void) {
 
 int main(void) {
   electrical_and_playout_references_cannot_alias();
+  unavailable_hardware_planes_are_explicit_not_fabricated();
   idle_trace_does_not_touch_audio_or_storage();
   armed_trace_publishes_one_exact_read_only_generation();
   discontinuity_aborts_without_reusing_a_partial_generation();

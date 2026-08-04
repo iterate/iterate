@@ -1,0 +1,15 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/ask-voice-agent.ts
+
+{
+  "agentPath": "/agents/voice/dev-621cd7aa562613aa",
+  "reply": "The device currently has 5,149,396 bytes of free heap and 5,122,748 bytes of free PSRAM. No call is active right now. There is no dedicated interrupt method, but pushToTalk.start() cancels audio already playing and opens the microphone.",
+  "replyOffset": 139520,
+  "direct": {
+    "heapFree": 5149396,
+    "psramFree": 5122748,
+    "callActive": false,
+    "wantsCall": false
+  }
+}

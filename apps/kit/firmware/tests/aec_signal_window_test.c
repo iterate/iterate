@@ -19,27 +19,26 @@ static void test_assert(
   test_assert((expression), #expression, __FILE__, __LINE__)
 
 /*
- * AEC acceptance compares all four processing taps at identical instants. Sampling
+ * AEC acceptance compares all three observable signals at identical instants. Sampling
  * each array with a separately advancing cursor would create convincing but
  * physically meaningless suppression ratios. Include INT16_MIN because a
  * narrow negation would overflow and under-report the largest legal sample.
  *
- * The linear tap is intentionally distinct from the final clean tap. Physical
- * StackChan trials produced a quiet steady tone but full-scale broadband output;
- * without this tap, that symptom cannot be attributed to the adaptive filter or
- * the nonlinear post-processor. The diagnostic prevents tuning the wrong stage.
+ * ESP-SR's VOIP engine deliberately integrates delay tracking, double-talk
+ * detection, linear cancellation and residual suppression behind one call. It
+ * does not expose a truthful intermediate tap, so this portable primitive must
+ * not fabricate one by copying either input or output under a misleading name.
  */
 static void aligned_stride_preserves_exact_integer_signal_evidence(void) {
   const int16_t near[] = {INT16_MIN, 111, -400, 222, 800, 333};
   const int16_t reference[] = {-1000, 1, 2000, 2, -3000, 3};
-  const int16_t linear[] = {800, 6, -600, 5, 200, 4};
   const int16_t clean[] = {400, 9, -200, 8, 100, 7};
   struct iterate_kit_aec_signal_window window;
   struct iterate_kit_aec_signal_summary summary;
 
   assert(
       iterate_kit_aec_signal_window_measure(
-          near, reference, linear, clean, 6U, 2U, &window) ==
+          near, reference, clean, 6U, 2U, &window) ==
       ITERATE_KIT_OK);
   assert(
       iterate_kit_aec_signal_window_summarize(
@@ -48,11 +47,9 @@ static void aligned_stride_preserves_exact_integer_signal_evidence(void) {
   assert(summary.sampled_samples == 3U);
   assert(summary.near_peak == 32768U);
   assert(summary.reference_peak == 3000U);
-  assert(summary.linear_peak == 800U);
   assert(summary.clean_peak == 400U);
   assert(summary.near_mean_absolute == (32768U + 400U + 800U) / 3U);
   assert(summary.reference_mean_absolute == 2000U);
-  assert(summary.linear_mean_absolute == 533U);
   assert(summary.clean_mean_absolute == 233U);
 }
 
@@ -71,7 +68,7 @@ static void merged_window_is_destroyed_after_one_interval_take(void) {
 
   assert(
       iterate_kit_aec_signal_window_measure(
-          samples, samples, samples, samples, 4U, 1U, &first) ==
+          samples, samples, samples, 4U, 1U, &first) ==
       ITERATE_KIT_OK);
   iterate_kit_aec_signal_window_merge(&aggregate, &first);
   iterate_kit_aec_signal_window_merge(&aggregate, &first);
@@ -92,7 +89,7 @@ static void zero_stride_is_rejected_before_walking_samples(void) {
   struct iterate_kit_aec_signal_window window;
   assert(
       iterate_kit_aec_signal_window_measure(
-          &sample, &sample, &sample, &sample, 1U, 0U, &window) ==
+          &sample, &sample, &sample, 1U, 0U, &window) ==
       ITERATE_KIT_INVALID_ARGUMENT);
 }
 

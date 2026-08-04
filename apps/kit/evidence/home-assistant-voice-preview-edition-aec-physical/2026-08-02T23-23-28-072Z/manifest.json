@@ -1,0 +1,61 @@
+{
+  "assessmentPassed": false,
+  "buildDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition",
+  "createdAt": "2026-08-02T23:24:37.243Z",
+  "device": "home-assistant-voice-preview-edition",
+  "networkClassification": "audio-invalid",
+  "networkVerdict": "valid",
+  "pcm": {
+    "microphoneBytes": 1793280,
+    "microphoneSha256": "16403b745532e30cdc3c08e43d68c08fa03163ac67b32fc1490430464cc00f1f",
+    "speakerBytes": 1152000,
+    "speakerSha256": "0afd1cc1614a2c431d70229069c3970ffa101d42994dfbf27555fda2c09586e4"
+  },
+  "port": "/dev/cu.usbmodem11101",
+  "schemaVersion": 1,
+  "stableUsbSerial": "D8:3B:DA:46:20:34",
+  "startupLifecycle": {
+    "observed": {
+      "captureFailures": 0,
+      "captureFrameDrops": 0,
+      "playbackDroppedFrames": 0,
+      "playbackIntegrityFailures": 0,
+      "playbackResets": 1,
+      "uplinkFrameDrops": 0,
+      "uplinkRestarts": 0
+    },
+    "passed": true,
+    "reasons": []
+  },
+  "stimuli": {
+    "acousticProfile": {
+      "macOutputVolumePercent": 35,
+      "matchedPathPilotAmplitude": 64,
+      "prbsCarrierAmplitude": 2500,
+      "speechRendererAmplitude": 2500,
+      "toneAmplitude": 5000
+    },
+    "doubleTalkPrbsCommitment": "ec8dae8bba6dcc1f131d1b560c318aa0e6377523707258dd253c45a328cc81a7",
+    "farPrbsCommitment": "64e342247de649c95971a0948d002a5830fa966e042e88a2add7521ea79fd32a",
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "nearSourceSha256": "580907004292c1f4f5ada9c76ada3546847408195c22ccbdf46a832187df34ae"
+  },
+  "transportValidity": {
+    "captureFailures": 0,
+    "captureFrameDrops": 0,
+    "clockDiscontinuities": 0,
+    "networkValid": true,
+    "playbackDroppedFrames": 0,
+    "playbackIntegrityFailures": 0,
+    "playbackResets": 0,
+    "playbackUnderrunIncidents": 0,
+    "recorderComplete": true,
+    "uplinkFrameDrops": 0,
+    "uplinkRestarts": 0,
+    "websocketReconnects": 0
+  }
+}

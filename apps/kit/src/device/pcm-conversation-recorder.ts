@@ -44,6 +44,15 @@ export interface PcmConversationRecorderOptions {
   sampleRateHz: number;
 }
 
+export interface PcmConversationMarker {
+  event: string;
+  microphoneByteOffset: number;
+  microphoneFrames: number;
+  observedAtMonotonicMs: number;
+  speakerByteOffset: number;
+  speakerFrames: number;
+}
+
 /**
  * A bounded, best-effort tee for the laptop-side physical test harness.
  *
@@ -141,20 +150,31 @@ export class PcmConversationRecorder {
   }
 
   recordEvent(event: string, fields: Readonly<Record<string, unknown>> = {}) {
-    if (this.#closed || this.#failure) return;
+    if (this.#closed || this.#failure) return undefined;
     if (!event) {
       this.#recordFailure("empty-conversation-event");
-      return;
+      return undefined;
     }
-    if (
-      !this.#writeTimeline({
-        ...fields,
-        event,
-        observedAtMonotonicMs: performance.now(),
-      })
-    ) {
+    /*
+     * Host time locates an event approximately, but network jitter means it
+     * cannot identify an exact media boundary. Snapshotting both lane offsets
+     * at the marker lets an offline AEC oracle extract the exact clean-mic and
+     * speaker PCM accepted before/after each phase without a second realtime
+     * recorder or a guessed timestamp conversion.
+     */
+    const marker: PcmConversationMarker = {
+      event,
+      microphoneByteOffset: this.#microphone.bytes,
+      microphoneFrames: this.#microphone.frames,
+      observedAtMonotonicMs: performance.now(),
+      speakerByteOffset: this.#speaker.bytes,
+      speakerFrames: this.#speaker.frames,
+    };
+    if (!this.#writeTimeline({ ...fields, ...marker })) {
       this.#recordFailure(`recording-backpressure: event:${event}`);
+      return undefined;
     }
+    return marker;
   }
 
   close() {

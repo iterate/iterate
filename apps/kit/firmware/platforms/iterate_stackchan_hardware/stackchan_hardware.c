@@ -145,7 +145,6 @@ static enum iterate_kit_status move_servos(
     int32_t pitch_degrees,
     uint16_t speed) {
   struct iterate_kit_stackchan_hardware *hardware = context;
-  int32_t absolute_yaw;
   if (!ready(hardware)) {
     return ITERATE_KIT_STATE_ERROR;
   }
@@ -164,11 +163,16 @@ static enum iterate_kit_status move_servos(
   if (hardware->ops.move_head == NULL) {
     return ITERATE_KIT_UNAVAILABLE;
   }
-  absolute_yaw =
-      ITERATE_KIT_STACKCHAN_YAW_CENTRE_DEGREES + yaw_degrees;
+  /*
+   * The public geometry deliberately matches M5Stack's Motion API: yaw is
+   * relative to calibrated forward and pitch is 0..90 degrees. The physical
+   * owner translates those angles through each servo's distinct raw zero.
+   * Treating the SCS0009's nominal 0..300 travel as the capability coordinate
+   * produced plausible host tests but completely wrong physical targets.
+   */
   return hardware->ops.move_head(
       hardware->ops.context,
-      (int16_t)absolute_yaw,
+      (int16_t)yaw_degrees,
       (int16_t)pitch_degrees,
       speed);
 }
@@ -281,4 +285,34 @@ struct iterate_kit_camera_driver iterate_kit_stackchan_camera_driver(
     take_photo,
   };
   return driver;
+}
+
+enum iterate_kit_status iterate_kit_stackchan_hardware_show_status(
+    struct iterate_kit_stackchan_hardware *hardware,
+    const struct iterate_kit_conversation_visual_state *state) {
+  struct iterate_kit_rgb8 logical[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  uint16_t physical[ITERATE_KIT_STACKCHAN_LED_COUNT];
+  if (!ready(hardware)) {
+    return ITERATE_KIT_STATE_ERROR;
+  }
+  if (state == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  _Static_assert(
+      (int)ITERATE_KIT_STACKCHAN_LED_COUNT ==
+          (int)ITERATE_KIT_CONVERSATION_LIGHT_COUNT,
+      "StackChan body must represent the complete shared light grammar");
+  iterate_kit_conversation_lights_render(state, logical);
+  for (size_t index = 0U; index < ITERATE_KIT_STACKCHAN_LED_COUNT; ++index) {
+    physical[index] = rgb565(
+        logical[index].red, logical[index].green, logical[index].blue);
+  }
+  /*
+   * Do not split the two six-pixel runs into separate transactions. The PY32
+   * refresh latch exposes one atomic twelve-pixel frame, so a single commit
+   * prevents a network status update from briefly presenting half old and
+   * half new conversation truth. Indexes 0..5 are one physical run and 6..11
+   * the other; the portable sector order remains unchanged.
+   */
+  return commit_leds(hardware, physical);
 }

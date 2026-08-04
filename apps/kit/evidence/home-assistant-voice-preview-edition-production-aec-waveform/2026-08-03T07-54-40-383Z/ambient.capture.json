@@ -1,0 +1,33 @@
+{
+  "assessment": {
+    "actualFrames": 165,
+    "acceptedFrameSpanMs": 3277,
+    "capturedAudioDurationMs": 3300,
+    "durationMs": 3285,
+    "expectedFrames": 164,
+    "frameConservationPassed": true,
+    "maximumExpectedFrames": 167,
+    "minimumExpectedFrames": 161,
+    "passed": false,
+    "realtimeCadencePassed": false,
+    "reasons": ["The maximum accepted-uplink gap was 152 ms; 60 ms is the fixed realtime limit."]
+  },
+  "capture": {
+    "acceptedFrameSpanMs": 3277,
+    "capturedAudioDurationMs": 3300,
+    "durationMs": 3285,
+    "finishedAtMs": 1785743695191,
+    "firstAcceptedAtMs": 1785743691909,
+    "firstAcceptedUplinkFrame": 96,
+    "frameBytes": 640,
+    "frames": 165,
+    "lastAcceptedAtMs": 1785743695186,
+    "lastAcceptedUplinkFrame": 260,
+    "maximumFrames": 300,
+    "maximumInterFrameGapMs": 152,
+    "pcmSha256": "2cec1a6fbab3b81c688ea39d8c78d75ccc5d27b113b011b282713f30b7ed561c",
+    "schemaVersion": 2,
+    "startedAtMs": 1785743691906,
+    "truncatedFrames": 0
+  }
+}

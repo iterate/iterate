@@ -11,6 +11,7 @@ struct fixture {
   struct iterate_kit_metrics_subscription metric_subscriptions[2];
   char diagnostics_expression
       [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY];
+  struct iterate_kit_aec_diagnostic_trace_capability aec_trace_capability;
   struct iterate_kit_voice_satellite device;
   uint32_t handled_events;
   uint32_t observed_events;
@@ -104,6 +105,7 @@ static void composes_a_real_full_duplex_voice_satellite(void) {
   struct iterate_kit_device erased;
 
   memset(&fixture, 0, sizeof(fixture));
+  fixture.aec_trace_capability.initialized = 1U;
   memset(&options, 0, sizeof(options));
   options.manifest = &manifest;
   options.leds = (struct iterate_kit_led_driver){
@@ -131,6 +133,7 @@ static void composes_a_real_full_duplex_voice_satellite(void) {
     .diagnostics_expression_capacity =
         sizeof(fixture.diagnostics_expression),
   };
+  options.aec_trace = &fixture.aec_trace_capability;
   assert(
       iterate_kit_voice_satellite_init(
           &fixture.device, &options) == CAPNWEB_OK);

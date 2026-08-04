@@ -8,19 +8,19 @@ describe("M5StickS3 userspace device tools", () => {
       executeKitDeviceTool(
         { capabilityHosts: { get: () => ({ invokeCapability }) } },
         {
-          arguments: '{"colour":"red"}',
+          arguments: '{"spriteSet":"karakuri-brass"}',
           callId: "call_stackchan",
-          name: "changeColour",
+          name: "changeSpriteSet",
         },
         "stackchan",
       ),
-    ).resolves.toEqual({ colour: "red", ok: true });
+    ).resolves.toEqual({ ok: true, spriteSet: "karakuri-brass" });
     expect(invokeCapability).toHaveBeenCalledWith({
-      args: ["red"],
-      path: ["kit", "stackchan", "changeColour"],
+      args: ["karakuri-brass"],
+      path: ["kit", "stackchan", "changeSpriteSet"],
     });
   });
-  test("routes Grok's validated colour choice through the project-root env.ITX capability", async () => {
+  test("routes Grok's validated sprite choice through the project-root env.ITX capability", async () => {
     /*
      * The voice provider must not learn a second device protocol. This fake is
      * the exact project-root capability-host boundary supplied by env.ITX; the
@@ -34,38 +34,38 @@ describe("M5StickS3 userspace device tools", () => {
       executeM5StickS3Tool(
         { capabilityHosts: { get } },
         {
-          arguments: '{"colour":"green"}',
-          callId: "call_green",
-          name: "changeColour",
+          arguments: '{"spriteSet":"starbyte"}',
+          callId: "call_starbyte",
+          name: "changeSpriteSet",
         },
       ),
-    ).resolves.toEqual({ colour: "green", ok: true });
+    ).resolves.toEqual({ ok: true, spriteSet: "starbyte" });
     expect(get).toHaveBeenCalledWith("/");
     expect(invokeCapability).toHaveBeenCalledWith({
-      args: ["green"],
-      path: ["kit", "m5sticks3", "changeColour"],
+      args: ["starbyte"],
+      path: ["kit", "m5sticks3", "changeSpriteSet"],
     });
   });
 
   test.each([
-    ["unknown tool", { arguments: '{"colour":"red"}', callId: "call", name: "erase" }],
-    ["invalid JSON", { arguments: "red", callId: "call", name: "changeColour" }],
+    ["unknown tool", { arguments: '{"spriteSet":"starbyte"}', callId: "call", name: "erase" }],
+    ["invalid JSON", { arguments: "starbyte", callId: "call", name: "changeSpriteSet" }],
     [
-      "unsupported colour",
-      { arguments: '{"colour":"blue"}', callId: "call", name: "changeColour" },
+      "unsupported sprite set",
+      { arguments: '{"spriteSet":"unknown"}', callId: "call", name: "changeSpriteSet" },
     ],
     [
       "extra authority",
       {
-        arguments: '{"colour":"red","path":["secrets"]}',
+        arguments: '{"spriteSet":"starbyte","path":["secrets"]}',
         callId: "call",
-        name: "changeColour",
+        name: "changeSpriteSet",
       },
     ],
   ])("rejects %s without invoking the device", async (_scenario, call) => {
     /*
      * Tool arguments are untrusted model output. Accepting extra fields or a
-     * dynamic path would turn a two-colour display tool into ambient project
+     * dynamic path would turn a closed sprite selector into ambient project
      * authority, so the worker validates an exact closed object before ITX.
      */
     const invokeCapability = vi.fn(async () => true);
@@ -89,11 +89,93 @@ describe("M5StickS3 userspace device tools", () => {
           },
         },
         {
-          arguments: '{"colour":"red"}',
-          callId: "call_red",
-          name: "changeColour",
+          arguments: '{"spriteSet":"starbyte"}',
+          callId: "call_starbyte",
+          name: "changeSpriteSet",
         },
       ),
     ).rejects.toThrow("did not acknowledge");
+  });
+
+  test("hangs up through the authenticated conversation capability", async () => {
+    const invokeCapability = vi.fn(async () => true);
+    await expect(
+      executeKitDeviceTool(
+        { capabilityHosts: { get: () => ({ invokeCapability }) } },
+        { arguments: "{}", callId: "call_end", name: "endConversation" },
+        "stackchan",
+      ),
+    ).resolves.toEqual({ action: "conversation-ended", ok: true });
+    expect(invokeCapability).toHaveBeenCalledWith({
+      args: [],
+      path: ["kit", "stackchan", "conversation", "hangUp"],
+    });
+  });
+
+  test("turns a nod into two acknowledged safe poses without device-side queuing", async () => {
+    const invokeCapability = vi.fn(async (_call: { args: unknown[]; path: string[] }) => true);
+    const delay = vi.fn(async () => undefined);
+    await expect(
+      executeKitDeviceTool(
+        { capabilityHosts: { get: () => ({ invokeCapability }) } },
+        { arguments: "{}", callId: "call_nod", name: "nod" },
+        "stackchan",
+        { delay },
+      ),
+    ).resolves.toEqual({ action: "nodded", ok: true });
+    expect(invokeCapability.mock.calls.map(([call]) => call)).toEqual([
+      {
+        args: [{ pitchDegrees: 25, speed: 220, yawDegrees: 0 }],
+        path: ["kit", "stackchan", "servos", "move"],
+      },
+      {
+        args: [{ pitchDegrees: 0, speed: 220, yawDegrees: 0 }],
+        path: ["kit", "stackchan", "servos", "move"],
+      },
+    ]);
+    expect(delay).toHaveBeenCalledExactlyOnceWith(250);
+  });
+
+  test("returns a head shake to neutral and rejects gestures on non-servo devices", async () => {
+    const invokeCapability = vi.fn(async (_call: { args: unknown[]; path: string[] }) => true);
+    const delay = vi.fn(async () => undefined);
+    await expect(
+      executeKitDeviceTool(
+        { capabilityHosts: { get: () => ({ invokeCapability }) } },
+        { arguments: "{}", callId: "call_shake", name: "shakeHead" },
+        "stackchan",
+        { delay },
+      ),
+    ).resolves.toEqual({ action: "shook-head", ok: true });
+    expect(invokeCapability.mock.calls.map(([call]) => call.args[0])).toEqual([
+      { pitchDegrees: 0, speed: 220, yawDegrees: -25 },
+      { pitchDegrees: 0, speed: 220, yawDegrees: 25 },
+      { pitchDegrees: 0, speed: 220, yawDegrees: 0 },
+    ]);
+    expect(delay).toHaveBeenCalledTimes(2);
+
+    await expect(
+      executeKitDeviceTool(
+        { capabilityHosts: { get: () => ({ invokeCapability }) } },
+        { arguments: "{}", callId: "call_bad", name: "nod" },
+        "m5sticks3",
+      ),
+    ).rejects.toThrow("only available on StackChan");
+  });
+
+  test("rejects generated fields on argument-free physical tools", async () => {
+    const invokeCapability = vi.fn(async () => true);
+    await expect(
+      executeKitDeviceTool(
+        { capabilityHosts: { get: () => ({ invokeCapability }) } },
+        {
+          arguments: '{"yawDegrees":128}',
+          callId: "call_injected",
+          name: "shakeHead",
+        },
+        "stackchan",
+      ),
+    ).rejects.toThrow("closed schema");
+    expect(invokeCapability).not.toHaveBeenCalled();
   });
 });

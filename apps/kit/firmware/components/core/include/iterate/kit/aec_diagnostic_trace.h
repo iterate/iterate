@@ -18,14 +18,26 @@ enum iterate_kit_aec_diagnostic_trace_state {
   ITERATE_KIT_AEC_DIAGNOSTIC_TRACE_ABORTED = 4,
 };
 
+enum iterate_kit_aec_diagnostic_plane {
+  ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_NEAR = 1U << 0,
+  ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_REFERENCE = 1U << 1,
+  ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_PLAYOUT = 1U << 2,
+  ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_LINEAR = 1U << 3,
+  ITERATE_KIT_AEC_DIAGNOSTIC_PLANE_CLEAN = 1U << 4,
+};
+
+#define ITERATE_KIT_AEC_DIAGNOSTIC_ALL_PLANES ((uint32_t)0x1FU)
+
 struct iterate_kit_aec_diagnostic_trace_options {
   uint32_t sample_rate_hz;
   size_t frame_samples;
   size_t capture_samples;
+  uint32_t available_planes;
 
   /*
-   * The platform supplies five non-overlapping, capture_samples-long arrays.
-   * Rich devices should place them in external RAM. Keeping storage outside
+   * The platform supplies one non-overlapping, capture_samples-long array for
+   * every bit in available_planes. Unavailable arrays must remain NULL. Rich
+   * devices should place them in external RAM. Keeping storage outside
    * this portable object makes the 5 * duration * sample-rate * 2-byte cost
    * visible in each target's map instead of hiding it in a heap allocation.
    * `reference_samples` is the physical/electrical AEC input;
@@ -41,6 +53,7 @@ struct iterate_kit_aec_diagnostic_trace_options {
 
 struct iterate_kit_aec_diagnostic_trace_snapshot {
   enum iterate_kit_aec_diagnostic_trace_state state;
+  uint32_t available_planes;
   uint32_t generation;
   uint32_t captured_samples;
   uint32_t first_frame_sequence;
@@ -63,7 +76,7 @@ struct iterate_kit_aec_diagnostic_trace_snapshot {
  *
  * There is intentionally no producer/consumer queue. One control owner arms
  * a fixed capture; the realtime audio owner copies each already-produced DSP
- * frame into caller-owned storage; the control owner may read only after the
+ * frame into truthful caller-owned planes; the control owner may read only after the
  * fixed capture is complete. Thus a slow RPC reader cannot backpressure audio
  * or turn diagnostics into accumulating conversation delay.
  */
@@ -95,8 +108,8 @@ enum iterate_kit_status iterate_kit_aec_diagnostic_trace_start(
  *
  * In the common IDLE/READY states this performs one atomic state load and
  * returns UNAVAILABLE without touching sample memory. During a capture it
- * performs exactly five bounded memcpy calls and no allocation, lock, log,
- * wait, callback, or I/O. frame_sequence must remain contiguous, including
+ * performs one bounded memcpy per available plane and no allocation, lock,
+ * log, wait, callback, or I/O. frame_sequence must remain contiguous, including
  * uint32 wrap; a discontinuity aborts rather than fabricating one waveform.
  */
 enum iterate_kit_status iterate_kit_aec_diagnostic_trace_record(
@@ -127,6 +140,8 @@ void iterate_kit_aec_diagnostic_trace_snapshot(
 /**
  * Copies a completed slice as five native int16 planes in this exact order:
  * near, electrical reference, completed-DMA playout, linear, clean. The
+ * unavailable planes are zero-filled and MUST be ignored according to the
+ * snapshot availability mask; zeros are not evidence of measured silence.
  * capability adapter defines wire byte order separately; this portable module
  * does not smuggle a protocol into DSP.
  */

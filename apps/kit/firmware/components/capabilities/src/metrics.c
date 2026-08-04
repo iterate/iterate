@@ -1,11 +1,11 @@
 #include "iterate/kit/capabilities/metrics.h"
 
-#include "rpc_internal.h"
-
 #include <inttypes.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>
+
+#include "rpc_internal.h"
 
 /*
  * Metrics are a latest-state subscription, not a telemetry queue. One owner
@@ -20,29 +20,28 @@
  */
 static const char *const subscribe_path[] = {"subscribeToMetrics"};
 static const char *const subscribe_playback_path[] = {
-  "subscribeToPlaybackMetrics",
+    "subscribeToPlaybackMetrics",
 };
 static const char *const subscribe_aec_path[] = {
-  "subscribeToAecMetrics",
+    "subscribeToAecMetrics",
 };
 static const char *const subscribe_avatar_path[] = {
-  "subscribeToAvatarMetrics",
+    "subscribeToAvatarMetrics",
 };
 static const char *const get_diagnostics_path[] = {"getDiagnostics"};
 
 static struct iterate_kit_poll_result poll_ok(void) {
   const struct iterate_kit_poll_result result = {
-    ITERATE_KIT_POLL_OK,
-    CAPNWEB_OK,
+      ITERATE_KIT_POLL_OK,
+      CAPNWEB_OK,
   };
   return result;
 }
 
-static struct iterate_kit_poll_result poll_capnweb(
-    enum capnweb_status status) {
+static struct iterate_kit_poll_result poll_capnweb(enum capnweb_status status) {
   const struct iterate_kit_poll_result result = {
-    ITERATE_KIT_POLL_CAPNWEB_ERROR,
-    status,
+      ITERATE_KIT_POLL_CAPNWEB_ERROR,
+      status,
   };
   return result;
 }
@@ -54,8 +53,8 @@ static enum iterate_kit_status reserve_callback_budget(
   if (metrics->options.callback_budget == NULL) {
     return ITERATE_KIT_OK;
   }
-  status = iterate_kit_callback_budget_acquire(
-      metrics->options.callback_budget);
+  status =
+      iterate_kit_callback_budget_acquire(metrics->options.callback_budget);
   if (status == ITERATE_KIT_OK) {
     subscription->callback_budget_reserved = true;
   }
@@ -70,16 +69,16 @@ static bool release_callback_budget(
   }
   subscription->callback_budget_reserved = false;
   if (metrics->options.callback_budget == NULL ||
-      iterate_kit_callback_budget_release(
-          metrics->options.callback_budget) != ITERATE_KIT_OK) {
+      iterate_kit_callback_budget_release(metrics->options.callback_budget) !=
+          ITERATE_KIT_OK) {
     /*
      * Budget underflow is profile accounting corruption. Preserve it as a
      * module failure instead of allowing the next poll to exceed the transport
      * burst that the device proved safe.
      */
     metrics->pending_result = (struct iterate_kit_poll_result){
-      ITERATE_KIT_POLL_DRIVER_ERROR,
-      CAPNWEB_OK,
+        ITERATE_KIT_POLL_DRIVER_ERROR,
+        CAPNWEB_OK,
     };
     return false;
   }
@@ -146,7 +145,7 @@ _Static_assert(
 enum {
   PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT = 35,
   PLAYBACK_VIEW_RUNTIME_FIELD_COUNT = 19,
-  AEC_VIEW_FIELD_COUNT = 41,
+  AEC_VIEW_FIELD_COUNT = 49,
   RAW_CLEAN_AEC_VIEW_FIELD_COUNT = 36,
   AVATAR_VIEW_FIELD_COUNT = 24,
 };
@@ -162,15 +161,12 @@ struct playback_metrics_expression_workspace {
    */
   struct capnweb_expression root_values[4];
   struct capnweb_object_field root_fields[6];
-  struct capnweb_expression
-      playback_values[PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT];
+  struct capnweb_expression playback_values[PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT];
   struct capnweb_object_field
       playback_fields[PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT];
   struct capnweb_expression playback_object;
-  struct capnweb_expression
-      runtime_values[PLAYBACK_VIEW_RUNTIME_FIELD_COUNT];
-  struct capnweb_object_field
-      runtime_fields[PLAYBACK_VIEW_RUNTIME_FIELD_COUNT];
+  struct capnweb_expression runtime_values[PLAYBACK_VIEW_RUNTIME_FIELD_COUNT];
+  struct capnweb_object_field runtime_fields[PLAYBACK_VIEW_RUNTIME_FIELD_COUNT];
   struct capnweb_expression runtime_object;
   struct capnweb_expression root_object;
 };
@@ -228,68 +224,62 @@ _Static_assert(
     sizeof(union any_metrics_expression_workspace) <= 4096U,
     "either metrics callback view must use at most 4 KiB of stack workspace");
 
-static void set_integer_field(
-    struct capnweb_expression *value,
-    struct capnweb_object_field *field,
-    const char *key,
-    size_t key_length,
-    int64_t integer) {
+static void set_integer_field(struct capnweb_expression *value,
+                              struct capnweb_object_field *field,
+                              const char *key,
+                              size_t key_length,
+                              int64_t integer) {
   *value = integer_expression(integer);
   *field = (struct capnweb_object_field){
-    {key, key_length},
-    value,
+      {key, key_length},
+      value,
   };
 }
 
-static void set_boolean_field(
-    struct capnweb_expression *value,
-    struct capnweb_object_field *field,
-    const char *key,
-    size_t key_length,
-    bool boolean) {
+static void set_boolean_field(struct capnweb_expression *value,
+                              struct capnweb_object_field *field,
+                              const char *key,
+                              size_t key_length,
+                              bool boolean) {
   *value = boolean_expression(boolean);
   *field = (struct capnweb_object_field){
-    {key, key_length},
-    value,
+      {key, key_length},
+      value,
   };
 }
 
-static void set_string_field(
-    struct capnweb_expression *value,
-    struct capnweb_object_field *field,
-    const char *key,
-    size_t key_length,
-    const char *string) {
-  const char *const safe_string =
-      string == NULL ? "none" : string;
+static void set_string_field(struct capnweb_expression *value,
+                             struct capnweb_object_field *field,
+                             const char *key,
+                             size_t key_length,
+                             const char *string) {
+  const char *const safe_string = string == NULL ? "none" : string;
   *value = (struct capnweb_expression){
-    .kind = CAPNWEB_EXPRESSION_STRING,
-    .value.string = {safe_string, strlen(safe_string)},
+      .kind = CAPNWEB_EXPRESSION_STRING,
+      .value.string = {safe_string, strlen(safe_string)},
   };
   *field = (struct capnweb_object_field){
-    {key, key_length},
-    value,
+      {key, key_length},
+      value,
   };
 }
 
-static void set_object(
-    struct capnweb_expression *object,
-    struct capnweb_object_field *fields,
-    size_t count) {
+static void set_object(struct capnweb_expression *object,
+                       struct capnweb_object_field *fields,
+                       size_t count) {
   *object = (struct capnweb_expression){
-    .kind = CAPNWEB_EXPRESSION_OBJECT,
-    .value.object = {fields, count},
+      .kind = CAPNWEB_EXPRESSION_OBJECT,
+      .value.object = {fields, count},
   };
 }
 
-static void set_object_field(
-    struct capnweb_object_field *field,
-    const char *key,
-    size_t key_length,
-    const struct capnweb_expression *object) {
+static void set_object_field(struct capnweb_object_field *field,
+                             const char *key,
+                             size_t key_length,
+                             const struct capnweb_expression *object) {
   *field = (struct capnweb_object_field){
-    {key, key_length},
-    object,
+      {key, key_length},
+      object,
   };
 }
 
@@ -313,8 +303,7 @@ static bool build_buffer_expression(
     struct capnweb_expression values[4],
     struct capnweb_object_field fields[4],
     struct capnweb_expression *object) {
-  const char *const evidence =
-      buffer_evidence_name(metrics->evidence);
+  const char *const evidence = buffer_evidence_name(metrics->evidence);
   if (evidence == NULL) {
     /*
      * Do not coerce an invalid driver enum to UNAVAILABLE. That fallback would
@@ -324,11 +313,7 @@ static bool build_buffer_expression(
     return false;
   }
   set_string_field(
-      &values[0],
-      &fields[0],
-      "evidence",
-      sizeof("evidence") - 1U,
-      evidence);
+      &values[0], &fields[0], "evidence", sizeof("evidence") - 1U, evidence);
   /*
    * These names deliberately omit a repeated "Bytes" suffix. The containing
    * buffer contract already fixes the unit, while spelling it out on all
@@ -337,24 +322,21 @@ static bool build_buffer_expression(
    * the fixed inbox/outbox rings on every device. Keep the wire form compact
    * and put the unit in the type/documentation instead.
    */
-  set_integer_field(
-      &values[1],
-      &fields[1],
-      "current",
-      sizeof("current") - 1U,
-      metrics->current_bytes);
-  set_integer_field(
-      &values[2],
-      &fields[2],
-      "highWater",
-      sizeof("highWater") - 1U,
-      metrics->high_water_bytes);
-  set_integer_field(
-      &values[3],
-      &fields[3],
-      "capacity",
-      sizeof("capacity") - 1U,
-      metrics->capacity_bytes);
+  set_integer_field(&values[1],
+                    &fields[1],
+                    "current",
+                    sizeof("current") - 1U,
+                    metrics->current_bytes);
+  set_integer_field(&values[2],
+                    &fields[2],
+                    "highWater",
+                    sizeof("highWater") - 1U,
+                    metrics->high_water_bytes);
+  set_integer_field(&values[3],
+                    &fields[3],
+                    "capacity",
+                    sizeof("capacity") - 1U,
+                    metrics->capacity_bytes);
   set_object(object, fields, 4U);
   return true;
 }
@@ -363,46 +345,39 @@ static bool build_buffers_expression(
     const struct iterate_kit_metrics_sample *sample,
     struct metrics_expression_workspace *workspace) {
   const struct iterate_kit_buffer_metrics *const metrics[] = {
-    &sample->audio.buffers.uplink_application,
-    &sample->audio.buffers.websocket_transmitter,
-    &sample->audio.buffers.lwip_send,
-    &sample->audio.buffers.tls_egress,
-    &sample->audio.buffers.wifi_egress,
+      &sample->audio.buffers.uplink_application,
+      &sample->audio.buffers.websocket_transmitter,
+      &sample->audio.buffers.lwip_send,
+      &sample->audio.buffers.tls_egress,
+      &sample->audio.buffers.wifi_egress,
   };
   static const struct capnweb_string names[] = {
-    {"uplinkApplication", sizeof("uplinkApplication") - 1U},
-    {"websocketTransmitter",
-     sizeof("websocketTransmitter") - 1U},
-    {"lwipSend", sizeof("lwipSend") - 1U},
-    {"tlsEgress", sizeof("tlsEgress") - 1U},
-    {"wifiEgress", sizeof("wifiEgress") - 1U},
+      {"uplinkApplication", sizeof("uplinkApplication") - 1U},
+      {"websocketTransmitter", sizeof("websocketTransmitter") - 1U},
+      {"lwipSend", sizeof("lwipSend") - 1U},
+      {"tlsEgress", sizeof("tlsEgress") - 1U},
+      {"wifiEgress", sizeof("wifiEgress") - 1U},
   };
   size_t index;
   _Static_assert(
-      sizeof(metrics) / sizeof(metrics[0]) ==
-          sizeof(names) / sizeof(names[0]),
+      sizeof(metrics) / sizeof(metrics[0]) == sizeof(names) / sizeof(names[0]),
       "every buffer sample needs one stable public name");
-  for (index = 0U;
-       index < sizeof(metrics) / sizeof(metrics[0]);
-       ++index) {
-    if (!build_buffer_expression(
-            metrics[index],
-            workspace->buffer_values[index].values,
-            workspace->buffer_values[index].fields,
-            &workspace->buffer_values[index].object)) {
+  for (index = 0U; index < sizeof(metrics) / sizeof(metrics[0]); ++index) {
+    if (!build_buffer_expression(metrics[index],
+                                 workspace->buffer_values[index].values,
+                                 workspace->buffer_values[index].fields,
+                                 &workspace->buffer_values[index].object)) {
       return false;
     }
-    workspace->buffer_fields[index] =
-        (struct capnweb_object_field){
-          names[index],
-          &workspace->buffer_values[index].object,
-        };
+    workspace->buffer_fields[index] = (struct capnweb_object_field){
+        names[index],
+        &workspace->buffer_values[index].object,
+    };
   }
   set_object(
       &workspace->buffers_object,
       workspace->buffer_fields,
-      sizeof(workspace->buffer_fields) /
-          sizeof(workspace->buffer_fields[0]));
+      sizeof(workspace->buffer_fields) / sizeof(workspace->buffer_fields[0]));
   return true;
 }
 
@@ -410,282 +385,234 @@ static bool build_audio_expression(
     const struct iterate_kit_metrics_sample *sample,
     struct metrics_expression_workspace *workspace) {
   size_t audio_count = 0U;
-  set_integer_field(
-      &workspace->capture_values[0],
-      &workspace->capture_fields[0],
-      "sent",
-      4U,
-      sample->audio.capture.sent);
-  set_integer_field(
-      &workspace->capture_values[1],
-      &workspace->capture_fields[1],
-      "dropped",
-      7U,
-      sample->audio.capture.dropped);
-  set_integer_field(
-      &workspace->capture_values[2],
-      &workspace->capture_fields[2],
-      "failures",
-      8U,
-      sample->audio.capture.failures);
+  set_integer_field(&workspace->capture_values[0],
+                    &workspace->capture_fields[0],
+                    "sent",
+                    4U,
+                    sample->audio.capture.sent);
+  set_integer_field(&workspace->capture_values[1],
+                    &workspace->capture_fields[1],
+                    "dropped",
+                    7U,
+                    sample->audio.capture.dropped);
+  set_integer_field(&workspace->capture_values[2],
+                    &workspace->capture_fields[2],
+                    "failures",
+                    8U,
+                    sample->audio.capture.failures);
   set_object(
       &workspace->capture_object,
       workspace->capture_fields,
-      sizeof(workspace->capture_fields) /
-          sizeof(workspace->capture_fields[0]));
+      sizeof(workspace->capture_fields) / sizeof(workspace->capture_fields[0]));
 
-  set_integer_field(
-      &workspace->uplink_values[0],
-      &workspace->uplink_fields[0],
-      "sent",
-      4U,
-      sample->audio.uplink.sent);
-  set_integer_field(
-      &workspace->uplink_values[1],
-      &workspace->uplink_fields[1],
-      "dropped",
-      7U,
-      sample->audio.uplink.dropped);
-  set_integer_field(
-      &workspace->uplink_values[2],
-      &workspace->uplink_fields[2],
-      "depth",
-      5U,
-      sample->audio.uplink.depth);
-  set_integer_field(
-      &workspace->uplink_values[3],
-      &workspace->uplink_fields[3],
-      "highWater",
-      9U,
-      sample->audio.uplink.high_water);
-  set_integer_field(
-      &workspace->uplink_values[4],
-      &workspace->uplink_fields[4],
-      "sendDeferrals",
-      13U,
-      sample->audio.uplink.send_deferrals);
-  set_integer_field(
-      &workspace->uplink_values[5],
-      &workspace->uplink_fields[5],
-      "consecutiveSendDeferrals",
-      24U,
-      sample->audio.uplink.consecutive_send_deferrals);
-  set_integer_field(
-      &workspace->uplink_values[6],
-      &workspace->uplink_fields[6],
-      "maximumConsecutiveSendDeferrals",
-      31U,
-      sample->audio.uplink.maximum_consecutive_send_deferrals);
-  set_integer_field(
-      &workspace->uplink_values[7],
-      &workspace->uplink_fields[7],
-      "failures",
-      8U,
-      sample->audio.uplink.failures);
-  set_integer_field(
-      &workspace->uplink_values[8],
-      &workspace->uplink_fields[8],
-      "restartIncidents",
-      sizeof("restartIncidents") - 1U,
-      sample->audio.uplink.restart_incidents);
-  set_integer_field(
-      &workspace->uplink_values[9],
-      &workspace->uplink_fields[9],
-      "inPlaceFreshnessRecoveries",
-      sizeof("inPlaceFreshnessRecoveries") - 1U,
-      sample->audio.uplink.in_place_freshness_recoveries);
-  set_integer_field(
-      &workspace->uplink_values[10],
-      &workspace->uplink_fields[10],
-      "socketRestarts",
-      sizeof("socketRestarts") - 1U,
-      sample->audio.uplink.socket_restarts);
-  set_integer_field(
-      &workspace->uplink_values[11],
-      &workspace->uplink_fields[11],
-      "producerBackpressureRestarts",
-      sizeof("producerBackpressureRestarts") - 1U,
-      sample->audio.uplink.producer_backpressure_restarts);
-  set_integer_field(
-      &workspace->uplink_values[12],
-      &workspace->uplink_fields[12],
-      "transportDisconnectRestarts",
-      sizeof("transportDisconnectRestarts") - 1U,
-      sample->audio.uplink.transport_disconnect_restarts);
-  set_integer_field(
-      &workspace->uplink_values[13],
-      &workspace->uplink_fields[13],
-      "noProgressTimeoutRestarts",
-      sizeof("noProgressTimeoutRestarts") - 1U,
-      sample->audio.uplink.no_progress_timeout_restarts);
-  set_integer_field(
-      &workspace->uplink_values[14],
-      &workspace->uplink_fields[14],
-      "frameSendTimeoutRestarts",
-      sizeof("frameSendTimeoutRestarts") - 1U,
-      sample->audio.uplink.frame_send_timeout_restarts);
-  set_integer_field(
-      &workspace->uplink_values[15],
-      &workspace->uplink_fields[15],
-      "captureStaleRestarts",
-      sizeof("captureStaleRestarts") - 1U,
-      sample->audio.uplink.capture_stale_restarts);
-  set_integer_field(
-      &workspace->uplink_values[16],
-      &workspace->uplink_fields[16],
-      "lastTransportAcceptAgeMs",
-      sizeof("lastTransportAcceptAgeMs") - 1U,
-      sample->audio.uplink.last_transport_accept_age_ms);
-  set_integer_field(
-      &workspace->uplink_values[17],
-      &workspace->uplink_fields[17],
-      "maximumTransportAcceptAgeMs",
-      sizeof("maximumTransportAcceptAgeMs") - 1U,
-      sample->audio.uplink.maximum_transport_accept_age_ms);
-  set_integer_field(
-      &workspace->uplink_values[18],
-      &workspace->uplink_fields[18],
-      "lastRestartOldestCaptureAgeMs",
-      sizeof("lastRestartOldestCaptureAgeMs") - 1U,
-      sample->audio.uplink.last_restart_oldest_capture_age_ms);
-  set_string_field(
-      &workspace->uplink_values[19],
-      &workspace->uplink_fields[19],
-      "lastRestartReason",
-      sizeof("lastRestartReason") - 1U,
-      sample->audio.uplink.last_restart_reason);
-  set_integer_field(
-      &workspace->uplink_values[20],
-      &workspace->uplink_fields[20],
-      "lastRestartFramesDiscarded",
-      sizeof("lastRestartFramesDiscarded") - 1U,
-      sample->audio.uplink.last_restart_frames_discarded);
+  set_integer_field(&workspace->uplink_values[0],
+                    &workspace->uplink_fields[0],
+                    "sent",
+                    4U,
+                    sample->audio.uplink.sent);
+  set_integer_field(&workspace->uplink_values[1],
+                    &workspace->uplink_fields[1],
+                    "dropped",
+                    7U,
+                    sample->audio.uplink.dropped);
+  set_integer_field(&workspace->uplink_values[2],
+                    &workspace->uplink_fields[2],
+                    "depth",
+                    5U,
+                    sample->audio.uplink.depth);
+  set_integer_field(&workspace->uplink_values[3],
+                    &workspace->uplink_fields[3],
+                    "highWater",
+                    9U,
+                    sample->audio.uplink.high_water);
+  set_integer_field(&workspace->uplink_values[4],
+                    &workspace->uplink_fields[4],
+                    "sendDeferrals",
+                    13U,
+                    sample->audio.uplink.send_deferrals);
+  set_integer_field(&workspace->uplink_values[5],
+                    &workspace->uplink_fields[5],
+                    "consecutiveSendDeferrals",
+                    24U,
+                    sample->audio.uplink.consecutive_send_deferrals);
+  set_integer_field(&workspace->uplink_values[6],
+                    &workspace->uplink_fields[6],
+                    "maximumConsecutiveSendDeferrals",
+                    31U,
+                    sample->audio.uplink.maximum_consecutive_send_deferrals);
+  set_integer_field(&workspace->uplink_values[7],
+                    &workspace->uplink_fields[7],
+                    "failures",
+                    8U,
+                    sample->audio.uplink.failures);
+  set_integer_field(&workspace->uplink_values[8],
+                    &workspace->uplink_fields[8],
+                    "restartIncidents",
+                    sizeof("restartIncidents") - 1U,
+                    sample->audio.uplink.restart_incidents);
+  set_integer_field(&workspace->uplink_values[9],
+                    &workspace->uplink_fields[9],
+                    "inPlaceFreshnessRecoveries",
+                    sizeof("inPlaceFreshnessRecoveries") - 1U,
+                    sample->audio.uplink.in_place_freshness_recoveries);
+  set_integer_field(&workspace->uplink_values[10],
+                    &workspace->uplink_fields[10],
+                    "socketRestarts",
+                    sizeof("socketRestarts") - 1U,
+                    sample->audio.uplink.socket_restarts);
+  set_integer_field(&workspace->uplink_values[11],
+                    &workspace->uplink_fields[11],
+                    "producerBackpressureRestarts",
+                    sizeof("producerBackpressureRestarts") - 1U,
+                    sample->audio.uplink.producer_backpressure_restarts);
+  set_integer_field(&workspace->uplink_values[12],
+                    &workspace->uplink_fields[12],
+                    "transportDisconnectRestarts",
+                    sizeof("transportDisconnectRestarts") - 1U,
+                    sample->audio.uplink.transport_disconnect_restarts);
+  set_integer_field(&workspace->uplink_values[13],
+                    &workspace->uplink_fields[13],
+                    "noProgressTimeoutRestarts",
+                    sizeof("noProgressTimeoutRestarts") - 1U,
+                    sample->audio.uplink.no_progress_timeout_restarts);
+  set_integer_field(&workspace->uplink_values[14],
+                    &workspace->uplink_fields[14],
+                    "frameSendTimeoutRestarts",
+                    sizeof("frameSendTimeoutRestarts") - 1U,
+                    sample->audio.uplink.frame_send_timeout_restarts);
+  set_integer_field(&workspace->uplink_values[15],
+                    &workspace->uplink_fields[15],
+                    "captureStaleRestarts",
+                    sizeof("captureStaleRestarts") - 1U,
+                    sample->audio.uplink.capture_stale_restarts);
+  set_integer_field(&workspace->uplink_values[16],
+                    &workspace->uplink_fields[16],
+                    "lastTransportAcceptAgeMs",
+                    sizeof("lastTransportAcceptAgeMs") - 1U,
+                    sample->audio.uplink.last_transport_accept_age_ms);
+  set_integer_field(&workspace->uplink_values[17],
+                    &workspace->uplink_fields[17],
+                    "maximumTransportAcceptAgeMs",
+                    sizeof("maximumTransportAcceptAgeMs") - 1U,
+                    sample->audio.uplink.maximum_transport_accept_age_ms);
+  set_integer_field(&workspace->uplink_values[18],
+                    &workspace->uplink_fields[18],
+                    "lastRestartOldestCaptureAgeMs",
+                    sizeof("lastRestartOldestCaptureAgeMs") - 1U,
+                    sample->audio.uplink.last_restart_oldest_capture_age_ms);
+  set_string_field(&workspace->uplink_values[19],
+                   &workspace->uplink_fields[19],
+                   "lastRestartReason",
+                   sizeof("lastRestartReason") - 1U,
+                   sample->audio.uplink.last_restart_reason);
+  set_integer_field(&workspace->uplink_values[20],
+                    &workspace->uplink_fields[20],
+                    "lastRestartFramesDiscarded",
+                    sizeof("lastRestartFramesDiscarded") - 1U,
+                    sample->audio.uplink.last_restart_frames_discarded);
   set_object(
       &workspace->uplink_object,
       workspace->uplink_fields,
-      sizeof(workspace->uplink_fields) /
-          sizeof(workspace->uplink_fields[0]));
+      sizeof(workspace->uplink_fields) / sizeof(workspace->uplink_fields[0]));
 
-  set_integer_field(
-      &workspace->downlink_values[0],
-      &workspace->downlink_fields[0],
-      "received",
-      8U,
-      sample->audio.downlink.received);
-  set_integer_field(
-      &workspace->downlink_values[1],
-      &workspace->downlink_fields[1],
-      "dropped",
-      7U,
-      sample->audio.downlink.dropped);
-  set_integer_field(
-      &workspace->downlink_values[2],
-      &workspace->downlink_fields[2],
-      "depth",
-      5U,
-      sample->audio.downlink.depth);
-  set_integer_field(
-      &workspace->downlink_values[3],
-      &workspace->downlink_fields[3],
-      "highWater",
-      9U,
-      sample->audio.downlink.high_water);
-  set_integer_field(
-      &workspace->downlink_values[4],
-      &workspace->downlink_fields[4],
-      "failures",
-      8U,
-      sample->audio.downlink.failures);
-  set_object(
-      &workspace->downlink_object,
-      workspace->downlink_fields,
-      sizeof(workspace->downlink_fields) /
-          sizeof(workspace->downlink_fields[0]));
+  set_integer_field(&workspace->downlink_values[0],
+                    &workspace->downlink_fields[0],
+                    "received",
+                    8U,
+                    sample->audio.downlink.received);
+  set_integer_field(&workspace->downlink_values[1],
+                    &workspace->downlink_fields[1],
+                    "dropped",
+                    7U,
+                    sample->audio.downlink.dropped);
+  set_integer_field(&workspace->downlink_values[2],
+                    &workspace->downlink_fields[2],
+                    "depth",
+                    5U,
+                    sample->audio.downlink.depth);
+  set_integer_field(&workspace->downlink_values[3],
+                    &workspace->downlink_fields[3],
+                    "highWater",
+                    9U,
+                    sample->audio.downlink.high_water);
+  set_integer_field(&workspace->downlink_values[4],
+                    &workspace->downlink_fields[4],
+                    "failures",
+                    8U,
+                    sample->audio.downlink.failures);
+  set_object(&workspace->downlink_object,
+             workspace->downlink_fields,
+             sizeof(workspace->downlink_fields) /
+                 sizeof(workspace->downlink_fields[0]));
 
-  set_object_field(
-      &workspace->audio_fields[audio_count++],
-      "capture",
-      7U,
-      &workspace->capture_object);
-  set_object_field(
-      &workspace->audio_fields[audio_count++],
-      "uplink",
-      6U,
-      &workspace->uplink_object);
-  set_object_field(
-      &workspace->audio_fields[audio_count++],
-      "downlink",
-      8U,
-      &workspace->downlink_object);
+  set_object_field(&workspace->audio_fields[audio_count++],
+                   "capture",
+                   7U,
+                   &workspace->capture_object);
+  set_object_field(&workspace->audio_fields[audio_count++],
+                   "uplink",
+                   6U,
+                   &workspace->uplink_object);
+  set_object_field(&workspace->audio_fields[audio_count++],
+                   "downlink",
+                   8U,
+                   &workspace->downlink_object);
   if (sample->audio.has_playback) {
-    set_integer_field(
-        &workspace->playback_values[0],
-        &workspace->playback_fields[0],
-        "submitted",
-        9U,
-        sample->audio.playback.submitted);
-    set_integer_field(
-        &workspace->playback_values[1],
-        &workspace->playback_fields[1],
-        "completed",
-        9U,
-        sample->audio.playback.completed);
-    set_integer_field(
-        &workspace->playback_values[2],
-        &workspace->playback_fields[2],
-        "flushed",
-        7U,
-        sample->audio.playback.flushed);
-    set_integer_field(
-        &workspace->playback_values[3],
-        &workspace->playback_fields[3],
-        "depth",
-        5U,
-        sample->audio.playback.depth);
-    set_integer_field(
-        &workspace->playback_values[4],
-        &workspace->playback_fields[4],
-        "highWater",
-        9U,
-        sample->audio.playback.high_water);
-    set_integer_field(
-        &workspace->playback_values[5],
-        &workspace->playback_fields[5],
-        "failures",
-        8U,
-        sample->audio.playback.failures);
-    set_object(
-        &workspace->playback_object,
-        workspace->playback_fields,
-        sizeof(workspace->playback_fields) /
-            sizeof(workspace->playback_fields[0]));
-    set_object_field(
-        &workspace->audio_fields[audio_count++],
-        "playback",
-        8U,
-        &workspace->playback_object);
+    set_integer_field(&workspace->playback_values[0],
+                      &workspace->playback_fields[0],
+                      "submitted",
+                      9U,
+                      sample->audio.playback.submitted);
+    set_integer_field(&workspace->playback_values[1],
+                      &workspace->playback_fields[1],
+                      "completed",
+                      9U,
+                      sample->audio.playback.completed);
+    set_integer_field(&workspace->playback_values[2],
+                      &workspace->playback_fields[2],
+                      "flushed",
+                      7U,
+                      sample->audio.playback.flushed);
+    set_integer_field(&workspace->playback_values[3],
+                      &workspace->playback_fields[3],
+                      "depth",
+                      5U,
+                      sample->audio.playback.depth);
+    set_integer_field(&workspace->playback_values[4],
+                      &workspace->playback_fields[4],
+                      "highWater",
+                      9U,
+                      sample->audio.playback.high_water);
+    set_integer_field(&workspace->playback_values[5],
+                      &workspace->playback_fields[5],
+                      "failures",
+                      8U,
+                      sample->audio.playback.failures);
+    set_object(&workspace->playback_object,
+               workspace->playback_fields,
+               sizeof(workspace->playback_fields) /
+                   sizeof(workspace->playback_fields[0]));
+    set_object_field(&workspace->audio_fields[audio_count++],
+                     "playback",
+                     8U,
+                     &workspace->playback_object);
   }
-  set_integer_field(
-      &workspace->protocol_failures,
-      &workspace->audio_fields[audio_count++],
-      "protocolFailures",
-      16U,
-      sample->audio.protocol_failures);
+  set_integer_field(&workspace->protocol_failures,
+                    &workspace->audio_fields[audio_count++],
+                    "protocolFailures",
+                    16U,
+                    sample->audio.protocol_failures);
   if (sample->audio.has_buffers) {
     if (!build_buffers_expression(sample, workspace)) {
       return false;
     }
-    set_object_field(
-        &workspace->audio_fields[audio_count],
-        "buffers",
-        sizeof("buffers") - 1U,
-        &workspace->buffers_object);
+    set_object_field(&workspace->audio_fields[audio_count],
+                     "buffers",
+                     sizeof("buffers") - 1U,
+                     &workspace->buffers_object);
     ++audio_count;
   }
-  set_object(
-      &workspace->audio_object,
-      workspace->audio_fields,
-      audio_count);
+  set_object(&workspace->audio_object, workspace->audio_fields, audio_count);
   return true;
 }
 
@@ -693,75 +620,62 @@ static bool build_metrics_expression(
     const struct iterate_kit_metrics_sample *sample,
     struct metrics_expression_workspace *workspace) {
   size_t root_count = 9U;
-  set_integer_field(
-      &workspace->root_values[0],
-      &workspace->root_fields[0],
-      "uptimeMs",
-      8U,
-      sample->uptime_ms);
-  set_integer_field(
-      &workspace->root_values[1],
-      &workspace->root_fields[1],
-      "freeHeapBytes",
-      13U,
-      sample->free_heap_bytes);
-  set_integer_field(
-      &workspace->root_values[2],
-      &workspace->root_fields[2],
-      "minimumFreeHeapBytes",
-      20U,
-      sample->minimum_free_heap_bytes);
-  set_integer_field(
-      &workspace->root_values[3],
-      &workspace->root_fields[3],
-      "freeInternalHeapBytes",
-      21U,
-      sample->free_internal_heap_bytes);
-  set_integer_field(
-      &workspace->root_values[4],
-      &workspace->root_fields[4],
-      "minimumFreeInternalHeapBytes",
-      28U,
-      sample->minimum_free_internal_heap_bytes);
-  set_integer_field(
-      &workspace->root_values[5],
-      &workspace->root_fields[5],
-      "freePsramBytes",
-      14U,
-      sample->free_psram_bytes);
-  set_integer_field(
-      &workspace->root_values[6],
-      &workspace->root_fields[6],
-      "taskStackHighWaterBytes",
-      23U,
-      sample->task_stack_high_water_bytes);
-  set_integer_field(
-      &workspace->root_values[7],
-      &workspace->root_fields[7],
-      "cpuPermille",
-      11U,
-      sample->cpu_permille);
-  set_integer_field(
-      &workspace->root_values[8],
-      &workspace->root_fields[8],
-      "subscriptionEnds",
-      sizeof("subscriptionEnds") - 1U,
-      sample->subscription_callback_rejections);
+  set_integer_field(&workspace->root_values[0],
+                    &workspace->root_fields[0],
+                    "uptimeMs",
+                    8U,
+                    sample->uptime_ms);
+  set_integer_field(&workspace->root_values[1],
+                    &workspace->root_fields[1],
+                    "freeHeapBytes",
+                    13U,
+                    sample->free_heap_bytes);
+  set_integer_field(&workspace->root_values[2],
+                    &workspace->root_fields[2],
+                    "minimumFreeHeapBytes",
+                    20U,
+                    sample->minimum_free_heap_bytes);
+  set_integer_field(&workspace->root_values[3],
+                    &workspace->root_fields[3],
+                    "freeInternalHeapBytes",
+                    21U,
+                    sample->free_internal_heap_bytes);
+  set_integer_field(&workspace->root_values[4],
+                    &workspace->root_fields[4],
+                    "minimumFreeInternalHeapBytes",
+                    28U,
+                    sample->minimum_free_internal_heap_bytes);
+  set_integer_field(&workspace->root_values[5],
+                    &workspace->root_fields[5],
+                    "freePsramBytes",
+                    14U,
+                    sample->free_psram_bytes);
+  set_integer_field(&workspace->root_values[6],
+                    &workspace->root_fields[6],
+                    "taskStackHighWaterBytes",
+                    23U,
+                    sample->task_stack_high_water_bytes);
+  set_integer_field(&workspace->root_values[7],
+                    &workspace->root_fields[7],
+                    "cpuPermille",
+                    11U,
+                    sample->cpu_permille);
+  set_integer_field(&workspace->root_values[8],
+                    &workspace->root_fields[8],
+                    "subscriptionEnds",
+                    sizeof("subscriptionEnds") - 1U,
+                    sample->subscription_callback_rejections);
   if (sample->has_audio) {
     if (!build_audio_expression(sample, workspace)) {
       return false;
     }
-    set_object_field(
-        &workspace->root_fields[root_count],
-        "audio",
-        5U,
-        &workspace->audio_object);
+    set_object_field(&workspace->root_fields[root_count],
+                     "audio",
+                     5U,
+                     &workspace->audio_object);
     ++root_count;
   }
-  set_object(
-      &workspace->root_object,
-      workspace->root_fields,
-      root_count);
+  set_object(&workspace->root_object, workspace->root_fields, root_count);
   return true;
 }
 
@@ -782,163 +696,119 @@ static bool build_playback_metrics_expression(
     return false;
   }
 
-#define SET_PLAYBACK_INTEGER(public_name, member)                         \
-  do {                                                                   \
-    if (playback_count >= PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT) {          \
-      return false;                                                      \
-    }                                                                    \
-    set_integer_field(                                                   \
-        &workspace->playback_values[playback_count],                     \
-        &workspace->playback_fields[playback_count],                     \
-        public_name,                                                     \
-        sizeof(public_name) - 1U,                                        \
-        detail->playback.member);                                        \
-    ++playback_count;                                                     \
+#define SET_PLAYBACK_INTEGER(public_name, member)                  \
+  do {                                                             \
+    if (playback_count >= PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT) {    \
+      return false;                                                \
+    }                                                              \
+    set_integer_field(&workspace->playback_values[playback_count], \
+                      &workspace->playback_fields[playback_count], \
+                      public_name,                                 \
+                      sizeof(public_name) - 1U,                    \
+                      detail->playback.member);                    \
+    ++playback_count;                                              \
   } while (0)
 
   SET_PLAYBACK_INTEGER("submitted", submitted);
   SET_PLAYBACK_INTEGER("completed", completed);
-  SET_PLAYBACK_INTEGER(
-      "generationFramesFlushed", generation_frames_flushed);
-  SET_PLAYBACK_INTEGER(
-      "freshnessFramesDropped", freshness_frames_dropped);
-  SET_PLAYBACK_INTEGER(
-      "partialPrebufferFramesDropped",
-      partial_prebuffer_frames_dropped);
-  SET_PLAYBACK_INTEGER(
-      "underrunFramesFlushed", underrun_frames_flushed);
+  SET_PLAYBACK_INTEGER("generationFramesFlushed", generation_frames_flushed);
+  SET_PLAYBACK_INTEGER("freshnessFramesDropped", freshness_frames_dropped);
+  SET_PLAYBACK_INTEGER("partialPrebufferFramesDropped",
+                       partial_prebuffer_frames_dropped);
+  SET_PLAYBACK_INTEGER("underrunFramesFlushed", underrun_frames_flushed);
   SET_PLAYBACK_INTEGER("underrunIncidents", underrun_incidents);
-  SET_PLAYBACK_INTEGER(
-      "underrunSilenceFramesSubmitted",
-      underrun_silence_frames_submitted);
-  SET_PLAYBACK_INTEGER(
-      "underrunSilenceFramesCompleted",
-      underrun_silence_frames_completed);
-  SET_PLAYBACK_INTEGER(
-      "underrunSilenceFramesRetired",
-      underrun_silence_frames_retired);
-  SET_PLAYBACK_INTEGER(
-      "underrunLateFramesDropped",
-      underrun_late_frames_dropped);
-  SET_PLAYBACK_INTEGER(
-      "dmaDeadlineMissIncidents", dma_deadline_miss_incidents);
+  SET_PLAYBACK_INTEGER("underrunSilenceFramesSubmitted",
+                       underrun_silence_frames_submitted);
+  SET_PLAYBACK_INTEGER("underrunSilenceFramesCompleted",
+                       underrun_silence_frames_completed);
+  SET_PLAYBACK_INTEGER("underrunSilenceFramesRetired",
+                       underrun_silence_frames_retired);
+  SET_PLAYBACK_INTEGER("underrunLateFramesDropped",
+                       underrun_late_frames_dropped);
+  SET_PLAYBACK_INTEGER("dmaDeadlineMissIncidents", dma_deadline_miss_incidents);
   SET_PLAYBACK_INTEGER("freshnessIncidents", freshness_incidents);
-  SET_PLAYBACK_INTEGER(
-      "partialPrebufferIncidents", partial_prebuffer_incidents);
-  SET_PLAYBACK_INTEGER(
-      "endOfStreamMarkersConsumed",
-      end_of_stream_markers_consumed);
-  SET_PLAYBACK_INTEGER(
-      "endOfStreamResponses", end_of_stream_responses);
-  SET_PLAYBACK_INTEGER(
-      "endOfStreamSilenceDescriptors",
-      end_of_stream_silence_descriptors);
-  SET_PLAYBACK_INTEGER(
-      "endOfStreamPaddingDescriptorsCompleted",
-      end_of_stream_padding_descriptors_completed);
-  SET_PLAYBACK_INTEGER(
-      "driverQueueOverflowIncidents",
-      driver_queue_overflow_incidents);
+  SET_PLAYBACK_INTEGER("partialPrebufferIncidents",
+                       partial_prebuffer_incidents);
+  SET_PLAYBACK_INTEGER("endOfStreamMarkersConsumed",
+                       end_of_stream_markers_consumed);
+  SET_PLAYBACK_INTEGER("endOfStreamResponses", end_of_stream_responses);
+  SET_PLAYBACK_INTEGER("endOfStreamSilenceDescriptors",
+                       end_of_stream_silence_descriptors);
+  SET_PLAYBACK_INTEGER("endOfStreamPaddingDescriptorsCompleted",
+                       end_of_stream_padding_descriptors_completed);
+  SET_PLAYBACK_INTEGER("driverQueueOverflowIncidents",
+                       driver_queue_overflow_incidents);
   SET_PLAYBACK_INTEGER("driverFailures", driver_failures);
   SET_PLAYBACK_INTEGER("driverStopFailures", driver_stop_failures);
   SET_PLAYBACK_INTEGER("fatalFramesFlushed", fatal_frames_flushed);
-  SET_PLAYBACK_INTEGER(
-      "writeBackpressureIncidents", write_backpressure_incidents);
-  SET_PLAYBACK_INTEGER(
-      "writeBackpressureDestructiveResets",
-      write_backpressure_destructive_resets);
-  SET_PLAYBACK_INTEGER(
-      "writeBackpressureFramesDropped",
-      write_backpressure_frames_dropped);
+  SET_PLAYBACK_INTEGER("writeBackpressureIncidents",
+                       write_backpressure_incidents);
+  SET_PLAYBACK_INTEGER("writeBackpressureDestructiveResets",
+                       write_backpressure_destructive_resets);
+  SET_PLAYBACK_INTEGER("writeBackpressureFramesDropped",
+                       write_backpressure_frames_dropped);
   SET_PLAYBACK_INTEGER("invalidFrames", invalid_frames);
   SET_PLAYBACK_INTEGER("stateErrors", state_errors);
-  SET_PLAYBACK_INTEGER(
-      "ownerClockRegressions", owner_clock_regressions);
-  SET_PLAYBACK_INTEGER(
-      "receiveToDmaStartSamples",
-      receive_to_dma_start_samples);
-  SET_PLAYBACK_INTEGER(
-      "maximumReceiveToDmaStartMs",
-      maximum_receive_to_dma_start_ms);
-  SET_PLAYBACK_INTEGER(
-      "downlinkInterarrivalSamples",
-      downlink_interarrival_samples);
-  SET_PLAYBACK_INTEGER(
-      "maximumDownlinkInterarrivalMs",
-      maximum_downlink_interarrival_ms);
-  SET_PLAYBACK_INTEGER(
-      "maximumEofToSuccessfulRefillUs",
-      maximum_eof_to_successful_refill_us);
-  SET_PLAYBACK_INTEGER(
-      "maximumWriteCallDurationUs",
-      maximum_write_call_duration_us);
-  SET_PLAYBACK_INTEGER(
-      "minimumReuseLeadAtSuccessfulRefillUs",
-      minimum_reuse_lead_at_successful_refill_us);
+  SET_PLAYBACK_INTEGER("ownerClockRegressions", owner_clock_regressions);
+  SET_PLAYBACK_INTEGER("receiveToDmaStartSamples",
+                       receive_to_dma_start_samples);
+  SET_PLAYBACK_INTEGER("maximumReceiveToDmaStartMs",
+                       maximum_receive_to_dma_start_ms);
+  SET_PLAYBACK_INTEGER("downlinkInterarrivalSamples",
+                       downlink_interarrival_samples);
+  SET_PLAYBACK_INTEGER("maximumDownlinkInterarrivalMs",
+                       maximum_downlink_interarrival_ms);
+  SET_PLAYBACK_INTEGER("maximumEofToSuccessfulRefillUs",
+                       maximum_eof_to_successful_refill_us);
+  SET_PLAYBACK_INTEGER("maximumWriteCallDurationUs",
+                       maximum_write_call_duration_us);
+  SET_PLAYBACK_INTEGER("minimumReuseLeadAtSuccessfulRefillUs",
+                       minimum_reuse_lead_at_successful_refill_us);
 #undef SET_PLAYBACK_INTEGER
 
-#define SET_RUNTIME_INTEGER(public_name, member)                          \
-  do {                                                                   \
-    if (runtime_count >= PLAYBACK_VIEW_RUNTIME_FIELD_COUNT) {            \
-      return false;                                                      \
-    }                                                                    \
-    set_integer_field(                                                   \
-        &workspace->runtime_values[runtime_count],                       \
-        &workspace->runtime_fields[runtime_count],                       \
-        public_name,                                                     \
-        sizeof(public_name) - 1U,                                        \
-        detail->runtime.member);                                         \
-    ++runtime_count;                                                      \
+#define SET_RUNTIME_INTEGER(public_name, member)                 \
+  do {                                                           \
+    if (runtime_count >= PLAYBACK_VIEW_RUNTIME_FIELD_COUNT) {    \
+      return false;                                              \
+    }                                                            \
+    set_integer_field(&workspace->runtime_values[runtime_count], \
+                      &workspace->runtime_fields[runtime_count], \
+                      public_name,                               \
+                      sizeof(public_name) - 1U,                  \
+                      detail->runtime.member);                   \
+    ++runtime_count;                                             \
   } while (0)
 
-  SET_RUNTIME_INTEGER(
-      "audioOwnerStackHeadroomBytes",
-      audio_owner_stack_headroom_bytes);
-  SET_RUNTIME_INTEGER(
-      "mainStackHeadroomBytes", main_stack_headroom_bytes);
-  SET_RUNTIME_INTEGER(
-      "controlNetworkStackHeadroomBytes",
-      control_network_stack_headroom_bytes);
-  SET_RUNTIME_INTEGER(
-      "pcmNetworkStackHeadroomBytes",
-      pcm_network_stack_headroom_bytes);
-  SET_RUNTIME_INTEGER(
-      "freeInternalHeapBytes", free_internal_heap_bytes);
-  SET_RUNTIME_INTEGER(
-      "minimumFreeInternalHeapBytes",
-      minimum_free_internal_heap_bytes);
+  SET_RUNTIME_INTEGER("audioOwnerStackHeadroomBytes",
+                      audio_owner_stack_headroom_bytes);
+  SET_RUNTIME_INTEGER("mainStackHeadroomBytes", main_stack_headroom_bytes);
+  SET_RUNTIME_INTEGER("controlNetworkStackHeadroomBytes",
+                      control_network_stack_headroom_bytes);
+  SET_RUNTIME_INTEGER("pcmNetworkStackHeadroomBytes",
+                      pcm_network_stack_headroom_bytes);
+  SET_RUNTIME_INTEGER("freeInternalHeapBytes", free_internal_heap_bytes);
+  SET_RUNTIME_INTEGER("minimumFreeInternalHeapBytes",
+                      minimum_free_internal_heap_bytes);
   SET_RUNTIME_INTEGER("freeDmaHeapBytes", free_dma_heap_bytes);
-  SET_RUNTIME_INTEGER(
-      "minimumFreeDmaHeapBytes", minimum_free_dma_heap_bytes);
-  SET_RUNTIME_INTEGER(
-      "largestFreeInternalHeapBlockBytes",
-      largest_free_internal_heap_block_bytes);
-  SET_RUNTIME_INTEGER(
-      "largestFreeDmaBlockBytes",
-      largest_free_dma_block_bytes);
+  SET_RUNTIME_INTEGER("minimumFreeDmaHeapBytes", minimum_free_dma_heap_bytes);
+  SET_RUNTIME_INTEGER("largestFreeInternalHeapBlockBytes",
+                      largest_free_internal_heap_block_bytes);
+  SET_RUNTIME_INTEGER("largestFreeDmaBlockBytes", largest_free_dma_block_bytes);
   SET_RUNTIME_INTEGER("cpuPermille", cpu_permille);
-  SET_RUNTIME_INTEGER(
-      "generationFenceAcknowledgementTimeouts",
-      generation_fence_acknowledgement_timeouts);
-  SET_RUNTIME_INTEGER(
-      "lifecycleAcknowledgementTimeouts",
-      lifecycle_acknowledgement_timeouts);
-  SET_RUNTIME_INTEGER(
-      "controlNetworkStackExhaustions",
-      control_network_stack_exhaustions);
-  SET_RUNTIME_INTEGER(
-      "pcmNetworkStackExhaustions",
-      pcm_network_stack_exhaustions);
-  SET_RUNTIME_INTEGER(
-      "pcmReceiveCalls", pcm_receive_calls);
-  SET_RUNTIME_INTEGER(
-      "pcmReceiveChunks", pcm_receive_chunks);
-  SET_RUNTIME_INTEGER(
-      "controlNetworkMaximumWorkCycles",
-      control_network_max_work_cycles);
-  SET_RUNTIME_INTEGER(
-      "pcmNetworkMaximumWorkCycles",
-      pcm_network_max_work_cycles);
+  SET_RUNTIME_INTEGER("generationFenceAcknowledgementTimeouts",
+                      generation_fence_acknowledgement_timeouts);
+  SET_RUNTIME_INTEGER("lifecycleAcknowledgementTimeouts",
+                      lifecycle_acknowledgement_timeouts);
+  SET_RUNTIME_INTEGER("controlNetworkStackExhaustions",
+                      control_network_stack_exhaustions);
+  SET_RUNTIME_INTEGER("pcmNetworkStackExhaustions",
+                      pcm_network_stack_exhaustions);
+  SET_RUNTIME_INTEGER("pcmReceiveCalls", pcm_receive_calls);
+  SET_RUNTIME_INTEGER("pcmReceiveChunks", pcm_receive_chunks);
+  SET_RUNTIME_INTEGER("controlNetworkMaximumWorkCycles",
+                      control_network_max_work_cycles);
+  SET_RUNTIME_INTEGER("pcmNetworkMaximumWorkCycles",
+                      pcm_network_max_work_cycles);
 #undef SET_RUNTIME_INTEGER
 
   if (playback_count != PLAYBACK_VIEW_PLAYBACK_FIELD_COUNT ||
@@ -953,53 +823,42 @@ static bool build_playback_metrics_expression(
     return false;
   }
   set_object(
-      &workspace->playback_object,
-      workspace->playback_fields,
-      playback_count);
+      &workspace->playback_object, workspace->playback_fields, playback_count);
   set_object(
-      &workspace->runtime_object,
-      workspace->runtime_fields,
-      runtime_count);
+      &workspace->runtime_object, workspace->runtime_fields, runtime_count);
 
-  set_integer_field(
-      &workspace->root_values[0],
-      &workspace->root_fields[0],
-      "schemaVersion",
-      sizeof("schemaVersion") - 1U,
-      detail->schema_version);
-  set_integer_field(
-      &workspace->root_values[1],
-      &workspace->root_fields[1],
-      "sequence",
-      sizeof("sequence") - 1U,
-      detail->sequence);
-  set_integer_field(
-      &workspace->root_values[2],
-      &workspace->root_fields[2],
-      "producedAtMs",
-      sizeof("producedAtMs") - 1U,
-      detail->produced_at_ms);
-  set_integer_field(
-      &workspace->root_values[3],
-      &workspace->root_fields[3],
-      "downlinkAccepted",
-      sizeof("downlinkAccepted") - 1U,
-      detail->downlink_accepted);
-  set_object_field(
-      &workspace->root_fields[4],
-      "playback",
-      sizeof("playback") - 1U,
-      &workspace->playback_object);
-  set_object_field(
-      &workspace->root_fields[5],
-      "runtime",
-      sizeof("runtime") - 1U,
-      &workspace->runtime_object);
+  set_integer_field(&workspace->root_values[0],
+                    &workspace->root_fields[0],
+                    "schemaVersion",
+                    sizeof("schemaVersion") - 1U,
+                    detail->schema_version);
+  set_integer_field(&workspace->root_values[1],
+                    &workspace->root_fields[1],
+                    "sequence",
+                    sizeof("sequence") - 1U,
+                    detail->sequence);
+  set_integer_field(&workspace->root_values[2],
+                    &workspace->root_fields[2],
+                    "producedAtMs",
+                    sizeof("producedAtMs") - 1U,
+                    detail->produced_at_ms);
+  set_integer_field(&workspace->root_values[3],
+                    &workspace->root_fields[3],
+                    "downlinkAccepted",
+                    sizeof("downlinkAccepted") - 1U,
+                    detail->downlink_accepted);
+  set_object_field(&workspace->root_fields[4],
+                   "playback",
+                   sizeof("playback") - 1U,
+                   &workspace->playback_object);
+  set_object_field(&workspace->root_fields[5],
+                   "runtime",
+                   sizeof("runtime") - 1U,
+                   &workspace->runtime_object);
   set_object(
       &workspace->root_object,
       workspace->root_fields,
-      sizeof(workspace->root_fields) /
-          sizeof(workspace->root_fields[0]));
+      sizeof(workspace->root_fields) / sizeof(workspace->root_fields[0]));
   return true;
 }
 
@@ -1009,8 +868,23 @@ static bool build_aec_metrics_expression(
   const struct iterate_kit_aec_metrics_sample *const detail =
       &sample->aec_detail;
   size_t count = 0U;
-  if (!sample->has_aec_detail || detail->schema_version != 3U ||
+  if (!sample->has_aec_detail || detail->schema_version != 11U ||
       detail->sample_stride == 0U ||
+      /*
+       * The generic Cap'n Web serializer does not own a platform's DSP-profile
+       * registry. Its old 1..4 allow-list made adding CoreS3 profile 5 turn a
+       * valid audio sample into a driver error and starve every detailed
+       * metrics subscriber. Zero still means “no engine”; any nonzero identity
+       * is serialized exactly, leaving the typed host parser to decide whether
+       * it understands that target-specific evidence revision.
+       */
+      detail->engine_profile == 0U ||
+      (detail->processing_frame_samples != 256U &&
+       detail->processing_frame_samples != 512U) ||
+      detail->near_window_gain_multiplier == 0U ||
+      detail->far_window_gain_multiplier == 0U ||
+      detail->speaker_volume_percent > 100U ||
+      detail->microphone_gain_db > 37U || detail->reference_gain_db > 37U ||
       detail->window_started_at_ms > detail->produced_at_ms) {
     /*
      * Zero-filled signal data is actively dangerous: it would say that a quiet
@@ -1021,18 +895,17 @@ static bool build_aec_metrics_expression(
     return false;
   }
 
-#define SET_AEC_INTEGER(public_name, member)                               \
-  do {                                                                    \
-    if (count >= AEC_VIEW_FIELD_COUNT) {                                  \
-      return false;                                                       \
-    }                                                                     \
-    set_integer_field(                                                    \
-        &workspace->values[count],                                        \
-        &workspace->fields[count],                                        \
-        public_name,                                                      \
-        sizeof(public_name) - 1U,                                         \
-        detail->member);                                                  \
-    ++count;                                                              \
+#define SET_AEC_INTEGER(public_name, member)     \
+  do {                                           \
+    if (count >= AEC_VIEW_FIELD_COUNT) {         \
+      return false;                              \
+    }                                            \
+    set_integer_field(&workspace->values[count], \
+                      &workspace->fields[count], \
+                      public_name,               \
+                      sizeof(public_name) - 1U,  \
+                      detail->member);           \
+    ++count;                                     \
   } while (0)
 
   SET_AEC_INTEGER("schemaVersion", schema_version);
@@ -1043,74 +916,67 @@ static bool build_aec_metrics_expression(
   SET_AEC_INTEGER("sampledSamples", sampled_samples);
   SET_AEC_INTEGER("nearPeak", near_peak);
   SET_AEC_INTEGER("referencePeak", reference_peak);
-  SET_AEC_INTEGER("linearPeak", linear_peak);
   SET_AEC_INTEGER("cleanPeak", clean_peak);
   SET_AEC_INTEGER("nearMeanAbsolute", near_mean_absolute);
   SET_AEC_INTEGER("referenceMeanAbsolute", reference_mean_absolute);
-  SET_AEC_INTEGER("linearMeanAbsolute", linear_mean_absolute);
   SET_AEC_INTEGER("cleanMeanAbsolute", clean_mean_absolute);
-  SET_AEC_INTEGER(
-      "lifetimeFramesProcessed", lifetime_frames_processed);
+  SET_AEC_INTEGER("engineProfile", engine_profile);
+  SET_AEC_INTEGER("processingFrameSamples", processing_frame_samples);
+  SET_AEC_INTEGER("nearWindowGainMultiplier", near_window_gain_multiplier);
+  SET_AEC_INTEGER("farWindowGainMultiplier", far_window_gain_multiplier);
+  SET_AEC_INTEGER("speakerVolumePercent", speaker_volume_percent);
+  SET_AEC_INTEGER("microphoneGainDb", microphone_gain_db);
+  SET_AEC_INTEGER("referenceGainDb", reference_gain_db);
+  SET_AEC_INTEGER("lifetimeFramesProcessed", lifetime_frames_processed);
   SET_AEC_INTEGER("lifetimeRecreates", lifetime_recreates);
-  SET_AEC_INTEGER(
-      "lifetimeRecreateFailures", lifetime_recreate_failures);
-  SET_AEC_INTEGER("lastLinearUs", last_linear_us);
-  SET_AEC_INTEGER("maximumLinearUs", maximum_linear_us);
-  SET_AEC_INTEGER("lastNlpUs", last_nlp_us);
-  SET_AEC_INTEGER("maximumNlpUs", maximum_nlp_us);
+  SET_AEC_INTEGER("lifetimeRecreateFailures", lifetime_recreate_failures);
+  SET_AEC_INTEGER("lastProcessUs", last_process_us);
+  SET_AEC_INTEGER("maximumProcessUs", maximum_process_us);
   SET_AEC_INTEGER("lastCaptureToUplinkUs", last_capture_to_uplink_us);
-  SET_AEC_INTEGER(
-      "maximumCaptureToUplinkUs", maximum_capture_to_uplink_us);
-  SET_AEC_INTEGER(
-      "lifetimeCaptureReserveDroppedChunks",
-      lifetime_capture_reserve_dropped_chunks);
-  SET_AEC_INTEGER(
-      "lifetimeCaptureBridgeErrors", lifetime_capture_bridge_errors);
-  SET_AEC_INTEGER(
-      "lifetimeSignalMeasurementFailures",
-      lifetime_signal_measurement_failures);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackContentSamples",
-      playback_health.lifetime_content_samples);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackResets", playback_health.lifetime_resets);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackFramesDiscardedByReset",
-      playback_health.lifetime_frames_discarded_by_reset);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackWriteFailures",
-      playback_health.lifetime_write_failures);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackQueueOverflows",
-      playback_health.lifetime_queue_overflows);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackPolicyErrors",
-      playback_health.lifetime_policy_errors);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackResetFailures",
-      playback_health.lifetime_reset_failures);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackObservationFailures",
-      playback_health.lifetime_observation_failures);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackUnderrunIncidents",
-      playback_health.lifetime_underrun_incidents);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackUnderrunSilenceSamples",
-      playback_health.lifetime_underrun_silence_samples);
-  SET_AEC_INTEGER(
-      "lifetimePlaybackStaleFramesDiscarded",
-      playback_health.lifetime_stale_frames_discarded);
-  SET_AEC_INTEGER(
-      "lastPlaybackWriteUs", playback_health.last_write_us);
-  SET_AEC_INTEGER(
-      "maximumPlaybackWriteUs", playback_health.maximum_write_us);
-  SET_AEC_INTEGER(
-      "lastReceiveToRenderMs",
-      playback_health.last_receive_to_render_ms);
-  SET_AEC_INTEGER(
-      "maximumReceiveToRenderMs",
-      playback_health.maximum_receive_to_render_ms);
+  SET_AEC_INTEGER("maximumCaptureToUplinkUs", maximum_capture_to_uplink_us);
+  SET_AEC_INTEGER("lifetimeCaptureReserveDroppedChunks",
+                  lifetime_capture_reserve_dropped_chunks);
+  SET_AEC_INTEGER("lifetimeCaptureChunksWithPlaybackContent",
+                  lifetime_capture_chunks_with_playback_content);
+  SET_AEC_INTEGER("lifetimeCaptureChunksWithoutPlaybackContent",
+                  lifetime_capture_chunks_without_playback_content);
+  SET_AEC_INTEGER("lifetimeCaptureBridgeErrors",
+                  lifetime_capture_bridge_errors);
+  SET_AEC_INTEGER("lifetimeSignalMeasurementFailures",
+                  lifetime_signal_measurement_failures);
+  SET_AEC_INTEGER("lifetimeReferenceScaleClippedSamples",
+                  lifetime_reference_scale_clipped_samples);
+  SET_AEC_INTEGER("lifetimeNearHighPassClippedSamples",
+                  lifetime_near_high_pass_clipped_samples);
+  SET_AEC_INTEGER("lifetimeUplinkGainClippedSamples",
+                  lifetime_uplink_gain_clipped_samples);
+  SET_AEC_INTEGER("lifetimePlaybackContentSamples",
+                  playback_health.lifetime_content_samples);
+  SET_AEC_INTEGER("lifetimePlaybackResets", playback_health.lifetime_resets);
+  SET_AEC_INTEGER("lifetimePlaybackFramesDiscardedByReset",
+                  playback_health.lifetime_frames_discarded_by_reset);
+  SET_AEC_INTEGER("lifetimePlaybackWriteFailures",
+                  playback_health.lifetime_write_failures);
+  SET_AEC_INTEGER("lifetimePlaybackQueueOverflows",
+                  playback_health.lifetime_queue_overflows);
+  SET_AEC_INTEGER("lifetimePlaybackPolicyErrors",
+                  playback_health.lifetime_policy_errors);
+  SET_AEC_INTEGER("lifetimePlaybackResetFailures",
+                  playback_health.lifetime_reset_failures);
+  SET_AEC_INTEGER("lifetimePlaybackObservationFailures",
+                  playback_health.lifetime_observation_failures);
+  SET_AEC_INTEGER("lifetimePlaybackUnderrunIncidents",
+                  playback_health.lifetime_underrun_incidents);
+  SET_AEC_INTEGER("lifetimePlaybackUnderrunSilenceSamples",
+                  playback_health.lifetime_underrun_silence_samples);
+  SET_AEC_INTEGER("lifetimePlaybackStaleFramesDiscarded",
+                  playback_health.lifetime_stale_frames_discarded);
+  SET_AEC_INTEGER("lastPlaybackWriteUs", playback_health.last_write_us);
+  SET_AEC_INTEGER("maximumPlaybackWriteUs", playback_health.maximum_write_us);
+  SET_AEC_INTEGER("lastReceiveToRenderMs",
+                  playback_health.last_receive_to_render_ms);
+  SET_AEC_INTEGER("maximumReceiveToRenderMs",
+                  playback_health.maximum_receive_to_render_ms);
 #undef SET_AEC_INTEGER
 
   if (count != AEC_VIEW_FIELD_COUNT) {
@@ -1126,8 +992,7 @@ static bool build_raw_clean_aec_metrics_expression(
   const struct iterate_kit_raw_clean_aec_metrics_sample *const detail =
       &sample->raw_clean_aec_detail;
   size_t count = 0U;
-  if (!sample->has_raw_clean_aec_detail ||
-      detail->schema_version != 4U ||
+  if (!sample->has_raw_clean_aec_detail || detail->schema_version != 4U ||
       detail->sample_stride == 0U ||
       detail->window_started_at_ms > detail->produced_at_ms) {
     /*
@@ -1138,27 +1003,25 @@ static bool build_raw_clean_aec_metrics_expression(
     return false;
   }
 
-#define SET_RAW_CLEAN_AEC_INTEGER(public_name, member)                    \
-  do {                                                                    \
-    if (count >= RAW_CLEAN_AEC_VIEW_FIELD_COUNT) {                        \
-      return false;                                                       \
-    }                                                                     \
-    set_integer_field(                                                    \
-        &workspace->values[count],                                        \
-        &workspace->fields[count],                                        \
-        public_name,                                                      \
-        sizeof(public_name) - 1U,                                         \
-        detail->member);                                                  \
-    ++count;                                                              \
+#define SET_RAW_CLEAN_AEC_INTEGER(public_name, member) \
+  do {                                                 \
+    if (count >= RAW_CLEAN_AEC_VIEW_FIELD_COUNT) {     \
+      return false;                                    \
+    }                                                  \
+    set_integer_field(&workspace->values[count],       \
+                      &workspace->fields[count],       \
+                      public_name,                     \
+                      sizeof(public_name) - 1U,        \
+                      detail->member);                 \
+    ++count;                                           \
   } while (0)
 
   SET_RAW_CLEAN_AEC_INTEGER("schemaVersion", schema_version);
-  set_string_field(
-      &workspace->values[count],
-      &workspace->fields[count],
-      "topology",
-      sizeof("topology") - 1U,
-      "raw-clean");
+  set_string_field(&workspace->values[count],
+                   &workspace->fields[count],
+                   "topology",
+                   sizeof("topology") - 1U,
+                   "raw-clean");
   ++count;
   SET_RAW_CLEAN_AEC_INTEGER("sequence", sequence);
   SET_RAW_CLEAN_AEC_INTEGER("windowStartedAtMs", window_started_at_ms);
@@ -1171,65 +1034,49 @@ static bool build_raw_clean_aec_metrics_expression(
   SET_RAW_CLEAN_AEC_INTEGER("cleanMeanAbsolute", clean_mean_absolute);
   SET_RAW_CLEAN_AEC_INTEGER("rawAbsoluteSum", raw_absolute_sum);
   SET_RAW_CLEAN_AEC_INTEGER("cleanAbsoluteSum", clean_absolute_sum);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "playbackContentSamples", playback_content_samples);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimeCaptureFrames", lifetime_capture_frames);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimeCleanUplinkFrames", lifetime_clean_uplink_frames);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimeCleanUplinkDrops", lifetime_clean_uplink_drops);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimeCaptureFailures", lifetime_capture_failures);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimeSignalMeasurementFailures",
-      lifetime_signal_measurement_failures);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lastCaptureToUplinkUs", last_capture_to_uplink_us);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "maximumCaptureToUplinkUs", maximum_capture_to_uplink_us);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackContentSamples",
-      playback_health.lifetime_content_samples);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackResets", playback_health.lifetime_resets);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackFramesDiscardedByReset",
-      playback_health.lifetime_frames_discarded_by_reset);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackWriteFailures",
-      playback_health.lifetime_write_failures);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackQueueOverflows",
-      playback_health.lifetime_queue_overflows);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackPolicyErrors",
-      playback_health.lifetime_policy_errors);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackResetFailures",
-      playback_health.lifetime_reset_failures);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackObservationFailures",
-      playback_health.lifetime_observation_failures);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackUnderrunIncidents",
-      playback_health.lifetime_underrun_incidents);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackUnderrunSilenceSamples",
-      playback_health.lifetime_underrun_silence_samples);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lifetimePlaybackStaleFramesDiscarded",
-      playback_health.lifetime_stale_frames_discarded);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lastPlaybackWriteUs", playback_health.last_write_us);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "maximumPlaybackWriteUs", playback_health.maximum_write_us);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "lastReceiveToRenderMs",
-      playback_health.last_receive_to_render_ms);
-  SET_RAW_CLEAN_AEC_INTEGER(
-      "maximumReceiveToRenderMs",
-      playback_health.maximum_receive_to_render_ms);
+  SET_RAW_CLEAN_AEC_INTEGER("playbackContentSamples", playback_content_samples);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimeCaptureFrames", lifetime_capture_frames);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimeCleanUplinkFrames",
+                            lifetime_clean_uplink_frames);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimeCleanUplinkDrops",
+                            lifetime_clean_uplink_drops);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimeCaptureFailures",
+                            lifetime_capture_failures);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimeSignalMeasurementFailures",
+                            lifetime_signal_measurement_failures);
+  SET_RAW_CLEAN_AEC_INTEGER("lastCaptureToUplinkUs", last_capture_to_uplink_us);
+  SET_RAW_CLEAN_AEC_INTEGER("maximumCaptureToUplinkUs",
+                            maximum_capture_to_uplink_us);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackContentSamples",
+                            playback_health.lifetime_content_samples);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackResets",
+                            playback_health.lifetime_resets);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackFramesDiscardedByReset",
+                            playback_health.lifetime_frames_discarded_by_reset);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackWriteFailures",
+                            playback_health.lifetime_write_failures);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackQueueOverflows",
+                            playback_health.lifetime_queue_overflows);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackPolicyErrors",
+                            playback_health.lifetime_policy_errors);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackResetFailures",
+                            playback_health.lifetime_reset_failures);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackObservationFailures",
+                            playback_health.lifetime_observation_failures);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackUnderrunIncidents",
+                            playback_health.lifetime_underrun_incidents);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackUnderrunSilenceSamples",
+                            playback_health.lifetime_underrun_silence_samples);
+  SET_RAW_CLEAN_AEC_INTEGER("lifetimePlaybackStaleFramesDiscarded",
+                            playback_health.lifetime_stale_frames_discarded);
+  SET_RAW_CLEAN_AEC_INTEGER("lastPlaybackWriteUs",
+                            playback_health.last_write_us);
+  SET_RAW_CLEAN_AEC_INTEGER("maximumPlaybackWriteUs",
+                            playback_health.maximum_write_us);
+  SET_RAW_CLEAN_AEC_INTEGER("lastReceiveToRenderMs",
+                            playback_health.last_receive_to_render_ms);
+  SET_RAW_CLEAN_AEC_INTEGER("maximumReceiveToRenderMs",
+                            playback_health.maximum_receive_to_render_ms);
 #undef SET_RAW_CLEAN_AEC_INTEGER
 
   if (count != RAW_CLEAN_AEC_VIEW_FIELD_COUNT) {
@@ -1254,28 +1101,26 @@ static bool build_avatar_metrics_expression(
     return false;
   }
 
-#define SET_AVATAR_INTEGER(public_name, member)                          \
-  do {                                                                  \
-    if (count >= AVATAR_VIEW_FIELD_COUNT) {                             \
-      return false;                                                     \
-    }                                                                   \
-    set_integer_field(                                                  \
-        &workspace->values[count],                                      \
-        &workspace->fields[count],                                      \
-        public_name,                                                    \
-        sizeof(public_name) - 1U,                                       \
-        detail->member);                                                \
-    ++count;                                                            \
+#define SET_AVATAR_INTEGER(public_name, member)  \
+  do {                                           \
+    if (count >= AVATAR_VIEW_FIELD_COUNT) {      \
+      return false;                              \
+    }                                            \
+    set_integer_field(&workspace->values[count], \
+                      &workspace->fields[count], \
+                      public_name,               \
+                      sizeof(public_name) - 1U,  \
+                      detail->member);           \
+    ++count;                                     \
   } while (0)
 
   SET_AVATAR_INTEGER("schemaVersion", schema_version);
   SET_AVATAR_INTEGER("producedAtMs", produced_at_ms);
-  set_boolean_field(
-      &workspace->values[count],
-      &workspace->fields[count],
-      "ready",
-      sizeof("ready") - 1U,
-      detail->ready);
+  set_boolean_field(&workspace->values[count],
+                    &workspace->fields[count],
+                    "ready",
+                    sizeof("ready") - 1U,
+                    detail->ready);
   ++count;
   SET_AVATAR_INTEGER("playoutObservations", playout_observations);
   SET_AVATAR_INTEGER("malformedObservations", malformed_observations);
@@ -1283,27 +1128,21 @@ static bool build_avatar_metrics_expression(
   SET_AVATAR_INTEGER("mailboxFailures", mailbox_failures);
   SET_AVATAR_INTEGER("analyzerFrames", analyzer_frames);
   SET_AVATAR_INTEGER("analyzerSequenceGaps", analyzer_sequence_gaps);
-  SET_AVATAR_INTEGER(
-      "mouthOpenRenderedFrames", mouth_open_rendered_frames);
+  SET_AVATAR_INTEGER("mouthOpenRenderedFrames", mouth_open_rendered_frames);
   SET_AVATAR_INTEGER("snapshotRaces", snapshot_races);
   SET_AVATAR_INTEGER("renderedFrames", rendered_frames);
   SET_AVATAR_INTEGER("renderFailures", render_failures);
   SET_AVATAR_INTEGER("displayTransfers", display_transfers);
-  SET_AVATAR_INTEGER(
-      "displayTransferFailures", display_transfer_failures);
-  SET_AVATAR_INTEGER(
-      "displayTransferTimeouts", display_transfer_timeouts);
-  SET_AVATAR_INTEGER(
-      "maximumHandoffDelayUs", maximum_handoff_delay_us);
+  SET_AVATAR_INTEGER("displayTransferFailures", display_transfer_failures);
+  SET_AVATAR_INTEGER("displayTransferTimeouts", display_transfer_timeouts);
+  SET_AVATAR_INTEGER("maximumHandoffDelayUs", maximum_handoff_delay_us);
   SET_AVATAR_INTEGER("maximumAnalyzerUs", maximum_analyzer_us);
   SET_AVATAR_INTEGER("maximumRenderUs", maximum_render_us);
-  SET_AVATAR_INTEGER(
-      "maximumDisplayTransferUs", maximum_display_transfer_us);
-  SET_AVATAR_INTEGER(
-      "analyzerStackMinimumFreeBytes",
-      analyzer_stack_minimum_free_bytes);
-  SET_AVATAR_INTEGER(
-      "physicalPlayoutSampleClock", physical_playout_sample_clock);
+  SET_AVATAR_INTEGER("maximumDisplayTransferUs", maximum_display_transfer_us);
+  SET_AVATAR_INTEGER("analyzerStackMinimumFreeBytes",
+                     analyzer_stack_minimum_free_bytes);
+  SET_AVATAR_INTEGER("physicalPlayoutSampleClock",
+                     physical_playout_sample_clock);
   SET_AVATAR_INTEGER("currentAvatarIndex", current_avatar_index);
   SET_AVATAR_INTEGER("framebufferBytes", framebuffer_bytes);
 #undef SET_AVATAR_INTEGER
@@ -1315,11 +1154,10 @@ static bool build_avatar_metrics_expression(
   return true;
 }
 
-static enum capnweb_status subscribe_view(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply,
-  enum iterate_kit_metrics_view view) {
+static enum capnweb_status subscribe_view(void *context,
+                                          const struct capnweb_call *call,
+                                          struct capnweb_reply *reply,
+                                          enum iterate_kit_metrics_view view) {
   struct iterate_kit_metrics *metrics = context;
   struct capnweb_remote_capability callback = {0};
   struct iterate_kit_subscription_owner_key owner_key = {0};
@@ -1340,31 +1178,27 @@ static enum capnweb_status subscribe_view(
   }
 
   if (owner_key.present) {
-    for (index = 0U;
-         index < metrics->options.subscription_count;
-         ++index) {
+    for (index = 0U; index < metrics->options.subscription_count; ++index) {
       struct iterate_kit_metrics_subscription *subscription =
           &metrics->options.subscriptions[index];
-      if (!iterate_kit_subscription_owner_keys_equal(
-              &subscription->owner_key, &owner_key)) {
+      if (!iterate_kit_subscription_owner_keys_equal(&subscription->owner_key,
+                                                     &owner_key)) {
         continue;
       }
       if (subscription->call_in_flight || subscription->release_pending) {
-        status = capnweb_session_release_remote(
-            metrics->options.session, callback);
+        status =
+            capnweb_session_release_remote(metrics->options.session, callback);
         if (status != CAPNWEB_OK) {
           return status;
         }
         return capnweb_reply_set_error(
-            reply,
-            "Error",
-            "metrics subscription replacement is busy");
+            reply, "Error", "metrics subscription replacement is busy");
       }
-      status = capnweb_session_release_remote(
-          metrics->options.session, subscription->callback);
+      status = capnweb_session_release_remote(metrics->options.session,
+                                              subscription->callback);
       if (status != CAPNWEB_OK) {
-        (void)capnweb_session_release_remote(
-            metrics->options.session, callback);
+        (void)capnweb_session_release_remote(metrics->options.session,
+                                             callback);
         return status;
       }
       (void)release_callback_budget(metrics, subscription);
@@ -1376,13 +1210,10 @@ static enum capnweb_status subscribe_view(
   }
 
   if (selected == NULL) {
-    for (index = 0U;
-         index < metrics->options.subscription_count;
-         ++index) {
+    for (index = 0U; index < metrics->options.subscription_count; ++index) {
       struct iterate_kit_metrics_subscription *subscription =
           &metrics->options.subscriptions[index];
-      if (!subscription->occupied &&
-          !subscription->call_in_flight &&
+      if (!subscription->occupied && !subscription->call_in_flight &&
           !subscription->release_pending) {
         selected = subscription;
         break;
@@ -1417,26 +1248,21 @@ static enum capnweb_status subscribe_view(
       reply, "Error", "metrics subscription limit reached");
 }
 
-static enum capnweb_status subscribe(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
-  return subscribe_view(
-      context, call, reply, ITERATE_KIT_METRICS_GENERAL);
+static enum capnweb_status subscribe(void *context,
+                                     const struct capnweb_call *call,
+                                     struct capnweb_reply *reply) {
+  return subscribe_view(context, call, reply, ITERATE_KIT_METRICS_GENERAL);
 }
 
-static enum capnweb_status subscribe_playback(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
-  return subscribe_view(
-      context, call, reply, ITERATE_KIT_METRICS_PLAYBACK);
+static enum capnweb_status subscribe_playback(void *context,
+                                              const struct capnweb_call *call,
+                                              struct capnweb_reply *reply) {
+  return subscribe_view(context, call, reply, ITERATE_KIT_METRICS_PLAYBACK);
 }
 
-static enum capnweb_status subscribe_aec(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
+static enum capnweb_status subscribe_aec(void *context,
+                                         const struct capnweb_call *call,
+                                         struct capnweb_reply *reply) {
   const struct iterate_kit_metrics *const metrics = context;
   return subscribe_view(
       context,
@@ -1447,12 +1273,10 @@ static enum capnweb_status subscribe_aec(
           : ITERATE_KIT_METRICS_AEC);
 }
 
-static enum capnweb_status subscribe_avatar(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
-  return subscribe_view(
-      context, call, reply, ITERATE_KIT_METRICS_AVATAR);
+static enum capnweb_status subscribe_avatar(void *context,
+                                            const struct capnweb_call *call,
+                                            struct capnweb_reply *reply) {
+  return subscribe_view(context, call, reply, ITERATE_KIT_METRICS_AVATAR);
 }
 
 static void diagnostics_reply_released(void *context) {
@@ -1467,10 +1291,9 @@ static void diagnostics_reply_released(void *context) {
   }
 }
 
-static enum capnweb_status get_diagnostics(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply) {
+static enum capnweb_status get_diagnostics(void *context,
+                                           const struct capnweb_call *call,
+                                           struct capnweb_reply *reply) {
   struct iterate_kit_metrics *metrics = context;
   struct iterate_kit_metrics_sample sample = {0};
   const struct iterate_kit_control_diagnostics_sample *diagnostics;
@@ -1503,15 +1326,14 @@ static enum capnweb_status get_diagnostics(
         reply, "Error", "control diagnostics snapshot already in flight");
   }
 
-  sample_status = metrics->options.driver.sample(
-      metrics->options.driver.context, &sample);
+  sample_status =
+      metrics->options.driver.sample(metrics->options.driver.context, &sample);
   if (sample_status != ITERATE_KIT_OK) {
     return capnweb_reply_set_error(
         reply, "Error", "control diagnostics sampling failed");
   }
   diagnostics = &sample.control_diagnostics;
-  if (!sample.has_control_diagnostics ||
-      diagnostics->schema_version == 0U) {
+  if (!sample.has_control_diagnostics || diagnostics->schema_version == 0U) {
     /*
      * Zero-filled optional state must never look like a healthy transport.
      * Profiles opt in only after wiring the platform's real retained fields.
@@ -1523,43 +1345,29 @@ static enum capnweb_status get_diagnostics(
   length = snprintf(
       metrics->options.diagnostics_expression_buffer,
       metrics->options.diagnostics_expression_capacity,
-      "{\"schemaVersion\":%" PRIu32
-      ",\"producedAtMs\":%" PRId64
+      "{\"schemaVersion\":%" PRIu32 ",\"producedAtMs\":%" PRId64
       ",\"control\":{\"websocketStartAttempts\":%" PRIu32
-      ",\"websocketConnections\":%" PRIu32
-      ",\"websocketDisconnects\":%" PRIu32
-      ",\"websocketErrors\":%" PRIu32
-      ",\"wifiDisconnects\":%" PRIu32
-      ",\"protocolFailures\":%" PRIu32
-      ",\"receiveFailures\":%" PRIu32
-      ",\"sendFailures\":%" PRIu32
-      ",\"lastWifiDisconnectReason\":%" PRId32
-      ",\"lastErrorGeneration\":%" PRIu32
-      ",\"lastErrorType\":%" PRId32
-      ",\"lastTlsError\":%" PRId32
-      ",\"lastTlsStackError\":%" PRId32
-      ",\"lastTransportErrno\":%" PRId32
-      ",\"lastHandshakeStatusCode\":%" PRId32
+      ",\"websocketConnections\":%" PRIu32 ",\"websocketDisconnects\":%" PRIu32
+      ",\"websocketErrors\":%" PRIu32 ",\"wifiDisconnects\":%" PRIu32
+      ",\"protocolFailures\":%" PRIu32 ",\"receiveFailures\":%" PRIu32
+      ",\"sendFailures\":%" PRIu32 ",\"lastWifiDisconnectReason\":%" PRId32
+      ",\"lastErrorGeneration\":%" PRIu32 ",\"lastErrorType\":%" PRId32
+      ",\"lastTlsError\":%" PRId32 ",\"lastTlsStackError\":%" PRId32
+      ",\"lastTransportErrno\":%" PRId32 ",\"lastHandshakeStatusCode\":%" PRId32
       ",\"lastCloseStatusCode\":%" PRId32
       ",\"protocolFailureGeneration\":%" PRIu32
       ",\"lastApplicationCapnwebGeneration\":%" PRIu32
       ",\"lastApplicationCapnwebStatus\":%" PRId32
-      ",\"lastControlReceiveStatus\":%" PRId32
-      ",\"messagesSent\":%" PRIu32
-      ",\"messagesDiscarded\":%" PRIu32
-      ",\"inboxDiscarded\":%" PRIu32
-      ",\"outboxDiscarded\":%" PRIu32
-      ",\"inbox\":{\"capacitySlots\":%" PRIu32
-      ",\"messagesPublished\":%" PRIu32
-      ",\"messagesConsumed\":%" PRIu32
-      ",\"producerBackpressure\":%" PRIu32
-      ",\"highWaterSlots\":%" PRIu32
-      ",\"currentSlots\":%" PRIu32 "}"
+      ",\"lastControlReceiveStatus\":%" PRId32 ",\"messagesSent\":%" PRIu32
+      ",\"messagesDiscarded\":%" PRIu32 ",\"inboxDiscarded\":%" PRIu32
+      ",\"outboxDiscarded\":%" PRIu32 ",\"inbox\":{\"capacitySlots\":%" PRIu32
+      ",\"messagesPublished\":%" PRIu32 ",\"messagesConsumed\":%" PRIu32
+      ",\"producerBackpressure\":%" PRIu32 ",\"highWaterSlots\":%" PRIu32
+      ",\"currentSlots\":%" PRIu32
+      "}"
       ",\"outbox\":{\"capacitySlots\":%" PRIu32
-      ",\"messagesPublished\":%" PRIu32
-      ",\"messagesConsumed\":%" PRIu32
-      ",\"producerBackpressure\":%" PRIu32
-      ",\"highWaterSlots\":%" PRIu32
+      ",\"messagesPublished\":%" PRIu32 ",\"messagesConsumed\":%" PRIu32
+      ",\"producerBackpressure\":%" PRIu32 ",\"highWaterSlots\":%" PRIu32
       ",\"currentSlots\":%" PRIu32 "}}",
       diagnostics->schema_version,
       diagnostics->produced_at_ms,
@@ -1600,8 +1408,7 @@ static enum capnweb_status get_diagnostics(
       diagnostics->control_outbox.high_water_slots,
       diagnostics->control_outbox.current_slots);
   if (length <= 0 ||
-      (size_t)length >=
-          metrics->options.diagnostics_expression_capacity) {
+      (size_t)length >= metrics->options.diagnostics_expression_capacity) {
     /*
      * This is a firmware/schema defect, not a partial snapshot. snprintf's
      * truncation is deliberately rejected before Cap'n Web can retain it.
@@ -1620,25 +1427,21 @@ static enum capnweb_status get_diagnostics(
    * exists at all. A sentinel such as 0 or INT32_MIN is still a valid JSON
    * number and would be indistinguishable from measured evidence to clients.
    */
-  remaining =
-      metrics->options.diagnostics_expression_capacity - (size_t)length;
+  remaining = metrics->options.diagnostics_expression_capacity - (size_t)length;
   if (diagnostics->network.has_wifi_rssi_dbm) {
     network_length = snprintf(
         metrics->options.diagnostics_expression_buffer + length,
         remaining,
         ",\"network\":{\"wifiConnected\":%s"
-        ",\"wifiRssiDbm\":%" PRId32
-        ",\"pcmWebsocketConnections\":%" PRIu32
+        ",\"wifiRssiDbm\":%" PRId32 ",\"pcmWebsocketConnections\":%" PRIu32
         ",\"pcmWebsocketDisconnects\":%" PRIu32
         ",\"pcmWebsocketErrors\":%" PRIu32
         ",\"pcmWebsocketRawWriteFailures\":%" PRIu32
         ",\"pcmTransportFailureIncidents\":%" PRIu32
-        ",\"pcmLastFailureOperation\":%" PRIu32
-        ",\"pcmLastRawResult\":%" PRId32
-        ",\"pcmLastSocketErrno\":%" PRId32
-        ",\"pcmLastEspTlsError\":%" PRId32
-        ",\"pcmLastTlsStackError\":%" PRId32
-        ",\"pcmLastTlsCertFlags\":%" PRId32 "}}",
+        ",\"pcmLastFailureOperation\":%" PRIu32 ",\"pcmLastRawResult\":%" PRId32
+        ",\"pcmLastSocketErrno\":%" PRId32 ",\"pcmLastEspTlsError\":%" PRId32
+        ",\"pcmLastTlsStackError\":%" PRId32 ",\"pcmLastTlsCertFlags\":%" PRId32
+        "}}",
         diagnostics->network.wifi_connected ? "true" : "false",
         diagnostics->network.wifi_rssi_dbm,
         diagnostics->network.pcm_websocket_connections,
@@ -1662,12 +1465,10 @@ static enum capnweb_status get_diagnostics(
         ",\"pcmWebsocketErrors\":%" PRIu32
         ",\"pcmWebsocketRawWriteFailures\":%" PRIu32
         ",\"pcmTransportFailureIncidents\":%" PRIu32
-        ",\"pcmLastFailureOperation\":%" PRIu32
-        ",\"pcmLastRawResult\":%" PRId32
-        ",\"pcmLastSocketErrno\":%" PRId32
-        ",\"pcmLastEspTlsError\":%" PRId32
-        ",\"pcmLastTlsStackError\":%" PRId32
-        ",\"pcmLastTlsCertFlags\":%" PRId32 "}}",
+        ",\"pcmLastFailureOperation\":%" PRIu32 ",\"pcmLastRawResult\":%" PRId32
+        ",\"pcmLastSocketErrno\":%" PRId32 ",\"pcmLastEspTlsError\":%" PRId32
+        ",\"pcmLastTlsStackError\":%" PRId32 ",\"pcmLastTlsCertFlags\":%" PRId32
+        "}}",
         diagnostics->network.wifi_connected ? "true" : "false",
         diagnostics->network.pcm_websocket_connections,
         diagnostics->network.pcm_websocket_disconnects,
@@ -1681,8 +1482,7 @@ static enum capnweb_status get_diagnostics(
         diagnostics->network.pcm_last_tls_stack_error,
         diagnostics->network.pcm_last_tls_cert_flags);
   }
-  if (network_length <= 0 ||
-      (size_t)network_length >= remaining) {
+  if (network_length <= 0 || (size_t)network_length >= remaining) {
     /*
      * As with the control prefix, truncation is a firmware/schema defect.
      * Reject the whole snapshot: a syntactically valid prefix without network
@@ -1706,13 +1506,11 @@ static enum capnweb_status get_diagnostics(
   return reply_status;
 }
 
-static void delivery_complete(
-    void *context, const struct capnweb_result *result) {
+static void delivery_complete(void *context,
+                              const struct capnweb_result *result) {
   struct iterate_kit_metrics_subscription *subscription = context;
   struct iterate_kit_metrics *metrics;
-  if (subscription == NULL ||
-      result == NULL ||
-      subscription->owner == NULL) {
+  if (subscription == NULL || result == NULL || subscription->owner == NULL) {
     return;
   }
   metrics = subscription->owner;
@@ -1728,23 +1526,21 @@ static void delivery_complete(
    * explicit release because closing the session already settles all imports.
    */
   subscription->occupied = false;
-  subscription->release_pending =
-      result->kind != CAPNWEB_RESULT_SESSION_ENDED;
+  subscription->release_pending = result->kind != CAPNWEB_RESULT_SESSION_ENDED;
   if (metrics->pending_result.status != ITERATE_KIT_POLL_OK) {
     return;
   }
   if (result->kind == CAPNWEB_RESULT_REJECTION) {
     metrics->pending_result = (struct iterate_kit_poll_result){
-      ITERATE_KIT_POLL_CALLBACK_REJECTED,
-      CAPNWEB_OK,
+        ITERATE_KIT_POLL_CALLBACK_REJECTED,
+        CAPNWEB_OK,
     };
   } else {
     metrics->pending_result = poll_capnweb(result->status);
   }
 }
 
-static struct iterate_kit_poll_result poll(
-    void *context, uint64_t now_ms) {
+static struct iterate_kit_poll_result poll(void *context, uint64_t now_ms) {
   struct iterate_kit_metrics *metrics = context;
   bool has_ready_subscription = false;
   bool recorded_backpressured_subscription = false;
@@ -1759,8 +1555,7 @@ static struct iterate_kit_poll_result poll(
   }
 
   scan_start = metrics->next_subscription_index;
-  for (scan_offset = 0U;
-       scan_offset < metrics->options.subscription_count;
+  for (scan_offset = 0U; scan_offset < metrics->options.subscription_count;
        ++scan_offset) {
     index = scan_start + scan_offset;
     if (index >= metrics->options.subscription_count) {
@@ -1801,18 +1596,17 @@ static struct iterate_kit_poll_result poll(
    * per callback would multiply CPU cost and let subscribers disagree about
    * queue depths solely because of iteration order.
    */
-  sample_status = metrics->options.driver.sample(
-      metrics->options.driver.context, &sample);
+  sample_status =
+      metrics->options.driver.sample(metrics->options.driver.context, &sample);
   if (sample_status != ITERATE_KIT_OK) {
     const struct iterate_kit_poll_result result = {
-      ITERATE_KIT_POLL_DRIVER_ERROR,
-      CAPNWEB_OK,
+        ITERATE_KIT_POLL_DRIVER_ERROR,
+        CAPNWEB_OK,
     };
     return result;
   }
 
-  for (scan_offset = 0U;
-       scan_offset < metrics->options.subscription_count;
+  for (scan_offset = 0U; scan_offset < metrics->options.subscription_count;
        ++scan_offset) {
     index = scan_start + scan_offset;
     if (index >= metrics->options.subscription_count) {
@@ -1848,27 +1642,26 @@ static struct iterate_kit_poll_result poll(
     }
     if (budget_status != ITERATE_KIT_OK) {
       return (struct iterate_kit_poll_result){
-        ITERATE_KIT_POLL_DRIVER_ERROR,
-        CAPNWEB_OK,
+          ITERATE_KIT_POLL_DRIVER_ERROR,
+          CAPNWEB_OK,
       };
     }
     if (subscription->view == ITERATE_KIT_METRICS_GENERAL) {
       if (!build_metrics_expression(&sample, &workspace.general)) {
         (void)release_callback_budget(metrics, subscription);
         const struct iterate_kit_poll_result result = {
-          ITERATE_KIT_POLL_DRIVER_ERROR,
-          CAPNWEB_OK,
+            ITERATE_KIT_POLL_DRIVER_ERROR,
+            CAPNWEB_OK,
         };
         return result;
       }
       root = &workspace.general.root_object;
     } else if (subscription->view == ITERATE_KIT_METRICS_PLAYBACK) {
-      if (!build_playback_metrics_expression(
-              &sample, &workspace.playback)) {
+      if (!build_playback_metrics_expression(&sample, &workspace.playback)) {
         (void)release_callback_budget(metrics, subscription);
         const struct iterate_kit_poll_result result = {
-          ITERATE_KIT_POLL_DRIVER_ERROR,
-          CAPNWEB_OK,
+            ITERATE_KIT_POLL_DRIVER_ERROR,
+            CAPNWEB_OK,
         };
         return result;
       }
@@ -1877,31 +1670,29 @@ static struct iterate_kit_poll_result poll(
       if (!build_aec_metrics_expression(&sample, &workspace.aec)) {
         (void)release_callback_budget(metrics, subscription);
         const struct iterate_kit_poll_result result = {
-          ITERATE_KIT_POLL_DRIVER_ERROR,
-          CAPNWEB_OK,
+            ITERATE_KIT_POLL_DRIVER_ERROR,
+            CAPNWEB_OK,
         };
         return result;
       }
       root = &workspace.aec.root_object;
-    } else if (
-        subscription->view == ITERATE_KIT_METRICS_RAW_CLEAN_AEC) {
-      if (!build_raw_clean_aec_metrics_expression(
-              &sample, &workspace.raw_clean_aec)) {
+    } else if (subscription->view == ITERATE_KIT_METRICS_RAW_CLEAN_AEC) {
+      if (!build_raw_clean_aec_metrics_expression(&sample,
+                                                  &workspace.raw_clean_aec)) {
         (void)release_callback_budget(metrics, subscription);
         const struct iterate_kit_poll_result result = {
-          ITERATE_KIT_POLL_DRIVER_ERROR,
-          CAPNWEB_OK,
+            ITERATE_KIT_POLL_DRIVER_ERROR,
+            CAPNWEB_OK,
         };
         return result;
       }
       root = &workspace.raw_clean_aec.root_object;
     } else if (subscription->view == ITERATE_KIT_METRICS_AVATAR) {
-      if (!build_avatar_metrics_expression(
-              &sample, &workspace.avatar)) {
+      if (!build_avatar_metrics_expression(&sample, &workspace.avatar)) {
         (void)release_callback_budget(metrics, subscription);
         const struct iterate_kit_poll_result result = {
-          ITERATE_KIT_POLL_DRIVER_ERROR,
-          CAPNWEB_OK,
+            ITERATE_KIT_POLL_DRIVER_ERROR,
+            CAPNWEB_OK,
         };
         return result;
       }
@@ -1914,8 +1705,8 @@ static struct iterate_kit_poll_result poll(
        */
       (void)release_callback_budget(metrics, subscription);
       const struct iterate_kit_poll_result result = {
-        ITERATE_KIT_POLL_DRIVER_ERROR,
-        CAPNWEB_OK,
+          ITERATE_KIT_POLL_DRIVER_ERROR,
+          CAPNWEB_OK,
       };
       return result;
     }
@@ -1924,15 +1715,14 @@ static struct iterate_kit_poll_result poll(
      * per-subscriber pending sample: a busy callback is deliberately skipped,
      * preserving bounded pending-call storage and newest-state semantics.
      */
-    status = capnweb_session_call_expressions(
-        metrics->options.session,
-        subscription->callback,
-        NULL,
-        0U,
-        root,
-        1U,
-        delivery_complete,
-        subscription);
+    status = capnweb_session_call_expressions(metrics->options.session,
+                                              subscription->callback,
+                                              NULL,
+                                              0U,
+                                              root,
+                                              1U,
+                                              delivery_complete,
+                                              subscription);
     if (status != CAPNWEB_OK) {
       (void)release_callback_budget(metrics, subscription);
       return poll_capnweb(status);
@@ -1960,9 +1750,7 @@ static struct iterate_kit_poll_result close_metrics(void *context) {
   if (metrics == NULL || !metrics->initialized) {
     return poll_capnweb(CAPNWEB_E_STATE);
   }
-  for (index = 0U;
-       index < metrics->options.subscription_count;
-       ++index) {
+  for (index = 0U; index < metrics->options.subscription_count; ++index) {
     struct iterate_kit_metrics_subscription *subscription =
         &metrics->options.subscriptions[index];
     if ((subscription->occupied || subscription->release_pending) &&
@@ -1974,8 +1762,7 @@ static struct iterate_kit_poll_result close_metrics(void *context) {
        */
       const enum capnweb_status status = capnweb_session_release_remote(
           metrics->options.session, subscription->callback);
-      if (result.status == ITERATE_KIT_POLL_OK &&
-          status != CAPNWEB_OK) {
+      if (result.status == ITERATE_KIT_POLL_OK && status != CAPNWEB_OK) {
         result = poll_capnweb(status);
       }
     }
@@ -1992,9 +1779,7 @@ static void session_ended(void *context) {
   if (metrics == NULL || !metrics->initialized) {
     return;
   }
-  for (index = 0U;
-       index < metrics->options.subscription_count;
-       ++index) {
+  for (index = 0U; index < metrics->options.subscription_count; ++index) {
     struct iterate_kit_metrics_subscription *subscription =
         &metrics->options.subscriptions[index];
     (void)release_callback_budget(metrics, subscription);
@@ -2021,15 +1806,10 @@ enum iterate_kit_status iterate_kit_metrics_init(
     struct iterate_kit_metrics *metrics,
     const struct iterate_kit_metrics_options *options) {
   size_t index;
-  if (metrics == NULL ||
-      options == NULL ||
-      options->session == NULL ||
-      options->driver.sample == NULL ||
-      options->subscriptions == NULL ||
-      options->subscription_count == 0U ||
-      options->interval_ms == 0U ||
-      (options->enable_aec_view &&
-       options->enable_raw_clean_aec_view) ||
+  if (metrics == NULL || options == NULL || options->session == NULL ||
+      options->driver.sample == NULL || options->subscriptions == NULL ||
+      options->subscription_count == 0U || options->interval_ms == 0U ||
+      (options->enable_aec_view && options->enable_raw_clean_aec_view) ||
       ((options->diagnostics_expression_buffer == NULL) !=
        (options->diagnostics_expression_capacity == 0U)) ||
       (options->diagnostics_expression_buffer != NULL &&
@@ -2042,10 +1822,9 @@ enum iterate_kit_status iterate_kit_metrics_init(
   metrics->pending_result = poll_ok();
   metrics->initialized = true;
   for (index = 0U; index < options->subscription_count; ++index) {
-    memset(
-        &options->subscriptions[index],
-        0,
-        sizeof(options->subscriptions[index]));
+    memset(&options->subscriptions[index],
+           0,
+           sizeof(options->subscriptions[index]));
     options->subscriptions[index].owner = metrics;
   }
   return ITERATE_KIT_OK;
@@ -2054,56 +1833,55 @@ enum iterate_kit_status iterate_kit_metrics_init(
 struct iterate_kit_module iterate_kit_metrics_module(
     struct iterate_kit_metrics *metrics) {
   static const struct iterate_kit_method base_methods[] = {
-    {subscribe_path, 1U, subscribe},
-    {get_diagnostics_path, 1U, get_diagnostics},
+      {subscribe_path, 1U, subscribe},
+      {get_diagnostics_path, 1U, get_diagnostics},
   };
   static const struct iterate_kit_method playback_methods[] = {
-    {subscribe_path, 1U, subscribe},
-    {subscribe_playback_path, 1U, subscribe_playback},
-    {get_diagnostics_path, 1U, get_diagnostics},
+      {subscribe_path, 1U, subscribe},
+      {subscribe_playback_path, 1U, subscribe_playback},
+      {get_diagnostics_path, 1U, get_diagnostics},
   };
   static const struct iterate_kit_method aec_methods[] = {
-    {subscribe_path, 1U, subscribe},
-    {subscribe_aec_path, 1U, subscribe_aec},
-    {get_diagnostics_path, 1U, get_diagnostics},
+      {subscribe_path, 1U, subscribe},
+      {subscribe_aec_path, 1U, subscribe_aec},
+      {get_diagnostics_path, 1U, get_diagnostics},
   };
   static const struct iterate_kit_method playback_aec_methods[] = {
-    {subscribe_path, 1U, subscribe},
-    {subscribe_playback_path, 1U, subscribe_playback},
-    {subscribe_aec_path, 1U, subscribe_aec},
-    {get_diagnostics_path, 1U, get_diagnostics},
+      {subscribe_path, 1U, subscribe},
+      {subscribe_playback_path, 1U, subscribe_playback},
+      {subscribe_aec_path, 1U, subscribe_aec},
+      {get_diagnostics_path, 1U, get_diagnostics},
   };
   static const struct iterate_kit_method avatar_methods[] = {
-    {subscribe_path, 1U, subscribe},
-    {subscribe_avatar_path, 1U, subscribe_avatar},
-    {get_diagnostics_path, 1U, get_diagnostics},
+      {subscribe_path, 1U, subscribe},
+      {subscribe_avatar_path, 1U, subscribe_avatar},
+      {get_diagnostics_path, 1U, get_diagnostics},
   };
   static const struct iterate_kit_method playback_avatar_methods[] = {
-    {subscribe_path, 1U, subscribe},
-    {subscribe_playback_path, 1U, subscribe_playback},
-    {subscribe_avatar_path, 1U, subscribe_avatar},
-    {get_diagnostics_path, 1U, get_diagnostics},
+      {subscribe_path, 1U, subscribe},
+      {subscribe_playback_path, 1U, subscribe_playback},
+      {subscribe_avatar_path, 1U, subscribe_avatar},
+      {get_diagnostics_path, 1U, get_diagnostics},
   };
   static const struct iterate_kit_method aec_avatar_methods[] = {
-    {subscribe_path, 1U, subscribe},
-    {subscribe_aec_path, 1U, subscribe_aec},
-    {subscribe_avatar_path, 1U, subscribe_avatar},
-    {get_diagnostics_path, 1U, get_diagnostics},
+      {subscribe_path, 1U, subscribe},
+      {subscribe_aec_path, 1U, subscribe_aec},
+      {subscribe_avatar_path, 1U, subscribe_avatar},
+      {get_diagnostics_path, 1U, get_diagnostics},
   };
   static const struct iterate_kit_method all_methods[] = {
-    {subscribe_path, 1U, subscribe},
-    {subscribe_playback_path, 1U, subscribe_playback},
-    {subscribe_aec_path, 1U, subscribe_aec},
-    {subscribe_avatar_path, 1U, subscribe_avatar},
-    {get_diagnostics_path, 1U, get_diagnostics},
+      {subscribe_path, 1U, subscribe},
+      {subscribe_playback_path, 1U, subscribe_playback},
+      {subscribe_aec_path, 1U, subscribe_aec},
+      {subscribe_avatar_path, 1U, subscribe_avatar},
+      {get_diagnostics_path, 1U, get_diagnostics},
   };
   const bool playback =
       metrics != NULL && metrics->options.enable_playback_view;
   const bool aec = metrics != NULL && metrics->options.enable_aec_view;
   const bool raw_clean_aec =
       metrics != NULL && metrics->options.enable_raw_clean_aec_view;
-  const bool avatar =
-      metrics != NULL && metrics->options.enable_avatar_view;
+  const bool avatar = metrics != NULL && metrics->options.enable_avatar_view;
   const struct iterate_kit_method *methods;
   size_t method_count;
   if (avatar && playback && (aec || raw_clean_aec)) {
@@ -2111,24 +1889,21 @@ struct iterate_kit_module iterate_kit_metrics_module(
     method_count = sizeof(all_methods) / sizeof(all_methods[0]);
   } else if (avatar && playback) {
     methods = playback_avatar_methods;
-    method_count = sizeof(playback_avatar_methods) /
-        sizeof(playback_avatar_methods[0]);
+    method_count =
+        sizeof(playback_avatar_methods) / sizeof(playback_avatar_methods[0]);
   } else if (avatar && (aec || raw_clean_aec)) {
     methods = aec_avatar_methods;
-    method_count = sizeof(aec_avatar_methods) /
-        sizeof(aec_avatar_methods[0]);
+    method_count = sizeof(aec_avatar_methods) / sizeof(aec_avatar_methods[0]);
   } else if (avatar) {
     methods = avatar_methods;
-    method_count = sizeof(avatar_methods) /
-        sizeof(avatar_methods[0]);
+    method_count = sizeof(avatar_methods) / sizeof(avatar_methods[0]);
   } else if (playback && (aec || raw_clean_aec)) {
     methods = playback_aec_methods;
-    method_count = sizeof(playback_aec_methods) /
-        sizeof(playback_aec_methods[0]);
+    method_count =
+        sizeof(playback_aec_methods) / sizeof(playback_aec_methods[0]);
   } else if (playback) {
     methods = playback_methods;
-    method_count = sizeof(playback_methods) /
-        sizeof(playback_methods[0]);
+    method_count = sizeof(playback_methods) / sizeof(playback_methods[0]);
   } else if (aec || raw_clean_aec) {
     methods = aec_methods;
     method_count = sizeof(aec_methods) / sizeof(aec_methods[0]);
@@ -2137,12 +1912,12 @@ struct iterate_kit_module iterate_kit_metrics_module(
     method_count = sizeof(base_methods) / sizeof(base_methods[0]);
   }
   const struct iterate_kit_module module = {
-    .methods = methods,
-    .method_count = method_count,
-    .context = metrics,
-    .poll = poll,
-    .close = close_metrics,
-    .session_ended = session_ended,
+      .methods = methods,
+      .method_count = method_count,
+      .context = metrics,
+      .poll = poll,
+      .close = close_metrics,
+      .session_ended = session_ended,
   };
   return module;
 }

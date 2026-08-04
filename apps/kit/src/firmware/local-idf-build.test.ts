@@ -4,7 +4,11 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { DeviceConfiguration } from "./config-image.ts";
 import type { FirmwareDevice } from "./catalog.ts";
-import { prepareLocalEspIdfFlashPlan, readLocalEspIdfNamedPartition } from "./local-idf-build.ts";
+import {
+  prepareLocalEspIdfFlashPlan,
+  readLocalEspIdfApplicationProvenance,
+  readLocalEspIdfNamedPartition,
+} from "./local-idf-build.ts";
 
 const temporaryDirectories: string[] = [];
 
@@ -53,6 +57,17 @@ async function createBuildFixture(overrides: Record<string, unknown> = {}) {
   await writeFile(join(directory, "partition_table", "partition-table.bin"), partitionTable);
   await writeFile(join(directory, "iterate-kit-m5sticks3.bin"), Uint8Array.of(5, 6));
   await writeFile(
+    join(directory, "project_description.json"),
+    JSON.stringify({
+      app_bin: "iterate-kit-m5sticks3.bin",
+      project_name: "iterate-kit-m5sticks3",
+    }),
+  );
+  await writeFile(
+    join(directory, "CMakeCache.txt"),
+    "ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE:STRING=1\n",
+  );
+  await writeFile(
     join(directory, "flasher_args.json"),
     JSON.stringify({
       flash_files: {
@@ -68,6 +83,27 @@ async function createBuildFixture(overrides: Record<string, unknown> = {}) {
 }
 
 describe("prepareLocalEspIdfFlashPlan", () => {
+  it("retains the exact application bytes and DSP build selector used by a physical run", async () => {
+    /*
+     * A build-directory label is not provenance: the directory can be rebuilt
+     * in place, and the XMOS tap was previously changed by editing one enum.
+     * Hash the selected application and retain the explicit cache input so an
+     * AEC run can be reproduced without trusting the engineer's evidence
+     * folder name.
+     */
+    const buildDirectory = await createBuildFixture();
+
+    await expect(readLocalEspIdfApplicationProvenance({ buildDirectory, device })).resolves.toEqual(
+      {
+        applicationBytes: 2,
+        applicationFile: "iterate-kit-m5sticks3.bin",
+        applicationSha256: "c42522128b49193de8cd45d8f7589cd7e085e65f138640d57d4482e5f7189623",
+        iterateKitVoicePeXmosUplinkStage: 1,
+        projectName: "iterate-kit-m5sticks3",
+      },
+    );
+  });
+
   it("reads the exact named region needed before existing device configuration can be decoded", async () => {
     /*
      * An unattended proof has to read credentials before it can construct a
@@ -137,6 +173,31 @@ describe("prepareLocalEspIdfFlashPlan", () => {
         device,
       }),
     ).rejects.toThrow("targets esp32c3; M5Stack M5StickS3 requires esp32s3");
+  });
+
+  it("rejects another ESP32-S3 board's image before any flash plan is produced", async () => {
+    /*
+     * A physical Stick was found crash-looping with the Waveshare application.
+     * Chip-family validation cannot prevent that mistake because every board
+     * in the rig is an ESP32-S3. The IDF project identity must therefore agree
+     * with the catalog target before a same-chip image can reach esptool.
+     */
+    const buildDirectory = await createBuildFixture();
+    await writeFile(
+      join(buildDirectory, "project_description.json"),
+      JSON.stringify({ project_name: "iterate-kit-waveshare-s3-amoled" }),
+    );
+
+    await expect(
+      prepareLocalEspIdfFlashPlan({
+        buildDirectory,
+        configuration,
+        configurationPartition: { offset: 0x11_0000, size: 4096 },
+        device,
+      }),
+    ).rejects.toThrow(
+      "build is iterate-kit-waveshare-s3-amoled; M5Stack M5StickS3 requires iterate-kit-m5sticks3",
+    );
   });
 
   it("does not allow flasher metadata to read outside the selected build", async () => {

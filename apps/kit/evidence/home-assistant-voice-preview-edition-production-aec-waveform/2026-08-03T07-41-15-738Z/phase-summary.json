@@ -1,0 +1,25 @@
+[
+  {
+    "assessment": {
+      "actualFrames": 152,
+      "acceptedFrameSpanMs": 3012,
+      "capturedAudioDurationMs": 3040,
+      "durationMs": 3038,
+      "expectedFrames": 152,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 155,
+      "minimumExpectedFrames": 149,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 3038,
+      "frames": 152,
+      "truncatedFrames": 0
+    },
+    "name": "ambient",
+    "playbackObserved": false,
+    "responseIndex": null
+  }
+]

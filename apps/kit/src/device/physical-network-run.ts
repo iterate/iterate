@@ -10,9 +10,11 @@ import type {
 import {
   PhysicalNetworkReachabilityMonitor,
   type PhysicalReachabilitySample,
+  type RemoteDnsAndTlsConnectMeasurement,
 } from "./physical-network-reachability.ts";
 import {
   classifyPhysicalNetworkValidity,
+  type DeviceControlRoundTripSample,
   type DnsAndConnectEvidence,
   type HostReachabilityEvidence,
   type HostReachabilityTarget,
@@ -24,6 +26,13 @@ import {
 const defaultSampleIntervalMs = 1_000;
 const defaultMaximumSamples = 720;
 const defaultMinimumRssiDbm = -75;
+/*
+ * The firmware discards stale uplink audio after 500 ms without WebSocket
+ * progress. A control capability taking longer proves the real device path was
+ * unavailable for at least that same freshness budget, even if ICMP happened
+ * to answer and the RPC eventually completed.
+ */
+const defaultMaximumDeviceControlRoundTripMs = 500;
 const defaultMaximumReachabilitySampleGapMs = 1_500;
 const defaultMaximumRttMs = {
   device: 100,
@@ -87,7 +96,7 @@ export interface PhysicalNetworkRunArtifact {
   network: PhysicalNetworkValidityResult;
   rawPcmEvidence: PhysicalNetworkPcmEvidence;
   rawReachabilitySamples: readonly PhysicalReachabilitySample[];
-  schemaVersion: 2;
+  schemaVersion: 3;
 }
 
 export type PhysicalDeviceDiagnosticsObservation =
@@ -218,6 +227,43 @@ export type PhysicalNetworkMonitorCapture = Omit<
   PhysicalNetworkRunArtifactInput,
   "audio" | "pcmEvidence"
 >;
+
+/**
+ * Aligns one bounded production DNS/TLS probe with the media interval whose
+ * attribution it supports.
+ *
+ * The reachability monitor starts all three ping lanes at the audio boundary,
+ * while DNS/TLS is an independent one-shot promise. Keeping the coverage join
+ * here gives every deployed-device harness the same failure-closed meaning for
+ * an absent measurement instead of copying subtly different placeholder
+ * evidence into each script.
+ */
+export function withRemoteDnsAndConnectMeasurement(
+  capture: PhysicalNetworkMonitorCapture,
+  measurement?: RemoteDnsAndTlsConnectMeasurement,
+): PhysicalNetworkMonitorCapture {
+  return {
+    ...capture,
+    dnsAndConnect: {
+      coverage: { ...capture.audioInterval },
+      kind: "measured",
+      ...(measurement ?? {
+        connect: {
+          durationMs: null,
+          error: null,
+          maximumHealthyDurationMs: 1_000,
+          outcome: "not-observed" as const,
+        },
+        dns: {
+          durationMs: null,
+          error: null,
+          maximumHealthyDurationMs: 500,
+          outcome: "not-observed" as const,
+        },
+      }),
+    },
+  };
+}
 
 /**
  * Captures bounded, exact-interval network evidence without touching PCM data.
@@ -487,6 +533,32 @@ export function buildPhysicalNetworkRunArtifact(
       : undefined;
   const evidence: PhysicalNetworkValidityEvidence = {
     audioInterval: options.audioInterval,
+    deviceControlRoundTrips: {
+      coverage,
+      expectedSampleCount: expectedDiagnosticsSamples,
+      maximumHealthyDurationMs: defaultMaximumDeviceControlRoundTripMs,
+      samples: options.diagnostics
+        .filter(
+          ({ completedAtMonotonicMs, startedAtMonotonicMs }) =>
+            startedAtMonotonicMs >= options.audioInterval.startedAtMonotonicMs &&
+            completedAtMonotonicMs <= options.audioInterval.completedAtMonotonicMs,
+        )
+        .map<DeviceControlRoundTripSample>((observation) =>
+          observation.outcome === "success"
+            ? {
+                completedAtMonotonicMs: observation.completedAtMonotonicMs,
+                durationMs: observation.completedAtMonotonicMs - observation.startedAtMonotonicMs,
+                outcome: "success",
+                startedAtMonotonicMs: observation.startedAtMonotonicMs,
+              }
+            : {
+                completedAtMonotonicMs: observation.completedAtMonotonicMs,
+                error: observation.error,
+                outcome: "failure",
+                startedAtMonotonicMs: observation.startedAtMonotonicMs,
+              },
+        ),
+    },
     deviceNetwork: {
       coverage,
       expectedSampleCount: expectedDiagnosticsSamples,
@@ -532,7 +604,7 @@ export function buildPhysicalNetworkRunArtifact(
     network,
     rawPcmEvidence: structuredClone(options.pcmEvidence),
     rawReachabilitySamples: options.reachability,
-    schemaVersion: 2,
+    schemaVersion: 3,
   };
 }
 

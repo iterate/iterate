@@ -54,13 +54,35 @@ const returnedEvents = vars.compactEvents
     })
   : events;
 
+const captureDiagnostic = async (operation) => {
+  try {
+    return { ok: true, value: await operation() };
+  } catch (error) {
+    /*
+     * Device, dynamic worker and repo are independent evidence sources. One
+     * failed capability invocation must remain an explicit result without
+     * discarding the successful provider timeline that explains the failure.
+     */
+    return {
+      ok: false,
+      error: {
+        name: error?.name ?? "Error",
+        message: error?.message ?? String(error),
+        itxCallId: error?.itxCallId ?? null,
+      },
+    };
+  }
+};
+
 const [metrics, deviceDiagnostics, repoLog] = await Promise.all([
-  worker.pcmMetrics(),
-  root.invokeCapability({
-    args: [],
-    path: ["kit", vars.deviceCapabilitySegment, "getDiagnostics"],
-  }),
-  itx.repo.log({ limit: 12 }),
+  captureDiagnostic(() => worker.pcmMetrics()),
+  captureDiagnostic(() =>
+    root.invokeCapability({
+      args: [],
+      path: ["kit", vars.deviceCapabilitySegment, "getDiagnostics"],
+    }),
+  ),
+  captureDiagnostic(() => itx.repo.log({ limit: 12 })),
 ]);
 
 return {

@@ -30,6 +30,8 @@ static const char *TAG = "M5Stack";
 
 #define BSP_AXP2101_ADDR    0x34
 #define BSP_AW9523_ADDR     0x58
+#define BSP_AXP2101_IRQ_STATUS_1_REG 0x49
+#define BSP_AXP2101_POWER_BUTTON_EVENT_MASK 0x0C
 
 /* Features */
 typedef enum {
@@ -58,6 +60,15 @@ static bool i2c_initialized = false;
 static i2c_master_dev_handle_t axp2101_h = NULL;
 static i2c_master_dev_handle_t aw9523_h = NULL;
 static bool spi_initialized = false;
+/*
+ * The output latch is one board-wide register pair, not five independent
+ * feature switches.  Keep its shadow beside the BSP-owned device handle so a
+ * later display/audio/camera update cannot unknowingly undo external-bus
+ * power established for a module such as StackChan.  No target-local driver
+ * may write AW9523 output registers behind this shadow.
+ */
+static uint8_t aw9523_P0 = 0b00000010;
+static uint8_t aw9523_P1 = 0b10100000;
 
 esp_err_t bsp_i2c_init(void)
 {
@@ -71,6 +82,15 @@ esp_err_t bsp_i2c_init(void)
         .sda_io_num = BSP_I2C_SDA,
         .scl_io_num = BSP_I2C_SCL,
         .clk_source = I2C_CLK_SRC_DEFAULT,
+        /*
+         * Match M5Stack's CoreS3 bus contract.  The body is reached through a
+         * board-to-board connector, where the ESP's weak pull-ups are useful
+         * during the interval before the powered module contributes its own.
+         * A missing pull-up manifested as ESP_ERR_TIMEOUT (a held bus), not a
+         * clean NACK, and therefore looked misleadingly like a slow PY32.
+         */
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = 1,
     };
     BSP_ERROR_CHECK_RETURN_ERR(i2c_new_master_bus(&i2c_config, &i2c_handle));
 
@@ -99,11 +119,52 @@ esp_err_t bsp_i2c_deinit(void)
     return ESP_OK;
 }
 
+esp_err_t bsp_power_button_take_events(bsp_power_button_event_t *events)
+{
+    if (events == NULL) {
+        return ESP_ERR_INVALID_ARG;
+    }
+    *events = BSP_POWER_BUTTON_EVENT_NONE;
+    BSP_ERROR_CHECK_RETURN_ERR(bsp_i2c_init());
+
+    const uint8_t register_address = BSP_AXP2101_IRQ_STATUS_1_REG;
+    uint8_t status = 0;
+    ESP_RETURN_ON_ERROR(
+        i2c_master_transmit_receive(
+            axp2101_h,
+            &register_address,
+            sizeof(register_address),
+            &status,
+            sizeof(status),
+            1000),
+        TAG,
+        "AXP2101 power-key status read failed");
+
+    status &= BSP_AXP2101_POWER_BUTTON_EVENT_MASK;
+    if (status != 0) {
+        /*
+         * AXP2101 IRQ status is write-one-to-clear.  Acknowledge exactly the
+         * observed key bits so an unrelated PMIC condition cannot be erased
+         * by an application button poll.  This mirrors M5Stack's first-party
+         * getPekPress() contract while retaining ESP-IDF's error reporting.
+         */
+        const uint8_t acknowledge[] = {
+            BSP_AXP2101_IRQ_STATUS_1_REG,
+            status,
+        };
+        ESP_RETURN_ON_ERROR(
+            i2c_master_transmit(
+                axp2101_h, acknowledge, sizeof(acknowledge), 1000),
+            TAG,
+            "AXP2101 power-key status clear failed");
+    }
+    *events = (bsp_power_button_event_t)(status >> 2);
+    return ESP_OK;
+}
+
 static esp_err_t bsp_enable_feature(bsp_feature_t feature)
 {
     esp_err_t err = ESP_OK;
-    static uint8_t aw9523_P0 = 0b10;
-    static uint8_t aw9523_P1 = 0b10100000;
     uint8_t data[2];
 
     /* Initilize I2C */
@@ -148,9 +209,43 @@ static esp_err_t bsp_enable_feature(bsp_feature_t feature)
         break;
     }
 
+    /*
+     * The output latch alone does not energise a CoreS3 rail after an AW9523
+     * reset: its pins remain inputs until CONFIG_P0/P1 say otherwise.  The
+     * upstream ESP-IDF BSP omitted those writes, which happened to leave the
+     * LCD usable but kept StackChan's M-BUS-powered PY32 body invisible at
+     * 0x6f.  Use M5Stack's first-party M5Unified CoreS3 configuration here so
+     * every feature update re-establishes the electrical contract before
+     * changing its latch.  Keeping this in the BSP is important: a body
+     * driver that writes the AW9523 independently would race this function's
+     * cached P0/P1 values and could later remove display, camera, or speaker
+     * power while updating an unrelated feature.
+     *
+     * In the AW9523 direction registers 1 means input and 0 means output.
+     * P0.1 is BUS_OUT_EN and P1.7 is BOOST_EN, so both are outputs in these
+     * board-specific masks.  0xff in LEDMODE selects ordinary GPIO operation;
+     * the PY32 on the StackChan body, not this CoreS3 expander, owns the twelve
+     * conversational LEDs.
+     */
+    data[0] = 0x04;
+    data[1] = 0b00011000;
+    err |= i2c_master_transmit(aw9523_h, data, sizeof(data), 1000);
+
+    data[0] = 0x05;
+    data[1] = 0b00001100;
+    err |= i2c_master_transmit(aw9523_h, data, sizeof(data), 1000);
+
     /* AW9523 P0 is in push-pull mode */
     data[0] = 0x11;
     data[1] = 0x10;
+    err |= i2c_master_transmit(aw9523_h, data, sizeof(data), 1000);
+
+    data[0] = 0x12;
+    data[1] = 0xff;
+    err |= i2c_master_transmit(aw9523_h, data, sizeof(data), 1000);
+
+    data[0] = 0x13;
+    data[1] = 0xff;
     err |= i2c_master_transmit(aw9523_h, data, sizeof(data), 1000);
 
     data[0] = 0x02;
@@ -162,6 +257,77 @@ static esp_err_t bsp_enable_feature(bsp_feature_t feature)
     err |= i2c_master_transmit(aw9523_h, data, sizeof(data), 1000);
 
     return err;
+}
+
+esp_err_t bsp_external_power_enable(void)
+{
+    uint8_t register_address = 0x02;
+    uint8_t outputs[2] = {0};
+    uint8_t write_outputs[3];
+    uint8_t configuration[4] = {0};
+
+    BSP_ERROR_CHECK_RETURN_ERR(bsp_i2c_init());
+
+    /*
+     * This is the exact electrical operation M5Unified performs for CoreS3's
+     * setExtOutput(true): BUS_OUT_EN is P0.1 and the SY7088 boost enable is
+     * P1.7.  Read-modify-write matters because the output registers also own
+     * display, camera, touch, speaker-reset, and USB-OTG rails.  Replaying a
+     * guessed constant here would turn an external-power fix into an
+     * intermittent failure in one of those unrelated peripherals.
+     */
+    ESP_RETURN_ON_ERROR(
+        i2c_master_transmit_receive(
+            aw9523_h,
+            &register_address,
+            sizeof(register_address),
+            outputs,
+            sizeof(outputs),
+            1000),
+        TAG,
+        "AW9523 output read failed");
+    outputs[0] |= 0b00000010;
+    outputs[1] |= 0b10000000;
+    write_outputs[0] = 0x02;
+    write_outputs[1] = outputs[0];
+    write_outputs[2] = outputs[1];
+    ESP_RETURN_ON_ERROR(
+        i2c_master_transmit(
+            aw9523_h, write_outputs, sizeof(write_outputs), 1000),
+        TAG,
+        "AW9523 external-power write failed");
+    aw9523_P0 = outputs[0];
+    aw9523_P1 = outputs[1];
+
+    /*
+     * A successful I2C write proves only that the expander acknowledged.  It
+     * does not prove the two pins are configured as outputs or that the
+     * latches retained the requested levels.  Read the whole output/config
+     * block back once so a body-probe failure can be attributed to the module
+     * side of the connector rather than silently blamed on its firmware.
+     */
+    register_address = 0x02;
+    ESP_RETURN_ON_ERROR(
+        i2c_master_transmit_receive(
+            aw9523_h,
+            &register_address,
+            sizeof(register_address),
+            configuration,
+            sizeof(configuration),
+            1000),
+        TAG,
+        "AW9523 external-power readback failed");
+    ESP_LOGI(TAG,
+             "external power readback: P0=0x%02x P1=0x%02x CFG0=0x%02x CFG1=0x%02x",
+             configuration[0], configuration[1], configuration[2], configuration[3]);
+    if ((configuration[0] & 0b00000010) == 0 ||
+        (configuration[1] & 0b10000000) == 0 ||
+        (configuration[2] & 0b00000010) != 0 ||
+        (configuration[3] & 0b10000000) != 0) {
+        ESP_LOGE(TAG, "external power readback violates CoreS3 BUS/BOOST contract");
+        return ESP_ERR_INVALID_RESPONSE;
+    }
+    return ESP_OK;
 }
 
 static esp_err_t bsp_spi_init(uint32_t max_transfer_sz)
@@ -179,6 +345,15 @@ static esp_err_t bsp_spi_init(uint32_t max_transfer_sz)
         .quadwp_io_num = GPIO_NUM_NC,
         .quadhd_io_num = GPIO_NUM_NC,
         .max_transfer_sz = max_transfer_sz,
+        /*
+         * ITERATE PATCH: this SPI bus is created from app_main on core 0,
+         * where ESP-IDF also pins Wi-Fi. AUTO affinity consequently places
+         * every LCD DMA completion interrupt beside the radio even though
+         * the lossy avatar task itself runs on core 1. Keep display work in
+         * one scheduling domain; the separately initialized I2S interrupt
+         * deliberately retains its measured baseline affinity.
+         */
+        .isr_cpu_id = ESP_INTR_CPU_AFFINITY_1,
     };
     ESP_RETURN_ON_ERROR(spi_bus_initialize(BSP_LCD_SPI_NUM, &buscfg, SPI_DMA_CH_AUTO), TAG, "SPI init failed");
 

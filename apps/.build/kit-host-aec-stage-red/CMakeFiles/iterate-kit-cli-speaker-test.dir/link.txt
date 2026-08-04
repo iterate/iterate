@@ -1,0 +1,1 @@
+/usr/bin/cc -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-cli-speaker-test.dir/targets/host_cli/cli_speaker.c.o" "CMakeFiles/iterate-kit-cli-speaker-test.dir/tests/cli_speaker_test.c.o" -o iterate-kit-cli-speaker-test  libiterate-kit-core.a vendor/capnweb/libcapnweb.a

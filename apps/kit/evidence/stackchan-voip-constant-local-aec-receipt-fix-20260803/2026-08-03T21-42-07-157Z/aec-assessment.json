@@ -1,0 +1,107 @@
+{
+  "ambient": {
+    "dbfs": -56.915452158208794,
+    "peak": 288,
+    "rms": 46.73877515990632
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -29.17404465577398,
+      "peak": 4344,
+      "rms": 1139.5875663925567
+    },
+    "farEndResidualDb": -10.988835999254503,
+    "farEndSimilarity": 0.006775541146592825,
+    "nearEndGain": 0.5407480457178817,
+    "nearEndSimilarity": 0.8303843243155294,
+    "passed": false,
+    "residualDegradationFromRepeatDb": 10.025068268172387,
+    "residualToNearEndDb": -8.80560092613683,
+    "similarityLossFromRepeat": 0.16252320726452296
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -48.70590140917395,
+        "peak": 808,
+        "rms": 120.26932249653207
+      },
+      "kind": "tone",
+      "passed": true,
+      "source": {
+        "dbfs": -20.255037277522632,
+        "peak": 4500,
+        "rms": 3181.9845827329204
+      },
+      "sourceSimilarity": 0.00912323842272024
+    },
+    {
+      "clean": {
+        "dbfs": -48.31008570277795,
+        "peak": 680,
+        "rms": 125.87678722828092
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": true,
+      "source": {
+        "dbfs": -23.265100635326633,
+        "peak": 3841,
+        "rms": 2250.0641657517235
+      },
+      "sourceSimilarity": 0.012958923824635066
+    },
+    {
+      "clean": {
+        "dbfs": -48.09703259870921,
+        "peak": 2784,
+        "rms": 129.00255294631447
+      },
+      "kind": "speech-shaped",
+      "passed": true,
+      "source": {
+        "dbfs": -22.971610308836556,
+        "peak": 7832,
+        "rms": 2327.3913694708717
+      },
+      "sourceSimilarity": 0.0009441466431065142
+    }
+  ],
+  "nearEnd": {
+    "aboveAmbientDb": 31.46973713544231,
+    "clean": {
+      "dbfs": -25.44571502276648,
+      "peak": 6016,
+      "rms": 1750.5083383596511
+    },
+    "passed": false,
+    "pathReferenceObserved": true,
+    "repeat": {
+      "clean": {
+        "dbfs": -25.75886092473221,
+        "peak": 5768,
+        "rms": 1688.5226424029038
+      },
+      "gain": 0.9555052237688197,
+      "passed": false,
+      "pathReferenceObserved": false,
+      "residualToReferenceDb": -18.830669194309216,
+      "similarity": 0.9929075315800524
+    },
+    "source": {
+      "dbfs": -15.176950127467181,
+      "peak": 26072,
+      "rms": 5709.55720506014
+    },
+    "sourceSimilarity": 0.6805792626396735
+  },
+  "passed": false,
+  "reasons": [
+    "The physical network interval was not valid.",
+    "The repeated near-end control did not physically exercise the matched XMOS reference path.",
+    "Double-talk degraded beyond repeated near-end control: similarity loss 0.163, residual degradation 10.03 dB."
+  ],
+  "validity": {
+    "passed": false,
+    "reasons": ["The physical network interval was not valid."]
+  }
+}

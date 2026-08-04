@@ -1,0 +1,880 @@
+{
+  "input": "evidence/home-assistant-voice-preview-edition-count-to-100-first-turn-fix-20260804/2026-08-04T05-07-09-376Z/iterate-kit-acoustic-dYPBrB/microphone.pcm16le",
+  "interval": {
+    "endSample": 5128192,
+    "startSample": 1089536
+  },
+  "result": {
+    "durationSeconds": 84.139,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"537e8288-5910-4492-bbce-3678afc78100\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"1\",\"words\":[{\"text\":\"1\",\"start\":1.374,\"end\":1.616}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.96,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"1 2\",\"words\":[{\"text\":\"1\",\"start\":1.373,\"end\":1.595},{\"text\":\"2\",\"start\":1.978,\"end\":2.12}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":2.14,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"two, three, four, five, six, seven, eight, nine, ten.\",\"words\":[{\"text\":\"two,\",\"start\":2.14,\"end\":2.281},{\"text\":\"three,\",\"start\":2.682,\"end\":2.963},{\"text\":\"four,\",\"start\":3.365,\"end\":3.586},{\"text\":\"five,\",\"start\":3.947,\"end\":4.349},{\"text\":\"six,\",\"start\":4.59,\"end\":4.851},{\"text\":\"seven,\",\"start\":5.192,\"end\":5.514},{\"text\":\"eight,\",\"start\":5.835,\"end\":6.036},{\"text\":\"nine,\",\"start\":6.337,\"end\":6.699},{\"text\":\"ten.\",\"start\":6.899,\"end\":7.0}],\"is_final\":true,\"speech_final\":false,\"start\":2.14,\"duration\":4.9,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"eleven, twelve, thirteen.\",\"words\":[{\"text\":\"eleven,\",\"start\":7.464,\"end\":7.847},{\"text\":\"twelve,\",\"start\":8.089,\"end\":8.533},{\"text\":\"thirteen.\",\"start\":8.714,\"end\":9.158}],\"is_final\":true,\"speech_final\":false,\"start\":2.14,\"duration\":7.28,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"fourteen, fifteen, sixteen, seventeen, eighteen, nineteen, twenty.\",\"words\":[{\"text\":\"fourteen,\",\"start\":9.42,\"end\":9.782},{\"text\":\"fifteen,\",\"start\":9.983,\"end\":10.385},{\"text\":\"sixteen,\",\"start\":10.586,\"end\":11.008},{\"text\":\"seventeen,\",\"start\":11.209,\"end\":11.712},{\"text\":\"eighteen,\",\"start\":11.933,\"end\":12.275},{\"text\":\"nineteen,\",\"start\":12.496,\"end\":12.939},{\"text\":\"twenty.\",\"start\":12.999,\"end\":13.2}],\"is_final\":true,\"speech_final\":false,\"start\":2.14,\"duration\":11.08,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"twenty one, twenty two, twenty three, twenty four, twenty five.\",\"words\":[{\"text\":\"twenty\",\"start\":13.361,\"end\":14.164},{\"text\":\"one,\",\"start\":14.324,\"end\":14.505},{\"text\":\"twenty\",\"start\":14.726,\"end\":15.027},{\"text\":\"two,\",\"start\":15.108,\"end\":15.328},{\"text\":\"twenty\",\"start\":15.589,\"end\":15.891},{\"text\":\"three,\",\"start\":15.991,\"end\":16.232},{\"text\":\"twenty\",\"start\":16.453,\"end\":16.734},{\"text\":\"four,\",\"start\":16.854,\"end\":17.035},{\"text\":\"twenty\",\"start\":17.296,\"end\":17.577},{\"text\":\"five.\",\"start\":17.678,\"end\":18.24}],\"is_final\":true,\"speech_final\":false,\"start\":2.14,\"duration\":16.1,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"twenty six, twenty seven, twenty eight, twenty nine, thirty.\",\"words\":[{\"text\":\"twenty\",\"start\":18.24,\"end\":18.461},{\"text\":\"six,\",\"start\":18.562,\"end\":18.783},{\"text\":\"twenty\",\"start\":19.044,\"end\":19.305},{\"text\":\"seven,\",\"start\":19.406,\"end\":19.687},{\"text\":\"twenty\",\"start\":19.908,\"end\":20.21},{\"text\":\"eight,\",\"start\":20.35,\"end\":20.531},{\"text\":\"twenty\",\"start\":20.732,\"end\":21.034},{\"text\":\"nine,\",\"start\":21.134,\"end\":21.416},{\"text\":\"thirty.\",\"start\":21.617,\"end\":21.938}],\"is_final\":true,\"speech_final\":false,\"start\":2.14,\"duration\":20.18,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, thirteen, fourteen, fifteen, sixteen, seventeen, eighteen, nineteen, twenty, twenty-one, twenty-two, twenty-three, twenty-four, twenty-five, twenty-six, twenty-seven, twenty-eight, twenty-nine, thirty, thirty\",\"words\":[{\"text\":\"two,\",\"start\":2.16,\"end\":2.28},{\"text\":\"three,\",\"start\":2.681,\"end\":2.961},{\"text\":\"four,\",\"start\":3.361,\"end\":3.581},{\"text\":\"five,\",\"start\":3.942,\"end\":4.342},{\"text\":\"six,\",\"start\":4.602,\"end\":4.843},{\"text\":\"seven,\",\"start\":5.183,\"end\":5.503},{\"text\":\"eight,\",\"start\":5.824,\"end\":6.024},{\"text\":\"nine,\",\"start\":6.324,\"end\":6.664},{\"text\":\"ten,\",\"start\":6.905,\"end\":7.185},{\"text\":\"eleven,\",\"start\":7.465,\"end\":7.866},{\"text\":\"twelve,\",\"start\":8.086,\"end\":8.506},{\"text\":\"thirteen,\",\"start\":8.706,\"end\":9.147},{\"text\":\"fourteen,\",\"start\":9.347,\"end\":9.788},{\"text\":\"fifteen,\",\"start\":9.988,\"end\":10.388},{\"text\":\"sixteen,\",\"start\":10.588,\"end\":11.009},{\"text\":\"seventeen,\",\"start\":11.209,\"end\":11.709},{\"text\":\"eighteen,\",\"start\":11.91,\"end\":12.27},{\"text\":\"nineteen,\",\"start\":12.29,\"end\":12.931},{\"text\":\"twenty,\",\"start\":13.091,\"end\":13.451},{\"text\":\"twenty-one,\",\"start\":13.892,\"end\":14.512},{\"text\":\"twenty-two,\",\"start\":14.732,\"end\":15.333},{\"text\":\"twenty-three,\",\"start\":15.593,\"end\":16.234},{\"text\":\"twenty-four,\",\"start\":16.454,\"end\":17.055},{\"text\":\"twenty-five,\",\"start\":17.295,\"end\":18.016},{\"text\":\"twenty-six,\",\"start\":18.176,\"end\":18.796},{\"text\":\"twenty-seven,\",\"start\":19.057,\"end\":19.697},{\"text\":\"twenty-eight,\",\"start\":19.917,\"end\":20.538},{\"text\":\"twenty-nine,\",\"start\":20.738,\"end\":21.419},{\"text\":\"thirty,\",\"start\":21.619,\"end\":21.939},{\"text\":\"thirty\",\"start\":22.38,\"end\":22.5}],\"is_final\":true,\"speech_final\":true,\"start\":2.14,\"duration\":20.36,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"thirty one, thirty two, thirty three, thirty four, thirty five, thirty six, thirty seven, thirty eight, thirty nine, forty, forty one, forty two, forty three, forty four, forty five, forty six, forty seven, forty eight, forty nine, fifty.\",\"words\":[{\"text\":\"thirty\",\"start\":22.5,\"end\":22.64},{\"text\":\"one,\",\"start\":22.8,\"end\":22.981},{\"text\":\"thirty\",\"start\":23.201,\"end\":23.461},{\"text\":\"two,\",\"start\":23.561,\"end\":23.762},{\"text\":\"thirty\",\"start\":24.062,\"end\":24.322},{\"text\":\"three,\",\"start\":24.422,\"end\":24.603},{\"text\":\"thirty\",\"start\":24.923,\"end\":25.183},{\"text\":\"four,\",\"start\":25.283,\"end\":25.484},{\"text\":\"thirty\",\"start\":25.764,\"end\":26.004},{\"text\":\"five,\",\"start\":26.105,\"end\":26.445},{\"text\":\"thirty\",\"start\":26.645,\"end\":26.885},{\"text\":\"six,\",\"start\":26.986,\"end\":27.186},{\"text\":\"thirty\",\"start\":27.506,\"end\":27.747},{\"text\":\"seven,\",\"start\":27.847,\"end\":28.127},{\"text\":\"thirty\",\"start\":28.367,\"end\":28.628},{\"text\":\"eight,\",\"start\":28.748,\"end\":28.928},{\"text\":\"thirty\",\"start\":29.188,\"end\":29.449},{\"text\":\"nine,\",\"start\":29.529,\"end\":29.829},{\"text\":\"forty,\",\"start\":30.049,\"end\":30.35},{\"text\":\"forty\",\"start\":30.73,\"end\":30.991},{\"text\":\"one,\",\"start\":31.151,\"end\":31.311},{\"text\":\"forty\",\"start\":31.511,\"end\":31.772},{\"text\":\"two,\",\"start\":31.872,\"end\":32.072},{\"text\":\"forty\",\"start\":32.332,\"end\":32.573},{\"text\":\"three,\",\"start\":32.693,\"end\":32.853},{\"text\":\"forty\",\"start\":33.153,\"end\":33.414},{\"text\":\"four,\",\"start\":33.514,\"end\":33.694},{\"text\":\"forty\",\"start\":33.974,\"end\":34.215},{\"text\":\"five,\",\"start\":34.315,\"end\":34.635},{\"text\":\"forty\",\"start\":34.795,\"end\":35.036},{\"text\":\"six,\",\"start\":35.156,\"end\":35.356},{\"text\":\"forty\",\"start\":35.616,\"end\":35.857},{\"text\":\"seven,\",\"start\":35.957,\"end\":36.217},{\"text\":\"forty\",\"start\":36.417,\"end\":36.658},{\"text\":\"eight,\",\"start\":36.798,\"end\":36.958},{\"text\":\"forty\",\"start\":37.178,\"end\":37.419},{\"text\":\"nine,\",\"start\":37.519,\"end\":37.779},{\"text\":\"fifty.\",\"start\":37.999,\"end\":38.32}],\"is_final\":true,\"speech_final\":false,\"start\":22.5,\"duration\":16.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"thirty one, thirty two, thirty three, thirty four, thirty five, thirty six, thirty seven, thirty eight, thirty nine, forty, forty one, forty two, forty three, forty four, forty five, forty six, forty seven, forty eight, forty nine, fifty.\",\"words\":[{\"text\":\"thirty\",\"start\":22.5,\"end\":22.64},{\"text\":\"one,\",\"start\":22.8,\"end\":22.981},{\"text\":\"thirty\",\"start\":23.201,\"end\":23.461},{\"text\":\"two,\",\"start\":23.561,\"end\":23.701},{\"text\":\"thirty\",\"start\":24.062,\"end\":24.322},{\"text\":\"three,\",\"start\":24.422,\"end\":24.603},{\"text\":\"thirty\",\"start\":24.923,\"end\":25.183},{\"text\":\"four,\",\"start\":25.283,\"end\":25.484},{\"text\":\"thirty\",\"start\":25.764,\"end\":26.004},{\"text\":\"five,\",\"start\":26.104,\"end\":26.445},{\"text\":\"thirty\",\"start\":26.645,\"end\":26.885},{\"text\":\"six,\",\"start\":26.986,\"end\":27.186},{\"text\":\"thirty\",\"start\":27.506,\"end\":27.746},{\"text\":\"seven,\",\"start\":27.847,\"end\":28.127},{\"text\":\"thirty\",\"start\":28.367,\"end\":28.628},{\"text\":\"eight,\",\"start\":28.748,\"end\":28.928},{\"text\":\"thirty\",\"start\":29.188,\"end\":29.449},{\"text\":\"nine,\",\"start\":29.529,\"end\":29.829},{\"text\":\"forty,\",\"start\":30.049,\"end\":30.35},{\"text\":\"forty\",\"start\":30.73,\"end\":30.99},{\"text\":\"one,\",\"start\":31.151,\"end\":31.311},{\"text\":\"forty\",\"start\":31.511,\"end\":31.771},{\"text\":\"two,\",\"start\":31.872,\"end\":32.072},{\"text\":\"forty\",\"start\":32.332,\"end\":32.572},{\"text\":\"three,\",\"start\":32.693,\"end\":32.853},{\"text\":\"forty\",\"start\":33.153,\"end\":33.413},{\"text\":\"four,\",\"start\":33.514,\"end\":33.694},{\"text\":\"forty\",\"start\":33.974,\"end\":34.214},{\"text\":\"five,\",\"start\":34.315,\"end\":34.635},{\"text\":\"forty\",\"start\":34.795,\"end\":35.035},{\"text\":\"six,\",\"start\":35.156,\"end\":35.356},{\"text\":\"forty\",\"start\":35.616,\"end\":35.857},{\"text\":\"seven,\",\"start\":35.957,\"end\":36.217},{\"text\":\"forty\",\"start\":36.417,\"end\":36.658},{\"text\":\"eight,\",\"start\":36.798,\"end\":36.958},{\"text\":\"forty\",\"start\":37.178,\"end\":37.418},{\"text\":\"nine,\",\"start\":37.519,\"end\":37.779},{\"text\":\"fifty.\",\"start\":37.999,\"end\":38.32}],\"is_final\":true,\"speech_final\":true,\"start\":22.5,\"duration\":16.18,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"fifty one, fifty two, fifty three, fifty four.\",\"words\":[{\"text\":\"fifty\",\"start\":38.7,\"end\":38.922},{\"text\":\"one,\",\"start\":39.083,\"end\":39.264},{\"text\":\"fifty\",\"start\":39.446,\"end\":39.728},{\"text\":\"two,\",\"start\":39.808,\"end\":40.01},{\"text\":\"fifty\",\"start\":40.251,\"end\":40.513},{\"text\":\"three,\",\"start\":40.594,\"end\":40.815},{\"text\":\"fifty\",\"start\":41.017,\"end\":41.259},{\"text\":\"four.\",\"start\":41.339,\"end\":41.44}],\"is_final\":true,\"speech_final\":false,\"start\":38.68,\"duration\":2.76,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"fifty five, fifty six, fifty seven, fifty eight.\",\"words\":[{\"text\":\"fifty\",\"start\":41.782,\"end\":42.023},{\"text\":\"five,\",\"start\":42.104,\"end\":42.426},{\"text\":\"fifty\",\"start\":42.566,\"end\":42.808},{\"text\":\"six,\",\"start\":42.908,\"end\":43.109},{\"text\":\"fifty\",\"start\":43.391,\"end\":43.612},{\"text\":\"seven,\",\"start\":43.713,\"end\":43.954},{\"text\":\"fifty\",\"start\":44.175,\"end\":44.417},{\"text\":\"eight.\",\"start\":44.558,\"end\":44.698}],\"is_final\":true,\"speech_final\":false,\"start\":38.68,\"duration\":6.32,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"fifty nine, sixty, sixty one, sixty two, sixty three, sixty four, sixty five.\",\"words\":[{\"text\":\"fifty\",\"start\":45.0,\"end\":45.161},{\"text\":\"nine,\",\"start\":45.241,\"end\":45.522},{\"text\":\"sixty,\",\"start\":45.723,\"end\":46.064},{\"text\":\"sixty\",\"start\":46.446,\"end\":46.707},{\"text\":\"one,\",\"start\":46.867,\"end\":47.028},{\"text\":\"sixty\",\"start\":47.229,\"end\":47.51},{\"text\":\"two,\",\"start\":47.61,\"end\":47.791},{\"text\":\"sixty\",\"start\":48.052,\"end\":48.333},{\"text\":\"three,\",\"start\":48.434,\"end\":48.634},{\"text\":\"sixty\",\"start\":48.875,\"end\":49.136},{\"text\":\"four,\",\"start\":49.237,\"end\":49.418},{\"text\":\"sixty\",\"start\":49.679,\"end\":49.92},{\"text\":\"five.\",\"start\":49.94,\"end\":50.02}],\"is_final\":true,\"speech_final\":false,\"start\":38.68,\"duration\":11.34,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"sixty six, sixty seven, sixty eight, sixty nine, seventy, seventy one, seventy two, seventy three, seventy four, seventy five, seventy six, seventy seven, seventy eight.\",\"words\":[{\"text\":\"sixty\",\"start\":50.481,\"end\":50.781},{\"text\":\"six,\",\"start\":50.861,\"end\":51.042},{\"text\":\"sixty\",\"start\":51.322,\"end\":51.563},{\"text\":\"seven,\",\"start\":51.663,\"end\":51.923},{\"text\":\"sixty\",\"start\":52.144,\"end\":52.424},{\"text\":\"eight,\",\"start\":52.544,\"end\":52.705},{\"text\":\"sixty\",\"start\":52.925,\"end\":53.186},{\"text\":\"nine,\",\"start\":53.266,\"end\":53.767},{\"text\":\"seventy,\",\"start\":53.767,\"end\":54.127},{\"text\":\"seventy\",\"start\":54.488,\"end\":54.808},{\"text\":\"one,\",\"start\":54.969,\"end\":55.129},{\"text\":\"seventy\",\"start\":55.309,\"end\":55.63},{\"text\":\"two,\",\"start\":55.73,\"end\":55.93},{\"text\":\"seventy\",\"start\":56.191,\"end\":56.511},{\"text\":\"three,\",\"start\":57.293,\"end\":58.956},{\"text\":\"seventy\",\"start\":59.657,\"end\":59.957},{\"text\":\"four,\",\"start\":59.957,\"end\":60.037},{\"text\":\"seventy\",\"start\":60.058,\"end\":60.418},{\"text\":\"five,\",\"start\":60.438,\"end\":60.618},{\"text\":\"seventy\",\"start\":60.618,\"end\":60.859},{\"text\":\"six,\",\"start\":60.859,\"end\":60.919},{\"text\":\"seventy\",\"start\":60.919,\"end\":61.079},{\"text\":\"seven,\",\"start\":61.079,\"end\":61.2},{\"text\":\"seventy\",\"start\":61.2,\"end\":61.38},{\"text\":\"eight.\",\"start\":61.38,\"end\":61.48}],\"is_final\":true,\"speech_final\":false,\"start\":38.68,\"duration\":22.8,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"fifty one, fifty two, fifty three, fifty four, fifty five, fifty six, fifty seven, fifty eight, fifty nine, sixty, sixty one, sixty two, sixty three, sixty four, sixty five, sixty six, sixty seven, sixty eight, sixty nine, seventy, seventy one, seventy two, seventy three, seventy four, seventy five, seventy six, seventy seven, seventy eight, seventy\",\"words\":[{\"text\":\"fifty\",\"start\":38.68,\"end\":38.94},{\"text\":\"one,\",\"start\":39.08,\"end\":39.261},{\"text\":\"fifty\",\"start\":39.461,\"end\":39.721},{\"text\":\"two,\",\"start\":39.801,\"end\":39.921},{\"text\":\"fifty\",\"start\":40.241,\"end\":40.502},{\"text\":\"three,\",\"start\":40.582,\"end\":40.762},{\"text\":\"fifty\",\"start\":41.002,\"end\":41.242},{\"text\":\"four,\",\"start\":41.342,\"end\":41.522},{\"text\":\"fifty\",\"start\":41.783,\"end\":42.003},{\"text\":\"five,\",\"start\":42.103,\"end\":42.423},{\"text\":\"fifty\",\"start\":42.563,\"end\":42.804},{\"text\":\"six,\",\"start\":42.924,\"end\":43.104},{\"text\":\"fifty\",\"start\":43.384,\"end\":43.624},{\"text\":\"seven,\",\"start\":43.704,\"end\":43.965},{\"text\":\"fifty\",\"start\":44.165,\"end\":44.405},{\"text\":\"eight,\",\"start\":44.545,\"end\":44.705},{\"text\":\"fifty\",\"start\":44.905,\"end\":45.166},{\"text\":\"nine,\",\"start\":45.246,\"end\":45.526},{\"text\":\"sixty,\",\"start\":45.726,\"end\":46.086},{\"text\":\"sixty\",\"start\":46.447,\"end\":46.707},{\"text\":\"one,\",\"start\":46.847,\"end\":47.027},{\"text\":\"sixty\",\"start\":47.227,\"end\":47.508},{\"text\":\"two,\",\"start\":47.608,\"end\":47.708},{\"text\":\"sixty\",\"start\":48.048,\"end\":48.308},{\"text\":\"three,\",\"start\":48.428,\"end\":48.629},{\"text\":\"sixty\",\"start\":48.889,\"end\":49.129},{\"text\":\"four,\",\"start\":49.229,\"end\":49.409},{\"text\":\"sixty\",\"start\":49.67,\"end\":49.97},{\"text\":\"five,\",\"start\":50.01,\"end\":50.33},{\"text\":\"sixty\",\"start\":50.49,\"end\":50.771},{\"text\":\"six,\",\"start\":50.871,\"end\":51.051},{\"text\":\"sixty\",\"start\":51.331,\"end\":51.591},{\"text\":\"seven,\",\"start\":51.671,\"end\":51.932},{\"text\":\"sixty\",\"start\":52.152,\"end\":52.432},{\"text\":\"eight,\",\"start\":52.532,\"end\":52.692},{\"text\":\"sixty\",\"start\":52.932,\"end\":53.193},{\"text\":\"nine,\",\"start\":53.273,\"end\":53.573},{\"text\":\"seventy,\",\"start\":53.773,\"end\":54.133},{\"text\":\"seventy\",\"start\":54.494,\"end\":54.814},{\"text\":\"one,\",\"start\":54.974,\"end\":55.134},{\"text\":\"seventy\",\"start\":55.314,\"end\":55.655},{\"text\":\"two,\",\"start\":55.735,\"end\":55.935},{\"text\":\"seventy\",\"start\":56.195,\"end\":56.516},{\"text\":\"three,\",\"start\":56.596,\"end\":56.776},{\"text\":\"seventy\",\"start\":57.056,\"end\":57.356},{\"text\":\"four,\",\"start\":57.476,\"end\":57.657},{\"text\":\"seventy\",\"start\":57.877,\"end\":58.197},{\"text\":\"five,\",\"start\":58.297,\"end\":58.597},{\"text\":\"seventy\",\"start\":58.798,\"end\":59.078},{\"text\":\"six,\",\"start\":59.198,\"end\":59.378},{\"text\":\"seventy\",\"start\":59.658,\"end\":59.959},{\"text\":\"seven,\",\"start\":60.059,\"end\":60.319},{\"text\":\"seventy\",\"start\":60.539,\"end\":60.839},{\"text\":\"eight,\",\"start\":60.979,\"end\":61.14},{\"text\":\"seventy\",\"start\":61.36,\"end\":61.64}],\"is_final\":true,\"speech_final\":true,\"start\":38.68,\"duration\":22.98,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"9, 80\",\"words\":[{\"text\":\"9,\",\"start\":61.742,\"end\":62.213},{\"text\":\"80\",\"start\":62.275,\"end\":62.459}],\"is_final\":true,\"speech_final\":false,\"start\":61.66,\"duration\":0.82,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"9, 80\",\"words\":[{\"text\":\"9,\",\"start\":61.742,\"end\":62.213},{\"text\":\"80\",\"start\":62.275,\"end\":62.459}],\"is_final\":true,\"speech_final\":true,\"start\":61.66,\"duration\":0.82,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"eighty, eighty one, eighty two, eighty three, eighty four, eighty five, eighty six, eighty seven.\",\"words\":[{\"text\":\"eighty,\",\"start\":62.821,\"end\":62.982},{\"text\":\"eighty\",\"start\":62.982,\"end\":63.123},{\"text\":\"one,\",\"start\":63.163,\"end\":63.343},{\"text\":\"eighty\",\"start\":63.564,\"end\":63.745},{\"text\":\"two,\",\"start\":63.845,\"end\":64.046},{\"text\":\"eighty\",\"start\":64.287,\"end\":64.468},{\"text\":\"three,\",\"start\":64.568,\"end\":64.769},{\"text\":\"eighty\",\"start\":65.01,\"end\":65.191},{\"text\":\"four,\",\"start\":65.291,\"end\":65.492},{\"text\":\"eighty\",\"start\":65.733,\"end\":65.914},{\"text\":\"five,\",\"start\":65.994,\"end\":66.315},{\"text\":\"eighty\",\"start\":66.496,\"end\":66.677},{\"text\":\"six,\",\"start\":66.777,\"end\":66.978},{\"text\":\"eighty\",\"start\":67.239,\"end\":67.4},{\"text\":\"seven.\",\"start\":67.4,\"end\":67.5}],\"is_final\":true,\"speech_final\":false,\"start\":62.48,\"duration\":5.02,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"eighty eight, eighty nine, ninety.\",\"words\":[{\"text\":\"eighty\",\"start\":67.561,\"end\":67.904},{\"text\":\"eight,\",\"start\":67.985,\"end\":68.106},{\"text\":\"eighty\",\"start\":68.288,\"end\":68.57},{\"text\":\"nine,\",\"start\":68.57,\"end\":69.156},{\"text\":\"ninety.\",\"start\":69.197,\"end\":69.54}],\"is_final\":true,\"speech_final\":false,\"start\":62.48,\"duration\":7.06,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"ninety one, ninety two, ninety three, ninety four, ninety five, ninety\",\"words\":[{\"text\":\"ninety\",\"start\":70.142,\"end\":70.424},{\"text\":\"one,\",\"start\":70.584,\"end\":70.765},{\"text\":\"ninety\",\"start\":70.966,\"end\":71.247},{\"text\":\"two,\",\"start\":71.347,\"end\":71.468},{\"text\":\"ninety\",\"start\":71.789,\"end\":72.05},{\"text\":\"three,\",\"start\":72.15,\"end\":72.371},{\"text\":\"ninety\",\"start\":72.612,\"end\":72.893},{\"text\":\"four,\",\"start\":72.994,\"end\":73.174},{\"text\":\"ninety\",\"start\":73.436,\"end\":73.717},{\"text\":\"five,\",\"start\":73.817,\"end\":74.118},{\"text\":\"ninety\",\"start\":74.299,\"end\":74.54}],\"is_final\":true,\"speech_final\":false,\"start\":62.48,\"duration\":12.08,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"six, ninety seven, ninety eight, ninety nine, one hundred.\",\"words\":[{\"text\":\"six,\",\"start\":74.66,\"end\":74.861},{\"text\":\"ninety\",\"start\":75.123,\"end\":75.404},{\"text\":\"seven,\",\"start\":75.505,\"end\":75.746},{\"text\":\"ninety\",\"start\":75.987,\"end\":76.268},{\"text\":\"eight,\",\"start\":76.389,\"end\":76.55},{\"text\":\"ninety\",\"start\":76.791,\"end\":77.072},{\"text\":\"nine,\",\"start\":77.173,\"end\":77.454},{\"text\":\"one\",\"start\":77.715,\"end\":77.856},{\"text\":\"hundred.\",\"start\":77.916,\"end\":78.318}],\"is_final\":true,\"speech_final\":false,\"start\":62.48,\"duration\":16.24,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"eighty, eighty one, eighty two, eighty three, eighty four, eighty five, eighty six, eighty seven, eighty eight, eighty nine, ninety, ninety one, ninety two, ninety three, ninety four, ninety five, ninety six, ninety seven, ninety eight, ninety nine, one hundred.\",\"words\":[{\"text\":\"eighty,\",\"start\":62.82,\"end\":62.981},{\"text\":\"eighty\",\"start\":62.981,\"end\":63.141},{\"text\":\"one,\",\"start\":63.161,\"end\":63.341},{\"text\":\"eighty\",\"start\":63.561,\"end\":63.742},{\"text\":\"two,\",\"start\":63.842,\"end\":63.962},{\"text\":\"eighty\",\"start\":64.282,\"end\":64.462},{\"text\":\"three,\",\"start\":64.563,\"end\":64.983},{\"text\":\"eighty\",\"start\":65.003,\"end\":65.183},{\"text\":\"four,\",\"start\":65.283,\"end\":65.484},{\"text\":\"eighty\",\"start\":65.724,\"end\":65.904},{\"text\":\"five,\",\"start\":65.984,\"end\":66.305},{\"text\":\"eighty\",\"start\":66.485,\"end\":66.665},{\"text\":\"six,\",\"start\":66.765,\"end\":66.965},{\"text\":\"eighty\",\"start\":67.226,\"end\":67.406},{\"text\":\"seven,\",\"start\":67.506,\"end\":67.766},{\"text\":\"eighty\",\"start\":67.987,\"end\":68.167},{\"text\":\"eight,\",\"start\":68.287,\"end\":68.467},{\"text\":\"eighty\",\"start\":68.688,\"end\":68.868},{\"text\":\"nine,\",\"start\":68.948,\"end\":69.228},{\"text\":\"ninety,\",\"start\":69.448,\"end\":69.789},{\"text\":\"ninety\",\"start\":70.149,\"end\":70.43},{\"text\":\"one,\",\"start\":70.59,\"end\":70.77},{\"text\":\"ninety\",\"start\":70.97,\"end\":71.251},{\"text\":\"two,\",\"start\":71.351,\"end\":71.471},{\"text\":\"ninety\",\"start\":71.791,\"end\":72.052},{\"text\":\"three,\",\"start\":72.152,\"end\":72.372},{\"text\":\"ninety\",\"start\":72.612,\"end\":72.893},{\"text\":\"four,\",\"start\":72.993,\"end\":73.173},{\"text\":\"ninety\",\"start\":73.433,\"end\":73.714},{\"text\":\"five,\",\"start\":73.814,\"end\":74.134},{\"text\":\"ninety\",\"start\":74.294,\"end\":74.575},{\"text\":\"six,\",\"start\":74.675,\"end\":74.875},{\"text\":\"ninety\",\"start\":75.135,\"end\":75.416},{\"text\":\"seven,\",\"start\":75.516,\"end\":75.756},{\"text\":\"ninety\",\"start\":75.996,\"end\":76.277},{\"text\":\"eight,\",\"start\":76.397,\"end\":76.557},{\"text\":\"ninety\",\"start\":76.797,\"end\":77.078},{\"text\":\"nine,\",\"start\":77.178,\"end\":77.458},{\"text\":\"one\",\"start\":77.719,\"end\":77.859},{\"text\":\"hundred.\",\"start\":77.919,\"end\":78.319}],\"is_final\":true,\"speech_final\":true,\"start\":62.48,\"duration\":16.44,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":78.92,\"duration\":1.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":78.92,\"duration\":3.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":78.92,\"duration\":4.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":78.92,\"duration\":5.219}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":84.139}"
+    ],
+    "text": "1 2 two, three, four, five, six, seven, eight, nine, ten, eleven, twelve, thirteen, fourteen, fifteen, sixteen, seventeen, eighteen, nineteen, twenty, twenty-one, twenty-two, twenty-three, twenty-four, twenty-five, twenty-six, twenty-seven, twenty-eight, twenty-nine, thirty, thirty thirty one, thirty two, thirty three, thirty four, thirty five, thirty six, thirty seven, thirty eight, thirty nine, forty, forty one, forty two, forty three, forty four, forty five, forty six, forty seven, forty eight, forty nine, fifty. fifty one, fifty two, fifty three, fifty four, fifty five, fifty six, fifty seven, fifty eight, fifty nine, sixty, sixty one, sixty two, sixty three, sixty four, sixty five, sixty six, sixty seven, sixty eight, sixty nine, seventy, seventy one, seventy two, seventy three, seventy four, seventy five, seventy six, seventy seven, seventy eight, seventy 9, 80 eighty, eighty one, eighty two, eighty three, eighty four, eighty five, eighty six, eighty seven, eighty eight, eighty nine, ninety, ninety one, ninety two, ninety three, ninety four, ninety five, ninety six, ninety seven, ninety eight, ninety nine, one hundred.",
+    "words": [
+      {
+        "text": "1",
+        "start": 1.373,
+        "end": 1.595
+      },
+      {
+        "text": "2",
+        "start": 1.978,
+        "end": 2.12
+      },
+      {
+        "text": "two,",
+        "start": 2.16,
+        "end": 2.28
+      },
+      {
+        "text": "three,",
+        "start": 2.681,
+        "end": 2.961
+      },
+      {
+        "text": "four,",
+        "start": 3.361,
+        "end": 3.581
+      },
+      {
+        "text": "five,",
+        "start": 3.942,
+        "end": 4.342
+      },
+      {
+        "text": "six,",
+        "start": 4.602,
+        "end": 4.843
+      },
+      {
+        "text": "seven,",
+        "start": 5.183,
+        "end": 5.503
+      },
+      {
+        "text": "eight,",
+        "start": 5.824,
+        "end": 6.024
+      },
+      {
+        "text": "nine,",
+        "start": 6.324,
+        "end": 6.664
+      },
+      {
+        "text": "ten,",
+        "start": 6.905,
+        "end": 7.185
+      },
+      {
+        "text": "eleven,",
+        "start": 7.465,
+        "end": 7.866
+      },
+      {
+        "text": "twelve,",
+        "start": 8.086,
+        "end": 8.506
+      },
+      {
+        "text": "thirteen,",
+        "start": 8.706,
+        "end": 9.147
+      },
+      {
+        "text": "fourteen,",
+        "start": 9.347,
+        "end": 9.788
+      },
+      {
+        "text": "fifteen,",
+        "start": 9.988,
+        "end": 10.388
+      },
+      {
+        "text": "sixteen,",
+        "start": 10.588,
+        "end": 11.009
+      },
+      {
+        "text": "seventeen,",
+        "start": 11.209,
+        "end": 11.709
+      },
+      {
+        "text": "eighteen,",
+        "start": 11.91,
+        "end": 12.27
+      },
+      {
+        "text": "nineteen,",
+        "start": 12.29,
+        "end": 12.931
+      },
+      {
+        "text": "twenty,",
+        "start": 13.091,
+        "end": 13.451
+      },
+      {
+        "text": "twenty-one,",
+        "start": 13.892,
+        "end": 14.512
+      },
+      {
+        "text": "twenty-two,",
+        "start": 14.732,
+        "end": 15.333
+      },
+      {
+        "text": "twenty-three,",
+        "start": 15.593,
+        "end": 16.234
+      },
+      {
+        "text": "twenty-four,",
+        "start": 16.454,
+        "end": 17.055
+      },
+      {
+        "text": "twenty-five,",
+        "start": 17.295,
+        "end": 18.016
+      },
+      {
+        "text": "twenty-six,",
+        "start": 18.176,
+        "end": 18.796
+      },
+      {
+        "text": "twenty-seven,",
+        "start": 19.057,
+        "end": 19.697
+      },
+      {
+        "text": "twenty-eight,",
+        "start": 19.917,
+        "end": 20.538
+      },
+      {
+        "text": "twenty-nine,",
+        "start": 20.738,
+        "end": 21.419
+      },
+      {
+        "text": "thirty,",
+        "start": 21.619,
+        "end": 21.939
+      },
+      {
+        "text": "thirty",
+        "start": 22.38,
+        "end": 22.5
+      },
+      {
+        "text": "thirty",
+        "start": 22.5,
+        "end": 22.64
+      },
+      {
+        "text": "one,",
+        "start": 22.8,
+        "end": 22.981
+      },
+      {
+        "text": "thirty",
+        "start": 23.201,
+        "end": 23.461
+      },
+      {
+        "text": "two,",
+        "start": 23.561,
+        "end": 23.701
+      },
+      {
+        "text": "thirty",
+        "start": 24.062,
+        "end": 24.322
+      },
+      {
+        "text": "three,",
+        "start": 24.422,
+        "end": 24.603
+      },
+      {
+        "text": "thirty",
+        "start": 24.923,
+        "end": 25.183
+      },
+      {
+        "text": "four,",
+        "start": 25.283,
+        "end": 25.484
+      },
+      {
+        "text": "thirty",
+        "start": 25.764,
+        "end": 26.004
+      },
+      {
+        "text": "five,",
+        "start": 26.104,
+        "end": 26.445
+      },
+      {
+        "text": "thirty",
+        "start": 26.645,
+        "end": 26.885
+      },
+      {
+        "text": "six,",
+        "start": 26.986,
+        "end": 27.186
+      },
+      {
+        "text": "thirty",
+        "start": 27.506,
+        "end": 27.746
+      },
+      {
+        "text": "seven,",
+        "start": 27.847,
+        "end": 28.127
+      },
+      {
+        "text": "thirty",
+        "start": 28.367,
+        "end": 28.628
+      },
+      {
+        "text": "eight,",
+        "start": 28.748,
+        "end": 28.928
+      },
+      {
+        "text": "thirty",
+        "start": 29.188,
+        "end": 29.449
+      },
+      {
+        "text": "nine,",
+        "start": 29.529,
+        "end": 29.829
+      },
+      {
+        "text": "forty,",
+        "start": 30.049,
+        "end": 30.35
+      },
+      {
+        "text": "forty",
+        "start": 30.73,
+        "end": 30.99
+      },
+      {
+        "text": "one,",
+        "start": 31.151,
+        "end": 31.311
+      },
+      {
+        "text": "forty",
+        "start": 31.511,
+        "end": 31.771
+      },
+      {
+        "text": "two,",
+        "start": 31.872,
+        "end": 32.072
+      },
+      {
+        "text": "forty",
+        "start": 32.332,
+        "end": 32.572
+      },
+      {
+        "text": "three,",
+        "start": 32.693,
+        "end": 32.853
+      },
+      {
+        "text": "forty",
+        "start": 33.153,
+        "end": 33.413
+      },
+      {
+        "text": "four,",
+        "start": 33.514,
+        "end": 33.694
+      },
+      {
+        "text": "forty",
+        "start": 33.974,
+        "end": 34.214
+      },
+      {
+        "text": "five,",
+        "start": 34.315,
+        "end": 34.635
+      },
+      {
+        "text": "forty",
+        "start": 34.795,
+        "end": 35.035
+      },
+      {
+        "text": "six,",
+        "start": 35.156,
+        "end": 35.356
+      },
+      {
+        "text": "forty",
+        "start": 35.616,
+        "end": 35.857
+      },
+      {
+        "text": "seven,",
+        "start": 35.957,
+        "end": 36.217
+      },
+      {
+        "text": "forty",
+        "start": 36.417,
+        "end": 36.658
+      },
+      {
+        "text": "eight,",
+        "start": 36.798,
+        "end": 36.958
+      },
+      {
+        "text": "forty",
+        "start": 37.178,
+        "end": 37.418
+      },
+      {
+        "text": "nine,",
+        "start": 37.519,
+        "end": 37.779
+      },
+      {
+        "text": "fifty.",
+        "start": 37.999,
+        "end": 38.32
+      },
+      {
+        "text": "fifty",
+        "start": 38.68,
+        "end": 38.94
+      },
+      {
+        "text": "one,",
+        "start": 39.08,
+        "end": 39.261
+      },
+      {
+        "text": "fifty",
+        "start": 39.461,
+        "end": 39.721
+      },
+      {
+        "text": "two,",
+        "start": 39.801,
+        "end": 39.921
+      },
+      {
+        "text": "fifty",
+        "start": 40.241,
+        "end": 40.502
+      },
+      {
+        "text": "three,",
+        "start": 40.582,
+        "end": 40.762
+      },
+      {
+        "text": "fifty",
+        "start": 41.002,
+        "end": 41.242
+      },
+      {
+        "text": "four,",
+        "start": 41.342,
+        "end": 41.522
+      },
+      {
+        "text": "fifty",
+        "start": 41.783,
+        "end": 42.003
+      },
+      {
+        "text": "five,",
+        "start": 42.103,
+        "end": 42.423
+      },
+      {
+        "text": "fifty",
+        "start": 42.563,
+        "end": 42.804
+      },
+      {
+        "text": "six,",
+        "start": 42.924,
+        "end": 43.104
+      },
+      {
+        "text": "fifty",
+        "start": 43.384,
+        "end": 43.624
+      },
+      {
+        "text": "seven,",
+        "start": 43.704,
+        "end": 43.965
+      },
+      {
+        "text": "fifty",
+        "start": 44.165,
+        "end": 44.405
+      },
+      {
+        "text": "eight,",
+        "start": 44.545,
+        "end": 44.705
+      },
+      {
+        "text": "fifty",
+        "start": 44.905,
+        "end": 45.166
+      },
+      {
+        "text": "nine,",
+        "start": 45.246,
+        "end": 45.526
+      },
+      {
+        "text": "sixty,",
+        "start": 45.726,
+        "end": 46.086
+      },
+      {
+        "text": "sixty",
+        "start": 46.447,
+        "end": 46.707
+      },
+      {
+        "text": "one,",
+        "start": 46.847,
+        "end": 47.027
+      },
+      {
+        "text": "sixty",
+        "start": 47.227,
+        "end": 47.508
+      },
+      {
+        "text": "two,",
+        "start": 47.608,
+        "end": 47.708
+      },
+      {
+        "text": "sixty",
+        "start": 48.048,
+        "end": 48.308
+      },
+      {
+        "text": "three,",
+        "start": 48.428,
+        "end": 48.629
+      },
+      {
+        "text": "sixty",
+        "start": 48.889,
+        "end": 49.129
+      },
+      {
+        "text": "four,",
+        "start": 49.229,
+        "end": 49.409
+      },
+      {
+        "text": "sixty",
+        "start": 49.67,
+        "end": 49.97
+      },
+      {
+        "text": "five,",
+        "start": 50.01,
+        "end": 50.33
+      },
+      {
+        "text": "sixty",
+        "start": 50.49,
+        "end": 50.771
+      },
+      {
+        "text": "six,",
+        "start": 50.871,
+        "end": 51.051
+      },
+      {
+        "text": "sixty",
+        "start": 51.331,
+        "end": 51.591
+      },
+      {
+        "text": "seven,",
+        "start": 51.671,
+        "end": 51.932
+      },
+      {
+        "text": "sixty",
+        "start": 52.152,
+        "end": 52.432
+      },
+      {
+        "text": "eight,",
+        "start": 52.532,
+        "end": 52.692
+      },
+      {
+        "text": "sixty",
+        "start": 52.932,
+        "end": 53.193
+      },
+      {
+        "text": "nine,",
+        "start": 53.273,
+        "end": 53.573
+      },
+      {
+        "text": "seventy,",
+        "start": 53.773,
+        "end": 54.133
+      },
+      {
+        "text": "seventy",
+        "start": 54.494,
+        "end": 54.814
+      },
+      {
+        "text": "one,",
+        "start": 54.974,
+        "end": 55.134
+      },
+      {
+        "text": "seventy",
+        "start": 55.314,
+        "end": 55.655
+      },
+      {
+        "text": "two,",
+        "start": 55.735,
+        "end": 55.935
+      },
+      {
+        "text": "seventy",
+        "start": 56.195,
+        "end": 56.516
+      },
+      {
+        "text": "three,",
+        "start": 56.596,
+        "end": 56.776
+      },
+      {
+        "text": "seventy",
+        "start": 57.056,
+        "end": 57.356
+      },
+      {
+        "text": "four,",
+        "start": 57.476,
+        "end": 57.657
+      },
+      {
+        "text": "seventy",
+        "start": 57.877,
+        "end": 58.197
+      },
+      {
+        "text": "five,",
+        "start": 58.297,
+        "end": 58.597
+      },
+      {
+        "text": "seventy",
+        "start": 58.798,
+        "end": 59.078
+      },
+      {
+        "text": "six,",
+        "start": 59.198,
+        "end": 59.378
+      },
+      {
+        "text": "seventy",
+        "start": 59.658,
+        "end": 59.959
+      },
+      {
+        "text": "seven,",
+        "start": 60.059,
+        "end": 60.319
+      },
+      {
+        "text": "seventy",
+        "start": 60.539,
+        "end": 60.839
+      },
+      {
+        "text": "eight,",
+        "start": 60.979,
+        "end": 61.14
+      },
+      {
+        "text": "seventy",
+        "start": 61.36,
+        "end": 61.64
+      },
+      {
+        "text": "9,",
+        "start": 61.742,
+        "end": 62.213
+      },
+      {
+        "text": "80",
+        "start": 62.275,
+        "end": 62.459
+      },
+      {
+        "text": "eighty,",
+        "start": 62.82,
+        "end": 62.981
+      },
+      {
+        "text": "eighty",
+        "start": 62.981,
+        "end": 63.141
+      },
+      {
+        "text": "one,",
+        "start": 63.161,
+        "end": 63.341
+      },
+      {
+        "text": "eighty",
+        "start": 63.561,
+        "end": 63.742
+      },
+      {
+        "text": "two,",
+        "start": 63.842,
+        "end": 63.962
+      },
+      {
+        "text": "eighty",
+        "start": 64.282,
+        "end": 64.462
+      },
+      {
+        "text": "three,",
+        "start": 64.563,
+        "end": 64.983
+      },
+      {
+        "text": "eighty",
+        "start": 65.003,
+        "end": 65.183
+      },
+      {
+        "text": "four,",
+        "start": 65.283,
+        "end": 65.484
+      },
+      {
+        "text": "eighty",
+        "start": 65.724,
+        "end": 65.904
+      },
+      {
+        "text": "five,",
+        "start": 65.984,
+        "end": 66.305
+      },
+      {
+        "text": "eighty",
+        "start": 66.485,
+        "end": 66.665
+      },
+      {
+        "text": "six,",
+        "start": 66.765,
+        "end": 66.965
+      },
+      {
+        "text": "eighty",
+        "start": 67.226,
+        "end": 67.406
+      },
+      {
+        "text": "seven,",
+        "start": 67.506,
+        "end": 67.766
+      },
+      {
+        "text": "eighty",
+        "start": 67.987,
+        "end": 68.167
+      },
+      {
+        "text": "eight,",
+        "start": 68.287,
+        "end": 68.467
+      },
+      {
+        "text": "eighty",
+        "start": 68.688,
+        "end": 68.868
+      },
+      {
+        "text": "nine,",
+        "start": 68.948,
+        "end": 69.228
+      },
+      {
+        "text": "ninety,",
+        "start": 69.448,
+        "end": 69.789
+      },
+      {
+        "text": "ninety",
+        "start": 70.149,
+        "end": 70.43
+      },
+      {
+        "text": "one,",
+        "start": 70.59,
+        "end": 70.77
+      },
+      {
+        "text": "ninety",
+        "start": 70.97,
+        "end": 71.251
+      },
+      {
+        "text": "two,",
+        "start": 71.351,
+        "end": 71.471
+      },
+      {
+        "text": "ninety",
+        "start": 71.791,
+        "end": 72.052
+      },
+      {
+        "text": "three,",
+        "start": 72.152,
+        "end": 72.372
+      },
+      {
+        "text": "ninety",
+        "start": 72.612,
+        "end": 72.893
+      },
+      {
+        "text": "four,",
+        "start": 72.993,
+        "end": 73.173
+      },
+      {
+        "text": "ninety",
+        "start": 73.433,
+        "end": 73.714
+      },
+      {
+        "text": "five,",
+        "start": 73.814,
+        "end": 74.134
+      },
+      {
+        "text": "ninety",
+        "start": 74.294,
+        "end": 74.575
+      },
+      {
+        "text": "six,",
+        "start": 74.675,
+        "end": 74.875
+      },
+      {
+        "text": "ninety",
+        "start": 75.135,
+        "end": 75.416
+      },
+      {
+        "text": "seven,",
+        "start": 75.516,
+        "end": 75.756
+      },
+      {
+        "text": "ninety",
+        "start": 75.996,
+        "end": 76.277
+      },
+      {
+        "text": "eight,",
+        "start": 76.397,
+        "end": 76.557
+      },
+      {
+        "text": "ninety",
+        "start": 76.797,
+        "end": 77.078
+      },
+      {
+        "text": "nine,",
+        "start": 77.178,
+        "end": 77.458
+      },
+      {
+        "text": "one",
+        "start": 77.719,
+        "end": 77.859
+      },
+      {
+        "text": "hundred.",
+        "start": 77.919,
+        "end": 78.319
+      }
+    ]
+  },
+  "sampleRateHz": 48000,
+  "schemaVersion": 1
+}

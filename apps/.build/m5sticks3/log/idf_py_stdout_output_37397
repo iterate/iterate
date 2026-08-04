@@ -1,0 +1,22 @@
+[0/1] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3 && /opt/homebrew/bin/cmake -D "IDF_SIZE_TOOL=/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python;-m;esp_idf_size" -D MAP_FILE=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/iterate-kit-m5sticks3.map -D OUTPUT_JSON= -P /Users/jonastemplestein/esp/esp-idf/tools/cmake/run_size_tool.cmake
+                            Memory Type Usage Summary                             
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Memory Type/Section ┃ Used [bytes] ┃ Used [%] ┃ Remain [bytes] ┃ Total [bytes] ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ Flash Code          │       829312 │          │                │               │
+│    .text            │       829312 │          │                │               │
+│ Flash Data          │       371708 │          │                │               │
+│    .rodata          │       292040 │          │                │               │
+│    .bss             │        79412 │          │                │               │
+│    .appdesc         │          256 │          │                │               │
+│ DIRAM               │       208835 │    61.11 │         132925 │        341760 │
+│    .bss             │       108856 │    31.85 │                │               │
+│    .text            │        79519 │    23.27 │                │               │
+│    .data            │        20460 │     5.99 │                │               │
+│ IRAM                │        16383 │    99.99 │              1 │         16384 │
+│    .text            │        15356 │    93.73 │                │               │
+│    .vectors         │         1027 │     6.27 │                │               │
+│ RTC FAST            │           52 │     0.63 │           8140 │          8192 │
+│    .force_fast      │           28 │     0.34 │                │               │
+│    .rtc_reserved    │           24 │     0.29 │                │               │
+└─────────────────────┴──────────────┴──────────┴────────────────┴───────────────┘

@@ -1,0 +1,88 @@
+{
+  "ambient": {
+    "dbfs": -91.06491348777921,
+    "peak": 3,
+    "rms": 0.9166515150262939
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -75.85974637278639,
+      "peak": 24,
+      "rms": 5.277917729835688
+    },
+    "nearEndGain": 0.6924902508658853,
+    "nearEndSimilarity": 0.6514721076315725,
+    "passed": false,
+    "residualToFarEndDb": -55.92603141231824,
+    "residualToNearEndDb": -1.868555424288492
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -85.84890488251828,
+        "peak": 34,
+        "rms": 1.6711086639314232
+      },
+      "kind": "tone",
+      "passed": true,
+      "source": {
+        "dbfs": -19.339884567655986,
+        "peak": 5000,
+        "rms": 3535.53960513809
+      },
+      "sourceSimilarity": 0.003960658687653438
+    },
+    {
+      "clean": {
+        "dbfs": -81.85735915209362,
+        "peak": 14,
+        "rms": 2.645952097072054
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": true,
+      "source": {
+        "dbfs": -22.350138854101736,
+        "peak": 4268,
+        "rms": 2500.017174941004
+      },
+      "sourceSimilarity": 0.008662191758836571
+    },
+    {
+      "clean": {
+        "dbfs": -75.4643957298139,
+        "peak": 25,
+        "rms": 5.5237008276456585
+      },
+      "kind": "speech-shaped",
+      "passed": true,
+      "source": {
+        "dbfs": -22.056464522318358,
+        "peak": 8702,
+        "rms": 2585.989212278511
+      },
+      "sourceSimilarity": 0.006862788571096726
+    }
+  ],
+  "nearEnd": {
+    "clean": {
+      "dbfs": -76.39062758982524,
+      "peak": 20,
+      "rms": 4.964992027519615
+    },
+    "passed": true,
+    "source": {
+      "dbfs": -15.176950127467181,
+      "peak": 26072,
+      "rms": 5709.55720506014
+    },
+    "sourceSimilarity": 0.6676697630325571
+  },
+  "passed": false,
+  "reasons": [
+    "Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.651, gain 0.692, residual -1.87 dB."
+  ],
+  "validity": {
+    "passed": true,
+    "reasons": []
+  }
+}

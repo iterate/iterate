@@ -1,0 +1,27 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/twocalls.ts
+
+{
+  "calls": [
+    {
+      "call": 1,
+      "sent": 1050,
+      "played": 759,
+      "dup": 0,
+      "stale": 0,
+      "catchup": 0,
+      "starvedMs": 0
+    },
+    {
+      "call": 2,
+      "sent": 726,
+      "played": 726,
+      "dup": 0,
+      "stale": 0,
+      "catchup": 0,
+      "starvedMs": 0
+    }
+  ],
+  "verdict": "PASS: call 2 on the same mount played every delivered frame, none refused"
+}

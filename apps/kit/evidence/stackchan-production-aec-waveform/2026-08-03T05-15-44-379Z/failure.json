@@ -1,0 +1,35 @@
+{
+  "aec": null,
+  "createdAt": "2026-08-03T05:15:46.279Z",
+  "device": {
+    "deviceHost": "192.168.1.178",
+    "id": "stackchan",
+    "projectId": "prj_0363ecd53eda492e972b07debd56eb46",
+    "projectSlug": "kit-stackchan-voice-e2e-20260801",
+    "workerHost": "kit--kit-stackchan-voice-e2e-20260801.iterate.app"
+  },
+  "digital": null,
+  "error": {
+    "message": "capability \"kit.stackchan\" is offline",
+    "name": "Error",
+    "stack": "Error: capability \"kit.stackchan\" is offline\n    at Evaluator.evaluateImpl (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:947:75)\n    at Evaluator.evaluateWithDepth (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:818:28)\n    at Evaluator.evaluate (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/serialize.ts:812:17)\n    at RpcSessionImpl.readLoop (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/node_modules/.pnpm/@iterate-com+capnweb@0.10.0/node_modules/@iterate-com/capnweb/src/rpc.ts:1059:73)"
+  },
+  "network": null,
+  "passed": false,
+  "projectModeRestored": true,
+  "schemaVersion": 1,
+  "stimuli": {
+    "macOutputVolumePercent": 40,
+    "nearSourceSha256": null,
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "providerDurationMs": 6000
+  },
+  "worker": {
+    "baseline": null,
+    "terminal": null
+  }
+}

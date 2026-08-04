@@ -1,0 +1,357 @@
+{
+  "assessmentPassed": false,
+  "buildDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition",
+  "createdAt": "2026-08-04T08:39:31.713Z",
+  "device": "home-assistant-voice-preview-edition",
+  "networkClassification": "network-invalid",
+  "networkVerdict": "network-invalid",
+  "pcm": {
+    "microphoneBytes": 2038400,
+    "microphoneSha256": "976606f71fad52f8b718becbf4f98db46be35a5527d339190ab23002f08897c4",
+    "speakerBytes": 1152000,
+    "speakerSha256": "5a35b1d0f9702b27e96468be97f494c0ecf2c7e6840e224b99fda3a8cbea9705"
+  },
+  "port": "/dev/cu.usbmodem11101",
+  "schemaVersion": 1,
+  "stableUsbSerial": "D8:3B:DA:46:20:34",
+  "transport": {
+    "baseUrl": "https://857eb3fed89edac0.tunnels.iterate.com",
+    "deviceHost": "192.168.0.33",
+    "gateway": "https://tunnels.iterate.com",
+    "kind": "captun",
+    "tunnelName": null
+  },
+  "startupLifecycle": {
+    "observed": {
+      "captureFailures": 0,
+      "captureFrameDrops": 0,
+      "playbackDroppedFrames": 0,
+      "playbackIntegrityFailures": 0,
+      "playbackResets": 1,
+      "uplinkFrameDrops": 0,
+      "uplinkRestarts": 0
+    },
+    "passed": true,
+    "reasons": []
+  },
+  "stimuli": {
+    "acousticProfile": {
+      "macOutputVolumePercent": 40,
+      "matchedPathPilotAmplitude": 64,
+      "prbsCarrierAmplitude": 2250,
+      "speechRendererAmplitude": 2250,
+      "toneAmplitude": 4500
+    },
+    "doubleTalkPrbsCommitment": "f452329215ee7126134a6517b27aded1d670fcbe4ca08d5f9ca31bd86ef61dc0",
+    "farPrbsCommitment": "18cc4be5e688e1c42a3d7af74413f4da5e9dafd09763a853ad6dd57389ff09ce",
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "nearSourceSha256": "580907004292c1f4f5ada9c76ada3546847408195c22ccbdf46a832187df34ae"
+  },
+  "diagnosticTraces": {
+    "ambient": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 1,
+        "firstFrameSequence": 1120,
+        "frameSamples": 320,
+        "generation": 1,
+        "lastFrameSequence": 1169,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 1,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/ambient/raw-microphone.pcm16le",
+          "sha256": "78cb500640d35106a10b141f5b743a80ff3ca4c4e4f485beb1b1236818138c0e"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/ambient/clean.pcm16le",
+          "sha256": "68b78ef2ea272273922f149873f07e6cb8cf69d58290ee7625b8882f13b0e35f"
+        },
+        "fixtureDownlink": {
+          "bytes": 0,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/ambient/fixture-downlink.pcm16le",
+          "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/ambient/pcm-uplink.pcm16le",
+          "sha256": "c2044fbfa3a9cbfe17a0d5b08602377815491e4f0b3217dd198e6119e8795888"
+        }
+      }
+    },
+    "far-tone": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 2,
+        "firstFrameSequence": 1489,
+        "frameSamples": 320,
+        "generation": 2,
+        "lastFrameSequence": 1538,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 2,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-tone/raw-microphone.pcm16le",
+          "sha256": "9080ee16c69ee9ea9ee03ad4a579bfeed7b4aab48c0f4d63101ebb24d0578072"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-tone/clean.pcm16le",
+          "sha256": "1224c5ed30700182d7878c101f59e8df472e9dc1e319c77887df2e22e95fc89a"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-tone/fixture-downlink.pcm16le",
+          "sha256": "ad415414357632455712df1360e34826c636ecc704bec5b7b14c7722ddc295b8"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-tone/pcm-uplink.pcm16le",
+          "sha256": "eadb622d3c32010000820cd1b9d29f1ed9a147de82d56e72ae4af3ab66ba4b3d"
+        }
+      }
+    },
+    "far-dual-carrier-prbs31": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 3,
+        "firstFrameSequence": 1907,
+        "frameSamples": 320,
+        "generation": 3,
+        "lastFrameSequence": 1956,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 3,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-dual-carrier-prbs31/raw-microphone.pcm16le",
+          "sha256": "7e4ae3b453d59f89815b5e823d1ed5ab07655a577d6d691e9c1d4043169d8d31"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-dual-carrier-prbs31/clean.pcm16le",
+          "sha256": "010cbcdffc07f77833add62a826ff106d0393ac4ad747e78a4a0ef1c6c989948"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-dual-carrier-prbs31/fixture-downlink.pcm16le",
+          "sha256": "d2ce137541ecb6f79c952ccc05c14a0e3854482166d4b73be57e17376f8d6ac3"
+        },
+        "pcmUplink": {
+          "bytes": 95360,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-dual-carrier-prbs31/pcm-uplink.pcm16le",
+          "sha256": "1989691182e453210b58d00f603188cf7fb07c8d0892876ecde077ef580c8471"
+        }
+      }
+    },
+    "far-speech-shaped": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 4,
+        "firstFrameSequence": 2331,
+        "frameSamples": 320,
+        "generation": 4,
+        "lastFrameSequence": 2380,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 4,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-speech-shaped/raw-microphone.pcm16le",
+          "sha256": "cc822c5a2cfb49690f5d6a3bd66e6d447c26c6c563a451648fd0444ddebcff8d"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-speech-shaped/clean.pcm16le",
+          "sha256": "75293577688c4f4f61c342ab22db421b4aae7e98fcf37685a900c18f20b9ada4"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-speech-shaped/fixture-downlink.pcm16le",
+          "sha256": "880c105a9fe8bd7a0e4aa237eb8bf28574b3992797ec3f7cfc19f39587091b94"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/far-speech-shaped/pcm-uplink.pcm16le",
+          "sha256": "8aeeb827fde62471343083f606c3bb4b6e28b39201f1e3ffdd4e4072a7704e7a"
+        }
+      }
+    },
+    "near-only": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 5,
+        "firstFrameSequence": 2768,
+        "frameSamples": 320,
+        "generation": 5,
+        "lastFrameSequence": 2817,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 5,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/near-only/raw-microphone.pcm16le",
+          "sha256": "dc06adc24915e2b2bad642bb3f504b433a15b29effa3646d4732a1bec51ce57b"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/near-only/clean.pcm16le",
+          "sha256": "1ed9e1b727c17d855f29d1198b6deac0baa43034e6f6c1c93067a01c7e711e72"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/near-only/fixture-downlink.pcm16le",
+          "sha256": "44e8550efe620357850c1954bef7da2fb7013548c70abd27ff92c84eff8d5799"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/near-only/pcm-uplink.pcm16le",
+          "sha256": "944caf92fa808f3c8413ae2da409a74cb3e9c9b0f7f2b0dffbe2a49879303b19"
+        }
+      }
+    },
+    "near-repeat": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 6,
+        "firstFrameSequence": 3248,
+        "frameSamples": 320,
+        "generation": 6,
+        "lastFrameSequence": 3297,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 6,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/near-repeat/raw-microphone.pcm16le",
+          "sha256": "0ff5fdaadd51ed82601b3e6505fa6bbccc881a4fd2f8a56cb482fee3b520d6eb"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/near-repeat/clean.pcm16le",
+          "sha256": "d9188ee56cb25e07f67d5c3003fc3043ed4dbe49b5d8d0a50bcb16ea44ace0d7"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/near-repeat/fixture-downlink.pcm16le",
+          "sha256": "44e8550efe620357850c1954bef7da2fb7013548c70abd27ff92c84eff8d5799"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/near-repeat/pcm-uplink.pcm16le",
+          "sha256": "2c0bdef87bfcb256cdad9231d519c750792aead96bcc07a968ce582dc8aba4c1"
+        }
+      }
+    },
+    "double-talk": {
+      "metadata": {
+        "abortedCaptures": 0,
+        "availablePlanes": 17,
+        "captureSamples": 16000,
+        "capturedSamples": 16000,
+        "completedCaptures": 7,
+        "firstFrameSequence": 3725,
+        "frameSamples": 320,
+        "generation": 7,
+        "lastFrameSequence": 3774,
+        "maximumReadSamples": 320,
+        "rejectedStarts": 0,
+        "sampleRateHz": 16000,
+        "schema": 1,
+        "startedCaptures": 7,
+        "state": 3
+      },
+      "planes": {
+        "near": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/double-talk/raw-microphone.pcm16le",
+          "sha256": "f6f5f09a68fa3a36cef0ec4373425aa0e460be76485a7e53f5e30ed8a2ab735d"
+        },
+        "clean": {
+          "bytes": 32000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/double-talk/clean.pcm16le",
+          "sha256": "9583acbdfd406c66341ee84316e64dcb155934539ecfb275bfc497f599237320"
+        },
+        "fixtureDownlink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/double-talk/fixture-downlink.pcm16le",
+          "sha256": "de5fce14af117dd32a91b86d0757de92e8e64f4f124a4f28b30a12f76c65e89c"
+        },
+        "pcmUplink": {
+          "bytes": 96000,
+          "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-deterministic-trace-20260804-rerun/2026-08-04T08-37-57-413Z/aec-traces/double-talk/pcm-uplink.pcm16le",
+          "sha256": "7d31efe1348755ad529d7a1f6d43090bb35953e1ca43f3512d62b19365699927"
+        }
+      }
+    }
+  },
+  "transportValidity": {
+    "captureFailures": 0,
+    "captureFrameDrops": 0,
+    "clockDiscontinuities": 0,
+    "networkValid": false,
+    "playbackDroppedFrames": 0,
+    "playbackIntegrityFailures": 0,
+    "playbackResets": 0,
+    "playbackUnderrunIncidents": 0,
+    "recorderComplete": true,
+    "uplinkFrameDrops": 26,
+    "uplinkRestarts": 1,
+    "websocketReconnects": 0
+  }
+}

@@ -1,0 +1,5 @@
+[0;33m--- esp-idf-monitor 1.9.0 on /dev/cu.usbmodem2101 115200[0m
+[0;33m--- Quit: Ctrl+] | Menu: Ctrl+T | Help: Ctrl+T followed by Ctrl+H[0m
+[0m--- 0x4037cb2e: [0;33mesp_cpu_wait_for_intr[0m[0m at [0;32m/Users/jonastemplestein/esp/esp-idf/components/esp_hw_support/cpu.c[0m[0m:[1;31m64[0m
+[0m--- 0x4037cb2e: [0;33mesp_cpu_wait_for_intr[0m[0m at [0;32m/Users/jonastemplestein/esp/esp-idf/components/esp_hw_support/cpu.c[0m[0m:[1;31m64[0m
+[0m

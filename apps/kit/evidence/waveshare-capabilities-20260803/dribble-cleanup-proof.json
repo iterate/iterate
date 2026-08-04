@@ -1,0 +1,54 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/dribble-proof.ts
+
+{
+  "memBefore": {
+    "heapFree": 5148340,
+    "psramFree": 5122748,
+    "heapMin": 4933076,
+    "connGeneration": 2,
+    "sessionGeneration": 1,
+    "connectionState": 2
+  },
+  "normalBefore": {
+    "ok": true,
+    "value": true,
+    "ms": 1236
+  },
+  "stalledBody": {
+    "ok": false,
+    "error": "timeout",
+    "ms": 15083
+  },
+  "normalAfterStall": {
+    "ok": true,
+    "value": true,
+    "ms": 1199
+  },
+  "dribbleBody": {
+    "ok": false,
+    "error": "timeout",
+    "ms": 15172
+  },
+  "normalImmediatelyAfterDribble": {
+    "ok": true,
+    "value": true,
+    "ms": 1227
+  },
+  "normalAgain": {
+    "ok": true,
+    "value": true,
+    "ms": 1260
+  },
+  "callStart": true,
+  "callHangUp": true,
+  "memAfter": {
+    "heapFree": 5065716,
+    "psramFree": 5040824,
+    "heapMin": 4932116,
+    "connGeneration": 3,
+    "sessionGeneration": 1,
+    "connectionState": 2
+  }
+}

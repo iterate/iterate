@@ -1,0 +1,76 @@
+{
+  "input": "evidence/home-assistant-voice-preview-edition-aec-physical/2026-08-02T23-27-41-344Z/double-talk-provider-level.pcm16le",
+  "interval": {
+    "endSample": 48000,
+    "startSample": 0
+  },
+  "result": {
+    "durationSeconds": 3,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"08db7909-4e62-4d0b-b1f3-071d3a56be3d\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"That this nearby voice remains clear while the device speaker is\",\"words\":[{\"text\":\"That\",\"start\":0.04,\"end\":0.161},{\"text\":\"this\",\"start\":0.181,\"end\":0.342},{\"text\":\"nearby\",\"start\":0.383,\"end\":0.745},{\"text\":\"voice\",\"start\":0.805,\"end\":1.047},{\"text\":\"remains\",\"start\":1.087,\"end\":1.47},{\"text\":\"clear\",\"start\":1.53,\"end\":1.752},{\"text\":\"while\",\"start\":1.792,\"end\":1.993},{\"text\":\"the\",\"start\":2.013,\"end\":2.094},{\"text\":\"device\",\"start\":2.114,\"end\":2.456},{\"text\":\"speaker\",\"start\":2.477,\"end\":2.839},{\"text\":\"is\",\"start\":2.899,\"end\":2.96}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"That this nearby voice remains clear while the device speaker is\",\"words\":[{\"text\":\"That\",\"start\":0.04,\"end\":0.161},{\"text\":\"this\",\"start\":0.181,\"end\":0.342},{\"text\":\"nearby\",\"start\":0.383,\"end\":0.745},{\"text\":\"voice\",\"start\":0.805,\"end\":1.047},{\"text\":\"remains\",\"start\":1.087,\"end\":1.47},{\"text\":\"clear\",\"start\":1.53,\"end\":1.752},{\"text\":\"while\",\"start\":1.792,\"end\":1.993},{\"text\":\"the\",\"start\":2.013,\"end\":2.094},{\"text\":\"device\",\"start\":2.114,\"end\":2.456},{\"text\":\"speaker\",\"start\":2.477,\"end\":2.839},{\"text\":\"is\",\"start\":2.899,\"end\":2.96}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":3.0,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":3.0}"
+    ],
+    "text": "That this nearby voice remains clear while the device speaker is",
+    "words": [
+      {
+        "text": "That",
+        "start": 0.04,
+        "end": 0.161
+      },
+      {
+        "text": "this",
+        "start": 0.181,
+        "end": 0.342
+      },
+      {
+        "text": "nearby",
+        "start": 0.383,
+        "end": 0.745
+      },
+      {
+        "text": "voice",
+        "start": 0.805,
+        "end": 1.047
+      },
+      {
+        "text": "remains",
+        "start": 1.087,
+        "end": 1.47
+      },
+      {
+        "text": "clear",
+        "start": 1.53,
+        "end": 1.752
+      },
+      {
+        "text": "while",
+        "start": 1.792,
+        "end": 1.993
+      },
+      {
+        "text": "the",
+        "start": 2.013,
+        "end": 2.094
+      },
+      {
+        "text": "device",
+        "start": 2.114,
+        "end": 2.456
+      },
+      {
+        "text": "speaker",
+        "start": 2.477,
+        "end": 2.839
+      },
+      {
+        "text": "is",
+        "start": 2.899,
+        "end": 2.96
+      }
+    ]
+  },
+  "sampleRateHz": 16000,
+  "schemaVersion": 1
+}

@@ -234,6 +234,105 @@ describe("production Grok provider event evidence", () => {
     );
   });
 
+  test("retains a completed response assembled from transcript deltas when Grok omits done", () => {
+    /*
+     * A real grok-voice-think-fast-2.0 response emitted two transcript deltas
+     * and a completed response.done but no output_audio_transcript.done. The
+     * old evidence reader aborted there, before it could report the much more
+     * important speaker-echo speech_started edge which immediately followed.
+     * response.done is the bounded completion fence: accepting unfenced deltas
+     * would let a disconnected, partial sentence masquerade as spoken proof.
+     */
+    const event = (sequence: number, providerType: string, raw: Record<string, unknown>) => ({
+      createdAt: "2026-08-03T15:26:28.000Z",
+      offset: 200 + sequence,
+      providerType,
+      raw: JSON.stringify({ type: providerType, ...raw }),
+      receivedAtMs: 10_000 + sequence,
+      sequence,
+      sessionId: "current",
+    });
+    const events = [
+      event(1, "response.output_audio_transcript.delta", {
+        delta: "Got it—sounds like the audio's",
+        item_id: "item-current",
+        response_id: "response-current",
+      }),
+      event(2, "response.output_audio_transcript.delta", {
+        delta: " coming through clean on your end.",
+        item_id: "item-current",
+        response_id: "response-current",
+      }),
+      event(3, "response.done", {
+        response: { id: "response-current", status: "completed" },
+        response_id: "response-current",
+      }),
+    ];
+
+    expect(completedProviderOutputTranscript(events)).toBe(
+      "Got it—sounds like the audio's coming through clean on your end.",
+    );
+  });
+
+  test("does not join another response's transcript deltas to a completed response", () => {
+    /*
+     * A cancelled response can leave transcript deltas immediately before the
+     * replacement response. Sequence adjacency is not ownership: only the
+     * response id on the completed fence may contribute spoken evidence.
+     */
+    const event = (sequence: number, providerType: string, raw: Record<string, unknown>) => ({
+      createdAt: "2026-08-03T15:26:28.000Z",
+      offset: 300 + sequence,
+      providerType,
+      raw: JSON.stringify({ type: providerType, ...raw }),
+      receivedAtMs: 20_000 + sequence,
+      sequence,
+      sessionId: "current",
+    });
+    const events = [
+      event(1, "response.output_audio_transcript.delta", {
+        delta: "obsolete words",
+        response_id: "response-cancelled",
+      }),
+      event(2, "response.output_audio_transcript.delta", {
+        delta: "replacement words",
+        response_id: "response-completed",
+      }),
+      event(3, "response.done", {
+        response: { id: "response-completed", status: "completed" },
+      }),
+    ];
+
+    expect(completedProviderOutputTranscript(events)).toBe("replacement words");
+  });
+
+  test("rejects transcript deltas without a completed response fence", () => {
+    /*
+     * A disconnect can strand perfectly valid JSON and plausible words. Those
+     * bytes are useful failure evidence, but they are not proof that Grok
+     * completed an audible response and must never satisfy the acoustic gate.
+     */
+    const events = [
+      {
+        createdAt: "2026-08-03T15:26:28.000Z",
+        offset: 401,
+        providerType: "response.output_audio_transcript.delta",
+        raw: JSON.stringify({
+          delta: "a sentence cut off by disconnect",
+          response_id: "response-incomplete",
+          type: "response.output_audio_transcript.delta",
+        }),
+        receivedAtMs: 30_001,
+        sequence: 1,
+        sessionId: "current",
+      },
+    ];
+
+    expect(() => completedProviderOutputTranscript(events)).toThrow(
+      "did not retain a completed output-audio transcript",
+    );
+  });
+
   test("extracts only the terminal input transcript for the current physical turn", () => {
     /*
      * xAI can emit several events with the same `completed` suffix while its
@@ -295,7 +394,7 @@ describe("production Grok provider event evidence", () => {
 
   test("correlates a successful tool result with the raw Grok call id", () => {
     /*
-     * The model saying it changed a colour is not proof. The event journal
+     * The model saying it changed a sprite is not proof. The event journal
      * must contain both Grok's call and the later function_call_output that
      * carries the device acknowledgement, even when that acknowledgement is
      * the terminal event after an already-spoken response.done.
@@ -311,24 +410,24 @@ describe("production Grok provider event evidence", () => {
     });
     const events = [
       event(1, "response.function_call_arguments.done", {
-        arguments: '{"colour":"green"}',
-        call_id: "call_green",
-        name: "changeColour",
+        arguments: '{"spriteSet":"starbyte"}',
+        call_id: "call_starbyte",
+        name: "changeSpriteSet",
       }),
       event(2, "response.done", {}),
       event(3, "conversation.item.added", {
         item: {
-          call_id: "call_green",
-          output: '{"colour":"green","ok":true}',
+          call_id: "call_starbyte",
+          output: '{"ok":true,"spriteSet":"starbyte"}',
           type: "function_call_output",
         },
       }),
     ];
 
-    expect(completedProviderToolCall(events, "changeColour")).toEqual({
-      arguments: { colour: "green" },
-      callId: "call_green",
-      output: { colour: "green", ok: true },
+    expect(completedProviderToolCall(events, "changeSpriteSet")).toEqual({
+      arguments: { spriteSet: "starbyte" },
+      callId: "call_starbyte",
+      output: { ok: true, spriteSet: "starbyte" },
     });
   });
 });

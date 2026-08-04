@@ -81,6 +81,9 @@ static char read_name[32];
 static size_t read_offset;
 static size_t read_capacity;
 static size_t read_length;
+/* Whole-file size measured by the task, so `size` and `read` cannot disagree. */
+static volatile size_t read_file_size;
+static volatile bool read_file_found;
 /* PSRAM: internal RAM is the TLS handshake's working set, and starving it
  * fails the connection outright with MBEDTLS_ERR_SSL_ALLOC_FAILED. */
 EXT_RAM_BSS_ATTR static uint8_t read_buffer[6144];
@@ -303,12 +306,25 @@ void waveshare_recorder_drain(void) {
   if (read_pending && !read_done) {
     char path[128];
     read_length = 0U;
+    read_file_size = 0U;
+    read_file_found = false;
     if (recording_path(read_name, path, sizeof(path))) {
       FILE *file;
       sync_open_files();
       file = fopen(path, "rb");
       if (file != NULL) {
-        if (fseek(file, (long)read_offset, SEEK_SET) == 0) {
+        read_file_found = true;
+        /*
+         * Measure the whole file while it is open. `size` used to answer from
+         * a live byte counter that resets when a call starts, so it reported 0
+         * for a file `read` was still returning 6000 bytes from — two answers
+         * about the same file, and only one of them true.
+         */
+        if (fseek(file, 0, SEEK_END) == 0) {
+          const long end = ftell(file);
+          if (end > 0) read_file_size = (size_t)end;
+        }
+        if (read_capacity > 0U && fseek(file, (long)read_offset, SEEK_SET) == 0) {
           read_length = fread(read_buffer, 1U, read_capacity, file);
         }
         (void)fclose(file);
@@ -343,21 +359,37 @@ void waveshare_recorder_drain(void) {
 }
 
 
+bool waveshare_recorder_known_name(const char *name) {
+  if (name == NULL) return false;
+  return strcmp(name, "mic.pcm") == 0 || strcmp(name, "speaker.pcm") == 0 ||
+      strcmp(name, "call.log") == 0;
+}
+
 size_t waveshare_recorder_size(const char *name) {
-  if (!recorder.mounted || name == NULL) return 0U;
-  if (strcmp(name, "mic.pcm") == 0) return recorder.mic_bytes;
-  if (strcmp(name, "speaker.pcm") == 0) return recorder.speaker_bytes;
-  if (strcmp(name, "call.log") == 0) return recorder.log_bytes;
-  return 0U;
+  /*
+   * Answered by the recorder task from the file itself, for the same reason
+   * `read` is: this runs on the task that answers every RPC and feeds the
+   * speaker, and a slow card must not take the device with it. Answering from
+   * the live counters instead was the bug — they reset when a call starts,
+   * while the file on the card does not.
+   */
+  if (!waveshare_recorder_known_name(name)) return 0U;
+  return waveshare_recorder_measure(name);
+}
+
+/** Whole-file size, measured by the recorder task. 0 when absent or unmounted. */
+size_t waveshare_recorder_measure(const char *name) {
+  (void)waveshare_recorder_read(name, 0U, NULL, 0U);
+  return read_file_size;
 }
 
 size_t waveshare_recorder_read(
     const char *name, size_t offset, void *out, size_t capacity) {
   const uint64_t deadline = now_ms() + 3000U;
   size_t taken;
-  if (!recorder.mounted || out == NULL || capacity == 0U || name == NULL) {
-    return 0U;
-  }
+  const bool measure_only = out == NULL && capacity == 0U;
+  if (!recorder.mounted || name == NULL) return 0U;
+  if (!measure_only && (out == NULL || capacity == 0U)) return 0U;
   /*
    * Hand the request to the recorder task rather than touching the
    * filesystem here. This runs on the task that answers every RPC and feeds
@@ -379,7 +411,7 @@ size_t waveshare_recorder_read(
     vTaskDelay(pdMS_TO_TICKS(5) > 0U ? pdMS_TO_TICKS(5) : 1U);
   }
   taken = read_length < capacity ? read_length : capacity;
-  memcpy(out, read_buffer, taken);
+  if (!measure_only) memcpy(out, read_buffer, taken);
   read_pending = false;
   return taken;
 }

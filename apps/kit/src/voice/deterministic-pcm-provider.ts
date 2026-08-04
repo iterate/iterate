@@ -17,10 +17,25 @@ export interface DeterministicPcm16LeRenderer {
   render(sampleCount: number): Uint8Array;
 }
 
+export interface DeterministicPcmSourcePause {
+  /** Exact sample boundary after which the source stops producing bytes. */
+  afterSamples: number;
+  /** Bounded wall-clock outage before the same source generation resumes. */
+  durationMs: number;
+}
+
+export interface DeterministicPcmResponsePlan {
+  durationMs: number;
+  renderer: DeterministicPcm16LeRenderer;
+  sourcePauses?: readonly DeterministicPcmSourcePause[];
+}
+
 export interface DeterministicPcmProviderOptions {
   chunkBytes: number;
-  createRenderer(): DeterministicPcm16LeRenderer;
-  durationMs: number;
+  createRenderer?(responseIndex: number): DeterministicPcm16LeRenderer;
+  createResponse?(responseIndex: number): DeterministicPcmResponsePlan;
+  durationMs?: number;
+  responseIndexScope?: "connection" | "provider";
   sampleRateHz: number;
 }
 
@@ -38,18 +53,11 @@ export class DeterministicPcmProvider implements Disposable {
   readonly #sockets = new Set<WebSocket>();
   readonly #streams = new Set<AbortController>();
   #disposed = false;
+  #providerResponseIndex = 0;
 
   constructor(options: DeterministicPcmProviderOptions) {
-    const sampleCount = (options.sampleRateHz * options.durationMs) / 1_000;
-    if (
-      !Number.isSafeInteger(options.sampleRateHz) ||
-      options.sampleRateHz <= 0 ||
-      !Number.isSafeInteger(options.durationMs) ||
-      options.durationMs <= 0 ||
-      !Number.isSafeInteger(sampleCount) ||
-      sampleCount > 10_000_000
-    ) {
-      throw new Error("The PCM duration must produce a bounded whole number of samples.");
+    if (!Number.isSafeInteger(options.sampleRateHz) || options.sampleRateHz <= 0) {
+      throw new Error("The deterministic PCM provider requires a positive whole sample rate.");
     }
     if (
       !Number.isSafeInteger(options.chunkBytes) ||
@@ -59,8 +67,23 @@ export class DeterministicPcmProvider implements Disposable {
     ) {
       throw new Error("Provider chunks must contain a bounded whole number of PCM16 samples.");
     }
-    if (typeof options.createRenderer !== "function") {
-      throw new Error("The deterministic PCM provider requires a renderer factory.");
+    const fixedResponse =
+      typeof options.createRenderer === "function" && options.durationMs !== undefined;
+    const plannedResponse = typeof options.createResponse === "function";
+    if (fixedResponse === plannedResponse) {
+      throw new Error(
+        "The deterministic PCM provider requires exactly one fixed or per-response plan.",
+      );
+    }
+    if (fixedResponse) {
+      validateDuration(options.durationMs!, options.sampleRateHz);
+    }
+    if (
+      options.responseIndexScope !== undefined &&
+      options.responseIndexScope !== "connection" &&
+      options.responseIndexScope !== "provider"
+    ) {
+      throw new Error("The deterministic PCM response index scope is invalid.");
     }
     this.#options = options;
   }
@@ -76,7 +99,11 @@ export class DeterministicPcmProvider implements Disposable {
     fixtureSocket.accept();
     this.#sockets.add(proxySocket);
     this.#sockets.add(fixtureSocket);
+    const forgetSocket = (event: Event) => this.#sockets.delete(event.currentTarget as WebSocket);
+    proxySocket.addEventListener("close", forgetSocket, { once: true });
+    fixtureSocket.addEventListener("close", forgetSocket, { once: true });
     let responseStarted = false;
+    let responseIndex = 0;
     let activeStream: AbortController | undefined;
 
     fixtureSocket.addEventListener("message", (event) => {
@@ -106,7 +133,15 @@ export class DeterministicPcmProvider implements Disposable {
       activeStream = new AbortController();
       this.#streams.add(activeStream);
       const stream = activeStream;
-      void this.#streamPcm(fixtureSocket, stream.signal)
+      const currentResponseIndex =
+        this.#options.responseIndexScope === "provider"
+          ? this.#providerResponseIndex++
+          : responseIndex++;
+      void this.#streamPcm(fixtureSocket, stream.signal, currentResponseIndex, () => {
+        if (activeStream !== stream) return;
+        activeStream = undefined;
+        responseStarted = false;
+      })
         .catch(() => {
           if (!stream.signal.aborted) {
             fixtureSocket.close(1011, "Deterministic provider stream failed.");
@@ -120,19 +155,74 @@ export class DeterministicPcmProvider implements Disposable {
     return proxySocket;
   }
 
-  async #streamPcm(socket: WebSocket, signal: AbortSignal) {
-    const renderer = this.#options.createRenderer();
+  /**
+   * Ends every current upstream generation without disposing fixture identity.
+   *
+   * The release matrix must prove reconnect behavior while preserving its
+   * provider-wide response index. Reconstructing the provider would reset that
+   * index and could silently replay phase zero under a later phase label.
+   */
+  retireConnections(reason = "Deterministic provider generation retired.") {
+    if (this.#disposed) throw new Error("The deterministic PCM provider has been disposed.");
+    for (const stream of this.#streams) stream.abort(new Error(reason));
+    this.#streams.clear();
+    for (const socket of this.#sockets) socket.close(1000, reason);
+    this.#sockets.clear();
+  }
+
+  async #streamPcm(
+    socket: WebSocket,
+    signal: AbortSignal,
+    responseIndex: number,
+    beforeResponseDone: () => void,
+  ) {
+    const response = this.#options.createResponse
+      ? this.#options.createResponse(responseIndex)
+      : {
+          durationMs: this.#options.durationMs!,
+          renderer: this.#options.createRenderer!(responseIndex),
+        };
+    validateDuration(response.durationMs, this.#options.sampleRateHz);
+    const sourcePauses = validateSourcePauses(
+      response.sourcePauses ?? [],
+      response.durationMs,
+      this.#options.sampleRateHz,
+    );
+    const renderer = response.renderer;
     if (!renderer || typeof renderer.render !== "function") {
       throw new Error("The deterministic PCM renderer factory returned no renderer.");
     }
     socket.send(JSON.stringify({ type: "response.created" }));
-    const sampleCount = (this.#options.sampleRateHz * this.#options.durationMs) / 1_000;
+    const sampleCount = (this.#options.sampleRateHz * response.durationMs) / 1_000;
     const samplesPerChunk = this.#options.chunkBytes / Int16Array.BYTES_PER_ELEMENT;
     let nextChunkDeadline = 0;
+    let nextPauseIndex = 0;
     let sampleOffset = 0;
     while (sampleOffset < sampleCount) {
       if (signal.aborted) throw signal.reason;
-      const renderedSamples = Math.min(samplesPerChunk, sampleCount - sampleOffset);
+      const nextPause = sourcePauses[nextPauseIndex];
+      const samplesBeforePause = nextPause
+        ? nextPause.afterSamples - sampleOffset
+        : Number.POSITIVE_INFINITY;
+      const renderedSamples = Math.min(
+        samplesPerChunk,
+        sampleCount - sampleOffset,
+        samplesBeforePause,
+      );
+      if (renderedSamples <= 0) {
+        if (!nextPause || sampleOffset !== nextPause.afterSamples) {
+          throw new Error("The PCM source pause plan did not advance monotonically.");
+        }
+        /*
+         * This is deliberately a source outage, not queued silence. Reset the
+         * absolute pacer afterward so recovery resumes at realtime cadence and
+         * never emits an old-audio catch-up burst.
+         */
+        await waitForDuration(nextPause.durationMs, signal);
+        nextPauseIndex += 1;
+        nextChunkDeadline = 0;
+        continue;
+      }
       const pcm = renderer.render(renderedSamples);
       if (
         !(pcm instanceof Uint8Array) ||
@@ -157,6 +247,14 @@ export class DeterministicPcmProvider implements Disposable {
       await waitForDeadline(nextChunkDeadline, signal);
     }
     if (signal.aborted) throw signal.reason;
+    /*
+     * response.done is a media boundary, not a connection boundary. Release
+     * the response latch before publishing that ordered terminal event so a
+     * test controller may synchronously request the next phase from its
+     * response.done listener. The callback checks stream ownership; a stale
+     * cancelled stream therefore cannot unlock a newer replacement response.
+     */
+    beforeResponseDone();
     socket.send(JSON.stringify({ type: "response.done" }));
   }
 
@@ -169,6 +267,49 @@ export class DeterministicPcmProvider implements Disposable {
       socket.close(1000, "Deterministic PCM provider stopped.");
     }
     this.#sockets.clear();
+  }
+}
+
+function validateSourcePauses(
+  pauses: readonly DeterministicPcmSourcePause[],
+  durationMs: number,
+  sampleRateHz: number,
+) {
+  const sampleCount = (sampleRateHz * durationMs) / 1_000;
+  let previousAfterSamples = 0;
+  return pauses.map((pause) => {
+    if (
+      !Number.isSafeInteger(pause.afterSamples) ||
+      pause.afterSamples <= previousAfterSamples ||
+      pause.afterSamples >= sampleCount ||
+      !Number.isSafeInteger(pause.durationMs) ||
+      pause.durationMs <= 0 ||
+      pause.durationMs > 5_000
+    ) {
+      throw new Error(
+        "PCM source pauses must be ordered interior sample boundaries with durations up to 5000 ms.",
+      );
+    }
+    previousAfterSamples = pause.afterSamples;
+    return Object.freeze({ ...pause });
+  });
+}
+
+function validateDuration(durationMs: number, sampleRateHz: number) {
+  const sampleCount = (sampleRateHz * durationMs) / 1_000;
+  /*
+   * Ten minutes is the release matrix's longest single phase. Keeping this
+   * bound on each response prevents malformed evidence metadata from turning
+   * a physical rig into an unbounded socket stream while still permitting the
+   * stability phase without special transport code.
+   */
+  if (
+    !Number.isSafeInteger(durationMs) ||
+    durationMs <= 0 ||
+    !Number.isSafeInteger(sampleCount) ||
+    sampleCount > 10_000_000
+  ) {
+    throw new Error("The PCM duration must produce a bounded whole number of samples.");
   }
 }
 
@@ -186,4 +327,8 @@ function waitForDeadline(deadline: number, signal: AbortSignal) {
     }
     signal.addEventListener("abort", aborted, { once: true });
   });
+}
+
+function waitForDuration(durationMs: number, signal: AbortSignal) {
+  return waitForDeadline(performance.now() + durationMs, signal);
 }

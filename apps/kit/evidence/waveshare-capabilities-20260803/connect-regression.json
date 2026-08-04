@@ -1,0 +1,74 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/connect-regression.ts
+
+{
+  "cycles": [
+    {
+      "cycle": 1,
+      "callLiveMs": 8116,
+      "live": true,
+      "starvedMs": 0,
+      "starveEvents": 0,
+      "sent": 4211,
+      "played": 3364,
+      "phases": {
+        "bridgeEnteredAt": 1785802931026,
+        "providerDialledMs": 491,
+        "providerReadyMs": 582,
+        "acceptedMs": 792
+      }
+    },
+    {
+      "cycle": 2,
+      "callLiveMs": 1845,
+      "live": true,
+      "starvedMs": 0,
+      "starveEvents": 0,
+      "sent": 4541,
+      "played": 3366,
+      "phases": {
+        "bridgeEnteredAt": 1785802931026,
+        "providerDialledMs": 491,
+        "providerReadyMs": 582,
+        "acceptedMs": 792
+      }
+    },
+    {
+      "cycle": 3,
+      "callLiveMs": 2646,
+      "live": true,
+      "starvedMs": 0,
+      "starveEvents": 0,
+      "sent": 4720,
+      "played": 3366,
+      "phases": {
+        "bridgeEnteredAt": 1785802931026,
+        "providerDialledMs": 491,
+        "providerReadyMs": 582,
+        "acceptedMs": 792
+      }
+    }
+  ],
+  "redials": [],
+  "acceptedPhases": [
+    {
+      "bridgeEnteredAt": 1785802931026,
+      "providerDialledMs": 491,
+      "providerReadyMs": 582,
+      "acceptedMs": 792
+    },
+    {
+      "bridgeEnteredAt": 1785803011906,
+      "providerDialledMs": 492,
+      "providerReadyMs": 1010,
+      "acceptedMs": 1227
+    },
+    {
+      "bridgeEnteredAt": 1785803093109,
+      "providerDialledMs": 507,
+      "providerReadyMs": 1158,
+      "acceptedMs": 1377
+    }
+  ]
+}

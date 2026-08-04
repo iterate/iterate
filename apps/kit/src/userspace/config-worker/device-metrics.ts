@@ -13,6 +13,7 @@ export interface DeviceMetricsPayload extends JsonObject {
   freePsramBytes: number;
   minimumFreeHeapBytes: number;
   minimumFreeInternalHeapBytes: number;
+  subscriptionEnds: number;
   taskStackHighWaterBytes: number;
   uptimeMs: number;
 }
@@ -25,6 +26,110 @@ export interface DeviceMetricsSessionMetrics {
     receivedAtMs: number;
   } | null;
   samplesReceived: number;
+}
+
+export type DeviceMetricsCallbackBracket =
+  | {
+      baseline: { receivedAtMs: number; uptimeMs: number };
+      deviceUptimeSpanMs: number;
+      exactMediaInterval: false;
+      receiptSpanMs: number;
+      sampleCountDelta: number;
+      semantics: "conservative-callback-bracket";
+      status: "valid";
+      terminal: { receivedAtMs: number; uptimeMs: number };
+    }
+  | {
+      exactMediaInterval: false;
+      reason: string;
+      semantics: "conservative-callback-bracket";
+      status: "invalid";
+    }
+  | {
+      exactMediaInterval: false;
+      reason: string;
+      semantics: "conservative-callback-bracket";
+      status: "unavailable";
+    };
+
+/**
+ * Describes the coverage of two low-rate capability snapshots honestly.
+ *
+ * A worker can read its own PCM counters at an exact scenario boundary, but a
+ * device metrics callback is pushed on the firmware's independent one-second
+ * clock. The two retained callback samples therefore bracket the interesting
+ * interval; subtracting counters from them is useful for leak/reset detection,
+ * but is not exact frame conservation. Encoding that distinction in the
+ * artifact prevents a later analyzer from silently upgrading sampled evidence
+ * into a transport claim.
+ */
+export function deviceMetricsCallbackBracket(
+  baseline: DeviceMetricsSessionMetrics | null | undefined,
+  terminal: DeviceMetricsSessionMetrics | null | undefined,
+): DeviceMetricsCallbackBracket {
+  if (
+    baseline?.latestSample === null ||
+    baseline?.latestSample === undefined ||
+    terminal?.latestSample === null ||
+    terminal?.latestSample === undefined
+  ) {
+    return {
+      exactMediaInterval: false,
+      reason: "Both proof boundaries require a retained device metrics callback.",
+      semantics: "conservative-callback-bracket",
+      status: "unavailable",
+    };
+  }
+  if (terminal.latestSample.metrics.uptimeMs < baseline.latestSample.metrics.uptimeMs) {
+    return {
+      exactMediaInterval: false,
+      reason: "Device uptime moved backwards across the metrics callback bracket.",
+      semantics: "conservative-callback-bracket",
+      status: "invalid",
+    };
+  }
+  if (terminal.samplesReceived < baseline.samplesReceived) {
+    return {
+      exactMediaInterval: false,
+      reason: "Userspace sample count moved backwards across the metrics callback bracket.",
+      semantics: "conservative-callback-bracket",
+      status: "invalid",
+    };
+  }
+  return {
+    baseline: {
+      receivedAtMs: baseline.latestSample.receivedAtMs,
+      uptimeMs: baseline.latestSample.metrics.uptimeMs,
+    },
+    deviceUptimeSpanMs:
+      terminal.latestSample.metrics.uptimeMs - baseline.latestSample.metrics.uptimeMs,
+    exactMediaInterval: false,
+    receiptSpanMs: terminal.latestSample.receivedAtMs - baseline.latestSample.receivedAtMs,
+    sampleCountDelta: terminal.samplesReceived - baseline.samplesReceived,
+    semantics: "conservative-callback-bracket",
+    status: "valid",
+    terminal: {
+      receivedAtMs: terminal.latestSample.receivedAtMs,
+      uptimeMs: terminal.latestSample.metrics.uptimeMs,
+    },
+  };
+}
+
+/**
+ * Reads the optional physical playback-ring observation from a valid metrics
+ * sample. Resource fields are mandatory across every Kit target, but older or
+ * non-audio devices may legitimately omit `audio.downlink`. Keeping this
+ * target-neutral boundary here avoids both unsafe nested casts in the worker
+ * and any device-slug branch in the realtime bridge.
+ */
+export function deviceDownlinkDepth(metrics: DeviceMetricsPayload): number | null {
+  const audio = metrics.audio;
+  if (!isJsonObject(audio)) return null;
+  const downlink = audio.downlink;
+  if (!isJsonObject(downlink)) return null;
+  const depth = downlink.depth;
+  if (typeof depth !== "number" || !Number.isSafeInteger(depth) || depth < 0) return null;
+  return depth;
 }
 
 /**
@@ -103,6 +208,7 @@ function isDeviceMetricsPayload(value: unknown): value is DeviceMetricsPayload {
     value.freePsramBytes,
     value.taskStackHighWaterBytes,
     value.cpuPermille,
+    value.subscriptionEnds,
   ].every((metric) => typeof metric === "number" && Number.isSafeInteger(metric));
 }
 

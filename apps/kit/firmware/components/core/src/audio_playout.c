@@ -13,6 +13,11 @@
 
 #include <stddef.h>
 
+void iterate_kit_playout_mark_drained(struct iterate_kit_playout *playout) {
+  if (playout == NULL) return;
+  playout->answer_audible = false;
+}
+
 void iterate_kit_playout_reset(
     struct iterate_kit_playout *playout, uint32_t call) {
   if (playout == NULL) {
@@ -27,6 +32,8 @@ void iterate_kit_playout_reset(
   playout->abandoned_frame = 0U;
   playout->appended = 0U;
   playout->replaced = 0U;
+  playout->superseded_midplay = 0U;
+  playout->answer_audible = false;
   playout->ignored_other_call = 0U;
   playout->ignored_stale_answer = 0U;
   playout->ignored_duplicate = 0U;
@@ -184,11 +191,20 @@ enum iterate_kit_playout_action iterate_kit_playout_classify(
    */
   if (frame->answer > playout->answer || !playout->answer_started) {
     ++playout->replaced;
+    /*
+     * Did this cost the listener anything? Only if an answer was already under
+     * way when the newer one arrived. Counting that separately is what lets a
+     * clean turn report zero while a barge-in still reports what it abandoned.
+     */
+    if (playout->answer_audible && frame->answer > playout->answer) {
+      ++playout->superseded_midplay;
+    }
     /* A newer answer settles the interruption: nothing is abandoned now. */
     playout->has_abandoned = false;
     playout->answer = frame->answer;
     playout->frame = frame->frame;
     playout->answer_started = true;
+    playout->answer_audible = true;
     return ITERATE_KIT_PLAYOUT_REPLACE;
   }
   /*
@@ -200,6 +216,7 @@ enum iterate_kit_playout_action iterate_kit_playout_classify(
     ++playout->ignored_duplicate;
     return ITERATE_KIT_PLAYOUT_IGNORE;
   }
+  playout->answer_audible = true;
   continue_answer(playout, frame);
   ++playout->appended;
   return ITERATE_KIT_PLAYOUT_APPEND;

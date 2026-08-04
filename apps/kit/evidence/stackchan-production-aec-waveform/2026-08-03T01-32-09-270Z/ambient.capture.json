@@ -1,0 +1,22 @@
+{
+  "assessment": {
+    "actualFrames": 152,
+    "durationMs": 3052,
+    "expectedFrames": 153,
+    "maximumExpectedFrames": 156,
+    "minimumExpectedFrames": 150,
+    "passed": true,
+    "reasons": []
+  },
+  "capture": {
+    "durationMs": 3052,
+    "finishedAtMs": 1785720740979,
+    "frameBytes": 640,
+    "frames": 152,
+    "maximumFrames": 300,
+    "pcmSha256": "88032f985cb4ff4d05a28926790768f1220918f4e20b5d1c4f45b31282c1e98f",
+    "schemaVersion": 1,
+    "startedAtMs": 1785720737927,
+    "truncatedFrames": 0
+  }
+}

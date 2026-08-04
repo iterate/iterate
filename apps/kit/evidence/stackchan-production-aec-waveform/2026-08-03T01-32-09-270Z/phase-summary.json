@@ -1,0 +1,97 @@
+[
+  {
+    "assessment": {
+      "actualFrames": 152,
+      "durationMs": 3052,
+      "expectedFrames": 153,
+      "maximumExpectedFrames": 156,
+      "minimumExpectedFrames": 150,
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 3052,
+      "frames": 152,
+      "truncatedFrames": 0
+    },
+    "name": "ambient",
+    "playbackObserved": false,
+    "responseIndex": null
+  },
+  {
+    "assessment": {
+      "actualFrames": 202,
+      "durationMs": 4087,
+      "expectedFrames": 204,
+      "maximumExpectedFrames": 207,
+      "minimumExpectedFrames": 201,
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4087,
+      "frames": 202,
+      "truncatedFrames": 0
+    },
+    "name": "far-tone",
+    "playbackObserved": true,
+    "responseIndex": 0
+  },
+  {
+    "assessment": {
+      "actualFrames": 205,
+      "durationMs": 4095,
+      "expectedFrames": 205,
+      "maximumExpectedFrames": 208,
+      "minimumExpectedFrames": 202,
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4095,
+      "frames": 205,
+      "truncatedFrames": 0
+    },
+    "name": "far-dual-carrier-prbs31",
+    "playbackObserved": true,
+    "responseIndex": 1
+  },
+  {
+    "assessment": {
+      "actualFrames": 203,
+      "durationMs": 4052,
+      "expectedFrames": 203,
+      "maximumExpectedFrames": 206,
+      "minimumExpectedFrames": 200,
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4052,
+      "frames": 203,
+      "truncatedFrames": 0
+    },
+    "name": "far-speech-shaped",
+    "playbackObserved": true,
+    "responseIndex": 2
+  },
+  {
+    "assessment": {
+      "actualFrames": 204,
+      "durationMs": 4121,
+      "expectedFrames": 206,
+      "maximumExpectedFrames": 209,
+      "minimumExpectedFrames": 203,
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4121,
+      "frames": 204,
+      "truncatedFrames": 0
+    },
+    "name": "near-only",
+    "playbackObserved": true,
+    "responseIndex": 3
+  }
+]

@@ -168,14 +168,14 @@ struct iterate_kit_esp_idf_pcm_transport_metrics {
   uint32_t downlink_receive_failures;
   uint32_t downlink_ordered_item_losses;
   /*
-   * Receipt counts describe the application boundary on this exact PCM hop.
-   * `received` means a whole ordered item reached the playback lane;
+   * Receipt counts describe the capacity boundary on this exact PCM hop.
+   * `released` means the hardware-clocked consumer freed one ordered lane item;
    * `acknowledged` means its cumulative receipt finished the socket write. A
    * receipt is not an audible-playback acknowledgement, but it gives workerd
    * the finite credit boundary that its server-side WebSocket API lacks.
    */
   uint32_t downlink_receipt_failures;
-  uint32_t downlink_items_received;
+  uint32_t downlink_items_released;
   uint32_t downlink_items_acknowledged;
   uint32_t downlink_receipts_sent;
   uint32_t downlink_receipt_send_deferrals;
@@ -252,6 +252,12 @@ struct iterate_kit_esp_idf_pcm_transport {
   uint32_t downlink_receive_failures;
   uint32_t downlink_ordered_item_losses;
   uint32_t downlink_receipt_failures;
+  /*
+   * The priority playback owner is the sole producer and the network task is
+   * the sole consumer. This atomic handoff carries counts, never audio; its
+   * maximum live value is bounded by the finite downlink lane.
+   */
+  uint32_t downlink_items_released_pending;
   uint32_t network_task_stack_exhaustions;
   uint32_t network_task_work_cycles;
   uint32_t network_task_max_work_cycles;
@@ -279,17 +285,17 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_prepare(
     const struct iterate_kit_esp_idf_pcm_transport_options *options);
 
 /**
- * Starts the PCM socket task after the shared Wi-Fi owner has connected.
+ * Publishes hardware-clocked downlink slot releases to the network owner.
+ *
+ * This callback is safe from the priority audio task: it performs one bounded
+ * atomic increment and task notification, with no allocation, logging, locks,
+ * or socket work. The network task coalesces the count into a cumulative
+ * application receipt. Calling it at socket ingress is incorrect because that
+ * would grant new supply before the device clock freed capacity.
  */
-enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_start(
-    struct iterate_kit_esp_idf_pcm_transport *transport);
-
-/**
- * Main-task state reconciliation. It performs no socket I/O and never waits.
- * On disconnect or reconnect it discards stale downlink frames.
- */
-enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_poll(
-    struct iterate_kit_esp_idf_pcm_transport *transport);
+void iterate_kit_esp_idf_pcm_transport_note_downlink_item_released(
+    void *context,
+    uint32_t released_items);
 
 /**
  * Wakes the socket owner after its producer publishes an uplink frame.
@@ -298,31 +304,9 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_poll(
 void iterate_kit_esp_idf_pcm_transport_notify_uplink(
     struct iterate_kit_esp_idf_pcm_transport *transport);
 
-void iterate_kit_esp_idf_pcm_transport_request_restart(
-    struct iterate_kit_esp_idf_pcm_transport *transport);
-
-/**
- * Revokes socket admission and wakes the network owner without waiting for a
- * possibly-blocked DNS/TLS operation. The application must subsequently call
- * finish_stop() until it returns OK before starting this transport again.
- */
-enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_request_stop(
-    struct iterate_kit_esp_idf_pcm_transport *transport);
-
-/** Nonblocking static-task reap; UNAVAILABLE means the owner is still exiting. */
-enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_finish_stop(
-    struct iterate_kit_esp_idf_pcm_transport *transport);
-
-/** Blocking shutdown helper for process teardown, not an interactive button. */
-enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_stop(
-    struct iterate_kit_esp_idf_pcm_transport *transport);
-
 void iterate_kit_esp_idf_pcm_transport_metrics(
     const struct iterate_kit_esp_idf_pcm_transport *transport,
     struct iterate_kit_esp_idf_pcm_transport_metrics *metrics);
-
-const char *iterate_kit_esp_idf_pcm_transport_state_name(
-    enum iterate_kit_esp_idf_pcm_transport_state state);
 
 #ifdef __cplusplus
 }

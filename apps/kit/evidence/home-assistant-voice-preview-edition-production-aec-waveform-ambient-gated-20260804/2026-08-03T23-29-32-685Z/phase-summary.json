@@ -1,0 +1,163 @@
+[
+  {
+    "assessment": {
+      "actualFrames": 165,
+      "acceptedFrameSpanMs": 3281,
+      "capturedAudioDurationMs": 3300,
+      "durationMs": 3290,
+      "expectedFrames": 165,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 168,
+      "minimumExpectedFrames": 162,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 3290,
+      "frames": 165,
+      "truncatedFrames": 0
+    },
+    "name": "ambient",
+    "playbackObserved": false,
+    "responseIndex": null
+  },
+  {
+    "assessment": {
+      "actualFrames": 214,
+      "acceptedFrameSpanMs": 4271,
+      "capturedAudioDurationMs": 4280,
+      "durationMs": 4289,
+      "expectedFrames": 214,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 217,
+      "minimumExpectedFrames": 211,
+      "passed": false,
+      "realtimeCadencePassed": false,
+      "reasons": ["The maximum accepted-uplink gap was 63 ms; 60 ms is the fixed realtime limit."]
+    },
+    "capture": {
+      "durationMs": 4289,
+      "frames": 214,
+      "truncatedFrames": 0
+    },
+    "name": "far-tone",
+    "playbackObserved": true,
+    "responseIndex": 0
+  },
+  {
+    "assessment": {
+      "actualFrames": 215,
+      "acceptedFrameSpanMs": 4283,
+      "capturedAudioDurationMs": 4300,
+      "durationMs": 4290,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4290,
+      "frames": 215,
+      "truncatedFrames": 0
+    },
+    "name": "far-dual-carrier-prbs31",
+    "playbackObserved": true,
+    "responseIndex": 1
+  },
+  {
+    "assessment": {
+      "actualFrames": 215,
+      "acceptedFrameSpanMs": 4283,
+      "capturedAudioDurationMs": 4300,
+      "durationMs": 4290,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4290,
+      "frames": 215,
+      "truncatedFrames": 0
+    },
+    "name": "far-speech-shaped",
+    "playbackObserved": true,
+    "responseIndex": 2
+  },
+  {
+    "assessment": {
+      "actualFrames": 214,
+      "acceptedFrameSpanMs": 4268,
+      "capturedAudioDurationMs": 4280,
+      "durationMs": 4288,
+      "expectedFrames": 214,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 217,
+      "minimumExpectedFrames": 211,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4288,
+      "frames": 214,
+      "truncatedFrames": 0
+    },
+    "name": "near-only",
+    "playbackObserved": true,
+    "responseIndex": 3
+  },
+  {
+    "assessment": {
+      "actualFrames": 214,
+      "acceptedFrameSpanMs": 4257,
+      "capturedAudioDurationMs": 4280,
+      "durationMs": 4280,
+      "expectedFrames": 214,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 217,
+      "minimumExpectedFrames": 211,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4280,
+      "frames": 214,
+      "truncatedFrames": 0
+    },
+    "name": "near-repeat",
+    "playbackObserved": true,
+    "responseIndex": 4
+  },
+  {
+    "assessment": {
+      "actualFrames": 215,
+      "acceptedFrameSpanMs": 4274,
+      "capturedAudioDurationMs": 4300,
+      "durationMs": 4291,
+      "expectedFrames": 215,
+      "frameConservationPassed": true,
+      "maximumExpectedFrames": 218,
+      "minimumExpectedFrames": 212,
+      "passed": true,
+      "realtimeCadencePassed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4291,
+      "frames": 215,
+      "truncatedFrames": 0
+    },
+    "name": "double-talk",
+    "playbackObserved": true,
+    "responseIndex": 5
+  }
+]

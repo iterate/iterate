@@ -1,11 +1,13 @@
 idf_component_register(
   SRCS
+    "src/aec_diagnostic_trace.c"
     "src/avatar.c"
     "src/callback_budget.c"
     "src/conversation.c"
     "src/camera.c"
     "src/device_event_stream.c"
     "src/leds.c"
+    "src/logical_input.c"
     "src/metrics.c"
     "src/push_to_talk.c"
     "src/rpc_internal.c"

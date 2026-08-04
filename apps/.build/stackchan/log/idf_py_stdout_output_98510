@@ -1,0 +1,50 @@
+2026-08-04 14:44:07 I (8173) wifi:state: auth -> init (0x200)
+2026-08-04 14:44:07 I (8173) wifi:new:<4,0>, old:<4,0>, ap:<255,255>, sta:<4,0>, prof:1, snd_ch_cfg:0x0
+2026-08-04 14:44:07 W (8643) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:44:08 W (9643) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:44:09 W (10643) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:44:10 W (11653) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:44:11 W (12653) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:44:12 W (13653) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:44:13 W (14653) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:44:14 W (15653) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:44:15 I (16023) wifi:new:<4,0>, old:<4,0>, ap:<255,255>, sta:<4,0>, prof:1, snd_ch_cfg:0x0
+2026-08-04 14:44:15 I (16023) wifi:state: init -> auth (0xb0)
+2026-08-04 14:44:15 I (16473) wifi:state: auth -> assoc (0x0)
+2026-08-04 14:44:15 I (16503) wifi:state: assoc -> run (0x10)
+2026-08-04 14:44:15 I (16543) wifi:connected with mispwoso2, aid = 37, channel 4, BW20, bssid = 62:7f:f0:57:9d:87
+2026-08-04 14:44:15 I (16543) wifi:security: WPA3-SAE, phy: bgn, rssi: -48
+2026-08-04 14:44:15 I (16543) wifi:pm start, type: 0
+2026-08-04 14:44:15 
+2026-08-04 14:44:15 I (16543) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+2026-08-04 14:44:15 I (16543) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+2026-08-04 14:44:15 I (16553) wifi:AP's beacon interval = 102400 us, DTIM period = 1
+2026-08-04 14:44:16 I (17043) wifi:<ba-add>idx:0 (ifx:0, 62:7f:f0:57:9d:87), tid:7, ssn:3, winSize:64
+2026-08-04 14:44:16 I (17043) wifi:<ba-del>idx:0, tid:7
+2026-08-04 14:44:16 I (17053) wifi:<ba-add>idx:0 (ifx:0, 62:7f:f0:57:9d:87), tid:7, ssn:3, winSize:64
+2026-08-04 14:44:17 I (18073) esp_netif_handlers: sta ip: 192.168.0.234, mask: 255.255.255.0, gw: 192.168.0.1
+2026-08-04 14:44:17 I (18073) iterate-stackchan: control state=websocket_connecting
+2026-08-04 14:44:17 I (18073) wifi:<ba-add>idx:1 (ifx:0, 62:7f:f0:57:9d:87), tid:0, ssn:1, winSize:64
+2026-08-04 14:44:17 I (18073) wifi:<ba-del>idx:1, tid:0
+2026-08-04 14:44:17 I (18073) wifi:<ba-add>idx:1 (ifx:0, 62:7f:f0:57:9d:87), tid:0, ssn:1, winSize:64
+2026-08-04 14:44:17 I (18693) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:44:19 I (20333) iterate-stackchan: control state=mounting
+2026-08-04 14:44:19 I (20543) iterate-stackchan: control state=ready
+2026-08-04 14:44:19 I (20543) iterate-stackchan: pcm session state=connecting status=0 platform=0
+2026-08-04 14:44:20 I (21703) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:44:24 I (25013) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:44:26 I (27543) iterate-stackchan: pcm session state=ready status=0 platform=32776
+2026-08-04 14:44:43 I (44493) iterate-stackchan-avatar: capture encoded: png=3016 total_ms=58 deflate_ms=32 free_psram=6750400 free_internal=23055
+2026-08-04 14:44:43 I (44503) iterate-stackchan-avatar: capture released
+2026-08-04 14:46:13 W (134443) iterate-stackchan: control capability idle lease expired: generation=1 served=3 remounts=1
+2026-08-04 14:46:13 I (134453) iterate-stackchan: control state=websocket_connecting
+2026-08-04 14:46:14 I (135373) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:46:16 I (137143) iterate-stackchan: control state=mounting
+2026-08-04 14:46:16 I (137423) iterate-stackchan: control state=ready
+2026-08-04 14:46:16 I (137423) iterate-stackchan: pcm session state=connecting status=0 platform=32776
+2026-08-04 14:46:17 I (138793) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:46:22 I (142933) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:46:24 I (145073) iterate-stackchan: pcm session state=ready status=0 platform=32776
+2026-08-04 14:46:35 I (155913) iterate-stackchan-avatar: capture encoded: png=3018 total_ms=57 deflate_ms=32 free_psram=6749932 free_internal=23055
+2026-08-04 14:46:35 I (155923) iterate-stackchan-avatar: capture released
+2026-08-04 14:46:36 W (157283) iterate-stackchan: remote capability subscription ended: callback rejected total=1

@@ -1,4 +1,6 @@
 import { connectItxReady } from "iterate/node";
+import { resolveProductionProjectApiKey } from "../src/device/production-project-api-key.ts";
+import { captureIncidentDiagnostic } from "../src/device/incident-diagnostic.ts";
 import { kitVoiceWorkerRef } from "../src/userspace/config-worker/app-ref.ts";
 import {
   KIT_PROVIDER_EVENT_STREAM_EVENT_TYPE,
@@ -7,18 +9,32 @@ import {
 import { kitDeviceCapabilityPath } from "../src/userspace/config-worker/device-id.ts";
 
 const projectId = process.env.ITERATE_KIT_PROJECT_ID?.trim() ?? "";
-const projectApiKey = process.env.ITERATE_KIT_PROJECT_API_KEY?.trim() ?? "";
 const deviceId = process.env.ITERATE_KIT_DEVICE_ID?.trim() || "m5sticks3";
+const streamOnly = process.env.ITERATE_KIT_INCIDENT_STREAM_ONLY === "1";
+const baseUrl = "https://os.iterate.com";
+const diagnosticTimeoutMs = 5_000;
 
 if (!/^prj_[A-Za-z0-9_-]+$/u.test(projectId)) {
   throw new Error("ITERATE_KIT_PROJECT_ID must identify the production proof project.");
 }
-if (!projectApiKey) throw new Error("ITERATE_KIT_PROJECT_API_KEY is required.");
+/*
+ * Incident collection must remain usable when the operator has only the
+ * normal Doppler-backed production admin credential. Resolve the project's
+ * narrow ingress key in memory through the same pairing seam as the proof
+ * harness; requiring a manually copied secret during an active physical
+ * failure loses the most valuable provider and socket evidence.
+ */
+const projectApiKey = await resolveProductionProjectApiKey({
+  adminApiSecret: process.env.APP_CONFIG_ADMIN_API_SECRET,
+  baseUrl,
+  projectApiKey: process.env.ITERATE_KIT_PROJECT_API_KEY,
+  projectId,
+});
 
 using project = await connectItxReady(
   {
     auth: { projectId, secret: projectApiKey, type: "project-secret" },
-    baseUrl: "https://os.iterate.com",
+    baseUrl,
     projectId,
   },
   {
@@ -69,28 +85,60 @@ const providerEvents = await stream.getEvents({
   limit: 300,
 });
 
-const [metrics, deviceDiagnostics, repoLog] = await Promise.all([
-  worker.pcmMetrics(),
-  capabilityRoot.invokeCapability({
-    args: [],
-    path: kitDeviceCapabilityPath(deviceId, "getDiagnostics"),
-  }),
-  project.repo.log({ limit: 12 }),
-]);
+/*
+ * The raw provider stream is the irreplaceable timing record during a live
+ * voice incident. A wedged device control socket or unrelated repository read
+ * must not prevent an operator from collecting it. Stream-only mode therefore
+ * omits those secondary calls explicitly; it does not substitute nulls that a
+ * later reader could mistake for successful diagnostics.
+ */
+const [metrics, deviceDiagnostics, repoLog] = streamOnly
+  ? [
+      { skipped: true, reason: "ITERATE_KIT_INCIDENT_STREAM_ONLY" },
+      { skipped: true, reason: "ITERATE_KIT_INCIDENT_STREAM_ONLY" },
+      { skipped: true, reason: "ITERATE_KIT_INCIDENT_STREAM_ONLY" },
+    ]
+  : await Promise.all([
+      captureIncidentDiagnostic(() => worker.pcmMetrics(), {
+        label: "pcmMetrics",
+        timeoutMs: diagnosticTimeoutMs,
+      }),
+      captureIncidentDiagnostic(
+        () =>
+          capabilityRoot.invokeCapability({
+            args: [],
+            path: kitDeviceCapabilityPath(deviceId, "getDiagnostics"),
+          }),
+        { label: "device getDiagnostics", timeoutMs: diagnosticTimeoutMs },
+      ),
+      captureIncidentDiagnostic(() => project.repo.log({ limit: 12 }), {
+        label: "project repo log",
+        timeoutMs: diagnosticTimeoutMs,
+      }),
+    ]);
 
-console.log(
-  JSON.stringify(
-    {
-      collectedAt: new Date().toISOString(),
-      deviceDiagnostics,
-      deviceId,
-      metrics,
-      projectId,
-      providerEvents,
-      repoLog,
-      streamHead: head.streamMaxOffset,
-    },
-    null,
-    2,
-  ),
+const artifact = JSON.stringify(
+  {
+    collectedAt: new Date().toISOString(),
+    deviceDiagnostics,
+    deviceId,
+    metrics,
+    projectId,
+    providerEvents,
+    repoLog,
+    streamHead: head.streamMaxOffset,
+  },
+  null,
+  2,
 );
+
+/*
+ * Promise.race can bound what the collector waits for, but JavaScript cannot
+ * cancel a Cap'n Web call that was already dispatched. A physically wedged
+ * call may therefore keep the client's WebSocket referenced after its timeout
+ * result has been serialized. This file is a one-shot incident CLI, so exiting
+ * only after stdout confirms the complete artifact was flushed is the honest
+ * cancellation boundary. Relying on natural event-loop emptiness recreated the
+ * very indefinite hang the timeout is meant to prevent.
+ */
+process.stdout.write(`${artifact}\n`, () => process.exit(0));

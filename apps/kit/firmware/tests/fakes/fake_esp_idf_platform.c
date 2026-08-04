@@ -43,6 +43,9 @@ static struct iterate_kit_fake_websocket_client websocket_client;
 static uint32_t defer_connected;
 static uint32_t short_next_send;
 static int64_t monotonic_clock_offset_us;
+static bool wifi_started;
+static int wifi_power_save;
+static wifi_bandwidth_t wifi_bandwidth = WIFI_BW_HT40;
 
 static void add_milliseconds(
     struct timespec *deadline, TickType_t milliseconds) {
@@ -149,12 +152,51 @@ esp_err_t esp_wifi_set_config(
   return configuration == NULL ? ESP_FAIL : ESP_OK;
 }
 
-esp_err_t esp_wifi_set_ps(int power_save) {
-  (void)power_save;
+esp_err_t esp_wifi_set_ps(wifi_ps_type_t power_save) {
+  /*
+   * ESP-IDF's own low-latency examples apply power policy after start. Model
+   * that lifecycle requirement here so the host test cannot bless a call made
+   * before the driver can enforce it—the ordering used by the physical Stick
+   * while it exhibited periodic LAN and Cap'n Web stalls.
+   */
+  if (!wifi_started) {
+    return ESP_ERR_INVALID_STATE;
+  }
+  wifi_power_save = power_save;
+  return ESP_OK;
+}
+
+esp_err_t esp_wifi_get_ps(wifi_ps_type_t *power_save) {
+  if (!wifi_started || power_save == NULL) {
+    return ESP_ERR_INVALID_STATE;
+  }
+  *power_save = wifi_power_save;
+  return ESP_OK;
+}
+
+esp_err_t esp_wifi_set_bandwidth(
+    int interface_id, wifi_bandwidth_t bandwidth) {
+  if (!wifi_started || interface_id != WIFI_IF_STA ||
+      (bandwidth != WIFI_BW_HT20 &&
+       bandwidth != WIFI_BW_HT40)) {
+    return ESP_ERR_INVALID_STATE;
+  }
+  wifi_bandwidth = bandwidth;
+  return ESP_OK;
+}
+
+esp_err_t esp_wifi_get_bandwidth(
+    int interface_id, wifi_bandwidth_t *bandwidth) {
+  if (!wifi_started || interface_id != WIFI_IF_STA ||
+      bandwidth == NULL) {
+    return ESP_ERR_INVALID_STATE;
+  }
+  *bandwidth = wifi_bandwidth;
   return ESP_OK;
 }
 
 esp_err_t esp_wifi_start(void) {
+  wifi_started = true;
   if (wifi_handler != NULL) {
     wifi_handler(
         wifi_handler_context,
@@ -177,6 +219,7 @@ esp_err_t esp_wifi_connect(void) {
 }
 
 esp_err_t esp_wifi_stop(void) {
+  wifi_started = false;
   return ESP_OK;
 }
 
@@ -382,6 +425,10 @@ int iterate_kit_fake_network_task_core_id(void) {
 
 unsigned int iterate_kit_fake_network_task_priority(void) {
   return network_task.created ? network_task.priority : 0U;
+}
+
+wifi_bandwidth_t iterate_kit_fake_wifi_bandwidth(void) {
+  return wifi_bandwidth;
 }
 
 void xTaskNotifyGive(TaskHandle_t task) {
@@ -691,5 +738,8 @@ esp_err_t iterate_kit_fake_platform_finish(void) {
   wifi_handler_context = NULL;
   ip_handler = NULL;
   ip_handler_context = NULL;
+  wifi_started = false;
+  wifi_power_save = WIFI_PS_NONE;
+  wifi_bandwidth = WIFI_BW_HT40;
   return ESP_OK;
 }

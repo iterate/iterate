@@ -40,6 +40,40 @@ function binaryMessages(socket: WebSocket) {
   return messages;
 }
 
+function binaryMessageBytes(data: unknown): Uint8Array | undefined {
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  if (!ArrayBuffer.isView(data)) return undefined;
+  return new Uint8Array(data.buffer, data.byteOffset, data.byteLength);
+}
+
+function downlinkReceipt(releasedItems: number): Uint8Array {
+  const receipt = Uint8Array.of(0x49, 0x4b, 0x41, 1, 0, 0, 0, 0);
+  new DataView(receipt.buffer).setUint32(4, releasedItems, true);
+  return receipt;
+}
+
+function acknowledgeEveryDownlinkItem(socket: WebSocket): void {
+  let releasedItems = 0;
+  socket.addEventListener("message", (event) => {
+    const bytes = binaryMessageBytes(event.data);
+    if (
+      bytes === undefined ||
+      (bytes.byteLength !== 0 && bytes.byteLength !== ITERATE_KIT_PCM_FRAME_BYTES)
+    ) {
+      return;
+    }
+    /*
+     * Production firmware acknowledges only after its hardware-clocked
+     * playback consumer releases the complete ordered item. Captun has no DAC,
+     * so this default fixture models zero-latency consumption at MessageEvent.
+     * Timing and flow-control cases disable it and emit receipts from an
+     * explicit fake hardware clock; unrelated protocol cases stay concise.
+     */
+    releasedItems += 1;
+    socket.send(downlinkReceipt(releasedItems));
+  });
+}
+
 function textMessages(socket: WebSocket) {
   const messages: string[] = [];
   socket.addEventListener("message", (event) => {
@@ -58,6 +92,9 @@ describe("userspace PCM session bridge", () => {
 
   function createBridge(
     options: {
+      automaticDownlinkReceipts?: boolean;
+      downlinkSourceStartupFrames?: number;
+      onAcceptedUplinkPcm?: (frame: Uint8Array, acceptedUplinkFrame: number) => void;
       onPlaybackInterruption?: () => Promise<void> | void;
       onProviderEvent?: (event: ProviderNonPcmEvent) => void;
       onProviderFunctionCall?: (call: ProviderFunctionCall) => Promise<unknown>;
@@ -70,9 +107,14 @@ describe("userspace PCM session bridge", () => {
     const provider = socketPair();
     sockets.push(device.client, device.server, provider.client, provider.server);
     const diagnostics: PcmProxyDiagnostic[] = [];
+    if (options.automaticDownlinkReceipts !== false) {
+      acknowledgeEveryDownlinkItem(device.client);
+    }
     const bridge = new PcmSessionBridge({
       device: device.server,
+      downlinkSourceStartupFrames: options.downlinkSourceStartupFrames,
       maximumSocketBufferedBytes: ITERATE_KIT_PCM_FRAME_BYTES * 16,
+      onAcceptedUplinkPcm: options.onAcceptedUplinkPcm,
       onDiagnostic: (diagnostic) => diagnostics.push(diagnostic),
       onPlaybackInterruption: options.onPlaybackInterruption,
       onProviderEvent: options.onProviderEvent,
@@ -190,6 +232,84 @@ describe("userspace PCM session bridge", () => {
     await vi.waitFor(() => expect(downlink).toHaveLength(2));
     expect(downlink[0]).toEqual(microphoneFrame);
     expect(downlink[1]).toHaveLength(0);
+  });
+
+  test("observes only the gained microphone frame accepted by the provider socket", async () => {
+    /*
+     * The production AEC capture must represent what Grok actually received,
+     * including the configured userspace gain. Observation before send would
+     * let a rejected frame masquerade as evidence; retaining the MessageEvent
+     * view would let the next owner mutate evidence after the callback. The
+     * recorder is therefore called synchronously after send and owns copying.
+     */
+    const accepted: Array<{ frame: Uint8Array; ordinal: number }> = [];
+    const { device, provider } = createBridge({
+      onAcceptedUplinkPcm: (frame, ordinal) => accepted.push({ frame: frame.slice(), ordinal }),
+      uplinkGainMultiplier: 2,
+    });
+    const providerFrames = binaryMessages(provider.client);
+    const frame = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES);
+    new DataView(frame.buffer).setInt16(0, 1_000, true);
+    const secondFrame = frame.slice();
+
+    device.client.send(frame);
+    device.client.send(secondFrame);
+
+    await vi.waitFor(() => expect(accepted).toHaveLength(2));
+    expect(accepted.map(({ ordinal }) => ordinal)).toEqual([1, 2]);
+    expect(new DataView(accepted[0]!.frame.buffer).getInt16(0, true)).toBe(2_000);
+    await vi.waitFor(() =>
+      expect(providerFrames).toEqual(accepted.map(({ frame: acceptedFrame }) => acceptedFrame)),
+    );
+  });
+
+  test("admits only one explicit diagnostic response until its physical boundary drains", async () => {
+    /*
+     * The deployed AEC rig needs known far-end audio without pretending that
+     * a mock provider implemented speech detection. This request still crosses
+     * the real provider control seam and the ordinary paced device downlink.
+     * The one-at-a-time fence is the important regression: two closely spaced
+     * harness calls must not manufacture overlapping responses or hide audio
+     * behind an unbounded provider/runtime queue.
+     */
+    const { bridge, device, provider } = createBridge();
+    const controls = textMessages(provider.client);
+    const downlink = binaryMessages(device.client);
+    const answer = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(47);
+
+    expect(bridge.requestDiagnosticResponse()).toBe(true);
+    expect(bridge.requestDiagnosticResponse()).toBe(false);
+    await vi.waitFor(() => expect(controls).toEqual(['{"type":"response.create"}']));
+
+    provider.client.send(JSON.stringify({ type: "response.created" }));
+    expect(bridge.requestDiagnosticResponse()).toBe(false);
+    provider.client.send(answer);
+    provider.client.send(JSON.stringify({ type: "response.done" }));
+
+    await vi.waitFor(() => expect(downlink).toEqual([answer, new Uint8Array(0)]));
+    expect(bridge.metrics()).toMatchObject({
+      diagnosticResponseRequests: 1,
+      providerResponsesCompleted: 1,
+    });
+    expect(bridge.requestDiagnosticResponse()).toBe(true);
+    await vi.waitFor(() =>
+      expect(controls).toEqual(['{"type":"response.create"}', '{"type":"response.create"}']),
+    );
+  });
+
+  test("rejects explicit diagnostic responses on a manual PTT session", async () => {
+    /*
+     * A diagnostic seam must not become a second way to make the Stick speak
+     * without a completed physical PTT turn. Tone injection is for the two
+     * continuous-AEC targets; manual mode retains its stricter commit fence.
+     */
+    const { bridge, provider } = createBridge({ turnDetection: "manual" });
+    const controls = textMessages(provider.client);
+
+    expect(bridge.requestDiagnosticResponse()).toBe(false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(controls).toEqual([]);
+    expect(bridge.metrics().diagnosticResponseRequests).toBe(0);
   });
 
   test("measures the provider PCM source and counts completed responses", async () => {
@@ -384,6 +504,21 @@ describe("userspace PCM session bridge", () => {
     await vi.waitFor(() => expect(controls).toEqual(['{"type":"input_audio_buffer.commit"}']));
     provider.client.send(JSON.stringify({ type: "input_audio_buffer.committed" }));
     await vi.waitFor(() => expect(controls).toContain('{"type":"response.create"}'));
+    provider.client.send(JSON.stringify({ type: "response.created" }));
+    provider.client.send(
+      JSON.stringify({
+        item: { id: "manual-item", role: "assistant", type: "message" },
+        type: "response.output_item.added",
+      }),
+    );
+    provider.client.send(
+      JSON.stringify({
+        content_index: 0,
+        item_id: "manual-item",
+        part: { type: "audio" },
+        type: "response.content_part.added",
+      }),
+    );
     provider.client.send(new Uint8Array(300).fill(7));
     await vi.waitFor(() => expect(bridge.metrics()).toMatchObject({ downlinkPartialBytes: 300 }));
 
@@ -395,6 +530,20 @@ describe("userspace PCM session bridge", () => {
      */
     device.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(11));
     await vi.waitFor(() => expect(controls).toContain('{"type":"response.cancel"}'));
+    expect(controls.map((message) => JSON.parse(message) as unknown)).toContainEqual({
+      audio_end_ms: 0,
+      content_index: 0,
+      item_id: "manual-item",
+      type: "conversation.item.truncate",
+    });
+    provider.client.send(
+      JSON.stringify({
+        audio_end_ms: 0,
+        content_index: 0,
+        item_id: "manual-item",
+        type: "conversation.item.truncated",
+      }),
+    );
     expect(bridge.metrics()).toMatchObject({
       downlinkPartialBytes: 0,
       interrupted: true,
@@ -407,6 +556,34 @@ describe("userspace PCM session bridge", () => {
     expect(bridge.metrics()).toMatchObject({
       providerUnsolicitedPcmBytes: 340,
       providerUnsolicitedResponses: 1,
+    });
+  });
+
+  test("server VAD does not reset an idle physical playback reference", async () => {
+    /*
+     * HAVPE feeds its XMOS AEC reference from the physical playback I2S bus.
+     * Grok emits speech_started for the first caller utterance while the
+     * speaker is necessarily idle. Resetting hardware at that edge cannot
+     * discard any stale assistant sample, but it does stop/restart the AEC
+     * reference clock immediately before the first reply. A retained physical
+     * incident then showed raw ~= clean during that reply and Grok detected
+     * the echo as a second caller turn. The semantic interruption state still
+     * advances here; only the provably unnecessary physical purge is skipped.
+     */
+    const interruptPlayback = vi.fn();
+    const { bridge, provider } = createBridge({
+      onPlaybackInterruption: interruptPlayback,
+      turnDetection: "server-vad",
+    });
+
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+
+    await vi.waitFor(() => expect(bridge.metrics().providerSpeechStarts).toBe(1));
+    expect(interruptPlayback).not.toHaveBeenCalled();
+    expect(bridge.metrics()).toMatchObject({
+      interrupted: true,
+      playbackInterruptionPending: false,
+      playbackInterruptionsRequested: 0,
     });
   });
 
@@ -482,6 +659,201 @@ describe("userspace PCM session bridge", () => {
     });
   });
 
+  test("truncates Grok history to hardware-played audio before admitting a barge-in reply", async () => {
+    /*
+     * Cancelling generation and clearing our speaker queues are not enough:
+     * Grok otherwise keeps the transcript for words that were generated but
+     * never reached the DAC. That makes its next answer depend on a private
+     * continuation the person did not hear. The only authoritative duration
+     * is therefore the content whose ordered slots the device hardware has
+     * released before speech_started. Bytes merely received from Grok, held in
+     * userspace, sent to the ESP, or bulk-released by the subsequent physical
+     * reset must not extend conversation history.
+     */
+    let acknowledgePlaybackReset: (() => void) | undefined;
+    const interruptPlayback = vi.fn(
+      () => new Promise<void>((resolve) => (acknowledgePlaybackReset = resolve)),
+    );
+    const { bridge, device, provider } = createBridge({
+      automaticDownlinkReceipts: false,
+      onPlaybackInterruption: interruptPlayback,
+      turnDetection: "server-vad",
+    });
+    const controls = textMessages(provider.client);
+    const downlink = binaryMessages(device.client);
+
+    provider.client.send(JSON.stringify({ type: "response.created" }));
+    provider.client.send(
+      JSON.stringify({
+        item: {
+          id: "assistant-item-1",
+          object: "realtime.item",
+          role: "assistant",
+          status: "in_progress",
+          type: "message",
+        },
+        output_index: 0,
+        response_id: "response-1",
+        type: "response.output_item.added",
+      }),
+    );
+    provider.client.send(
+      JSON.stringify({
+        content_index: 0,
+        item_id: "assistant-item-1",
+        output_index: 0,
+        part: { transcript: "", type: "audio" },
+        response_id: "response-1",
+        type: "response.content_part.added",
+      }),
+    );
+    provider.client.send(new Uint8Array(32 * ITERATE_KIT_PCM_FRAME_BYTES).fill(71));
+
+    await vi.waitFor(() => expect(downlink).toHaveLength(16));
+    device.client.send(downlinkReceipt(7));
+    await vi.waitFor(() => expect(bridge.metrics().downlinkItemsAcknowledged).toBe(7));
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+
+    await vi.waitFor(() =>
+      expect(controls.map((message) => JSON.parse(message) as unknown)).toContainEqual({
+        audio_end_ms: 140,
+        content_index: 0,
+        item_id: "assistant-item-1",
+        type: "conversation.item.truncate",
+      }),
+    );
+    expect(controls).not.toContain('{"type":"response.cancel"}');
+    expect(interruptPlayback).toHaveBeenCalledOnce();
+    const downlinkItemsAtInterruption = downlink.length;
+    expect(downlinkItemsAtInterruption).toBe(23);
+    expect(bridge.metrics()).toMatchObject({
+      providerTruncationsCompleted: 0,
+      providerTruncationsPending: 1,
+      providerTruncationsRequested: 1,
+    });
+
+    /*
+     * A reset receipt can release the nine unplayed DMA slots, but the frozen
+     * 140 ms provider duration must not move. Fresh response bytes remain
+     * fenced until both independent authorities agree: the device has purged
+     * physical playback and xAI has corrected conversation history.
+     */
+    device.client.send(downlinkReceipt(downlinkItemsAtInterruption));
+    acknowledgePlaybackReset?.();
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
+    provider.client.send(JSON.stringify({ type: "response.created" }));
+    provider.client.send(
+      JSON.stringify({
+        item: {
+          id: "assistant-item-2",
+          object: "realtime.item",
+          role: "assistant",
+          status: "in_progress",
+          type: "message",
+        },
+        output_index: 0,
+        response_id: "response-2",
+        type: "response.output_item.added",
+      }),
+    );
+    provider.client.send(
+      JSON.stringify({
+        content_index: 0,
+        item_id: "assistant-item-2",
+        output_index: 0,
+        part: { transcript: "", type: "audio" },
+        response_id: "response-2",
+        type: "response.content_part.added",
+      }),
+    );
+    provider.client.send(new Uint8Array(32 * ITERATE_KIT_PCM_FRAME_BYTES).fill(83));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(downlink).toHaveLength(downlinkItemsAtInterruption);
+
+    provider.client.send(
+      JSON.stringify({
+        audio_end_ms: 140,
+        content_index: 0,
+        item_id: "assistant-item-1",
+        type: "conversation.item.truncated",
+      }),
+    );
+    await vi.waitFor(() => expect(downlink.length).toBeGreaterThan(downlinkItemsAtInterruption));
+    expect(bridge.metrics()).toMatchObject({
+      providerTruncationsCompleted: 1,
+      providerTruncationsPending: 0,
+      providerTruncationsRequested: 1,
+    });
+  });
+
+  test("retires a server-VAD provider that violates automatic response creation", async () => {
+    /*
+     * Current xAI Voice says response creation is automatic with server VAD.
+     * Sending our own response.create after an arbitrary grace period races a
+     * late automatic response and can produce two assistant turns. A committed
+     * utterance that stays silent for five seconds is therefore a failed,
+     * disposable provider generation: record it and replace the generation,
+     * but keep the physical device lane connected and never replay the turn.
+     */
+    vi.useFakeTimers();
+    const providerUnavailable = vi.fn();
+    const { bridge, device, diagnostics, provider } = createBridge({
+      onProviderUnavailable: providerUnavailable,
+      turnDetection: "server-vad",
+    });
+    const controls = textMessages(provider.client);
+    const deviceClosed = vi.fn();
+    device.client.addEventListener("close", deviceClosed);
+
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.committed" }));
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(controls).toEqual([]);
+    expect(providerUnavailable).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(controls).toEqual([]);
+    expect(deviceClosed).not.toHaveBeenCalled();
+    expect(providerUnavailable).toHaveBeenCalledOnce();
+    expect(bridge.metrics()).toMatchObject({
+      closed: false,
+      providerAvailable: false,
+      providerResponseCreateMessagesSent: 0,
+      serverVadResponseTimeouts: 1,
+    });
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "server-vad-response-timeout",
+        severity: "error",
+      }),
+    );
+  });
+
+  test("does not manufacture a server-VAD response when Grok creates one normally", async () => {
+    /*
+     * Recovery must not turn a merely slow callback into two AI answers. A
+     * provider response is authoritative even when it arrives just before the
+     * watchdog boundary, so observing response.created permanently disarms
+     * the one-shot timer for that utterance.
+     */
+    vi.useFakeTimers();
+    const { bridge, provider } = createBridge({ turnDetection: "server-vad" });
+    const controls = textMessages(provider.client);
+
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
+    provider.client.send(JSON.stringify({ type: "input_audio_buffer.committed" }));
+    await vi.advanceTimersByTimeAsync(4_999);
+    provider.client.send(JSON.stringify({ type: "response.created" }));
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    expect(controls).toEqual([]);
+    expect(bridge.metrics()).toMatchObject({
+      providerResponseCreateMessagesSent: 0,
+    });
+  });
+
   test("server VAD coalesces repeated speech starts behind one physical playback purge", async () => {
     /*
      * A marginal echo path can make Grok emit speech_started, speech_stopped,
@@ -503,6 +875,15 @@ describe("userspace PCM session bridge", () => {
       turnDetection: "server-vad",
     });
 
+    /*
+     * This scenario is specifically about coalescing while assistant audio is
+     * live. Leave a partial provider frame in the bounded reservoir so the
+     * first speech edge has a real stale sample to purge; an idle first turn
+     * is covered separately and must not mutate physical playback at all.
+     */
+    provider.client.send(JSON.stringify({ type: "response.created" }));
+    provider.client.send(new Uint8Array(300).fill(17));
+    await vi.waitFor(() => expect(bridge.metrics().downlinkPartialBytes).toBe(300));
     provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
     provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_stopped" }));
     provider.client.send(JSON.stringify({ type: "input_audio_buffer.speech_started" }));
@@ -860,7 +1241,7 @@ describe("userspace PCM session bridge", () => {
      * Grok may issue several function calls in one response. Continuing after
      * the first result lets it answer without the remaining physical changes;
      * waiting only for RPC completion but not response.done can also overlap
-     * the continuation with current speech. This models two colour requests
+     * the continuation with current speech. This models two sprite requests
      * completing out of order and protects both fences.
      */
     const pending = new Map<string, (value: unknown) => void>();
@@ -876,43 +1257,43 @@ describe("userspace PCM session bridge", () => {
     provider.client.send(JSON.stringify({ type: "response.created" }));
     provider.client.send(
       JSON.stringify({
-        arguments: '{"colour":"red"}',
-        call_id: "call_red",
-        name: "changeColour",
+        arguments: '{"spriteSet":"starbyte"}',
+        call_id: "call_starbyte",
+        name: "changeSpriteSet",
         type: "response.function_call_arguments.done",
       }),
     );
     provider.client.send(
       JSON.stringify({
-        arguments: '{"colour":"green"}',
-        call_id: "call_green",
-        name: "changeColour",
+        arguments: '{"spriteSet":"karakuri-brass"}',
+        call_id: "call_karakuri",
+        name: "changeSpriteSet",
         type: "response.function_call_arguments.done",
       }),
     );
     provider.client.send(JSON.stringify({ type: "response.done" }));
     await vi.waitFor(() => expect(calls).toHaveLength(2));
 
-    pending.get("call_green")?.({ colour: "green", ok: true });
+    pending.get("call_karakuri")?.({ ok: true, spriteSet: "karakuri-brass" });
     await vi.waitFor(() => expect(controls).toHaveLength(1));
     expect(controls[0]).toBe(
       JSON.stringify({
         item: {
-          call_id: "call_green",
-          output: JSON.stringify({ colour: "green", ok: true }),
+          call_id: "call_karakuri",
+          output: JSON.stringify({ ok: true, spriteSet: "karakuri-brass" }),
           type: "function_call_output",
         },
         type: "conversation.item.create",
       }),
     );
 
-    pending.get("call_red")?.({ colour: "red", ok: true });
+    pending.get("call_starbyte")?.({ ok: true, spriteSet: "starbyte" });
     await vi.waitFor(() => expect(controls).toHaveLength(3));
     expect(controls[1]).toBe(
       JSON.stringify({
         item: {
-          call_id: "call_red",
-          output: JSON.stringify({ colour: "red", ok: true }),
+          call_id: "call_starbyte",
+          output: JSON.stringify({ ok: true, spriteSet: "starbyte" }),
           type: "function_call_output",
         },
         type: "conversation.item.create",
@@ -945,7 +1326,7 @@ describe("userspace PCM session bridge", () => {
 
   test("does not synthesize a duplicate continuation when the tool response already spoke", async () => {
     /*
-     * A production Grok turn returned both changeColour and a complete spoken
+     * A production Grok turn returned both changeSpriteSet and a complete spoken
      * sentence in one response. Unconditionally sending response.create after
      * the tool result made Grok speak that same sentence again: digital frame
      * accounting stayed perfect, but the physical microphone correctly heard
@@ -953,7 +1334,7 @@ describe("userspace PCM session bridge", () => {
      * the redundant continuation request must be suppressed.
      */
     const { bridge, device, provider } = createBridge({
-      onProviderFunctionCall: async () => ({ colour: "green", ok: true }),
+      onProviderFunctionCall: async () => ({ ok: true, spriteSet: "starbyte" }),
     });
     const controls = textMessages(provider.client);
     const downlink = binaryMessages(device.client);
@@ -962,9 +1343,9 @@ describe("userspace PCM session bridge", () => {
     provider.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(7));
     provider.client.send(
       JSON.stringify({
-        arguments: '{"colour":"green"}',
-        call_id: "call_green",
-        name: "changeColour",
+        arguments: '{"spriteSet":"starbyte"}',
+        call_id: "call_starbyte",
+        name: "changeSpriteSet",
         type: "response.function_call_arguments.done",
       }),
     );
@@ -1001,9 +1382,9 @@ describe("userspace PCM session bridge", () => {
     provider.client.send(JSON.stringify({ type: "response.created" }));
     provider.client.send(
       JSON.stringify({
-        arguments: '{"colour":"red"}',
+        arguments: '{"spriteSet":"starbyte"}',
         call_id: "old_call",
-        name: "changeColour",
+        name: "changeSpriteSet",
         type: "response.function_call_arguments.done",
       }),
     );
@@ -1013,7 +1394,7 @@ describe("userspace PCM session bridge", () => {
     sockets.push(replacement.client, replacement.server);
     const replacementControls = textMessages(replacement.client);
     expect(bridge.attachProvider(replacement.server)).toBe(true);
-    finishTool?.({ colour: "red", ok: true });
+    finishTool?.({ ok: true, spriteSet: "starbyte" });
     await new Promise((resolve) => setTimeout(resolve, 0));
 
     expect(oldControls).toEqual([]);
@@ -1170,6 +1551,133 @@ describe("userspace PCM session bridge", () => {
     expect(diagnostics).not.toContainEqual(expect.objectContaining({ code: "downlink-overflow" }));
   });
 
+  test("retains the measured 300-to-400 Grok count while hardware plays it in realtime", async () => {
+    /*
+     * A direct grok-voice-think-fast-2.0 measurement on 2026-08-04 produced
+     * 4,920,064 PCM bytes: 153.752 seconds generated in 20.85 seconds. The old
+     * 90-second reservoir therefore made the mandatory count/interruption
+     * acceptance scenario impossible even with a perfect device and network.
+     * Round the final partial provider chunk up to one 640-byte device frame;
+     * the public sockets must conserve all 7,688 frames and the response marker
+     * without moving that accelerated future audio into embedded RAM.
+     */
+    vi.useFakeTimers();
+    const { bridge, device, diagnostics, provider } = createBridge();
+    const downlink = binaryMessages(device.client);
+    const measuredCountFrames = 7_688;
+
+    provider.client.send(
+      new Uint8Array(measuredCountFrames * ITERATE_KIT_PCM_FRAME_BYTES).fill(79),
+    );
+    provider.client.send(
+      JSON.stringify({ response: { status: "completed" }, type: "response.done" }),
+    );
+    await vi.advanceTimersByTimeAsync(measuredCountFrames * 20);
+
+    expect(bridge.metrics()).toMatchObject({
+      closed: false,
+      downlinkDroppedBytes: 0,
+      downlinkFrames: measuredCountFrames,
+      downlinkResponseReservoirCapacityBytes: 5_760_000,
+      downlinkQueuedBytes: 0,
+      maximumProviderResponseDurationMs: 180_000,
+      providerResponsesCompleted: 1,
+    });
+    expect(downlink).toHaveLength(measuredCountFrames + 1);
+    expect(downlink.at(-1)).toHaveLength(0);
+    expect(diagnostics).not.toContainEqual(expect.objectContaining({ code: "downlink-overflow" }));
+  });
+
+  test("feeds a long response from hardware release credit without cross-clock drift", async () => {
+    /*
+     * The physical HAVPE count-to-100 incident disproved the old test model:
+     * userspace admitted all frames on a perfect 20 ms fake clock, while the
+     * finite 32-slot hardware ring eventually reached high-water 32 and its
+     * transport retired the call around audible number 37. A WebSocket send
+     * only proves local runtime acceptance; it says nothing about the ESP's
+     * independent I2S clock or current receive-ring depth.
+     *
+     * Model a deliberately large 5% clock disagreement for 72 seconds. The
+     * device emits cumulative credit only when its independent hardware clock
+     * releases an ordered lane item. This makes clock drift an ordinary supply
+     * rate rather than a second timer for userspace to estimate or correct.
+     * Every frame must survive without overflowing a 32-item peer,
+     * accumulating delay, or replacing the call.
+     */
+    vi.useFakeTimers();
+    const { bridge, device, diagnostics, provider } = createBridge({
+      automaticDownlinkReceipts: false,
+    });
+    const deviceCapacityFrames = 32;
+    const responseFrames = 3_600;
+    let deviceDepthFrames = 0;
+    let deviceHighWaterFrames = 0;
+    let deviceOverflowFrames = 0;
+    let devicePlayedFrames = 0;
+    let deviceReceivedFrames = 0;
+    let deviceReleasedItems = 0;
+    const deviceItems: boolean[] = [];
+
+    device.client.addEventListener("message", (event) => {
+      const bytes =
+        event.data instanceof ArrayBuffer
+          ? new Uint8Array(event.data)
+          : ArrayBuffer.isView(event.data)
+            ? new Uint8Array(event.data.buffer, event.data.byteOffset, event.data.byteLength)
+            : null;
+      if (bytes === null) return;
+      if (deviceItems.length >= deviceCapacityFrames) {
+        deviceOverflowFrames += 1;
+        return;
+      }
+      const isPcm = bytes.byteLength > 0;
+      deviceItems.push(isPcm);
+      if (isPcm) {
+        deviceReceivedFrames += 1;
+        deviceDepthFrames += 1;
+      }
+      deviceHighWaterFrames = Math.max(deviceHighWaterFrames, deviceDepthFrames);
+    });
+
+    const playbackClock = setInterval(() => {
+      const isPcm = deviceItems.shift();
+      if (isPcm === undefined) return;
+      if (isPcm) {
+        deviceDepthFrames -= 1;
+        devicePlayedFrames += 1;
+      }
+      deviceReleasedItems += 1;
+      device.client.send(downlinkReceipt(deviceReleasedItems));
+    }, 21);
+    const depthFeedback = setInterval(() => {
+      bridge.observeDeviceDownlinkDepth(deviceDepthFrames);
+    }, 1_000);
+
+    provider.client.send(new Uint8Array(responseFrames * ITERATE_KIT_PCM_FRAME_BYTES).fill(83));
+    provider.client.send(
+      JSON.stringify({ response: { status: "completed" }, type: "response.done" }),
+    );
+    await vi.advanceTimersByTimeAsync(77_000);
+    clearInterval(playbackClock);
+    clearInterval(depthFeedback);
+
+    expect(deviceOverflowFrames).toBe(0);
+    expect(deviceReceivedFrames).toBe(responseFrames);
+    expect(devicePlayedFrames).toBe(responseFrames);
+    expect(deviceDepthFrames).toBe(0);
+    expect(deviceHighWaterFrames).toBeLessThan(deviceCapacityFrames);
+    expect(bridge.metrics()).toMatchObject({
+      closed: false,
+      deviceDownlinkDepthCorrections: 0,
+      deviceDownlinkDepthMaximumFrames: expect.any(Number),
+      deviceDownlinkDepthObservations: 77,
+      downlinkDroppedBytes: 0,
+      downlinkFrames: responseFrames,
+    });
+    expect(bridge.metrics().downlinkMaximumInFlightItems).toBeLessThanOrEqual(16);
+    expect(diagnostics).not.toContainEqual(expect.objectContaining({ severity: "error" }));
+  });
+
   test("retires only an oversized provider response and keeps the device lane reusable", async () => {
     /*
      * The response reservoir is deliberately finite: an unbounded story must
@@ -1179,8 +1687,8 @@ describe("userspace PCM session bridge", () => {
      * disposable provider generation is retired, and a replacement provider
      * can serve the next turn on the exact same device WebSocket.
      *
-     * This public-socket example exceeds the documented 90-second budget by
-     * one frame after the twelve-frame device lead has been admitted. It proves
+     * This public-socket example exceeds the documented 180-second budget by
+     * one frame after the sixteen-frame device lead has been admitted. It proves
      * both bounded loss accounting and recovery without inspecting queue
      * offsets or any private scheduler state.
      */
@@ -1193,16 +1701,16 @@ describe("userspace PCM session bridge", () => {
     const deviceClosed = vi.fn();
     device.client.addEventListener("close", deviceClosed);
 
-    provider.client.send(new Uint8Array(4_500 * ITERATE_KIT_PCM_FRAME_BYTES).fill(17));
-    provider.client.send(new Uint8Array(13 * ITERATE_KIT_PCM_FRAME_BYTES).fill(23));
+    provider.client.send(new Uint8Array(9_000 * ITERATE_KIT_PCM_FRAME_BYTES).fill(17));
+    provider.client.send(new Uint8Array(17 * ITERATE_KIT_PCM_FRAME_BYTES).fill(23));
     await vi.advanceTimersByTimeAsync(0);
 
     expect(deviceClosed).not.toHaveBeenCalled();
     expect(providerUnavailable).toHaveBeenCalledOnce();
     expect(bridge.metrics()).toMatchObject({
       closed: false,
-      downlinkDroppedBytes: 4_501 * ITERATE_KIT_PCM_FRAME_BYTES,
-      downlinkFrames: 12,
+      downlinkDroppedBytes: 9_001 * ITERATE_KIT_PCM_FRAME_BYTES,
+      downlinkFrames: 16,
       downlinkQueuedBytes: 0,
       lastSocketClose: {
         code: 4000,
@@ -1210,7 +1718,7 @@ describe("userspace PCM session bridge", () => {
       },
       providerAvailable: false,
     });
-    expect(downlink).toHaveLength(13);
+    expect(downlink).toHaveLength(17);
     expect(downlink.at(-1)).toHaveLength(0);
     expect(diagnostics).toContainEqual(
       expect.objectContaining({ code: "downlink-overflow", severity: "error" }),
@@ -1228,7 +1736,7 @@ describe("userspace PCM session bridge", () => {
     expect(deviceClosed).not.toHaveBeenCalled();
     expect(bridge.metrics()).toMatchObject({
       closed: false,
-      downlinkFrames: 13,
+      downlinkFrames: 17,
       providerAvailable: true,
       providerResponsesCompleted: 1,
     });
@@ -1236,7 +1744,56 @@ describe("userspace PCM session bridge", () => {
     expect(downlink.at(-1)).toHaveLength(0);
   });
 
-  test("keeps a real provider burst in userspace while feeding only a measured finite device lead", async () => {
+  test("finishes an overflowed provider boundary before admitting replacement audio", async () => {
+    /*
+     * The overflow path retires only Grok and owes the device one zero-length
+     * response marker. If all sixteen hardware credits are occupied, that
+     * marker cannot cross until the DAC releases a slot. A replacement Grok
+     * generation can attach in the meantime. Its first short packet must not
+     * inherit the retired generation's `response.done` flag: doing so bypasses
+     * the 32-frame source watermark, splices new speech before the old EOS,
+     * and can make firmware treat an in-progress answer as already complete.
+     *
+     * This test observes only public WebSocket items and hardware receipts.
+     * It deliberately releases one physical slot after replacement PCM is
+     * waiting; the one newly visible item must be the old zero-length boundary,
+     * never the replacement's under-watermark audio.
+     */
+    vi.useFakeTimers();
+    const providerUnavailable = vi.fn();
+    const { bridge, device, provider } = createBridge({
+      automaticDownlinkReceipts: false,
+      onProviderUnavailable: providerUnavailable,
+    });
+    const downlink = binaryMessages(device.client);
+
+    provider.client.send(new Uint8Array(9_000 * ITERATE_KIT_PCM_FRAME_BYTES).fill(17));
+    provider.client.send(new Uint8Array(17 * ITERATE_KIT_PCM_FRAME_BYTES).fill(23));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(providerUnavailable).toHaveBeenCalledOnce();
+    expect(downlink).toHaveLength(16);
+
+    const replacement = socketPair();
+    sockets.push(replacement.client, replacement.server);
+    expect(bridge.attachProvider(replacement.server)).toBe(true);
+    replacement.client.send(JSON.stringify({ type: "response.created" }));
+    replacement.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(29));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(downlink).toHaveLength(16);
+
+    device.client.send(downlinkReceipt(1));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(downlink).toHaveLength(17);
+    expect(downlink.at(-1)).toHaveLength(0);
+    expect(bridge.metrics()).toMatchObject({
+      closed: false,
+      downlinkQueuedBytes: ITERATE_KIT_PCM_FRAME_BYTES,
+      downlinkRetiredBoundaryPending: false,
+      providerAvailable: true,
+    });
+  });
+
+  test("keeps a real provider burst in userspace behind a finite hardware-credit window", async () => {
     /*
      * A physical grok-voice-think-fast-2.0 turn produced a 203.28 ms gap
      * between provider packets. Forwarding a whole packet immediately does
@@ -1246,17 +1803,20 @@ describe("userspace PCM session bridge", () => {
      * observed provider gap. A later production run then measured a 170 ms
      * post-send delivery gap while userspace itself reported zero timer
      * lateness. The old 160 ms lead was therefore one frame too short and
-     * firmware visibly substituted silence. Twelve frames provide a bounded
-     * 240 ms reserve without filling the existing 32-frame device lane.
+     * firmware visibly substituted silence. More importantly, the Stick's
+     * sixteen-descriptor DMA cycle cannot start—and therefore cannot emit its
+     * first hardware-release receipt—until sixteen ordered items arrive. A
+     * twelve-item userspace window made both sides wait correctly forever.
      *
      * The public WebSocket seam is the contract under test: userspace waits
-     * for 32 generated frames, primes exactly twelve device frames, and then
-     * admits one frame per 20 ms. This literal timing example comes from the
-     * successful physical run and deliberately does not mirror a scheduler
-     * implementation.
+     * for 32 generated frames, primes exactly sixteen device frames, and then
+     * admits only the number of slots the hardware consumer releases. A timer
+     * cannot manufacture credit even when the observed provider gap elapses.
      */
     vi.useFakeTimers();
-    const { device, diagnostics, provider } = createBridge();
+    const { device, diagnostics, provider } = createBridge({
+      automaticDownlinkReceipts: false,
+    });
     const downlink = binaryMessages(device.client);
     const source = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES * 32);
     for (let frame = 0; frame < 32; frame += 1) {
@@ -1270,37 +1830,73 @@ describe("userspace PCM session bridge", () => {
     provider.client.send(source);
     await vi.advanceTimersByTimeAsync(0);
     expect(downlink.map((frame) => frame[0])).toEqual(
-      Array.from({ length: 12 }, (_, index) => index + 1),
+      Array.from({ length: 16 }, (_, index) => index + 1),
     );
 
     await vi.advanceTimersByTimeAsync(203);
+    expect(downlink).toHaveLength(16);
+    device.client.send(downlinkReceipt(10));
+    await vi.advanceTimersByTimeAsync(0);
     expect(downlink.map((frame) => frame[0])).toEqual(
-      Array.from({ length: 22 }, (_, index) => index + 1),
+      Array.from({ length: 26 }, (_, index) => index + 1),
     );
     expect(diagnostics).not.toContainEqual(expect.objectContaining({ severity: "error" }));
 
-    await vi.advanceTimersByTimeAsync(17);
+    device.client.send(downlinkReceipt(11));
+    await vi.advanceTimersByTimeAsync(0);
     expect(downlink.map((frame) => frame[0])).toEqual(
-      Array.from({ length: 23 }, (_, index) => index + 1),
+      Array.from({ length: 27 }, (_, index) => index + 1),
     );
   });
 
-  test("restores the finite device lead after one delayed userspace pacing callback", async () => {
+  test.each([8, 12, 32])(
+    "makes a %i-frame source-readiness candidate observable at the public socket seam",
+    async (sourceStartupFrames) => {
+      /*
+       * The adversarial review requested a bounded 8/12/32 A/B instead of
+       * treating the historical 32-frame source watermark as folklore. The
+       * provider socket and device socket are the two production boundaries:
+       * no PCM may escape before the selected amount exists, and reaching the
+       * threshold may prime only the finite hardware-credit window. This test
+       * deliberately does not declare the smaller candidates healthy—the
+       * Stick needs sixteen descriptors before it can release credit, while
+       * the retained provider trace contains a 203.28 ms packet gap. It makes
+       * each policy executable so those independent physical facts, rather
+       * than an untestable constant, decide promotion.
+       */
+      const { device, provider } = createBridge({
+        automaticDownlinkReceipts: false,
+        downlinkSourceStartupFrames: sourceStartupFrames,
+      });
+      const downlink = binaryMessages(device.client);
+
+      for (let frame = 1; frame < sourceStartupFrames; frame += 1) {
+        provider.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(frame));
+      }
+      await vi.waitFor(() => expect(downlink).toEqual([]));
+
+      provider.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(sourceStartupFrames));
+      await vi.waitFor(() =>
+        expect(downlink.map((frame) => frame[0])).toEqual(
+          Array.from({ length: Math.min(sourceStartupFrames, 16) }, (_, index) => index + 1),
+        ),
+      );
+    },
+  );
+
+  test("monotonic time cannot admit or expire media without a hardware release", async () => {
     /*
      * The 68-second physical Grok story retained a full userspace source
      * reservoir and a healthy device socket, yet callback gaps could consume
-     * the finite lead and force firmware to replace speech with silence. Fake
-     * timers normally conceal this bug:
-     * advancing 160 ms invokes every intermediate 20 ms callback on time.
-     * Report a late monotonic clock from the first callback instead so this
-     * example exercises one genuinely stalled isolate wake.
-     *
-     * Catch-up is bounded by the same twelve frames already admitted at
-     * startup. It restores, but can never enlarge, the explicit device lead;
-     * the remaining response stays in the inspectable userspace reservoir.
+     * the finite lead and force firmware to replace speech with silence. The
+     * clean ownership rule is stronger than bounded catch-up: userspace time
+     * has no authority over the DAC. Even an arbitrary clock jump changes
+     * nothing until firmware reports that the hardware freed a slot.
      */
     vi.useFakeTimers();
-    const { bridge, device, provider } = createBridge();
+    const { bridge, device, provider } = createBridge({
+      automaticDownlinkReceipts: false,
+    });
     const downlink = binaryMessages(device.client);
     const source = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES * 32);
     for (let frame = 0; frame < 32; frame += 1) {
@@ -1314,150 +1910,218 @@ describe("userspace PCM session bridge", () => {
     provider.client.send(source);
     await vi.advanceTimersByTimeAsync(0);
     expect(downlink.map((frame) => frame[0])).toEqual(
-      Array.from({ length: 12 }, (_, index) => index + 1),
+      Array.from({ length: 16 }, (_, index) => index + 1),
     );
 
-    const monotonicClock = vi.spyOn(performance, "now").mockReturnValue(160);
-    await vi.advanceTimersByTimeAsync(20);
+    const monotonicClock = vi.spyOn(performance, "now").mockReturnValue(50_000);
+    await vi.advanceTimersByTimeAsync(500);
     monotonicClock.mockRestore();
 
+    expect(downlink).toHaveLength(16);
+    device.client.send(downlinkReceipt(8));
+    await vi.advanceTimersByTimeAsync(0);
     expect(downlink.map((frame) => frame[0])).toEqual(
-      Array.from({ length: 20 }, (_, index) => index + 1),
+      Array.from({ length: 24 }, (_, index) => index + 1),
     );
     expect(bridge.metrics()).toMatchObject({
-      downlinkPacingCatchUpFrames: 7,
-      downlinkPacingCatchUpIncidents: 1,
-      downlinkPacingMaximumLatenessMs: 140,
+      closed: false,
+      downlinkDroppedBytes: 0,
+      downlinkPacingCatchUpFrames: 0,
+      downlinkPacingCatchUpIncidents: 0,
+      downlinkPacingMaximumLatenessMs: 0,
+      downlinkPacingOverrunFrames: 0,
     });
   });
 
-  test("drops only elapsed media when a pacing stall exceeds the declared device lead", async () => {
+  test("never admits more than the finite device window without application receipts", async () => {
     /*
-     * Once an armed callback is more than twelve frames late, some physical
-     * playout slots have already elapsed. Replaying those oldest samples would
-     * preserve bytes by creating permanent delay—the failure mode this system
-     * is specifically meant to prevent. This test fixes the exact recovery
-     * contract: account the two elapsed frames, restore no more than the normal
-     * twelve-frame lead, retain the call socket, and make the incident visible.
+     * Cloudflare workerd has no server-side WebSocket bufferedAmount. The old
+     * guard therefore read zero while a physical HAVPE run lost 83 frames
+     * below send(). Hold every device receipt and advance well beyond the media
+     * clock: exactly the declared sixteen-item lead may cross, all future audio
+     * remains in the inspectable userspace reservoir, and a finite watchdog
+     * replaces the ambiguous socket instead of accumulating delay forever.
      */
     vi.useFakeTimers();
-    const { bridge, device, diagnostics, provider } = createBridge();
+    const { bridge, device, diagnostics, provider } = createBridge({
+      automaticDownlinkReceipts: false,
+    });
     const downlink = binaryMessages(device.client);
-    const source = new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES * 32);
-    for (let frame = 0; frame < 32; frame += 1) {
-      source.fill(
-        frame + 1,
-        frame * ITERATE_KIT_PCM_FRAME_BYTES,
-        (frame + 1) * ITERATE_KIT_PCM_FRAME_BYTES,
-      );
-    }
-
-    provider.client.send(source);
+    provider.client.send(new Uint8Array(32 * ITERATE_KIT_PCM_FRAME_BYTES).fill(19));
     await vi.advanceTimersByTimeAsync(0);
-    const monotonicClock = vi.spyOn(performance, "now").mockReturnValue(280);
-    await vi.advanceTimersByTimeAsync(20);
-    monotonicClock.mockRestore();
-
-    expect(downlink.map((frame) => frame[0])).toEqual([
-      1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26,
-    ]);
+    expect(downlink).toHaveLength(16);
+    await vi.advanceTimersByTimeAsync(1_499);
+    expect(downlink).toHaveLength(16);
     expect(bridge.metrics()).toMatchObject({
       closed: false,
-      downlinkDroppedBytes: 2 * ITERATE_KIT_PCM_FRAME_BYTES,
-      downlinkPacingCatchUpFrames: 11,
-      downlinkPacingCatchUpIncidents: 1,
-      downlinkPacingMaximumLatenessMs: 260,
-      downlinkPacingOverrunFrames: 2,
+      downlinkItemsAcknowledged: 0,
+      downlinkItemsInFlight: 16,
+      downlinkItemsSent: 16,
+      downlinkMaximumInFlightItems: 16,
+      downlinkQueuedBytes: 16 * ITERATE_KIT_PCM_FRAME_BYTES,
+    });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(bridge.metrics()).toMatchObject({
+      closed: true,
+      downlinkReceiptTimeouts: 1,
     });
     expect(diagnostics).toContainEqual(
       expect.objectContaining({
-        code: "downlink-pacing-overrun",
-        droppedBytes: 2 * ITERATE_KIT_PCM_FRAME_BYTES,
+        code: "downlink-device-receipt-timeout",
         severity: "error",
       }),
     );
   });
 
-  test("starts a fresh pacing grid after the provider source genuinely runs dry", async () => {
+  test("cumulative receipts release exact credit and duplicates release none", async () => {
     /*
-     * A missing provider packet and a delayed JavaScript callback are not the
-     * same event. After the source reservoir drains there is no armed media
-     * obligation to catch up; bursting a later packet would only move provider
-     * latency into the device. Let 32 frames drain completely, advance the
-     * monotonic clock by seconds, then prove the next generated frame crosses
-     * once with no invented catch-up or loss.
+     * Receipts are cumulative so firmware may coalesce several receive bursts
+     * into one eight-byte write. Grant five items, then repeat that same value:
+     * pacing may consume exactly five new credits, while the duplicate is
+     * idempotent and cannot enlarge the opaque device window.
      */
     vi.useFakeTimers();
-    const { bridge, device, provider } = createBridge();
+    const { bridge, device, provider } = createBridge({
+      automaticDownlinkReceipts: false,
+    });
     const downlink = binaryMessages(device.client);
     provider.client.send(new Uint8Array(32 * ITERATE_KIT_PCM_FRAME_BYTES).fill(31));
-    await vi.advanceTimersByTimeAsync(480);
-    expect(downlink).toHaveLength(32);
-
-    const monotonicClock = vi.spyOn(performance, "now").mockReturnValue(5_000);
-    provider.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(47));
-    provider.client.send(
-      JSON.stringify({ response: { status: "completed" }, type: "response.done" }),
-    );
     await vi.advanceTimersByTimeAsync(0);
-    monotonicClock.mockRestore();
+    expect(downlink).toHaveLength(16);
 
-    expect(downlink).toHaveLength(34);
-    expect(downlink.at(-2)).toEqual(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(47));
-    expect(downlink.at(-1)).toHaveLength(0);
+    device.client.send(downlinkReceipt(5));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(downlink).toHaveLength(21);
+    expect(bridge.metrics()).toMatchObject({
+      downlinkItemsAcknowledged: 5,
+      downlinkItemsInFlight: 16,
+      downlinkItemsSent: 21,
+    });
+
+    device.client.send(downlinkReceipt(5));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(downlink).toHaveLength(21);
+    expect(bridge.metrics()).toMatchObject({
+      downlinkDuplicateReceipts: 1,
+      downlinkItemsInFlight: 16,
+    });
+  });
+
+  test("hardware release credit preserves ordered audio after a delayed userspace wake", async () => {
+    /*
+     * The physical StackChan run that motivated this test measured a 380 ms
+     * userspace callback delay while the codec's DMA clock kept consuming its
+     * already-buffered lead. The old worker treated its own late JavaScript
+     * clock as proof that audio had expired and discarded thirteen perfectly
+     * ordered provider frames. That made the deterministic return audibly
+     * choppy even though the device, not the isolate, owns the playout clock.
+     *
+     * Hold all hardware-consumption receipts while 500 ms passes, then release
+     * the initial sixteen slots at once. Time alone must neither drop nor admit
+     * media: the cumulative release fact grants exactly sixteen credits, and
+     * the next sixteen oldest frames must cross in order immediately.
+     */
+    vi.useFakeTimers();
+    const { bridge, device, provider } = createBridge({
+      automaticDownlinkReceipts: false,
+    });
+    const downlink = binaryMessages(device.client);
+    const source = new Uint8Array(32 * ITERATE_KIT_PCM_FRAME_BYTES);
+    for (let frame = 0; frame < 32; frame += 1) {
+      source.fill(
+        frame + 1,
+        frame * ITERATE_KIT_PCM_FRAME_BYTES,
+        (frame + 1) * ITERATE_KIT_PCM_FRAME_BYTES,
+      );
+    }
+
+    provider.client.send(source);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(downlink.map((frame) => frame[0])).toEqual(
+      Array.from({ length: 16 }, (_, index) => index + 1),
+    );
+
+    await vi.advanceTimersByTimeAsync(500);
+    device.client.send(downlinkReceipt(16));
+    await vi.advanceTimersByTimeAsync(0);
+
+    expect(downlink.map((frame) => frame[0])).toEqual(
+      Array.from({ length: 32 }, (_, index) => index + 1),
+    );
     expect(bridge.metrics()).toMatchObject({
       downlinkDroppedBytes: 0,
-      downlinkPacingCatchUpFrames: 0,
-      downlinkPacingCatchUpIncidents: 0,
+      downlinkItemsAcknowledged: 16,
+      downlinkItemsInFlight: 16,
+      downlinkItemsSent: 32,
+      downlinkQueuedBytes: 0,
       downlinkPacingOverrunFrames: 0,
     });
   });
 
-  test("drops stale content without killing the call when device egress is temporarily backed up", async () => {
-    const { bridge, device, diagnostics, provider } = createBridge();
-    const downlink = binaryMessages(device.client);
-    let bufferedAmount = ITERATE_KIT_PCM_FRAME_BYTES * 16;
-    Object.defineProperty(device.server, "bufferedAmount", {
-      configurable: true,
-      get: () => bufferedAmount,
-    });
-    provider.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES));
-    provider.client.send(JSON.stringify({ type: "response.done" }));
-
-    await vi.waitFor(() =>
-      expect(diagnostics).toContainEqual(
-        expect.objectContaining({
-          code: "downlink-device-egress-overrun",
-          severity: "error",
-        }),
-      ),
-    );
-    expect(bridge.metrics()).toMatchObject({
-      closed: false,
-      downlinkDeviceEgressOverrunFrames: 1,
-      downlinkDroppedBytes: ITERATE_KIT_PCM_FRAME_BYTES,
-      downlinkFrames: 0,
-    });
-    expect(downlink).toEqual([new Uint8Array(0)]);
-
+  test("the ordered response marker waits for and consumes device credit", async () => {
     /*
-     * Once TCP drains, the next provider response must use the same physical
-     * /pcm generation. A terminal close here recreates the user's observed
-     * mid-conversation reset; retaining stale audio recreates accumulating
-     * delay. The only acceptable recovery is an accounted drop and fresh
-     * media on the already-open lane.
+     * EOS occupies one playback-lane slot even though it contains no PCM. A
+     * sixteen-frame answer therefore fills the whole initial window; sending
+     * its marker before a receipt would make the server and device disagree
+     * about the exact ordered-item ledger during a radio stall.
      */
-    bufferedAmount = 0;
-    provider.client.send(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(23));
-    provider.client.send(JSON.stringify({ type: "response.done" }));
-    await vi.waitFor(() => expect(downlink).toHaveLength(3));
-    expect(downlink.at(-2)).toEqual(new Uint8Array(ITERATE_KIT_PCM_FRAME_BYTES).fill(23));
-    expect(downlink.at(-1)).toEqual(new Uint8Array(0));
-    expect(bridge.metrics()).toMatchObject({
-      closed: false,
-      downlinkDeviceEgressOverrunFrames: 1,
-      downlinkFrames: 1,
+    vi.useFakeTimers();
+    const { bridge, device, provider } = createBridge({
+      automaticDownlinkReceipts: false,
     });
+    const downlink = binaryMessages(device.client);
+    provider.client.send(new Uint8Array(16 * ITERATE_KIT_PCM_FRAME_BYTES).fill(41));
+    provider.client.send(JSON.stringify({ type: "response.done" }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(downlink).toHaveLength(16);
+
+    device.client.send(downlinkReceipt(16));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(downlink).toHaveLength(17);
+    expect(downlink.at(-1)).toHaveLength(0);
+    expect(bridge.metrics()).toMatchObject({
+      downlinkItemsAcknowledged: 16,
+      downlinkItemsInFlight: 1,
+      downlinkItemsSent: 17,
+    });
+
+    device.client.send(downlinkReceipt(17));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(bridge.metrics()).toMatchObject({
+      downlinkItemsAcknowledged: 17,
+      downlinkItemsInFlight: 0,
+    });
+  });
+
+  test.each([
+    { firstReceipt: 17, secondReceipt: undefined, problem: "forward" },
+    { firstReceipt: 5, secondReceipt: 4, problem: "regressing" },
+  ])("rejects a $problem device receipt without granting credit", async (scenario) => {
+    /*
+     * WebSocket ordering makes a forward or regressing cumulative value an
+     * impossible peer state. Treating either as advisory would let malformed
+     * device bytes manufacture credit and recreate the unbounded queue this
+     * protocol is intended to eliminate.
+     */
+    vi.useFakeTimers();
+    const { bridge, device, diagnostics, provider } = createBridge({
+      automaticDownlinkReceipts: false,
+    });
+    provider.client.send(new Uint8Array(32 * ITERATE_KIT_PCM_FRAME_BYTES).fill(51));
+    await vi.advanceTimersByTimeAsync(0);
+    device.client.send(downlinkReceipt(scenario.firstReceipt));
+    await vi.advanceTimersByTimeAsync(0);
+    if (scenario.secondReceipt !== undefined) {
+      device.client.send(downlinkReceipt(scenario.secondReceipt));
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(bridge.metrics().closed).toBe(true);
+    expect(diagnostics).toContainEqual(
+      expect.objectContaining({
+        code: "invalid-device-receipt",
+        severity: "error",
+      }),
+    );
   });
 
   test("keeps the device lane alive when an idle provider closes and accepts a fresh provider", async () => {
@@ -1588,7 +2252,7 @@ describe("userspace PCM session bridge", () => {
               type: "output_text",
             },
           ],
-          interruptible: false,
+          interruptible: true,
           role: "assistant",
           type: "force_message",
         },

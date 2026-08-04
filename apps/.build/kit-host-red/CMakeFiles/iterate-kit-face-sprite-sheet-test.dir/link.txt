@@ -1,0 +1,1 @@
+/usr/bin/cc -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-face-sprite-sheet-test.dir/components/avatar/tests/face_sprite_sheet_test.c.o" -o iterate-kit-face-sprite-sheet-test  libiterate-kit-avatar.a

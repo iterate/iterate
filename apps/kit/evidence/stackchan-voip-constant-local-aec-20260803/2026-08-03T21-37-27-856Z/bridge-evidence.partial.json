@@ -1,0 +1,57 @@
+{
+  "closeEvents": [
+    {
+      "closedAtMonotonicMs": 27007.685125,
+      "metrics": {
+        "closeCode": 4002,
+        "closeReason": "invalid-pcm-uplink-frame-size",
+        "controlMessageTrace": [],
+        "deviceSocketCloseDisposition": "webSocketClose",
+        "deviceSocketMaximumBufferedBytes": 0,
+        "deviceSocketMaximumPayloadBytesInFlight": 640,
+        "deviceSocketMaximumSendCallbackLatencyMs": 0.11058299999785959,
+        "deviceSocketMaximumSendCallbacksInFlight": 1,
+        "deviceSocketOldestSendCallbackAgeMsAtClose": 0,
+        "deviceSocketPayloadBytesInFlightAtClose": 0,
+        "deviceSocketSendCallbacksInFlightAtClose": 0,
+        "deviceToWorkerBytes": 184328,
+        "deviceToWorkerMessages": 289,
+        "elapsedMs": 5801.708875,
+        "endpoint": "/pcm",
+        "maximumBufferedBytes": 5120,
+        "protocol": "iterate.kit.pcm.v1",
+        "workerToDeviceBytes": 5760,
+        "workerToDeviceMaximumInterarrivalMs": 21.224333000001934,
+        "workerToDeviceMessages": 9
+      }
+    }
+  ],
+  "openEvents": [
+    {
+      "endpoint": "/api",
+      "protocol": "",
+      "remoteAddress": "192.168.0.234",
+      "remotePort": 60858,
+      "startedAtMonotonicMs": 20990.042917
+    },
+    {
+      "endpoint": "/pcm",
+      "protocol": "iterate.kit.pcm.v1",
+      "remoteAddress": "192.168.0.234",
+      "remotePort": 60859,
+      "startedAtMonotonicMs": 21205.939625
+    },
+    {
+      "endpoint": "/pcm",
+      "protocol": "iterate.kit.pcm.v1",
+      "remoteAddress": "192.168.0.234",
+      "remotePort": 60860,
+      "startedAtMonotonicMs": 27294.84
+    }
+  ],
+  "progress": {
+    "microphoneBytes": 939520,
+    "speakerBytes": 5760,
+    "speakerFrames": 9
+  }
+}

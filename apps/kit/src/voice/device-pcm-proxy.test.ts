@@ -467,6 +467,43 @@ describe("device PCM proxy", () => {
     });
   });
 
+  test("delivers a remotely requested response while a server-VAD microphone is streaming", async () => {
+    /*
+     * The unattended physical AEC rig keeps the microphone lane live while it
+     * asks the deterministic provider to render a far-end stimulus. That is a
+     * different state from ordinary provider-driven server VAD: the remote
+     * request first suppresses stale downlink, then `response.created` must
+     * atomically identify the requested generation and release it. Restricting
+     * that release to push-to-talk made a perfectly healthy full-duplex device
+     * upload PCM forever while every diagnostic speaker frame was discarded.
+     */
+    const { provider, proxy } = createProxy({
+      inputMode: "server-vad",
+      minimumDownlinkStartupFrames: 1,
+    });
+    const response = await proxy.fetch(pcmRequest());
+    const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
+    if (!device) throw new Error("missing device WebSocket");
+    device.accept();
+    sockets.push(device);
+
+    const microphoneAtProvider = waitForMessage(provider.client);
+    device.send(new Uint8Array(frameBytes).fill(11));
+    await expect(microphoneAtProvider).resolves.toMatchObject({
+      data: new Uint8Array(frameBytes).fill(11),
+    });
+
+    const controls = waitForMessages(provider.client, 2);
+    await expect(proxy.requestTextResponse(projectId, "play the AEC fixture")).resolves.toBe(true);
+    await controls;
+    provider.client.send(JSON.stringify({ type: "response.created" }));
+    const downlink = waitForMessage(device);
+    provider.client.send(new Uint8Array(frameBytes).fill(31));
+    await expect(downlink).resolves.toMatchObject({
+      data: new Uint8Array(frameBytes).fill(31),
+    });
+  });
+
   test("an interrupted push-to-talk turn cancels and suppresses stale provider audio", async () => {
     const { provider, proxy } = createProxy({
       inputMode: "push-to-talk",
@@ -495,6 +532,15 @@ describe("device PCM proxy", () => {
   });
 
   test("paces provider audio at one device frame per frame duration", async () => {
+    /*
+     * This is a media-deadline test, not an operating-system scheduler test.
+     * Under the full suite a requested 15 ms sleep once resumed 24.6 ms later,
+     * after the correctly scheduled second frame, and produced a false audio
+     * pacing failure. Drive the proxy's clock explicitly so the assertion says
+     * exactly what matters in production: no second admission before 20 ms,
+     * then one admission at the deadline.
+     */
+    vi.useFakeTimers();
     const { provider, proxy } = createProxy();
     const response = await proxy.fetch(pcmRequest());
     const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
@@ -509,11 +555,12 @@ describe("device PCM proxy", () => {
     const firstFrame = waitForMessage(device);
     provider.client.send(new Uint8Array(frameBytes * 3).fill(6));
 
+    await vi.advanceTimersByTimeAsync(0);
     await firstFrame;
     expect(receivedAt).toHaveLength(1);
-    await new Promise((resolve) => setTimeout(resolve, 15));
+    await vi.advanceTimersByTimeAsync(19);
     expect(receivedAt).toHaveLength(1);
-    await new Promise((resolve) => setTimeout(resolve, 10));
+    await vi.advanceTimersByTimeAsync(1);
     expect(receivedAt).toHaveLength(2);
   });
 
@@ -1082,6 +1129,35 @@ describe("device PCM proxy", () => {
       await expect(deviceClosed).resolves.toMatchObject({ code: 4002 });
       await expect(providerClosed).resolves.toMatchObject({ code: 4002 });
     }
+  });
+
+  test("keeps cumulative speaker-release receipts off the microphone PCM lane", async () => {
+    /*
+     * The physical StackChan local-AEC run delivered 288 complete 640-byte
+     * microphone frames followed by one eight-byte hardware-release receipt.
+     * Treating every binary device message as microphone PCM closed the local
+     * harness after exactly `288 * 640 + 8` bytes, even though the same v1
+     * firmware/receipt contract is accepted by the deployed userspace proxy.
+     *
+     * Exercise the public device WebSocket seam: the receipt is ordered device
+     * control, not audio, so it must neither reach the provider nor close the
+     * generation. A subsequent microphone frame proves the session remains
+     * usable instead of merely swallowing the close event in the test.
+     */
+    const { provider, proxy } = createProxy();
+    const response = await proxy.fetch(pcmRequest());
+    const device = (response as Response & { webSocket?: AcceptingWebSocket }).webSocket;
+    if (!device) throw new Error("missing device WebSocket");
+    device.accept();
+    sockets.push(device);
+
+    const providerMessage = waitForMessage(provider.client);
+    const microphoneFrame = new Uint8Array(frameBytes).fill(0x35);
+    const receipt = Uint8Array.of(0x49, 0x4b, 0x41, 1, 1, 0, 0, 0);
+    device.send(receipt);
+    device.send(microphoneFrame);
+
+    await expect(providerMessage).resolves.toMatchObject({ data: microphoneFrame.buffer });
   });
 
   test("shuts down provider sockets using a WebSocket-valid close code", async () => {

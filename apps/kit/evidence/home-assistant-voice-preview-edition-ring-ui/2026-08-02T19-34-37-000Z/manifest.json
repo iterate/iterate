@@ -1,0 +1,115 @@
+{
+  "schemaVersion": 1,
+  "status": "passed-with-explicit-lifecycle-drops",
+  "scope": "fresh-havpe-ring-ui-reset-model-and-production-pcm-smoke",
+  "device": {
+    "id": "home-assistant-voice-preview-edition",
+    "stableUsbSerial": "D8:3B:DA:46:20:34",
+    "flashPortAtRunTime": "/dev/cu.usbmodem11101"
+  },
+  "deployment": {
+    "baseUrl": "https://os.iterate.com",
+    "projectId": "prj_4f76ffe131f1495981afd65619f57914",
+    "projectSlug": "kit-havpe-voice-e2e-20260802",
+    "capability": "itx.kit.homeAssistantVoicePreviewEdition",
+    "pcmHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app",
+    "provider": "grok-voice-think-fast-2.0"
+  },
+  "firmware": {
+    "applicationBytes": 1073520,
+    "logicalImageBytes": 1073406,
+    "applicationSha256": "99b5d2b3c312d99a9a482a2f8ce055a1bb0a36f431de27e912f04937b822a40e",
+    "smallestApplicationPartitionBytes": 5242880,
+    "applicationPartitionFreePercent": 80,
+    "diramUsedBytes": 210019,
+    "diramRemainingBytes": 131741,
+    "iramUsedBytes": 16383,
+    "iramRemainingBytes": 1,
+    "configurationPreserved": true,
+    "esptoolMacMatchedStableIdentity": true,
+    "esptoolHashVerifiedEveryRegion": true
+  },
+  "uiContract": {
+    "ringPixels": 12,
+    "networkSector": [0, 1, 2],
+    "speakerSector": [3, 4, 5],
+    "microphoneSector": [6, 7, 8],
+    "reservedDarkSector": [9, 10, 11],
+    "refreshCeilingHz": 20,
+    "wifiSampleHz": 1,
+    "remoteLedOverrideMs": 3000,
+    "realtimeUiQueues": 0,
+    "microphonePeakSource": "existing-aec-observation",
+    "speakerSampleStride": 8
+  },
+  "resetContract": {
+    "gpio": 0,
+    "activeLow": true,
+    "holdMs": 3000,
+    "armedColour": "magenta",
+    "restartsOnlyAfterDebouncedRelease": true,
+    "preservesProvisioning": true,
+    "factoryReset": false,
+    "physicalActuationProven": false
+  },
+  "tests": {
+    "targetedHostPassed": 2,
+    "targetedHostFailed": 0,
+    "names": ["iterate-kit-havpe-ui-test", "iterate-kit-debounced-button-test"],
+    "idfBuildWarningsAsErrors": true
+  },
+  "productionSmoke": {
+    "remoteConversationStartAcknowledged": true,
+    "pcmConnectionsDelta": 1,
+    "remoteHangUpAcknowledged": true,
+    "pcmDisconnectsDelta": 1,
+    "remoteGreenFillAcknowledged": true,
+    "wifiRssiDbm": {
+      "best": -39,
+      "last": -45
+    },
+    "wifiDisconnectsDelta": 0,
+    "controlWebsocketErrorsDelta": 0,
+    "pcmWebsocketErrorsDelta": 0,
+    "pcmWebsocketRawWriteFailuresDelta": 0,
+    "pcmTransportFailureIncidentsDelta": 0,
+    "controlProtocolFailuresDelta": 0,
+    "controlReceiveFailuresDelta": 0,
+    "controlSendFailuresDelta": 0,
+    "controlMessagesDiscardedDelta": 0,
+    "downlinkDrops": 0,
+    "audioFailures": 0,
+    "uplinkRestartIncidents": 0,
+    "captureFramesAccepted": 1198,
+    "captureProducerBackpressure": 164,
+    "uplinkFramesSent": 1166,
+    "uplinkDropsIncludingProducerBackpressure": 195,
+    "inferredLifecycleTailFramesDiscarded": 31,
+    "downlinkFramesReceived": 136,
+    "maximumTransportAcceptAgeMs": 31,
+    "runtimeSample": {
+      "uptimeMs": 139294,
+      "freeHeapBytes": 7273620,
+      "minimumFreeHeapBytes": 7215024,
+      "freeInternalHeapBytes": 87847,
+      "minimumFreeInternalHeapBytes": 68187,
+      "freePsramBytes": 7210044,
+      "taskStackHighWaterBytes": 1660,
+      "cpuPermille": 23
+    }
+  },
+  "classification": {
+    "transportHealthCountersClean": true,
+    "networkValidityAcceptance": false,
+    "observedRingRendererTransportPerturbation": false,
+    "freshFrameConservationAcceptance": false,
+    "lifecycleDrops": "The exact 195 uplink aggregate consists of the same 164 producer-backpressure events reported by clean capture plus a bounded 31-frame sender-tail discard. No retry, reconnect, freshness restart, transport failure, or downlink drop occurred.",
+    "authority": "This finite smoke validates the exact flashed ring/reset build under production control and PCM load. The retained schema-v3 physical Grok/AEC manifest remains the acoustic and frame-conservation authority."
+  },
+  "limits": [
+    "No physical camera or human observation was used as a ring UI oracle; the driver acknowledged the remote fill, the pure renderer is host-tested, and production diagnostics remained clean.",
+    "The center-button short press and long-hold reboot are host-modelled and present in the flashed image, but this unattended run did not mechanically actuate GPIO0.",
+    "This finite smoke did not run the interval-aligned router/device/worker probe matrix and therefore is not promoted as a network-validity acceptance run.",
+    "The one-byte reported IRAM margin remains a release-hardening risk."
+  ]
+}

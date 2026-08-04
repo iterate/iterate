@@ -3,7 +3,15 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { EspChipFamily } from "./catalog.ts";
-import type { FirmwareFlashPlan } from "./prepare-flash-plan.ts";
+import type { FirmwareFlashPart } from "./prepare-flash-plan.ts";
+
+/*
+ * Current macOS installs expose the system interpreter as `python3`; a bare
+ * `python` is normally absent. Keep the caller override because ESP-IDF may
+ * supply a dedicated virtualenv, but make the unattended CLI work on the
+ * machine it is designed to flash from without first sourcing export.sh.
+ */
+const DEFAULT_PYTHON_EXECUTABLE = "python3";
 
 export interface PreparedFlashFile {
   address: number;
@@ -15,6 +23,19 @@ export interface EspFlashRegion {
   size: number;
 }
 
+/**
+ * The low-level writer also serves diagnostics which must replace one bounded
+ * partition without erasing an otherwise proven firmware image. The public
+ * installer still supplies its stricter `FirmwareFlashPlan` (`eraseAll: true`);
+ * making the erase decision explicit here prevents a physical test helper
+ * from pretending that a whole-device erase is an unavoidable esptool rule.
+ */
+export interface EsptoolFlashPlan {
+  chipFamily: EspChipFamily;
+  eraseAll: boolean;
+  parts: readonly FirmwareFlashPart[];
+}
+
 export function esptoolChipName(chipFamily: EspChipFamily) {
   return chipFamily.toLowerCase().replaceAll("-", "");
 }
@@ -22,7 +43,7 @@ export function esptoolChipName(chipFamily: EspChipFamily) {
 interface EsptoolWriteFlashInput {
   baudrate: number;
   files: readonly PreparedFlashFile[];
-  plan: FirmwareFlashPlan;
+  plan: EsptoolFlashPlan;
   port: string;
 }
 
@@ -128,15 +149,16 @@ export function buildEsptoolRunApplicationArguments(input: EsptoolRunApplication
   }
   /*
    * ESP32-S2/S3 native USB Serial/JTAG needs esptool's 1200-baud USB reset to
-   * leave the downloaded stub reliably. `default_reset` can report a hard
-   * reset while the physical Stick remains in the ROM loader. Older families
-   * normally sit behind the conventional RTS/DTR UART circuit, where the
-   * default strategy remains the compatible choice.
+   * reach the downloaded stub reliably. CoreS3 then proved that the ordinary
+   * RTS `hard_reset` can report success while the board remains in that stub:
+   * it stayed off Wi-Fi until the same stub armed the chip watchdog. Use that
+   * in-band reset for native-USB chips, where it avoids depending on a board's
+   * reset-delay circuit. Older families normally sit behind a conventional
+   * RTS/DTR UART bridge, so retain both of their compatible reset strategies.
    */
-  const before =
-    input.chipFamily === "ESP32-S2" || input.chipFamily === "ESP32-S3"
-      ? "usb_reset"
-      : "default_reset";
+  const nativeUsb = input.chipFamily === "ESP32-S2" || input.chipFamily === "ESP32-S3";
+  const before = nativeUsb ? "usb_reset" : "default_reset";
+  const after = nativeUsb ? "watchdog_reset" : "hard_reset";
   return [
     "-m",
     "esptool",
@@ -147,13 +169,13 @@ export function buildEsptoolRunApplicationArguments(input: EsptoolRunApplication
     "--before",
     before,
     "--after",
-    "hard_reset",
+    after,
     "run",
   ];
 }
 
 export async function flashFirmwareWithEsptool(
-  plan: FirmwareFlashPlan,
+  plan: EsptoolFlashPlan,
   options: {
     baudrate?: number;
     port: string;
@@ -176,7 +198,7 @@ export async function flashFirmwareWithEsptool(
       plan,
       port: options.port,
     });
-    await runProcess(options.pythonExecutable ?? "python", args);
+    await runProcess(options.pythonExecutable ?? DEFAULT_PYTHON_EXECUTABLE, args);
   } catch (error) {
     operationFailure = error;
   }
@@ -219,7 +241,7 @@ export async function readFlashRegionWithEsptool(options: {
     });
     let readFailure: unknown;
     try {
-      await runProcess(options.pythonExecutable ?? "python", args);
+      await runProcess(options.pythonExecutable ?? DEFAULT_PYTHON_EXECUTABLE, args);
     } catch (error) {
       readFailure = error;
     }
@@ -235,7 +257,7 @@ export async function readFlashRegionWithEsptool(options: {
        * an otherwise healthy device off Wi-Fi.
        */
       await runProcess(
-        options.pythonExecutable ?? "python",
+        options.pythonExecutable ?? DEFAULT_PYTHON_EXECUTABLE,
         buildEsptoolRunApplicationArguments({
           chipFamily: options.chipFamily,
           port: options.port,
@@ -282,6 +304,25 @@ export async function readFlashRegionWithEsptool(options: {
     throw new Error("Flash-region reading completed without data.");
   }
   return result;
+}
+
+/**
+ * Explicitly leaves the ROM loader after a native-USB flash transaction.
+ *
+ * esptool's preceding command may print "Hard resetting" while an ESP32-S3
+ * remains unavailable on Wi-Fi. Keeping this operation public lets a bounded
+ * partition rewrite establish an unambiguous application-start boundary
+ * without opening a serial monitor (which would introduce another reset).
+ */
+export function runApplicationWithEsptool(options: {
+  chipFamily: EspChipFamily;
+  port: string;
+  pythonExecutable?: string;
+}) {
+  return runProcess(
+    options.pythonExecutable ?? DEFAULT_PYTHON_EXECUTABLE,
+    buildEsptoolRunApplicationArguments(options),
+  );
 }
 
 function runProcess(command: string, args: readonly string[]) {

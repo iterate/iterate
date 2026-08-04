@@ -1,0 +1,22 @@
+{
+  "calibrationOutput": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/calibration/havpe-D8-3B-DA-46-20-34.json",
+  "createdAt": "2026-08-04T10:02:47.801Z",
+  "device": "home-assistant-voice-preview-edition",
+  "exactMac": "D8:3B:DA:46:20:34",
+  "firmwareApplication": {
+    "applicationBytes": 1086960,
+    "applicationFile": "iterate-kit-home-assistant-voice-preview-edition.bin",
+    "applicationSha256": "391c1285a8f63eb81d46c508594827d23c3ca8cc6379f55d58050da13c89968d",
+    "iterateKitVoicePeXmosUplinkStage": 3,
+    "projectName": "iterate-kit-home-assistant-voice-preview-edition"
+  },
+  "networkClassification": "network-invalid",
+  "networkVerdict": "network-invalid",
+  "qualification": "calibration-acquisition-only",
+  "schemaVersion": 1,
+  "transport": {
+    "baseUrl": "https://bf8af22c73505f02.tunnels.iterate.com",
+    "deviceHost": "192.168.0.33",
+    "kind": "captun"
+  }
+}

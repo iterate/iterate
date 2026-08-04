@@ -2,6 +2,7 @@
 #include "fake_esp_idf_platform.h"
 #include "iterate/kit/pcm_lane.h"
 #include "iterate/kit/platforms/esp_idf_pcm_transport.h"
+#include "pcm_transport_lifecycle.h"
 #include "iterate/kit/platforms/esp_idf_websocket_policy.h"
 
 #include <stdbool.h>
@@ -501,12 +502,21 @@ static void content_and_eos_remain_ordered_across_the_transport_task(void) {
       ITERATE_KIT_ESP_IDF_PCM_READY);
   CHECK(wait_for_downlink_publications(&fixture, 2U));
   /*
-   * Publishing content and EOS is not enough for a bounded userspace sender:
-   * workerd cannot inspect bytes hidden below send(). The same production
-   * owner must return cumulative credit for both ordered items, including the
-   * zero-byte marker, without depending on microphone traffic to wake it.
+   * Socket ingress is not playback capacity. The physical choppy run proved
+   * that acknowledging here makes Cloudflare's timer the de facto speaker
+   * clock and allows it to discard elapsed media during a late wake. Give the
+   * network owner many host scheduling quanta and prove it grants no credit
+   * while both items still occupy the device lane.
    */
-  CHECK(wait_for_downlink_acknowledgement(&fixture, 2U));
+  for (index = 0U; index < 20U; ++index) {
+    pause_one_millisecond();
+  }
+  {
+    struct iterate_kit_esp_idf_pcm_transport_metrics transport_metrics;
+    iterate_kit_esp_idf_pcm_transport_metrics(
+        &fixture.transport, &transport_metrics);
+    CHECK(transport_metrics.downlink_items_acknowledged == 0U);
+  }
 
   CHECK(iterate_kit_pcm_lane_downlink_acquire_at(
       &fixture.lane,
@@ -518,6 +528,9 @@ static void content_and_eos_remain_ordered_across_the_transport_task(void) {
   CHECK(memcmp(received, frame, sizeof(frame)) == 0);
   CHECK(iterate_kit_pcm_lane_downlink_release(
       &fixture.lane) == ITERATE_KIT_OK);
+  iterate_kit_esp_idf_pcm_transport_note_downlink_item_released(
+      &fixture.transport, 1U);
+  CHECK(wait_for_downlink_acknowledgement(&fixture, 1U));
 
   CHECK(iterate_kit_pcm_lane_downlink_acquire_at(
       &fixture.lane,
@@ -528,6 +541,9 @@ static void content_and_eos_remain_ordered_across_the_transport_task(void) {
   CHECK(received_size == 0U);
   CHECK(iterate_kit_pcm_lane_downlink_release(
       &fixture.lane) == ITERATE_KIT_OK);
+  iterate_kit_esp_idf_pcm_transport_note_downlink_item_released(
+      &fixture.transport, 1U);
+  CHECK(wait_for_downlink_acknowledgement(&fixture, 2U));
   CHECK(iterate_kit_pcm_lane_downlink_acquire_at(
       &fixture.lane,
       &received,
@@ -544,7 +560,7 @@ static void content_and_eos_remain_ordered_across_the_transport_task(void) {
         transport_metrics;
     iterate_kit_esp_idf_pcm_transport_metrics(
         &fixture.transport, &transport_metrics);
-    CHECK(transport_metrics.downlink_items_received == 2U);
+    CHECK(transport_metrics.downlink_items_released == 2U);
     CHECK(
         transport_metrics.downlink_items_acknowledged == 2U);
     CHECK(transport_metrics.downlink_receipts_sent >= 1U);

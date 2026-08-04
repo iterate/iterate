@@ -5,6 +5,10 @@
   "type": "module",
   "description": "A tiny browser-based installer for Iterate voice devices.",
   "scripts": {
+    "aec:physical": "tsx ./scripts/prove-local-aec.ts",
+    "aec:calibrate": "tsx ./scripts/prove-local-aec.ts",
+    "aec:fixtures": "tsx ./scripts/materialize-aec-release-fixtures.ts",
+    "aec:score": "tsx ./scripts/score-aec-evidence.ts",
     "audio:transcribe": "tsx ./scripts/transcribe-pcm16.ts",
     "dev": "vite dev",
     "build": "pnpm firmware:sync && vite build && tsc --noEmit",
@@ -14,6 +18,7 @@
     "deploy": "tsx ./scripts/deploy.ts",
     "ensure-resources": "tsx ./scripts/ensure-resources.ts",
     "firmware:flash": "tsx ./scripts/flash.ts",
+    "firmware:wifi": "tsx ./scripts/reprovision-device-wifi.ts",
     "firmware:sync": "tsx ./scripts/sync-firmware-assets.ts",
     "firmware:test:capnweb": "tsx ./scripts/test-capnweb-c-interop.ts",
     "firmware:test:diagnostics": "tsx ./scripts/test-runtime-diagnostics.ts",

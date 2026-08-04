@@ -152,7 +152,6 @@ export async function transcribePcm16WithXaiStreamingStt(
           const partialText = typeof value.text === "string" ? value.text.trim() : "";
           const partialWords = decodeTimedTranscriptWords(value.words);
           if (partialWords.length > 0) {
-            const replacementStartsAt = partialWords[0]!.start;
             /*
              * xAI emits finalized, non-overlapping chunks during a long
              * recording, then a speech-final chunk that repeats its trailing
@@ -161,8 +160,7 @@ export async function transcribePcm16WithXaiStreamingStt(
              * retains the whole utterance without duplicating its last
              * several seconds.
              */
-            finalizedWords = finalizedWords.filter((word) => word.end <= replacementStartsAt);
-            finalizedWords.push(...partialWords);
+            finalizedWords = mergeTimedTranscriptWords(finalizedWords, partialWords);
           }
           if (value.speech_final === true && partialText) {
             speechFinalText =
@@ -180,11 +178,30 @@ export async function transcribePcm16WithXaiStreamingStt(
         }
         if (value.type === "transcript.done") {
           const doneText = typeof value.text === "string" ? value.text.trim() : "";
+          const doneWords = decodeTimedTranscriptWords(value.words);
+          if (doneWords.length > 0) {
+            /*
+             * `transcript.done` is not guaranteed to restate the entire
+             * artifact. A physical StackChan recording produced two finalised
+             * speech segments and a non-empty done payload containing only the
+             * second. Merge its timed window as a trailing correction; using
+             * doneText directly deleted the already-proven first segment.
+             */
+            finalizedWords = mergeTimedTranscriptWords(finalizedWords, doneWords);
+          }
           finish({
             durationSeconds: typeof value.duration === "number" ? value.duration : 0,
             rawEvents,
-            text: doneText || speechFinalText,
-            words: doneText && Array.isArray(value.words) ? value.words : speechFinalWords,
+            text:
+              finalizedWords.length > 0
+                ? finalizedWords.map((word) => word.text).join(" ")
+                : doneText || speechFinalText,
+            words:
+              finalizedWords.length > 0
+                ? finalizedWords.map((word) => word.raw)
+                : doneText && Array.isArray(value.words)
+                  ? value.words
+                  : speechFinalWords,
           });
         }
       } catch (error) {
@@ -196,6 +213,14 @@ export async function transcribePcm16WithXaiStreamingStt(
     socket.addEventListener("message", onMessage);
     socket.addEventListener("error", onError);
   });
+}
+
+function mergeTimedTranscriptWords(
+  accumulated: readonly TimedTranscriptWord[],
+  replacement: readonly TimedTranscriptWord[],
+) {
+  const replacementStartsAt = replacement[0]!.start;
+  return [...accumulated.filter((word) => word.end <= replacementStartsAt), ...replacement];
 }
 
 function decodeTimedTranscriptWords(value: unknown): TimedTranscriptWord[] {

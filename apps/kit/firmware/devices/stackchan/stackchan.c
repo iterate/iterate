@@ -25,13 +25,17 @@ static const char description[] =
     "\"subscribeToAecMetrics\":\"Call a callback with the latest aligned "
     "near, speaker-reference, and clean AEC signal window plus bounded "
     "timing and failure counters.\","
+    "\"aecTrace\":\"Capture and retrieve one bounded, explicitly described "
+    "raw/reference/clean trace without blocking realtime audio.\","
     "\"subscribeToEvents\":\"Call one callback with the current push-to-talk "
     "snapshot and each later processed call or talk transition.\","
     "\"getDiagnostics\":\"Return one retained control-transport incident "
     "snapshot.\","
     "\"renderOnScreen\":\"Download and render a PNG from {url}.\","
-    "\"changeSpriteSet\":\"Select dot-matrix-oracle, gameboy-fine-black, "
-    "karakuri-brass, or starbyte.\","
+    "\"captureScreen\":\"Capture the current display as one bounded PNG "
+    "byte array.\","
+    "\"changeSpriteSet\":\"Select dot-matrix-oracle, karakuri-brass, or "
+    "starbyte.\","
     "\"conversation\":{\"start\":\"Open the PCM conversation intent.\","
     "\"hangUp\":\"End the current conversation intent.\","
     "\"interruptPlayback\":\"Purge assistant speech and acknowledge only "
@@ -144,10 +148,12 @@ enum capnweb_status iterate_kit_stackchan_init(
   struct iterate_kit_metrics_options metrics_options;
   struct iterate_kit_device_event_stream_options event_stream_options;
   struct iterate_kit_device_event_queue_options event_options;
-  if (device == NULL || options == NULL) {
+  if (device == NULL || options == NULL || options->aec_trace == NULL ||
+      options->aec_trace->initialized == 0U) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
   memset(device, 0, sizeof(*device));
+  device->aec_trace = options->aec_trace;
   if (iterate_kit_callback_budget_init(
           &device->callback_budget,
           ITERATE_KIT_STACKCHAN_MAXIMUM_IN_FLIGHT_CALLBACKS) !=
@@ -182,6 +188,10 @@ enum capnweb_status iterate_kit_stackchan_init(
           &options->avatar,
           options->avatar_slug_scratch,
           options->avatar_slug_scratch_size) != ITERATE_KIT_OK ||
+      iterate_kit_screen_capture_init(
+          &device->screen_capture,
+          &options->screen_capture,
+          options->maximum_screen_capture_bytes) != ITERATE_KIT_OK ||
       iterate_kit_servos_init(
           &device->servos,
           &options->servos,
@@ -234,10 +244,14 @@ enum capnweb_status iterate_kit_stackchan_init(
   device->modules[2] = iterate_kit_screen_module(&device->screen);
   device->modules[3] = iterate_kit_avatar_module(&device->avatar);
   device->modules[4] =
+      iterate_kit_screen_capture_module(&device->screen_capture);
+  device->modules[5] =
       iterate_kit_conversation_module(&device->conversation);
-  device->modules[5] = iterate_kit_servos_module(&device->servos);
-  device->modules[6] = iterate_kit_leds_module(&device->leds);
-  device->modules[7] = iterate_kit_camera_module(&device->camera);
+  device->modules[6] = iterate_kit_servos_module(&device->servos);
+  device->modules[7] = iterate_kit_leds_module(&device->leds);
+  device->modules[8] = iterate_kit_camera_module(&device->camera);
+  device->modules[9] =
+      iterate_kit_aec_diagnostic_trace_module(device->aec_trace);
   /*
    * Routing remains one fixed table even though the public description is
    * nested. Each generic module owns its method path, avoiding a per-profile

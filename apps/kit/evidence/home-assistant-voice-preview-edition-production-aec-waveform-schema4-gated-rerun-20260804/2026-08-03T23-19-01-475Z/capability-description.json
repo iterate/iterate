@@ -1,0 +1,6 @@
+{
+  "instructions": "A dynamic live capability mounted at \"kit.homeAssistantVoicePreviewEdition\".\n\nThis is a FLATTENED dispatch target: any dotted call under the mount compiles to one invokeCapability call with the remaining path — `kit.homeAssistantVoicePreviewEdition.a.b(x)` reaches the provider as `invokeCapability({ path: [\"a\",\"b\"], args: [x] })`. There is no object graph to walk; `children` is empty because sub-paths are routes the provider interprets, not members this host can list.",
+  "types": "",
+  "children": {},
+  "parent": "the capability host at scope \"/\" (mounted at \"kit.homeAssistantVoicePreviewEdition\", providedAtOffset 1093)"
+}

@@ -1,0 +1,5 @@
+{
+  "message": "Timed out waiting for home-assistant-voice-preview-edition did not mount on the local Cap'n Web peer.",
+  "name": "Error",
+  "stack": "Error: Timed out waiting for home-assistant-voice-preview-edition did not mount on the local Cap'n Web peer.\n    at <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-local-aec.ts:998:13)\n    at async proveLocalAec (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-local-aec.ts:300:21)"
+}

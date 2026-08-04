@@ -458,18 +458,27 @@ using M5StickS3ProductionPlayback =
         iterate::kit::platforms::M5StickS3RealtimeAudioPolicy::
             minimumRefillLeadUs>;
 
+void countReleasedItems(
+    void *context,
+    std::uint32_t releasedItems) {
+  auto *total = static_cast<std::uint32_t *>(context);
+  TEST_ASSERT(total != nullptr);
+  TEST_ASSERT(
+      releasedItems <=
+      std::numeric_limits<std::uint32_t>::max() - *total);
+  *total += releasedItems;
+}
+
 /*
  * The policy owns counters and scalar ownership metadata, never PCM storage.
- * Pinning the measured 296-byte 64-bit-host ceiling catches an accidental frame
- * copy/vector/queue in this layer. The latest 24 bytes are deliberate: four
- * counters expose submitted/completed/retired/drop dispositions, while two
- * scalar ledgers retain exact ordered-drop and outstanding-descriptor
- * ownership without retaining PCM. The object is still hundreds of bytes
- * rather than even one 640-byte mono frame. Target resource reports remain the
- * authoritative ESP32 size.
+ * Pinning the measured 320-byte 64-bit-host ceiling catches an accidental frame
+ * copy/vector/queue in this layer. The newest 16 bytes hold one callback and
+ * context so exact DMA completion can return finite userspace credit without a
+ * second queue or polling clock. The object is still half of one 640-byte mono
+ * frame. Target resource reports remain the authoritative ESP32 size.
  */
 static_assert(
-    sizeof(Playback) <= 304U,
+    sizeof(Playback) <= 320U,
     "realtime playback policy must remain a small control object");
 
 /*
@@ -502,6 +511,72 @@ void fourFreshFramesAreRequiredBeforePlaybackStarts() {
       output.currentDma ==
       std::vector<std::int16_t>({1, 2, 3, 4}));
   TEST_ASSERT(playback.metrics().currentContentFrames == 4U);
+}
+
+/*
+ * The device releases an SPSC slot as soon as it copies a frame into cyclic
+ * DMA, but userspace credit represents hardware progress rather than that
+ * internal copy. The M5Stick previously emitted no release receipts at all,
+ * so a response longer than the finite twelve-item window stalled after about
+ * 240 ms. Emitting on submission instead would merely move the bug: userspace
+ * could outrun a stalled speaker and rebuild the same hidden backlog below the
+ * WebSocket. Pin both sides of the boundary with one exact EOF.
+ */
+void hardwareReceiptFollowsCompletionNotSubmission() {
+  LaneFixture fixture;
+  FakeDirectOutput output;
+  Playback playback;
+  std::uint32_t releasedItems = 0U;
+  TEST_ASSERT(
+      playback.bindItemReleased(
+          countReleasedItems, &releasedItems) ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
+  for (std::int16_t value = 1; value <= 5; ++value) {
+    fixture.publish(value, 0U);
+  }
+
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 0U).
+          playbackStarted);
+  TEST_ASSERT(releasedItems == 0U);
+
+  output.complete(1U);
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 20U).status ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(releasedItems == 1U);
+}
+
+/*
+ * PTT interruption stops hardware and purges the bounded queued epoch. Those
+ * items no longer consume device capacity even though they were intentionally
+ * not played, so one successful stop must return every slot exactly once. A
+ * missing bulk receipt deadlocks the sender; a duplicate lets it exceed the
+ * physical ring bound.
+ */
+void explicitStopReturnsEveryReleasedCapacityItem() {
+  LaneFixture fixture;
+  FakeDirectOutput output;
+  Playback playback;
+  std::uint32_t releasedItems = 0U;
+  TEST_ASSERT(
+      playback.bindItemReleased(
+          countReleasedItems, &releasedItems) ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
+  for (std::int16_t value = 1; value <= 6; ++value) {
+    fixture.publish(value, 0U);
+  }
+  TEST_ASSERT(
+      playback.pump(fixture.lane, output, 0U).
+          playbackStarted);
+  TEST_ASSERT(releasedItems == 0U);
+
+  TEST_ASSERT(
+      playback.stop(fixture.lane, output) ==
+      ITERATE_KIT_OK);
+  TEST_ASSERT(releasedItems == 6U);
 }
 
 /*
@@ -1107,11 +1182,17 @@ void generationBarrierFlushesHardwareDriverAndLaneOwnership() {
   LaneFixture fixture;
   FakeDirectOutput output;
   Playback playback;
+  std::uint32_t releasedItems = 0U;
+  TEST_ASSERT(
+      playback.bindItemReleased(
+          countReleasedItems, &releasedItems) ==
+      ITERATE_KIT_OK);
   TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
   for (std::int16_t value = 1; value <= 6; ++value) {
     fixture.publish(value, 0U);
   }
   TEST_ASSERT(playback.pump(fixture.lane, output, 0U).playbackStarted);
+  TEST_ASSERT(releasedItems == 0U);
   output.complete(1U);
 
   TEST_ASSERT(
@@ -1122,6 +1203,7 @@ void generationBarrierFlushesHardwareDriverAndLaneOwnership() {
   TEST_ASSERT(output.currentDma.empty());
   TEST_ASSERT(playback.metrics().dmaFramesCompleted == 1U);
   TEST_ASSERT(playback.metrics().generationFramesFlushed == 5U);
+  TEST_ASSERT(releasedItems == 6U);
 
   for (std::int16_t value = 21; value <= 24; ++value) {
     fixture.publish(value, 20U);
@@ -1173,6 +1255,11 @@ void staleDownlinkIsPurgedInsteadOfPlayedLate() {
   LaneFixture fixture;
   FakeDirectOutput output;
   Playback playback;
+  std::uint32_t releasedItems = 0U;
+  TEST_ASSERT(
+      playback.bindItemReleased(
+          countReleasedItems, &releasedItems) ==
+      ITERATE_KIT_OK);
   TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
   for (std::int16_t value = 1; value <= 6; ++value) {
     fixture.publish(value, 100U);
@@ -1185,6 +1272,7 @@ void staleDownlinkIsPurgedInsteadOfPlayedLate() {
   TEST_ASSERT(output.submittedHistory.empty());
   TEST_ASSERT(playback.metrics().freshnessIncidents == 1U);
   TEST_ASSERT(playback.metrics().freshnessFramesDropped == 6U);
+  TEST_ASSERT(releasedItems == 6U);
 }
 
 /*
@@ -1382,6 +1470,11 @@ void partialPrebufferTimesOutAsOneClassifiedDiscard() {
   LaneFixture fixture;
   FakeDirectOutput output;
   Playback playback;
+  std::uint32_t releasedItems = 0U;
+  TEST_ASSERT(
+      playback.bindItemReleased(
+          countReleasedItems, &releasedItems) ==
+      ITERATE_KIT_OK);
   TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
   fixture.publish(7, 10U);
   fixture.publish(8, 20U);
@@ -1398,6 +1491,7 @@ void partialPrebufferTimesOutAsOneClassifiedDiscard() {
   TEST_ASSERT(playback.metrics().partialPrebufferFramesDropped == 2U);
   TEST_ASSERT(output.startCount == 0U);
   TEST_ASSERT(output.currentDma.empty());
+  TEST_ASSERT(releasedItems == 2U);
 }
 
 /*
@@ -1886,6 +1980,11 @@ void freshnessDropSurvivesDriverStopFailure() {
   LaneFixture fixture;
   FakeDirectOutput output;
   Playback playback;
+  std::uint32_t releasedItems = 0U;
+  TEST_ASSERT(
+      playback.bindItemReleased(
+          countReleasedItems, &releasedItems) ==
+      ITERATE_KIT_OK);
   TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
   for (std::int16_t value = 1; value <= 5; ++value) {
     fixture.publish(value, 0U);
@@ -1902,6 +2001,12 @@ void freshnessDropSurvivesDriverStopFailure() {
   TEST_ASSERT(!fixture.downlinkRing.read_acquired);
   TEST_ASSERT(playback.metrics().freshnessIncidents == 1U);
   TEST_ASSERT(playback.metrics().freshnessFramesDropped == 1U);
+  /*
+   * The one completed descriptor is proven hardware progress. The stale head
+   * and remaining DMA epoch are not reusable after stop failure, so the failed
+   * session must retire rather than mint speculative credits.
+   */
+  TEST_ASSERT(releasedItems == 1U);
 }
 
 /*
@@ -1925,6 +2030,11 @@ void steadyStreamingResponseDrainsItsExactTailAtEndOfStream() {
    */
   output.enforceBoundedDriverQueue = true;
   Playback playback;
+  std::uint32_t releasedItems = 0U;
+  TEST_ASSERT(
+      playback.bindItemReleased(
+          countReleasedItems, &releasedItems) ==
+      ITERATE_KIT_OK);
   TEST_ASSERT(playback.begin(output) == ITERATE_KIT_OK);
   for (std::int16_t value = 1; value <= 4; ++value) {
     fixture.publish(value, 0U);
@@ -1932,6 +2042,12 @@ void steadyStreamingResponseDrainsItsExactTailAtEndOfStream() {
   TEST_ASSERT(
       playback.pump(fixture.lane, output, 0U).
           playbackStarted);
+  /*
+   * Ring release and DMA submission are not delivery. The exact twelve-item
+   * userspace window would otherwise admit a thirteenth frame before the
+   * speaker clock had consumed even one of the first four.
+   */
+  TEST_ASSERT(releasedItems == 0U);
 
   std::uint64_t nowMs = 20U;
   for (std::int16_t value = 5;
@@ -1974,6 +2090,9 @@ void steadyStreamingResponseDrainsItsExactTailAtEndOfStream() {
   TEST_ASSERT(
       output.submittedHistory.size() ==
       static_cast<std::size_t>(frameCount));
+  TEST_ASSERT(
+      releasedItems ==
+      static_cast<std::uint32_t>(frameCount) + 1U);
   for (std::int16_t value = 1;
        value <= frameCount;
        ++value) {
@@ -2235,6 +2354,8 @@ void futureReceiveTimestampCannotBypassFreshness() {
 
 int main() {
   fourFreshFramesAreRequiredBeforePlaybackStarts();
+  hardwareReceiptFollowsCompletionNotSubmission();
+  explicitStopReturnsEveryReleasedCapacityItem();
   boundedJitterPlaysOneOrderedContinuousSequence();
   timelyFrameAfterEofUsesHardwareReserveWithoutSilence();
   underrunStopsOnceAndRebuffersFourFreshFrames();

@@ -64,6 +64,7 @@ struct Simulation {
    * fixture would hide.
    */
   std::uint32_t photoReleaseCount = 0U;
+  std::uint32_t screenshotReleaseCount = 0U;
 
   /* All following storage is caller-owned for the full profile lifetime,
    * matching the allocation-free device contract. */
@@ -72,9 +73,45 @@ struct Simulation {
   char diagnosticsExpression
       [ITERATE_KIT_METRICS_DIAGNOSTICS_EXPRESSION_CAPACITY]{};
   iterate_kit_metrics_subscription subscriptions[subscriptionCapacity]{};
+  iterate_kit_aec_diagnostic_trace_capability aecTraceCapability{
+    .initialized = 1U,
+  };
   iterate_kit_stackchan stackchan{};
   iterate_kit_device profile{};
 };
+
+/*
+ * One complete one-pixel PNG is enough for the host peer to prove byte-array
+ * serialization and release ownership. It deliberately does not mimic the
+ * CoreS3 framebuffer or ROM encoder; those are physical-target acceptance.
+ */
+constexpr std::uint8_t screenshotPng[] = {
+  0x89U, 0x50U, 0x4eU, 0x47U, 0x0dU, 0x0aU, 0x1aU, 0x0aU,
+  0x00U, 0x00U, 0x00U, 0x0dU, 0x49U, 0x48U, 0x44U, 0x52U,
+  0x00U, 0x00U, 0x00U, 0x01U, 0x00U, 0x00U, 0x00U, 0x01U,
+  0x08U, 0x06U, 0x00U, 0x00U, 0x00U, 0x1fU, 0x15U, 0xc4U,
+  0x89U, 0x00U, 0x00U, 0x00U, 0x0dU, 0x49U, 0x44U, 0x41U,
+  0x54U, 0x08U, 0xd7U, 0x63U, 0xf8U, 0xcfU, 0xc0U, 0xf0U,
+  0x1fU, 0x00U, 0x05U, 0x00U, 0x01U, 0xffU, 0x89U, 0x99U,
+  0x3dU, 0x1dU, 0x00U, 0x00U, 0x00U, 0x00U, 0x49U, 0x45U,
+  0x4eU, 0x44U, 0xaeU, 0x42U, 0x60U, 0x82U,
+};
+
+void releaseScreenshot(void *context) {
+  ++static_cast<Simulation *>(context)->screenshotReleaseCount;
+}
+
+iterate_kit_status captureScreen(
+    void *context, iterate_kit_captured_screen *capture) {
+  if (capture == nullptr) return ITERATE_KIT_INVALID_ARGUMENT;
+  *capture = {
+    screenshotPng,
+    sizeof(screenshotPng),
+    releaseScreenshot,
+    context,
+  };
+  return ITERATE_KIT_OK;
+}
 
 iterate_kit_status requestPlaybackInterruption(
     void *context, std::uint32_t *token) {
@@ -218,6 +255,10 @@ capnweb_status dispatch(
   if (pathEquals(call, "__test", "photoReleaseCount")) {
     return capnweb_reply_set_int64(reply, simulation.photoReleaseCount);
   }
+  if (pathEquals(call, "__test", "screenshotReleaseCount")) {
+    return capnweb_reply_set_int64(
+        reply, simulation.screenshotReleaseCount);
+  }
   return simulation.profile.capability.dispatch(
       simulation.profile.capability.context, call, reply);
 }
@@ -276,6 +317,8 @@ capnweb_status initialize(
     {&simulation.common, iterate::kit::simulator::changeSpriteSet},
     simulation.avatarSlugScratch,
     sizeof(simulation.avatarSlugScratch),
+    {&simulation, captureScreen},
+    sizeof(screenshotPng),
     {&simulation, moveServos},
     {&simulation, setLed, fillLeds},
     {&simulation, takePhoto},
@@ -300,6 +343,7 @@ capnweb_status initialize(
       sizeof(simulation.diagnosticsExpression),
       nullptr,
     },
+    &simulation.aecTraceCapability,
   };
   const capnweb_status status =
       iterate_kit_stackchan_init(&simulation.stackchan, &options);

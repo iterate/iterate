@@ -104,6 +104,12 @@ export interface KitMetrics {
   freePsramBytes: number;
   taskStackHighWaterBytes: number;
   cpuPermille: number;
+  /**
+   * Number of remote subscription callbacks that ended by rejecting. This is
+   * lifecycle evidence, not a device failure counter: the firmware releases
+   * the associated Cap'n Web import and keeps other modules progressing.
+   */
+  subscriptionEnds: number;
   audio?: KitAudioMetrics;
 }
 
@@ -189,17 +195,52 @@ export interface KitPlaybackMetrics {
 }
 
 /**
+ * Low-rate health of a synchronous speaker owner.
+ *
+ * StackChan and HAVPE cannot truthfully expose the Stick's one-record-per-wire-
+ * frame DMA schema: their codec writes use smaller hardware-clocked chunks.
+ * They can still prove that current content reached that clock, that no reset
+ * or queue fault interrupted it, and how long accepted PCM waited before the
+ * write. Keeping these counters in each AEC callback aligns the integrity and
+ * signal observations without adding a realtime queue or a second sampler.
+ */
+export interface KitSynchronousPlaybackHealthMetrics {
+  lifetimePlaybackContentSamples: number;
+  lifetimePlaybackResets: number;
+  lifetimePlaybackFramesDiscardedByReset: number;
+  /** Failed or partial writes; a partial write is never retried. */
+  lifetimePlaybackWriteFailures: number;
+  lifetimePlaybackQueueOverflows: number;
+  lifetimePlaybackPolicyErrors: number;
+  lifetimePlaybackResetFailures: number;
+  /** Malformed/missing physical-clock observations where that sidecar exists. */
+  lifetimePlaybackObservationFailures: number;
+  /** Refill edges where the active response had no fresh content to play. */
+  lifetimePlaybackUnderrunIncidents: number;
+  /** Exact 16 kHz silence samples inserted across those underrun edges. */
+  lifetimePlaybackUnderrunSilenceSamples: number;
+  /** Downlink frames rejected because they exceeded the freshness deadline. */
+  lifetimePlaybackStaleFramesDiscarded: number;
+  lastPlaybackWriteUs: number;
+  maximumPlaybackWriteUs: number;
+  lastReceiveToRenderMs: number;
+  maximumReceiveToRenderMs: number;
+}
+
+/**
  * One device-clocked AEC signal window.
  *
- * All six amplitudes come from identical sampled positions before and after
- * AEC. A harness can therefore distinguish weak capture from aggressive
- * suppression and derive an echo-suppression ratio during speaker-only
- * intervals. Sequence zero is the explicitly partial startup window; completed
- * one-second windows begin at one and may be repeated when a callback poll
- * lands before the audio owner rotates again.
+ * All six amplitudes come from identical sampled positions: near input,
+ * physical reference, and the signal actually selected for uplink. The latter
+ * may be the retained VOIP selector or one constant full-duplex AEC output.
+ * ESP-SR owns cancellation behind one call; exposing a made-up intermediate
+ * stage would be false precision. The profile, processing frame and two
+ * effective window gains make either topology arithmetically explicit.
+ * Sequence zero is the explicitly partial startup window; completed one-second
+ * windows begin at one and may repeat when a callback poll lands before rotation.
  */
-export interface KitAecMetrics {
-  schemaVersion: 1;
+export interface KitAecMetrics extends KitSynchronousPlaybackHealthMetrics {
+  schemaVersion: 11;
   sequence: number;
   windowStartedAtMs: number;
   producedAtMs: number;
@@ -211,18 +252,38 @@ export interface KitAecMetrics {
   nearMeanAbsolute: number;
   referenceMeanAbsolute: number;
   cleanMeanAbsolute: number;
+  /** 1 = VOIP selector; 2 = FD low; 3 = VOIP complete; 4 = VOIP linear; 5 = FD high. */
+  engineProfile: 1 | 2 | 3 | 4 | 5 | 6;
+  /** ESP-SR processing frame; PCM-v1 remains 320 samples in both profiles. */
+  processingFrameSamples: 256 | 512;
+  /** Effective wire gain used for a reference-quiet near-speech window. */
+  nearWindowGainMultiplier: number;
+  /** Effective wire gain used for a reference-active far-end window. */
+  farWindowGainMultiplier: number;
+  /** Codec output volume programmed for the physical speaker path. */
+  speakerVolumePercent: number;
+  /** Codec PGA programmed for the near-microphone channel. */
+  microphoneGainDb: number;
+  /** Codec PGA programmed for the electrical speaker-reference channel. */
+  referenceGainDb: number;
   lifetimeFramesProcessed: number;
   lifetimeRecreates: number;
   lifetimeRecreateFailures: number;
-  lastLinearUs: number;
-  maximumLinearUs: number;
-  lastNlpUs: number;
-  maximumNlpUs: number;
+  lastProcessUs: number;
+  maximumProcessUs: number;
   lastCaptureToUplinkUs: number;
   maximumCaptureToUplinkUs: number;
   lifetimeCaptureReserveDroppedChunks: number;
+  lifetimeCaptureChunksWithPlaybackContent: number;
+  lifetimeCaptureChunksWithoutPlaybackContent: number;
   lifetimeCaptureBridgeErrors: number;
   lifetimeSignalMeasurementFailures: number;
+  /** Samples saturated while scaling the electrical speaker reference for AEC. */
+  lifetimeReferenceScaleClippedSamples: number;
+  /** Samples saturated by the stateful near-microphone high-pass conditioner. */
+  lifetimeNearHighPassClippedSamples: number;
+  /** Samples saturated when applying the selected raw/processed uplink gain. */
+  lifetimeUplinkGainClippedSamples: number;
 }
 
 /**
@@ -275,8 +336,8 @@ export interface KitAvatarMetrics {
  * acceptance harness select far-end intervals without misrepresenting
  * intended PCM as a measured hardware tap.
  */
-export interface KitRawCleanAecMetrics {
-  schemaVersion: 3;
+export interface KitRawCleanAecMetrics extends KitSynchronousPlaybackHealthMetrics {
+  schemaVersion: 4;
   topology: "raw-clean";
   sequence: number;
   windowStartedAtMs: number;
@@ -430,7 +491,7 @@ export interface KitDeviceEvent {
 
 export interface KitDevice {
   __describe(): Promise<KitDeviceDescription>;
-  changeColour(colour: "red" | "green"): Promise<boolean>;
+  changeSpriteSet(spriteSet: import("./sprite-sets.ts").KitSpriteSet): Promise<boolean>;
   getDiagnostics(): Promise<KitControlDiagnostics>;
   subscribeToMetrics(callback: (metrics: KitMetrics) => void): Promise<void>;
   renderOnScreen(input: { url: string }): Promise<boolean>;

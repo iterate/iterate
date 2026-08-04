@@ -10,6 +10,7 @@ export type StackChanMetrics = KitMetrics;
 export type StackChanDescription = KitDeviceDescription;
 
 export interface StackChan extends KitDevice {
+  captureScreen(): Promise<Uint8Array>;
   subscribeToAecMetrics(callback: (metrics: KitAecMetrics) => void): Promise<void>;
   subscribeToAvatarMetrics(callback: (metrics: KitAvatarMetrics) => void): Promise<void>;
   servos: {

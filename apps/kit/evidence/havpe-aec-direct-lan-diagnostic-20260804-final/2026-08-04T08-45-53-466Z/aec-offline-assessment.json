@@ -1,0 +1,504 @@
+{
+  "device": "home-assistant-voice-preview-edition",
+  "deviceSignal": {
+    "assessment": {
+      "ambient": {
+        "dbfs": -92.2243568866121,
+        "peak": 3,
+        "rms": 0.802106601394104
+      },
+      "doubleTalk": {
+        "clean": {
+          "dbfs": -57.85648289085084,
+          "peak": 178,
+          "rms": 41.93974546894628
+        },
+        "farEndResidualDb": -41.764702040260325,
+        "farEndSimilarity": 0.022667074847746778,
+        "nearEndGain": 1.032244024149958,
+        "nearEndSimilarity": 0.8986270944926541,
+        "passed": false,
+        "residualDegradationFromRepeatDb": 9.021163176504064,
+        "residualToNearEndDb": -5.9523269458550265,
+        "similarityLossFromRepeat": 0.08708013592508002
+      },
+      "farEnd": [
+        {
+          "clean": {
+            "dbfs": -90.6069832531132,
+            "peak": 5,
+            "rms": 0.9662750643579705
+          },
+          "kind": "tone",
+          "passed": true,
+          "source": {
+            "dbfs": -20.255037277522632,
+            "peak": 4500,
+            "rms": 3181.9845827329204
+          },
+          "sourceSimilarity": 0.0008465706677819738
+        },
+        {
+          "clean": {
+            "dbfs": -84.20852195699739,
+            "peak": 11,
+            "rms": 2.018477148743577
+          },
+          "kind": "dual-carrier-prbs31",
+          "passed": true,
+          "source": {
+            "dbfs": -23.265100635326633,
+            "peak": 3841,
+            "rms": 2250.0641657517235
+          },
+          "sourceSimilarity": 0.01156958608312487
+        },
+        {
+          "clean": {
+            "dbfs": -84.4818328299655,
+            "peak": 10,
+            "rms": 1.9559524534098471
+          },
+          "kind": "speech-shaped",
+          "passed": true,
+          "source": {
+            "dbfs": -22.971610308836556,
+            "peak": 7832,
+            "rms": 2327.3913694708717
+          },
+          "sourceSimilarity": 0.009667328387105467
+        }
+      ],
+      "nearEnd": {
+        "aboveAmbientDb": 33.1707287224757,
+        "clean": {
+          "dbfs": -59.0536281641364,
+          "peak": 152,
+          "rms": 36.539998631636536
+        },
+        "passed": true,
+        "pathReferenceObserved": true,
+        "repeat": {
+          "clean": {
+            "dbfs": -58.5626928056474,
+            "peak": 160,
+            "rms": 38.66475785518384
+          },
+          "gain": 1.0436566178596873,
+          "passed": true,
+          "pathReferenceObserved": true,
+          "residualToReferenceDb": -14.973490122359092,
+          "similarity": 0.9857072304177341
+        },
+        "source": {
+          "dbfs": -15.176950127467181,
+          "peak": 26072,
+          "rms": 5709.55720506014
+        },
+        "sourceSimilarity": 0.5920704535084996
+      },
+      "passed": false,
+      "reasons": [
+        "Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.899, gain 1.032, residual -5.95 dB.",
+        "Double-talk degraded beyond repeated near-end control: similarity loss 0.087, residual degradation 9.02 dB."
+      ],
+      "validity": {
+        "passed": true,
+        "reasons": []
+      }
+    },
+    "lane": "device-clean-trace",
+    "validitySource": "signal-only-zero-fault-baseline"
+  },
+  "inputFiles": {
+    "manifest.json": {
+      "bytes": 16336,
+      "sha256": "2f7fd4b4fa2c402cfed3fec7740751eb1b132deda69bef072e6e6ff444482116"
+    },
+    "aec-traces/ambient/metadata.json": {
+      "bytes": 363,
+      "sha256": "43f961a87313b832987b1bf8e9df0394331395d3a8eaa4d77660e9877e126d1c"
+    },
+    "aec-traces/far-tone/metadata.json": {
+      "bytes": 364,
+      "sha256": "32f8af85fdd9f878ccd0a94859e3345d5059ee7abe2d795c534e8f5fa94c0ea1"
+    },
+    "aec-traces/far-dual-carrier-prbs31/metadata.json": {
+      "bytes": 364,
+      "sha256": "2d7a91e1fa606a3d94327930f4a51fdf9d2fa616cc58ad13197d18f0c429aa7f"
+    },
+    "aec-traces/far-speech-shaped/metadata.json": {
+      "bytes": 364,
+      "sha256": "5523ae319aae026e44f7a3adb2a6e07c2e0fe2fe0f4093e3abeed93e123c03ba"
+    },
+    "aec-traces/near-only/metadata.json": {
+      "bytes": 364,
+      "sha256": "604ecab435f3bba8ee8cedc9fad256034945694ae084240fd32e517737acaa9c"
+    },
+    "aec-traces/near-repeat/metadata.json": {
+      "bytes": 364,
+      "sha256": "1a6f8c82a9cee683eb2c6b35506a5425e1bb7477f72bbbb250825c36e54b3cbc"
+    },
+    "aec-traces/double-talk/metadata.json": {
+      "bytes": 364,
+      "sha256": "c8da6ee6fbae599d64bde8c7f91725a2e48dcadb4b22547552900e2c6756919f"
+    },
+    "aec-metrics.json": {
+      "bytes": 85533,
+      "sha256": "091cf7407d549a3be69a12860df6586d694a9216538a881b685127f441a2bcd1"
+    },
+    "mac-near-source.wav": {
+      "bytes": 251164,
+      "sha256": "b00bc6e358fa3a4eb6ca635675fae89c3a0bcd50f9c112ace44f52e1ccc6ec3a"
+    },
+    "aec-traces/far-tone/fixture-downlink.pcm16le": {
+      "bytes": 96000,
+      "sha256": "ad415414357632455712df1360e34826c636ecc704bec5b7b14c7722ddc295b8"
+    },
+    "aec-traces/far-dual-carrier-prbs31/fixture-downlink.pcm16le": {
+      "bytes": 96000,
+      "sha256": "f9f05b7aee222143748ed624bc7715b5934853b7891326116c7fb5521ca1394a"
+    },
+    "aec-traces/far-speech-shaped/fixture-downlink.pcm16le": {
+      "bytes": 96000,
+      "sha256": "880c105a9fe8bd7a0e4aa237eb8bf28574b3992797ec3f7cfc19f39587091b94"
+    },
+    "aec-traces/near-only/fixture-downlink.pcm16le": {
+      "bytes": 96000,
+      "sha256": "44e8550efe620357850c1954bef7da2fb7013548c70abd27ff92c84eff8d5799"
+    },
+    "aec-traces/near-repeat/fixture-downlink.pcm16le": {
+      "bytes": 96000,
+      "sha256": "44e8550efe620357850c1954bef7da2fb7013548c70abd27ff92c84eff8d5799"
+    },
+    "aec-traces/double-talk/fixture-downlink.pcm16le": {
+      "bytes": 96000,
+      "sha256": "d1816c877edcedd2f13b21bfbf84c7456b36ff7c27b5102c88b81ddbc01fe0f0"
+    },
+    "aec-traces/ambient/fixture-downlink.pcm16le": {
+      "bytes": 0,
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "aec-traces/ambient/clean.pcm16le": {
+      "bytes": 32000,
+      "sha256": "e4b8a5bc8abe5fccab7c8d5149fb91a001e564609bae23ca6b335308d78a8733"
+    },
+    "aec-traces/ambient/raw-microphone.pcm16le": {
+      "bytes": 32000,
+      "sha256": "6829dfb6053f64412b7d400d07500ae2c02305b00b81ad73e0ffc880d1ea909a"
+    },
+    "aec-traces/ambient/pcm-uplink.pcm16le": {
+      "bytes": 99200,
+      "sha256": "d67b7b514b4cef50f717aeddce2fb36bc9cdae8843092f7a72d36d84a3b51c83"
+    },
+    "aec-traces/far-tone/clean.pcm16le": {
+      "bytes": 32000,
+      "sha256": "7d483abf57171e48024a55e7b3cd1c0c43389539d0442609da2ed4345e18351b"
+    },
+    "aec-traces/far-tone/raw-microphone.pcm16le": {
+      "bytes": 32000,
+      "sha256": "c0cca87097c0bca942e2bd25c726c2aa51e0f1894b39ea00221814fbee72aa57"
+    },
+    "aec-traces/far-tone/pcm-uplink.pcm16le": {
+      "bytes": 96000,
+      "sha256": "bf9ae1bd41efad5b55feeed8d4793c38656af517a775ce5109c5aab1ad64ab01"
+    },
+    "aec-traces/far-dual-carrier-prbs31/clean.pcm16le": {
+      "bytes": 32000,
+      "sha256": "2879d666650549479671ff3e60566c1ffab7f546681bd9275ad9bd3654ea2817"
+    },
+    "aec-traces/far-dual-carrier-prbs31/raw-microphone.pcm16le": {
+      "bytes": 32000,
+      "sha256": "c9f651aa02fb7ca40014b04057965b2da142aa6fa82d682b3af6fdfea7dbc5ca"
+    },
+    "aec-traces/far-dual-carrier-prbs31/pcm-uplink.pcm16le": {
+      "bytes": 96000,
+      "sha256": "1ba423c9bd6ff7795795437c6aae3c02933a0f6da67fe17affe37a1609c71c7a"
+    },
+    "aec-traces/far-speech-shaped/clean.pcm16le": {
+      "bytes": 32000,
+      "sha256": "94fd3c4a3946080872c481c3709c0a7dd07ae4ff085f7ba20a63f9128dd93eed"
+    },
+    "aec-traces/far-speech-shaped/raw-microphone.pcm16le": {
+      "bytes": 32000,
+      "sha256": "37e635d1ac1c388ed72042bd1a416c5632df677c8e042c9d8695546bdb1bf105"
+    },
+    "aec-traces/far-speech-shaped/pcm-uplink.pcm16le": {
+      "bytes": 98560,
+      "sha256": "59ce3ee95b7e1678fac624486575cce6f7a5300d9537c99728dd6ada3fc39d45"
+    },
+    "aec-traces/near-only/clean.pcm16le": {
+      "bytes": 32000,
+      "sha256": "26545e5ad9196c6e1b332c1fb8f2e0e18aac4fa83a212569256878bf0c7df47b"
+    },
+    "aec-traces/near-only/raw-microphone.pcm16le": {
+      "bytes": 32000,
+      "sha256": "ef4bff19f9e04540cf4baf0dbad2fb5c2eece241a1cdf7043cd956e67319dac0"
+    },
+    "aec-traces/near-only/pcm-uplink.pcm16le": {
+      "bytes": 96000,
+      "sha256": "930917dcf27defa00d0486c29147abbe02696c11bdfb46e8be71551731ec07c0"
+    },
+    "aec-traces/near-repeat/clean.pcm16le": {
+      "bytes": 32000,
+      "sha256": "e0eef816092ea1b0e45996b5b09fd4d463a072b6312596c7d17226194e76e46c"
+    },
+    "aec-traces/near-repeat/raw-microphone.pcm16le": {
+      "bytes": 32000,
+      "sha256": "c52dab70dfabc8f6ea6c60267dc8980a168e5b6ded13e694e747e52e4b8b0889"
+    },
+    "aec-traces/near-repeat/pcm-uplink.pcm16le": {
+      "bytes": 95360,
+      "sha256": "ac34e0c6b90b562365f973bf12d00104aaffb9f7a9a8f35bd6632e09c98f108e"
+    },
+    "aec-traces/double-talk/clean.pcm16le": {
+      "bytes": 32000,
+      "sha256": "7c941a2c4627e482b3332493dd08d375943e7428dcb6829e6bec2fa548851ee3"
+    },
+    "aec-traces/double-talk/raw-microphone.pcm16le": {
+      "bytes": 32000,
+      "sha256": "d0ddd52ccafa3f2c4826852adcf0ba5ad65ccd602314dd75ef236b1e03d2c3c7"
+    },
+    "aec-traces/double-talk/pcm-uplink.pcm16le": {
+      "bytes": 96000,
+      "sha256": "782756ec2d48fd643ba28406376f69fd53b1745a930eb8460bb23da0b3de2949"
+    }
+  },
+  "passed": false,
+  "pcmTransport": {
+    "assessment": {
+      "ambient": {
+        "dbfs": -92.43493677033146,
+        "peak": 3,
+        "rms": 0.7828942374911021
+      },
+      "doubleTalk": {
+        "clean": {
+          "dbfs": -57.16656388900163,
+          "peak": 199,
+          "rms": 45.4068882439658
+        },
+        "farEndResidualDb": -41.90624770930404,
+        "farEndSimilarity": 0.00802423036225497,
+        "nearEndGain": 1.0767795793846302,
+        "nearEndSimilarity": 0.9171276665732084,
+        "passed": false,
+        "residualDegradationFromRepeatDb": 9.130112938674936,
+        "residualToNearEndDb": -6.595453660292307,
+        "similarityLossFromRepeat": 0.07165285909393071
+      },
+      "farEnd": [
+        {
+          "clean": {
+            "dbfs": -90.31506496106849,
+            "peak": 5,
+            "rms": 0.9993018396193748
+          },
+          "kind": "tone",
+          "passed": true,
+          "source": {
+            "dbfs": -20.255037277522632,
+            "peak": 4500,
+            "rms": 3181.9845827329204
+          },
+          "sourceSimilarity": 0.008169452410863663
+        },
+        {
+          "clean": {
+            "dbfs": -84.81117764444642,
+            "peak": 16,
+            "rms": 1.8831766158984309
+          },
+          "kind": "dual-carrier-prbs31",
+          "passed": true,
+          "source": {
+            "dbfs": -23.265100635326633,
+            "peak": 3841,
+            "rms": 2250.0641657517235
+          },
+          "sourceSimilarity": 0.011105539040724274
+        },
+        {
+          "clean": {
+            "dbfs": -84.62500498430911,
+            "peak": 10,
+            "rms": 1.9239761571409228
+          },
+          "kind": "speech-shaped",
+          "passed": true,
+          "source": {
+            "dbfs": -22.971610308836556,
+            "peak": 7832,
+            "rms": 2327.3913694708717
+          },
+          "sourceSimilarity": 0.005396371477883776
+        }
+      ],
+      "nearEnd": {
+        "aboveAmbientDb": 33.865146758325,
+        "clean": {
+          "dbfs": -58.56979001200648,
+          "peak": 165,
+          "rms": 38.63317793684594
+        },
+        "passed": true,
+        "pathReferenceObserved": true,
+        "repeat": {
+          "clean": {
+            "dbfs": -57.768093151412145,
+            "peak": 181,
+            "rms": 42.36871352668193
+          },
+          "gain": 1.082784151120501,
+          "passed": true,
+          "pathReferenceObserved": true,
+          "residualToReferenceDb": -15.725566598967243,
+          "similarity": 0.9887805256671391
+        },
+        "source": {
+          "dbfs": -15.176950127467181,
+          "peak": 26072,
+          "rms": 5709.55720506014
+        },
+        "sourceSimilarity": 0.5857391418908403
+      },
+      "passed": false,
+      "reasons": [
+        "Double-talk degraded beyond repeated near-end control: similarity loss 0.072, residual degradation 9.13 dB."
+      ],
+      "validity": {
+        "passed": true,
+        "reasons": []
+      }
+    },
+    "lane": "userspace-pcm-uplink",
+    "validitySource": "manifest.transportValidity"
+  },
+  "rawMicrophone": {
+    "assessment": {
+      "ambient": {
+        "dbfs": -84.3929968501479,
+        "peak": 9,
+        "rms": 1.9760598422112625
+      },
+      "doubleTalk": {
+        "clean": {
+          "dbfs": -53.37308247006732,
+          "peak": 209,
+          "rms": 70.27418400451192
+        },
+        "farEndResidualDb": -30.572135788354053,
+        "farEndSimilarity": 0.015011466913067676,
+        "nearEndGain": 0.9407428047501046,
+        "nearEndSimilarity": 0.30848485258711716,
+        "passed": false,
+        "residualDegradationFromRepeatDb": 26.262223296329935,
+        "residualToNearEndDb": 9.250445199398547,
+        "similarityLossFromRepeat": 0.6799585121390521
+      },
+      "farEnd": [
+        {
+          "clean": {
+            "dbfs": -52.25420765260078,
+            "peak": 119,
+            "rms": 79.93547358651226
+          },
+          "kind": "tone",
+          "passed": false,
+          "source": {
+            "dbfs": -20.255037277522632,
+            "peak": 4500,
+            "rms": 3181.9845827329204
+          },
+          "sourceSimilarity": 0.9983815081223966
+        },
+        {
+          "clean": {
+            "dbfs": -53.812945134477026,
+            "peak": 189,
+            "rms": 66.80403243816949
+          },
+          "kind": "dual-carrier-prbs31",
+          "passed": true,
+          "source": {
+            "dbfs": -23.265100635326633,
+            "peak": 3841,
+            "rms": 2250.0641657517235
+          },
+          "sourceSimilarity": 0.017789899521209237
+        },
+        {
+          "clean": {
+            "dbfs": -51.79850120569989,
+            "peak": 398,
+            "rms": 84.2412640129527
+          },
+          "kind": "speech-shaped",
+          "passed": false,
+          "source": {
+            "dbfs": -22.971610308836556,
+            "peak": 7832,
+            "rms": 2327.3913694708717
+          },
+          "sourceSimilarity": 0.42425643421785286
+        }
+      ],
+      "nearEnd": {
+        "aboveAmbientDb": 21.36692964156897,
+        "clean": {
+          "dbfs": -63.02606720857894,
+          "peak": 76,
+          "rms": 23.128452444986458
+        },
+        "passed": true,
+        "pathReferenceObserved": true,
+        "repeat": {
+          "clean": {
+            "dbfs": -63.75282366117218,
+            "peak": 68,
+            "rms": 21.272020943013384
+          },
+          "gain": 0.9197939931785694,
+          "passed": true,
+          "pathReferenceObserved": true,
+          "residualToReferenceDb": -17.011778096931387,
+          "similarity": 0.9884433647261692
+        },
+        "source": {
+          "dbfs": -15.176950127467181,
+          "peak": 26072,
+          "rms": 5709.55720506014
+        },
+        "sourceSimilarity": 0.6453552954226635
+      },
+      "passed": false,
+      "reasons": [
+        "tone far-only clean uplink retained source similarity 0.998; expected at most 0.200.",
+        "speech-shaped far-only clean uplink retained source similarity 0.424; expected at most 0.200.",
+        "Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.308, gain 0.941, residual 9.25 dB.",
+        "Double-talk degraded beyond repeated near-end control: similarity loss 0.680, residual degradation 26.26 dB."
+      ],
+      "validity": {
+        "passed": true,
+        "reasons": []
+      }
+    },
+    "lane": "device-raw-microphone-trace",
+    "validitySource": "signal-only-zero-fault-baseline"
+  },
+  "schemaVersion": 1,
+  "transportValidity": {
+    "captureFailures": 0,
+    "captureFrameDrops": 0,
+    "clockDiscontinuities": 0,
+    "networkValid": true,
+    "playbackDroppedFrames": 0,
+    "playbackIntegrityFailures": 0,
+    "playbackResets": 0,
+    "playbackUnderrunIncidents": 0,
+    "recorderComplete": true,
+    "uplinkFrameDrops": 0,
+    "uplinkRestarts": 0,
+    "websocketReconnects": 0
+  }
+}

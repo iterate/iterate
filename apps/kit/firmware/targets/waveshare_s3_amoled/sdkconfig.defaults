@@ -22,6 +22,7 @@ CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_16=y
 CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_22=y
 CONFIG_LV_FONT_MONTSERRAT_28=y
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_USE_PERF_MONITOR=n
@@ -149,3 +150,17 @@ CONFIG_LWIP_TCP_RECVMBOX_SIZE=24
 #
 CONFIG_LWIP_TCP_SACK_OUT=y
 CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=12
+
+# TLS record buffers come from PSRAM, not the internal heap.
+#
+# MBEDTLS_SSL_IN_CONTENT_LEN is 16384, and by the time this device has a
+# WebSocket session up, the largest free INTERNAL block is about 10 KB — so a
+# second TLS connection (fetching an image) failed in mbedtls_ssl_setup with
+# MBEDTLS_ERR_SSL_ALLOC_FAILED (-0x7F00), which surfaces as "unreachable" and
+# looks exactly like a network fault. Measured, not guessed: dmaLargest 10240
+# against a 16384-byte request.
+#
+# These buffers are memcpy'd into by lwip and never touched by DMA, so PSRAM is
+# a safe home for them. This affects the audio WebSocket's TLS as well, which is
+# why the long conversation soak is the check on it.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y

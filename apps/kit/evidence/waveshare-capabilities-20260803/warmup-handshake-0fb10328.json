@@ -1,0 +1,82 @@
+{
+  "deployedConfigCommit": "0fb10328",
+  "headBefore": 245202,
+  "headAfter": 245226,
+  "correlated": [
+    {
+      "attempt": 1,
+      "setupMs": 15439,
+      "ok": false,
+      "roundTripMs": null,
+      "exactBriefMatch": false,
+      "threw": "Error: setupVoiceAgent: the processor for /agents/voice/dev-621cd7aa562613aa did not acknowledge warm-up within 15031ms — acknowledged=false briefMatched=false bridgeWarmed=false protocol=(none) expected=warmup/3-call-path-and-bridge expectedBrief=voice-agent/brief:0l2uva5:after0 seenBrief=(none) lastError=Error: stream-wait-timeout: Timed out waiting for stream event after 15000ms (the public deadline expired while recovery re-armed one-shot waits)."
+    },
+    {
+      "attempt": 2,
+      "setupMs": 1419,
+      "ok": true,
+      "token": "621bc4af-f7a1-4c6e-bc95-f19107f1bdf7",
+      "askedAt": "2026-08-04T01:21:40.128Z",
+      "answerType": "voicelab/warmup-ready",
+      "answeredAt": "2026-08-04T01:21:41.094Z",
+      "roundTripMs": 966,
+      "briefKey": "voice-agent/brief:0l2uva5:after0",
+      "protocolRevision": "warmup/3-call-path-and-bridge",
+      "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+      "exactBriefMatch": true
+    },
+    {
+      "attempt": 3,
+      "setupMs": 790,
+      "ok": true,
+      "token": "8f8245cb-72bb-4d2f-ade1-a40e8c683f99",
+      "askedAt": "2026-08-04T01:21:41.427Z",
+      "answerType": "voicelab/warmup-ready",
+      "answeredAt": "2026-08-04T01:21:41.858Z",
+      "roundTripMs": 431,
+      "briefKey": "voice-agent/brief:0l2uva5:after0",
+      "protocolRevision": "warmup/3-call-path-and-bridge",
+      "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+      "exactBriefMatch": true
+    }
+  ],
+  "attempts": [
+    {
+      "attempt": 1,
+      "setupMs": 15439,
+      "threw": "Error: setupVoiceAgent: the processor for /agents/voice/dev-621cd7aa562613aa did not acknowledge warm-up within 15031ms — acknowledged=false briefMatched=false bridgeWarmed=false protocol=(none) expected=warmup/3-call-path-and-bridge expectedBrief=voice-agent/brief:0l2uva5:after0 seenBrief=(none) lastError=Error: stream-wait-timeout: Timed out waiting for stream event after 15000ms (the public deadline expired while recovery re-armed one-shot waits)."
+    },
+    {
+      "attempt": 2,
+      "setupMs": 1419,
+      "warm": {
+        "ok": true,
+        "ms": 1068,
+        "token": "621bc4af-f7a1-4c6e-bc95-f19107f1bdf7",
+        "acknowledged": true,
+        "briefMatched": true,
+        "bridgeWarmed": true,
+        "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "protocolRevision": "warmup/3-call-path-and-bridge",
+        "seenBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "bridgeWarmMs": 545
+      }
+    },
+    {
+      "attempt": 3,
+      "setupMs": 790,
+      "warm": {
+        "ok": true,
+        "ms": 537,
+        "token": "8f8245cb-72bb-4d2f-ade1-a40e8c683f99",
+        "acknowledged": true,
+        "briefMatched": true,
+        "bridgeWarmed": true,
+        "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "protocolRevision": "warmup/3-call-path-and-bridge",
+        "seenBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "bridgeWarmMs": 21
+      }
+    }
+  ]
+}

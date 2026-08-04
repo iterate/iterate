@@ -1,0 +1,22 @@
+[0/1] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition && /opt/homebrew/bin/cmake -D "IDF_SIZE_TOOL=/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python;-m;esp_idf_size" -D MAP_FILE=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/iterate-kit-home-assistant-voice-preview-edition.map -D OUTPUT_JSON= -P /Users/jonastemplestein/esp/esp-idf/tools/cmake/run_size_tool.cmake
+                            Memory Type Usage Summary                             
+┏━━━━━━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━┳━━━━━━━━━━┳━━━━━━━━━━━━━━━━┳━━━━━━━━━━━━━━━┓
+┃ Memory Type/Section ┃ Used [bytes] ┃ Used [%] ┃ Remain [bytes] ┃ Total [bytes] ┃
+┡━━━━━━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━╇━━━━━━━━━━╇━━━━━━━━━━━━━━━━╇━━━━━━━━━━━━━━━┩
+│ Flash Code          │       723980 │          │                │               │
+│    .text            │       723980 │          │                │               │
+│ Flash Data          │       358216 │          │                │               │
+│    .rodata          │       213004 │          │                │               │
+│    .bss             │       144956 │          │                │               │
+│    .appdesc         │          256 │          │                │               │
+│ DIRAM               │       210019 │    61.45 │         131741 │        341760 │
+│    .bss             │        90264 │    26.41 │                │               │
+│    .text            │        80467 │    23.54 │                │               │
+│    .data            │        39288 │     11.5 │                │               │
+│ IRAM                │        16383 │    99.99 │              1 │         16384 │
+│    .text            │        15356 │    93.73 │                │               │
+│    .vectors         │         1027 │     6.27 │                │               │
+│ RTC FAST            │           52 │     0.63 │           8140 │          8192 │
+│    .force_fast      │           28 │     0.34 │                │               │
+│    .rtc_reserved    │           24 │     0.29 │                │               │
+└─────────────────────┴──────────────┴──────────┴────────────────┴───────────────┘

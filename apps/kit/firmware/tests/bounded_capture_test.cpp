@@ -170,6 +170,14 @@ iterate_kit_audio_controller makeController(FakeEgress &egress) {
   TEST_ASSERT(
       iterate_kit_audio_controller_init(&controller, &options) ==
       ITERATE_KIT_OK);
+  /*
+   * This fixture exercises capture-buffer ownership, not session admission.
+   * Explicitly open the same gate production receives from pcm_session so the
+   * test cannot accidentally depend on a permissive controller default.
+   */
+  TEST_ASSERT(
+      iterate_kit_audio_set_media_ready(&controller, true) ==
+      ITERATE_KIT_OK);
   TEST_ASSERT(
       iterate_kit_audio_push_to_talk(&controller, true) ==
       ITERATE_KIT_OK);

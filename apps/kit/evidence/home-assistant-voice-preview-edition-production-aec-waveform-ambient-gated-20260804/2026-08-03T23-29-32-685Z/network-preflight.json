@@ -1,0 +1,112 @@
+{
+  "createdAt": "2026-08-03T23:29:38.796Z",
+  "deviceHost": "192.168.0.33",
+  "deviceReachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 159.552
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 4.898
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 175.585
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 8.068
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.796
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 7.081
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 5.815
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 16.165
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 12.54
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.476
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 3.814
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "dnsAndConnect": {
+    "connect": {
+      "durationMs": 29.9301660000001,
+      "error": null,
+      "maximumHealthyDurationMs": 1000,
+      "outcome": "success"
+    },
+    "dns": {
+      "durationMs": 34.716125000000375,
+      "error": null,
+      "maximumHealthyDurationMs": 500,
+      "outcome": "success"
+    }
+  },
+  "reachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 12.982
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 12.323
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 12.647
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 20.396
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 11.956
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 12.233
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 14.636
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 41.065
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "workerHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app",
+  "passed": true,
+  "reasons": [],
+  "schemaVersion": 2
+}

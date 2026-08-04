@@ -1,0 +1,128 @@
+ESP-ROM:esp32s3-20210327
+Build:Mar 27 2021
+rst:0x15 (USB_UART_CHIP_RESET),boot:0x2b (SPI_FAST_FLASH_BOOT)
+Saved PC:0x4037ca66
+SPIWP:0xee
+mode:DIO, clock div:1
+load:0x3fce2820,len:0x16d0
+load:0x403c8700,len:0x4
+load:0x403c8704,len:0xe24
+load:0x403cb700,len:0x316c
+entry 0x403c893c
+[0;32mI (26) boot: ESP-IDF v5.4.2 2nd stage bootloader[0m
+[0;32mI (27) boot: compile time Aug  4 2026 11:41:59[0m
+[0;32mI (27) boot: Multicore bootloader[0m
+[0;32mI (27) boot: chip revision: v0.2[0m
+[0;32mI (27) boot: efuse block revision: v1.4[0m
+[0;32mI (27) qio_mode: Enabling default flash chip QIO[0m
+[0;32mI (28) boot.esp32s3: Boot SPI Speed : 80MHz[0m
+[0;32mI (28) boot.esp32s3: SPI Mode       : QIO[0m
+[0;32mI (28) boot.esp32s3: SPI Flash Size : 16MB[0m
+[0;32mI (28) boot: Enabling RNG early entropy source...[0m
+[0;32mI (28) boot: Partition Table:[0m
+[0;32mI (28) boot: ## Label            Usage          Type ST Offset   Length[0m
+[0;32mI (29) boot:  0 nvs              WiFi data        01 02 00009000 00006000[0m
+[0;32mI (29) boot:  1 phy_init         RF data          01 01 0000f000 00001000[0m
+[0;32mI (30) boot:  2 factory          factory app      00 00 00010000 00500000[0m
+[0;32mI (30) boot:  3 iterate_kit      unknown          40 00 00510000 00001000[0m
+[0;32mI (30) boot: End of partition table[0m
+[0;32mI (30) esp_image: segment 0: paddr=00010020 vaddr=3c0e0020 size=44490h (279696) map[0m
+[0;32mI (72) esp_image: segment 1: paddr=000544b8 vaddr=3fc9d900 size=0bb60h ( 47968) load[0m
+[0;32mI (81) esp_image: segment 2: paddr=00060020 vaddr=42000020 size=d23e8h (861160) map[0m
+[0;32mI (209) esp_image: segment 3: paddr=00132410 vaddr=3fca9460 size=035d0h ( 13776) load[0m
+[0;32mI (212) esp_image: segment 4: paddr=001359e8 vaddr=40374000 size=198c8h (104648) load[0m
+[0;32mI (232) esp_image: segment 5: paddr=0014f2b8 vaddr=600fe000 size=0001ch (    28) load[0m
+[0;32mI (244) boot: Loaded app from partition at offset 0x10000[0m
+[0;32mI (245) boot: Disabling RNG early entropy source...[0m
+[0;32mI (246) esp_psram: Found 8MB PSRAM device[0m
+[0;32mI (246) esp_psram: Speed: 80MHz[0m
+[0;32mI (277) mmu_psram: Read only data copied and mapped to SPIRAM[0m
+[0;32mI (374) mmu_psram: Instructions copied and mapped to SPIRAM[0m
+[0;32mI (374) cpu_start: Multicore app[0m
+[0;32mI (1033) esp_psram: SPI SRAM memory test OK[0m
+[0;32mI (1056) cpu_start: Pro cpu start user code[0m
+[0;32mI (1056) cpu_start: cpu freq: 240000000 Hz[0m
+[0;32mI (1056) app_init: Application information:[0m
+[0;32mI (1056) app_init: Project name:     iterate-kit-stackchan[0m
+[0;32mI (1056) app_init: App version:      v2026-07-28-21-00-57-161-g4f60f[0m
+[0;32mI (1056) app_init: Compile time:     Aug  4 2026 11:41:59[0m
+[0;32mI (1056) app_init: ELF file SHA256:  2ceae803c...[0m
+[0;32mI (1057) app_init: ESP-IDF:          v5.4.2[0m
+[0;32mI (1057) efuse_init: Min chip rev:     v0.0[0m
+[0;32mI (1057) efuse_init: Max chip rev:     v0.99 [0m
+[0;32mI (1057) efuse_init: Chip rev:         v0.2[0m
+[0;32mI (1057) heap_init: Initializing. RAM available for dynamic allocation:[0m
+[0;32mI (1057) heap_init: At 3FCC2F30 len 000267E0 (153 KiB): RAM[0m
+[0;32mI (1057) heap_init: At 3FCE9710 len 00005724 (21 KiB): RAM[0m
+[0;32mI (1058) heap_init: At 600FE01C len 00001FCC (7 KiB): RTCRAM[0m
+[0;32mI (1058) esp_psram: Adding pool of 6733K of PSRAM memory to heap allocator[0m
+[0;32mI (1058) esp_psram: Adding pool of 46K of PSRAM memory gap generated due to end address alignment of drom to the heap allocator[0m
+[0;32mI (1059) spi_flash: detected chip: generic[0m
+[0;32mI (1059) spi_flash: flash io: qio[0m
+[0;32mI (1060) sleep_gpio: Configure to isolate all GPIO pins in sleep state[0m
+[0;32mI (1060) sleep_gpio: Enable automatic switching of GPIO sleep configuration[0m
+[0;32mI (1061) main_task: Started on CPU0[0m
+[0;32mI (1071) esp_psram: Reserving pool of 32K of internal memory for DMA/internal allocations[0m
+[0;32mI (1071) main_task: Calling app_main()[0m
+[0;32mI (1081) ili9341: LCD panel create success, version: 2.0.2[0m
+[0;32mI (1201) M5Stack: Setting LCD backlight: 100%[0m
+[0;32mI (1231) iterate-stackchan-avatar: ready: avatar=dot-matrix-oracle count=3 source=38400 + scale_strip=10240 bytes internal DMA; display=direct exact-2x 320x240@15Hz; handoff=latest-only 1x128 samples; visual=core1 priority2; input=whole-screen-call+PMIC-face@50Hz core1 priority3; PMIC-long=hardware-power-off; lower-key=hardware-reset[0m
+[0;32mI (1241) M5Stack: external power readback: P0=0x03 P1=0xa3 CFG0=0x18 CFG1=0x0c[0m
+[0;32mI (1441) iterate-stackchan-body: body ready: version=0x41 leds=12 servos=2[0m
+[0;32mI (1441) pp: pp rom version: e7ae62f[0m
+[0;32mI (1441) net80211: net80211 rom version: e7ae62f[0m
+[0;32mI (1451) wifi:wifi driver task: 3fce3240, prio:23, stack:6656, core=0[0m
+[0;32mI (1451) wifi:wifi firmware version: bea31f3[0m
+[0;32mI (1451) wifi:wifi certification version: v7.0[0m
+[0;32mI (1451) wifi:config NVS flash: enabled[0m
+[0;32mI (1451) wifi:config nano formatting: disabled[0m
+[0;32mI (1451) wifi:Init data frame dynamic rx buffer num: 32[0m
+[0;32mI (1451) wifi:Init static rx mgmt buffer num: 5[0m
+[0;32mI (1451) wifi:Init management short buffer num: 32[0m
+[0;32mI (1451) wifi:Init dynamic tx buffer num: 32[0m
+[0;32mI (1451) wifi:Init static tx FG buffer num: 2[0m
+[0;32mI (1451) wifi:Init static rx buffer size: 1600[0m
+[0;32mI (1451) wifi:Init static rx buffer num: 10[0m
+[0;32mI (1451) wifi:Init dynamic rx buffer num: 32[0m
+[0;32mI (1451) wifi_init: rx ba win: 6[0m
+[0;32mI (1451) wifi_init: accept mbox: 6[0m
+[0;32mI (1451) wifi_init: tcpip mbox: 32[0m
+[0;32mI (1451) wifi_init: udp mbox: 6[0m
+[0;32mI (1451) wifi_init: tcp mbox: 6[0m
+[0;32mI (1451) wifi_init: tcp tx win: 5760[0m
+[0;32mI (1451) wifi_init: tcp rx win: 5760[0m
+[0;32mI (1451) wifi_init: tcp mss: 1440[0m
+[0;32mI (1451) wifi_init: WiFi IRAM OP enabled[0m
+[0;32mI (1451) wifi_init: WiFi RX IRAM OP enabled[0m
+[0;32mI (1451) phy_init: phy_version 701,f4f1da3a,Mar  3 2025,15:50:10[0m
+[0;32mI (1481) wifi:mode : sta (68:ee:8f:d8:53:20)[0m
+[0;32mI (1481) wifi:enable tsf[0m
+[0;32mI (1481) wifi:enable tsf[0m
+[1;31mE (1491) wifi:sta is connecting, return error[0m
+[0;32mI (1491) wifi:Set ps type: 0, coexist: 0[0m
+
+[1;31mE (1491) iterate-stackchan: CoreS3 audio owner failed to start[0m
+[0;32mI (1491) main_task: Returned from app_main()[0m
+[0;32mI (3891) wifi:new:<4,0>, old:<1,0>, ap:<255,255>, sta:<4,0>, prof:1, snd_ch_cfg:0x0[0m
+[0;32mI (3891) wifi:state: init -> auth (0xb0)[0m
+[0;32mI (8091) wifi:state: auth -> init (0x200)[0m
+[0;32mI (8101) wifi:new:<4,0>, old:<4,0>, ap:<255,255>, sta:<4,0>, prof:1, snd_ch_cfg:0x0[0m
+[0;32mI (15941) wifi:new:<4,0>, old:<4,0>, ap:<255,255>, sta:<4,0>, prof:1, snd_ch_cfg:0x0[0m
+[0;32mI (15941) wifi:state: init -> auth (0xb0)[0m
+[0;32mI (16341) wifi:state: auth -> assoc (0x0)[0m
+[0;32mI (16381) wifi:state: assoc -> run (0x10)[0m
+[0;32mI (16421) wifi:connected with mispwoso2, aid = 29, channel 4, BW20, bssid = 62:7f:f0:57:9d:87[0m
+[0;32mI (16421) wifi:security: WPA3-SAE, phy: bgn, rssi: -44[0m
+[0;32mI (16421) wifi:pm start, type: 0[0m
+
+[0;32mI (16421) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us[0m
+[0;32mI (16421) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000[0m
+[0;32mI (16441) wifi:AP's beacon interval = 102400 us, DTIM period = 1[0m
+[0;32mI (16921) wifi:<ba-add>idx:0 (ifx:0, 62:7f:f0:57:9d:87), tid:7, ssn:3, winSize:64[0m
+[0;32mI (16921) wifi:<ba-del>idx:0, tid:7[0m
+[0;32mI (16921) wifi:<ba-add>idx:0 (ifx:0, 62:7f:f0:57:9d:87), tid:7, ssn:3, winSize:64[0m
+[0;32mI (17981) esp_netif_handlers: sta ip: 192.168.0.234, mask: 255.255.255.0, gw: 192.168.0.1[0m
+[0;32mI (17991) wifi:<ba-add>idx:1 (ifx:0, 62:7f:f0:57:9d:87), tid:0, ssn:1, winSize:64[0m
+[0;32mI (17991) wifi:<ba-del>idx:1, tid:0[0m
+[0;32mI (17991) wifi:<ba-add>idx:1 (ifx:0, 62:7f:f0:57:9d:87), tid:0, ssn:1, winSize:64[0m
+[0;32mI (18541) esp-x509-crt-bundle: Certificate validated[0m

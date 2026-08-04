@@ -1,0 +1,5 @@
+{
+  "message": "speaker phase boundaries 0..0 are not valid PCM16 offsets.",
+  "name": "Error",
+  "stack": "Error: speaker phase boundaries 0..0 are not valid PCM16 offsets.\n    at sliceMarkerPcm (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-local-aec.ts:1187:11)\n    at proveLocalAec (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-local-aec.ts:757:9)"
+}

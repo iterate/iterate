@@ -72,10 +72,38 @@ include CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/codegen:
 .PHONY : CMakeFiles/iterate-kit-capabilities.dir/codegen
 
+CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
+CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/aec_diagnostic_trace.c
+CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/aec_diagnostic_trace.c
+
+CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/aec_diagnostic_trace.c > CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.i
+
+CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/aec_diagnostic_trace.c -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.s
+
+CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
+CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/avatar.c
+CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.o"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/avatar.c
+
+CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.i: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Preprocessing C source to CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.i"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -E /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/avatar.c > CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.i
+
+CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.s: cmake_force
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green "Compiling C source to assembly CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.s"
+	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -S /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/avatar.c -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.s
+
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/callback_budget.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_1) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/callback_budget.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.i: cmake_force
@@ -89,7 +117,7 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_bud
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/conversation.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_2) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/conversation.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.i: cmake_force
@@ -103,7 +131,7 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/camera.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_3) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/camera.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.i: cmake_force
@@ -117,7 +145,7 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.s: 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/device_event_stream.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/device_event_stream.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/device_event_stream.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/device_event_stream.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_4) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/device_event_stream.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/device_event_stream.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/device_event_stream.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/device_event_stream.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/device_event_stream.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/device_event_stream.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/device_event_stream.c.i: cmake_force
@@ -131,7 +159,7 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/device_event
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/leds.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/leds.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/leds.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/leds.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_5) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/leds.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/leds.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/leds.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/leds.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/leds.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/leds.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/leds.c.i: cmake_force
@@ -145,7 +173,7 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/leds.c.s: cm
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/metrics.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/metrics.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/metrics.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/metrics.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_6) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/metrics.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/metrics.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/metrics.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/metrics.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/metrics.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/metrics.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/metrics.c.i: cmake_force
@@ -159,7 +187,7 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/metrics.c.s:
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/push_to_talk.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/push_to_talk.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/push_to_talk.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/push_to_talk.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_7) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/push_to_talk.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/push_to_talk.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/push_to_talk.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/push_to_talk.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/push_to_talk.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/push_to_talk.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/push_to_talk.c.i: cmake_force
@@ -173,7 +201,7 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/push_to_talk
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/rpc_internal.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/rpc_internal.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/rpc_internal.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/rpc_internal.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_8) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/rpc_internal.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/rpc_internal.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/rpc_internal.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/rpc_internal.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/rpc_internal.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/rpc_internal.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/rpc_internal.c.i: cmake_force
@@ -187,7 +215,7 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/rpc_internal
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/screen.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_9) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/screen.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen.c.i: cmake_force
@@ -201,7 +229,7 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen.c.s: 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen_capture.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen_capture.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/screen_capture.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen_capture.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_10) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen_capture.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen_capture.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen_capture.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen_capture.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen_capture.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/screen_capture.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen_capture.c.i: cmake_force
@@ -215,7 +243,7 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/screen_captu
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.o: CMakeFiles/iterate-kit-capabilities.dir/flags.make
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.o: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/servos.c
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.o: CMakeFiles/iterate-kit-capabilities.dir/compiler_depend.ts
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_11) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.o"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_13) "Building C object CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.o"
 	/usr/bin/cc $(C_DEFINES) $(C_INCLUDES) $(C_FLAGS) -MD -MT CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.o -MF CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.o.d -o CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.o -c /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/components/capabilities/src/servos.c
 
 CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.i: cmake_force
@@ -228,6 +256,8 @@ CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.s: 
 
 # Object files for target iterate-kit-capabilities
 iterate__kit__capabilities_OBJECTS = \
+"CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.o" \
+"CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.o" \
 "CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.o" \
 "CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.o" \
 "CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.o" \
@@ -243,6 +273,8 @@ iterate__kit__capabilities_OBJECTS = \
 # External object files for target iterate-kit-capabilities
 iterate__kit__capabilities_EXTERNAL_OBJECTS =
 
+libiterate-kit-capabilities.a: CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.o
+libiterate-kit-capabilities.a: CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.o
 libiterate-kit-capabilities.a: CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/callback_budget.c.o
 libiterate-kit-capabilities.a: CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/conversation.c.o
 libiterate-kit-capabilities.a: CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/camera.c.o
@@ -256,7 +288,7 @@ libiterate-kit-capabilities.a: CMakeFiles/iterate-kit-capabilities.dir/component
 libiterate-kit-capabilities.a: CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/servos.c.o
 libiterate-kit-capabilities.a: CMakeFiles/iterate-kit-capabilities.dir/build.make
 libiterate-kit-capabilities.a: CMakeFiles/iterate-kit-capabilities.dir/link.txt
-	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_12) "Linking C static library libiterate-kit-capabilities.a"
+	@$(CMAKE_COMMAND) -E cmake_echo_color "--switch=$(COLOR)" --green --bold --progress-dir=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/kit-host-red/CMakeFiles --progress-num=$(CMAKE_PROGRESS_14) "Linking C static library libiterate-kit-capabilities.a"
 	$(CMAKE_COMMAND) -P CMakeFiles/iterate-kit-capabilities.dir/cmake_clean_target.cmake
 	$(CMAKE_COMMAND) -E cmake_link_script CMakeFiles/iterate-kit-capabilities.dir/link.txt --verbose=$(VERBOSE)
 

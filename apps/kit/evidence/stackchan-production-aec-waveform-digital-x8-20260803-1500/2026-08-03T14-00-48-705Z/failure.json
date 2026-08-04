@@ -1,0 +1,1721 @@
+{
+  "aec": {
+    "ambient": {
+      "dbfs": -30.780022373852113,
+      "peak": 5512,
+      "rms": 947.2155439321435
+    },
+    "doubleTalk": {
+      "clean": {
+        "dbfs": -15.097129219204422,
+        "peak": 32768,
+        "rms": 5762.268275731355
+      },
+      "farEndResidualDb": 7.992818706381826,
+      "farEndSimilarity": 0.008917090918400344,
+      "nearEndGain": 0.7208430216534655,
+      "nearEndSimilarity": 0.12227488487841395,
+      "passed": false,
+      "residualDegradationFromRepeatDb": 15.116903442360389,
+      "residualToNearEndDb": 15.344646412042291,
+      "similarityLossFromRepeat": 0.23510174585499174
+    },
+    "farEnd": [
+      {
+        "clean": {
+          "dbfs": -22.132896087492774,
+          "peak": 8808,
+          "rms": 2563.333601907225
+        },
+        "kind": "tone",
+        "passed": false,
+        "source": {
+          "dbfs": -20.255037277522632,
+          "peak": 4500,
+          "rms": 3181.9845827329204
+        },
+        "sourceSimilarity": 0.0003704837950569888
+      },
+      {
+        "clean": {
+          "dbfs": -1.4402053044579244,
+          "peak": 32768,
+          "rms": 27761.29171766606
+        },
+        "kind": "dual-carrier-prbs31",
+        "passed": false,
+        "source": {
+          "dbfs": -23.265100635326633,
+          "peak": 3841,
+          "rms": 2250.0641657517235
+        },
+        "sourceSimilarity": 0.009985091545076812
+      },
+      {
+        "clean": {
+          "dbfs": -10.077955449835958,
+          "peak": 32768,
+          "rms": 10269.567705198006
+        },
+        "kind": "speech-shaped",
+        "passed": false,
+        "source": {
+          "dbfs": -22.976377410245146,
+          "peak": 7832,
+          "rms": 2326.1143711357286
+        },
+        "sourceSimilarity": 0.12073862869424769
+      }
+    ],
+    "nearEnd": {
+      "aboveAmbientDb": 0.17770163884032183,
+      "clean": {
+        "dbfs": -30.60232073501179,
+        "peak": 3888,
+        "rms": 966.7938925472516
+      },
+      "passed": false,
+      "pathReferenceObserved": true,
+      "repeat": {
+        "clean": {
+          "dbfs": -29.770865284615773,
+          "peak": 15112,
+          "rms": 1063.914359961991
+        },
+        "gain": 0.39281210008823597,
+        "passed": false,
+        "pathReferenceObserved": true,
+        "residualToReferenceDb": 0.22774296968190216,
+        "similarity": 0.3573766307334057
+      },
+      "source": {
+        "dbfs": -15.176950127467181,
+        "peak": 26072,
+        "rms": 5709.55720506014
+      },
+      "sourceSimilarity": 0.42495040104893544
+    },
+    "passed": false,
+    "reasons": [
+      "The PCM recorder did not close complete.",
+      "The physical network interval was not valid.",
+      "tone far-only clean uplink was -22.13 dBFS; expected at most -24.78 dBFS.",
+      "dual-carrier-prbs31 far-only clean uplink was -1.44 dBFS; expected at most -24.78 dBFS.",
+      "speech-shaped far-only clean uplink was -10.08 dBFS; expected at most -24.78 dBFS.",
+      "Mac-only signal did not rise above ambient: 0.18 dB; expected at least 10 dB.",
+      "Repeated Mac-only capture was not sufficiently close to the first control: similarity 0.357, gain 0.393, residual 0.23 dB.",
+      "Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.122, gain 0.721, residual 15.34 dB.",
+      "Double-talk degraded beyond repeated near-end control: similarity loss 0.235, residual degradation 15.12 dB.",
+      "Double-talk residual retained device-speaker content: residual energy 7.99 dB relative to the far source, similarity 0.009."
+    ],
+    "validity": {
+      "passed": false,
+      "reasons": [
+        "The PCM recorder did not close complete.",
+        "The physical network interval was not valid."
+      ]
+    }
+  },
+  "createdAt": "2026-08-03T14:01:57.946Z",
+  "device": {
+    "deviceHost": "192.168.1.46",
+    "id": "stackchan",
+    "projectId": "prj_0363ecd53eda492e972b07debd56eb46",
+    "projectSlug": "kit-stackchan-voice-e2e-20260801",
+    "workerHost": "kit--kit-stackchan-voice-e2e-20260801.iterate.app"
+  },
+  "digital": {
+    "passed": true,
+    "reasons": []
+  },
+  "error": {
+    "message": "Production AEC acceptance failed (network-invalid): The PCM recorder did not close complete. The physical network interval was not valid. tone far-only clean uplink was -22.13 dBFS; expected at most -24.78 dBFS. dual-carrier-prbs31 far-only clean uplink was -1.44 dBFS; expected at most -24.78 dBFS. speech-shaped far-only clean uplink was -10.08 dBFS; expected at most -24.78 dBFS. Mac-only signal did not rise above ambient: 0.18 dB; expected at least 10 dB. Repeated Mac-only capture was not sufficiently close to the first control: similarity 0.357, gain 0.393, residual 0.23 dB. Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.122, gain 0.721, residual 15.34 dB. Double-talk degraded beyond repeated near-end control: similarity loss 0.235, residual degradation 15.12 dB. Double-talk residual retained device-speaker content: residual energy 7.99 dB relative to the far source, similarity 0.009.",
+    "name": "Error",
+    "stack": "Error: Production AEC acceptance failed (network-invalid): The PCM recorder did not close complete. The physical network interval was not valid. tone far-only clean uplink was -22.13 dBFS; expected at most -24.78 dBFS. dual-carrier-prbs31 far-only clean uplink was -1.44 dBFS; expected at most -24.78 dBFS. speech-shaped far-only clean uplink was -10.08 dBFS; expected at most -24.78 dBFS. Mac-only signal did not rise above ambient: 0.18 dB; expected at least 10 dB. Repeated Mac-only capture was not sufficiently close to the first control: similarity 0.357, gain 0.393, residual 0.23 dB. Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.122, gain 0.721, residual 15.34 dB. Double-talk degraded beyond repeated near-end control: similarity loss 0.235, residual degradation 15.12 dB. Double-talk residual retained device-speaker content: residual energy 7.99 dB relative to the far source, similarity 0.009.\n    at proveProductionAecWaveform (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:607:13)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:1269:20)"
+  },
+  "network": {
+    "classification": "network-invalid",
+    "reasons": [
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 11218.721416 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 13219.071041 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 15219.9905 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 17219.463 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 19219.077166 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 21218.425333 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 23218.799041 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 25219.6215 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 27218.21675 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 29219.596166 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 31219.754291 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 33217.950208 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 35219.024833 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 37219.708583 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 39219.524375 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 41219.35225 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 43219.724916 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 45219.618625 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 47218.662875 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 49219.106333 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 51219.667541 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 53219.766333 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 55218.508916 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 57218.3385 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 59219.396166 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 61219.633708 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 63219.400125 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 65219.513458 ms."
+      },
+      {
+        "code": "host-reachability-timeout",
+        "message": "device reachability probe timed out at 67216.9185 ms."
+      },
+      {
+        "code": "host-rtt-exceeded",
+        "message": "router RTT 79.6 ms exceeded 50 ms at 41219.35225 ms."
+      },
+      {
+        "code": "host-rtt-exceeded",
+        "message": "router RTT 62.433 ms exceeded 50 ms at 43219.724916 ms."
+      },
+      {
+        "code": "host-rtt-exceeded",
+        "message": "router RTT 69.339 ms exceeded 50 ms at 45219.618625 ms."
+      },
+      {
+        "code": "host-rtt-exceeded",
+        "message": "worker RTT 102.081 ms exceeded 100 ms at 61219.633708 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.349624999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.9194590000006 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.4724999999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.6141659999994 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.348167 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.3737079999992 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.8224590000027 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1998.5952499999985 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2001.3794159999998 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.1581250000017 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1998.195917000001 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2001.074625000001 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.6837499999965 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.8157920000012 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.8278750000027 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.3726659999957 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.8937090000036 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.044249999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.4434580000016 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.5612079999992 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.098791999997 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1998.7425829999993 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.8295839999992 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2001.0576660000006 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.2375420000026 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1999.766416999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 2000.1133330000011 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1997.4050419999985 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "device reachability evidence contains a 1502.086374999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.349624999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.9194590000006 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.4724999999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.6141659999994 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.348167 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.3737079999992 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.8224590000027 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1998.5952499999985 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2001.3794159999998 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.1581250000017 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1998.195917000001 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2001.074625000001 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.6837499999965 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.8157920000012 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.8278750000027 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.3726659999957 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.8937090000036 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.044249999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.4434580000016 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.5612079999992 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.098791999997 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1998.7425829999993 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.8295839999992 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2001.0576660000006 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.2375420000026 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1999.766416999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 2000.1133330000011 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1997.4050419999985 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "router reachability evidence contains a 1502.086374999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.349624999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.9194590000006 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.4724999999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.6141659999994 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.348167 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.3737079999992 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.8224590000027 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1998.5952499999985 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2001.3794159999998 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.1581250000017 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1998.195917000001 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2001.074625000001 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.6837499999965 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.8157920000012 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.8278750000027 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.3726659999957 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.8937090000036 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.044249999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.4434580000016 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.5612079999992 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.098791999997 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1998.7425829999993 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.8295839999992 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2001.0576660000006 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.2375420000026 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1999.766416999999 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 2000.1133330000011 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1997.4050419999985 ms gap, exceeding 1500 ms."
+      },
+      {
+        "code": "host-reachability-coverage-gap",
+        "message": "worker reachability evidence contains a 1502.086374999999 ms gap, exceeding 1500 ms."
+      }
+    ],
+    "verdict": "network-invalid"
+  },
+  "passed": false,
+  "projectModeRestored": true,
+  "schemaVersion": 1,
+  "stimuli": {
+    "macOutputVolumePercent": 40,
+    "nearSourceSha256": "8d72755838ef5b3450c53a87926ea3ded83fa075dc2194df36db161cd041854e",
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "providerDurationMs": 6000
+  },
+  "worker": {
+    "baseline": {
+      "awaitingCommitAcknowledgement": false,
+      "awaitingUplinkEndMarker": false,
+      "closed": false,
+      "conversationActive": true,
+      "conversationEnds": 0,
+      "conversationStartedAtMs": 1785765658563,
+      "conversationStarts": 1,
+      "devicePcmPeakSample": 431,
+      "devicePcmRmsSample": 98.55225332084186,
+      "devicePcmSamples": 4160,
+      "diagnosticResponseRequests": 0,
+      "deviceDownlinkDepthCorrectionFrames": 0,
+      "deviceDownlinkDepthCorrections": 0,
+      "deviceDownlinkDepthMaximumFrames": 0,
+      "deviceDownlinkDepthObservations": 1,
+      "downlinkCreditBlocked": 0,
+      "downlinkDroppedBytes": 0,
+      "downlinkFrames": 0,
+      "downlinkItemsAcknowledged": 0,
+      "downlinkItemsInFlight": 0,
+      "downlinkItemsSent": 0,
+      "downlinkMaximumInFlightItems": 0,
+      "downlinkInterruptedBytes": 0,
+      "downlinkPacingCatchUpFrames": 0,
+      "downlinkPacingCatchUpIncidents": 0,
+      "downlinkPacingMaximumLatenessMs": 0,
+      "downlinkPacingOverrunFrames": 0,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 0,
+      "downlinkReceipts": 0,
+      "downlinkDuplicateReceipts": 0,
+      "downlinkReceiptTimeouts": 0,
+      "emptyUplinkTurns": 0,
+      "firstDevicePcmSentAtMs": null,
+      "firstProviderPcmAtMs": null,
+      "initialGreetingRequests": 0,
+      "interrupted": false,
+      "lastProviderError": null,
+      "lastProviderEventType": null,
+      "lastSocketClose": null,
+      "providerAvailable": true,
+      "providerAttachedAtMs": 1785765658563,
+      "providerCommitMessagesSent": 0,
+      "providerConnections": 1,
+      "providerControlEvents": 0,
+      "providerControlMessagesSent": 0,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 0,
+      "providerFunctionCallFailures": 0,
+      "providerFunctionCalls": 0,
+      "providerFunctionCallsPending": 0,
+      "providerKeepalivePings": 0,
+      "providerKeepalivePongs": 0,
+      "playbackInterruptionFailures": 0,
+      "playbackInterruptionPending": false,
+      "playbackInterruptionsCoalesced": 0,
+      "playbackInterruptionsCompleted": 0,
+      "playbackInterruptionsRequested": 0,
+      "providerPcmPeakSample": 0,
+      "providerPcmRmsSample": 0,
+      "providerPcmSamples": 0,
+      "providerRetirements": 0,
+      "providerResponseActive": false,
+      "providerResponseCreateMessagesSent": 0,
+      "providerResponsesCancelled": 0,
+      "providerResponsesCompleted": 0,
+      "providerResponsesFailed": 0,
+      "providerUnsolicitedPcmBytes": 0,
+      "providerUnsolicitedResponses": 0,
+      "providerSessionReadyAtMs": null,
+      "providerSendFailures": 0,
+      "providerSpeechActiveSinceAtMs": null,
+      "providerSpeechMaximumDurationMs": 0,
+      "providerSpeechStarts": 0,
+      "providerSpeechStops": 0,
+      "providerSpeechTimeouts": 0,
+      "serverVadResponseFallbacks": 0,
+      "serverVadResponseTimeouts": 0,
+      "turnDetection": "server-vad",
+      "uplinkGainMultiplier": 8,
+      "uplinkPcmClippedSamples": 0,
+      "uplinkPcmPeakSample": 3448,
+      "uplinkPcmRmsSample": 788.4180265667349,
+      "uplinkPcmSamples": 4160,
+      "uplinkControlStarts": 0,
+      "uplinkControlStops": 0,
+      "uplinkDroppedBytes": 0,
+      "uplinkEndMarkers": 0,
+      "uplinkEndMarkerTimeouts": 0,
+      "uplinkFrames": 13,
+      "uplinkTurns": 0,
+      "uplinkUnavailableFrames": 0,
+      "audioMode": "full-duplex-aec",
+      "deviceEvents": {
+        "acceptedEvents": 1,
+        "lastEvent": {
+          "sequence": 2,
+          "source": "system",
+          "type": "conversation.started"
+        },
+        "physicalConversationEnds": 0,
+        "physicalConversationStarts": 0,
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteConversationEnds": 0,
+        "remoteConversationStarts": 0,
+        "remoteStarts": 0,
+        "remoteStops": 0
+      },
+      "deviceId": "stackchan",
+      "deviceMetrics": {
+        "invalidSamples": 0,
+        "lastInvalidReason": null,
+        "latestSample": {
+          "metrics": {
+            "uptimeMs": 50809,
+            "freeHeapBytes": 6901080,
+            "minimumFreeHeapBytes": 6894168,
+            "freeInternalHeapBytes": 31839,
+            "minimumFreeInternalHeapBytes": 30411,
+            "freePsramBytes": 6898636,
+            "taskStackHighWaterBytes": 1180,
+            "cpuPermille": 392,
+            "subscriptionEnds": 0,
+            "audio": {
+              "capture": {
+                "sent": 3,
+                "dropped": 0,
+                "failures": 0
+              },
+              "uplink": {
+                "sent": 3,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 2,
+                "sendDeferrals": 0,
+                "consecutiveSendDeferrals": 0,
+                "maximumConsecutiveSendDeferrals": 0,
+                "failures": 0,
+                "restartIncidents": 0,
+                "inPlaceFreshnessRecoveries": 0,
+                "socketRestarts": 0,
+                "producerBackpressureRestarts": 0,
+                "transportDisconnectRestarts": 0,
+                "noProgressTimeoutRestarts": 0,
+                "frameSendTimeoutRestarts": 0,
+                "captureStaleRestarts": 0,
+                "lastTransportAcceptAgeMs": 24,
+                "maximumTransportAcceptAgeMs": 44,
+                "lastRestartOldestCaptureAgeMs": 0,
+                "lastRestartReason": "none",
+                "lastRestartFramesDiscarded": 0
+              },
+              "downlink": {
+                "received": 0,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 0,
+                "failures": 0
+              },
+              "protocolFailures": 0,
+              "buffers": {
+                "uplinkApplication": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 1280,
+                  "capacity": 20480
+                },
+                "websocketTransmitter": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 648,
+                  "capacity": 910
+                },
+                "lwipSend": {
+                  "evidence": "capacityOnly",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 5760
+                },
+                "tlsEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                },
+                "wifiEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                }
+              }
+            }
+          },
+          "receivedAtMs": 1785765658635
+        },
+        "samplesReceived": 1
+      },
+      "deviceSubscriptions": {
+        "eventAttempts": 1,
+        "eventFailures": 0,
+        "eventReady": true,
+        "lastEventError": null,
+        "lastMetricsError": null,
+        "metricsAttempts": 1,
+        "metricsFailures": 0,
+        "metricsReady": true
+      },
+      "diagnosticCapture": null,
+      "deviceEventSubscriptionAttempts": 1,
+      "deviceEventSubscriptionFailures": 0,
+      "endedAtMs": null,
+      "grokCredential": null,
+      "lastProviderConnectError": null,
+      "previousSession": {
+        "awaitingCommitAcknowledgement": false,
+        "awaitingUplinkEndMarker": false,
+        "closed": true,
+        "conversationActive": false,
+        "conversationEnds": 1,
+        "conversationStartedAtMs": 1785764673308,
+        "conversationStarts": 1,
+        "devicePcmPeakSample": 32581,
+        "devicePcmRmsSample": 393.29569654423216,
+        "devicePcmSamples": 285760,
+        "diagnosticResponseRequests": 0,
+        "deviceDownlinkDepthCorrectionFrames": 0,
+        "deviceDownlinkDepthCorrections": 0,
+        "deviceDownlinkDepthMaximumFrames": 0,
+        "deviceDownlinkDepthObservations": 20,
+        "downlinkCreditBlocked": 0,
+        "downlinkDroppedBytes": 0,
+        "downlinkFrames": 0,
+        "downlinkItemsAcknowledged": 0,
+        "downlinkItemsInFlight": 0,
+        "downlinkItemsSent": 0,
+        "downlinkMaximumInFlightItems": 0,
+        "downlinkInterruptedBytes": 0,
+        "downlinkPacingCatchUpFrames": 0,
+        "downlinkPacingCatchUpIncidents": 0,
+        "downlinkPacingMaximumLatenessMs": 0,
+        "downlinkPacingOverrunFrames": 0,
+        "downlinkPartialBytes": 0,
+        "downlinkQueuedBytes": 0,
+        "downlinkQueueHighWaterBytes": 0,
+        "downlinkReceipts": 0,
+        "downlinkDuplicateReceipts": 0,
+        "downlinkReceiptTimeouts": 0,
+        "emptyUplinkTurns": 0,
+        "firstDevicePcmSentAtMs": null,
+        "firstProviderPcmAtMs": null,
+        "initialGreetingRequests": 0,
+        "interrupted": false,
+        "lastProviderError": null,
+        "lastProviderEventType": "ping",
+        "lastSocketClose": {
+          "code": 1006,
+          "reason": "WebSocket disconnected without sending Close frame.",
+          "source": "device"
+        },
+        "providerAvailable": false,
+        "providerAttachedAtMs": 1785764673901,
+        "providerCommitMessagesSent": 0,
+        "providerConnections": 1,
+        "providerControlEvents": 5,
+        "providerControlMessagesSent": 2,
+        "providerBufferedBytes": 0,
+        "providerDisconnects": 0,
+        "providerFunctionCallFailures": 0,
+        "providerFunctionCalls": 0,
+        "providerFunctionCallsPending": 0,
+        "providerKeepalivePings": 2,
+        "providerKeepalivePongs": 2,
+        "playbackInterruptionFailures": 0,
+        "playbackInterruptionPending": false,
+        "playbackInterruptionsCoalesced": 0,
+        "playbackInterruptionsCompleted": 0,
+        "playbackInterruptionsRequested": 0,
+        "providerPcmPeakSample": 0,
+        "providerPcmRmsSample": 0,
+        "providerPcmSamples": 0,
+        "providerRetirements": 1,
+        "providerResponseActive": false,
+        "providerResponseCreateMessagesSent": 0,
+        "providerResponsesCancelled": 0,
+        "providerResponsesCompleted": 0,
+        "providerResponsesFailed": 0,
+        "providerUnsolicitedPcmBytes": 0,
+        "providerUnsolicitedResponses": 0,
+        "providerSessionReadyAtMs": 1785764674102,
+        "providerSendFailures": 0,
+        "providerSpeechActiveSinceAtMs": null,
+        "providerSpeechMaximumDurationMs": 0,
+        "providerSpeechStarts": 0,
+        "providerSpeechStops": 0,
+        "providerSpeechTimeouts": 0,
+        "serverVadResponseFallbacks": 0,
+        "serverVadResponseTimeouts": 0,
+        "turnDetection": "server-vad",
+        "uplinkGainMultiplier": 8,
+        "uplinkPcmClippedSamples": 150,
+        "uplinkPcmPeakSample": 32768,
+        "uplinkPcmRmsSample": 1417.064135366604,
+        "uplinkPcmSamples": 285760,
+        "uplinkControlStarts": 0,
+        "uplinkControlStops": 0,
+        "uplinkDroppedBytes": 15360,
+        "uplinkEndMarkers": 0,
+        "uplinkEndMarkerTimeouts": 0,
+        "uplinkFrames": 893,
+        "uplinkTurns": 0,
+        "uplinkUnavailableFrames": 24,
+        "audioMode": "full-duplex-aec",
+        "deviceEvents": {
+          "acceptedEvents": 2,
+          "lastEvent": {
+            "sequence": 2,
+            "source": "physical",
+            "type": "conversation.ended"
+          },
+          "physicalConversationEnds": 1,
+          "physicalConversationStarts": 0,
+          "physicalStarts": 0,
+          "physicalStops": 0,
+          "remoteConversationEnds": 0,
+          "remoteConversationStarts": 0,
+          "remoteStarts": 0,
+          "remoteStops": 0
+        },
+        "deviceMetrics": {
+          "invalidSamples": 0,
+          "lastInvalidReason": null,
+          "latestSample": {
+            "metrics": {
+              "uptimeMs": 74424,
+              "freeHeapBytes": 6931932,
+              "minimumFreeHeapBytes": 6883104,
+              "freeInternalHeapBytes": 26967,
+              "minimumFreeInternalHeapBytes": 23427,
+              "freePsramBytes": 6926928,
+              "taskStackHighWaterBytes": 1212,
+              "cpuPermille": 382,
+              "subscriptionEnds": 1,
+              "audio": {
+                "capture": {
+                  "sent": 2617,
+                  "dropped": 1,
+                  "failures": 0
+                },
+                "uplink": {
+                  "sent": 2563,
+                  "dropped": 55,
+                  "depth": 0,
+                  "highWater": 31,
+                  "sendDeferrals": 2353,
+                  "consecutiveSendDeferrals": 0,
+                  "maximumConsecutiveSendDeferrals": 63,
+                  "failures": 0,
+                  "restartIncidents": 1,
+                  "inPlaceFreshnessRecoveries": 1,
+                  "socketRestarts": 0,
+                  "producerBackpressureRestarts": 1,
+                  "transportDisconnectRestarts": 0,
+                  "noProgressTimeoutRestarts": 0,
+                  "frameSendTimeoutRestarts": 0,
+                  "captureStaleRestarts": 0,
+                  "lastTransportAcceptAgeMs": 406,
+                  "maximumTransportAcceptAgeMs": 477,
+                  "lastRestartOldestCaptureAgeMs": 633,
+                  "lastRestartReason": "producer_backpressure",
+                  "lastRestartFramesDiscarded": 31
+                },
+                "downlink": {
+                  "received": 394,
+                  "dropped": 0,
+                  "depth": 0,
+                  "highWater": 17,
+                  "failures": 0
+                },
+                "protocolFailures": 0,
+                "buffers": {
+                  "uplinkApplication": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 19840,
+                    "capacity": 20480
+                  },
+                  "websocketTransmitter": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 648,
+                    "capacity": 910
+                  },
+                  "lwipSend": {
+                    "evidence": "capacityOnly",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 5760
+                  },
+                  "tlsEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  },
+                  "wifiEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  }
+                }
+              }
+            },
+            "receivedAtMs": 1785764693200
+          },
+          "samplesReceived": 20
+        },
+        "deviceId": "stackchan",
+        "deviceSubscriptions": {
+          "eventAttempts": 1,
+          "eventFailures": 0,
+          "eventReady": true,
+          "lastEventError": null,
+          "lastMetricsError": null,
+          "metricsAttempts": 1,
+          "metricsFailures": 0,
+          "metricsReady": true
+        },
+        "diagnosticCapture": null,
+        "deviceEventSubscriptionAttempts": 1,
+        "deviceEventSubscriptionFailures": 0,
+        "endedAtMs": 1785764693211,
+        "grokCredential": {
+          "attempts": 2,
+          "expiresAtEpochSeconds": 1785768273,
+          "failures": 0,
+          "lastError": null,
+          "state": "ready"
+        },
+        "lastProviderConnectError": null,
+        "providerEvents": {
+          "appendFailures": 0,
+          "appendedEvents": 5,
+          "droppedEvents": 0,
+          "lastAppendError": null,
+          "lastAppendedSequence": 5,
+          "observedEvents": 5,
+          "pendingEvents": 0,
+          "pendingRawBytes": 0,
+          "pendingRawHighWaterBytes": 1736
+        },
+        "providerConnectAttempts": 1,
+        "providerConnectFailures": 0,
+        "serverVadProfile": "low-level-aec",
+        "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:fe3a892b-853a-4eb2-b2a1-35b9d4fcbcf4",
+        "startup": {
+          "authenticationAndModeReadyAtMs": 1785764673198,
+          "credentialPrewarmDecodedAtMs": 1785764673501,
+          "credentialPrewarmReceivedAtMs": 1785764673501,
+          "credentialPrewarmStartedAtMs": 1785764673198,
+          "deviceLaneAcceptedAtMs": 1785764673198,
+          "providerConnectStartedAtMs": 1785764673308,
+          "providerSessionUpdateSentAtMs": 1785764673901,
+          "providerWebSocketCreatedAtMs": 1785764673501,
+          "providerWebSocketOpenedAtMs": 1785764673901,
+          "requestReceivedAtMs": 1785764673156,
+          "deviceUpgradeLatencyMs": 42,
+          "firstDevicePcmLatencyMs": null,
+          "firstDevicePcmSentAtMs": null,
+          "firstDevicePcmFromConversationMs": null,
+          "firstProviderPcmAtMs": null,
+          "firstProviderPcmLatencyMs": null,
+          "firstProviderPcmFromConversationMs": null,
+          "conversationStartedAtMs": 1785764673308,
+          "providerAttachedAtMs": 1785764673901,
+          "providerAttachedLatencyMs": 745,
+          "providerAttachedFromConversationMs": 593,
+          "credentialPrewarmLatencyMs": 303,
+          "credentialReadyBeforeConversationMs": 0,
+          "providerWebSocketOpenFromConversationMs": 593,
+          "providerSessionReadyAtMs": 1785764674102,
+          "providerSessionReadyLatencyMs": 946,
+          "providerSessionReadyFromConversationMs": 794
+        }
+      },
+      "providerEvents": {
+        "appendFailures": 0,
+        "appendedEvents": 0,
+        "droppedEvents": 0,
+        "lastAppendError": null,
+        "lastAppendedSequence": 0,
+        "observedEvents": 0,
+        "pendingEvents": 0,
+        "pendingRawBytes": 0,
+        "pendingRawHighWaterBytes": 0
+      },
+      "providerConnectAttempts": 1,
+      "providerConnectFailures": 0,
+      "serverVadProfile": "low-level-aec",
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6b286275-d0b0-4f6e-9b3a-cb372812cf5e",
+      "startup": {
+        "authenticationAndModeReadyAtMs": 1785765658483,
+        "credentialPrewarmDecodedAtMs": null,
+        "credentialPrewarmReceivedAtMs": null,
+        "credentialPrewarmStartedAtMs": null,
+        "deviceLaneAcceptedAtMs": 1785765658483,
+        "providerConnectStartedAtMs": 1785765658563,
+        "providerSessionUpdateSentAtMs": null,
+        "providerWebSocketCreatedAtMs": null,
+        "providerWebSocketOpenedAtMs": null,
+        "requestReceivedAtMs": 1785765658442,
+        "deviceUpgradeLatencyMs": 41,
+        "firstDevicePcmLatencyMs": null,
+        "firstDevicePcmSentAtMs": null,
+        "firstDevicePcmFromConversationMs": null,
+        "firstProviderPcmAtMs": null,
+        "firstProviderPcmLatencyMs": null,
+        "firstProviderPcmFromConversationMs": null,
+        "conversationStartedAtMs": 1785765658563,
+        "providerAttachedAtMs": 1785765658563,
+        "providerAttachedLatencyMs": 121,
+        "providerAttachedFromConversationMs": 0,
+        "credentialPrewarmLatencyMs": null,
+        "credentialReadyBeforeConversationMs": null,
+        "providerWebSocketOpenFromConversationMs": null,
+        "providerSessionReadyAtMs": null,
+        "providerSessionReadyLatencyMs": null,
+        "providerSessionReadyFromConversationMs": null
+      }
+    },
+    "deviceMetricsCallbackBracket": {
+      "baseline": {
+        "receivedAtMs": 1785765658635,
+        "uptimeMs": 50809
+      },
+      "deviceUptimeSpanMs": 58346,
+      "exactMediaInterval": false,
+      "receiptSpanMs": 58365,
+      "sampleCountDelta": 58,
+      "semantics": "conservative-callback-bracket",
+      "status": "valid",
+      "terminal": {
+        "receivedAtMs": 1785765717000,
+        "uptimeMs": 109155
+      }
+    },
+    "terminal": {
+      "awaitingCommitAcknowledgement": false,
+      "awaitingUplinkEndMarker": false,
+      "closed": false,
+      "conversationActive": true,
+      "conversationEnds": 0,
+      "conversationStartedAtMs": 1785765658563,
+      "conversationStarts": 1,
+      "devicePcmPeakSample": 20622,
+      "devicePcmRmsSample": 1966.8674441801886,
+      "devicePcmSamples": 943040,
+      "diagnosticResponseRequests": 6,
+      "deviceDownlinkDepthCorrectionFrames": 2,
+      "deviceDownlinkDepthCorrections": 2,
+      "deviceDownlinkDepthMaximumFrames": 13,
+      "deviceDownlinkDepthObservations": 59,
+      "downlinkCreditBlocked": 10,
+      "downlinkDroppedBytes": 0,
+      "downlinkFrames": 1800,
+      "downlinkItemsAcknowledged": 1806,
+      "downlinkItemsInFlight": 0,
+      "downlinkItemsSent": 1806,
+      "downlinkMaximumInFlightItems": 12,
+      "downlinkInterruptedBytes": 0,
+      "downlinkPacingCatchUpFrames": 4,
+      "downlinkPacingCatchUpIncidents": 8,
+      "downlinkPacingMaximumLatenessMs": 34,
+      "downlinkPacingOverrunFrames": 0,
+      "downlinkPartialBytes": 0,
+      "downlinkQueuedBytes": 0,
+      "downlinkQueueHighWaterBytes": 20480,
+      "downlinkReceipts": 1701,
+      "downlinkDuplicateReceipts": 0,
+      "downlinkReceiptTimeouts": 0,
+      "emptyUplinkTurns": 0,
+      "firstDevicePcmSentAtMs": 1785765664634,
+      "firstProviderPcmAtMs": 1785765664014,
+      "initialGreetingRequests": 0,
+      "interrupted": false,
+      "lastProviderError": null,
+      "lastProviderEventType": "response.done",
+      "lastSocketClose": null,
+      "providerAvailable": true,
+      "providerAttachedAtMs": 1785765658563,
+      "providerCommitMessagesSent": 0,
+      "providerConnections": 1,
+      "providerControlEvents": 12,
+      "providerControlMessagesSent": 6,
+      "providerBufferedBytes": 0,
+      "providerDisconnects": 0,
+      "providerFunctionCallFailures": 0,
+      "providerFunctionCalls": 0,
+      "providerFunctionCallsPending": 0,
+      "providerKeepalivePings": 0,
+      "providerKeepalivePongs": 0,
+      "playbackInterruptionFailures": 0,
+      "playbackInterruptionPending": false,
+      "playbackInterruptionsCoalesced": 0,
+      "playbackInterruptionsCompleted": 0,
+      "playbackInterruptionsRequested": 0,
+      "providerPcmPeakSample": 7832,
+      "providerPcmRmsSample": 2066.801070205795,
+      "providerPcmSamples": 576000,
+      "providerRetirements": 0,
+      "providerResponseActive": false,
+      "providerResponseCreateMessagesSent": 6,
+      "providerResponsesCancelled": 0,
+      "providerResponsesCompleted": 6,
+      "providerResponsesFailed": 0,
+      "providerUnsolicitedPcmBytes": 0,
+      "providerUnsolicitedResponses": 0,
+      "providerSessionReadyAtMs": null,
+      "providerSendFailures": 0,
+      "providerSpeechActiveSinceAtMs": null,
+      "providerSpeechMaximumDurationMs": 0,
+      "providerSpeechStarts": 0,
+      "providerSpeechStops": 0,
+      "providerSpeechTimeouts": 0,
+      "serverVadResponseFallbacks": 0,
+      "serverVadResponseTimeouts": 0,
+      "turnDetection": "server-vad",
+      "uplinkGainMultiplier": 8,
+      "uplinkPcmClippedSamples": 53769,
+      "uplinkPcmPeakSample": 32768,
+      "uplinkPcmRmsSample": 9710.07887386117,
+      "uplinkPcmSamples": 943040,
+      "uplinkControlStarts": 0,
+      "uplinkControlStops": 0,
+      "uplinkDroppedBytes": 0,
+      "uplinkEndMarkers": 0,
+      "uplinkEndMarkerTimeouts": 0,
+      "uplinkFrames": 2947,
+      "uplinkTurns": 0,
+      "uplinkUnavailableFrames": 0,
+      "audioMode": "full-duplex-aec",
+      "deviceEvents": {
+        "acceptedEvents": 1,
+        "lastEvent": {
+          "sequence": 2,
+          "source": "system",
+          "type": "conversation.started"
+        },
+        "physicalConversationEnds": 0,
+        "physicalConversationStarts": 0,
+        "physicalStarts": 0,
+        "physicalStops": 0,
+        "remoteConversationEnds": 0,
+        "remoteConversationStarts": 0,
+        "remoteStarts": 0,
+        "remoteStops": 0
+      },
+      "deviceId": "stackchan",
+      "deviceMetrics": {
+        "invalidSamples": 0,
+        "lastInvalidReason": null,
+        "latestSample": {
+          "metrics": {
+            "uptimeMs": 109155,
+            "freeHeapBytes": 6907224,
+            "minimumFreeHeapBytes": 6887828,
+            "freeInternalHeapBytes": 31839,
+            "minimumFreeInternalHeapBytes": 27199,
+            "freePsramBytes": 6903160,
+            "taskStackHighWaterBytes": 1164,
+            "cpuPermille": 413,
+            "subscriptionEnds": 0,
+            "audio": {
+              "capture": {
+                "sent": 2920,
+                "dropped": 0,
+                "failures": 0
+              },
+              "uplink": {
+                "sent": 2920,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 2,
+                "sendDeferrals": 0,
+                "consecutiveSendDeferrals": 0,
+                "maximumConsecutiveSendDeferrals": 0,
+                "failures": 0,
+                "restartIncidents": 0,
+                "inPlaceFreshnessRecoveries": 0,
+                "socketRestarts": 0,
+                "producerBackpressureRestarts": 0,
+                "transportDisconnectRestarts": 0,
+                "noProgressTimeoutRestarts": 0,
+                "frameSendTimeoutRestarts": 0,
+                "captureStaleRestarts": 0,
+                "lastTransportAcceptAgeMs": 17,
+                "maximumTransportAcceptAgeMs": 48,
+                "lastRestartOldestCaptureAgeMs": 0,
+                "lastRestartReason": "none",
+                "lastRestartFramesDiscarded": 0
+              },
+              "downlink": {
+                "received": 1800,
+                "dropped": 0,
+                "depth": 0,
+                "highWater": 13,
+                "failures": 0
+              },
+              "protocolFailures": 0,
+              "buffers": {
+                "uplinkApplication": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 1280,
+                  "capacity": 20480
+                },
+                "websocketTransmitter": {
+                  "evidence": "observed",
+                  "current": 0,
+                  "highWater": 648,
+                  "capacity": 910
+                },
+                "lwipSend": {
+                  "evidence": "capacityOnly",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 5760
+                },
+                "tlsEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                },
+                "wifiEgress": {
+                  "evidence": "unavailable",
+                  "current": 0,
+                  "highWater": 0,
+                  "capacity": 0
+                }
+              }
+            }
+          },
+          "receivedAtMs": 1785765717000
+        },
+        "samplesReceived": 59
+      },
+      "deviceSubscriptions": {
+        "eventAttempts": 1,
+        "eventFailures": 0,
+        "eventReady": true,
+        "lastEventError": null,
+        "lastMetricsError": null,
+        "metricsAttempts": 1,
+        "metricsFailures": 0,
+        "metricsReady": true
+      },
+      "diagnosticCapture": null,
+      "deviceEventSubscriptionAttempts": 1,
+      "deviceEventSubscriptionFailures": 0,
+      "endedAtMs": null,
+      "grokCredential": null,
+      "lastProviderConnectError": null,
+      "previousSession": {
+        "awaitingCommitAcknowledgement": false,
+        "awaitingUplinkEndMarker": false,
+        "closed": true,
+        "conversationActive": false,
+        "conversationEnds": 1,
+        "conversationStartedAtMs": 1785764673308,
+        "conversationStarts": 1,
+        "devicePcmPeakSample": 32581,
+        "devicePcmRmsSample": 393.29569654423216,
+        "devicePcmSamples": 285760,
+        "diagnosticResponseRequests": 0,
+        "deviceDownlinkDepthCorrectionFrames": 0,
+        "deviceDownlinkDepthCorrections": 0,
+        "deviceDownlinkDepthMaximumFrames": 0,
+        "deviceDownlinkDepthObservations": 20,
+        "downlinkCreditBlocked": 0,
+        "downlinkDroppedBytes": 0,
+        "downlinkFrames": 0,
+        "downlinkItemsAcknowledged": 0,
+        "downlinkItemsInFlight": 0,
+        "downlinkItemsSent": 0,
+        "downlinkMaximumInFlightItems": 0,
+        "downlinkInterruptedBytes": 0,
+        "downlinkPacingCatchUpFrames": 0,
+        "downlinkPacingCatchUpIncidents": 0,
+        "downlinkPacingMaximumLatenessMs": 0,
+        "downlinkPacingOverrunFrames": 0,
+        "downlinkPartialBytes": 0,
+        "downlinkQueuedBytes": 0,
+        "downlinkQueueHighWaterBytes": 0,
+        "downlinkReceipts": 0,
+        "downlinkDuplicateReceipts": 0,
+        "downlinkReceiptTimeouts": 0,
+        "emptyUplinkTurns": 0,
+        "firstDevicePcmSentAtMs": null,
+        "firstProviderPcmAtMs": null,
+        "initialGreetingRequests": 0,
+        "interrupted": false,
+        "lastProviderError": null,
+        "lastProviderEventType": "ping",
+        "lastSocketClose": {
+          "code": 1006,
+          "reason": "WebSocket disconnected without sending Close frame.",
+          "source": "device"
+        },
+        "providerAvailable": false,
+        "providerAttachedAtMs": 1785764673901,
+        "providerCommitMessagesSent": 0,
+        "providerConnections": 1,
+        "providerControlEvents": 5,
+        "providerControlMessagesSent": 2,
+        "providerBufferedBytes": 0,
+        "providerDisconnects": 0,
+        "providerFunctionCallFailures": 0,
+        "providerFunctionCalls": 0,
+        "providerFunctionCallsPending": 0,
+        "providerKeepalivePings": 2,
+        "providerKeepalivePongs": 2,
+        "playbackInterruptionFailures": 0,
+        "playbackInterruptionPending": false,
+        "playbackInterruptionsCoalesced": 0,
+        "playbackInterruptionsCompleted": 0,
+        "playbackInterruptionsRequested": 0,
+        "providerPcmPeakSample": 0,
+        "providerPcmRmsSample": 0,
+        "providerPcmSamples": 0,
+        "providerRetirements": 1,
+        "providerResponseActive": false,
+        "providerResponseCreateMessagesSent": 0,
+        "providerResponsesCancelled": 0,
+        "providerResponsesCompleted": 0,
+        "providerResponsesFailed": 0,
+        "providerUnsolicitedPcmBytes": 0,
+        "providerUnsolicitedResponses": 0,
+        "providerSessionReadyAtMs": 1785764674102,
+        "providerSendFailures": 0,
+        "providerSpeechActiveSinceAtMs": null,
+        "providerSpeechMaximumDurationMs": 0,
+        "providerSpeechStarts": 0,
+        "providerSpeechStops": 0,
+        "providerSpeechTimeouts": 0,
+        "serverVadResponseFallbacks": 0,
+        "serverVadResponseTimeouts": 0,
+        "turnDetection": "server-vad",
+        "uplinkGainMultiplier": 8,
+        "uplinkPcmClippedSamples": 150,
+        "uplinkPcmPeakSample": 32768,
+        "uplinkPcmRmsSample": 1417.064135366604,
+        "uplinkPcmSamples": 285760,
+        "uplinkControlStarts": 0,
+        "uplinkControlStops": 0,
+        "uplinkDroppedBytes": 15360,
+        "uplinkEndMarkers": 0,
+        "uplinkEndMarkerTimeouts": 0,
+        "uplinkFrames": 893,
+        "uplinkTurns": 0,
+        "uplinkUnavailableFrames": 24,
+        "audioMode": "full-duplex-aec",
+        "deviceEvents": {
+          "acceptedEvents": 2,
+          "lastEvent": {
+            "sequence": 2,
+            "source": "physical",
+            "type": "conversation.ended"
+          },
+          "physicalConversationEnds": 1,
+          "physicalConversationStarts": 0,
+          "physicalStarts": 0,
+          "physicalStops": 0,
+          "remoteConversationEnds": 0,
+          "remoteConversationStarts": 0,
+          "remoteStarts": 0,
+          "remoteStops": 0
+        },
+        "deviceMetrics": {
+          "invalidSamples": 0,
+          "lastInvalidReason": null,
+          "latestSample": {
+            "metrics": {
+              "uptimeMs": 74424,
+              "freeHeapBytes": 6931932,
+              "minimumFreeHeapBytes": 6883104,
+              "freeInternalHeapBytes": 26967,
+              "minimumFreeInternalHeapBytes": 23427,
+              "freePsramBytes": 6926928,
+              "taskStackHighWaterBytes": 1212,
+              "cpuPermille": 382,
+              "subscriptionEnds": 1,
+              "audio": {
+                "capture": {
+                  "sent": 2617,
+                  "dropped": 1,
+                  "failures": 0
+                },
+                "uplink": {
+                  "sent": 2563,
+                  "dropped": 55,
+                  "depth": 0,
+                  "highWater": 31,
+                  "sendDeferrals": 2353,
+                  "consecutiveSendDeferrals": 0,
+                  "maximumConsecutiveSendDeferrals": 63,
+                  "failures": 0,
+                  "restartIncidents": 1,
+                  "inPlaceFreshnessRecoveries": 1,
+                  "socketRestarts": 0,
+                  "producerBackpressureRestarts": 1,
+                  "transportDisconnectRestarts": 0,
+                  "noProgressTimeoutRestarts": 0,
+                  "frameSendTimeoutRestarts": 0,
+                  "captureStaleRestarts": 0,
+                  "lastTransportAcceptAgeMs": 406,
+                  "maximumTransportAcceptAgeMs": 477,
+                  "lastRestartOldestCaptureAgeMs": 633,
+                  "lastRestartReason": "producer_backpressure",
+                  "lastRestartFramesDiscarded": 31
+                },
+                "downlink": {
+                  "received": 394,
+                  "dropped": 0,
+                  "depth": 0,
+                  "highWater": 17,
+                  "failures": 0
+                },
+                "protocolFailures": 0,
+                "buffers": {
+                  "uplinkApplication": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 19840,
+                    "capacity": 20480
+                  },
+                  "websocketTransmitter": {
+                    "evidence": "observed",
+                    "current": 0,
+                    "highWater": 648,
+                    "capacity": 910
+                  },
+                  "lwipSend": {
+                    "evidence": "capacityOnly",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 5760
+                  },
+                  "tlsEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  },
+                  "wifiEgress": {
+                    "evidence": "unavailable",
+                    "current": 0,
+                    "highWater": 0,
+                    "capacity": 0
+                  }
+                }
+              }
+            },
+            "receivedAtMs": 1785764693200
+          },
+          "samplesReceived": 20
+        },
+        "deviceId": "stackchan",
+        "deviceSubscriptions": {
+          "eventAttempts": 1,
+          "eventFailures": 0,
+          "eventReady": true,
+          "lastEventError": null,
+          "lastMetricsError": null,
+          "metricsAttempts": 1,
+          "metricsFailures": 0,
+          "metricsReady": true
+        },
+        "diagnosticCapture": null,
+        "deviceEventSubscriptionAttempts": 1,
+        "deviceEventSubscriptionFailures": 0,
+        "endedAtMs": 1785764693211,
+        "grokCredential": {
+          "attempts": 2,
+          "expiresAtEpochSeconds": 1785768273,
+          "failures": 0,
+          "lastError": null,
+          "state": "ready"
+        },
+        "lastProviderConnectError": null,
+        "providerEvents": {
+          "appendFailures": 0,
+          "appendedEvents": 5,
+          "droppedEvents": 0,
+          "lastAppendError": null,
+          "lastAppendedSequence": 5,
+          "observedEvents": 5,
+          "pendingEvents": 0,
+          "pendingRawBytes": 0,
+          "pendingRawHighWaterBytes": 1736
+        },
+        "providerConnectAttempts": 1,
+        "providerConnectFailures": 0,
+        "serverVadProfile": "low-level-aec",
+        "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:fe3a892b-853a-4eb2-b2a1-35b9d4fcbcf4",
+        "startup": {
+          "authenticationAndModeReadyAtMs": 1785764673198,
+          "credentialPrewarmDecodedAtMs": 1785764673501,
+          "credentialPrewarmReceivedAtMs": 1785764673501,
+          "credentialPrewarmStartedAtMs": 1785764673198,
+          "deviceLaneAcceptedAtMs": 1785764673198,
+          "providerConnectStartedAtMs": 1785764673308,
+          "providerSessionUpdateSentAtMs": 1785764673901,
+          "providerWebSocketCreatedAtMs": 1785764673501,
+          "providerWebSocketOpenedAtMs": 1785764673901,
+          "requestReceivedAtMs": 1785764673156,
+          "deviceUpgradeLatencyMs": 42,
+          "firstDevicePcmLatencyMs": null,
+          "firstDevicePcmSentAtMs": null,
+          "firstDevicePcmFromConversationMs": null,
+          "firstProviderPcmAtMs": null,
+          "firstProviderPcmLatencyMs": null,
+          "firstProviderPcmFromConversationMs": null,
+          "conversationStartedAtMs": 1785764673308,
+          "providerAttachedAtMs": 1785764673901,
+          "providerAttachedLatencyMs": 745,
+          "providerAttachedFromConversationMs": 593,
+          "credentialPrewarmLatencyMs": 303,
+          "credentialReadyBeforeConversationMs": 0,
+          "providerWebSocketOpenFromConversationMs": 593,
+          "providerSessionReadyAtMs": 1785764674102,
+          "providerSessionReadyLatencyMs": 946,
+          "providerSessionReadyFromConversationMs": 794
+        }
+      },
+      "providerEvents": {
+        "appendFailures": 0,
+        "appendedEvents": 12,
+        "droppedEvents": 0,
+        "lastAppendError": null,
+        "lastAppendedSequence": 12,
+        "observedEvents": 12,
+        "pendingEvents": 0,
+        "pendingRawBytes": 0,
+        "pendingRawHighWaterBytes": 27
+      },
+      "providerConnectAttempts": 1,
+      "providerConnectFailures": 0,
+      "serverVadProfile": "low-level-aec",
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:6b286275-d0b0-4f6e-9b3a-cb372812cf5e",
+      "startup": {
+        "authenticationAndModeReadyAtMs": 1785765658483,
+        "credentialPrewarmDecodedAtMs": null,
+        "credentialPrewarmReceivedAtMs": null,
+        "credentialPrewarmStartedAtMs": null,
+        "deviceLaneAcceptedAtMs": 1785765658483,
+        "providerConnectStartedAtMs": 1785765658563,
+        "providerSessionUpdateSentAtMs": null,
+        "providerWebSocketCreatedAtMs": null,
+        "providerWebSocketOpenedAtMs": null,
+        "requestReceivedAtMs": 1785765658442,
+        "deviceUpgradeLatencyMs": 41,
+        "firstDevicePcmLatencyMs": 6192,
+        "firstDevicePcmSentAtMs": 1785765664634,
+        "firstDevicePcmFromConversationMs": 6071,
+        "firstProviderPcmAtMs": 1785765664014,
+        "firstProviderPcmLatencyMs": 5572,
+        "firstProviderPcmFromConversationMs": 5451,
+        "conversationStartedAtMs": 1785765658563,
+        "providerAttachedAtMs": 1785765658563,
+        "providerAttachedLatencyMs": 121,
+        "providerAttachedFromConversationMs": 0,
+        "credentialPrewarmLatencyMs": null,
+        "credentialReadyBeforeConversationMs": null,
+        "providerWebSocketOpenFromConversationMs": null,
+        "providerSessionReadyAtMs": null,
+        "providerSessionReadyLatencyMs": null,
+        "providerSessionReadyFromConversationMs": null
+      }
+    }
+  }
+}

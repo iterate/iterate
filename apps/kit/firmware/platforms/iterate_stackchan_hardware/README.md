@@ -15,8 +15,8 @@ unchanged in the host rig with failure-injecting fakes.
 - screen colours use RGB888 and remote images require HTTPS;
 - all 12 body LEDs are sent as one RGB565 transaction, with a 24-byte shadow
   committed only after successful I/O;
-- relative yaw is mapped to the official 150-degree StackChan centre, while
-  the documented mechanical limits remain enforced at the local C boundary;
+- yaw/pitch use the official relative Motion coordinate while the physical
+  body owner applies the two distinct raw servo zero calibrations;
 - camera bytes are never copied or queued: exactly one encoded frame may be
   borrowed, and it must be released before another capture;
 - missing physical operations return `UNAVAILABLE` instead of simulating
@@ -33,11 +33,13 @@ cmake --build /tmp/iterate-stackchan-hardware-build
 ctest --test-dir /tmp/iterate-stackchan-hardware-build --output-on-failure
 ```
 
-## Honest target status
+## Target integration
 
-This component is not yet added to a device target. The injected physical
-operations are therefore tested policy boundaries, not a claim that current
-firmware drives the attached StackChan.
+The StackChan target injects the official body's PY32 LED and SCS0009 servo
+operations into this adapter. The avatar/display owner starts first because
+CoreS3's AW9523 must enable the M-BUS 5 V rail before the body can answer its
+I2C address. This sequencing is an electrical board constraint, not permission
+for display or body work to enter either realtime audio task.
 
 The exact target-side mechanisms found in M5Stack's StackChan/CoreS3 sources
 are:
@@ -51,7 +53,7 @@ are:
 - camera: CoreS3's GC0308 through `esp_camera_fb_get()` /
   `esp_camera_fb_return()`.
 
-Three gaps must remain explicit:
+Two gaps remain explicit:
 
 1. The GC0308/BSP produces RGB565 rather than JPEG. Existing M5Stack helpers
    allocate while encoding, so `takePhoto()` needs a bounded encoder/output
@@ -59,6 +61,3 @@ Three gaps must remain explicit:
 2. `renderOnScreen(url)` still needs a bounded HTTPS fetch plus PNG decoder.
    The adapter rejects cleartext and returns `UNAVAILABLE` until one is
    injected.
-3. Target assembly must initialize and inject the display/I2C/UART operations.
-   That wiring belongs with the chosen device profile so it cannot steal work
-   from the realtime audio owner accidentally.

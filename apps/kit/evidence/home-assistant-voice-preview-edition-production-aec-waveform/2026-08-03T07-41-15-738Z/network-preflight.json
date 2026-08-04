@@ -1,0 +1,60 @@
+{
+  "createdAt": "2026-08-03T07:41:20.746Z",
+  "dnsAndConnect": {
+    "connect": {
+      "durationMs": 37.64195900000004,
+      "error": null,
+      "maximumHealthyDurationMs": 1000,
+      "outcome": "success"
+    },
+    "dns": {
+      "durationMs": 40.860041999999794,
+      "error": null,
+      "maximumHealthyDurationMs": 500,
+      "outcome": "success"
+    }
+  },
+  "reachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 14.234
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.614
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.745
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 14.77
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.663
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.86
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 13.821
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 14.683
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "workerHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app",
+  "passed": true,
+  "reasons": [],
+  "schemaVersion": 1
+}

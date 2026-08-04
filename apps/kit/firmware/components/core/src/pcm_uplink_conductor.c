@@ -68,7 +68,7 @@ static void reset_downlink_receipt_generation(
       conductor->downlink_receipt_payload,
       0,
       sizeof(conductor->downlink_receipt_payload));
-  atomic_store_u32(&conductor->downlink_items_received, 0U);
+  atomic_store_u32(&conductor->downlink_items_released, 0U);
   atomic_store_u32(
       &conductor->downlink_items_acknowledged, 0U);
   conductor->downlink_receipt_inflight_items = 0U;
@@ -93,7 +93,7 @@ poll_downlink_receipt(
       return ITERATE_KIT_WEBSOCKET_TX_IDLE;
     }
     conductor->downlink_receipt_inflight_items =
-        atomic_load_u32(&conductor->downlink_items_received);
+        atomic_load_u32(&conductor->downlink_items_released);
     if (iterate_kit_pcm_websocket_encode_downlink_receipt(
             conductor->downlink_receipt_inflight_items,
             conductor->downlink_receipt_payload,
@@ -118,7 +118,7 @@ poll_downlink_receipt(
         &conductor->downlink_receipts_sent);
     conductor->downlink_receipt_active = false;
     conductor->downlink_receipt_pending =
-        atomic_load_u32(&conductor->downlink_items_received) >
+        atomic_load_u32(&conductor->downlink_items_released) >
         conductor->downlink_receipt_inflight_items;
   } else if (result == ITERATE_KIT_WEBSOCKET_TX_DEFERRED) {
     atomic_saturating_increment(
@@ -328,17 +328,17 @@ iterate_kit_pcm_uplink_conductor_begin_generation(
 }
 
 enum iterate_kit_status
-iterate_kit_pcm_uplink_conductor_note_downlink_item(
+iterate_kit_pcm_uplink_conductor_note_downlink_item_released(
     struct iterate_kit_pcm_uplink_conductor *conductor) {
-  uint32_t received;
+  uint32_t released;
   if (conductor == NULL ||
       !conductor->initialized ||
       !conductor->generation_active) {
     return ITERATE_KIT_STATE_ERROR;
   }
-  received = atomic_load_u32(
-      &conductor->downlink_items_received);
-  if (received == UINT32_MAX) {
+  released = atomic_load_u32(
+      &conductor->downlink_items_released);
+  if (released == UINT32_MAX) {
     /*
      * Wrapping would make a newer cumulative receipt look older and grant the
      * server arbitrary credit. A generation lasting over two years at 50 fps
@@ -347,7 +347,7 @@ iterate_kit_pcm_uplink_conductor_note_downlink_item(
     return ITERATE_KIT_LIMIT;
   }
   atomic_store_u32(
-      &conductor->downlink_items_received, received + 1U);
+      &conductor->downlink_items_released, released + 1U);
   conductor->downlink_receipt_pending = true;
   return ITERATE_KIT_OK;
 }
@@ -655,8 +655,8 @@ void iterate_kit_pcm_uplink_conductor_metrics(
           &conductor->maximum_policy_time_adjustment_ms);
   metrics->owner_clock_regressions =
       atomic_load_u32(&conductor->owner_clock_regressions);
-  metrics->downlink_items_received =
-      atomic_load_u32(&conductor->downlink_items_received);
+  metrics->downlink_items_released =
+      atomic_load_u32(&conductor->downlink_items_released);
   metrics->downlink_items_acknowledged =
       atomic_load_u32(
           &conductor->downlink_items_acknowledged);

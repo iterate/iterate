@@ -97,6 +97,55 @@ class SegmentedScriptedSocket extends EventTarget implements XaiStreamingSttSock
   }
 }
 
+class NonEmptyTrailingDoneSocket extends EventTarget implements XaiStreamingSttSocket {
+  close(): void {}
+
+  send(value: string | Uint8Array): void {
+    if (typeof value !== "string" || JSON.parse(value).type !== "audio.done") return;
+    for (const message of [
+      {
+        is_final: true,
+        speech_final: true,
+        text: "Production audio.",
+        type: "transcript.partial",
+        words: [
+          { end: 2.7, start: 2.2, text: "Production" },
+          { end: 3.1, start: 2.8, text: "audio." },
+        ],
+      },
+      {
+        is_final: true,
+        speech_final: false,
+        text: "Signal amber is clear and audible.",
+        type: "transcript.partial",
+        words: [
+          { end: 3.6, start: 3.2, text: "Signal" },
+          { end: 4.1, start: 3.7, text: "amber" },
+          { end: 4.3, start: 4.2, text: "is" },
+          { end: 4.7, start: 4.4, text: "clear" },
+          { end: 5, start: 4.8, text: "and" },
+          { end: 5.9, start: 5.1, text: "audible." },
+        ],
+      },
+      {
+        duration: 6.3,
+        text: "Signal amber is clear and audible.",
+        type: "transcript.done",
+        words: [
+          { end: 3.6, start: 3.2, text: "Signal" },
+          { end: 4.1, start: 3.7, text: "amber" },
+          { end: 4.3, start: 4.2, text: "is" },
+          { end: 4.7, start: 4.4, text: "clear" },
+          { end: 5, start: 4.8, text: "and" },
+          { end: 5.9, start: 5.1, text: "audible." },
+        ],
+      },
+    ]) {
+      this.dispatchEvent(new MessageEvent("message", { data: JSON.stringify(message) }));
+    }
+  }
+}
+
 describe("xAI streaming STT acoustic oracle", () => {
   afterEach(() => {
     vi.useRealTimers();
@@ -218,6 +267,53 @@ describe("xAI streaming STT acoustic oracle", () => {
         { text: "was" },
         { text: "a" },
         { text: "robot." },
+      ],
+    });
+  });
+
+  test("does not discard an earlier speech-final segment when done contains only the tail", async () => {
+    /*
+     * A real StackChan acoustic proof produced two independently finalised STT
+     * segments. `transcript.done` repeated only the second one. Treating that
+     * terminator as the entire artifact made a physically complete sentence
+     * fail its exact oracle by deleting its first two words. The accumulated
+     * timed words are authoritative here because their non-overlapping clocks
+     * prove that the done payload is a trailing segment, not a correction of
+     * the earlier speech-final result.
+     */
+    const socket = new NonEmptyTrailingDoneSocket();
+    const resultPromise = transcribePcm16WithXaiStreamingStt({
+      apiKey: "test-key",
+      createSocket: () => {
+        queueMicrotask(() => {
+          socket.dispatchEvent(
+            new MessageEvent("message", {
+              data: JSON.stringify({
+                id: "transcript-multi-utterance",
+                type: "transcript.created",
+              }),
+            }),
+          );
+        });
+        return socket;
+      },
+      pcm: new Uint8Array(200),
+      sampleRateHz: 1_000,
+      sleep: async () => {},
+      timeoutMs: 1_000,
+    });
+
+    await expect(resultPromise).resolves.toMatchObject({
+      text: "Production audio. Signal amber is clear and audible.",
+      words: [
+        { text: "Production" },
+        { text: "audio." },
+        { text: "Signal" },
+        { text: "amber" },
+        { text: "is" },
+        { text: "clear" },
+        { text: "and" },
+        { text: "audible." },
       ],
     });
   });

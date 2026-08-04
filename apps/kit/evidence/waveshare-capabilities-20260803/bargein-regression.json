@@ -1,0 +1,37 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/bargein-regression.ts
+
+{
+  "cuts": [
+    {
+      "cut": 1,
+      "starvedMs": 0,
+      "starveEvents": 0,
+      "ledger": 0,
+      "softDry": 0
+    },
+    {
+      "cut": 2,
+      "starvedMs": 0,
+      "starveEvents": 0,
+      "ledger": 0,
+      "softDry": 0
+    },
+    {
+      "cut": 3,
+      "starvedMs": 0,
+      "starveEvents": 0,
+      "ledger": 0,
+      "softDry": 0
+    },
+    {
+      "cut": 4,
+      "starvedMs": 0,
+      "starveEvents": 0,
+      "ledger": 0,
+      "softDry": 0
+    }
+  ],
+  "verdict": "PASS: four barge-ins, zero listener starvation on every one"
+}

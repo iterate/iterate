@@ -37,6 +37,14 @@
 #define VOICE_PE_AUDIO_TASK_CORE 1
 #define VOICE_PE_IO_FAILURE_LIMIT 3U
 
+/*
+ * Keep the response-start contract identical to CoreS3: eight locally queued
+ * ordered items absorb WebSocket packetization before the independent XMOS
+ * speaker clock starts. This is not an accumulating jitter buffer; the shared
+ * core consults it once per response and bypasses it for a queued short EOS.
+ */
+#define VOICE_PE_PLAYBACK_STARTUP_ITEMS 8U
+
 #define VOICE_PE_PLAYBACK_DMA_DESCRIPTOR_COUNT 6U
 #define VOICE_PE_PLAYBACK_DMA_FRAMES 480U
 #define VOICE_PE_CAPTURE_DMA_DESCRIPTOR_COUNT 5U
@@ -124,6 +132,7 @@ struct voice_pe_audio_owner {
   struct iterate_kit_pcm_capture_turn capture_turn;
   struct iterate_kit_pcm_generation_fence generation_fence;
   struct iterate_kit_pcm_playback_interruption playback_interruption;
+  struct iterate_kit_aec_diagnostic_trace *diagnostic_trace;
   struct iterate_kit_voice_pe_playback_resampler playback_resampler;
 
   int16_t retained_downlink[ITERATE_KIT_PCM_V1_SAMPLES_PER_FRAME]
@@ -160,6 +169,7 @@ struct voice_pe_audio_owner {
 
   struct voice_pe_atomic_metrics metrics;
   volatile uint32_t started;
+  uint32_t diagnostic_frame_sequence;
   volatile uint32_t running;
   volatile uint32_t ready;
   volatile uint32_t playback_failed;
@@ -779,6 +789,7 @@ static void wait_until_running(void) {
 static enum iterate_kit_status reset_playback_state(void *context) {
   (void)context;
   uint32_t discarded_frames = 0U;
+  uint32_t discarded_items = 0U;
 
   /*
    * Software queue purge alone is insufficient: up to 20 ms is already
@@ -793,8 +804,10 @@ static enum iterate_kit_status reset_playback_state(void *context) {
   iterate_kit_voice_pe_playback_resampler_reset(
       &owner.playback_resampler);
   const enum iterate_kit_status lane_status =
-      iterate_kit_pcm_lane_discard_downlink(
-          owner.lane, &discarded_frames);
+      iterate_kit_pcm_clock_playback_discard_queued(
+          &owner.playback,
+          &discarded_frames,
+          &discarded_items);
   if (hardware_status == ESP_OK) {
     hardware_status = preload_playback_silence();
   }
@@ -806,6 +819,7 @@ static enum iterate_kit_status reset_playback_state(void *context) {
   atomic_saturating_add(
       &owner.metrics.downlink_frames_discarded_by_reset,
       discarded_frames);
+  (void)discarded_items;
   if (hardware_status != ESP_OK ||
       playback_status != ITERATE_KIT_OK ||
       lane_status != ITERATE_KIT_OK) {
@@ -1008,6 +1022,11 @@ static void playback_task_main(void *context) {
 }
 
 static bool reset_capture_channel(void) {
+  if (owner.diagnostic_trace != NULL) {
+    /* A restarted RX descriptor timeline cannot be one continuous trace. */
+    (void)iterate_kit_aec_diagnostic_trace_abort(
+        owner.diagnostic_trace);
+  }
   esp_err_t status = i2s_channel_disable(owner.capture_channel);
   if (status == ESP_OK) {
     status = i2s_channel_enable(owner.capture_channel);
@@ -1126,6 +1145,28 @@ static void capture_task_main(void *context) {
           &observation, (uint64_t)captured_at_us);
     }
 
+    if (owner.diagnostic_trace != NULL) {
+      ++owner.diagnostic_frame_sequence;
+      const enum iterate_kit_status trace_status =
+          iterate_kit_aec_diagnostic_trace_record(
+              owner.diagnostic_trace,
+              owner.diagnostic_frame_sequence,
+              owner.capture_raw,
+              NULL,
+              NULL,
+              NULL,
+              owner.capture_clean,
+              ITERATE_KIT_VOICE_PE_CAPTURE_FRAME_SAMPLES);
+      if (trace_status != ITERATE_KIT_OK &&
+          trace_status != ITERATE_KIT_UNAVAILABLE) {
+        /*
+         * The frozen trace state is the diagnostic. Audio remains authoritative
+         * and must not drop a valid microphone frame because its observer
+         * rejected or aborted a capture generation.
+         */
+      }
+    }
+
     const bool publication_was_active =
         iterate_kit_pcm_capture_turn_is_active(
             &owner.capture_turn);
@@ -1171,7 +1212,13 @@ static bool valid_options(
   return options != NULL && options->lane != NULL &&
       options->lane->initialized &&
       options->maximum_downlink_frame_age_ms > 0U &&
-      options->maximum_lane_items_per_playback_edge > 0U;
+      options->maximum_lane_items_per_playback_edge > 0U &&
+      (options->diagnostic_trace == NULL ||
+       (options->diagnostic_trace->initialized != 0U &&
+        options->diagnostic_trace->options.sample_rate_hz ==
+            ITERATE_KIT_VOICE_PE_CAPTURE_RATE_HZ &&
+        options->diagnostic_trace->options.frame_samples ==
+            ITERATE_KIT_VOICE_PE_CAPTURE_FRAME_SAMPLES));
 }
 
 esp_err_t iterate_kit_voice_pe_audio_owner_start(
@@ -1191,6 +1238,7 @@ esp_err_t iterate_kit_voice_pe_audio_owner_start(
   }
 
   owner.lane = options->lane;
+  owner.diagnostic_trace = options->diagnostic_trace;
   const struct iterate_kit_pcm_clock_playback_options playback_options = {
     .lane = owner.lane,
     .retained_frame = owner.retained_downlink,
@@ -1199,6 +1247,10 @@ esp_err_t iterate_kit_voice_pe_audio_owner_start(
     .maximum_frame_age_ms = options->maximum_downlink_frame_age_ms,
     .maximum_lane_items_per_render =
         options->maximum_lane_items_per_playback_edge,
+    .minimum_start_items = VOICE_PE_PLAYBACK_STARTUP_ITEMS,
+    .item_released = options->downlink_item_released,
+    .item_released_context =
+        options->downlink_item_released_context,
   };
   if (iterate_kit_pcm_clock_playback_init(
           &owner.playback, &playback_options) != ITERATE_KIT_OK) {

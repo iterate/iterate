@@ -1,0 +1,63 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/ownership2.ts
+
+{
+  "beforeOrdinary": {
+    "u": 0,
+    "starvedMs": 0,
+    "starveEvents": 0,
+    "opening": 0,
+    "owed": 0,
+    "sends": 0,
+    "written": 0,
+    "gapUs": 0,
+    "played": 0,
+    "frames": 0
+  },
+  "afterOrdinary": {
+    "u": 0,
+    "starvedMs": 0,
+    "starveEvents": 0,
+    "opening": 157,
+    "owed": 5,
+    "sends": 1,
+    "written": 20,
+    "gapUs": 0,
+    "played": 627,
+    "frames": 633
+  },
+  "ordinaryMoved": 0,
+  "openingPerFrame": 0.2503987240829346,
+  "playbackWasMoving": true,
+  "beforeInjection": {
+    "u": 0,
+    "starvedMs": 0,
+    "starveEvents": 0,
+    "opening": 157,
+    "owed": 90,
+    "sends": 22,
+    "written": 420,
+    "gapUs": 0,
+    "played": 647,
+    "frames": 654
+  },
+  "injected": 600,
+  "afterInjection": {
+    "u": 0,
+    "starvedMs": 0,
+    "starveEvents": 0,
+    "opening": 190,
+    "owed": 0,
+    "sends": 2,
+    "written": 20,
+    "gapUs": 0,
+    "played": 787,
+    "frames": 884
+  },
+  "injectionMoved": 0,
+  "injectionStarvedMs": 0,
+  "injectionStarveEvents": 0,
+  "ordinaryStarvedMs": 0,
+  "verdict": "FAIL"
+}

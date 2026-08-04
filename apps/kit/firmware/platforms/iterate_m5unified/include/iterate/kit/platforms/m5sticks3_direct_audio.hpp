@@ -245,7 +245,10 @@ class M5StickS3DirectAudioOwner {
   static constexpr std::size_t stereoScratchBytes =
       M5StickS3DirectI2sOps::stereoFrameBytes;
 
-  iterate_kit_status begin(iterate_kit_pcm_lane *lane);
+  iterate_kit_status begin(
+      iterate_kit_pcm_lane *lane,
+      RealtimePlaybackItemReleasedFn itemReleased,
+      void *itemReleasedContext);
   void notifyDownlinkReady();
 
   RealtimePlaybackPumpResult takePumpResult();

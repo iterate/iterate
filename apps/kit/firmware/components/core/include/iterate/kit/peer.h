@@ -83,6 +83,12 @@ struct iterate_kit_peer {
    * of historical errors or a second diagnostics owner.
    */
   uint32_t subscription_callback_rejections;
+  /*
+   * Saturating count of inbound calls that reached this device capability.
+   * Socket pings deliberately do not appear here. Targets use the distinction
+   * to detect a server-side live-mount loss that leaves the WebSocket healthy.
+   */
+  uint32_t served_dispatches;
   bool initialized;
 };
 
@@ -94,6 +100,8 @@ struct capnweb_capability iterate_kit_peer_capability(
 struct iterate_kit_poll_result iterate_kit_peer_poll(
     struct iterate_kit_peer *peer, uint64_t now_ms);
 uint32_t iterate_kit_peer_subscription_callback_rejections(
+    const struct iterate_kit_peer *peer);
+uint32_t iterate_kit_peer_served_dispatches(
     const struct iterate_kit_peer *peer);
 void iterate_kit_peer_session_ended(struct iterate_kit_peer *peer);
 struct iterate_kit_poll_result iterate_kit_peer_close(

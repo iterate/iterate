@@ -1,0 +1,116 @@
+{
+  "ambient": {
+    "dbfs": -45.91663234950766,
+    "peak": 736,
+    "rms": 165.81290094804254
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -18.407598290333404,
+      "peak": 32768,
+      "rms": 3936.135318738458
+    },
+    "farEndResidualDb": 4.577872470175649,
+    "farEndSimilarity": 0.00711318017863874,
+    "nearEndGain": 0.5236544494760086,
+    "nearEndSimilarity": 0.24551421575424787,
+    "passed": false,
+    "residualDegradationFromRepeatDb": 18.06947988597257,
+    "residualToNearEndDb": 6.309360588815844,
+    "similarityLossFromRepeat": 0.7177773405150818
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -27.875558166610052,
+        "peak": 3640,
+        "rms": 1323.3417877662303
+      },
+      "kind": "tone",
+      "passed": false,
+      "source": {
+        "dbfs": -20.255037277522632,
+        "peak": 4500,
+        "rms": 3181.9845827329204
+      },
+      "sourceSimilarity": 0.0012829521643958474
+    },
+    {
+      "clean": {
+        "dbfs": -3.3535944948775183,
+        "peak": 32768,
+        "rms": 22272.5637264307
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": false,
+      "source": {
+        "dbfs": -23.265100635326633,
+        "peak": 3841,
+        "rms": 2250.0641657517235
+      },
+      "sourceSimilarity": 0.012777459869958131
+    },
+    {
+      "clean": {
+        "dbfs": -10.877637537503535,
+        "peak": 32768,
+        "rms": 9366.299872400476
+      },
+      "kind": "speech-shaped",
+      "passed": false,
+      "source": {
+        "dbfs": -22.971610308836556,
+        "peak": 7832,
+        "rms": 2327.3913694708717
+      },
+      "sourceSimilarity": 0.02235444092349056
+    }
+  ],
+  "nearEnd": {
+    "aboveAmbientDb": 20.901200798778795,
+    "clean": {
+      "dbfs": -25.01543155072886,
+      "peak": 6296,
+      "rms": 1839.409213126142
+    },
+    "passed": true,
+    "pathReferenceObserved": true,
+    "repeat": {
+      "clean": {
+        "dbfs": -25.370814406813594,
+        "peak": 6504,
+        "rms": 1765.6686848431564
+      },
+      "gain": 0.9265660916685996,
+      "passed": true,
+      "pathReferenceObserved": true,
+      "residualToReferenceDb": -11.760119297156724,
+      "similarity": 0.9632915562693297
+    },
+    "source": {
+      "dbfs": -15.176950127467181,
+      "peak": 26072,
+      "rms": 5709.55720506014
+    },
+    "sourceSimilarity": 0.6646157184355485
+  },
+  "passed": false,
+  "reasons": [
+    "The physical network interval was not valid.",
+    "The run observed 11 playback frame drops.",
+    "The run observed 56 playback integrity failures.",
+    "tone far-only clean uplink was -27.88 dBFS; expected at most -39.92 dBFS.",
+    "dual-carrier-prbs31 far-only clean uplink was -3.35 dBFS; expected at most -39.92 dBFS.",
+    "speech-shaped far-only clean uplink was -10.88 dBFS; expected at most -39.92 dBFS.",
+    "Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.246, gain 0.524, residual 6.31 dB.",
+    "Double-talk degraded beyond repeated near-end control: similarity loss 0.718, residual degradation 18.07 dB."
+  ],
+  "validity": {
+    "passed": false,
+    "reasons": [
+      "The physical network interval was not valid.",
+      "The run observed 11 playback frame drops.",
+      "The run observed 56 playback integrity failures."
+    ]
+  }
+}

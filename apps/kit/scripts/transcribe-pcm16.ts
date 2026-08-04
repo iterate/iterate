@@ -1,6 +1,6 @@
 import { readFile, writeFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
-import { transcribePcm16WithXaiStreamingStt } from "../src/device/xai-streaming-stt.ts";
+import { transcribePcm16WithXaiBatchStt } from "../src/device/xai-batch-stt.ts";
 
 interface Options {
   endSample?: number;
@@ -14,7 +14,7 @@ interface Options {
 /**
  * Small operator-facing wrapper around the same independent oracle used by
  * the physical proof. Keeping one STT implementation matters: an ad-hoc local
- * transcription command with different framing or final-event semantics could
+ * transcription command with different file-decoding semantics could
  * disagree with the automated verdict and make a failed audio interval harder
  * to attribute.
  */
@@ -35,7 +35,7 @@ export async function transcribePcm16(
         `${availableSamples} available samples.`,
     );
   }
-  const result = await transcribePcm16WithXaiStreamingStt({
+  const result = await transcribePcm16WithXaiBatchStt({
     apiKey: options.xaiApiKey,
     pcm: artifact.subarray(
       options.startSample * Int16Array.BYTES_PER_ELEMENT,

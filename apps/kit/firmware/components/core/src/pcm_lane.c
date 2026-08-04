@@ -653,7 +653,8 @@ iterate_kit_pcm_lane_reset_downlink_producer(
 
 enum iterate_kit_status iterate_kit_pcm_lane_discard_downlink(
     struct iterate_kit_pcm_lane *lane,
-    uint32_t *discarded_frames) {
+    uint32_t *discarded_frames,
+    uint32_t *discarded_items) {
   uint32_t discarded = 0U;
   uint32_t end_markers_discarded = 0U;
   uint32_t items_discarded = 0U;
@@ -662,7 +663,11 @@ enum iterate_kit_status iterate_kit_pcm_lane_discard_downlink(
   if (discarded_frames != NULL) {
     *discarded_frames = 0U;
   }
-  if (!valid_lane(lane) || discarded_frames == NULL) {
+  if (discarded_items != NULL) {
+    *discarded_items = 0U;
+  }
+  if (!valid_lane(lane) || discarded_frames == NULL ||
+      discarded_items == NULL) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   /*
@@ -721,6 +726,7 @@ enum iterate_kit_status iterate_kit_pcm_lane_discard_downlink(
       &lane->downlink_end_markers_discarded,
       end_markers_discarded);
   *discarded_frames = discarded;
+  *discarded_items = items_discarded;
   return ITERATE_KIT_OK;
 }
 

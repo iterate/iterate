@@ -95,6 +95,7 @@ iterate__stackchan__resource__profile_EXTERNAL_OBJECTS =
 
 iterate-stackchan-resource-profile: CMakeFiles/iterate-stackchan-resource-profile.dir/simulator/resource_profile.cpp.o
 iterate-stackchan-resource-profile: CMakeFiles/iterate-stackchan-resource-profile.dir/build.make
+iterate-stackchan-resource-profile: libiterate-kit-avatar.a
 iterate-stackchan-resource-profile: libiterate-kit-stackchan.a
 iterate-stackchan-resource-profile: libiterate-kit-m5sticks3.a
 iterate-stackchan-resource-profile: libiterate-kit-capabilities.a

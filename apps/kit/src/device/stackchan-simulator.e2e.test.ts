@@ -18,6 +18,7 @@ interface StackChanSimulator extends StackChan {
     servoSpeed(): Promise<number>;
     ledIndex(): Promise<number>;
     photoReleaseCount(): Promise<number>;
+    screenshotReleaseCount(): Promise<number>;
   };
 }
 
@@ -264,6 +265,8 @@ test("the real embedded capability layer exposes the StackChan surface", async (
    */
   expect(description.instructions).toMatch(/full-duplex AEC.*separate realtime WebSocket/i);
   expect(description.children).toMatchObject({
+    captureScreen: expect.any(String),
+    changeSpriteSet: expect.any(String),
     subscribeToAecMetrics: expect.any(String),
     subscribeToMetrics: expect.any(String),
     renderOnScreen: expect.any(String),
@@ -275,6 +278,15 @@ test("the real embedded capability layer exposes the StackChan surface", async (
   await expect(
     stackchan.renderOnScreen({ url: "https://assets.iterate.com/test/face.png" }),
   ).resolves.toBe(true);
+  await expect(stackchan.changeSpriteSet("karakuri-brass")).resolves.toBe(true);
+  const screenshot = await stackchan.captureScreen();
+  /*
+   * The StackChan simulator uses tiny deterministic pixels, but this still
+   * crosses the real C profile and Cap'n Web byte serializer. It catches a
+   * target-only screenshot implementation that never became a mounted public
+   * capability, while physical acceptance owns framebuffer/PNG fidelity.
+   */
+  expect([...screenshot.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
   await expect(
     stackchan.servos.move({ yawDegrees: -42, pitchDegrees: 31, speed: 640 }),
   ).resolves.toBe(true);
@@ -286,6 +298,7 @@ test("the real embedded capability layer exposes the StackChan surface", async (
   await expect(stackchan.__test.servoPitchDegrees()).resolves.toBe(31);
   await expect(stackchan.__test.servoSpeed()).resolves.toBe(640);
   await expect(stackchan.__test.ledIndex()).resolves.toBe(7);
+  await expect(stackchan.__test.screenshotReleaseCount()).resolves.toBe(1);
 });
 
 test("the M5StickS3 profile describes screen, metrics, and push-to-talk events", async () => {
@@ -294,7 +307,7 @@ test("the M5StickS3 profile describes screen, metrics, and push-to-talk events",
   const description = await m5sticks3.__describe();
   expect(description.children).toEqual({
     captureScreen: expect.any(String),
-    changeColour: expect.any(String),
+    changeSpriteSet: expect.any(String),
     conversation: {
       hangUp: expect.any(String),
       start: expect.any(String),
@@ -315,6 +328,7 @@ test("the M5StickS3 profile describes screen, metrics, and push-to-talk events",
       url: "https://assets.iterate.com/test/stick-face.png",
     }),
   ).resolves.toBe(true);
+  await expect(m5sticks3.changeSpriteSet("starbyte")).resolves.toBe(true);
   await expect(m5sticks3.__test.renderUrlHash()).resolves.not.toBe(0);
   const screenshot = await m5sticks3.captureScreen();
   /*
@@ -583,7 +597,7 @@ test("subscribeToAecMetrics carries one aligned signal window through the C peer
   /*
    * This is a capability-boundary regression, not an acoustic simulation. It
    * proves the target-specific view is discoverable and that all three aligned
-   * signal channels survive the bounded C serializer and callback transport.
+   * signals survive the bounded C serializer and callback transport.
    * Physical suppression claims still require the CoreS3 speaker/microphone
    * rig because a host fake cannot model enclosure coupling or ESP-SR.
    */
@@ -596,7 +610,7 @@ test("subscribeToAecMetrics carries one aligned signal window through the C peer
     ),
   ]);
   expect(metrics).toMatchObject({
-    schemaVersion: 1,
+    schemaVersion: 11,
     sampleStride: 8,
     sampledSamples: 2_000,
     nearPeak: 12_000,
@@ -605,12 +619,38 @@ test("subscribeToAecMetrics carries one aligned signal window through the C peer
     nearMeanAbsolute: 2_400,
     referenceMeanAbsolute: 2_000,
     cleanMeanAbsolute: 300,
+    engineProfile: 1,
+    processingFrameSamples: 256,
+    nearWindowGainMultiplier: 6,
+    farWindowGainMultiplier: 8,
+    speakerVolumePercent: 90,
+    microphoneGainDb: 24,
+    referenceGainDb: 0,
     lifetimeFramesProcessed: 31,
     lifetimeRecreates: 1,
     lifetimeRecreateFailures: 0,
+    lastProcessUs: 1_340,
+    maximumProcessUs: 1_580,
     lastCaptureToUplinkUs: 3_100,
     maximumCaptureToUplinkUs: 3_500,
+    lifetimeCaptureChunksWithPlaybackContent: 18,
+    lifetimeCaptureChunksWithoutPlaybackContent: 44,
     lifetimeSignalMeasurementFailures: 0,
+    lifetimeReferenceScaleClippedSamples: 0,
+    lifetimeNearHighPassClippedSamples: 0,
+    lifetimeUplinkGainClippedSamples: 0,
+    lifetimePlaybackContentSamples: 96_000,
+    lifetimePlaybackResets: 0,
+    lifetimePlaybackFramesDiscardedByReset: 0,
+    lifetimePlaybackWriteFailures: 0,
+    lifetimePlaybackQueueOverflows: 0,
+    lifetimePlaybackPolicyErrors: 0,
+    lifetimePlaybackResetFailures: 0,
+    lifetimePlaybackObservationFailures: 0,
+    lastPlaybackWriteUs: 8_000,
+    maximumPlaybackWriteUs: 9_000,
+    lastReceiveToRenderMs: 20,
+    maximumReceiveToRenderMs: 30,
   });
   expect(metrics.producedAtMs).toBeGreaterThanOrEqual(metrics.windowStartedAtMs);
 });
@@ -808,7 +848,13 @@ test("reports static working memory and host CPU cost", () => {
   // target map evidence accounts for slot metadata and ring control objects.
   expect(profile.m5sticks3PcmLanePayloadBytes).toBe(2 * 32 * 640);
   expect(profile.m5sticks3AudioTaskStackBytes).toBe(8_192);
-  expect(profile.m5sticks3PlatformControlBytes).toBeLessThanOrEqual(128);
+  /*
+   * The shared avatar registry/player adds 64 host-ABI bytes to the previous
+   * 128-byte board/UI control ceiling. Keep that cost explicit: the 38.4 KiB
+   * pixels live in the separately measured PSRAM framebuffer, while this bound
+   * prevents a sprite selector from quietly growing a second frame or queue.
+   */
+  expect(profile.m5sticks3PlatformControlBytes).toBeLessThanOrEqual(192);
   expect(profile.m5sticks3PlatformBytes).toBe(
     (profile.m5sticks3CaptureFrameStorageBytes as number) +
       (profile.m5sticks3PlatformControlBytes as number),

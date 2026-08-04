@@ -1,0 +1,30 @@
+{
+  "InstallScripts": [
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/xtensa/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/newlib/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/soc/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/micro-ecc/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/hal/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/spi_flash/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esp_bootloader_format/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esp_app_format/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/bootloader_support/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/efuse/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esp_security/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esp_system/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esp_hw_support/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esp_hw_support/port/esp32s3/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esp_hw_support/lowpower/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esp_common/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esp_rom/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/log/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/esptool_py/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/partition_table/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/bootloader/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/freertos/cmake_install.cmake",
+    "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/m5sticks3/bootloader/esp-idf/main/cmake_install.cmake"
+  ],
+  "Parallel": false
+}

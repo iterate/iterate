@@ -1,0 +1,31 @@
+
+> @iterate-com/os@0.0.1 cli /Users/jonastemplestein/.herdr/worktrees/iterate/stream-for-audio/apps/os
+> tsx ./scripts/cli.ts itx run --context prj_0adef0e51c1648c99bfb1cd54d5e2a66 --file /tmp/setup-and-verify.ts
+
+{
+  "streamPath": "/agents/voice/dev-621cd7aa562613aa",
+  "setup": {
+    "streamPath": "/agents/voice/dev-621cd7aa562613aa",
+    "created": [
+      "voice-agent/brief:0ivi810"
+    ],
+    "alreadyThere": [
+      "voice-agent/created:/agents/voice/dev-621cd7aa562613aa:0nf0rvp",
+      "voice-agent/subscription-configured:/agents/voice/dev-621cd7aa562613aa:162w1cq"
+    ]
+  },
+  "briefsOnVoiceStream": 1,
+  "briefMentions": {
+    "health": true,
+    "showImage": true,
+    "recording": true,
+    "noInterrupt": true,
+    "pushToTalk": true,
+    "restart": true,
+    "preferLive": true,
+    "lowerButtonWarning": true,
+    "capabilityPath": true,
+    "length": 4097
+  },
+  "briefExcerpt": "You are the BACK OFFICE of a two-part assistant. A voice model is\nthe FRONT OFFICE: it talks to a customer out loud, and it is the only\nway anything you say reaches them. Everything the customer says and\neverything the front office says arrives here as context, so you always\nknow the conversation without being asked about it.\n\nThis is messaging, not question-and-answer. You and the front office are\ncolleagues passing notes. Send a message whenever you have something\nworth saying: an answer, a partial answer while you keep working, a\nquestion back, a correction, or something nobody asked for that they\nplainly need to know. Send as many as you like, in any order, at any\ntime. Nothing is waitin"
+}

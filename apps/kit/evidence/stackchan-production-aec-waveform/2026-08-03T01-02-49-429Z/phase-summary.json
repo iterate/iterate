@@ -1,0 +1,78 @@
+[
+  {
+    "assessment": {
+      "actualFrames": 154,
+      "durationMs": 3092,
+      "expectedFrames": 155,
+      "maximumExpectedFrames": 158,
+      "minimumExpectedFrames": 152,
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 3092,
+      "frames": 154,
+      "truncatedFrames": 0
+    },
+    "name": "ambient",
+    "playbackObserved": false,
+    "responseIndex": null
+  },
+  {
+    "assessment": {
+      "actualFrames": 203,
+      "durationMs": 4098,
+      "expectedFrames": 205,
+      "maximumExpectedFrames": 208,
+      "minimumExpectedFrames": 202,
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4098,
+      "frames": 203,
+      "truncatedFrames": 0
+    },
+    "name": "far-tone",
+    "playbackObserved": true,
+    "responseIndex": 0
+  },
+  {
+    "assessment": {
+      "actualFrames": 205,
+      "durationMs": 4121,
+      "expectedFrames": 206,
+      "maximumExpectedFrames": 209,
+      "minimumExpectedFrames": 203,
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4121,
+      "frames": 205,
+      "truncatedFrames": 0
+    },
+    "name": "far-dual-carrier-prbs31",
+    "playbackObserved": true,
+    "responseIndex": 1
+  },
+  {
+    "assessment": {
+      "actualFrames": 205,
+      "durationMs": 4122,
+      "expectedFrames": 206,
+      "maximumExpectedFrames": 209,
+      "minimumExpectedFrames": 203,
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 4122,
+      "frames": 205,
+      "truncatedFrames": 0
+    },
+    "name": "far-speech-shaped",
+    "playbackObserved": true,
+    "responseIndex": 2
+  }
+]

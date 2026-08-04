@@ -1,0 +1,90 @@
+{
+  "ambient": {
+    "dbfs": -90.88055055585613,
+    "peak": 4,
+    "rms": 0.9363159189077157
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -67.66196044502522,
+      "peak": 57,
+      "rms": 13.56287979498946
+    },
+    "nearEndGain": 0.81224552892948,
+    "nearEndSimilarity": 0.8876077808305491,
+    "passed": false,
+    "residualToFarEndDb": -51.952173495597265,
+    "residualToNearEndDb": -7.504195371852051
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -79.72165507159167,
+        "peak": 76,
+        "rms": 3.3835077951735237
+      },
+      "kind": "tone",
+      "passed": true,
+      "source": {
+        "dbfs": -19.339884567655986,
+        "peak": 5000,
+        "rms": 3535.53960513809
+      },
+      "sourceSimilarity": 0.0015420912493428888
+    },
+    {
+      "clean": {
+        "dbfs": -81.50687462538113,
+        "peak": 13,
+        "rms": 2.7549023131441315
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": true,
+      "source": {
+        "dbfs": -22.350138854101736,
+        "peak": 4268,
+        "rms": 2500.017174941004
+      },
+      "sourceSimilarity": 0.002840734490918405
+    },
+    {
+      "clean": {
+        "dbfs": -75.32928991157726,
+        "peak": 25,
+        "rms": 5.610291660560643
+      },
+      "kind": "speech-shaped",
+      "passed": true,
+      "source": {
+        "dbfs": -22.056464522318358,
+        "peak": 8702,
+        "rms": 2585.989212278511
+      },
+      "sourceSimilarity": 0.005416775631001797
+    }
+  ],
+  "nearEnd": {
+    "aboveAmbientDb": 23.96583015142895,
+    "clean": {
+      "dbfs": -66.91472040442719,
+      "peak": 56,
+      "rms": 14.7813436757599
+    },
+    "passed": true,
+    "pathReferenceObserved": true,
+    "source": {
+      "dbfs": -15.176950127467181,
+      "peak": 26072,
+      "rms": 5709.55720506014
+    },
+    "sourceSimilarity": 0.6996433225469785
+  },
+  "passed": false,
+  "reasons": [
+    "Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.888, gain 0.812, residual -7.50 dB."
+  ],
+  "validity": {
+    "passed": true,
+    "reasons": []
+  }
+}

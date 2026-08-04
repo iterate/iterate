@@ -1,5 +1,23 @@
 #include "iterate/kit/platforms/voice_pe_hardware_config.h"
 
+/*
+ * NS remains the unqualified production default. A release experiment may
+ * select another cumulative XMOS tap in a separate build directory, but the
+ * choice must be a compiler-visible build input: editing this source between
+ * flashes made retained evidence impossible to attribute and made accidental
+ * production drift too easy. The numeric values are the XMOS wire contract
+ * mirrored by the public enum below, so reject an out-of-range cache value at
+ * compile time rather than sending an invented command to hardware.
+ */
+#ifndef ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE
+#define ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE 3
+#endif
+
+#if ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE < 0 || \
+    ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE >= 5
+#error "ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE must be an XMOS pipeline stage 0..4"
+#endif
+
 enum {
   VOICE_PE_XMOS_DFU_RESOURCE = 240,
   VOICE_PE_XMOS_CONFIGURATION_RESOURCE = 241,
@@ -71,24 +89,35 @@ iterate_kit_voice_pe_xmos_uplink_stage(void) {
    * excluded because a production full-duplex run showed it expanding quiet
    * speaker residue by roughly two orders of magnitude and retriggering server
    * VAD. The corrected IC experiment held the control and double-talk captures
-   * on the same AEC path, supplied adequate spoken SNR, and kept transport and
+   * on the same path, supplied adequate spoken SNR, and kept transport and
    * network valid; it still reached only 0.888 similarity and -7.50 dB
-   * residual. A corrected NS run then measured two identical matched-path
-   * Mac-only captures at 0.982 similarity / -15.46 dB residual, but the same
-   * speech during double-talk fell to 0.901 / -8.69 dB while far-end residue
-   * remained negligible. The difference is therefore downstream speech damage,
-   * not room repeatability or echo leakage. Select the AEC tap: it preserves
-   * the hardware canceller while removing the IC and NS transforms implicated
-   * by that controlled result.
+   * residual. A corrected NS run measured two matched-path Mac-only captures at
+   * 0.982 similarity / -15.46 dB residual. During double-talk it retained 0.901
+   * similarity / -8.69 dB and Grok transcribed the intended nearby utterance
+   * exactly. That is bounded damage, not erased near speech.
+   *
+   * The tempting alternative was the upstream AEC tap: its long, pre-warmed
+   * physical matrix looked excellent (0.909 double-talk similarity and about
+   * -47 dB far residue). A fresh production-shaped run falsified that choice.
+   * The first short reply leaked through the AEC tap nearly unchanged, server
+   * VAD opened a second turn, and Grok transcribed its own exact words, "How can
+   * I help?". The first measured playback windows also showed raw and processed
+   * peaks of the same order, identifying an onset/convergence problem that the
+   * settled matrix could not expose. In contrast, the retained NS production
+   * run produced exactly three VAD starts for three deliberate utterances,
+   * including barge-in, with no speaker-echo turn. Select NS as the only
+   * measured stable conversational output; keep the fixed userspace gain so
+   * provider VAD sees its otherwise quiet but bounded signal.
    *
    * This is deliberately guarded by the physical oracle rather than assumed
-   * from the tap name. The same run must reject this policy if AEC erases or
-   * materially changes nearby speech, or if tone, PRBS, or spoken far-only
-   * leakage is no longer near-empty. Userspace may apply one fixed
-   * post-transport gain for provider VAD, but it must never substitute
-   * adaptive AGC or hide that gate.
+   * from the tap name. A production run must reject this policy if the complete
+   * NS output erases or materially changes nearby speech, or if spoken far-only
+   * leakage creates any provider turn. Userspace may apply one fixed
+   * post-transport gain for provider VAD, but it must never substitute adaptive
+   * AGC, speaker-time muting, or a weakened double-talk gate.
    */
-  return ITERATE_KIT_VOICE_PE_XMOS_STAGE_AEC;
+  return (enum iterate_kit_voice_pe_xmos_stage)
+      ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE;
 }
 
 enum iterate_kit_status iterate_kit_voice_pe_xmos_pipeline_command(

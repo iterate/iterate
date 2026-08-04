@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "status": "passed",
+  "scope": "fresh-firmware-production-control-and-pcm-lifecycle-smoke",
+  "device": {
+    "id": "home-assistant-voice-preview-edition",
+    "stableUsbSerial": "D8:3B:DA:46:20:34",
+    "lanAddress": "192.168.1.159"
+  },
+  "deployment": {
+    "baseUrl": "https://os.iterate.com",
+    "projectId": "prj_4f76ffe131f1495981afd65619f57914",
+    "projectSlug": "kit-havpe-voice-e2e-20260802",
+    "capability": "itx.kit.homeAssistantVoicePreviewEdition",
+    "pcmHost": "kit--kit-havpe-voice-e2e-20260802.iterate.app"
+  },
+  "flash": {
+    "applicationBytes": 1071424,
+    "configurationPreserved": true,
+    "esptoolHashVerified": true,
+    "totalWrittenBytes": 1100800
+  },
+  "hostTests": {
+    "passed": 4,
+    "failed": 0,
+    "names": [
+      "iterate-kit-voice-satellite-test",
+      "iterate-kit-device-events-test",
+      "iterate-kit-debounced-button-test",
+      "iterate-kit-audio-intent-reconciler-test"
+    ]
+  },
+  "productionSmoke": {
+    "remoteStartAcknowledged": true,
+    "pcmConnectionsDelta": 1,
+    "remoteHangUpAcknowledged": true,
+    "pcmDisconnectsDelta": 1,
+    "wifiRssiDbm": {
+      "minimum": -51,
+      "maximum": -50
+    },
+    "wifiDisconnectsDelta": 0,
+    "pcmWebsocketErrorsDelta": 0,
+    "pcmWebsocketRawWriteFailuresDelta": 0,
+    "pcmTransportFailureIncidentsDelta": 0,
+    "controlProtocolFailuresDelta": 0,
+    "controlReceiveFailuresDelta": 0,
+    "controlSendFailuresDelta": 0,
+    "controlMessagesDiscardedDelta": 0,
+    "controlInboxDiscardedDelta": 0,
+    "controlOutboxDiscardedDelta": 0
+  },
+  "limits": [
+    "This is the post-flash control and PCM lifecycle smoke, not a replacement for the retained physical acoustic/AEC acceptance manifest.",
+    "The GPIO0 button path is covered by the same event owner and a host debounce regression, but this unattended smoke invoked that owner remotely rather than mechanically pressing the button."
+  ]
+}

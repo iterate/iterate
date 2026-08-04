@@ -1,0 +1,19 @@
+{
+  "instructions": "An Iterate StackChan with health metrics, screen, head servos, RGB LEDs, camera, and full-duplex AEC voice. PCM media uses the target's separate realtime WebSocket lane.",
+  "children": {
+    "subscribeToMetrics": "Call a callback immediately and once per configured interval with bounded runtime metrics.",
+    "subscribeToAecMetrics": "Call a callback with the latest aligned near, speaker-reference, and clean AEC signal window plus bounded timing and failure counters.",
+    "subscribeToEvents": "Call one callback with the current push-to-talk snapshot and each later processed call or talk transition.",
+    "getDiagnostics": "Return one retained control-transport incident snapshot.",
+    "renderOnScreen": "Download and render a PNG from {url}.",
+    "changeSpriteSet": "Select dot-matrix-oracle, gameboy-fine-black, karakuri-brass, or starbyte.",
+    "conversation": {
+      "start": "Open the PCM conversation intent.",
+      "hangUp": "End the current conversation intent.",
+      "interruptPlayback": "Purge assistant speech and acknowledge only after the physical speaker owner has reset."
+    },
+    "servos": "Head servos; call servos.move(...).",
+    "leds": "RGB LEDs; call leds.set(...) or leds.fill(...).",
+    "takePhoto": "Capture and return one bounded image byte array."
+  }
+}

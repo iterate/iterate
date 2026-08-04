@@ -39,6 +39,31 @@ export interface DeviceNetworkEvidence extends ExactIntervalSampleSeries<DeviceN
   minimumRssiDbm: number;
 }
 
+export type DeviceControlRoundTripSample =
+  | {
+      completedAtMonotonicMs: number;
+      durationMs: number;
+      outcome: "success";
+      startedAtMonotonicMs: number;
+    }
+  | {
+      completedAtMonotonicMs: number;
+      error: string;
+      outcome: "failure";
+      startedAtMonotonicMs: number;
+    };
+
+/**
+ * End-to-end latency of the real Cap'n Web diagnostics capability.
+ *
+ * ICMP can establish host reachability but cannot prove that the application
+ * path used beside PCM remained schedulable. This lane deliberately measures
+ * the mounted device capability through the same production control plane.
+ */
+export interface DeviceControlRoundTripEvidence extends ExactIntervalSampleSeries<DeviceControlRoundTripSample> {
+  maximumHealthyDurationMs: number;
+}
+
 export interface SocketCounterSample {
   capturedAtMonotonicMs: number;
   connected: boolean;
@@ -89,6 +114,7 @@ export interface TerminalPcmSocketAggregate {
 
 export interface PhysicalNetworkValidityEvidence {
   audioInterval: PhysicalAudioInterval;
+  deviceControlRoundTrips?: DeviceControlRoundTripEvidence;
   deviceNetwork?: DeviceNetworkEvidence;
   dnsAndConnect?: DnsAndConnectEvidence;
   hostReachability?: Partial<Record<HostReachabilityTarget, HostReachabilityEvidence>>;
@@ -135,6 +161,62 @@ export function classifyPhysicalNetworkValidity(
 ): PhysicalNetworkValidityResult {
   const networkInvalidReasons: PhysicalNetworkValidityReason[] = [];
   const indeterminateReasons: PhysicalNetworkValidityReason[] = [];
+
+  if (!evidence.deviceControlRoundTrips) {
+    indeterminateReasons.push({
+      code: "missing-device-control-round-trips",
+      message: "Device control round-trip evidence is missing.",
+    });
+  } else {
+    const series = evidence.deviceControlRoundTrips;
+    if (!intervalsMatch(series.coverage, evidence.audioInterval)) {
+      indeterminateReasons.push({
+        code: "misaligned-device-control-round-trips",
+        message: "Device control round trips do not cover the exact audio interval.",
+      });
+    }
+    if (
+      !Number.isSafeInteger(series.expectedSampleCount) ||
+      series.expectedSampleCount < 2 ||
+      series.samples.length !== series.expectedSampleCount
+    ) {
+      indeterminateReasons.push({
+        code: "incomplete-device-control-round-trips",
+        message:
+          `Device control round-trip evidence contains ${series.samples.length} of ` +
+          `${series.expectedSampleCount} expected samples.`,
+      });
+    }
+    for (const sample of series.samples) {
+      if (
+        !intervalContains(evidence.audioInterval, sample.startedAtMonotonicMs) ||
+        !intervalContains(evidence.audioInterval, sample.completedAtMonotonicMs)
+      ) {
+        indeterminateReasons.push({
+          code: "device-control-round-trip-outside-interval",
+          message:
+            `Device control round trip from ${sample.startedAtMonotonicMs} ms to ` +
+            `${sample.completedAtMonotonicMs} ms is outside the audio interval.`,
+        });
+        continue;
+      }
+      if (sample.outcome === "failure") {
+        networkInvalidReasons.push({
+          code: "device-control-round-trip-failed",
+          message: `Device control round trip failed: ${sample.error}.`,
+        });
+        continue;
+      }
+      if (sample.durationMs > series.maximumHealthyDurationMs) {
+        networkInvalidReasons.push({
+          code: "device-control-round-trip-duration-exceeded",
+          message:
+            `Device control round trip took ${sample.durationMs} ms, exceeding its ` +
+            `${series.maximumHealthyDurationMs} ms healthy budget.`,
+        });
+      }
+    }
+  }
 
   if (!evidence.deviceNetwork) {
     indeterminateReasons.push({

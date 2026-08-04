@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "failure": null,
+  "frameBytes": 640,
+  "microphone": {
+    "bytes": 0,
+    "frames": 0,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-aec-physical/2026-08-02T21-46-07-040Z/pcm/microphone-uplink.pcm16le",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "outputDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-aec-physical/2026-08-02T21-46-07-040Z/pcm",
+  "producedAt": "2026-08-02T21:46:17.162Z",
+  "sampleRateHz": 16000,
+  "speaker": {
+    "bytes": 0,
+    "frames": 0,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-aec-physical/2026-08-02T21-46-07-040Z/pcm/speaker-downlink.pcm16le",
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "timelinePath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/stackchan-aec-physical/2026-08-02T21-46-07-040Z/pcm/timeline.jsonl"
+}

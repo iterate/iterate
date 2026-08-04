@@ -1,0 +1,5 @@
+{
+  "message": "Invalid AEC startup lifecycle: Startup generation barrier performed 0 playback resets; expected exactly 1.",
+  "name": "Error",
+  "stack": "Error: Invalid AEC startup lifecycle: Startup generation barrier performed 0 playback resets; expected exactly 1.\n    at proveLocalAec (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-local-aec.ts:509:13)"
+}

@@ -23,7 +23,7 @@ static void test_assert(
   test_assert((expression), #expression, __FILE__, __LINE__)
 
 enum {
-  processing_samples = 512,
+  processing_samples = 256,
   wire_samples = 320,
   dma_samples = 128,
   maximum_emitted_frames = 16,
@@ -33,6 +33,7 @@ struct fixture {
   struct iterate_kit_aec_capture_bridge bridge;
   int16_t near[processing_samples];
   int16_t reference[processing_samples];
+  int16_t playout[processing_samples];
   int16_t clean[processing_samples];
   int16_t egress[wire_samples];
   int16_t emitted[maximum_emitted_frames][wire_samples];
@@ -41,6 +42,8 @@ struct fixture {
   size_t reset_calls;
   size_t copy_calls;
   size_t copied_frames;
+  int16_t last_processed_playout_first;
+  int16_t last_processed_playout_last;
   size_t fail_process_call;
   size_t fail_copy_call;
 };
@@ -49,10 +52,13 @@ static enum iterate_kit_status process_aec(
     void *context,
     const int16_t *near,
     const int16_t *reference,
+    const int16_t *playout,
     int16_t *clean,
     size_t sample_count) {
   struct fixture *fixture = context;
   fixture->process_calls++;
+  fixture->last_processed_playout_first = playout[0];
+  fixture->last_processed_playout_last = playout[sample_count - 1U];
   for (size_t index = 0U; index < sample_count; ++index) {
     clean[index] = (int16_t)(near[index] - reference[index]);
   }
@@ -105,6 +111,7 @@ static void initialise(struct fixture *fixture) {
     .egress_frame_samples = wire_samples,
     .near_frame = fixture->near,
     .reference_frame = fixture->reference,
+    .playout_frame = fixture->playout,
     .clean_frame = fixture->clean,
     .processing_frame_capacity = processing_samples,
     .egress_frame = fixture->egress,
@@ -127,9 +134,11 @@ static enum iterate_kit_status push_chunk(
     size_t first_sample) {
   int16_t near[dma_samples];
   int16_t reference[dma_samples];
+  int16_t playout[dma_samples];
   for (size_t index = 0U; index < dma_samples; ++index) {
     near[index] = (int16_t)(first_sample + index);
     reference[index] = 0;
+    playout[index] = (int16_t)(12000U + first_sample + index);
   }
   return iterate_kit_aec_capture_bridge_push_aligned(
       &fixture->bridge,
@@ -137,15 +146,39 @@ static enum iterate_kit_status push_chunk(
       captured_through_at_us,
       near,
       reference,
+      playout,
       dma_samples);
 }
 
 /*
- * CoreS3 AEC consumes 512-sample frames while the production PCM protocol is
+ * Physical loudspeaker feedback and exact digital playout answer different
+ * questions. The feedback is the best cancellation input because it contains
+ * amplifier distortion; the exact playout is the only reliable far-active
+ * oracle because the feedback lane can contain noise during silence. This
+ * regression proves the generic cadence bridge cannot accidentally alias or
+ * discard the third timeline while joining two 128-sample DMA chunks into one
+ * 256-sample DSP frame.
+ */
+static void preserves_distinct_reference_and_playout_timelines(void) {
+  struct fixture fixture = {0};
+  initialise(&fixture);
+
+  TEST_ASSERT(push_chunk(&fixture, 0U, 8000U, 0U) == ITERATE_KIT_OK);
+  TEST_ASSERT(
+      push_chunk(&fixture, 1U, 16000U, dma_samples) == ITERATE_KIT_OK);
+  TEST_ASSERT(fixture.process_calls == 1U);
+  TEST_ASSERT(fixture.last_processed_playout_first == 12000);
+  TEST_ASSERT(
+      fixture.last_processed_playout_last ==
+      (int16_t)(12000U + processing_samples - 1U));
+}
+
+/*
+ * CoreS3's ESP-SR VOIP AEC consumes 256-sample frames while PCM v1 is
  * fixed at 320 samples. Accumulating either side as whole frames creates a
  * beat-pattern queue and eventually stale speech. Twenty 8 ms DMA chunks are
  * the least common period, so this test proves exact order, conservation, and
- * capture-boundary timestamps across all five DSP / eight wire frames.
+ * capture-boundary timestamps across all ten DSP / eight wire frames.
  */
 static void reframes_without_loss_or_drift(void) {
   struct fixture fixture = {0};
@@ -161,7 +194,7 @@ static void reframes_without_loss_or_drift(void) {
             chunk * dma_samples) == ITERATE_KIT_OK);
   }
 
-  TEST_ASSERT(fixture.process_calls == 5U);
+  TEST_ASSERT(fixture.process_calls == 10U);
   TEST_ASSERT(fixture.copied_frames == 8U);
   for (size_t frame = 0U; frame < 8U; ++frame) {
     for (size_t sample = 0U; sample < wire_samples; ++sample) {
@@ -177,7 +210,7 @@ static void reframes_without_loss_or_drift(void) {
   const struct iterate_kit_aec_capture_bridge_metrics *metrics =
       iterate_kit_aec_capture_bridge_metrics(&fixture.bridge);
   TEST_ASSERT(metrics->input_samples_accepted == 2560U);
-  TEST_ASSERT(metrics->processor_frames == 5U);
+  TEST_ASSERT(metrics->processor_frames == 10U);
   TEST_ASSERT(metrics->clean_samples_produced == 2560U);
   TEST_ASSERT(metrics->egress_frames_copied == 8U);
   TEST_ASSERT(metrics->egress_samples_copied == 2560U);
@@ -231,24 +264,17 @@ static void sequence_gap_discards_unprocessed_input(void) {
   struct fixture fixture = {0};
   initialise(&fixture);
 
-  for (uint32_t sequence = 0U; sequence < 3U; ++sequence) {
-    TEST_ASSERT(
-        push_chunk(
-            &fixture,
-            sequence,
-            (uint64_t)(sequence + 1U) * 8000U,
-            (size_t)sequence * dma_samples) == ITERATE_KIT_OK);
-  }
+  TEST_ASSERT(push_chunk(&fixture, 0U, 8000U, 0U) == ITERATE_KIT_OK);
   TEST_ASSERT(
-      push_chunk(&fixture, 5U, 48000U, 5U * dma_samples) ==
+      push_chunk(&fixture, 2U, 24000U, 2U * dma_samples) ==
       ITERATE_KIT_OK);
 
   const struct iterate_kit_aec_capture_bridge_metrics *metrics =
       iterate_kit_aec_capture_bridge_metrics(&fixture.bridge);
   TEST_ASSERT(fixture.process_calls == 0U);
   TEST_ASSERT(fixture.reset_calls == 1U);
-  TEST_ASSERT(metrics->input_samples_accepted == 512U);
-  TEST_ASSERT(metrics->input_samples_discarded == 384U);
+  TEST_ASSERT(metrics->input_samples_accepted == 256U);
+  TEST_ASSERT(metrics->input_samples_discarded == 128U);
   TEST_ASSERT(metrics->input_partial_samples == dma_samples);
 }
 
@@ -264,25 +290,31 @@ static void processor_failure_is_auditable_silence(void) {
   fixture.fail_process_call = 1U;
   initialise(&fixture);
 
-  enum iterate_kit_status last_status = ITERATE_KIT_OK;
+  enum iterate_kit_status observed_failure = ITERATE_KIT_OK;
   for (uint32_t sequence = 0U; sequence < 4U; ++sequence) {
-    last_status = push_chunk(
+    const enum iterate_kit_status status = push_chunk(
         &fixture,
         sequence,
         (uint64_t)(sequence + 1U) * 8000U,
         (size_t)sequence * dma_samples);
+    if (status != ITERATE_KIT_OK) {
+      observed_failure = status;
+    }
   }
-  TEST_ASSERT(last_status == ITERATE_KIT_IO_ERROR);
+  TEST_ASSERT(observed_failure == ITERATE_KIT_IO_ERROR);
   TEST_ASSERT(fixture.copied_frames == 1U);
-  for (size_t sample = 0U; sample < wire_samples; ++sample) {
+  for (size_t sample = 0U; sample < processing_samples; ++sample) {
     TEST_ASSERT(fixture.emitted[0][sample] == 0);
+  }
+  for (size_t sample = processing_samples; sample < wire_samples; ++sample) {
+    TEST_ASSERT(fixture.emitted[0][sample] == (int16_t)sample);
   }
 
   const struct iterate_kit_aec_capture_bridge_metrics *metrics =
       iterate_kit_aec_capture_bridge_metrics(&fixture.bridge);
   TEST_ASSERT(metrics->processor_failures == 1U);
   TEST_ASSERT(metrics->processor_silence_samples == processing_samples);
-  TEST_ASSERT(metrics->clean_samples_produced == processing_samples);
+  TEST_ASSERT(metrics->clean_samples_produced == processing_samples * 2U);
 }
 
 /*
@@ -310,18 +342,18 @@ static void egress_backpressure_abandons_the_whole_stale_suffix(void) {
   }
 
   TEST_ASSERT(observed_failure == ITERATE_KIT_BACKPRESSURE);
-  TEST_ASSERT(fixture.copied_frames == 2U);
+  TEST_ASSERT(fixture.copied_frames == 3U);
   TEST_ASSERT(fixture.emitted[0][0] == 0);
-  TEST_ASSERT(fixture.emitted[1][0] == 1024);
-  TEST_ASSERT(fixture.emitted_at_us[1] == 84000U);
+  TEST_ASSERT(fixture.emitted[1][0] == 768);
+  TEST_ASSERT(fixture.emitted_at_us[1] == 68000U);
 
   const struct iterate_kit_aec_capture_bridge_metrics *metrics =
       iterate_kit_aec_capture_bridge_metrics(&fixture.bridge);
   TEST_ASSERT(metrics->egress_copy_failures == 1U);
-  TEST_ASSERT(metrics->egress_frames_copied == 2U);
-  TEST_ASSERT(metrics->egress_samples_copied == 640U);
-  TEST_ASSERT(metrics->clean_samples_discarded == 704U);
-  TEST_ASSERT(metrics->egress_partial_samples == 192U);
+  TEST_ASSERT(metrics->egress_frames_copied == 3U);
+  TEST_ASSERT(metrics->egress_samples_copied == 960U);
+  TEST_ASSERT(metrics->clean_samples_discarded == 448U);
+  TEST_ASSERT(metrics->egress_partial_samples == 128U);
   TEST_ASSERT(
       metrics->clean_samples_produced ==
       metrics->egress_samples_copied +
@@ -339,6 +371,7 @@ static void coalesced_input_cannot_send_past_backpressure(void) {
   struct fixture fixture = {0};
   int16_t near[processing_samples * 3U];
   int16_t reference[processing_samples * 3U] = {0};
+  int16_t playout[processing_samples * 3U] = {0};
   fixture.fail_copy_call = 2U;
   initialise(&fixture);
   for (size_t index = 0U;
@@ -354,6 +387,7 @@ static void coalesced_input_cannot_send_past_backpressure(void) {
           96000U,
           near,
           reference,
+          playout,
           processing_samples * 3U) ==
       ITERATE_KIT_BACKPRESSURE);
 
@@ -364,7 +398,7 @@ static void coalesced_input_cannot_send_past_backpressure(void) {
   TEST_ASSERT(fixture.copied_frames == 1U);
   TEST_ASSERT(metrics->egress_copy_failures == 1U);
   TEST_ASSERT(metrics->egress_samples_copied == wire_samples);
-  TEST_ASSERT(metrics->clean_samples_discarded == 1216U);
+  TEST_ASSERT(metrics->clean_samples_discarded == 448U);
   TEST_ASSERT(metrics->egress_partial_samples == 0U);
   TEST_ASSERT(
       metrics->clean_samples_produced ==
@@ -396,11 +430,12 @@ static void timestamp_regression_is_rejected_without_state_drift(void) {
   TEST_ASSERT(metrics->timestamp_regressions == 1U);
   TEST_ASSERT(metrics->input_samples_accepted == 256U);
   TEST_ASSERT(metrics->input_samples_discarded == dma_samples);
-  TEST_ASSERT(metrics->input_partial_samples == 256U);
+  TEST_ASSERT(metrics->input_partial_samples == 0U);
   TEST_ASSERT(metrics->sequence_discontinuities == 0U);
 }
 
 int main(void) {
+  preserves_distinct_reference_and_playout_timelines();
   reframes_without_loss_or_drift();
   sequence_gap_resets_every_partial_epoch();
   sequence_gap_discards_unprocessed_input();

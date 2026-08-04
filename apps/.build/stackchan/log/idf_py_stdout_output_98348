@@ -1,0 +1,45 @@
+[1/35] Building C object esp-idf/capabilities/CMakeFiles/__idf_capabilities.dir/src/avatar.c.obj
+[2/35] Building C object esp-idf/capabilities/CMakeFiles/__idf_capabilities.dir/src/leds.c.obj
+[3/35] Building C object esp-idf/core/CMakeFiles/__idf_core.dir/src/control_recovery.c.obj
+[4/35] Building C object esp-idf/capabilities/CMakeFiles/__idf_capabilities.dir/src/camera.c.obj
+[5/35] Building C object esp-idf/capabilities/CMakeFiles/__idf_capabilities.dir/src/push_to_talk.c.obj
+[6/35] Building C object esp-idf/capabilities/CMakeFiles/__idf_capabilities.dir/src/screen_capture.c.obj
+[7/35] Building C object esp-idf/core/CMakeFiles/__idf_core.dir/src/audio_intent_reconciler.c.obj
+[8/35] Building C object esp-idf/capabilities/CMakeFiles/__idf_capabilities.dir/src/conversation.c.obj
+[9/35] Building C object esp-idf/capabilities/CMakeFiles/__idf_capabilities.dir/src/screen.c.obj
+[10/35] Building C object esp-idf/capabilities/CMakeFiles/__idf_capabilities.dir/src/servos.c.obj
+[11/35] Building C object esp-idf/stackchan/CMakeFiles/__idf_stackchan.dir/stackchan.c.obj
+[12/35] Building C object esp-idf/iterate_stackchan_hardware/CMakeFiles/__idf_iterate_stackchan_hardware.dir/stackchan_hardware.c.obj
+[13/35] Building C object esp-idf/core/CMakeFiles/__idf_core.dir/src/audio.c.obj
+[14/35] Building C object esp-idf/core/CMakeFiles/__idf_core.dir/src/peer.c.obj
+[15/35] Building C object esp-idf/capabilities/CMakeFiles/__idf_capabilities.dir/src/device_event_stream.c.obj
+[16/35] Performing build step for 'bootloader'
+[1/1] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/bootloader/esp-idf/esptool_py && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 bootloader 0x0 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/bootloader/bootloader.bin
+Bootloader binary size 0x56c0 bytes. 0x2940 bytes (32%) free.
+[17/35] No install step for 'bootloader'
+[18/35] Completed 'bootloader'
+[19/35] Building C object esp-idf/iterate_esp_idf/CMakeFiles/__idf_iterate_esp_idf.dir/pcm_transport.c.obj
+[20/35] Building C object esp-idf/iterate_core_s3_audio/CMakeFiles/__idf_iterate_core_s3_audio.dir/core_s3_audio_owner.c.obj
+[21/35] Linking C static library esp-idf/core/libcore.a
+[22/35] Linking C static library esp-idf/iterate_core_s3_audio/libiterate_core_s3_audio.a
+[23/35] Linking C static library esp-idf/iterate_esp_idf/libiterate_esp_idf.a
+[24/35] Building C object esp-idf/main/CMakeFiles/__idf_main.dir/main.c.obj
+[25/35] Building C object esp-idf/capabilities/CMakeFiles/__idf_capabilities.dir/src/metrics.c.obj
+[26/35] Linking C static library esp-idf/capabilities/libcapabilities.a
+[27/35] Linking C static library esp-idf/stackchan/libstackchan.a
+[28/35] Linking C static library esp-idf/iterate_stackchan_hardware/libiterate_stackchan_hardware.a
+[29/35] Linking C static library esp-idf/main/libmain.a
+[30/35] Generating ld/sections.ld
+[31/35] Linking CXX executable iterate-kit-stackchan.elf
+[32/35] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/stackchan/tests/verify_bsp_source_selection.py /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/project_description.json /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/targets/stackchan/../../platforms/iterate_esp_idf/idf_overrides/espressif__m5stack_core_s3
+CoreS3 BSP source selection verified: /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/firmware/platforms/iterate_esp_idf/idf_overrides/espressif__m5stack_core_s3 -> /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__m5stack_core_s3/iterate_patched/m5stack_core_s3.c, /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__m5stack_core_s3/iterate_patched/m5stack_core_s3_idf5.c
+[33/35] Generating binary image from built executable
+esptool.py v4.12.0
+Creating esp32s3 image...
+Merged 2 ELF sections
+Successfully created esp32s3 image.
+Generated /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/iterate-kit-stackchan.bin
+[34/35] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/esptool_py && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/partition_table/partition-table.bin /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/iterate-kit-stackchan.bin
+iterate-kit-stackchan.bin binary size 0x13ae60 bytes. Smallest app partition is 0x500000 bytes. 0x3c51a0 bytes (75%) free.
+[35/35] Auditing CoreS3 realtime ISR placement
+-- CoreS3 realtime ELF audit passed: callback graph in IRAM/ROM, state in DRAM

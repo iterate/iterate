@@ -1,0 +1,35 @@
+{
+  "aec": null,
+  "createdAt": "2026-08-03T05:17:30.763Z",
+  "device": {
+    "deviceHost": "192.168.1.178",
+    "id": "stackchan",
+    "projectId": "prj_0363ecd53eda492e972b07debd56eb46",
+    "projectSlug": "kit-stackchan-voice-e2e-20260801",
+    "workerHost": "kit--kit-stackchan-voice-e2e-20260801.iterate.app"
+  },
+  "digital": null,
+  "error": {
+    "message": "Production route preflight failed: Worker reachability did not sustain 8 consecutive replies at or below 100 ms across 8 bounded attempts.",
+    "name": "Error",
+    "stack": "Error: Production route preflight failed: Worker reachability did not sustain 8 consecutive replies at or below 100 ms across 8 bounded attempts.\n    at proveProductionAecWaveform (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:330:13)\n    at async <anonymous> (/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/scripts/prove-production-aec-waveform.ts:1228:20)"
+  },
+  "network": null,
+  "passed": false,
+  "projectModeRestored": true,
+  "schemaVersion": 1,
+  "stimuli": {
+    "macOutputVolumePercent": 40,
+    "nearSourceSha256": null,
+    "nearSpeech": {
+      "rateWordsPerMinute": 180,
+      "text": "Please verify that this nearby voice remains clear while the device speaker is talking. This sentence repeats identically in both comparison phases.",
+      "voice": "Samantha"
+    },
+    "providerDurationMs": 6000
+  },
+  "worker": {
+    "baseline": null,
+    "terminal": null
+  }
+}

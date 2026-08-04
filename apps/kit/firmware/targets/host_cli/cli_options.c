@@ -11,7 +11,7 @@ enum {
   CLI_OPTIONS_PROBLEM_TEXT_MAX = 96,
 };
 
-#define CLI_OPTIONS_DEFAULT_STREAM_PATH "/voicelab/device"
+#define CLI_OPTIONS_DEFAULT_STREAM_PATH "/voice-agent/device"
 #define CLI_OPTIONS_DEFAULT_NAME "host"
 #define CLI_OPTIONS_DEFAULT_SPEAKER_WAV "iterate-kit-playback.wav"
 #define CLI_OPTIONS_DEFAULT_REPORT_JSON "iterate-kit-report.json"
@@ -106,7 +106,7 @@ static const struct cli_options_flag CLI_OPTIONS_FLAGS[] = {
   {"--stream-path", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_STREAM_PATH,
    "ITERATE_KIT_STREAM_PATH",
    "  --stream-path PATH    Stream path (ITERATE_KIT_STREAM_PATH; "
-   "default /voicelab/device)\n"},
+   "default /voice-agent/device)\n"},
   {"--name", CLI_OPTIONS_KIND_TEXT, CLI_OPTIONS_FIELD_NAME,
    "ITERATE_KIT_CAPABILITY_NAME",
    "  --name NAME           Mount capability as kit.NAME "

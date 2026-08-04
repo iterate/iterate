@@ -1,0 +1,89 @@
+{
+  "ambient": {
+    "dbfs": -92.95980218428352,
+    "peak": 3,
+    "rms": 0.7369869974681277
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -83.10950871102398,
+      "peak": 10,
+      "rms": 2.2907331431952813
+    },
+    "nearEndGain": 0.07239556787477222,
+    "nearEndSimilarity": 0.05914467358169093,
+    "passed": false,
+    "residualToFarEndDb": -60.57894305110836,
+    "residualToNearEndDb": 1.7407081403759146
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -81.90460494498693,
+        "peak": 34,
+        "rms": 2.6315988486089594
+      },
+      "kind": "tone",
+      "passed": true,
+      "source": {
+        "dbfs": -19.339884567655986,
+        "peak": 5000,
+        "rms": 3535.53960513809
+      },
+      "sourceSimilarity": 0.024581938872932932
+    },
+    {
+      "clean": {
+        "dbfs": -87.3122916951818,
+        "peak": 9,
+        "rms": 1.4120021246442938
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": true,
+      "source": {
+        "dbfs": -22.350138854101736,
+        "peak": 4268,
+        "rms": 2500.017174941004
+      },
+      "sourceSimilarity": 0.0037637360986798487
+    },
+    {
+      "clean": {
+        "dbfs": -83.59088941311698,
+        "peak": 10,
+        "rms": 2.1672322979628493
+      },
+      "kind": "speech-shaped",
+      "passed": true,
+      "source": {
+        "dbfs": -22.056464522318358,
+        "peak": 8702,
+        "rms": 2585.989212278511
+      },
+      "sourceSimilarity": 0.002677559878491863
+    }
+  ],
+  "nearEnd": {
+    "clean": {
+      "dbfs": -84.24773978180104,
+      "peak": 13,
+      "rms": 2.0093840280507433
+    },
+    "passed": false,
+    "source": {
+      "dbfs": -22.061952700320173,
+      "peak": 7929,
+      "rms": 2584.355771500414
+    },
+    "sourceSimilarity": 0.40075363886544285
+  },
+  "passed": false,
+  "reasons": [
+    "Mac-only signal did not rise above ambient: 8.71 dB; expected at least 10 dB.",
+    "Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.059, gain 0.072, residual 1.74 dB."
+  ],
+  "validity": {
+    "passed": true,
+    "reasons": []
+  }
+}

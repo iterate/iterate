@@ -1,0 +1,21 @@
+{
+  "complete": true,
+  "failure": null,
+  "frameBytes": 640,
+  "microphone": {
+    "bytes": 2256000,
+    "frames": 3525,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-calibration-20260804/2026-08-04T10-01-07-830Z/pcm/microphone-uplink.pcm16le",
+    "sha256": "45d10db652feec40d3daf96fd8ba6e653befcdc832e587a9ae8bff69c38b563c"
+  },
+  "outputDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-calibration-20260804/2026-08-04T10-01-07-830Z/pcm",
+  "producedAt": "2026-08-04T10:02:47.800Z",
+  "sampleRateHz": 16000,
+  "speaker": {
+    "bytes": 800000,
+    "frames": 1250,
+    "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-calibration-20260804/2026-08-04T10-01-07-830Z/pcm/speaker-downlink.pcm16le",
+    "sha256": "c85d699ec7a6d7c73f940d05ee555891b2d3a6367688c389baf4be8ac059a4f6"
+  },
+  "timelinePath": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-calibration-20260804/2026-08-04T10-01-07-830Z/pcm/timeline.jsonl"
+}

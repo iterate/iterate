@@ -1,0 +1,1 @@
+/usr/bin/cc -UNDEBUG -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-face-viseme-queue-test.dir/components/avatar/tests/face_viseme_queue_test.c.o" -o iterate-kit-face-viseme-queue-test  libiterate-kit-avatar.a

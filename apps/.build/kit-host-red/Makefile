@@ -140,6 +140,58 @@ iterate-kit-core/fast:
 .PHONY : iterate-kit-core/fast
 
 #=============================================================================
+# Target rules for targets named iterate-kit-avatar
+
+# Build rule for target.
+iterate-kit-avatar: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-avatar
+.PHONY : iterate-kit-avatar
+
+# fast build rule for target.
+iterate-kit-avatar/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/build
+.PHONY : iterate-kit-avatar/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-posix
+
+# Build rule for target.
+iterate-kit-posix: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-posix
+.PHONY : iterate-kit-posix
+
+# fast build rule for target.
+iterate-kit-posix/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix.dir/build.make CMakeFiles/iterate-kit-posix.dir/build
+.PHONY : iterate-kit-posix/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli
+
+# Build rule for target.
+iterate-kit-cli: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli
+.PHONY : iterate-kit-cli
+
+# fast build rule for target.
+iterate-kit-cli/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/build
+.PHONY : iterate-kit-cli/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-audio-in-test
+
+# Build rule for target.
+iterate-kit-cli-audio-in-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-audio-in-test
+.PHONY : iterate-kit-cli-audio-in-test
+
+# fast build rule for target.
+iterate-kit-cli-audio-in-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-audio-in-test.dir/build.make CMakeFiles/iterate-kit-cli-audio-in-test.dir/build
+.PHONY : iterate-kit-cli-audio-in-test/fast
+
+#=============================================================================
 # Target rules for targets named iterate-kit-capabilities
 
 # Build rule for target.
@@ -244,6 +296,123 @@ iterate-stackchan-resource-profile/fast:
 .PHONY : iterate-stackchan-resource-profile/fast
 
 #=============================================================================
+# Target rules for targets named iterate-kit-face-animator-test
+
+# Build rule for target.
+iterate-kit-face-animator-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-face-animator-test
+.PHONY : iterate-kit-face-animator-test
+
+# fast build rule for target.
+iterate-kit-face-animator-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-animator-test.dir/build.make CMakeFiles/iterate-kit-face-animator-test.dir/build
+.PHONY : iterate-kit-face-animator-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-face-avatar-registry-test
+
+# Build rule for target.
+iterate-kit-face-avatar-registry-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-face-avatar-registry-test
+.PHONY : iterate-kit-face-avatar-registry-test
+
+# fast build rule for target.
+iterate-kit-face-avatar-registry-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-avatar-registry-test.dir/build.make CMakeFiles/iterate-kit-face-avatar-registry-test.dir/build
+.PHONY : iterate-kit-face-avatar-registry-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-face-doze-test
+
+# Build rule for target.
+iterate-kit-face-doze-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-face-doze-test
+.PHONY : iterate-kit-face-doze-test
+
+# fast build rule for target.
+iterate-kit-face-doze-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-doze-test.dir/build.make CMakeFiles/iterate-kit-face-doze-test.dir/build
+.PHONY : iterate-kit-face-doze-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-face-keyframe-test
+
+# Build rule for target.
+iterate-kit-face-keyframe-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-face-keyframe-test
+.PHONY : iterate-kit-face-keyframe-test
+
+# fast build rule for target.
+iterate-kit-face-keyframe-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-keyframe-test.dir/build.make CMakeFiles/iterate-kit-face-keyframe-test.dir/build
+.PHONY : iterate-kit-face-keyframe-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-face-performance-test
+
+# Build rule for target.
+iterate-kit-face-performance-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-face-performance-test
+.PHONY : iterate-kit-face-performance-test
+
+# fast build rule for target.
+iterate-kit-face-performance-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-performance-test.dir/build.make CMakeFiles/iterate-kit-face-performance-test.dir/build
+.PHONY : iterate-kit-face-performance-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-face-scale-test
+
+# Build rule for target.
+iterate-kit-face-scale-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-face-scale-test
+.PHONY : iterate-kit-face-scale-test
+
+# fast build rule for target.
+iterate-kit-face-scale-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-scale-test.dir/build.make CMakeFiles/iterate-kit-face-scale-test.dir/build
+.PHONY : iterate-kit-face-scale-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-face-sprite-sheet-test
+
+# Build rule for target.
+iterate-kit-face-sprite-sheet-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-face-sprite-sheet-test
+.PHONY : iterate-kit-face-sprite-sheet-test
+
+# fast build rule for target.
+iterate-kit-face-sprite-sheet-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-sprite-sheet-test.dir/build.make CMakeFiles/iterate-kit-face-sprite-sheet-test.dir/build
+.PHONY : iterate-kit-face-sprite-sheet-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-face-stage-test
+
+# Build rule for target.
+iterate-kit-face-stage-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-face-stage-test
+.PHONY : iterate-kit-face-stage-test
+
+# fast build rule for target.
+iterate-kit-face-stage-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-stage-test.dir/build.make CMakeFiles/iterate-kit-face-stage-test.dir/build
+.PHONY : iterate-kit-face-stage-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-face-viseme-queue-test
+
+# Build rule for target.
+iterate-kit-face-viseme-queue-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-face-viseme-queue-test
+.PHONY : iterate-kit-face-viseme-queue-test
+
+# fast build rule for target.
+iterate-kit-face-viseme-queue-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-viseme-queue-test.dir/build.make CMakeFiles/iterate-kit-face-viseme-queue-test.dir/build
+.PHONY : iterate-kit-face-viseme-queue-test/fast
+
+#=============================================================================
 # Target rules for targets named iterate-kit-audio-test
 
 # Build rule for target.
@@ -255,6 +424,19 @@ iterate-kit-audio-test: cmake_check_build_system
 iterate-kit-audio-test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-audio-test.dir/build.make CMakeFiles/iterate-kit-audio-test.dir/build
 .PHONY : iterate-kit-audio-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-peer-poll-test
+
+# Build rule for target.
+iterate-kit-peer-poll-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-peer-poll-test
+.PHONY : iterate-kit-peer-poll-test
+
+# fast build rule for target.
+iterate-kit-peer-poll-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-peer-poll-test.dir/build.make CMakeFiles/iterate-kit-peer-poll-test.dir/build
+.PHONY : iterate-kit-peer-poll-test/fast
 
 #=============================================================================
 # Target rules for targets named iterate-kit-aec-capture-bridge-test
@@ -270,6 +452,58 @@ iterate-kit-aec-capture-bridge-test/fast:
 .PHONY : iterate-kit-aec-capture-bridge-test/fast
 
 #=============================================================================
+# Target rules for targets named iterate-kit-aec-reference-scaler-test
+
+# Build rule for target.
+iterate-kit-aec-reference-scaler-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-aec-reference-scaler-test
+.PHONY : iterate-kit-aec-reference-scaler-test
+
+# fast build rule for target.
+iterate-kit-aec-reference-scaler-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-reference-scaler-test.dir/build.make CMakeFiles/iterate-kit-aec-reference-scaler-test.dir/build
+.PHONY : iterate-kit-aec-reference-scaler-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-pcm-high-pass-test
+
+# Build rule for target.
+iterate-kit-pcm-high-pass-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-pcm-high-pass-test
+.PHONY : iterate-kit-pcm-high-pass-test
+
+# fast build rule for target.
+iterate-kit-pcm-high-pass-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-high-pass-test.dir/build.make CMakeFiles/iterate-kit-pcm-high-pass-test.dir/build
+.PHONY : iterate-kit-pcm-high-pass-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-aec-diagnostic-trace-test
+
+# Build rule for target.
+iterate-kit-aec-diagnostic-trace-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-aec-diagnostic-trace-test
+.PHONY : iterate-kit-aec-diagnostic-trace-test
+
+# fast build rule for target.
+iterate-kit-aec-diagnostic-trace-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-diagnostic-trace-test.dir/build.make CMakeFiles/iterate-kit-aec-diagnostic-trace-test.dir/build
+.PHONY : iterate-kit-aec-diagnostic-trace-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-aec-diagnostic-trace-capability-test
+
+# Build rule for target.
+iterate-kit-aec-diagnostic-trace-capability-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-aec-diagnostic-trace-capability-test
+.PHONY : iterate-kit-aec-diagnostic-trace-capability-test
+
+# fast build rule for target.
+iterate-kit-aec-diagnostic-trace-capability-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-diagnostic-trace-capability-test.dir/build.make CMakeFiles/iterate-kit-aec-diagnostic-trace-capability-test.dir/build
+.PHONY : iterate-kit-aec-diagnostic-trace-capability-test/fast
+
+#=============================================================================
 # Target rules for targets named iterate-kit-aec-signal-window-test
 
 # Build rule for target.
@@ -281,6 +515,19 @@ iterate-kit-aec-signal-window-test: cmake_check_build_system
 iterate-kit-aec-signal-window-test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-signal-window-test.dir/build.make CMakeFiles/iterate-kit-aec-signal-window-test.dir/build
 .PHONY : iterate-kit-aec-signal-window-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-aec-uplink-selector-test
+
+# Build rule for target.
+iterate-kit-aec-uplink-selector-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-aec-uplink-selector-test
+.PHONY : iterate-kit-aec-uplink-selector-test
+
+# fast build rule for target.
+iterate-kit-aec-uplink-selector-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-uplink-selector-test.dir/build.make CMakeFiles/iterate-kit-aec-uplink-selector-test.dir/build
+.PHONY : iterate-kit-aec-uplink-selector-test/fast
 
 #=============================================================================
 # Target rules for targets named iterate-kit-pcm-clock-playback-test
@@ -335,6 +582,19 @@ iterate-kit-voice-pe-hardware-config-test/fast:
 .PHONY : iterate-kit-voice-pe-hardware-config-test/fast
 
 #=============================================================================
+# Target rules for targets named iterate-kit-voice-pe-hardware-config-aec-override-test
+
+# Build rule for target.
+iterate-kit-voice-pe-hardware-config-aec-override-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-voice-pe-hardware-config-aec-override-test
+.PHONY : iterate-kit-voice-pe-hardware-config-aec-override-test
+
+# fast build rule for target.
+iterate-kit-voice-pe-hardware-config-aec-override-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/build
+.PHONY : iterate-kit-voice-pe-hardware-config-aec-override-test/fast
+
+#=============================================================================
 # Target rules for targets named iterate-kit-voice-satellite-test
 
 # Build rule for target.
@@ -359,6 +619,71 @@ iterate-kit-device-events-test: cmake_check_build_system
 iterate-kit-device-events-test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-device-events-test.dir/build.make CMakeFiles/iterate-kit-device-events-test.dir/build
 .PHONY : iterate-kit-device-events-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-debounced-button-test
+
+# Build rule for target.
+iterate-kit-debounced-button-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-debounced-button-test
+.PHONY : iterate-kit-debounced-button-test
+
+# fast build rule for target.
+iterate-kit-debounced-button-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-debounced-button-test.dir/build.make CMakeFiles/iterate-kit-debounced-button-test.dir/build
+.PHONY : iterate-kit-debounced-button-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-talk-button-test
+
+# Build rule for target.
+iterate-kit-talk-button-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-talk-button-test
+.PHONY : iterate-kit-talk-button-test
+
+# fast build rule for target.
+iterate-kit-talk-button-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-talk-button-test.dir/build.make CMakeFiles/iterate-kit-talk-button-test.dir/build
+.PHONY : iterate-kit-talk-button-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-havpe-ui-test
+
+# Build rule for target.
+iterate-kit-havpe-ui-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-havpe-ui-test
+.PHONY : iterate-kit-havpe-ui-test
+
+# fast build rule for target.
+iterate-kit-havpe-ui-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-havpe-ui-test.dir/build.make CMakeFiles/iterate-kit-havpe-ui-test.dir/build
+.PHONY : iterate-kit-havpe-ui-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-conversation-lights-test
+
+# Build rule for target.
+iterate-kit-conversation-lights-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-conversation-lights-test
+.PHONY : iterate-kit-conversation-lights-test
+
+# fast build rule for target.
+iterate-kit-conversation-lights-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-conversation-lights-test.dir/build.make CMakeFiles/iterate-kit-conversation-lights-test.dir/build
+.PHONY : iterate-kit-conversation-lights-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-touch-tap-test
+
+# Build rule for target.
+iterate-kit-touch-tap-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-touch-tap-test
+.PHONY : iterate-kit-touch-tap-test
+
+# fast build rule for target.
+iterate-kit-touch-tap-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-touch-tap-test.dir/build.make CMakeFiles/iterate-kit-touch-tap-test.dir/build
+.PHONY : iterate-kit-touch-tap-test/fast
 
 #=============================================================================
 # Target rules for targets named iterate-kit-retry-gate-test
@@ -411,6 +736,19 @@ iterate-kit-control-recovery-test: cmake_check_build_system
 iterate-kit-control-recovery-test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-control-recovery-test.dir/build.make CMakeFiles/iterate-kit-control-recovery-test.dir/build
 .PHONY : iterate-kit-control-recovery-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-speaker-abandon-test
+
+# Build rule for target.
+iterate-kit-speaker-abandon-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-speaker-abandon-test
+.PHONY : iterate-kit-speaker-abandon-test
+
+# fast build rule for target.
+iterate-kit-speaker-abandon-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-speaker-abandon-test.dir/build.make CMakeFiles/iterate-kit-speaker-abandon-test.dir/build
+.PHONY : iterate-kit-speaker-abandon-test/fast
 
 #=============================================================================
 # Target rules for targets named iterate-kit-runtime-diagnostics-fixture
@@ -530,6 +868,19 @@ iterate-kit-display-refresh-gate-test/fast:
 .PHONY : iterate-kit-display-refresh-gate-test/fast
 
 #=============================================================================
+# Target rules for targets named iterate-kit-m5sticks3-visual-layout-test
+
+# Build rule for target.
+iterate-kit-m5sticks3-visual-layout-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-m5sticks3-visual-layout-test
+.PHONY : iterate-kit-m5sticks3-visual-layout-test
+
+# fast build rule for target.
+iterate-kit-m5sticks3-visual-layout-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-m5sticks3-visual-layout-test.dir/build.make CMakeFiles/iterate-kit-m5sticks3-visual-layout-test.dir/build
+.PHONY : iterate-kit-m5sticks3-visual-layout-test/fast
+
+#=============================================================================
 # Target rules for targets named iterate-kit-configuration-test
 
 # Build rule for target.
@@ -543,6 +894,188 @@ iterate-kit-configuration-test/fast:
 .PHONY : iterate-kit-configuration-test/fast
 
 #=============================================================================
+# Target rules for targets named iterate-kit-cli-report-test
+
+# Build rule for target.
+iterate-kit-cli-report-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-report-test
+.PHONY : iterate-kit-cli-report-test
+
+# fast build rule for target.
+iterate-kit-cli-report-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-report-test.dir/build.make CMakeFiles/iterate-kit-cli-report-test.dir/build
+.PHONY : iterate-kit-cli-report-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-options-test
+
+# Build rule for target.
+iterate-kit-cli-options-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-options-test
+.PHONY : iterate-kit-cli-options-test
+
+# fast build rule for target.
+iterate-kit-cli-options-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-options-test.dir/build.make CMakeFiles/iterate-kit-cli-options-test.dir/build
+.PHONY : iterate-kit-cli-options-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-wav-test
+
+# Build rule for target.
+iterate-kit-cli-wav-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-wav-test
+.PHONY : iterate-kit-cli-wav-test
+
+# fast build rule for target.
+iterate-kit-cli-wav-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-wav-test.dir/build.make CMakeFiles/iterate-kit-cli-wav-test.dir/build
+.PHONY : iterate-kit-cli-wav-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-speaker-test
+
+# Build rule for target.
+iterate-kit-cli-speaker-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-speaker-test
+.PHONY : iterate-kit-cli-speaker-test
+
+# fast build rule for target.
+iterate-kit-cli-speaker-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-speaker-test.dir/build.make CMakeFiles/iterate-kit-cli-speaker-test.dir/build
+.PHONY : iterate-kit-cli-speaker-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-paced-sink-test
+
+# Build rule for target.
+iterate-kit-cli-paced-sink-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-paced-sink-test
+.PHONY : iterate-kit-cli-paced-sink-test
+
+# fast build rule for target.
+iterate-kit-cli-paced-sink-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build.make CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build
+.PHONY : iterate-kit-cli-paced-sink-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-fault-schedule-test
+
+# Build rule for target.
+iterate-kit-cli-fault-schedule-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-fault-schedule-test
+.PHONY : iterate-kit-cli-fault-schedule-test
+
+# fast build rule for target.
+iterate-kit-cli-fault-schedule-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/build.make CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/build
+.PHONY : iterate-kit-cli-fault-schedule-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-virtual-clock-test
+
+# Build rule for target.
+iterate-kit-cli-virtual-clock-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-virtual-clock-test
+.PHONY : iterate-kit-cli-virtual-clock-test
+
+# fast build rule for target.
+iterate-kit-cli-virtual-clock-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build.make CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build
+.PHONY : iterate-kit-cli-virtual-clock-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-delivery-fault-test
+
+# Build rule for target.
+iterate-kit-cli-delivery-fault-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-delivery-fault-test
+.PHONY : iterate-kit-cli-delivery-fault-test
+
+# fast build rule for target.
+iterate-kit-cli-delivery-fault-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build.make CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build
+.PHONY : iterate-kit-cli-delivery-fault-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-device-profile-test
+
+# Build rule for target.
+iterate-kit-cli-device-profile-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-device-profile-test
+.PHONY : iterate-kit-cli-device-profile-test
+
+# fast build rule for target.
+iterate-kit-cli-device-profile-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-device-profile-test.dir/build.make CMakeFiles/iterate-kit-cli-device-profile-test.dir/build
+.PHONY : iterate-kit-cli-device-profile-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-keyboard-test
+
+# Build rule for target.
+iterate-kit-cli-keyboard-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-keyboard-test
+.PHONY : iterate-kit-cli-keyboard-test
+
+# fast build rule for target.
+iterate-kit-cli-keyboard-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-keyboard-test.dir/build.make CMakeFiles/iterate-kit-cli-keyboard-test.dir/build
+.PHONY : iterate-kit-cli-keyboard-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-cli-microphone-test
+
+# Build rule for target.
+iterate-kit-cli-microphone-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-cli-microphone-test
+.PHONY : iterate-kit-cli-microphone-test
+
+# fast build rule for target.
+iterate-kit-cli-microphone-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-microphone-test.dir/build.make CMakeFiles/iterate-kit-cli-microphone-test.dir/build
+.PHONY : iterate-kit-cli-microphone-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-audio-playout-test
+
+# Build rule for target.
+iterate-kit-audio-playout-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-audio-playout-test
+.PHONY : iterate-kit-audio-playout-test
+
+# fast build rule for target.
+iterate-kit-audio-playout-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-audio-playout-test.dir/build.make CMakeFiles/iterate-kit-audio-playout-test.dir/build
+.PHONY : iterate-kit-audio-playout-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-device-menu-test
+
+# Build rule for target.
+iterate-kit-device-menu-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-device-menu-test
+.PHONY : iterate-kit-device-menu-test
+
+# fast build rule for target.
+iterate-kit-device-menu-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-device-menu-test.dir/build.make CMakeFiles/iterate-kit-device-menu-test.dir/build
+.PHONY : iterate-kit-device-menu-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-voice-playback-clock-test
+
+# Build rule for target.
+iterate-kit-voice-playback-clock-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-voice-playback-clock-test
+.PHONY : iterate-kit-voice-playback-clock-test
+
+# fast build rule for target.
+iterate-kit-voice-playback-clock-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-playback-clock-test.dir/build.make CMakeFiles/iterate-kit-voice-playback-clock-test.dir/build
+.PHONY : iterate-kit-voice-playback-clock-test/fast
+
+#=============================================================================
 # Target rules for targets named iterate-kit-voicelab-stream-test
 
 # Build rule for target.
@@ -554,6 +1087,19 @@ iterate-kit-voicelab-stream-test: cmake_check_build_system
 iterate-kit-voicelab-stream-test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voicelab-stream-test.dir/build.make CMakeFiles/iterate-kit-voicelab-stream-test.dir/build
 .PHONY : iterate-kit-voicelab-stream-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-mulaw-roundtrip-test
+
+# Build rule for target.
+iterate-kit-mulaw-roundtrip-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-mulaw-roundtrip-test
+.PHONY : iterate-kit-mulaw-roundtrip-test
+
+# fast build rule for target.
+iterate-kit-mulaw-roundtrip-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-mulaw-roundtrip-test.dir/build.make CMakeFiles/iterate-kit-mulaw-roundtrip-test.dir/build
+.PHONY : iterate-kit-mulaw-roundtrip-test/fast
 
 #=============================================================================
 # Target rules for targets named iterate-kit-capnweb-oneway-call-test
@@ -829,6 +1375,32 @@ iterate-kit-esp-idf-itx-transport-test/fast:
 .PHONY : iterate-kit-esp-idf-itx-transport-test/fast
 
 #=============================================================================
+# Target rules for targets named iterate-kit-posix-websocket-test
+
+# Build rule for target.
+iterate-kit-posix-websocket-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-posix-websocket-test
+.PHONY : iterate-kit-posix-websocket-test
+
+# fast build rule for target.
+iterate-kit-posix-websocket-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-websocket-test.dir/build.make CMakeFiles/iterate-kit-posix-websocket-test.dir/build
+.PHONY : iterate-kit-posix-websocket-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-posix-itx-transport-test
+
+# Build rule for target.
+iterate-kit-posix-itx-transport-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-posix-itx-transport-test
+.PHONY : iterate-kit-posix-itx-transport-test
+
+# fast build rule for target.
+iterate-kit-posix-itx-transport-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build
+.PHONY : iterate-kit-posix-itx-transport-test/fast
+
+#=============================================================================
 # Target rules for targets named iterate-kit-esp-idf-pcm-transport-test
 
 # Build rule for target.
@@ -840,6 +1412,19 @@ iterate-kit-esp-idf-pcm-transport-test: cmake_check_build_system
 iterate-kit-esp-idf-pcm-transport-test/fast:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-transport-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-transport-test.dir/build
 .PHONY : iterate-kit-esp-idf-pcm-transport-test/fast
+
+#=============================================================================
+# Target rules for targets named iterate-kit-esp-idf-pcm-session-test
+
+# Build rule for target.
+iterate-kit-esp-idf-pcm-session-test: cmake_check_build_system
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/Makefile2 iterate-kit-esp-idf-pcm-session-test
+.PHONY : iterate-kit-esp-idf-pcm-session-test
+
+# fast build rule for target.
+iterate-kit-esp-idf-pcm-session-test/fast:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/build
+.PHONY : iterate-kit-esp-idf-pcm-session-test/fast
 
 #=============================================================================
 # Target rules for targets named iterate-kit-configuration-decoder-fixture
@@ -931,6 +1516,582 @@ capnweb-native-peer: cmake_check_build_system
 capnweb-native-peer/fast:
 	$(MAKE) $(MAKESILENT) -f vendor/capnweb/CMakeFiles/capnweb-native-peer.dir/build.make vendor/capnweb/CMakeFiles/capnweb-native-peer.dir/build
 .PHONY : capnweb-native-peer/fast
+
+components/avatar/src/face_animator.o: components/avatar/src/face_animator.c.o
+.PHONY : components/avatar/src/face_animator.o
+
+# target to build an object file
+components/avatar/src/face_animator.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_animator.c.o
+.PHONY : components/avatar/src/face_animator.c.o
+
+components/avatar/src/face_animator.i: components/avatar/src/face_animator.c.i
+.PHONY : components/avatar/src/face_animator.i
+
+# target to preprocess a source file
+components/avatar/src/face_animator.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_animator.c.i
+.PHONY : components/avatar/src/face_animator.c.i
+
+components/avatar/src/face_animator.s: components/avatar/src/face_animator.c.s
+.PHONY : components/avatar/src/face_animator.s
+
+# target to generate assembly for a file
+components/avatar/src/face_animator.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_animator.c.s
+.PHONY : components/avatar/src/face_animator.c.s
+
+components/avatar/src/face_avatar_registry.o: components/avatar/src/face_avatar_registry.c.o
+.PHONY : components/avatar/src/face_avatar_registry.o
+
+# target to build an object file
+components/avatar/src/face_avatar_registry.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_avatar_registry.c.o
+.PHONY : components/avatar/src/face_avatar_registry.c.o
+
+components/avatar/src/face_avatar_registry.i: components/avatar/src/face_avatar_registry.c.i
+.PHONY : components/avatar/src/face_avatar_registry.i
+
+# target to preprocess a source file
+components/avatar/src/face_avatar_registry.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_avatar_registry.c.i
+.PHONY : components/avatar/src/face_avatar_registry.c.i
+
+components/avatar/src/face_avatar_registry.s: components/avatar/src/face_avatar_registry.c.s
+.PHONY : components/avatar/src/face_avatar_registry.s
+
+# target to generate assembly for a file
+components/avatar/src/face_avatar_registry.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_avatar_registry.c.s
+.PHONY : components/avatar/src/face_avatar_registry.c.s
+
+components/avatar/src/face_doze.o: components/avatar/src/face_doze.c.o
+.PHONY : components/avatar/src/face_doze.o
+
+# target to build an object file
+components/avatar/src/face_doze.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_doze.c.o
+.PHONY : components/avatar/src/face_doze.c.o
+
+components/avatar/src/face_doze.i: components/avatar/src/face_doze.c.i
+.PHONY : components/avatar/src/face_doze.i
+
+# target to preprocess a source file
+components/avatar/src/face_doze.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_doze.c.i
+.PHONY : components/avatar/src/face_doze.c.i
+
+components/avatar/src/face_doze.s: components/avatar/src/face_doze.c.s
+.PHONY : components/avatar/src/face_doze.s
+
+# target to generate assembly for a file
+components/avatar/src/face_doze.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_doze.c.s
+.PHONY : components/avatar/src/face_doze.c.s
+
+components/avatar/src/face_driver.o: components/avatar/src/face_driver.c.o
+.PHONY : components/avatar/src/face_driver.o
+
+# target to build an object file
+components/avatar/src/face_driver.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_driver.c.o
+.PHONY : components/avatar/src/face_driver.c.o
+
+components/avatar/src/face_driver.i: components/avatar/src/face_driver.c.i
+.PHONY : components/avatar/src/face_driver.i
+
+# target to preprocess a source file
+components/avatar/src/face_driver.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_driver.c.i
+.PHONY : components/avatar/src/face_driver.c.i
+
+components/avatar/src/face_driver.s: components/avatar/src/face_driver.c.s
+.PHONY : components/avatar/src/face_driver.s
+
+# target to generate assembly for a file
+components/avatar/src/face_driver.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_driver.c.s
+.PHONY : components/avatar/src/face_driver.c.s
+
+components/avatar/src/face_keyframe.o: components/avatar/src/face_keyframe.c.o
+.PHONY : components/avatar/src/face_keyframe.o
+
+# target to build an object file
+components/avatar/src/face_keyframe.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_keyframe.c.o
+.PHONY : components/avatar/src/face_keyframe.c.o
+
+components/avatar/src/face_keyframe.i: components/avatar/src/face_keyframe.c.i
+.PHONY : components/avatar/src/face_keyframe.i
+
+# target to preprocess a source file
+components/avatar/src/face_keyframe.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_keyframe.c.i
+.PHONY : components/avatar/src/face_keyframe.c.i
+
+components/avatar/src/face_keyframe.s: components/avatar/src/face_keyframe.c.s
+.PHONY : components/avatar/src/face_keyframe.s
+
+# target to generate assembly for a file
+components/avatar/src/face_keyframe.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_keyframe.c.s
+.PHONY : components/avatar/src/face_keyframe.c.s
+
+components/avatar/src/face_performance.o: components/avatar/src/face_performance.c.o
+.PHONY : components/avatar/src/face_performance.o
+
+# target to build an object file
+components/avatar/src/face_performance.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_performance.c.o
+.PHONY : components/avatar/src/face_performance.c.o
+
+components/avatar/src/face_performance.i: components/avatar/src/face_performance.c.i
+.PHONY : components/avatar/src/face_performance.i
+
+# target to preprocess a source file
+components/avatar/src/face_performance.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_performance.c.i
+.PHONY : components/avatar/src/face_performance.c.i
+
+components/avatar/src/face_performance.s: components/avatar/src/face_performance.c.s
+.PHONY : components/avatar/src/face_performance.s
+
+# target to generate assembly for a file
+components/avatar/src/face_performance.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_performance.c.s
+.PHONY : components/avatar/src/face_performance.c.s
+
+components/avatar/src/face_scale.o: components/avatar/src/face_scale.c.o
+.PHONY : components/avatar/src/face_scale.o
+
+# target to build an object file
+components/avatar/src/face_scale.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_scale.c.o
+.PHONY : components/avatar/src/face_scale.c.o
+
+components/avatar/src/face_scale.i: components/avatar/src/face_scale.c.i
+.PHONY : components/avatar/src/face_scale.i
+
+# target to preprocess a source file
+components/avatar/src/face_scale.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_scale.c.i
+.PHONY : components/avatar/src/face_scale.c.i
+
+components/avatar/src/face_scale.s: components/avatar/src/face_scale.c.s
+.PHONY : components/avatar/src/face_scale.s
+
+# target to generate assembly for a file
+components/avatar/src/face_scale.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_scale.c.s
+.PHONY : components/avatar/src/face_scale.c.s
+
+components/avatar/src/face_sprite_sheet.o: components/avatar/src/face_sprite_sheet.c.o
+.PHONY : components/avatar/src/face_sprite_sheet.o
+
+# target to build an object file
+components/avatar/src/face_sprite_sheet.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_sprite_sheet.c.o
+.PHONY : components/avatar/src/face_sprite_sheet.c.o
+
+components/avatar/src/face_sprite_sheet.i: components/avatar/src/face_sprite_sheet.c.i
+.PHONY : components/avatar/src/face_sprite_sheet.i
+
+# target to preprocess a source file
+components/avatar/src/face_sprite_sheet.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_sprite_sheet.c.i
+.PHONY : components/avatar/src/face_sprite_sheet.c.i
+
+components/avatar/src/face_sprite_sheet.s: components/avatar/src/face_sprite_sheet.c.s
+.PHONY : components/avatar/src/face_sprite_sheet.s
+
+# target to generate assembly for a file
+components/avatar/src/face_sprite_sheet.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_sprite_sheet.c.s
+.PHONY : components/avatar/src/face_sprite_sheet.c.s
+
+components/avatar/src/face_stage.o: components/avatar/src/face_stage.c.o
+.PHONY : components/avatar/src/face_stage.o
+
+# target to build an object file
+components/avatar/src/face_stage.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_stage.c.o
+.PHONY : components/avatar/src/face_stage.c.o
+
+components/avatar/src/face_stage.i: components/avatar/src/face_stage.c.i
+.PHONY : components/avatar/src/face_stage.i
+
+# target to preprocess a source file
+components/avatar/src/face_stage.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_stage.c.i
+.PHONY : components/avatar/src/face_stage.c.i
+
+components/avatar/src/face_stage.s: components/avatar/src/face_stage.c.s
+.PHONY : components/avatar/src/face_stage.s
+
+# target to generate assembly for a file
+components/avatar/src/face_stage.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_stage.c.s
+.PHONY : components/avatar/src/face_stage.c.s
+
+components/avatar/src/face_viseme_queue.o: components/avatar/src/face_viseme_queue.c.o
+.PHONY : components/avatar/src/face_viseme_queue.o
+
+# target to build an object file
+components/avatar/src/face_viseme_queue.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_viseme_queue.c.o
+.PHONY : components/avatar/src/face_viseme_queue.c.o
+
+components/avatar/src/face_viseme_queue.i: components/avatar/src/face_viseme_queue.c.i
+.PHONY : components/avatar/src/face_viseme_queue.i
+
+# target to preprocess a source file
+components/avatar/src/face_viseme_queue.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_viseme_queue.c.i
+.PHONY : components/avatar/src/face_viseme_queue.c.i
+
+components/avatar/src/face_viseme_queue.s: components/avatar/src/face_viseme_queue.c.s
+.PHONY : components/avatar/src/face_viseme_queue.s
+
+# target to generate assembly for a file
+components/avatar/src/face_viseme_queue.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/face_viseme_queue.c.s
+.PHONY : components/avatar/src/face_viseme_queue.c.s
+
+components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.o: components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.o
+.PHONY : components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.o
+
+# target to build an object file
+components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.o
+.PHONY : components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.o
+
+components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.i: components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.i
+.PHONY : components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.i
+
+# target to preprocess a source file
+components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.i
+.PHONY : components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.i
+
+components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.s: components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.s
+.PHONY : components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.s
+
+# target to generate assembly for a file
+components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.s
+.PHONY : components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c.s
+
+components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.o: components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.o
+.PHONY : components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.o
+
+# target to build an object file
+components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.o
+.PHONY : components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.o
+
+components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.i: components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.i
+.PHONY : components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.i
+
+# target to preprocess a source file
+components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.i
+.PHONY : components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.i
+
+components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.s: components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.s
+.PHONY : components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.s
+
+# target to generate assembly for a file
+components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.s
+.PHONY : components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c.s
+
+components/avatar/src/fspp_starbyte_cores3_fine_atlas.o: components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.o
+.PHONY : components/avatar/src/fspp_starbyte_cores3_fine_atlas.o
+
+# target to build an object file
+components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.o
+.PHONY : components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.o
+
+components/avatar/src/fspp_starbyte_cores3_fine_atlas.i: components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.i
+.PHONY : components/avatar/src/fspp_starbyte_cores3_fine_atlas.i
+
+# target to preprocess a source file
+components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.i
+.PHONY : components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.i
+
+components/avatar/src/fspp_starbyte_cores3_fine_atlas.s: components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.s
+.PHONY : components/avatar/src/fspp_starbyte_cores3_fine_atlas.s
+
+# target to generate assembly for a file
+components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-avatar.dir/build.make CMakeFiles/iterate-kit-avatar.dir/components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.s
+.PHONY : components/avatar/src/fspp_starbyte_cores3_fine_atlas.c.s
+
+components/avatar/tests/face_animator_test.o: components/avatar/tests/face_animator_test.c.o
+.PHONY : components/avatar/tests/face_animator_test.o
+
+# target to build an object file
+components/avatar/tests/face_animator_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-animator-test.dir/build.make CMakeFiles/iterate-kit-face-animator-test.dir/components/avatar/tests/face_animator_test.c.o
+.PHONY : components/avatar/tests/face_animator_test.c.o
+
+components/avatar/tests/face_animator_test.i: components/avatar/tests/face_animator_test.c.i
+.PHONY : components/avatar/tests/face_animator_test.i
+
+# target to preprocess a source file
+components/avatar/tests/face_animator_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-animator-test.dir/build.make CMakeFiles/iterate-kit-face-animator-test.dir/components/avatar/tests/face_animator_test.c.i
+.PHONY : components/avatar/tests/face_animator_test.c.i
+
+components/avatar/tests/face_animator_test.s: components/avatar/tests/face_animator_test.c.s
+.PHONY : components/avatar/tests/face_animator_test.s
+
+# target to generate assembly for a file
+components/avatar/tests/face_animator_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-animator-test.dir/build.make CMakeFiles/iterate-kit-face-animator-test.dir/components/avatar/tests/face_animator_test.c.s
+.PHONY : components/avatar/tests/face_animator_test.c.s
+
+components/avatar/tests/face_avatar_registry_test.o: components/avatar/tests/face_avatar_registry_test.c.o
+.PHONY : components/avatar/tests/face_avatar_registry_test.o
+
+# target to build an object file
+components/avatar/tests/face_avatar_registry_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-avatar-registry-test.dir/build.make CMakeFiles/iterate-kit-face-avatar-registry-test.dir/components/avatar/tests/face_avatar_registry_test.c.o
+.PHONY : components/avatar/tests/face_avatar_registry_test.c.o
+
+components/avatar/tests/face_avatar_registry_test.i: components/avatar/tests/face_avatar_registry_test.c.i
+.PHONY : components/avatar/tests/face_avatar_registry_test.i
+
+# target to preprocess a source file
+components/avatar/tests/face_avatar_registry_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-avatar-registry-test.dir/build.make CMakeFiles/iterate-kit-face-avatar-registry-test.dir/components/avatar/tests/face_avatar_registry_test.c.i
+.PHONY : components/avatar/tests/face_avatar_registry_test.c.i
+
+components/avatar/tests/face_avatar_registry_test.s: components/avatar/tests/face_avatar_registry_test.c.s
+.PHONY : components/avatar/tests/face_avatar_registry_test.s
+
+# target to generate assembly for a file
+components/avatar/tests/face_avatar_registry_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-avatar-registry-test.dir/build.make CMakeFiles/iterate-kit-face-avatar-registry-test.dir/components/avatar/tests/face_avatar_registry_test.c.s
+.PHONY : components/avatar/tests/face_avatar_registry_test.c.s
+
+components/avatar/tests/face_doze_test.o: components/avatar/tests/face_doze_test.c.o
+.PHONY : components/avatar/tests/face_doze_test.o
+
+# target to build an object file
+components/avatar/tests/face_doze_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-doze-test.dir/build.make CMakeFiles/iterate-kit-face-doze-test.dir/components/avatar/tests/face_doze_test.c.o
+.PHONY : components/avatar/tests/face_doze_test.c.o
+
+components/avatar/tests/face_doze_test.i: components/avatar/tests/face_doze_test.c.i
+.PHONY : components/avatar/tests/face_doze_test.i
+
+# target to preprocess a source file
+components/avatar/tests/face_doze_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-doze-test.dir/build.make CMakeFiles/iterate-kit-face-doze-test.dir/components/avatar/tests/face_doze_test.c.i
+.PHONY : components/avatar/tests/face_doze_test.c.i
+
+components/avatar/tests/face_doze_test.s: components/avatar/tests/face_doze_test.c.s
+.PHONY : components/avatar/tests/face_doze_test.s
+
+# target to generate assembly for a file
+components/avatar/tests/face_doze_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-doze-test.dir/build.make CMakeFiles/iterate-kit-face-doze-test.dir/components/avatar/tests/face_doze_test.c.s
+.PHONY : components/avatar/tests/face_doze_test.c.s
+
+components/avatar/tests/face_keyframe_test.o: components/avatar/tests/face_keyframe_test.c.o
+.PHONY : components/avatar/tests/face_keyframe_test.o
+
+# target to build an object file
+components/avatar/tests/face_keyframe_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-keyframe-test.dir/build.make CMakeFiles/iterate-kit-face-keyframe-test.dir/components/avatar/tests/face_keyframe_test.c.o
+.PHONY : components/avatar/tests/face_keyframe_test.c.o
+
+components/avatar/tests/face_keyframe_test.i: components/avatar/tests/face_keyframe_test.c.i
+.PHONY : components/avatar/tests/face_keyframe_test.i
+
+# target to preprocess a source file
+components/avatar/tests/face_keyframe_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-keyframe-test.dir/build.make CMakeFiles/iterate-kit-face-keyframe-test.dir/components/avatar/tests/face_keyframe_test.c.i
+.PHONY : components/avatar/tests/face_keyframe_test.c.i
+
+components/avatar/tests/face_keyframe_test.s: components/avatar/tests/face_keyframe_test.c.s
+.PHONY : components/avatar/tests/face_keyframe_test.s
+
+# target to generate assembly for a file
+components/avatar/tests/face_keyframe_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-keyframe-test.dir/build.make CMakeFiles/iterate-kit-face-keyframe-test.dir/components/avatar/tests/face_keyframe_test.c.s
+.PHONY : components/avatar/tests/face_keyframe_test.c.s
+
+components/avatar/tests/face_performance_test.o: components/avatar/tests/face_performance_test.c.o
+.PHONY : components/avatar/tests/face_performance_test.o
+
+# target to build an object file
+components/avatar/tests/face_performance_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-performance-test.dir/build.make CMakeFiles/iterate-kit-face-performance-test.dir/components/avatar/tests/face_performance_test.c.o
+.PHONY : components/avatar/tests/face_performance_test.c.o
+
+components/avatar/tests/face_performance_test.i: components/avatar/tests/face_performance_test.c.i
+.PHONY : components/avatar/tests/face_performance_test.i
+
+# target to preprocess a source file
+components/avatar/tests/face_performance_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-performance-test.dir/build.make CMakeFiles/iterate-kit-face-performance-test.dir/components/avatar/tests/face_performance_test.c.i
+.PHONY : components/avatar/tests/face_performance_test.c.i
+
+components/avatar/tests/face_performance_test.s: components/avatar/tests/face_performance_test.c.s
+.PHONY : components/avatar/tests/face_performance_test.s
+
+# target to generate assembly for a file
+components/avatar/tests/face_performance_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-performance-test.dir/build.make CMakeFiles/iterate-kit-face-performance-test.dir/components/avatar/tests/face_performance_test.c.s
+.PHONY : components/avatar/tests/face_performance_test.c.s
+
+components/avatar/tests/face_scale_test.o: components/avatar/tests/face_scale_test.c.o
+.PHONY : components/avatar/tests/face_scale_test.o
+
+# target to build an object file
+components/avatar/tests/face_scale_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-scale-test.dir/build.make CMakeFiles/iterate-kit-face-scale-test.dir/components/avatar/tests/face_scale_test.c.o
+.PHONY : components/avatar/tests/face_scale_test.c.o
+
+components/avatar/tests/face_scale_test.i: components/avatar/tests/face_scale_test.c.i
+.PHONY : components/avatar/tests/face_scale_test.i
+
+# target to preprocess a source file
+components/avatar/tests/face_scale_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-scale-test.dir/build.make CMakeFiles/iterate-kit-face-scale-test.dir/components/avatar/tests/face_scale_test.c.i
+.PHONY : components/avatar/tests/face_scale_test.c.i
+
+components/avatar/tests/face_scale_test.s: components/avatar/tests/face_scale_test.c.s
+.PHONY : components/avatar/tests/face_scale_test.s
+
+# target to generate assembly for a file
+components/avatar/tests/face_scale_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-scale-test.dir/build.make CMakeFiles/iterate-kit-face-scale-test.dir/components/avatar/tests/face_scale_test.c.s
+.PHONY : components/avatar/tests/face_scale_test.c.s
+
+components/avatar/tests/face_sprite_sheet_test.o: components/avatar/tests/face_sprite_sheet_test.c.o
+.PHONY : components/avatar/tests/face_sprite_sheet_test.o
+
+# target to build an object file
+components/avatar/tests/face_sprite_sheet_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-sprite-sheet-test.dir/build.make CMakeFiles/iterate-kit-face-sprite-sheet-test.dir/components/avatar/tests/face_sprite_sheet_test.c.o
+.PHONY : components/avatar/tests/face_sprite_sheet_test.c.o
+
+components/avatar/tests/face_sprite_sheet_test.i: components/avatar/tests/face_sprite_sheet_test.c.i
+.PHONY : components/avatar/tests/face_sprite_sheet_test.i
+
+# target to preprocess a source file
+components/avatar/tests/face_sprite_sheet_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-sprite-sheet-test.dir/build.make CMakeFiles/iterate-kit-face-sprite-sheet-test.dir/components/avatar/tests/face_sprite_sheet_test.c.i
+.PHONY : components/avatar/tests/face_sprite_sheet_test.c.i
+
+components/avatar/tests/face_sprite_sheet_test.s: components/avatar/tests/face_sprite_sheet_test.c.s
+.PHONY : components/avatar/tests/face_sprite_sheet_test.s
+
+# target to generate assembly for a file
+components/avatar/tests/face_sprite_sheet_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-sprite-sheet-test.dir/build.make CMakeFiles/iterate-kit-face-sprite-sheet-test.dir/components/avatar/tests/face_sprite_sheet_test.c.s
+.PHONY : components/avatar/tests/face_sprite_sheet_test.c.s
+
+components/avatar/tests/face_stage_test.o: components/avatar/tests/face_stage_test.c.o
+.PHONY : components/avatar/tests/face_stage_test.o
+
+# target to build an object file
+components/avatar/tests/face_stage_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-stage-test.dir/build.make CMakeFiles/iterate-kit-face-stage-test.dir/components/avatar/tests/face_stage_test.c.o
+.PHONY : components/avatar/tests/face_stage_test.c.o
+
+components/avatar/tests/face_stage_test.i: components/avatar/tests/face_stage_test.c.i
+.PHONY : components/avatar/tests/face_stage_test.i
+
+# target to preprocess a source file
+components/avatar/tests/face_stage_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-stage-test.dir/build.make CMakeFiles/iterate-kit-face-stage-test.dir/components/avatar/tests/face_stage_test.c.i
+.PHONY : components/avatar/tests/face_stage_test.c.i
+
+components/avatar/tests/face_stage_test.s: components/avatar/tests/face_stage_test.c.s
+.PHONY : components/avatar/tests/face_stage_test.s
+
+# target to generate assembly for a file
+components/avatar/tests/face_stage_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-stage-test.dir/build.make CMakeFiles/iterate-kit-face-stage-test.dir/components/avatar/tests/face_stage_test.c.s
+.PHONY : components/avatar/tests/face_stage_test.c.s
+
+components/avatar/tests/face_viseme_queue_test.o: components/avatar/tests/face_viseme_queue_test.c.o
+.PHONY : components/avatar/tests/face_viseme_queue_test.o
+
+# target to build an object file
+components/avatar/tests/face_viseme_queue_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-viseme-queue-test.dir/build.make CMakeFiles/iterate-kit-face-viseme-queue-test.dir/components/avatar/tests/face_viseme_queue_test.c.o
+.PHONY : components/avatar/tests/face_viseme_queue_test.c.o
+
+components/avatar/tests/face_viseme_queue_test.i: components/avatar/tests/face_viseme_queue_test.c.i
+.PHONY : components/avatar/tests/face_viseme_queue_test.i
+
+# target to preprocess a source file
+components/avatar/tests/face_viseme_queue_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-viseme-queue-test.dir/build.make CMakeFiles/iterate-kit-face-viseme-queue-test.dir/components/avatar/tests/face_viseme_queue_test.c.i
+.PHONY : components/avatar/tests/face_viseme_queue_test.c.i
+
+components/avatar/tests/face_viseme_queue_test.s: components/avatar/tests/face_viseme_queue_test.c.s
+.PHONY : components/avatar/tests/face_viseme_queue_test.s
+
+# target to generate assembly for a file
+components/avatar/tests/face_viseme_queue_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-face-viseme-queue-test.dir/build.make CMakeFiles/iterate-kit-face-viseme-queue-test.dir/components/avatar/tests/face_viseme_queue_test.c.s
+.PHONY : components/avatar/tests/face_viseme_queue_test.c.s
+
+components/capabilities/src/aec_diagnostic_trace.o: components/capabilities/src/aec_diagnostic_trace.c.o
+.PHONY : components/capabilities/src/aec_diagnostic_trace.o
+
+# target to build an object file
+components/capabilities/src/aec_diagnostic_trace.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-capabilities.dir/build.make CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.o
+.PHONY : components/capabilities/src/aec_diagnostic_trace.c.o
+
+components/capabilities/src/aec_diagnostic_trace.i: components/capabilities/src/aec_diagnostic_trace.c.i
+.PHONY : components/capabilities/src/aec_diagnostic_trace.i
+
+# target to preprocess a source file
+components/capabilities/src/aec_diagnostic_trace.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-capabilities.dir/build.make CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.i
+.PHONY : components/capabilities/src/aec_diagnostic_trace.c.i
+
+components/capabilities/src/aec_diagnostic_trace.s: components/capabilities/src/aec_diagnostic_trace.c.s
+.PHONY : components/capabilities/src/aec_diagnostic_trace.s
+
+# target to generate assembly for a file
+components/capabilities/src/aec_diagnostic_trace.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-capabilities.dir/build.make CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/aec_diagnostic_trace.c.s
+.PHONY : components/capabilities/src/aec_diagnostic_trace.c.s
+
+components/capabilities/src/avatar.o: components/capabilities/src/avatar.c.o
+.PHONY : components/capabilities/src/avatar.o
+
+# target to build an object file
+components/capabilities/src/avatar.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-capabilities.dir/build.make CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.o
+.PHONY : components/capabilities/src/avatar.c.o
+
+components/capabilities/src/avatar.i: components/capabilities/src/avatar.c.i
+.PHONY : components/capabilities/src/avatar.i
+
+# target to preprocess a source file
+components/capabilities/src/avatar.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-capabilities.dir/build.make CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.i
+.PHONY : components/capabilities/src/avatar.c.i
+
+components/capabilities/src/avatar.s: components/capabilities/src/avatar.c.s
+.PHONY : components/capabilities/src/avatar.s
+
+# target to generate assembly for a file
+components/capabilities/src/avatar.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-capabilities.dir/build.make CMakeFiles/iterate-kit-capabilities.dir/components/capabilities/src/avatar.c.s
+.PHONY : components/capabilities/src/avatar.c.s
 
 components/capabilities/src/callback_budget.o: components/capabilities/src/callback_budget.c.o
 .PHONY : components/capabilities/src/callback_budget.o
@@ -1220,6 +2381,54 @@ components/core/src/aec_capture_bridge.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_capture_bridge.c.s
 .PHONY : components/core/src/aec_capture_bridge.c.s
 
+components/core/src/aec_diagnostic_trace.o: components/core/src/aec_diagnostic_trace.c.o
+.PHONY : components/core/src/aec_diagnostic_trace.o
+
+# target to build an object file
+components/core/src/aec_diagnostic_trace.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.o
+.PHONY : components/core/src/aec_diagnostic_trace.c.o
+
+components/core/src/aec_diagnostic_trace.i: components/core/src/aec_diagnostic_trace.c.i
+.PHONY : components/core/src/aec_diagnostic_trace.i
+
+# target to preprocess a source file
+components/core/src/aec_diagnostic_trace.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.i
+.PHONY : components/core/src/aec_diagnostic_trace.c.i
+
+components/core/src/aec_diagnostic_trace.s: components/core/src/aec_diagnostic_trace.c.s
+.PHONY : components/core/src/aec_diagnostic_trace.s
+
+# target to generate assembly for a file
+components/core/src/aec_diagnostic_trace.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_diagnostic_trace.c.s
+.PHONY : components/core/src/aec_diagnostic_trace.c.s
+
+components/core/src/aec_reference_scaler.o: components/core/src/aec_reference_scaler.c.o
+.PHONY : components/core/src/aec_reference_scaler.o
+
+# target to build an object file
+components/core/src/aec_reference_scaler.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.o
+.PHONY : components/core/src/aec_reference_scaler.c.o
+
+components/core/src/aec_reference_scaler.i: components/core/src/aec_reference_scaler.c.i
+.PHONY : components/core/src/aec_reference_scaler.i
+
+# target to preprocess a source file
+components/core/src/aec_reference_scaler.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.i
+.PHONY : components/core/src/aec_reference_scaler.c.i
+
+components/core/src/aec_reference_scaler.s: components/core/src/aec_reference_scaler.c.s
+.PHONY : components/core/src/aec_reference_scaler.s
+
+# target to generate assembly for a file
+components/core/src/aec_reference_scaler.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_reference_scaler.c.s
+.PHONY : components/core/src/aec_reference_scaler.c.s
+
 components/core/src/aec_signal_window.o: components/core/src/aec_signal_window.c.o
 .PHONY : components/core/src/aec_signal_window.o
 
@@ -1243,6 +2452,30 @@ components/core/src/aec_signal_window.s: components/core/src/aec_signal_window.c
 components/core/src/aec_signal_window.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_signal_window.c.s
 .PHONY : components/core/src/aec_signal_window.c.s
+
+components/core/src/aec_uplink_selector.o: components/core/src/aec_uplink_selector.c.o
+.PHONY : components/core/src/aec_uplink_selector.o
+
+# target to build an object file
+components/core/src/aec_uplink_selector.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.o
+.PHONY : components/core/src/aec_uplink_selector.c.o
+
+components/core/src/aec_uplink_selector.i: components/core/src/aec_uplink_selector.c.i
+.PHONY : components/core/src/aec_uplink_selector.i
+
+# target to preprocess a source file
+components/core/src/aec_uplink_selector.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.i
+.PHONY : components/core/src/aec_uplink_selector.c.i
+
+components/core/src/aec_uplink_selector.s: components/core/src/aec_uplink_selector.c.s
+.PHONY : components/core/src/aec_uplink_selector.s
+
+# target to generate assembly for a file
+components/core/src/aec_uplink_selector.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/aec_uplink_selector.c.s
+.PHONY : components/core/src/aec_uplink_selector.c.s
 
 components/core/src/audio.o: components/core/src/audio.c.o
 .PHONY : components/core/src/audio.o
@@ -1292,6 +2525,30 @@ components/core/src/audio_intent_reconciler.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/audio_intent_reconciler.c.s
 .PHONY : components/core/src/audio_intent_reconciler.c.s
 
+components/core/src/audio_playout.o: components/core/src/audio_playout.c.o
+.PHONY : components/core/src/audio_playout.o
+
+# target to build an object file
+components/core/src/audio_playout.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.o
+.PHONY : components/core/src/audio_playout.c.o
+
+components/core/src/audio_playout.i: components/core/src/audio_playout.c.i
+.PHONY : components/core/src/audio_playout.i
+
+# target to preprocess a source file
+components/core/src/audio_playout.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.i
+.PHONY : components/core/src/audio_playout.c.i
+
+components/core/src/audio_playout.s: components/core/src/audio_playout.c.s
+.PHONY : components/core/src/audio_playout.s
+
+# target to generate assembly for a file
+components/core/src/audio_playout.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/audio_playout.c.s
+.PHONY : components/core/src/audio_playout.c.s
+
 components/core/src/configuration.o: components/core/src/configuration.c.o
 .PHONY : components/core/src/configuration.o
 
@@ -1340,6 +2597,30 @@ components/core/src/control_recovery.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/control_recovery.c.s
 .PHONY : components/core/src/control_recovery.c.s
 
+components/core/src/conversation_lights.o: components/core/src/conversation_lights.c.o
+.PHONY : components/core/src/conversation_lights.o
+
+# target to build an object file
+components/core/src/conversation_lights.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.o
+.PHONY : components/core/src/conversation_lights.c.o
+
+components/core/src/conversation_lights.i: components/core/src/conversation_lights.c.i
+.PHONY : components/core/src/conversation_lights.i
+
+# target to preprocess a source file
+components/core/src/conversation_lights.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.i
+.PHONY : components/core/src/conversation_lights.c.i
+
+components/core/src/conversation_lights.s: components/core/src/conversation_lights.c.s
+.PHONY : components/core/src/conversation_lights.s
+
+# target to generate assembly for a file
+components/core/src/conversation_lights.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/conversation_lights.c.s
+.PHONY : components/core/src/conversation_lights.c.s
+
 components/core/src/cpu_usage.o: components/core/src/cpu_usage.c.o
 .PHONY : components/core/src/cpu_usage.o
 
@@ -1364,6 +2645,30 @@ components/core/src/cpu_usage.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/cpu_usage.c.s
 .PHONY : components/core/src/cpu_usage.c.s
 
+components/core/src/debounced_button.o: components/core/src/debounced_button.c.o
+.PHONY : components/core/src/debounced_button.o
+
+# target to build an object file
+components/core/src/debounced_button.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.o
+.PHONY : components/core/src/debounced_button.c.o
+
+components/core/src/debounced_button.i: components/core/src/debounced_button.c.i
+.PHONY : components/core/src/debounced_button.i
+
+# target to preprocess a source file
+components/core/src/debounced_button.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.i
+.PHONY : components/core/src/debounced_button.c.i
+
+components/core/src/debounced_button.s: components/core/src/debounced_button.c.s
+.PHONY : components/core/src/debounced_button.s
+
+# target to generate assembly for a file
+components/core/src/debounced_button.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/debounced_button.c.s
+.PHONY : components/core/src/debounced_button.c.s
+
 components/core/src/device_events.o: components/core/src/device_events.c.o
 .PHONY : components/core/src/device_events.o
 
@@ -1387,6 +2692,30 @@ components/core/src/device_events.s: components/core/src/device_events.c.s
 components/core/src/device_events.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/device_events.c.s
 .PHONY : components/core/src/device_events.c.s
+
+components/core/src/device_menu.o: components/core/src/device_menu.c.o
+.PHONY : components/core/src/device_menu.o
+
+# target to build an object file
+components/core/src/device_menu.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.o
+.PHONY : components/core/src/device_menu.c.o
+
+components/core/src/device_menu.i: components/core/src/device_menu.c.i
+.PHONY : components/core/src/device_menu.i
+
+# target to preprocess a source file
+components/core/src/device_menu.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.i
+.PHONY : components/core/src/device_menu.c.i
+
+components/core/src/device_menu.s: components/core/src/device_menu.c.s
+.PHONY : components/core/src/device_menu.s
+
+# target to generate assembly for a file
+components/core/src/device_menu.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/device_menu.c.s
+.PHONY : components/core/src/device_menu.c.s
 
 components/core/src/itx_connection.o: components/core/src/itx_connection.c.o
 .PHONY : components/core/src/itx_connection.o
@@ -1435,6 +2764,30 @@ components/core/src/itx_mount.s: components/core/src/itx_mount.c.s
 components/core/src/itx_mount.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/itx_mount.c.s
 .PHONY : components/core/src/itx_mount.c.s
+
+components/core/src/itx_outbox_sender.o: components/core/src/itx_outbox_sender.c.o
+.PHONY : components/core/src/itx_outbox_sender.o
+
+# target to build an object file
+components/core/src/itx_outbox_sender.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.o
+.PHONY : components/core/src/itx_outbox_sender.c.o
+
+components/core/src/itx_outbox_sender.i: components/core/src/itx_outbox_sender.c.i
+.PHONY : components/core/src/itx_outbox_sender.i
+
+# target to preprocess a source file
+components/core/src/itx_outbox_sender.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.i
+.PHONY : components/core/src/itx_outbox_sender.c.i
+
+components/core/src/itx_outbox_sender.s: components/core/src/itx_outbox_sender.c.s
+.PHONY : components/core/src/itx_outbox_sender.s
+
+# target to generate assembly for a file
+components/core/src/itx_outbox_sender.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/itx_outbox_sender.c.s
+.PHONY : components/core/src/itx_outbox_sender.c.s
 
 components/core/src/pcm_capture_turn.o: components/core/src/pcm_capture_turn.c.o
 .PHONY : components/core/src/pcm_capture_turn.o
@@ -1507,6 +2860,30 @@ components/core/src/pcm_generation_fence.s: components/core/src/pcm_generation_f
 components/core/src/pcm_generation_fence.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_generation_fence.c.s
 .PHONY : components/core/src/pcm_generation_fence.c.s
+
+components/core/src/pcm_high_pass.o: components/core/src/pcm_high_pass.c.o
+.PHONY : components/core/src/pcm_high_pass.o
+
+# target to build an object file
+components/core/src/pcm_high_pass.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.o
+.PHONY : components/core/src/pcm_high_pass.c.o
+
+components/core/src/pcm_high_pass.i: components/core/src/pcm_high_pass.c.i
+.PHONY : components/core/src/pcm_high_pass.i
+
+# target to preprocess a source file
+components/core/src/pcm_high_pass.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.i
+.PHONY : components/core/src/pcm_high_pass.c.i
+
+components/core/src/pcm_high_pass.s: components/core/src/pcm_high_pass.c.s
+.PHONY : components/core/src/pcm_high_pass.s
+
+# target to generate assembly for a file
+components/core/src/pcm_high_pass.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/pcm_high_pass.c.s
+.PHONY : components/core/src/pcm_high_pass.c.s
 
 components/core/src/pcm_lane.o: components/core/src/pcm_lane.c.o
 .PHONY : components/core/src/pcm_lane.o
@@ -1700,6 +3077,30 @@ components/core/src/runtime_diagnostics.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/runtime_diagnostics.c.s
 .PHONY : components/core/src/runtime_diagnostics.c.s
 
+components/core/src/speaker_abandon.o: components/core/src/speaker_abandon.c.o
+.PHONY : components/core/src/speaker_abandon.o
+
+# target to build an object file
+components/core/src/speaker_abandon.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.o
+.PHONY : components/core/src/speaker_abandon.c.o
+
+components/core/src/speaker_abandon.i: components/core/src/speaker_abandon.c.i
+.PHONY : components/core/src/speaker_abandon.i
+
+# target to preprocess a source file
+components/core/src/speaker_abandon.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.i
+.PHONY : components/core/src/speaker_abandon.c.i
+
+components/core/src/speaker_abandon.s: components/core/src/speaker_abandon.c.s
+.PHONY : components/core/src/speaker_abandon.s
+
+# target to generate assembly for a file
+components/core/src/speaker_abandon.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/speaker_abandon.c.s
+.PHONY : components/core/src/speaker_abandon.c.s
+
 components/core/src/spsc_ring.o: components/core/src/spsc_ring.c.o
 .PHONY : components/core/src/spsc_ring.o
 
@@ -1724,6 +3125,78 @@ components/core/src/spsc_ring.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/spsc_ring.c.s
 .PHONY : components/core/src/spsc_ring.c.s
 
+components/core/src/talk_button.o: components/core/src/talk_button.c.o
+.PHONY : components/core/src/talk_button.o
+
+# target to build an object file
+components/core/src/talk_button.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.o
+.PHONY : components/core/src/talk_button.c.o
+
+components/core/src/talk_button.i: components/core/src/talk_button.c.i
+.PHONY : components/core/src/talk_button.i
+
+# target to preprocess a source file
+components/core/src/talk_button.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.i
+.PHONY : components/core/src/talk_button.c.i
+
+components/core/src/talk_button.s: components/core/src/talk_button.c.s
+.PHONY : components/core/src/talk_button.s
+
+# target to generate assembly for a file
+components/core/src/talk_button.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/talk_button.c.s
+.PHONY : components/core/src/talk_button.c.s
+
+components/core/src/touch_tap.o: components/core/src/touch_tap.c.o
+.PHONY : components/core/src/touch_tap.o
+
+# target to build an object file
+components/core/src/touch_tap.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.o
+.PHONY : components/core/src/touch_tap.c.o
+
+components/core/src/touch_tap.i: components/core/src/touch_tap.c.i
+.PHONY : components/core/src/touch_tap.i
+
+# target to preprocess a source file
+components/core/src/touch_tap.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.i
+.PHONY : components/core/src/touch_tap.c.i
+
+components/core/src/touch_tap.s: components/core/src/touch_tap.c.s
+.PHONY : components/core/src/touch_tap.s
+
+# target to generate assembly for a file
+components/core/src/touch_tap.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/touch_tap.c.s
+.PHONY : components/core/src/touch_tap.c.s
+
+components/core/src/voice_playback_clock.o: components/core/src/voice_playback_clock.c.o
+.PHONY : components/core/src/voice_playback_clock.o
+
+# target to build an object file
+components/core/src/voice_playback_clock.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.o
+.PHONY : components/core/src/voice_playback_clock.c.o
+
+components/core/src/voice_playback_clock.i: components/core/src/voice_playback_clock.c.i
+.PHONY : components/core/src/voice_playback_clock.i
+
+# target to preprocess a source file
+components/core/src/voice_playback_clock.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.i
+.PHONY : components/core/src/voice_playback_clock.c.i
+
+components/core/src/voice_playback_clock.s: components/core/src/voice_playback_clock.c.s
+.PHONY : components/core/src/voice_playback_clock.s
+
+# target to generate assembly for a file
+components/core/src/voice_playback_clock.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/voice_playback_clock.c.s
+.PHONY : components/core/src/voice_playback_clock.c.s
+
 components/core/src/voicelab_stream.o: components/core/src/voicelab_stream.c.o
 .PHONY : components/core/src/voicelab_stream.o
 
@@ -1747,6 +3220,30 @@ components/core/src/voicelab_stream.s: components/core/src/voicelab_stream.c.s
 components/core/src/voicelab_stream.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/voicelab_stream.c.s
 .PHONY : components/core/src/voicelab_stream.c.s
+
+components/core/src/websocket_frame_reader.o: components/core/src/websocket_frame_reader.c.o
+.PHONY : components/core/src/websocket_frame_reader.o
+
+# target to build an object file
+components/core/src/websocket_frame_reader.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.o
+.PHONY : components/core/src/websocket_frame_reader.c.o
+
+components/core/src/websocket_frame_reader.i: components/core/src/websocket_frame_reader.c.i
+.PHONY : components/core/src/websocket_frame_reader.i
+
+# target to preprocess a source file
+components/core/src/websocket_frame_reader.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.i
+.PHONY : components/core/src/websocket_frame_reader.c.i
+
+components/core/src/websocket_frame_reader.s: components/core/src/websocket_frame_reader.c.s
+.PHONY : components/core/src/websocket_frame_reader.s
+
+# target to generate assembly for a file
+components/core/src/websocket_frame_reader.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-core.dir/build.make CMakeFiles/iterate-kit-core.dir/components/core/src/websocket_frame_reader.c.s
+.PHONY : components/core/src/websocket_frame_reader.c.s
 
 components/core/src/websocket_frame_writer.o: components/core/src/websocket_frame_writer.c.o
 .PHONY : components/core/src/websocket_frame_writer.o
@@ -1988,6 +3485,30 @@ platforms/iterate_esp_idf/itx_transport.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-itx-transport-test.dir/platforms/iterate_esp_idf/itx_transport.c.s
 .PHONY : platforms/iterate_esp_idf/itx_transport.c.s
 
+platforms/iterate_esp_idf/pcm_session.o: platforms/iterate_esp_idf/pcm_session.c.o
+.PHONY : platforms/iterate_esp_idf/pcm_session.o
+
+# target to build an object file
+platforms/iterate_esp_idf/pcm_session.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/platforms/iterate_esp_idf/pcm_session.c.o
+.PHONY : platforms/iterate_esp_idf/pcm_session.c.o
+
+platforms/iterate_esp_idf/pcm_session.i: platforms/iterate_esp_idf/pcm_session.c.i
+.PHONY : platforms/iterate_esp_idf/pcm_session.i
+
+# target to preprocess a source file
+platforms/iterate_esp_idf/pcm_session.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/platforms/iterate_esp_idf/pcm_session.c.i
+.PHONY : platforms/iterate_esp_idf/pcm_session.c.i
+
+platforms/iterate_esp_idf/pcm_session.s: platforms/iterate_esp_idf/pcm_session.c.s
+.PHONY : platforms/iterate_esp_idf/pcm_session.s
+
+# target to generate assembly for a file
+platforms/iterate_esp_idf/pcm_session.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/platforms/iterate_esp_idf/pcm_session.c.s
+.PHONY : platforms/iterate_esp_idf/pcm_session.c.s
+
 platforms/iterate_esp_idf/pcm_transport.o: platforms/iterate_esp_idf/pcm_transport.c.o
 .PHONY : platforms/iterate_esp_idf/pcm_transport.o
 
@@ -2012,12 +3533,88 @@ platforms/iterate_esp_idf/pcm_transport.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-transport-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-transport-test.dir/platforms/iterate_esp_idf/pcm_transport.c.s
 .PHONY : platforms/iterate_esp_idf/pcm_transport.c.s
 
+platforms/iterate_posix/posix_itx_transport.o: platforms/iterate_posix/posix_itx_transport.c.o
+.PHONY : platforms/iterate_posix/posix_itx_transport.o
+
+# target to build an object file
+platforms/iterate_posix/posix_itx_transport.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix.dir/build.make CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/posix_itx_transport.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-posix-itx-transport-test.dir/platforms/iterate_posix/posix_itx_transport.c.o
+.PHONY : platforms/iterate_posix/posix_itx_transport.c.o
+
+platforms/iterate_posix/posix_itx_transport.i: platforms/iterate_posix/posix_itx_transport.c.i
+.PHONY : platforms/iterate_posix/posix_itx_transport.i
+
+# target to preprocess a source file
+platforms/iterate_posix/posix_itx_transport.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix.dir/build.make CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/posix_itx_transport.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-posix-itx-transport-test.dir/platforms/iterate_posix/posix_itx_transport.c.i
+.PHONY : platforms/iterate_posix/posix_itx_transport.c.i
+
+platforms/iterate_posix/posix_itx_transport.s: platforms/iterate_posix/posix_itx_transport.c.s
+.PHONY : platforms/iterate_posix/posix_itx_transport.s
+
+# target to generate assembly for a file
+platforms/iterate_posix/posix_itx_transport.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix.dir/build.make CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/posix_itx_transport.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-posix-itx-transport-test.dir/platforms/iterate_posix/posix_itx_transport.c.s
+.PHONY : platforms/iterate_posix/posix_itx_transport.c.s
+
+platforms/iterate_posix/tls_stream.o: platforms/iterate_posix/tls_stream.c.o
+.PHONY : platforms/iterate_posix/tls_stream.o
+
+# target to build an object file
+platforms/iterate_posix/tls_stream.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix.dir/build.make CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/tls_stream.c.o
+.PHONY : platforms/iterate_posix/tls_stream.c.o
+
+platforms/iterate_posix/tls_stream.i: platforms/iterate_posix/tls_stream.c.i
+.PHONY : platforms/iterate_posix/tls_stream.i
+
+# target to preprocess a source file
+platforms/iterate_posix/tls_stream.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix.dir/build.make CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/tls_stream.c.i
+.PHONY : platforms/iterate_posix/tls_stream.c.i
+
+platforms/iterate_posix/tls_stream.s: platforms/iterate_posix/tls_stream.c.s
+.PHONY : platforms/iterate_posix/tls_stream.s
+
+# target to generate assembly for a file
+platforms/iterate_posix/tls_stream.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix.dir/build.make CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/tls_stream.c.s
+.PHONY : platforms/iterate_posix/tls_stream.c.s
+
+platforms/iterate_posix/websocket_client.o: platforms/iterate_posix/websocket_client.c.o
+.PHONY : platforms/iterate_posix/websocket_client.o
+
+# target to build an object file
+platforms/iterate_posix/websocket_client.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix.dir/build.make CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/websocket_client.c.o
+.PHONY : platforms/iterate_posix/websocket_client.c.o
+
+platforms/iterate_posix/websocket_client.i: platforms/iterate_posix/websocket_client.c.i
+.PHONY : platforms/iterate_posix/websocket_client.i
+
+# target to preprocess a source file
+platforms/iterate_posix/websocket_client.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix.dir/build.make CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/websocket_client.c.i
+.PHONY : platforms/iterate_posix/websocket_client.c.i
+
+platforms/iterate_posix/websocket_client.s: platforms/iterate_posix/websocket_client.c.s
+.PHONY : platforms/iterate_posix/websocket_client.s
+
+# target to generate assembly for a file
+platforms/iterate_posix/websocket_client.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix.dir/build.make CMakeFiles/iterate-kit-posix.dir/platforms/iterate_posix/websocket_client.c.s
+.PHONY : platforms/iterate_posix/websocket_client.c.s
+
 platforms/iterate_voice_pe_audio/voice_pe_hardware_config.o: platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.o
 .PHONY : platforms/iterate_voice_pe_audio/voice_pe_hardware_config.o
 
 # target to build an object file
 platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.o:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.o
 .PHONY : platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.o
 
 platforms/iterate_voice_pe_audio/voice_pe_hardware_config.i: platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.i
@@ -2026,6 +3623,7 @@ platforms/iterate_voice_pe_audio/voice_pe_hardware_config.i: platforms/iterate_v
 # target to preprocess a source file
 platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.i:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.i
 .PHONY : platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.i
 
 platforms/iterate_voice_pe_audio/voice_pe_hardware_config.s: platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.s
@@ -2034,6 +3632,7 @@ platforms/iterate_voice_pe_audio/voice_pe_hardware_config.s: platforms/iterate_v
 # target to generate assembly for a file
 platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-test.dir/platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.s
 .PHONY : platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c.s
 
 platforms/iterate_voice_pe_audio/voice_pe_pcm_format.o: platforms/iterate_voice_pe_audio/voice_pe_pcm_format.c.o
@@ -2180,6 +3779,459 @@ simulator/src/runner.cpp.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-simulator.dir/build.make CMakeFiles/iterate-kit-simulator.dir/simulator/src/runner.cpp.s
 .PHONY : simulator/src/runner.cpp.s
 
+targets/home-assistant-voice-preview-edition/main/havpe_ui.o: targets/home-assistant-voice-preview-edition/main/havpe_ui.c.o
+.PHONY : targets/home-assistant-voice-preview-edition/main/havpe_ui.o
+
+# target to build an object file
+targets/home-assistant-voice-preview-edition/main/havpe_ui.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-havpe-ui-test.dir/build.make CMakeFiles/iterate-kit-havpe-ui-test.dir/targets/home-assistant-voice-preview-edition/main/havpe_ui.c.o
+.PHONY : targets/home-assistant-voice-preview-edition/main/havpe_ui.c.o
+
+targets/home-assistant-voice-preview-edition/main/havpe_ui.i: targets/home-assistant-voice-preview-edition/main/havpe_ui.c.i
+.PHONY : targets/home-assistant-voice-preview-edition/main/havpe_ui.i
+
+# target to preprocess a source file
+targets/home-assistant-voice-preview-edition/main/havpe_ui.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-havpe-ui-test.dir/build.make CMakeFiles/iterate-kit-havpe-ui-test.dir/targets/home-assistant-voice-preview-edition/main/havpe_ui.c.i
+.PHONY : targets/home-assistant-voice-preview-edition/main/havpe_ui.c.i
+
+targets/home-assistant-voice-preview-edition/main/havpe_ui.s: targets/home-assistant-voice-preview-edition/main/havpe_ui.c.s
+.PHONY : targets/home-assistant-voice-preview-edition/main/havpe_ui.s
+
+# target to generate assembly for a file
+targets/home-assistant-voice-preview-edition/main/havpe_ui.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-havpe-ui-test.dir/build.make CMakeFiles/iterate-kit-havpe-ui-test.dir/targets/home-assistant-voice-preview-edition/main/havpe_ui.c.s
+.PHONY : targets/home-assistant-voice-preview-edition/main/havpe_ui.c.s
+
+targets/host_cli/cli_audio_in.o: targets/host_cli/cli_audio_in.c.o
+.PHONY : targets/host_cli/cli_audio_in.o
+
+# target to build an object file
+targets/host_cli/cli_audio_in.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_audio_in.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-audio-in-test.dir/build.make CMakeFiles/iterate-kit-cli-audio-in-test.dir/targets/host_cli/cli_audio_in.c.o
+.PHONY : targets/host_cli/cli_audio_in.c.o
+
+targets/host_cli/cli_audio_in.i: targets/host_cli/cli_audio_in.c.i
+.PHONY : targets/host_cli/cli_audio_in.i
+
+# target to preprocess a source file
+targets/host_cli/cli_audio_in.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_audio_in.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-audio-in-test.dir/build.make CMakeFiles/iterate-kit-cli-audio-in-test.dir/targets/host_cli/cli_audio_in.c.i
+.PHONY : targets/host_cli/cli_audio_in.c.i
+
+targets/host_cli/cli_audio_in.s: targets/host_cli/cli_audio_in.c.s
+.PHONY : targets/host_cli/cli_audio_in.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_audio_in.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_audio_in.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-audio-in-test.dir/build.make CMakeFiles/iterate-kit-cli-audio-in-test.dir/targets/host_cli/cli_audio_in.c.s
+.PHONY : targets/host_cli/cli_audio_in.c.s
+
+targets/host_cli/cli_audio_out.o: targets/host_cli/cli_audio_out.c.o
+.PHONY : targets/host_cli/cli_audio_out.o
+
+# target to build an object file
+targets/host_cli/cli_audio_out.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_audio_out.c.o
+.PHONY : targets/host_cli/cli_audio_out.c.o
+
+targets/host_cli/cli_audio_out.i: targets/host_cli/cli_audio_out.c.i
+.PHONY : targets/host_cli/cli_audio_out.i
+
+# target to preprocess a source file
+targets/host_cli/cli_audio_out.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_audio_out.c.i
+.PHONY : targets/host_cli/cli_audio_out.c.i
+
+targets/host_cli/cli_audio_out.s: targets/host_cli/cli_audio_out.c.s
+.PHONY : targets/host_cli/cli_audio_out.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_audio_out.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_audio_out.c.s
+.PHONY : targets/host_cli/cli_audio_out.c.s
+
+targets/host_cli/cli_capabilities.o: targets/host_cli/cli_capabilities.c.o
+.PHONY : targets/host_cli/cli_capabilities.o
+
+# target to build an object file
+targets/host_cli/cli_capabilities.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_capabilities.c.o
+.PHONY : targets/host_cli/cli_capabilities.c.o
+
+targets/host_cli/cli_capabilities.i: targets/host_cli/cli_capabilities.c.i
+.PHONY : targets/host_cli/cli_capabilities.i
+
+# target to preprocess a source file
+targets/host_cli/cli_capabilities.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_capabilities.c.i
+.PHONY : targets/host_cli/cli_capabilities.c.i
+
+targets/host_cli/cli_capabilities.s: targets/host_cli/cli_capabilities.c.s
+.PHONY : targets/host_cli/cli_capabilities.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_capabilities.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_capabilities.c.s
+.PHONY : targets/host_cli/cli_capabilities.c.s
+
+targets/host_cli/cli_conversation.o: targets/host_cli/cli_conversation.c.o
+.PHONY : targets/host_cli/cli_conversation.o
+
+# target to build an object file
+targets/host_cli/cli_conversation.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_conversation.c.o
+.PHONY : targets/host_cli/cli_conversation.c.o
+
+targets/host_cli/cli_conversation.i: targets/host_cli/cli_conversation.c.i
+.PHONY : targets/host_cli/cli_conversation.i
+
+# target to preprocess a source file
+targets/host_cli/cli_conversation.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_conversation.c.i
+.PHONY : targets/host_cli/cli_conversation.c.i
+
+targets/host_cli/cli_conversation.s: targets/host_cli/cli_conversation.c.s
+.PHONY : targets/host_cli/cli_conversation.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_conversation.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_conversation.c.s
+.PHONY : targets/host_cli/cli_conversation.c.s
+
+targets/host_cli/cli_delivery_fault.o: targets/host_cli/cli_delivery_fault.c.o
+.PHONY : targets/host_cli/cli_delivery_fault.o
+
+# target to build an object file
+targets/host_cli/cli_delivery_fault.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_delivery_fault.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build.make CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/targets/host_cli/cli_delivery_fault.c.o
+.PHONY : targets/host_cli/cli_delivery_fault.c.o
+
+targets/host_cli/cli_delivery_fault.i: targets/host_cli/cli_delivery_fault.c.i
+.PHONY : targets/host_cli/cli_delivery_fault.i
+
+# target to preprocess a source file
+targets/host_cli/cli_delivery_fault.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_delivery_fault.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build.make CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/targets/host_cli/cli_delivery_fault.c.i
+.PHONY : targets/host_cli/cli_delivery_fault.c.i
+
+targets/host_cli/cli_delivery_fault.s: targets/host_cli/cli_delivery_fault.c.s
+.PHONY : targets/host_cli/cli_delivery_fault.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_delivery_fault.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_delivery_fault.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build.make CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/targets/host_cli/cli_delivery_fault.c.s
+.PHONY : targets/host_cli/cli_delivery_fault.c.s
+
+targets/host_cli/cli_device_profile.o: targets/host_cli/cli_device_profile.c.o
+.PHONY : targets/host_cli/cli_device_profile.o
+
+# target to build an object file
+targets/host_cli/cli_device_profile.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_device_profile.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-device-profile-test.dir/build.make CMakeFiles/iterate-kit-cli-device-profile-test.dir/targets/host_cli/cli_device_profile.c.o
+.PHONY : targets/host_cli/cli_device_profile.c.o
+
+targets/host_cli/cli_device_profile.i: targets/host_cli/cli_device_profile.c.i
+.PHONY : targets/host_cli/cli_device_profile.i
+
+# target to preprocess a source file
+targets/host_cli/cli_device_profile.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_device_profile.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-device-profile-test.dir/build.make CMakeFiles/iterate-kit-cli-device-profile-test.dir/targets/host_cli/cli_device_profile.c.i
+.PHONY : targets/host_cli/cli_device_profile.c.i
+
+targets/host_cli/cli_device_profile.s: targets/host_cli/cli_device_profile.c.s
+.PHONY : targets/host_cli/cli_device_profile.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_device_profile.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_device_profile.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-device-profile-test.dir/build.make CMakeFiles/iterate-kit-cli-device-profile-test.dir/targets/host_cli/cli_device_profile.c.s
+.PHONY : targets/host_cli/cli_device_profile.c.s
+
+targets/host_cli/cli_fault_schedule.o: targets/host_cli/cli_fault_schedule.c.o
+.PHONY : targets/host_cli/cli_fault_schedule.o
+
+# target to build an object file
+targets/host_cli/cli_fault_schedule.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_fault_schedule.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/build.make CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/targets/host_cli/cli_fault_schedule.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build.make CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/targets/host_cli/cli_fault_schedule.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build.make CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/targets/host_cli/cli_fault_schedule.c.o
+.PHONY : targets/host_cli/cli_fault_schedule.c.o
+
+targets/host_cli/cli_fault_schedule.i: targets/host_cli/cli_fault_schedule.c.i
+.PHONY : targets/host_cli/cli_fault_schedule.i
+
+# target to preprocess a source file
+targets/host_cli/cli_fault_schedule.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_fault_schedule.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/build.make CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/targets/host_cli/cli_fault_schedule.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build.make CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/targets/host_cli/cli_fault_schedule.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build.make CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/targets/host_cli/cli_fault_schedule.c.i
+.PHONY : targets/host_cli/cli_fault_schedule.c.i
+
+targets/host_cli/cli_fault_schedule.s: targets/host_cli/cli_fault_schedule.c.s
+.PHONY : targets/host_cli/cli_fault_schedule.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_fault_schedule.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_fault_schedule.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/build.make CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/targets/host_cli/cli_fault_schedule.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build.make CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/targets/host_cli/cli_fault_schedule.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build.make CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/targets/host_cli/cli_fault_schedule.c.s
+.PHONY : targets/host_cli/cli_fault_schedule.c.s
+
+targets/host_cli/cli_keyboard.o: targets/host_cli/cli_keyboard.c.o
+.PHONY : targets/host_cli/cli_keyboard.o
+
+# target to build an object file
+targets/host_cli/cli_keyboard.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_keyboard.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-keyboard-test.dir/build.make CMakeFiles/iterate-kit-cli-keyboard-test.dir/targets/host_cli/cli_keyboard.c.o
+.PHONY : targets/host_cli/cli_keyboard.c.o
+
+targets/host_cli/cli_keyboard.i: targets/host_cli/cli_keyboard.c.i
+.PHONY : targets/host_cli/cli_keyboard.i
+
+# target to preprocess a source file
+targets/host_cli/cli_keyboard.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_keyboard.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-keyboard-test.dir/build.make CMakeFiles/iterate-kit-cli-keyboard-test.dir/targets/host_cli/cli_keyboard.c.i
+.PHONY : targets/host_cli/cli_keyboard.c.i
+
+targets/host_cli/cli_keyboard.s: targets/host_cli/cli_keyboard.c.s
+.PHONY : targets/host_cli/cli_keyboard.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_keyboard.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_keyboard.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-keyboard-test.dir/build.make CMakeFiles/iterate-kit-cli-keyboard-test.dir/targets/host_cli/cli_keyboard.c.s
+.PHONY : targets/host_cli/cli_keyboard.c.s
+
+targets/host_cli/cli_microphone.o: targets/host_cli/cli_microphone.c.o
+.PHONY : targets/host_cli/cli_microphone.o
+
+# target to build an object file
+targets/host_cli/cli_microphone.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_microphone.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-microphone-test.dir/build.make CMakeFiles/iterate-kit-cli-microphone-test.dir/targets/host_cli/cli_microphone.c.o
+.PHONY : targets/host_cli/cli_microphone.c.o
+
+targets/host_cli/cli_microphone.i: targets/host_cli/cli_microphone.c.i
+.PHONY : targets/host_cli/cli_microphone.i
+
+# target to preprocess a source file
+targets/host_cli/cli_microphone.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_microphone.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-microphone-test.dir/build.make CMakeFiles/iterate-kit-cli-microphone-test.dir/targets/host_cli/cli_microphone.c.i
+.PHONY : targets/host_cli/cli_microphone.c.i
+
+targets/host_cli/cli_microphone.s: targets/host_cli/cli_microphone.c.s
+.PHONY : targets/host_cli/cli_microphone.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_microphone.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_microphone.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-microphone-test.dir/build.make CMakeFiles/iterate-kit-cli-microphone-test.dir/targets/host_cli/cli_microphone.c.s
+.PHONY : targets/host_cli/cli_microphone.c.s
+
+targets/host_cli/cli_options.o: targets/host_cli/cli_options.c.o
+.PHONY : targets/host_cli/cli_options.o
+
+# target to build an object file
+targets/host_cli/cli_options.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_options.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-options-test.dir/build.make CMakeFiles/iterate-kit-cli-options-test.dir/targets/host_cli/cli_options.c.o
+.PHONY : targets/host_cli/cli_options.c.o
+
+targets/host_cli/cli_options.i: targets/host_cli/cli_options.c.i
+.PHONY : targets/host_cli/cli_options.i
+
+# target to preprocess a source file
+targets/host_cli/cli_options.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_options.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-options-test.dir/build.make CMakeFiles/iterate-kit-cli-options-test.dir/targets/host_cli/cli_options.c.i
+.PHONY : targets/host_cli/cli_options.c.i
+
+targets/host_cli/cli_options.s: targets/host_cli/cli_options.c.s
+.PHONY : targets/host_cli/cli_options.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_options.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_options.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-options-test.dir/build.make CMakeFiles/iterate-kit-cli-options-test.dir/targets/host_cli/cli_options.c.s
+.PHONY : targets/host_cli/cli_options.c.s
+
+targets/host_cli/cli_paced_sink.o: targets/host_cli/cli_paced_sink.c.o
+.PHONY : targets/host_cli/cli_paced_sink.o
+
+# target to build an object file
+targets/host_cli/cli_paced_sink.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_paced_sink.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build.make CMakeFiles/iterate-kit-cli-paced-sink-test.dir/targets/host_cli/cli_paced_sink.c.o
+.PHONY : targets/host_cli/cli_paced_sink.c.o
+
+targets/host_cli/cli_paced_sink.i: targets/host_cli/cli_paced_sink.c.i
+.PHONY : targets/host_cli/cli_paced_sink.i
+
+# target to preprocess a source file
+targets/host_cli/cli_paced_sink.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_paced_sink.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build.make CMakeFiles/iterate-kit-cli-paced-sink-test.dir/targets/host_cli/cli_paced_sink.c.i
+.PHONY : targets/host_cli/cli_paced_sink.c.i
+
+targets/host_cli/cli_paced_sink.s: targets/host_cli/cli_paced_sink.c.s
+.PHONY : targets/host_cli/cli_paced_sink.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_paced_sink.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_paced_sink.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build.make CMakeFiles/iterate-kit-cli-paced-sink-test.dir/targets/host_cli/cli_paced_sink.c.s
+.PHONY : targets/host_cli/cli_paced_sink.c.s
+
+targets/host_cli/cli_report.o: targets/host_cli/cli_report.c.o
+.PHONY : targets/host_cli/cli_report.o
+
+# target to build an object file
+targets/host_cli/cli_report.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_report.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-report-test.dir/build.make CMakeFiles/iterate-kit-cli-report-test.dir/targets/host_cli/cli_report.c.o
+.PHONY : targets/host_cli/cli_report.c.o
+
+targets/host_cli/cli_report.i: targets/host_cli/cli_report.c.i
+.PHONY : targets/host_cli/cli_report.i
+
+# target to preprocess a source file
+targets/host_cli/cli_report.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_report.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-report-test.dir/build.make CMakeFiles/iterate-kit-cli-report-test.dir/targets/host_cli/cli_report.c.i
+.PHONY : targets/host_cli/cli_report.c.i
+
+targets/host_cli/cli_report.s: targets/host_cli/cli_report.c.s
+.PHONY : targets/host_cli/cli_report.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_report.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_report.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-report-test.dir/build.make CMakeFiles/iterate-kit-cli-report-test.dir/targets/host_cli/cli_report.c.s
+.PHONY : targets/host_cli/cli_report.c.s
+
+targets/host_cli/cli_speaker.o: targets/host_cli/cli_speaker.c.o
+.PHONY : targets/host_cli/cli_speaker.o
+
+# target to build an object file
+targets/host_cli/cli_speaker.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_speaker.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-speaker-test.dir/build.make CMakeFiles/iterate-kit-cli-speaker-test.dir/targets/host_cli/cli_speaker.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build.make CMakeFiles/iterate-kit-cli-paced-sink-test.dir/targets/host_cli/cli_speaker.c.o
+.PHONY : targets/host_cli/cli_speaker.c.o
+
+targets/host_cli/cli_speaker.i: targets/host_cli/cli_speaker.c.i
+.PHONY : targets/host_cli/cli_speaker.i
+
+# target to preprocess a source file
+targets/host_cli/cli_speaker.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_speaker.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-speaker-test.dir/build.make CMakeFiles/iterate-kit-cli-speaker-test.dir/targets/host_cli/cli_speaker.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build.make CMakeFiles/iterate-kit-cli-paced-sink-test.dir/targets/host_cli/cli_speaker.c.i
+.PHONY : targets/host_cli/cli_speaker.c.i
+
+targets/host_cli/cli_speaker.s: targets/host_cli/cli_speaker.c.s
+.PHONY : targets/host_cli/cli_speaker.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_speaker.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_speaker.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-speaker-test.dir/build.make CMakeFiles/iterate-kit-cli-speaker-test.dir/targets/host_cli/cli_speaker.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build.make CMakeFiles/iterate-kit-cli-paced-sink-test.dir/targets/host_cli/cli_speaker.c.s
+.PHONY : targets/host_cli/cli_speaker.c.s
+
+targets/host_cli/cli_virtual_clock.o: targets/host_cli/cli_virtual_clock.c.o
+.PHONY : targets/host_cli/cli_virtual_clock.o
+
+# target to build an object file
+targets/host_cli/cli_virtual_clock.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_virtual_clock.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build.make CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/targets/host_cli/cli_virtual_clock.c.o
+.PHONY : targets/host_cli/cli_virtual_clock.c.o
+
+targets/host_cli/cli_virtual_clock.i: targets/host_cli/cli_virtual_clock.c.i
+.PHONY : targets/host_cli/cli_virtual_clock.i
+
+# target to preprocess a source file
+targets/host_cli/cli_virtual_clock.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_virtual_clock.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build.make CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/targets/host_cli/cli_virtual_clock.c.i
+.PHONY : targets/host_cli/cli_virtual_clock.c.i
+
+targets/host_cli/cli_virtual_clock.s: targets/host_cli/cli_virtual_clock.c.s
+.PHONY : targets/host_cli/cli_virtual_clock.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_virtual_clock.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_virtual_clock.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build.make CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/targets/host_cli/cli_virtual_clock.c.s
+.PHONY : targets/host_cli/cli_virtual_clock.c.s
+
+targets/host_cli/cli_wav.o: targets/host_cli/cli_wav.c.o
+.PHONY : targets/host_cli/cli_wav.o
+
+# target to build an object file
+targets/host_cli/cli_wav.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_wav.c.o
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-wav-test.dir/build.make CMakeFiles/iterate-kit-cli-wav-test.dir/targets/host_cli/cli_wav.c.o
+.PHONY : targets/host_cli/cli_wav.c.o
+
+targets/host_cli/cli_wav.i: targets/host_cli/cli_wav.c.i
+.PHONY : targets/host_cli/cli_wav.i
+
+# target to preprocess a source file
+targets/host_cli/cli_wav.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_wav.c.i
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-wav-test.dir/build.make CMakeFiles/iterate-kit-cli-wav-test.dir/targets/host_cli/cli_wav.c.i
+.PHONY : targets/host_cli/cli_wav.c.i
+
+targets/host_cli/cli_wav.s: targets/host_cli/cli_wav.c.s
+.PHONY : targets/host_cli/cli_wav.s
+
+# target to generate assembly for a file
+targets/host_cli/cli_wav.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/cli_wav.c.s
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-wav-test.dir/build.make CMakeFiles/iterate-kit-cli-wav-test.dir/targets/host_cli/cli_wav.c.s
+.PHONY : targets/host_cli/cli_wav.c.s
+
+targets/host_cli/main.o: targets/host_cli/main.c.o
+.PHONY : targets/host_cli/main.o
+
+# target to build an object file
+targets/host_cli/main.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/main.c.o
+.PHONY : targets/host_cli/main.c.o
+
+targets/host_cli/main.i: targets/host_cli/main.c.i
+.PHONY : targets/host_cli/main.i
+
+# target to preprocess a source file
+targets/host_cli/main.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/main.c.i
+.PHONY : targets/host_cli/main.c.i
+
+targets/host_cli/main.s: targets/host_cli/main.c.s
+.PHONY : targets/host_cli/main.s
+
+# target to generate assembly for a file
+targets/host_cli/main.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli.dir/build.make CMakeFiles/iterate-kit-cli.dir/targets/host_cli/main.c.s
+.PHONY : targets/host_cli/main.c.s
+
 tests/aec_capture_bridge_test.o: tests/aec_capture_bridge_test.c.o
 .PHONY : tests/aec_capture_bridge_test.o
 
@@ -2204,6 +4256,78 @@ tests/aec_capture_bridge_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-capture-bridge-test.dir/build.make CMakeFiles/iterate-kit-aec-capture-bridge-test.dir/tests/aec_capture_bridge_test.c.s
 .PHONY : tests/aec_capture_bridge_test.c.s
 
+tests/aec_diagnostic_trace_capability_test.o: tests/aec_diagnostic_trace_capability_test.c.o
+.PHONY : tests/aec_diagnostic_trace_capability_test.o
+
+# target to build an object file
+tests/aec_diagnostic_trace_capability_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-diagnostic-trace-capability-test.dir/build.make CMakeFiles/iterate-kit-aec-diagnostic-trace-capability-test.dir/tests/aec_diagnostic_trace_capability_test.c.o
+.PHONY : tests/aec_diagnostic_trace_capability_test.c.o
+
+tests/aec_diagnostic_trace_capability_test.i: tests/aec_diagnostic_trace_capability_test.c.i
+.PHONY : tests/aec_diagnostic_trace_capability_test.i
+
+# target to preprocess a source file
+tests/aec_diagnostic_trace_capability_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-diagnostic-trace-capability-test.dir/build.make CMakeFiles/iterate-kit-aec-diagnostic-trace-capability-test.dir/tests/aec_diagnostic_trace_capability_test.c.i
+.PHONY : tests/aec_diagnostic_trace_capability_test.c.i
+
+tests/aec_diagnostic_trace_capability_test.s: tests/aec_diagnostic_trace_capability_test.c.s
+.PHONY : tests/aec_diagnostic_trace_capability_test.s
+
+# target to generate assembly for a file
+tests/aec_diagnostic_trace_capability_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-diagnostic-trace-capability-test.dir/build.make CMakeFiles/iterate-kit-aec-diagnostic-trace-capability-test.dir/tests/aec_diagnostic_trace_capability_test.c.s
+.PHONY : tests/aec_diagnostic_trace_capability_test.c.s
+
+tests/aec_diagnostic_trace_test.o: tests/aec_diagnostic_trace_test.c.o
+.PHONY : tests/aec_diagnostic_trace_test.o
+
+# target to build an object file
+tests/aec_diagnostic_trace_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-diagnostic-trace-test.dir/build.make CMakeFiles/iterate-kit-aec-diagnostic-trace-test.dir/tests/aec_diagnostic_trace_test.c.o
+.PHONY : tests/aec_diagnostic_trace_test.c.o
+
+tests/aec_diagnostic_trace_test.i: tests/aec_diagnostic_trace_test.c.i
+.PHONY : tests/aec_diagnostic_trace_test.i
+
+# target to preprocess a source file
+tests/aec_diagnostic_trace_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-diagnostic-trace-test.dir/build.make CMakeFiles/iterate-kit-aec-diagnostic-trace-test.dir/tests/aec_diagnostic_trace_test.c.i
+.PHONY : tests/aec_diagnostic_trace_test.c.i
+
+tests/aec_diagnostic_trace_test.s: tests/aec_diagnostic_trace_test.c.s
+.PHONY : tests/aec_diagnostic_trace_test.s
+
+# target to generate assembly for a file
+tests/aec_diagnostic_trace_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-diagnostic-trace-test.dir/build.make CMakeFiles/iterate-kit-aec-diagnostic-trace-test.dir/tests/aec_diagnostic_trace_test.c.s
+.PHONY : tests/aec_diagnostic_trace_test.c.s
+
+tests/aec_reference_scaler_test.o: tests/aec_reference_scaler_test.c.o
+.PHONY : tests/aec_reference_scaler_test.o
+
+# target to build an object file
+tests/aec_reference_scaler_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-reference-scaler-test.dir/build.make CMakeFiles/iterate-kit-aec-reference-scaler-test.dir/tests/aec_reference_scaler_test.c.o
+.PHONY : tests/aec_reference_scaler_test.c.o
+
+tests/aec_reference_scaler_test.i: tests/aec_reference_scaler_test.c.i
+.PHONY : tests/aec_reference_scaler_test.i
+
+# target to preprocess a source file
+tests/aec_reference_scaler_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-reference-scaler-test.dir/build.make CMakeFiles/iterate-kit-aec-reference-scaler-test.dir/tests/aec_reference_scaler_test.c.i
+.PHONY : tests/aec_reference_scaler_test.c.i
+
+tests/aec_reference_scaler_test.s: tests/aec_reference_scaler_test.c.s
+.PHONY : tests/aec_reference_scaler_test.s
+
+# target to generate assembly for a file
+tests/aec_reference_scaler_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-reference-scaler-test.dir/build.make CMakeFiles/iterate-kit-aec-reference-scaler-test.dir/tests/aec_reference_scaler_test.c.s
+.PHONY : tests/aec_reference_scaler_test.c.s
+
 tests/aec_signal_window_test.o: tests/aec_signal_window_test.c.o
 .PHONY : tests/aec_signal_window_test.o
 
@@ -2227,6 +4351,30 @@ tests/aec_signal_window_test.s: tests/aec_signal_window_test.c.s
 tests/aec_signal_window_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-signal-window-test.dir/build.make CMakeFiles/iterate-kit-aec-signal-window-test.dir/tests/aec_signal_window_test.c.s
 .PHONY : tests/aec_signal_window_test.c.s
+
+tests/aec_uplink_selector_test.o: tests/aec_uplink_selector_test.c.o
+.PHONY : tests/aec_uplink_selector_test.o
+
+# target to build an object file
+tests/aec_uplink_selector_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-uplink-selector-test.dir/build.make CMakeFiles/iterate-kit-aec-uplink-selector-test.dir/tests/aec_uplink_selector_test.c.o
+.PHONY : tests/aec_uplink_selector_test.c.o
+
+tests/aec_uplink_selector_test.i: tests/aec_uplink_selector_test.c.i
+.PHONY : tests/aec_uplink_selector_test.i
+
+# target to preprocess a source file
+tests/aec_uplink_selector_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-uplink-selector-test.dir/build.make CMakeFiles/iterate-kit-aec-uplink-selector-test.dir/tests/aec_uplink_selector_test.c.i
+.PHONY : tests/aec_uplink_selector_test.c.i
+
+tests/aec_uplink_selector_test.s: tests/aec_uplink_selector_test.c.s
+.PHONY : tests/aec_uplink_selector_test.s
+
+# target to generate assembly for a file
+tests/aec_uplink_selector_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-aec-uplink-selector-test.dir/build.make CMakeFiles/iterate-kit-aec-uplink-selector-test.dir/tests/aec_uplink_selector_test.c.s
+.PHONY : tests/aec_uplink_selector_test.c.s
 
 tests/atomic_test.o: tests/atomic_test.c.o
 .PHONY : tests/atomic_test.o
@@ -2300,6 +4448,30 @@ tests/audio_intent_reconciler_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-audio-intent-reconciler-test.dir/build.make CMakeFiles/iterate-kit-audio-intent-reconciler-test.dir/tests/audio_intent_reconciler_test.c.s
 .PHONY : tests/audio_intent_reconciler_test.c.s
 
+tests/audio_playout_test.o: tests/audio_playout_test.c.o
+.PHONY : tests/audio_playout_test.o
+
+# target to build an object file
+tests/audio_playout_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-audio-playout-test.dir/build.make CMakeFiles/iterate-kit-audio-playout-test.dir/tests/audio_playout_test.c.o
+.PHONY : tests/audio_playout_test.c.o
+
+tests/audio_playout_test.i: tests/audio_playout_test.c.i
+.PHONY : tests/audio_playout_test.i
+
+# target to preprocess a source file
+tests/audio_playout_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-audio-playout-test.dir/build.make CMakeFiles/iterate-kit-audio-playout-test.dir/tests/audio_playout_test.c.i
+.PHONY : tests/audio_playout_test.c.i
+
+tests/audio_playout_test.s: tests/audio_playout_test.c.s
+.PHONY : tests/audio_playout_test.s
+
+# target to generate assembly for a file
+tests/audio_playout_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-audio-playout-test.dir/build.make CMakeFiles/iterate-kit-audio-playout-test.dir/tests/audio_playout_test.c.s
+.PHONY : tests/audio_playout_test.c.s
+
 tests/bounded_capture_test.o: tests/bounded_capture_test.cpp.o
 .PHONY : tests/bounded_capture_test.o
 
@@ -2371,6 +4543,294 @@ tests/capnweb_oneway_call_test.s: tests/capnweb_oneway_call_test.c.s
 tests/capnweb_oneway_call_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-capnweb-oneway-call-test.dir/build.make CMakeFiles/iterate-kit-capnweb-oneway-call-test.dir/tests/capnweb_oneway_call_test.c.s
 .PHONY : tests/capnweb_oneway_call_test.c.s
+
+tests/cli_audio_in_test.o: tests/cli_audio_in_test.c.o
+.PHONY : tests/cli_audio_in_test.o
+
+# target to build an object file
+tests/cli_audio_in_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-audio-in-test.dir/build.make CMakeFiles/iterate-kit-cli-audio-in-test.dir/tests/cli_audio_in_test.c.o
+.PHONY : tests/cli_audio_in_test.c.o
+
+tests/cli_audio_in_test.i: tests/cli_audio_in_test.c.i
+.PHONY : tests/cli_audio_in_test.i
+
+# target to preprocess a source file
+tests/cli_audio_in_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-audio-in-test.dir/build.make CMakeFiles/iterate-kit-cli-audio-in-test.dir/tests/cli_audio_in_test.c.i
+.PHONY : tests/cli_audio_in_test.c.i
+
+tests/cli_audio_in_test.s: tests/cli_audio_in_test.c.s
+.PHONY : tests/cli_audio_in_test.s
+
+# target to generate assembly for a file
+tests/cli_audio_in_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-audio-in-test.dir/build.make CMakeFiles/iterate-kit-cli-audio-in-test.dir/tests/cli_audio_in_test.c.s
+.PHONY : tests/cli_audio_in_test.c.s
+
+tests/cli_delivery_fault_test.o: tests/cli_delivery_fault_test.c.o
+.PHONY : tests/cli_delivery_fault_test.o
+
+# target to build an object file
+tests/cli_delivery_fault_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build.make CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/tests/cli_delivery_fault_test.c.o
+.PHONY : tests/cli_delivery_fault_test.c.o
+
+tests/cli_delivery_fault_test.i: tests/cli_delivery_fault_test.c.i
+.PHONY : tests/cli_delivery_fault_test.i
+
+# target to preprocess a source file
+tests/cli_delivery_fault_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build.make CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/tests/cli_delivery_fault_test.c.i
+.PHONY : tests/cli_delivery_fault_test.c.i
+
+tests/cli_delivery_fault_test.s: tests/cli_delivery_fault_test.c.s
+.PHONY : tests/cli_delivery_fault_test.s
+
+# target to generate assembly for a file
+tests/cli_delivery_fault_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/build.make CMakeFiles/iterate-kit-cli-delivery-fault-test.dir/tests/cli_delivery_fault_test.c.s
+.PHONY : tests/cli_delivery_fault_test.c.s
+
+tests/cli_device_profile_test.o: tests/cli_device_profile_test.c.o
+.PHONY : tests/cli_device_profile_test.o
+
+# target to build an object file
+tests/cli_device_profile_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-device-profile-test.dir/build.make CMakeFiles/iterate-kit-cli-device-profile-test.dir/tests/cli_device_profile_test.c.o
+.PHONY : tests/cli_device_profile_test.c.o
+
+tests/cli_device_profile_test.i: tests/cli_device_profile_test.c.i
+.PHONY : tests/cli_device_profile_test.i
+
+# target to preprocess a source file
+tests/cli_device_profile_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-device-profile-test.dir/build.make CMakeFiles/iterate-kit-cli-device-profile-test.dir/tests/cli_device_profile_test.c.i
+.PHONY : tests/cli_device_profile_test.c.i
+
+tests/cli_device_profile_test.s: tests/cli_device_profile_test.c.s
+.PHONY : tests/cli_device_profile_test.s
+
+# target to generate assembly for a file
+tests/cli_device_profile_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-device-profile-test.dir/build.make CMakeFiles/iterate-kit-cli-device-profile-test.dir/tests/cli_device_profile_test.c.s
+.PHONY : tests/cli_device_profile_test.c.s
+
+tests/cli_fault_schedule_test.o: tests/cli_fault_schedule_test.c.o
+.PHONY : tests/cli_fault_schedule_test.o
+
+# target to build an object file
+tests/cli_fault_schedule_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/build.make CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/tests/cli_fault_schedule_test.c.o
+.PHONY : tests/cli_fault_schedule_test.c.o
+
+tests/cli_fault_schedule_test.i: tests/cli_fault_schedule_test.c.i
+.PHONY : tests/cli_fault_schedule_test.i
+
+# target to preprocess a source file
+tests/cli_fault_schedule_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/build.make CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/tests/cli_fault_schedule_test.c.i
+.PHONY : tests/cli_fault_schedule_test.c.i
+
+tests/cli_fault_schedule_test.s: tests/cli_fault_schedule_test.c.s
+.PHONY : tests/cli_fault_schedule_test.s
+
+# target to generate assembly for a file
+tests/cli_fault_schedule_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/build.make CMakeFiles/iterate-kit-cli-fault-schedule-test.dir/tests/cli_fault_schedule_test.c.s
+.PHONY : tests/cli_fault_schedule_test.c.s
+
+tests/cli_keyboard_test.o: tests/cli_keyboard_test.c.o
+.PHONY : tests/cli_keyboard_test.o
+
+# target to build an object file
+tests/cli_keyboard_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-keyboard-test.dir/build.make CMakeFiles/iterate-kit-cli-keyboard-test.dir/tests/cli_keyboard_test.c.o
+.PHONY : tests/cli_keyboard_test.c.o
+
+tests/cli_keyboard_test.i: tests/cli_keyboard_test.c.i
+.PHONY : tests/cli_keyboard_test.i
+
+# target to preprocess a source file
+tests/cli_keyboard_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-keyboard-test.dir/build.make CMakeFiles/iterate-kit-cli-keyboard-test.dir/tests/cli_keyboard_test.c.i
+.PHONY : tests/cli_keyboard_test.c.i
+
+tests/cli_keyboard_test.s: tests/cli_keyboard_test.c.s
+.PHONY : tests/cli_keyboard_test.s
+
+# target to generate assembly for a file
+tests/cli_keyboard_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-keyboard-test.dir/build.make CMakeFiles/iterate-kit-cli-keyboard-test.dir/tests/cli_keyboard_test.c.s
+.PHONY : tests/cli_keyboard_test.c.s
+
+tests/cli_microphone_test.o: tests/cli_microphone_test.c.o
+.PHONY : tests/cli_microphone_test.o
+
+# target to build an object file
+tests/cli_microphone_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-microphone-test.dir/build.make CMakeFiles/iterate-kit-cli-microphone-test.dir/tests/cli_microphone_test.c.o
+.PHONY : tests/cli_microphone_test.c.o
+
+tests/cli_microphone_test.i: tests/cli_microphone_test.c.i
+.PHONY : tests/cli_microphone_test.i
+
+# target to preprocess a source file
+tests/cli_microphone_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-microphone-test.dir/build.make CMakeFiles/iterate-kit-cli-microphone-test.dir/tests/cli_microphone_test.c.i
+.PHONY : tests/cli_microphone_test.c.i
+
+tests/cli_microphone_test.s: tests/cli_microphone_test.c.s
+.PHONY : tests/cli_microphone_test.s
+
+# target to generate assembly for a file
+tests/cli_microphone_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-microphone-test.dir/build.make CMakeFiles/iterate-kit-cli-microphone-test.dir/tests/cli_microphone_test.c.s
+.PHONY : tests/cli_microphone_test.c.s
+
+tests/cli_options_test.o: tests/cli_options_test.c.o
+.PHONY : tests/cli_options_test.o
+
+# target to build an object file
+tests/cli_options_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-options-test.dir/build.make CMakeFiles/iterate-kit-cli-options-test.dir/tests/cli_options_test.c.o
+.PHONY : tests/cli_options_test.c.o
+
+tests/cli_options_test.i: tests/cli_options_test.c.i
+.PHONY : tests/cli_options_test.i
+
+# target to preprocess a source file
+tests/cli_options_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-options-test.dir/build.make CMakeFiles/iterate-kit-cli-options-test.dir/tests/cli_options_test.c.i
+.PHONY : tests/cli_options_test.c.i
+
+tests/cli_options_test.s: tests/cli_options_test.c.s
+.PHONY : tests/cli_options_test.s
+
+# target to generate assembly for a file
+tests/cli_options_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-options-test.dir/build.make CMakeFiles/iterate-kit-cli-options-test.dir/tests/cli_options_test.c.s
+.PHONY : tests/cli_options_test.c.s
+
+tests/cli_paced_sink_test.o: tests/cli_paced_sink_test.c.o
+.PHONY : tests/cli_paced_sink_test.o
+
+# target to build an object file
+tests/cli_paced_sink_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build.make CMakeFiles/iterate-kit-cli-paced-sink-test.dir/tests/cli_paced_sink_test.c.o
+.PHONY : tests/cli_paced_sink_test.c.o
+
+tests/cli_paced_sink_test.i: tests/cli_paced_sink_test.c.i
+.PHONY : tests/cli_paced_sink_test.i
+
+# target to preprocess a source file
+tests/cli_paced_sink_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build.make CMakeFiles/iterate-kit-cli-paced-sink-test.dir/tests/cli_paced_sink_test.c.i
+.PHONY : tests/cli_paced_sink_test.c.i
+
+tests/cli_paced_sink_test.s: tests/cli_paced_sink_test.c.s
+.PHONY : tests/cli_paced_sink_test.s
+
+# target to generate assembly for a file
+tests/cli_paced_sink_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-paced-sink-test.dir/build.make CMakeFiles/iterate-kit-cli-paced-sink-test.dir/tests/cli_paced_sink_test.c.s
+.PHONY : tests/cli_paced_sink_test.c.s
+
+tests/cli_report_test.o: tests/cli_report_test.c.o
+.PHONY : tests/cli_report_test.o
+
+# target to build an object file
+tests/cli_report_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-report-test.dir/build.make CMakeFiles/iterate-kit-cli-report-test.dir/tests/cli_report_test.c.o
+.PHONY : tests/cli_report_test.c.o
+
+tests/cli_report_test.i: tests/cli_report_test.c.i
+.PHONY : tests/cli_report_test.i
+
+# target to preprocess a source file
+tests/cli_report_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-report-test.dir/build.make CMakeFiles/iterate-kit-cli-report-test.dir/tests/cli_report_test.c.i
+.PHONY : tests/cli_report_test.c.i
+
+tests/cli_report_test.s: tests/cli_report_test.c.s
+.PHONY : tests/cli_report_test.s
+
+# target to generate assembly for a file
+tests/cli_report_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-report-test.dir/build.make CMakeFiles/iterate-kit-cli-report-test.dir/tests/cli_report_test.c.s
+.PHONY : tests/cli_report_test.c.s
+
+tests/cli_speaker_test.o: tests/cli_speaker_test.c.o
+.PHONY : tests/cli_speaker_test.o
+
+# target to build an object file
+tests/cli_speaker_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-speaker-test.dir/build.make CMakeFiles/iterate-kit-cli-speaker-test.dir/tests/cli_speaker_test.c.o
+.PHONY : tests/cli_speaker_test.c.o
+
+tests/cli_speaker_test.i: tests/cli_speaker_test.c.i
+.PHONY : tests/cli_speaker_test.i
+
+# target to preprocess a source file
+tests/cli_speaker_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-speaker-test.dir/build.make CMakeFiles/iterate-kit-cli-speaker-test.dir/tests/cli_speaker_test.c.i
+.PHONY : tests/cli_speaker_test.c.i
+
+tests/cli_speaker_test.s: tests/cli_speaker_test.c.s
+.PHONY : tests/cli_speaker_test.s
+
+# target to generate assembly for a file
+tests/cli_speaker_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-speaker-test.dir/build.make CMakeFiles/iterate-kit-cli-speaker-test.dir/tests/cli_speaker_test.c.s
+.PHONY : tests/cli_speaker_test.c.s
+
+tests/cli_virtual_clock_test.o: tests/cli_virtual_clock_test.c.o
+.PHONY : tests/cli_virtual_clock_test.o
+
+# target to build an object file
+tests/cli_virtual_clock_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build.make CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/tests/cli_virtual_clock_test.c.o
+.PHONY : tests/cli_virtual_clock_test.c.o
+
+tests/cli_virtual_clock_test.i: tests/cli_virtual_clock_test.c.i
+.PHONY : tests/cli_virtual_clock_test.i
+
+# target to preprocess a source file
+tests/cli_virtual_clock_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build.make CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/tests/cli_virtual_clock_test.c.i
+.PHONY : tests/cli_virtual_clock_test.c.i
+
+tests/cli_virtual_clock_test.s: tests/cli_virtual_clock_test.c.s
+.PHONY : tests/cli_virtual_clock_test.s
+
+# target to generate assembly for a file
+tests/cli_virtual_clock_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/build.make CMakeFiles/iterate-kit-cli-virtual-clock-test.dir/tests/cli_virtual_clock_test.c.s
+.PHONY : tests/cli_virtual_clock_test.c.s
+
+tests/cli_wav_test.o: tests/cli_wav_test.c.o
+.PHONY : tests/cli_wav_test.o
+
+# target to build an object file
+tests/cli_wav_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-wav-test.dir/build.make CMakeFiles/iterate-kit-cli-wav-test.dir/tests/cli_wav_test.c.o
+.PHONY : tests/cli_wav_test.c.o
+
+tests/cli_wav_test.i: tests/cli_wav_test.c.i
+.PHONY : tests/cli_wav_test.i
+
+# target to preprocess a source file
+tests/cli_wav_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-wav-test.dir/build.make CMakeFiles/iterate-kit-cli-wav-test.dir/tests/cli_wav_test.c.i
+.PHONY : tests/cli_wav_test.c.i
+
+tests/cli_wav_test.s: tests/cli_wav_test.c.s
+.PHONY : tests/cli_wav_test.s
+
+# target to generate assembly for a file
+tests/cli_wav_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cli-wav-test.dir/build.make CMakeFiles/iterate-kit-cli-wav-test.dir/tests/cli_wav_test.c.s
+.PHONY : tests/cli_wav_test.c.s
 
 tests/configuration_decoder_fixture.o: tests/configuration_decoder_fixture.c.o
 .PHONY : tests/configuration_decoder_fixture.o
@@ -2444,6 +4904,30 @@ tests/control_recovery_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-control-recovery-test.dir/build.make CMakeFiles/iterate-kit-control-recovery-test.dir/tests/control_recovery_test.c.s
 .PHONY : tests/control_recovery_test.c.s
 
+tests/conversation_lights_test.o: tests/conversation_lights_test.c.o
+.PHONY : tests/conversation_lights_test.o
+
+# target to build an object file
+tests/conversation_lights_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-conversation-lights-test.dir/build.make CMakeFiles/iterate-kit-conversation-lights-test.dir/tests/conversation_lights_test.c.o
+.PHONY : tests/conversation_lights_test.c.o
+
+tests/conversation_lights_test.i: tests/conversation_lights_test.c.i
+.PHONY : tests/conversation_lights_test.i
+
+# target to preprocess a source file
+tests/conversation_lights_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-conversation-lights-test.dir/build.make CMakeFiles/iterate-kit-conversation-lights-test.dir/tests/conversation_lights_test.c.i
+.PHONY : tests/conversation_lights_test.c.i
+
+tests/conversation_lights_test.s: tests/conversation_lights_test.c.s
+.PHONY : tests/conversation_lights_test.s
+
+# target to generate assembly for a file
+tests/conversation_lights_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-conversation-lights-test.dir/build.make CMakeFiles/iterate-kit-conversation-lights-test.dir/tests/conversation_lights_test.c.s
+.PHONY : tests/conversation_lights_test.c.s
+
 tests/core_s3_capture_reserve_test.o: tests/core_s3_capture_reserve_test.c.o
 .PHONY : tests/core_s3_capture_reserve_test.o
 
@@ -2492,6 +4976,30 @@ tests/cpu_usage_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-cpu-usage-test.dir/build.make CMakeFiles/iterate-kit-cpu-usage-test.dir/tests/cpu_usage_test.c.s
 .PHONY : tests/cpu_usage_test.c.s
 
+tests/debounced_button_test.o: tests/debounced_button_test.c.o
+.PHONY : tests/debounced_button_test.o
+
+# target to build an object file
+tests/debounced_button_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-debounced-button-test.dir/build.make CMakeFiles/iterate-kit-debounced-button-test.dir/tests/debounced_button_test.c.o
+.PHONY : tests/debounced_button_test.c.o
+
+tests/debounced_button_test.i: tests/debounced_button_test.c.i
+.PHONY : tests/debounced_button_test.i
+
+# target to preprocess a source file
+tests/debounced_button_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-debounced-button-test.dir/build.make CMakeFiles/iterate-kit-debounced-button-test.dir/tests/debounced_button_test.c.i
+.PHONY : tests/debounced_button_test.c.i
+
+tests/debounced_button_test.s: tests/debounced_button_test.c.s
+.PHONY : tests/debounced_button_test.s
+
+# target to generate assembly for a file
+tests/debounced_button_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-debounced-button-test.dir/build.make CMakeFiles/iterate-kit-debounced-button-test.dir/tests/debounced_button_test.c.s
+.PHONY : tests/debounced_button_test.c.s
+
 tests/device_events_test.o: tests/device_events_test.c.o
 .PHONY : tests/device_events_test.o
 
@@ -2515,6 +5023,30 @@ tests/device_events_test.s: tests/device_events_test.c.s
 tests/device_events_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-device-events-test.dir/build.make CMakeFiles/iterate-kit-device-events-test.dir/tests/device_events_test.c.s
 .PHONY : tests/device_events_test.c.s
+
+tests/device_menu_test.o: tests/device_menu_test.c.o
+.PHONY : tests/device_menu_test.o
+
+# target to build an object file
+tests/device_menu_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-device-menu-test.dir/build.make CMakeFiles/iterate-kit-device-menu-test.dir/tests/device_menu_test.c.o
+.PHONY : tests/device_menu_test.c.o
+
+tests/device_menu_test.i: tests/device_menu_test.c.i
+.PHONY : tests/device_menu_test.i
+
+# target to preprocess a source file
+tests/device_menu_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-device-menu-test.dir/build.make CMakeFiles/iterate-kit-device-menu-test.dir/tests/device_menu_test.c.i
+.PHONY : tests/device_menu_test.c.i
+
+tests/device_menu_test.s: tests/device_menu_test.c.s
+.PHONY : tests/device_menu_test.s
+
+# target to generate assembly for a file
+tests/device_menu_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-device-menu-test.dir/build.make CMakeFiles/iterate-kit-device-menu-test.dir/tests/device_menu_test.c.s
+.PHONY : tests/device_menu_test.c.s
 
 tests/direct_i2s_stereo_output_test.o: tests/direct_i2s_stereo_output_test.cpp.o
 .PHONY : tests/direct_i2s_stereo_output_test.o
@@ -2635,6 +5167,30 @@ tests/esp_idf_itx_transport_test.s: tests/esp_idf_itx_transport_test.c.s
 tests/esp_idf_itx_transport_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-itx-transport-test.dir/tests/esp_idf_itx_transport_test.c.s
 .PHONY : tests/esp_idf_itx_transport_test.c.s
+
+tests/esp_idf_pcm_session_test.o: tests/esp_idf_pcm_session_test.c.o
+.PHONY : tests/esp_idf_pcm_session_test.o
+
+# target to build an object file
+tests/esp_idf_pcm_session_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/tests/esp_idf_pcm_session_test.c.o
+.PHONY : tests/esp_idf_pcm_session_test.c.o
+
+tests/esp_idf_pcm_session_test.i: tests/esp_idf_pcm_session_test.c.i
+.PHONY : tests/esp_idf_pcm_session_test.i
+
+# target to preprocess a source file
+tests/esp_idf_pcm_session_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/tests/esp_idf_pcm_session_test.c.i
+.PHONY : tests/esp_idf_pcm_session_test.c.i
+
+tests/esp_idf_pcm_session_test.s: tests/esp_idf_pcm_session_test.c.s
+.PHONY : tests/esp_idf_pcm_session_test.s
+
+# target to generate assembly for a file
+tests/esp_idf_pcm_session_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-session-test.dir/tests/esp_idf_pcm_session_test.c.s
+.PHONY : tests/esp_idf_pcm_session_test.c.s
 
 tests/esp_idf_pcm_transport_test.o: tests/esp_idf_pcm_transport_test.c.o
 .PHONY : tests/esp_idf_pcm_transport_test.o
@@ -2759,6 +5315,54 @@ tests/fakes/fake_esp_idf_platform.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-esp-idf-pcm-transport-test.dir/build.make CMakeFiles/iterate-kit-esp-idf-pcm-transport-test.dir/tests/fakes/fake_esp_idf_platform.c.s
 .PHONY : tests/fakes/fake_esp_idf_platform.c.s
 
+tests/fakes/fake_posix_websocket.o: tests/fakes/fake_posix_websocket.c.o
+.PHONY : tests/fakes/fake_posix_websocket.o
+
+# target to build an object file
+tests/fakes/fake_posix_websocket.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-posix-itx-transport-test.dir/tests/fakes/fake_posix_websocket.c.o
+.PHONY : tests/fakes/fake_posix_websocket.c.o
+
+tests/fakes/fake_posix_websocket.i: tests/fakes/fake_posix_websocket.c.i
+.PHONY : tests/fakes/fake_posix_websocket.i
+
+# target to preprocess a source file
+tests/fakes/fake_posix_websocket.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-posix-itx-transport-test.dir/tests/fakes/fake_posix_websocket.c.i
+.PHONY : tests/fakes/fake_posix_websocket.c.i
+
+tests/fakes/fake_posix_websocket.s: tests/fakes/fake_posix_websocket.c.s
+.PHONY : tests/fakes/fake_posix_websocket.s
+
+# target to generate assembly for a file
+tests/fakes/fake_posix_websocket.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-posix-itx-transport-test.dir/tests/fakes/fake_posix_websocket.c.s
+.PHONY : tests/fakes/fake_posix_websocket.c.s
+
+tests/havpe_ui_test.o: tests/havpe_ui_test.c.o
+.PHONY : tests/havpe_ui_test.o
+
+# target to build an object file
+tests/havpe_ui_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-havpe-ui-test.dir/build.make CMakeFiles/iterate-kit-havpe-ui-test.dir/tests/havpe_ui_test.c.o
+.PHONY : tests/havpe_ui_test.c.o
+
+tests/havpe_ui_test.i: tests/havpe_ui_test.c.i
+.PHONY : tests/havpe_ui_test.i
+
+# target to preprocess a source file
+tests/havpe_ui_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-havpe-ui-test.dir/build.make CMakeFiles/iterate-kit-havpe-ui-test.dir/tests/havpe_ui_test.c.i
+.PHONY : tests/havpe_ui_test.c.i
+
+tests/havpe_ui_test.s: tests/havpe_ui_test.c.s
+.PHONY : tests/havpe_ui_test.s
+
+# target to generate assembly for a file
+tests/havpe_ui_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-havpe-ui-test.dir/build.make CMakeFiles/iterate-kit-havpe-ui-test.dir/tests/havpe_ui_test.c.s
+.PHONY : tests/havpe_ui_test.c.s
+
 tests/itx_connection_test.o: tests/itx_connection_test.c.o
 .PHONY : tests/itx_connection_test.o
 
@@ -2831,6 +5435,30 @@ tests/m5sticks3_events_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-m5sticks3-events-test.dir/build.make CMakeFiles/iterate-kit-m5sticks3-events-test.dir/tests/m5sticks3_events_test.c.s
 .PHONY : tests/m5sticks3_events_test.c.s
 
+tests/m5sticks3_visual_layout_test.o: tests/m5sticks3_visual_layout_test.cpp.o
+.PHONY : tests/m5sticks3_visual_layout_test.o
+
+# target to build an object file
+tests/m5sticks3_visual_layout_test.cpp.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-m5sticks3-visual-layout-test.dir/build.make CMakeFiles/iterate-kit-m5sticks3-visual-layout-test.dir/tests/m5sticks3_visual_layout_test.cpp.o
+.PHONY : tests/m5sticks3_visual_layout_test.cpp.o
+
+tests/m5sticks3_visual_layout_test.i: tests/m5sticks3_visual_layout_test.cpp.i
+.PHONY : tests/m5sticks3_visual_layout_test.i
+
+# target to preprocess a source file
+tests/m5sticks3_visual_layout_test.cpp.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-m5sticks3-visual-layout-test.dir/build.make CMakeFiles/iterate-kit-m5sticks3-visual-layout-test.dir/tests/m5sticks3_visual_layout_test.cpp.i
+.PHONY : tests/m5sticks3_visual_layout_test.cpp.i
+
+tests/m5sticks3_visual_layout_test.s: tests/m5sticks3_visual_layout_test.cpp.s
+.PHONY : tests/m5sticks3_visual_layout_test.s
+
+# target to generate assembly for a file
+tests/m5sticks3_visual_layout_test.cpp.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-m5sticks3-visual-layout-test.dir/build.make CMakeFiles/iterate-kit-m5sticks3-visual-layout-test.dir/tests/m5sticks3_visual_layout_test.cpp.s
+.PHONY : tests/m5sticks3_visual_layout_test.cpp.s
+
 tests/metrics_subscription_test.o: tests/metrics_subscription_test.c.o
 .PHONY : tests/metrics_subscription_test.o
 
@@ -2854,6 +5482,30 @@ tests/metrics_subscription_test.s: tests/metrics_subscription_test.c.s
 tests/metrics_subscription_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-metrics-subscription-test.dir/build.make CMakeFiles/iterate-kit-metrics-subscription-test.dir/tests/metrics_subscription_test.c.s
 .PHONY : tests/metrics_subscription_test.c.s
+
+tests/mulaw_roundtrip_test.o: tests/mulaw_roundtrip_test.c.o
+.PHONY : tests/mulaw_roundtrip_test.o
+
+# target to build an object file
+tests/mulaw_roundtrip_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-mulaw-roundtrip-test.dir/build.make CMakeFiles/iterate-kit-mulaw-roundtrip-test.dir/tests/mulaw_roundtrip_test.c.o
+.PHONY : tests/mulaw_roundtrip_test.c.o
+
+tests/mulaw_roundtrip_test.i: tests/mulaw_roundtrip_test.c.i
+.PHONY : tests/mulaw_roundtrip_test.i
+
+# target to preprocess a source file
+tests/mulaw_roundtrip_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-mulaw-roundtrip-test.dir/build.make CMakeFiles/iterate-kit-mulaw-roundtrip-test.dir/tests/mulaw_roundtrip_test.c.i
+.PHONY : tests/mulaw_roundtrip_test.c.i
+
+tests/mulaw_roundtrip_test.s: tests/mulaw_roundtrip_test.c.s
+.PHONY : tests/mulaw_roundtrip_test.s
+
+# target to generate assembly for a file
+tests/mulaw_roundtrip_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-mulaw-roundtrip-test.dir/build.make CMakeFiles/iterate-kit-mulaw-roundtrip-test.dir/tests/mulaw_roundtrip_test.c.s
+.PHONY : tests/mulaw_roundtrip_test.c.s
 
 tests/pcm_capture_turn_test.o: tests/pcm_capture_turn_test.c.o
 .PHONY : tests/pcm_capture_turn_test.o
@@ -2926,6 +5578,30 @@ tests/pcm_generation_fence_test.s: tests/pcm_generation_fence_test.c.s
 tests/pcm_generation_fence_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-generation-fence-test.dir/build.make CMakeFiles/iterate-kit-pcm-generation-fence-test.dir/tests/pcm_generation_fence_test.c.s
 .PHONY : tests/pcm_generation_fence_test.c.s
+
+tests/pcm_high_pass_test.o: tests/pcm_high_pass_test.c.o
+.PHONY : tests/pcm_high_pass_test.o
+
+# target to build an object file
+tests/pcm_high_pass_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-high-pass-test.dir/build.make CMakeFiles/iterate-kit-pcm-high-pass-test.dir/tests/pcm_high_pass_test.c.o
+.PHONY : tests/pcm_high_pass_test.c.o
+
+tests/pcm_high_pass_test.i: tests/pcm_high_pass_test.c.i
+.PHONY : tests/pcm_high_pass_test.i
+
+# target to preprocess a source file
+tests/pcm_high_pass_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-high-pass-test.dir/build.make CMakeFiles/iterate-kit-pcm-high-pass-test.dir/tests/pcm_high_pass_test.c.i
+.PHONY : tests/pcm_high_pass_test.c.i
+
+tests/pcm_high_pass_test.s: tests/pcm_high_pass_test.c.s
+.PHONY : tests/pcm_high_pass_test.s
+
+# target to generate assembly for a file
+tests/pcm_high_pass_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-high-pass-test.dir/build.make CMakeFiles/iterate-kit-pcm-high-pass-test.dir/tests/pcm_high_pass_test.c.s
+.PHONY : tests/pcm_high_pass_test.c.s
 
 tests/pcm_lane_test.o: tests/pcm_lane_test.c.o
 .PHONY : tests/pcm_lane_test.o
@@ -3071,6 +5747,78 @@ tests/pcm_websocket_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-pcm-websocket-test.dir/build.make CMakeFiles/iterate-kit-pcm-websocket-test.dir/tests/pcm_websocket_test.c.s
 .PHONY : tests/pcm_websocket_test.c.s
 
+tests/peer_poll_test.o: tests/peer_poll_test.c.o
+.PHONY : tests/peer_poll_test.o
+
+# target to build an object file
+tests/peer_poll_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-peer-poll-test.dir/build.make CMakeFiles/iterate-kit-peer-poll-test.dir/tests/peer_poll_test.c.o
+.PHONY : tests/peer_poll_test.c.o
+
+tests/peer_poll_test.i: tests/peer_poll_test.c.i
+.PHONY : tests/peer_poll_test.i
+
+# target to preprocess a source file
+tests/peer_poll_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-peer-poll-test.dir/build.make CMakeFiles/iterate-kit-peer-poll-test.dir/tests/peer_poll_test.c.i
+.PHONY : tests/peer_poll_test.c.i
+
+tests/peer_poll_test.s: tests/peer_poll_test.c.s
+.PHONY : tests/peer_poll_test.s
+
+# target to generate assembly for a file
+tests/peer_poll_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-peer-poll-test.dir/build.make CMakeFiles/iterate-kit-peer-poll-test.dir/tests/peer_poll_test.c.s
+.PHONY : tests/peer_poll_test.c.s
+
+tests/posix_itx_transport_test.o: tests/posix_itx_transport_test.c.o
+.PHONY : tests/posix_itx_transport_test.o
+
+# target to build an object file
+tests/posix_itx_transport_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-posix-itx-transport-test.dir/tests/posix_itx_transport_test.c.o
+.PHONY : tests/posix_itx_transport_test.c.o
+
+tests/posix_itx_transport_test.i: tests/posix_itx_transport_test.c.i
+.PHONY : tests/posix_itx_transport_test.i
+
+# target to preprocess a source file
+tests/posix_itx_transport_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-posix-itx-transport-test.dir/tests/posix_itx_transport_test.c.i
+.PHONY : tests/posix_itx_transport_test.c.i
+
+tests/posix_itx_transport_test.s: tests/posix_itx_transport_test.c.s
+.PHONY : tests/posix_itx_transport_test.s
+
+# target to generate assembly for a file
+tests/posix_itx_transport_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-itx-transport-test.dir/build.make CMakeFiles/iterate-kit-posix-itx-transport-test.dir/tests/posix_itx_transport_test.c.s
+.PHONY : tests/posix_itx_transport_test.c.s
+
+tests/posix_websocket_test.o: tests/posix_websocket_test.c.o
+.PHONY : tests/posix_websocket_test.o
+
+# target to build an object file
+tests/posix_websocket_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-websocket-test.dir/build.make CMakeFiles/iterate-kit-posix-websocket-test.dir/tests/posix_websocket_test.c.o
+.PHONY : tests/posix_websocket_test.c.o
+
+tests/posix_websocket_test.i: tests/posix_websocket_test.c.i
+.PHONY : tests/posix_websocket_test.i
+
+# target to preprocess a source file
+tests/posix_websocket_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-websocket-test.dir/build.make CMakeFiles/iterate-kit-posix-websocket-test.dir/tests/posix_websocket_test.c.i
+.PHONY : tests/posix_websocket_test.c.i
+
+tests/posix_websocket_test.s: tests/posix_websocket_test.c.s
+.PHONY : tests/posix_websocket_test.s
+
+# target to generate assembly for a file
+tests/posix_websocket_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-posix-websocket-test.dir/build.make CMakeFiles/iterate-kit-posix-websocket-test.dir/tests/posix_websocket_test.c.s
+.PHONY : tests/posix_websocket_test.c.s
+
 tests/realtime_owner_control_test.o: tests/realtime_owner_control_test.cpp.o
 .PHONY : tests/realtime_owner_control_test.o
 
@@ -3215,6 +5963,30 @@ tests/runtime_diagnostics_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-runtime-diagnostics-test.dir/build.make CMakeFiles/iterate-kit-runtime-diagnostics-test.dir/tests/runtime_diagnostics_test.c.s
 .PHONY : tests/runtime_diagnostics_test.c.s
 
+tests/speaker_abandon_test.o: tests/speaker_abandon_test.c.o
+.PHONY : tests/speaker_abandon_test.o
+
+# target to build an object file
+tests/speaker_abandon_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-speaker-abandon-test.dir/build.make CMakeFiles/iterate-kit-speaker-abandon-test.dir/tests/speaker_abandon_test.c.o
+.PHONY : tests/speaker_abandon_test.c.o
+
+tests/speaker_abandon_test.i: tests/speaker_abandon_test.c.i
+.PHONY : tests/speaker_abandon_test.i
+
+# target to preprocess a source file
+tests/speaker_abandon_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-speaker-abandon-test.dir/build.make CMakeFiles/iterate-kit-speaker-abandon-test.dir/tests/speaker_abandon_test.c.i
+.PHONY : tests/speaker_abandon_test.c.i
+
+tests/speaker_abandon_test.s: tests/speaker_abandon_test.c.s
+.PHONY : tests/speaker_abandon_test.s
+
+# target to generate assembly for a file
+tests/speaker_abandon_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-speaker-abandon-test.dir/build.make CMakeFiles/iterate-kit-speaker-abandon-test.dir/tests/speaker_abandon_test.c.s
+.PHONY : tests/speaker_abandon_test.c.s
+
 tests/spsc_ring_test.o: tests/spsc_ring_test.c.o
 .PHONY : tests/spsc_ring_test.o
 
@@ -3263,6 +6035,78 @@ tests/stackchan_control_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-stackchan-control-test.dir/build.make CMakeFiles/iterate-kit-stackchan-control-test.dir/tests/stackchan_control_test.c.s
 .PHONY : tests/stackchan_control_test.c.s
 
+tests/talk_button_test.o: tests/talk_button_test.c.o
+.PHONY : tests/talk_button_test.o
+
+# target to build an object file
+tests/talk_button_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-talk-button-test.dir/build.make CMakeFiles/iterate-kit-talk-button-test.dir/tests/talk_button_test.c.o
+.PHONY : tests/talk_button_test.c.o
+
+tests/talk_button_test.i: tests/talk_button_test.c.i
+.PHONY : tests/talk_button_test.i
+
+# target to preprocess a source file
+tests/talk_button_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-talk-button-test.dir/build.make CMakeFiles/iterate-kit-talk-button-test.dir/tests/talk_button_test.c.i
+.PHONY : tests/talk_button_test.c.i
+
+tests/talk_button_test.s: tests/talk_button_test.c.s
+.PHONY : tests/talk_button_test.s
+
+# target to generate assembly for a file
+tests/talk_button_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-talk-button-test.dir/build.make CMakeFiles/iterate-kit-talk-button-test.dir/tests/talk_button_test.c.s
+.PHONY : tests/talk_button_test.c.s
+
+tests/touch_tap_test.o: tests/touch_tap_test.c.o
+.PHONY : tests/touch_tap_test.o
+
+# target to build an object file
+tests/touch_tap_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-touch-tap-test.dir/build.make CMakeFiles/iterate-kit-touch-tap-test.dir/tests/touch_tap_test.c.o
+.PHONY : tests/touch_tap_test.c.o
+
+tests/touch_tap_test.i: tests/touch_tap_test.c.i
+.PHONY : tests/touch_tap_test.i
+
+# target to preprocess a source file
+tests/touch_tap_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-touch-tap-test.dir/build.make CMakeFiles/iterate-kit-touch-tap-test.dir/tests/touch_tap_test.c.i
+.PHONY : tests/touch_tap_test.c.i
+
+tests/touch_tap_test.s: tests/touch_tap_test.c.s
+.PHONY : tests/touch_tap_test.s
+
+# target to generate assembly for a file
+tests/touch_tap_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-touch-tap-test.dir/build.make CMakeFiles/iterate-kit-touch-tap-test.dir/tests/touch_tap_test.c.s
+.PHONY : tests/touch_tap_test.c.s
+
+tests/voice_pe_hardware_config_aec_override_test.o: tests/voice_pe_hardware_config_aec_override_test.c.o
+.PHONY : tests/voice_pe_hardware_config_aec_override_test.o
+
+# target to build an object file
+tests/voice_pe_hardware_config_aec_override_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/tests/voice_pe_hardware_config_aec_override_test.c.o
+.PHONY : tests/voice_pe_hardware_config_aec_override_test.c.o
+
+tests/voice_pe_hardware_config_aec_override_test.i: tests/voice_pe_hardware_config_aec_override_test.c.i
+.PHONY : tests/voice_pe_hardware_config_aec_override_test.i
+
+# target to preprocess a source file
+tests/voice_pe_hardware_config_aec_override_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/tests/voice_pe_hardware_config_aec_override_test.c.i
+.PHONY : tests/voice_pe_hardware_config_aec_override_test.c.i
+
+tests/voice_pe_hardware_config_aec_override_test.s: tests/voice_pe_hardware_config_aec_override_test.c.s
+.PHONY : tests/voice_pe_hardware_config_aec_override_test.s
+
+# target to generate assembly for a file
+tests/voice_pe_hardware_config_aec_override_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-hardware-config-aec-override-test.dir/tests/voice_pe_hardware_config_aec_override_test.c.s
+.PHONY : tests/voice_pe_hardware_config_aec_override_test.c.s
+
 tests/voice_pe_hardware_config_test.o: tests/voice_pe_hardware_config_test.c.o
 .PHONY : tests/voice_pe_hardware_config_test.o
 
@@ -3310,6 +6154,30 @@ tests/voice_pe_pcm_format_test.s: tests/voice_pe_pcm_format_test.c.s
 tests/voice_pe_pcm_format_test.c.s:
 	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/build.make CMakeFiles/iterate-kit-voice-pe-pcm-format-test.dir/tests/voice_pe_pcm_format_test.c.s
 .PHONY : tests/voice_pe_pcm_format_test.c.s
+
+tests/voice_playback_clock_test.o: tests/voice_playback_clock_test.c.o
+.PHONY : tests/voice_playback_clock_test.o
+
+# target to build an object file
+tests/voice_playback_clock_test.c.o:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-playback-clock-test.dir/build.make CMakeFiles/iterate-kit-voice-playback-clock-test.dir/tests/voice_playback_clock_test.c.o
+.PHONY : tests/voice_playback_clock_test.c.o
+
+tests/voice_playback_clock_test.i: tests/voice_playback_clock_test.c.i
+.PHONY : tests/voice_playback_clock_test.i
+
+# target to preprocess a source file
+tests/voice_playback_clock_test.c.i:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-playback-clock-test.dir/build.make CMakeFiles/iterate-kit-voice-playback-clock-test.dir/tests/voice_playback_clock_test.c.i
+.PHONY : tests/voice_playback_clock_test.c.i
+
+tests/voice_playback_clock_test.s: tests/voice_playback_clock_test.c.s
+.PHONY : tests/voice_playback_clock_test.s
+
+# target to generate assembly for a file
+tests/voice_playback_clock_test.c.s:
+	$(MAKE) $(MAKESILENT) -f CMakeFiles/iterate-kit-voice-playback-clock-test.dir/build.make CMakeFiles/iterate-kit-voice-playback-clock-test.dir/tests/voice_playback_clock_test.c.s
+.PHONY : tests/voice_playback_clock_test.c.s
 
 tests/voice_satellite_test.o: tests/voice_satellite_test.c.o
 .PHONY : tests/voice_satellite_test.o
@@ -3491,42 +6359,82 @@ help:
 	@echo "... capnweb"
 	@echo "... capnweb-native-peer"
 	@echo "... iterate-kit-aec-capture-bridge-test"
+	@echo "... iterate-kit-aec-diagnostic-trace-capability-test"
+	@echo "... iterate-kit-aec-diagnostic-trace-test"
+	@echo "... iterate-kit-aec-reference-scaler-test"
 	@echo "... iterate-kit-aec-signal-window-test"
+	@echo "... iterate-kit-aec-uplink-selector-test"
 	@echo "... iterate-kit-atomic-test"
 	@echo "... iterate-kit-audio-intent-reconciler-test"
+	@echo "... iterate-kit-audio-playout-test"
 	@echo "... iterate-kit-audio-test"
+	@echo "... iterate-kit-avatar"
 	@echo "... iterate-kit-bounded-capture-test"
 	@echo "... iterate-kit-bounded-playback-test"
 	@echo "... iterate-kit-capabilities"
 	@echo "... iterate-kit-capnweb-oneway-call-test"
+	@echo "... iterate-kit-cli"
+	@echo "... iterate-kit-cli-audio-in-test"
+	@echo "... iterate-kit-cli-delivery-fault-test"
+	@echo "... iterate-kit-cli-device-profile-test"
+	@echo "... iterate-kit-cli-fault-schedule-test"
+	@echo "... iterate-kit-cli-keyboard-test"
+	@echo "... iterate-kit-cli-microphone-test"
+	@echo "... iterate-kit-cli-options-test"
+	@echo "... iterate-kit-cli-paced-sink-test"
+	@echo "... iterate-kit-cli-report-test"
+	@echo "... iterate-kit-cli-speaker-test"
+	@echo "... iterate-kit-cli-virtual-clock-test"
+	@echo "... iterate-kit-cli-wav-test"
 	@echo "... iterate-kit-configuration-decoder-fixture"
 	@echo "... iterate-kit-configuration-test"
 	@echo "... iterate-kit-control-recovery-test"
+	@echo "... iterate-kit-conversation-lights-test"
 	@echo "... iterate-kit-core"
 	@echo "... iterate-kit-core-s3-capture-reserve-test"
 	@echo "... iterate-kit-cpu-usage-test"
+	@echo "... iterate-kit-debounced-button-test"
 	@echo "... iterate-kit-device-events-test"
+	@echo "... iterate-kit-device-menu-test"
 	@echo "... iterate-kit-direct-i2s-stereo-output-test"
 	@echo "... iterate-kit-display-refresh-gate-test"
 	@echo "... iterate-kit-esp-idf-configuration-test"
 	@echo "... iterate-kit-esp-idf-direct-i2s-backend-test"
 	@echo "... iterate-kit-esp-idf-itx-transport-test"
+	@echo "... iterate-kit-esp-idf-pcm-session-test"
 	@echo "... iterate-kit-esp-idf-pcm-transport-test"
 	@echo "... iterate-kit-esp-idf-websocket-policy-test"
+	@echo "... iterate-kit-face-animator-test"
+	@echo "... iterate-kit-face-avatar-registry-test"
+	@echo "... iterate-kit-face-doze-test"
+	@echo "... iterate-kit-face-keyframe-test"
+	@echo "... iterate-kit-face-performance-test"
+	@echo "... iterate-kit-face-scale-test"
+	@echo "... iterate-kit-face-sprite-sheet-test"
+	@echo "... iterate-kit-face-stage-test"
+	@echo "... iterate-kit-face-viseme-queue-test"
+	@echo "... iterate-kit-havpe-ui-test"
 	@echo "... iterate-kit-itx-connection-test"
 	@echo "... iterate-kit-itx-mount-test"
 	@echo "... iterate-kit-m5sticks3"
 	@echo "... iterate-kit-m5sticks3-events-test"
+	@echo "... iterate-kit-m5sticks3-visual-layout-test"
 	@echo "... iterate-kit-metrics-subscription-test"
+	@echo "... iterate-kit-mulaw-roundtrip-test"
 	@echo "... iterate-kit-pcm-capture-turn-test"
 	@echo "... iterate-kit-pcm-clock-playback-test"
 	@echo "... iterate-kit-pcm-generation-fence-test"
+	@echo "... iterate-kit-pcm-high-pass-test"
 	@echo "... iterate-kit-pcm-lane-test"
 	@echo "... iterate-kit-pcm-playback-interruption-test"
 	@echo "... iterate-kit-pcm-realtime-fault-harness-test"
 	@echo "... iterate-kit-pcm-uplink-conductor-test"
 	@echo "... iterate-kit-pcm-uplink-sender-test"
 	@echo "... iterate-kit-pcm-websocket-test"
+	@echo "... iterate-kit-peer-poll-test"
+	@echo "... iterate-kit-posix"
+	@echo "... iterate-kit-posix-itx-transport-test"
+	@echo "... iterate-kit-posix-websocket-test"
 	@echo "... iterate-kit-realtime-owner-control-test"
 	@echo "... iterate-kit-realtime-playback-test"
 	@echo "... iterate-kit-release-owned-handle-test"
@@ -3534,11 +6442,16 @@ help:
 	@echo "... iterate-kit-runtime-diagnostics-fixture"
 	@echo "... iterate-kit-runtime-diagnostics-test"
 	@echo "... iterate-kit-simulator"
+	@echo "... iterate-kit-speaker-abandon-test"
 	@echo "... iterate-kit-spsc-ring-test"
 	@echo "... iterate-kit-stackchan"
 	@echo "... iterate-kit-stackchan-control-test"
+	@echo "... iterate-kit-talk-button-test"
+	@echo "... iterate-kit-touch-tap-test"
+	@echo "... iterate-kit-voice-pe-hardware-config-aec-override-test"
 	@echo "... iterate-kit-voice-pe-hardware-config-test"
 	@echo "... iterate-kit-voice-pe-pcm-format-test"
+	@echo "... iterate-kit-voice-playback-clock-test"
 	@echo "... iterate-kit-voice-satellite"
 	@echo "... iterate-kit-voice-satellite-test"
 	@echo "... iterate-kit-voicelab-stream-test"
@@ -3550,6 +6463,78 @@ help:
 	@echo "... iterate-m5sticks3-simulator"
 	@echo "... iterate-stackchan-resource-profile"
 	@echo "... iterate-stackchan-simulator"
+	@echo "... components/avatar/src/face_animator.o"
+	@echo "... components/avatar/src/face_animator.i"
+	@echo "... components/avatar/src/face_animator.s"
+	@echo "... components/avatar/src/face_avatar_registry.o"
+	@echo "... components/avatar/src/face_avatar_registry.i"
+	@echo "... components/avatar/src/face_avatar_registry.s"
+	@echo "... components/avatar/src/face_doze.o"
+	@echo "... components/avatar/src/face_doze.i"
+	@echo "... components/avatar/src/face_doze.s"
+	@echo "... components/avatar/src/face_driver.o"
+	@echo "... components/avatar/src/face_driver.i"
+	@echo "... components/avatar/src/face_driver.s"
+	@echo "... components/avatar/src/face_keyframe.o"
+	@echo "... components/avatar/src/face_keyframe.i"
+	@echo "... components/avatar/src/face_keyframe.s"
+	@echo "... components/avatar/src/face_performance.o"
+	@echo "... components/avatar/src/face_performance.i"
+	@echo "... components/avatar/src/face_performance.s"
+	@echo "... components/avatar/src/face_scale.o"
+	@echo "... components/avatar/src/face_scale.i"
+	@echo "... components/avatar/src/face_scale.s"
+	@echo "... components/avatar/src/face_sprite_sheet.o"
+	@echo "... components/avatar/src/face_sprite_sheet.i"
+	@echo "... components/avatar/src/face_sprite_sheet.s"
+	@echo "... components/avatar/src/face_stage.o"
+	@echo "... components/avatar/src/face_stage.i"
+	@echo "... components/avatar/src/face_stage.s"
+	@echo "... components/avatar/src/face_viseme_queue.o"
+	@echo "... components/avatar/src/face_viseme_queue.i"
+	@echo "... components/avatar/src/face_viseme_queue.s"
+	@echo "... components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.o"
+	@echo "... components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.i"
+	@echo "... components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.s"
+	@echo "... components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.o"
+	@echo "... components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.i"
+	@echo "... components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.s"
+	@echo "... components/avatar/src/fspp_starbyte_cores3_fine_atlas.o"
+	@echo "... components/avatar/src/fspp_starbyte_cores3_fine_atlas.i"
+	@echo "... components/avatar/src/fspp_starbyte_cores3_fine_atlas.s"
+	@echo "... components/avatar/tests/face_animator_test.o"
+	@echo "... components/avatar/tests/face_animator_test.i"
+	@echo "... components/avatar/tests/face_animator_test.s"
+	@echo "... components/avatar/tests/face_avatar_registry_test.o"
+	@echo "... components/avatar/tests/face_avatar_registry_test.i"
+	@echo "... components/avatar/tests/face_avatar_registry_test.s"
+	@echo "... components/avatar/tests/face_doze_test.o"
+	@echo "... components/avatar/tests/face_doze_test.i"
+	@echo "... components/avatar/tests/face_doze_test.s"
+	@echo "... components/avatar/tests/face_keyframe_test.o"
+	@echo "... components/avatar/tests/face_keyframe_test.i"
+	@echo "... components/avatar/tests/face_keyframe_test.s"
+	@echo "... components/avatar/tests/face_performance_test.o"
+	@echo "... components/avatar/tests/face_performance_test.i"
+	@echo "... components/avatar/tests/face_performance_test.s"
+	@echo "... components/avatar/tests/face_scale_test.o"
+	@echo "... components/avatar/tests/face_scale_test.i"
+	@echo "... components/avatar/tests/face_scale_test.s"
+	@echo "... components/avatar/tests/face_sprite_sheet_test.o"
+	@echo "... components/avatar/tests/face_sprite_sheet_test.i"
+	@echo "... components/avatar/tests/face_sprite_sheet_test.s"
+	@echo "... components/avatar/tests/face_stage_test.o"
+	@echo "... components/avatar/tests/face_stage_test.i"
+	@echo "... components/avatar/tests/face_stage_test.s"
+	@echo "... components/avatar/tests/face_viseme_queue_test.o"
+	@echo "... components/avatar/tests/face_viseme_queue_test.i"
+	@echo "... components/avatar/tests/face_viseme_queue_test.s"
+	@echo "... components/capabilities/src/aec_diagnostic_trace.o"
+	@echo "... components/capabilities/src/aec_diagnostic_trace.i"
+	@echo "... components/capabilities/src/aec_diagnostic_trace.s"
+	@echo "... components/capabilities/src/avatar.o"
+	@echo "... components/capabilities/src/avatar.i"
+	@echo "... components/capabilities/src/avatar.s"
 	@echo "... components/capabilities/src/callback_budget.o"
 	@echo "... components/capabilities/src/callback_budget.i"
 	@echo "... components/capabilities/src/callback_budget.s"
@@ -3586,33 +6571,57 @@ help:
 	@echo "... components/core/src/aec_capture_bridge.o"
 	@echo "... components/core/src/aec_capture_bridge.i"
 	@echo "... components/core/src/aec_capture_bridge.s"
+	@echo "... components/core/src/aec_diagnostic_trace.o"
+	@echo "... components/core/src/aec_diagnostic_trace.i"
+	@echo "... components/core/src/aec_diagnostic_trace.s"
+	@echo "... components/core/src/aec_reference_scaler.o"
+	@echo "... components/core/src/aec_reference_scaler.i"
+	@echo "... components/core/src/aec_reference_scaler.s"
 	@echo "... components/core/src/aec_signal_window.o"
 	@echo "... components/core/src/aec_signal_window.i"
 	@echo "... components/core/src/aec_signal_window.s"
+	@echo "... components/core/src/aec_uplink_selector.o"
+	@echo "... components/core/src/aec_uplink_selector.i"
+	@echo "... components/core/src/aec_uplink_selector.s"
 	@echo "... components/core/src/audio.o"
 	@echo "... components/core/src/audio.i"
 	@echo "... components/core/src/audio.s"
 	@echo "... components/core/src/audio_intent_reconciler.o"
 	@echo "... components/core/src/audio_intent_reconciler.i"
 	@echo "... components/core/src/audio_intent_reconciler.s"
+	@echo "... components/core/src/audio_playout.o"
+	@echo "... components/core/src/audio_playout.i"
+	@echo "... components/core/src/audio_playout.s"
 	@echo "... components/core/src/configuration.o"
 	@echo "... components/core/src/configuration.i"
 	@echo "... components/core/src/configuration.s"
 	@echo "... components/core/src/control_recovery.o"
 	@echo "... components/core/src/control_recovery.i"
 	@echo "... components/core/src/control_recovery.s"
+	@echo "... components/core/src/conversation_lights.o"
+	@echo "... components/core/src/conversation_lights.i"
+	@echo "... components/core/src/conversation_lights.s"
 	@echo "... components/core/src/cpu_usage.o"
 	@echo "... components/core/src/cpu_usage.i"
 	@echo "... components/core/src/cpu_usage.s"
+	@echo "... components/core/src/debounced_button.o"
+	@echo "... components/core/src/debounced_button.i"
+	@echo "... components/core/src/debounced_button.s"
 	@echo "... components/core/src/device_events.o"
 	@echo "... components/core/src/device_events.i"
 	@echo "... components/core/src/device_events.s"
+	@echo "... components/core/src/device_menu.o"
+	@echo "... components/core/src/device_menu.i"
+	@echo "... components/core/src/device_menu.s"
 	@echo "... components/core/src/itx_connection.o"
 	@echo "... components/core/src/itx_connection.i"
 	@echo "... components/core/src/itx_connection.s"
 	@echo "... components/core/src/itx_mount.o"
 	@echo "... components/core/src/itx_mount.i"
 	@echo "... components/core/src/itx_mount.s"
+	@echo "... components/core/src/itx_outbox_sender.o"
+	@echo "... components/core/src/itx_outbox_sender.i"
+	@echo "... components/core/src/itx_outbox_sender.s"
 	@echo "... components/core/src/pcm_capture_turn.o"
 	@echo "... components/core/src/pcm_capture_turn.i"
 	@echo "... components/core/src/pcm_capture_turn.s"
@@ -3622,6 +6631,9 @@ help:
 	@echo "... components/core/src/pcm_generation_fence.o"
 	@echo "... components/core/src/pcm_generation_fence.i"
 	@echo "... components/core/src/pcm_generation_fence.s"
+	@echo "... components/core/src/pcm_high_pass.o"
+	@echo "... components/core/src/pcm_high_pass.i"
+	@echo "... components/core/src/pcm_high_pass.s"
 	@echo "... components/core/src/pcm_lane.o"
 	@echo "... components/core/src/pcm_lane.i"
 	@echo "... components/core/src/pcm_lane.s"
@@ -3646,12 +6658,27 @@ help:
 	@echo "... components/core/src/runtime_diagnostics.o"
 	@echo "... components/core/src/runtime_diagnostics.i"
 	@echo "... components/core/src/runtime_diagnostics.s"
+	@echo "... components/core/src/speaker_abandon.o"
+	@echo "... components/core/src/speaker_abandon.i"
+	@echo "... components/core/src/speaker_abandon.s"
 	@echo "... components/core/src/spsc_ring.o"
 	@echo "... components/core/src/spsc_ring.i"
 	@echo "... components/core/src/spsc_ring.s"
+	@echo "... components/core/src/talk_button.o"
+	@echo "... components/core/src/talk_button.i"
+	@echo "... components/core/src/talk_button.s"
+	@echo "... components/core/src/touch_tap.o"
+	@echo "... components/core/src/touch_tap.i"
+	@echo "... components/core/src/touch_tap.s"
+	@echo "... components/core/src/voice_playback_clock.o"
+	@echo "... components/core/src/voice_playback_clock.i"
+	@echo "... components/core/src/voice_playback_clock.s"
 	@echo "... components/core/src/voicelab_stream.o"
 	@echo "... components/core/src/voicelab_stream.i"
 	@echo "... components/core/src/voicelab_stream.s"
+	@echo "... components/core/src/websocket_frame_reader.o"
+	@echo "... components/core/src/websocket_frame_reader.i"
+	@echo "... components/core/src/websocket_frame_reader.s"
 	@echo "... components/core/src/websocket_frame_writer.o"
 	@echo "... components/core/src/websocket_frame_writer.i"
 	@echo "... components/core/src/websocket_frame_writer.s"
@@ -3682,9 +6709,21 @@ help:
 	@echo "... platforms/iterate_esp_idf/itx_transport.o"
 	@echo "... platforms/iterate_esp_idf/itx_transport.i"
 	@echo "... platforms/iterate_esp_idf/itx_transport.s"
+	@echo "... platforms/iterate_esp_idf/pcm_session.o"
+	@echo "... platforms/iterate_esp_idf/pcm_session.i"
+	@echo "... platforms/iterate_esp_idf/pcm_session.s"
 	@echo "... platforms/iterate_esp_idf/pcm_transport.o"
 	@echo "... platforms/iterate_esp_idf/pcm_transport.i"
 	@echo "... platforms/iterate_esp_idf/pcm_transport.s"
+	@echo "... platforms/iterate_posix/posix_itx_transport.o"
+	@echo "... platforms/iterate_posix/posix_itx_transport.i"
+	@echo "... platforms/iterate_posix/posix_itx_transport.s"
+	@echo "... platforms/iterate_posix/tls_stream.o"
+	@echo "... platforms/iterate_posix/tls_stream.i"
+	@echo "... platforms/iterate_posix/tls_stream.s"
+	@echo "... platforms/iterate_posix/websocket_client.o"
+	@echo "... platforms/iterate_posix/websocket_client.i"
+	@echo "... platforms/iterate_posix/websocket_client.s"
 	@echo "... platforms/iterate_voice_pe_audio/voice_pe_hardware_config.o"
 	@echo "... platforms/iterate_voice_pe_audio/voice_pe_hardware_config.i"
 	@echo "... platforms/iterate_voice_pe_audio/voice_pe_hardware_config.s"
@@ -3706,12 +6745,75 @@ help:
 	@echo "... simulator/src/runner.o"
 	@echo "... simulator/src/runner.i"
 	@echo "... simulator/src/runner.s"
+	@echo "... targets/home-assistant-voice-preview-edition/main/havpe_ui.o"
+	@echo "... targets/home-assistant-voice-preview-edition/main/havpe_ui.i"
+	@echo "... targets/home-assistant-voice-preview-edition/main/havpe_ui.s"
+	@echo "... targets/host_cli/cli_audio_in.o"
+	@echo "... targets/host_cli/cli_audio_in.i"
+	@echo "... targets/host_cli/cli_audio_in.s"
+	@echo "... targets/host_cli/cli_audio_out.o"
+	@echo "... targets/host_cli/cli_audio_out.i"
+	@echo "... targets/host_cli/cli_audio_out.s"
+	@echo "... targets/host_cli/cli_capabilities.o"
+	@echo "... targets/host_cli/cli_capabilities.i"
+	@echo "... targets/host_cli/cli_capabilities.s"
+	@echo "... targets/host_cli/cli_conversation.o"
+	@echo "... targets/host_cli/cli_conversation.i"
+	@echo "... targets/host_cli/cli_conversation.s"
+	@echo "... targets/host_cli/cli_delivery_fault.o"
+	@echo "... targets/host_cli/cli_delivery_fault.i"
+	@echo "... targets/host_cli/cli_delivery_fault.s"
+	@echo "... targets/host_cli/cli_device_profile.o"
+	@echo "... targets/host_cli/cli_device_profile.i"
+	@echo "... targets/host_cli/cli_device_profile.s"
+	@echo "... targets/host_cli/cli_fault_schedule.o"
+	@echo "... targets/host_cli/cli_fault_schedule.i"
+	@echo "... targets/host_cli/cli_fault_schedule.s"
+	@echo "... targets/host_cli/cli_keyboard.o"
+	@echo "... targets/host_cli/cli_keyboard.i"
+	@echo "... targets/host_cli/cli_keyboard.s"
+	@echo "... targets/host_cli/cli_microphone.o"
+	@echo "... targets/host_cli/cli_microphone.i"
+	@echo "... targets/host_cli/cli_microphone.s"
+	@echo "... targets/host_cli/cli_options.o"
+	@echo "... targets/host_cli/cli_options.i"
+	@echo "... targets/host_cli/cli_options.s"
+	@echo "... targets/host_cli/cli_paced_sink.o"
+	@echo "... targets/host_cli/cli_paced_sink.i"
+	@echo "... targets/host_cli/cli_paced_sink.s"
+	@echo "... targets/host_cli/cli_report.o"
+	@echo "... targets/host_cli/cli_report.i"
+	@echo "... targets/host_cli/cli_report.s"
+	@echo "... targets/host_cli/cli_speaker.o"
+	@echo "... targets/host_cli/cli_speaker.i"
+	@echo "... targets/host_cli/cli_speaker.s"
+	@echo "... targets/host_cli/cli_virtual_clock.o"
+	@echo "... targets/host_cli/cli_virtual_clock.i"
+	@echo "... targets/host_cli/cli_virtual_clock.s"
+	@echo "... targets/host_cli/cli_wav.o"
+	@echo "... targets/host_cli/cli_wav.i"
+	@echo "... targets/host_cli/cli_wav.s"
+	@echo "... targets/host_cli/main.o"
+	@echo "... targets/host_cli/main.i"
+	@echo "... targets/host_cli/main.s"
 	@echo "... tests/aec_capture_bridge_test.o"
 	@echo "... tests/aec_capture_bridge_test.i"
 	@echo "... tests/aec_capture_bridge_test.s"
+	@echo "... tests/aec_diagnostic_trace_capability_test.o"
+	@echo "... tests/aec_diagnostic_trace_capability_test.i"
+	@echo "... tests/aec_diagnostic_trace_capability_test.s"
+	@echo "... tests/aec_diagnostic_trace_test.o"
+	@echo "... tests/aec_diagnostic_trace_test.i"
+	@echo "... tests/aec_diagnostic_trace_test.s"
+	@echo "... tests/aec_reference_scaler_test.o"
+	@echo "... tests/aec_reference_scaler_test.i"
+	@echo "... tests/aec_reference_scaler_test.s"
 	@echo "... tests/aec_signal_window_test.o"
 	@echo "... tests/aec_signal_window_test.i"
 	@echo "... tests/aec_signal_window_test.s"
+	@echo "... tests/aec_uplink_selector_test.o"
+	@echo "... tests/aec_uplink_selector_test.i"
+	@echo "... tests/aec_uplink_selector_test.s"
 	@echo "... tests/atomic_test.o"
 	@echo "... tests/atomic_test.i"
 	@echo "... tests/atomic_test.s"
@@ -3721,6 +6823,9 @@ help:
 	@echo "... tests/audio_intent_reconciler_test.o"
 	@echo "... tests/audio_intent_reconciler_test.i"
 	@echo "... tests/audio_intent_reconciler_test.s"
+	@echo "... tests/audio_playout_test.o"
+	@echo "... tests/audio_playout_test.i"
+	@echo "... tests/audio_playout_test.s"
 	@echo "... tests/bounded_capture_test.o"
 	@echo "... tests/bounded_capture_test.i"
 	@echo "... tests/bounded_capture_test.s"
@@ -3730,6 +6835,42 @@ help:
 	@echo "... tests/capnweb_oneway_call_test.o"
 	@echo "... tests/capnweb_oneway_call_test.i"
 	@echo "... tests/capnweb_oneway_call_test.s"
+	@echo "... tests/cli_audio_in_test.o"
+	@echo "... tests/cli_audio_in_test.i"
+	@echo "... tests/cli_audio_in_test.s"
+	@echo "... tests/cli_delivery_fault_test.o"
+	@echo "... tests/cli_delivery_fault_test.i"
+	@echo "... tests/cli_delivery_fault_test.s"
+	@echo "... tests/cli_device_profile_test.o"
+	@echo "... tests/cli_device_profile_test.i"
+	@echo "... tests/cli_device_profile_test.s"
+	@echo "... tests/cli_fault_schedule_test.o"
+	@echo "... tests/cli_fault_schedule_test.i"
+	@echo "... tests/cli_fault_schedule_test.s"
+	@echo "... tests/cli_keyboard_test.o"
+	@echo "... tests/cli_keyboard_test.i"
+	@echo "... tests/cli_keyboard_test.s"
+	@echo "... tests/cli_microphone_test.o"
+	@echo "... tests/cli_microphone_test.i"
+	@echo "... tests/cli_microphone_test.s"
+	@echo "... tests/cli_options_test.o"
+	@echo "... tests/cli_options_test.i"
+	@echo "... tests/cli_options_test.s"
+	@echo "... tests/cli_paced_sink_test.o"
+	@echo "... tests/cli_paced_sink_test.i"
+	@echo "... tests/cli_paced_sink_test.s"
+	@echo "... tests/cli_report_test.o"
+	@echo "... tests/cli_report_test.i"
+	@echo "... tests/cli_report_test.s"
+	@echo "... tests/cli_speaker_test.o"
+	@echo "... tests/cli_speaker_test.i"
+	@echo "... tests/cli_speaker_test.s"
+	@echo "... tests/cli_virtual_clock_test.o"
+	@echo "... tests/cli_virtual_clock_test.i"
+	@echo "... tests/cli_virtual_clock_test.s"
+	@echo "... tests/cli_wav_test.o"
+	@echo "... tests/cli_wav_test.i"
+	@echo "... tests/cli_wav_test.s"
 	@echo "... tests/configuration_decoder_fixture.o"
 	@echo "... tests/configuration_decoder_fixture.i"
 	@echo "... tests/configuration_decoder_fixture.s"
@@ -3739,15 +6880,24 @@ help:
 	@echo "... tests/control_recovery_test.o"
 	@echo "... tests/control_recovery_test.i"
 	@echo "... tests/control_recovery_test.s"
+	@echo "... tests/conversation_lights_test.o"
+	@echo "... tests/conversation_lights_test.i"
+	@echo "... tests/conversation_lights_test.s"
 	@echo "... tests/core_s3_capture_reserve_test.o"
 	@echo "... tests/core_s3_capture_reserve_test.i"
 	@echo "... tests/core_s3_capture_reserve_test.s"
 	@echo "... tests/cpu_usage_test.o"
 	@echo "... tests/cpu_usage_test.i"
 	@echo "... tests/cpu_usage_test.s"
+	@echo "... tests/debounced_button_test.o"
+	@echo "... tests/debounced_button_test.i"
+	@echo "... tests/debounced_button_test.s"
 	@echo "... tests/device_events_test.o"
 	@echo "... tests/device_events_test.i"
 	@echo "... tests/device_events_test.s"
+	@echo "... tests/device_menu_test.o"
+	@echo "... tests/device_menu_test.i"
+	@echo "... tests/device_menu_test.s"
 	@echo "... tests/direct_i2s_stereo_output_test.o"
 	@echo "... tests/direct_i2s_stereo_output_test.i"
 	@echo "... tests/direct_i2s_stereo_output_test.s"
@@ -3763,6 +6913,9 @@ help:
 	@echo "... tests/esp_idf_itx_transport_test.o"
 	@echo "... tests/esp_idf_itx_transport_test.i"
 	@echo "... tests/esp_idf_itx_transport_test.s"
+	@echo "... tests/esp_idf_pcm_session_test.o"
+	@echo "... tests/esp_idf_pcm_session_test.i"
+	@echo "... tests/esp_idf_pcm_session_test.s"
 	@echo "... tests/esp_idf_pcm_transport_test.o"
 	@echo "... tests/esp_idf_pcm_transport_test.i"
 	@echo "... tests/esp_idf_pcm_transport_test.s"
@@ -3778,6 +6931,12 @@ help:
 	@echo "... tests/fakes/fake_esp_idf_platform.o"
 	@echo "... tests/fakes/fake_esp_idf_platform.i"
 	@echo "... tests/fakes/fake_esp_idf_platform.s"
+	@echo "... tests/fakes/fake_posix_websocket.o"
+	@echo "... tests/fakes/fake_posix_websocket.i"
+	@echo "... tests/fakes/fake_posix_websocket.s"
+	@echo "... tests/havpe_ui_test.o"
+	@echo "... tests/havpe_ui_test.i"
+	@echo "... tests/havpe_ui_test.s"
 	@echo "... tests/itx_connection_test.o"
 	@echo "... tests/itx_connection_test.i"
 	@echo "... tests/itx_connection_test.s"
@@ -3787,9 +6946,15 @@ help:
 	@echo "... tests/m5sticks3_events_test.o"
 	@echo "... tests/m5sticks3_events_test.i"
 	@echo "... tests/m5sticks3_events_test.s"
+	@echo "... tests/m5sticks3_visual_layout_test.o"
+	@echo "... tests/m5sticks3_visual_layout_test.i"
+	@echo "... tests/m5sticks3_visual_layout_test.s"
 	@echo "... tests/metrics_subscription_test.o"
 	@echo "... tests/metrics_subscription_test.i"
 	@echo "... tests/metrics_subscription_test.s"
+	@echo "... tests/mulaw_roundtrip_test.o"
+	@echo "... tests/mulaw_roundtrip_test.i"
+	@echo "... tests/mulaw_roundtrip_test.s"
 	@echo "... tests/pcm_capture_turn_test.o"
 	@echo "... tests/pcm_capture_turn_test.i"
 	@echo "... tests/pcm_capture_turn_test.s"
@@ -3799,6 +6964,9 @@ help:
 	@echo "... tests/pcm_generation_fence_test.o"
 	@echo "... tests/pcm_generation_fence_test.i"
 	@echo "... tests/pcm_generation_fence_test.s"
+	@echo "... tests/pcm_high_pass_test.o"
+	@echo "... tests/pcm_high_pass_test.i"
+	@echo "... tests/pcm_high_pass_test.s"
 	@echo "... tests/pcm_lane_test.o"
 	@echo "... tests/pcm_lane_test.i"
 	@echo "... tests/pcm_lane_test.s"
@@ -3817,6 +6985,15 @@ help:
 	@echo "... tests/pcm_websocket_test.o"
 	@echo "... tests/pcm_websocket_test.i"
 	@echo "... tests/pcm_websocket_test.s"
+	@echo "... tests/peer_poll_test.o"
+	@echo "... tests/peer_poll_test.i"
+	@echo "... tests/peer_poll_test.s"
+	@echo "... tests/posix_itx_transport_test.o"
+	@echo "... tests/posix_itx_transport_test.i"
+	@echo "... tests/posix_itx_transport_test.s"
+	@echo "... tests/posix_websocket_test.o"
+	@echo "... tests/posix_websocket_test.i"
+	@echo "... tests/posix_websocket_test.s"
 	@echo "... tests/realtime_owner_control_test.o"
 	@echo "... tests/realtime_owner_control_test.i"
 	@echo "... tests/realtime_owner_control_test.s"
@@ -3835,18 +7012,33 @@ help:
 	@echo "... tests/runtime_diagnostics_test.o"
 	@echo "... tests/runtime_diagnostics_test.i"
 	@echo "... tests/runtime_diagnostics_test.s"
+	@echo "... tests/speaker_abandon_test.o"
+	@echo "... tests/speaker_abandon_test.i"
+	@echo "... tests/speaker_abandon_test.s"
 	@echo "... tests/spsc_ring_test.o"
 	@echo "... tests/spsc_ring_test.i"
 	@echo "... tests/spsc_ring_test.s"
 	@echo "... tests/stackchan_control_test.o"
 	@echo "... tests/stackchan_control_test.i"
 	@echo "... tests/stackchan_control_test.s"
+	@echo "... tests/talk_button_test.o"
+	@echo "... tests/talk_button_test.i"
+	@echo "... tests/talk_button_test.s"
+	@echo "... tests/touch_tap_test.o"
+	@echo "... tests/touch_tap_test.i"
+	@echo "... tests/touch_tap_test.s"
+	@echo "... tests/voice_pe_hardware_config_aec_override_test.o"
+	@echo "... tests/voice_pe_hardware_config_aec_override_test.i"
+	@echo "... tests/voice_pe_hardware_config_aec_override_test.s"
 	@echo "... tests/voice_pe_hardware_config_test.o"
 	@echo "... tests/voice_pe_hardware_config_test.i"
 	@echo "... tests/voice_pe_hardware_config_test.s"
 	@echo "... tests/voice_pe_pcm_format_test.o"
 	@echo "... tests/voice_pe_pcm_format_test.i"
 	@echo "... tests/voice_pe_pcm_format_test.s"
+	@echo "... tests/voice_playback_clock_test.o"
+	@echo "... tests/voice_playback_clock_test.i"
+	@echo "... tests/voice_playback_clock_test.s"
 	@echo "... tests/voice_satellite_test.o"
 	@echo "... tests/voice_satellite_test.i"
 	@echo "... tests/voice_satellite_test.s"

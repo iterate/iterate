@@ -1,0 +1,60 @@
+{
+  "createdAt": "2026-08-03T06:02:33.200Z",
+  "dnsAndConnect": {
+    "connect": {
+      "durationMs": 88.68787499999962,
+      "error": null,
+      "maximumHealthyDurationMs": 1000,
+      "outcome": "success"
+    },
+    "dns": {
+      "durationMs": 57.16554099999985,
+      "error": null,
+      "maximumHealthyDurationMs": 500,
+      "outcome": "success"
+    }
+  },
+  "reachability": {
+    "attempts": [
+      {
+        "outcome": "reply",
+        "rttMs": 43.305
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 45.261
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 64.62
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 47.471
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 51.246
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 56.98
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 58.076
+      },
+      {
+        "outcome": "reply",
+        "rttMs": 62.143
+      }
+    ],
+    "maximumHealthyRttMs": 100,
+    "passed": true,
+    "requiredConsecutiveHealthyReplies": 8
+  },
+  "workerHost": "kit--kit-stackchan-voice-e2e-20260801.iterate.app",
+  "passed": true,
+  "reasons": [],
+  "schemaVersion": 1
+}

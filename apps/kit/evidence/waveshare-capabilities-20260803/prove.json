@@ -1,0 +1,1453 @@
+{
+  "agentPath": "/agents/voice/dev-621cd7aa562613aa",
+  "baseUrl": "https://os.iterate-preview-3.com",
+  "capability": "kit.waveshare",
+  "cases": [
+    {
+      "agent": {
+        "afterOffset": 139858,
+        "error": null,
+        "finalMessage": "The exact current values are: uptimeMs 596302, connectionState 2, and resetReason 11.",
+        "finalMessageOffset": 139853,
+        "ms": 18012,
+        "prompt": "Use the kit.waveshare device capability. Call health() once and reply with the exact values of uptimeMs, connectionState and resetReason. Do not guess any number.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const [health] = await Promise.all([\n    itx.kit.waveshare.health(),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reading current device health\" },\n    }),\n  ]);\n  await Promise.all([\n    itx.chat.sendMessage(`The exact current values are: uptimeMs ${health.uptimeMs}, connectionState ${health.connectionState}, and resetReason ${health.resetReason}.`),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported live health values\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:139845",
+            "requestedAtOffset": 139848,
+            "settledAtOffset": 139858,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 139669
+      },
+      "detail": "agent-reported uptimeMs (null) is not consistent with the direct read (596854)",
+      "independent": {
+        "uptimeMs": 596854,
+        "connectionState": 2,
+        "resetReason": 11
+      },
+      "verdict": "failed",
+      "id": "health",
+      "kind": "tool",
+      "methods": ["health"]
+    },
+    {
+      "agent": {
+        "afterOffset": 140133,
+        "error": null,
+        "finalMessage": "The screenshot is 184 by 224, with 82432 bytes across 14 chunks. I read back 82432 bytes in total.",
+        "finalMessageOffset": 140129,
+        "ms": 23444,
+        "prompt": "Use the kit.waveshare device capability. Call takeScreenshot(), then read EVERY chunk with readScreenshotChunk(i) and reply with width, height, bytes, chunks, and the total number of bytes you actually read back.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const screenshot = await itx.kit.waveshare.takeScreenshot();\n  const chunks = await Promise.all(\n    Array.from({ length: screenshot.chunks }, (_, i) => itx.kit.waveshare.readScreenshotChunk(i))\n  );\n  const totalRead = chunks.reduce((sum, chunk) => {\n    if (typeof chunk === \"string\") return sum + chunk.length;\n    if (chunk instanceof Uint8Array) return sum + chunk.byteLength;\n    if (chunk instanceof ArrayBuffer) return sum + chunk.byteLength;\n    return sum + (chunk as any).byteLength;\n  }, 0);\n  await Promise.all([\n    itx.chat.sendMessage(`The screenshot is ${screenshot.width} by ${screenshot.height}, with ${screenshot.bytes} bytes across ${screenshot.chunks} chunks. I read back ${totalRead} bytes in total.`),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Captured and read all screenshot chunks\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:140121",
+            "requestedAtOffset": 140124,
+            "settledAtOffset": 140132,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 139858
+      },
+      "detail": "agent-reported geometry does not match the direct read (184x224, 14 chunks)",
+      "independent": {
+        "bytes": 82432,
+        "bytesRead": 82432,
+        "chunks": 14,
+        "distinct": 30,
+        "dominant": {
+          "b": 33,
+          "g": 24,
+          "r": 16,
+          "rgb565": 4292,
+          "share": 0.9829435170807453
+        },
+        "height": 224,
+        "width": 184
+      },
+      "verdict": "failed",
+      "id": "screenshot",
+      "kind": "tool",
+      "methods": ["takeScreenshot", "readScreenshotChunk"]
+    },
+    {
+      "agent": {
+        "afterOffset": 140339,
+        "error": null,
+        "finalMessage": "The background colour call returned true, confirming it was accepted.",
+        "finalMessageOffset": 140335,
+        "ms": 20416,
+        "prompt": "Use the kit.waveshare device capability. Call setBackground(\"#7f0000\") to set the device's background colour, then confirm what the call returned.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const [result] = await Promise.all([\n    itx.kit.waveshare.setBackground(\"#7f0000\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Setting the device background colour\" },\n    }),\n  ]);\n  return result;\n}",
+            "executionId": "agent-output:140226",
+            "requestedAtOffset": 140229,
+            "settledAtOffset": 140232,
+            "settlement": {
+              "status": "succeeded",
+              "result": true
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The background colour call returned true, confirming it was accepted.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Confirmed device background update\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:140327",
+            "requestedAtOffset": 140330,
+            "settledAtOffset": 140338,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 140133
+      },
+      "detail": "panel dominant colour moved rgb(16,24,33) @98% -> rgb(123,0,0) @98%, within tolerance of #7f0000",
+      "independent": {
+        "after": {
+          "bytes": 82432,
+          "bytesRead": 82432,
+          "chunks": 14,
+          "distinct": 31,
+          "dominant": {
+            "b": 0,
+            "g": 0,
+            "r": 123,
+            "rgb565": 30720,
+            "share": 0.9829435170807453
+          },
+          "height": 224,
+          "width": 184
+        },
+        "before": {
+          "bytes": 82432,
+          "bytesRead": 82432,
+          "chunks": 14,
+          "distinct": 30,
+          "dominant": {
+            "b": 33,
+            "g": 24,
+            "r": 16,
+            "rgb565": 4292,
+            "share": 0.9829435170807453
+          },
+          "height": 224,
+          "width": 184
+        },
+        "target": "#7f0000"
+      },
+      "verdict": "proven",
+      "id": "set-background",
+      "kind": "tool",
+      "methods": ["setBackground"]
+    },
+    {
+      "agent": {
+        "afterOffset": 140543,
+        "error": null,
+        "finalMessage": "The setVolume call returned exactly 42.",
+        "finalMessageOffset": 140539,
+        "ms": 22560,
+        "prompt": "Use the kit.waveshare device capability. Call setVolume(42) and tell me exactly what the call returned.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const [result] = await Promise.all([\n    itx.kit.waveshare.setVolume(42),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Setting device volume to 42\" },\n    }),\n  ]);\n  return result;\n}",
+            "executionId": "agent-output:140432",
+            "requestedAtOffset": 140435,
+            "settledAtOffset": 140439,
+            "settlement": {
+              "status": "succeeded",
+              "result": 42
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The setVolume call returned exactly 42.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Confirmed device volume update\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:140530",
+            "requestedAtOffset": 140534,
+            "settledAtOffset": 140542,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 140341
+      },
+      "detail": "setVolume(42) echoed 42 to the agent and to a direct call (no getter exists; the echo IS the read-back)",
+      "independent": {
+        "ok": true,
+        "value": 42
+      },
+      "verdict": "proven",
+      "id": "set-volume",
+      "kind": "tool",
+      "methods": ["setVolume"]
+    },
+    {
+      "agent": {
+        "afterOffset": 140751,
+        "error": null,
+        "finalMessage": "The setMicGain call returned exactly 30.",
+        "finalMessageOffset": 140747,
+        "ms": 26805,
+        "prompt": "Use the kit.waveshare device capability. Call setMicGain(30) to set the microphone gain to 30 dB and tell me exactly what the call returned.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const [result] = await Promise.all([\n    itx.kit.waveshare.setMicGain(30),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Setting microphone gain to 30 dB\" },\n    }),\n  ]);\n  return result;\n}",
+            "executionId": "agent-output:140638",
+            "requestedAtOffset": 140641,
+            "settledAtOffset": 140645,
+            "settlement": {
+              "status": "succeeded",
+              "result": 30
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The setMicGain call returned exactly 30.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Confirmed microphone gain update\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:140740",
+            "requestedAtOffset": 140743,
+            "settledAtOffset": 140750,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 140543
+      },
+      "detail": "setMicGain(30) echoed 30 to the agent and to a direct call (no getter exists; the echo IS the read-back)",
+      "independent": {
+        "ok": true,
+        "value": 30
+      },
+      "verdict": "proven",
+      "id": "set-mic-gain",
+      "kind": "tool",
+      "methods": ["setMicGain"]
+    },
+    {
+      "agent": {
+        "afterOffset": 140978,
+        "error": null,
+        "finalMessage": "The device reports that an SD card is present, but it has no recorded audio or log data on disk. The mic, speaker, and log recordings are all zero bytes.",
+        "finalMessageOffset": 140973,
+        "ms": 22939,
+        "prompt": "Using only the kit.waveshare device capability, find out whether the device has anything recorded on its SD card. If there is a way to ask it, use it and report what you found. If there is no such call, say so plainly.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const [status] = await Promise.all([\n    itx.kit.waveshare.recording.status(),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Checking device recording status\" },\n    }),\n  ]);\n  return status;\n}",
+            "executionId": "agent-output:140838",
+            "requestedAtOffset": 140841,
+            "settledAtOffset": 140845,
+            "settlement": {
+              "status": "succeeded",
+              "result": {
+                "card": true,
+                "recording": false,
+                "begins": 0,
+                "ends": 0,
+                "written": {
+                  "mic": 0,
+                  "speaker": 0,
+                  "log": 0
+                },
+                "onDisk": {
+                  "mic": 0,
+                  "speaker": 0,
+                  "log": 0
+                }
+              }
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The device reports that an SD card is present, but it has no recorded audio or log data on disk. The mic, speaker, and log recordings are all zero bytes.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported SD-card recording status\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:140966",
+            "requestedAtOffset": 140969,
+            "settledAtOffset": 140978,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 140751
+      },
+      "detail": "the agent discovered recording.* unprompted, from the mount description alone",
+      "independent": {
+        "ok": true,
+        "value": {
+          "card": true,
+          "recording": false,
+          "begins": 0,
+          "ends": 0,
+          "written": {
+            "mic": 0,
+            "speaker": 0,
+            "log": 0
+          },
+          "onDisk": {
+            "mic": 0,
+            "speaker": 0,
+            "log": 0
+          }
+        }
+      },
+      "verdict": "proven",
+      "id": "recording-discovery",
+      "kind": "tool",
+      "methods": ["recording.status", "recording.size", "recording.read"]
+    },
+    {
+      "agent": {
+        "afterOffset": 141278,
+        "error": null,
+        "finalMessage": "The recording status object is {\"card\":true,\"recording\":false,\"begins\":0,\"ends\":0,\"written\":{\"mic\":0,\"speaker\":0,\"log\":0},\"onDisk\":{\"mic\":0,\"speaker\":0,\"log\":0}}. The size of mic.pcm is 0 bytes. Reading call.log from offset zero returned 6000 bytes.",
+        "finalMessageOffset": 141273,
+        "ms": 31046,
+        "prompt": "Use the kit.waveshare device capability. It has three recording calls: recording.status(), recording.size(name) and recording.read(name, byteOffset). Call recording.status(), then recording.size(\"mic.pcm\"), then recording.read(\"call.log\", 0) and report the status object, the size, and how many bytes the read returned.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Reading device recording status and files\" },\n  });\n  const status = await itx.kit.waveshare.recording.status();\n  const size = await itx.kit.waveshare.recording.size(\"mic.pcm\");\n  const read = await itx.kit.waveshare.recording.read(\"call.log\", 0);\n  const bytes = typeof read === \"string\"\n    ? new TextEncoder().encode(read).byteLength\n    : read instanceof Uint8Array\n      ? read.byteLength\n      : read instanceof ArrayBuffer\n        ? read.byteLength\n        : (read as any).byteLength;\n  await Promise.all([\n    itx.chat.sendMessage(`The recording status object is ${JSON.stringify(status)}. The size of mic.pcm is ${size} bytes. Reading call.log from offset zero returned ${bytes} bytes.`),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported device recording data\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:141263",
+            "requestedAtOffset": 141266,
+            "settledAtOffset": 141278,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 140978
+      },
+      "detail": "all three recording calls answered (status.card=true, size(\"mic.pcm\")=0, read(\"call.log\",0)=6000 bytes) — NOTE: size reports 0 while read still returns 6000 bytes, which is an inconsistency worth a look",
+      "independent": {
+        "read": {
+          "ok": true,
+          "value": 6000
+        },
+        "size": {
+          "ok": true,
+          "value": 0
+        },
+        "status": {
+          "ok": true,
+          "value": {
+            "card": true,
+            "recording": false,
+            "begins": 0,
+            "ends": 0,
+            "written": {
+              "mic": 0,
+              "speaker": 0,
+              "log": 0
+            },
+            "onDisk": {
+              "mic": 0,
+              "speaker": 0,
+              "log": 0
+            }
+          }
+        }
+      },
+      "verdict": "proven",
+      "id": "recording",
+      "kind": "tool",
+      "methods": ["recording.status", "recording.size", "recording.read"]
+    },
+    {
+      "agent": {
+        "afterOffset": 141492,
+        "error": null,
+        "finalMessage": "The showImage call returned true.",
+        "finalMessageOffset": 141488,
+        "ms": 22935,
+        "prompt": "Use the kit.waveshare device capability. Call showImage(\"https://placehold.co/200x200.jpg\", 6) to put that picture on the device screen for 6 seconds, then tell me what the call returned.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const [result] = await Promise.all([\n    itx.kit.waveshare.showImage(\"https://placehold.co/200x200.jpg\", 6),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Displaying the requested image for six seconds\" },\n    }),\n  ]);\n  return result;\n}",
+            "executionId": "agent-output:141382",
+            "requestedAtOffset": 141385,
+            "settledAtOffset": 141391,
+            "settlement": {
+              "status": "succeeded",
+              "result": true
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The showImage call returned true.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Confirmed requested image display\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:141481",
+            "requestedAtOffset": 141484,
+            "settledAtOffset": 141492,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 141278
+      },
+      "detail": "screen changed while the image was up (rgb(123,0,0) @98% -> rgb(0,0,0) @76%) and returned to rgb(123,0,0) @98% after 6s",
+      "independent": {
+        "before": {
+          "bytes": 82432,
+          "bytesRead": 82432,
+          "chunks": 14,
+          "distinct": 31,
+          "dominant": {
+            "b": 0,
+            "g": 0,
+            "r": 123,
+            "rgb565": 30720,
+            "share": 0.9829435170807453
+          },
+          "height": 224,
+          "width": 184
+        },
+        "during": {
+          "bytes": 82432,
+          "bytesRead": 82432,
+          "chunks": 14,
+          "distinct": 26,
+          "dominant": {
+            "b": 0,
+            "g": 0,
+            "r": 0,
+            "rgb565": 0,
+            "share": 0.7573757763975155
+          },
+          "height": 224,
+          "width": 184
+        },
+        "restored": {
+          "bytes": 82432,
+          "bytesRead": 82432,
+          "chunks": 14,
+          "distinct": 31,
+          "dominant": {
+            "b": 0,
+            "g": 0,
+            "r": 123,
+            "rgb565": 30720,
+            "share": 0.9829435170807453
+          },
+          "height": 224,
+          "width": 184
+        },
+        "seconds": 6,
+        "url": "https://placehold.co/200x200.jpg"
+      },
+      "verdict": "proven",
+      "id": "show-image",
+      "kind": "tool",
+      "methods": ["showImage"]
+    },
+    {
+      "agent": {
+        "afterOffset": 141704,
+        "error": null,
+        "finalMessage": "The error message was: seconds must be 1-30",
+        "finalMessageOffset": 141699,
+        "ms": 24350,
+        "prompt": "Use the kit.waveshare device capability. Call showImage(\"https://placehold.co/200x200.jpg\", 0) and report the error message verbatim. Do not retry with a different number.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested image duration\" },\n  });\n  return await itx.kit.waveshare.showImage(\"https://placehold.co/200x200.jpg\", 0);\n}",
+            "executionId": "agent-output:141586",
+            "requestedAtOffset": 141589,
+            "settledAtOffset": 141594,
+            "settlement": {
+              "status": "failed",
+              "error": "seconds must be 1-30",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: seconds must be 1-30\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested image-duration error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:141692",
+            "requestedAtOffset": 141695,
+            "settledAtOffset": 141704,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 141498
+      },
+      "detail": "refused with \"seconds must be 1-30\" both through the agent and on a direct call",
+      "independent": {
+        "error": "seconds must be 1-30",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "show-image-seconds-zero",
+      "kind": "boundary",
+      "methods": ["showImage"]
+    },
+    {
+      "agent": {
+        "afterOffset": 141908,
+        "error": null,
+        "finalMessage": "The error message was: seconds must be 1-30",
+        "finalMessageOffset": 141904,
+        "ms": 21263,
+        "prompt": "Use the kit.waveshare device capability. Call showImage(\"https://placehold.co/200x200.jpg\", 999) and report the error message verbatim. Do not retry with a different number.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested image duration\" },\n  });\n  return await itx.kit.waveshare.showImage(\"https://placehold.co/200x200.jpg\", 999);\n}",
+            "executionId": "agent-output:141791",
+            "requestedAtOffset": 141795,
+            "settledAtOffset": 141800,
+            "settlement": {
+              "status": "failed",
+              "error": "seconds must be 1-30",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: seconds must be 1-30\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested image-duration error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:141895",
+            "requestedAtOffset": 141899,
+            "settledAtOffset": 141908,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 141704
+      },
+      "detail": "refused with \"seconds must be 1-30\" both through the agent and on a direct call",
+      "independent": {
+        "error": "seconds must be 1-30",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "show-image-seconds-999",
+      "kind": "boundary",
+      "methods": ["showImage"]
+    },
+    {
+      "agent": {
+        "afterOffset": 142106,
+        "error": null,
+        "finalMessage": "The error message was: bad-url",
+        "finalMessageOffset": 142102,
+        "ms": 23852,
+        "prompt": "Use the kit.waveshare device capability. Call showImage(\"ftp://example.com/photo.jpg\", 3) and report the error message verbatim. Do not substitute a different URL.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested image URL\" },\n  });\n  return await itx.kit.waveshare.showImage(\"ftp://example.com/photo.jpg\", 3);\n}",
+            "executionId": "agent-output:141994",
+            "requestedAtOffset": 141997,
+            "settledAtOffset": 142002,
+            "settlement": {
+              "status": "failed",
+              "error": "bad-url",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: bad-url\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested image-URL error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:142095",
+            "requestedAtOffset": 142098,
+            "settledAtOffset": 142106,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 141908
+      },
+      "detail": "refused with \"bad-url\" both through the agent and on a direct call",
+      "independent": {
+        "error": "bad-url",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "show-image-bad-scheme",
+      "kind": "boundary",
+      "methods": ["showImage"]
+    },
+    {
+      "agent": {
+        "afterOffset": 142350,
+        "error": null,
+        "finalMessage": "The error message was: unsupported-format: this device decodes BASELINE JPEG only. PNG is refused, and so is progressive JPEG (SOF2), which is what many image CDNs serve by default. Re-encode as baseline JPEG.",
+        "finalMessageOffset": 142345,
+        "ms": 31018,
+        "prompt": "Use the kit.waveshare device capability. Call showImage(\"https://httpbin.org/image/png\", 3) — that URL is a PNG — and report the error message verbatim. Do not convert it or pick another URL.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested PNG image URL\" },\n  });\n  return await itx.kit.waveshare.showImage(\"https://httpbin.org/image/png\", 3);\n}",
+            "executionId": "agent-output:142196",
+            "requestedAtOffset": 142199,
+            "settledAtOffset": 142204,
+            "settlement": {
+              "status": "failed",
+              "error": "unsupported-format: this device decodes BASELINE JPEG only. PNG is refused, and so is progressive JPEG (SOF2), which is what many image CDNs serve by default. Re-encode as baseline JPEG.",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: unsupported-format: this device decodes BASELINE JPEG only. PNG is refused, and so is progressive JPEG (SOF2), which is what many image CDNs serve by default. Re-encode as baseline JPEG.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested PNG image error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:142338",
+            "requestedAtOffset": 142341,
+            "settledAtOffset": 142350,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 142106
+      },
+      "detail": "refused with \"unsupported-format\" both through the agent and on a direct call",
+      "independent": {
+        "error": "unsupported-format: this device decodes BASELINE JPEG only. PNG is refused, and so is progressive JPEG (SOF2), which is what many image CDNs serve by default. Re-encode as baseline JPEG.",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "show-image-png",
+      "kind": "boundary",
+      "methods": ["showImage"]
+    },
+    {
+      "agent": {
+        "afterOffset": 142595,
+        "error": null,
+        "finalMessage": "The error message was: unsupported-format: this device decodes BASELINE JPEG only. PNG is refused, and so is progressive JPEG (SOF2), which is what many image CDNs serve by default. Re-encode as baseline JPEG.",
+        "finalMessageOffset": 142591,
+        "ms": 25807,
+        "prompt": "Use the kit.waveshare device capability. Call showImage(\"https://picsum.photos/200/200.jpg\", 3) — that URL serves a progressive JPEG — and report the error message verbatim. Do not pick another URL.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested progressive JPEG URL\" },\n  });\n  return await itx.kit.waveshare.showImage(\"https://picsum.photos/200/200.jpg\", 3);\n}",
+            "executionId": "agent-output:142440",
+            "requestedAtOffset": 142443,
+            "settledAtOffset": 142449,
+            "settlement": {
+              "status": "failed",
+              "error": "unsupported-format: this device decodes BASELINE JPEG only. PNG is refused, and so is progressive JPEG (SOF2), which is what many image CDNs serve by default. Re-encode as baseline JPEG.",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: unsupported-format: this device decodes BASELINE JPEG only. PNG is refused, and so is progressive JPEG (SOF2), which is what many image CDNs serve by default. Re-encode as baseline JPEG.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested progressive-JPEG error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:142584",
+            "requestedAtOffset": 142587,
+            "settledAtOffset": 142594,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 142351
+      },
+      "detail": "refused with \"unsupported-format\" both through the agent and on a direct call",
+      "independent": {
+        "error": "unsupported-format: this device decodes BASELINE JPEG only. PNG is refused, and so is progressive JPEG (SOF2), which is what many image CDNs serve by default. Re-encode as baseline JPEG.",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "show-image-progressive-jpeg",
+      "kind": "boundary",
+      "methods": ["showImage"]
+    },
+    {
+      "agent": {
+        "afterOffset": 142798,
+        "error": null,
+        "finalMessage": "The error message was: too-large",
+        "finalMessageOffset": 142794,
+        "ms": 23266,
+        "prompt": "Use the kit.waveshare device capability. Call showImage(\"https://placehold.co/800x900.jpg\", 3) — that image is 800x900, larger than the panel — and report the error message verbatim. Do not resize it or pick another URL.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested oversized image URL\" },\n  });\n  return await itx.kit.waveshare.showImage(\"https://placehold.co/800x900.jpg\", 3);\n}",
+            "executionId": "agent-output:142686",
+            "requestedAtOffset": 142689,
+            "settledAtOffset": 142693,
+            "settlement": {
+              "status": "failed",
+              "error": "too-large",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: too-large\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested oversized-image error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:142786",
+            "requestedAtOffset": 142789,
+            "settledAtOffset": 142798,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 142596
+      },
+      "detail": "refused with \"too-large\" both through the agent and on a direct call",
+      "independent": {
+        "error": "too-large",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "show-image-too-large",
+      "kind": "boundary",
+      "methods": ["showImage"]
+    },
+    {
+      "agent": {
+        "afterOffset": 142987,
+        "error": null,
+        "finalMessage": "The error message was: expected 0-100",
+        "finalMessageOffset": 142983,
+        "ms": 20508,
+        "prompt": "Use the kit.waveshare device capability. Call setVolume(101) and report the error message verbatim. Do not retry with a valid number.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested volume value\" },\n  });\n  return await itx.kit.waveshare.setVolume(101);\n}",
+            "executionId": "agent-output:142874",
+            "requestedAtOffset": 142877,
+            "settledAtOffset": 142881,
+            "settlement": {
+              "status": "failed",
+              "error": "expected 0-100",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: expected 0-100\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested volume error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:142973",
+            "requestedAtOffset": 142976,
+            "settledAtOffset": 142987,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 142798
+      },
+      "detail": "refused with \"expected 0-100\" both through the agent and on a direct call",
+      "independent": {
+        "error": "expected 0-100",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "set-volume-over",
+      "kind": "boundary",
+      "methods": ["setVolume"]
+    },
+    {
+      "agent": {
+        "afterOffset": 143179,
+        "error": null,
+        "finalMessage": "The error message was: expected 0-100",
+        "finalMessageOffset": 143174,
+        "ms": 26472,
+        "prompt": "Use the kit.waveshare device capability. Call setVolume(-1) and report the error message verbatim. Do not retry with a valid number.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested volume value\" },\n  });\n  return await itx.kit.waveshare.setVolume(-1);\n}",
+            "executionId": "agent-output:143064",
+            "requestedAtOffset": 143067,
+            "settledAtOffset": 143070,
+            "settlement": {
+              "status": "failed",
+              "error": "expected 0-100",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: expected 0-100\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested volume error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:143168",
+            "requestedAtOffset": 143171,
+            "settledAtOffset": 143179,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 142987
+      },
+      "detail": "refused with \"expected 0-100\" both through the agent and on a direct call",
+      "independent": {
+        "error": "expected 0-100",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "set-volume-under",
+      "kind": "boundary",
+      "methods": ["setVolume"]
+    },
+    {
+      "agent": {
+        "afterOffset": 143375,
+        "error": null,
+        "finalMessage": "The error message was: expected 0-48 dB",
+        "finalMessageOffset": 143371,
+        "ms": 22025,
+        "prompt": "Use the kit.waveshare device capability. Call setMicGain(49) and report the error message verbatim. Do not retry with a valid number.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested microphone gain value\" },\n  });\n  return await itx.kit.waveshare.setMicGain(49);\n}",
+            "executionId": "agent-output:143257",
+            "requestedAtOffset": 143260,
+            "settledAtOffset": 143266,
+            "settlement": {
+              "status": "failed",
+              "error": "expected 0-48 dB",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: expected 0-48 dB\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested microphone-gain error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:143362",
+            "requestedAtOffset": 143365,
+            "settledAtOffset": 143374,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 143179
+      },
+      "detail": "refused with \"expected 0-48 dB\" both through the agent and on a direct call",
+      "independent": {
+        "error": "expected 0-48 dB",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "set-mic-gain-over",
+      "kind": "boundary",
+      "methods": ["setMicGain"]
+    },
+    {
+      "agent": {
+        "afterOffset": 143570,
+        "error": null,
+        "finalMessage": "The error message was: expected 0-48 dB",
+        "finalMessageOffset": 143565,
+        "ms": 21858,
+        "prompt": "Use the kit.waveshare device capability. Call setMicGain(-1) and report the error message verbatim. Do not retry with a valid number.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested microphone gain value\" },\n  });\n  return await itx.kit.waveshare.setMicGain(-1);\n}",
+            "executionId": "agent-output:143453",
+            "requestedAtOffset": 143456,
+            "settledAtOffset": 143461,
+            "settlement": {
+              "status": "failed",
+              "error": "expected 0-48 dB",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: expected 0-48 dB\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested microphone-gain error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:143560",
+            "requestedAtOffset": 143563,
+            "settledAtOffset": 143570,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 143375
+      },
+      "detail": "refused with \"expected 0-48 dB\" both through the agent and on a direct call",
+      "independent": {
+        "error": "expected 0-48 dB",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "set-mic-gain-under",
+      "kind": "boundary",
+      "methods": ["setMicGain"]
+    },
+    {
+      "agent": {
+        "afterOffset": 143779,
+        "error": null,
+        "finalMessage": "The error message was: chunk index out of range",
+        "finalMessageOffset": 143774,
+        "ms": 25244,
+        "prompt": "Use the kit.waveshare device capability. Call takeScreenshot(), then call readScreenshotChunk(9999) and report the error message verbatim.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested screenshot chunk index\" },\n  });\n  await itx.kit.waveshare.takeScreenshot();\n  return await itx.kit.waveshare.readScreenshotChunk(9999);\n}",
+            "executionId": "agent-output:143665",
+            "requestedAtOffset": 143668,
+            "settledAtOffset": 143671,
+            "settlement": {
+              "status": "failed",
+              "error": "chunk index out of range",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: chunk index out of range\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported requested screenshot-chunk error\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:143768",
+            "requestedAtOffset": 143771,
+            "settledAtOffset": 143779,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 143571
+      },
+      "detail": "refused with \"chunk index out of range\" both through the agent and on a direct call",
+      "independent": {
+        "error": "chunk index out of range",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "screenshot-chunk-out-of-range",
+      "kind": "boundary",
+      "methods": ["readScreenshotChunk"]
+    },
+    {
+      "agent": {
+        "afterOffset": 143973,
+        "error": null,
+        "finalMessage": "The call failed with exactly: unknown device capability",
+        "finalMessageOffset": 143968,
+        "ms": 22177,
+        "prompt": "Use the kit.waveshare device capability. Try to call interruptPlayback() on it and report exactly what happens. Do not substitute another method.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Attempting the requested playback interruption call\" },\n  });\n  return await (itx.kit.waveshare as any).interruptPlayback();\n}",
+            "executionId": "agent-output:143859",
+            "requestedAtOffset": 143862,
+            "settledAtOffset": 143866,
+            "settlement": {
+              "status": "failed",
+              "error": "unknown device capability",
+              "failureKind": "runtime",
+              "phase": "execution",
+              "executionMayHaveOccurred": true,
+              "cancellation": "external-work-may-continue"
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The call failed with exactly: unknown device capability\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported playback interruption call result\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:143959",
+            "requestedAtOffset": 143962,
+            "settledAtOffset": 143973,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 143779
+      },
+      "detail": "refused with \"unknown device capability\" both through the agent and on a direct call",
+      "independent": {
+        "error": "unknown device capability",
+        "ok": false
+      },
+      "verdict": "refused-as-expected",
+      "id": "no-interrupt-method",
+      "kind": "boundary",
+      "methods": ["(none — asserts absence)"]
+    },
+    {
+      "agent": {
+        "afterOffset": 144284,
+        "error": null,
+        "finalMessage": "The first outcome was rejected, with reason exactly {\"remote\":true,\"durableObjectId\":\"ff5ced4c30e3256e83e8bfe421bb5d238ca10ba811e5a36b29393ba602c9ea47\"}. The second outcome was fulfilled with value true.",
+        "finalMessageOffset": 144279,
+        "ms": 38529,
+        "prompt": "Use the kit.waveshare device capability. In ONE script, start both of these at the same time without awaiting the first before starting the second: showImage(\"https://placehold.co/200x200.jpg\", 5) and showImage(\"https://placehold.co/210x210.jpg\", 5). Use Promise.allSettled and report BOTH outcomes verbatim.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Starting both requested image displays simultaneously\" },\n  });\n  const first = itx.kit.waveshare.showImage(\"https://placehold.co/200x200.jpg\", 5);\n  const second = itx.kit.waveshare.showImage(\"https://placehold.co/210x210.jpg\", 5);\n  return await Promise.allSettled([first, second]);\n}",
+            "executionId": "agent-output:144107",
+            "requestedAtOffset": 144110,
+            "settledAtOffset": 144115,
+            "settlement": {
+              "status": "succeeded",
+              "result": [
+                {
+                  "status": "rejected",
+                  "reason": {
+                    "remote": true,
+                    "durableObjectId": "ff5ced4c30e3256e83e8bfe421bb5d238ca10ba811e5a36b29393ba602c9ea47"
+                  }
+                },
+                {
+                  "status": "fulfilled",
+                  "value": true
+                }
+              ]
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage('The first outcome was rejected, with reason exactly {\"remote\":true,\"durableObjectId\":\"ff5ced4c30e3256e83e8bfe421bb5d238ca10ba811e5a36b29393ba602c9ea47\"}. The second outcome was fulfilled with value true.'),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported simultaneous image display outcomes\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:144272",
+            "requestedAtOffset": 144275,
+            "settledAtOffset": 144284,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 143973
+      },
+      "detail": "overlap did not resolve to exactly one success plus one \"already in flight\" refusal (agent evidence contains it: false; direct: [{\"error\":\"an image request is already in flight\",\"ok\":false},{\"ok\":true,\"value\":true}])",
+      "independent": [
+        {
+          "error": "an image request is already in flight",
+          "ok": false
+        },
+        {
+          "ok": true,
+          "value": true
+        }
+      ],
+      "verdict": "failed",
+      "id": "show-image-busy",
+      "kind": "bounded-error",
+      "methods": ["showImage"]
+    },
+    {
+      "agent": {
+        "afterOffset": 144578,
+        "error": null,
+        "finalMessage": "The error message was: timeout. The call took about 15.2 seconds.",
+        "finalMessageOffset": 144574,
+        "ms": 41459,
+        "prompt": "Use the kit.waveshare device capability. Call showImage(\"http://192.168.0.169:8899/stall\", 3). That URL never finishes sending its body. Report the error message verbatim and roughly how long the call took.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  await itx.agent.append({\n    type: \"events.iterate.com/agent/summary-updated\",\n    payload: { activity: \"Testing the requested stalled image URL\" },\n  });\n  const started = Date.now();\n  try {\n    const result = await itx.kit.waveshare.showImage(\"http://192.168.0.169:8899/stall\", 3);\n    return { elapsedMs: Date.now() - started, result };\n  } catch (error) {\n    return {\n      elapsedMs: Date.now() - started,\n      error: error instanceof Error ? error.message : String(error),\n    };\n  }\n}",
+            "executionId": "agent-output:144448",
+            "requestedAtOffset": 144451,
+            "settledAtOffset": 144465,
+            "settlement": {
+              "status": "succeeded",
+              "result": {
+                "elapsedMs": 15161,
+                "error": "timeout"
+              }
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The error message was: timeout. The call took about 15.2 seconds.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported stalled image request result\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:144566",
+            "requestedAtOffset": 144569,
+            "settledAtOffset": 144578,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 144290
+      },
+      "detail": "a stalling body failed with \"timeout\" after 15080ms — explicit and bounded, through the agent and on a direct call",
+      "independent": {
+        "error": "timeout",
+        "ok": false,
+        "ms": 15080
+      },
+      "verdict": "refused-as-expected",
+      "id": "show-image-timeout",
+      "kind": "bounded-error",
+      "methods": ["showImage"]
+    },
+    {
+      "agent": {
+        "afterOffset": 144790,
+        "error": null,
+        "finalMessage": "The conversation.start call returned true.",
+        "finalMessageOffset": 144783,
+        "ms": 20811,
+        "prompt": "Use the kit.waveshare device capability. Call conversation.start() to start a conversation on the device, then tell me what it returned.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const [result] = await Promise.all([\n    itx.kit.waveshare.conversation.start(),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Starting a device conversation\" },\n    }),\n  ]);\n  return result;\n}",
+            "executionId": "agent-output:144672",
+            "requestedAtOffset": 144675,
+            "settledAtOffset": 144681,
+            "settlement": {
+              "status": "succeeded",
+              "result": true
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The conversation.start call returned true.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Confirmed device conversation start\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:144776",
+            "requestedAtOffset": 144779,
+            "settledAtOffset": 144790,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 144584
+      },
+      "detail": "health() now reports wantsCall=true (callActive=true, callPending=false) — the device took the intent",
+      "independent": {
+        "callActive": true,
+        "callPending": false,
+        "sessionGeneration": 1,
+        "wantsCall": true
+      },
+      "verdict": "proven",
+      "id": "conversation-start",
+      "kind": "tool",
+      "methods": ["conversation.start"]
+    },
+    {
+      "agent": {
+        "afterOffset": 145169,
+        "error": null,
+        "finalMessage": "The pushToTalk.start call returned true.",
+        "finalMessageOffset": 145159,
+        "ms": 16150,
+        "prompt": "Use the kit.waveshare device capability. Call pushToTalk.start() to hold the device's talk button down. Do NOT call pushToTalk.stop(). Tell me what start returned.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const [result] = await Promise.all([\n    itx.kit.waveshare.pushToTalk.start(),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Holding the device talk button down\" },\n    }),\n  ]);\n  await Promise.all([\n    itx.chat.sendMessage(`The pushToTalk.start call returned ${JSON.stringify(result)}.`),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported push-to-talk start result\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:145133",
+            "requestedAtOffset": 145136,
+            "settledAtOffset": 145169,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 144792
+      },
+      "detail": "health() reports talking=true with the button still held — the agent's press stuck",
+      "independent": {
+        "micCaptured": 61769,
+        "talking": true
+      },
+      "verdict": "proven",
+      "id": "push-to-talk-start",
+      "kind": "tool",
+      "methods": ["pushToTalk.start"]
+    },
+    {
+      "agent": {
+        "afterOffset": 145970,
+        "error": null,
+        "finalMessage": "The pushToTalk.stop call returned true.",
+        "finalMessageOffset": 145965,
+        "ms": 19277,
+        "prompt": "Use the kit.waveshare device capability. Call pushToTalk.stop() to release the device's talk button and tell me what it returned.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const [result] = await Promise.all([\n    itx.kit.waveshare.pushToTalk.stop(),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Releasing the device talk button\" },\n    }),\n  ]);\n  return result;\n}",
+            "executionId": "agent-output:145591",
+            "requestedAtOffset": 145598,
+            "settledAtOffset": 145712,
+            "settlement": {
+              "status": "succeeded",
+              "result": true
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The pushToTalk.stop call returned true.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported push-to-talk stop result\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:145957",
+            "requestedAtOffset": 145960,
+            "settledAtOffset": 145969,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 145185
+      },
+      "detail": "health() reports talking=false — the agent's release landed",
+      "independent": {
+        "micCaptured": 62752,
+        "talking": false
+      },
+      "verdict": "proven",
+      "id": "push-to-talk-stop",
+      "kind": "tool",
+      "methods": ["pushToTalk.stop"]
+    },
+    {
+      "agent": {
+        "afterOffset": 146340,
+        "error": null,
+        "finalMessage": "The conversation.hangUp call returned true.",
+        "finalMessageOffset": 146334,
+        "ms": 23656,
+        "prompt": "Use the kit.waveshare device capability. Call conversation.hangUp() to end the conversation on the device and tell me what it returned.",
+        "scriptRuns": [
+          {
+            "code": "async (itx) => {\n  const [result] = await Promise.all([\n    itx.kit.waveshare.conversation.hangUp(),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Ending the device conversation\" },\n    }),\n  ]);\n  return result;\n}",
+            "executionId": "agent-output:146222",
+            "requestedAtOffset": 146225,
+            "settledAtOffset": 146235,
+            "settlement": {
+              "status": "succeeded",
+              "result": true
+            }
+          },
+          {
+            "code": "async (itx) => {\n  await Promise.all([\n    itx.chat.sendMessage(\"The conversation.hangUp call returned true.\"),\n    itx.agent.append({\n      type: \"events.iterate.com/agent/summary-updated\",\n      payload: { activity: \"Reported device conversation end\", waitingFor: \"user_input\" },\n    }),\n  ]);\n  return;\n}",
+            "executionId": "agent-output:146328",
+            "requestedAtOffset": 146331,
+            "settledAtOffset": 146340,
+            "settlement": {
+              "status": "succeeded"
+            }
+          }
+        ],
+        "beforeOffset": 145973
+      },
+      "detail": "health() reports wantsCall=false (callActive=false) — the hang-up landed",
+      "independent": {
+        "callActive": false,
+        "wantsCall": false
+      },
+      "verdict": "proven",
+      "id": "conversation-hang-up",
+      "kind": "tool",
+      "methods": ["conversation.hangUp"]
+    },
+    {
+      "agent": null,
+      "detail": "expected a sub-second `capability \"kit.waveshare\" is offline`; got success ({\"ok\":true}) in 52ms",
+      "independent": {
+        "ok": true,
+        "value": {
+          "ok": true
+        },
+        "ms": 52,
+        "scopePath": "/voicelab/prove-offline-msdpjdmr",
+        "synthetic": true
+      },
+      "verdict": "failed",
+      "id": "offline-is-explicit-and-fast",
+      "kind": "bounded-error",
+      "methods": ["(none — asserts the platform's error for a dead provider)"]
+    },
+    {
+      "agent": null,
+      "detail": "not run: restart reboots the device (~20s, drops any live call). Pass --include-restart to include it, and --restart-stream-path to also prove the remembered conversation path survived the reboot.",
+      "independent": null,
+      "verdict": "skipped",
+      "id": "restart",
+      "kind": "tool",
+      "methods": ["restart"]
+    }
+  ],
+  "deviceOnline": true,
+  "finishedAt": "2026-08-03T20:54:36.308Z",
+  "inventory": {
+    "expected": [
+      "health",
+      "restart",
+      "setBackground",
+      "conversation.start",
+      "conversation.hangUp",
+      "pushToTalk.start",
+      "pushToTalk.stop",
+      "takeScreenshot",
+      "readScreenshotChunk",
+      "setVolume",
+      "setMicGain",
+      "recording.status",
+      "recording.size",
+      "recording.read",
+      "showImage"
+    ],
+    "advertised": [
+      "health",
+      "restart",
+      "setBackground",
+      "conversation.start",
+      "conversation.hangUp",
+      "pushToTalk.start",
+      "pushToTalk.stop",
+      "takeScreenshot",
+      "readScreenshotChunk",
+      "setVolume",
+      "setMicGain",
+      "recording.status",
+      "recording.size",
+      "recording.read",
+      "showImage"
+    ],
+    "advertisedButAbsent": [],
+    "presentButUnadvertised": [],
+    "expectedButMissing": [],
+    "present": [
+      "health",
+      "setBackground",
+      "takeScreenshot",
+      "readScreenshotChunk",
+      "setVolume",
+      "setMicGain",
+      "recording.status",
+      "recording.size",
+      "recording.read",
+      "showImage"
+    ],
+    "absent": [],
+    "probeResults": {
+      "health": {
+        "answer": "ok: {\"transport\":\"ready\",\"voicelab\":\"ready\",\"voicelabFailure\":\"none\",\"callActive\":false,\"callPending\":false,\"wantsCall\":fals",
+        "ok": true
+      },
+      "setBackground": {
+        "answer": "unrecognised colour",
+        "ok": false
+      },
+      "takeScreenshot": {
+        "answer": "ok: {\"width\":184,\"height\":224,\"format\":\"rgb565le\",\"bytes\":82432,\"chunkSize\":6000,\"chunks\":14}",
+        "ok": true
+      },
+      "readScreenshotChunk": {
+        "answer": "chunk index out of range",
+        "ok": false
+      },
+      "setVolume": {
+        "answer": "expected 0-100",
+        "ok": false
+      },
+      "setMicGain": {
+        "answer": "expected 0-48 dB",
+        "ok": false
+      },
+      "recording.status": {
+        "answer": "ok: {\"card\":true,\"recording\":false,\"begins\":0,\"ends\":0,\"written\":{\"mic\":0,\"speaker\":0,\"log\":0},\"onDisk\":{\"mic\":0,\"speaker\":0",
+        "ok": true
+      },
+      "recording.size": {
+        "answer": "expected a file name, e.g. \"mic.pcm\"",
+        "ok": false
+      },
+      "recording.read": {
+        "answer": "expected (name, byteOffset)",
+        "ok": false
+      },
+      "showImage": {
+        "answer": "seconds must be 1-30",
+        "ok": false
+      }
+    },
+    "notProbeable": {
+      "conversation.hangUp": "proven by its own case",
+      "conversation.start": "proven by its own case",
+      "pushToTalk.start": "proven by its own case",
+      "pushToTalk.stop": "proven by its own case",
+      "restart": "probing it IS the reboot; behind --include-restart"
+    },
+    "absenceProbes": {
+      "interruptPlayback": "unknown device capability",
+      "interrupt": "unknown device capability",
+      "conversation.interrupt": "unknown device capability"
+    },
+    "shouldNotExistButDoes": [],
+    "mount": {
+      "instructions": "Iterate voice device (Waveshare ESP32-S3 AMOLED, 368x448 touch panel, microphone, speaker, two buttons). Calls are dotted paths on this mount.\n\nMETRICS: health() takes no arguments and returns ~70 live read-only numbers as one JSON object. This is the metrics surface — prefer it over the voicelab/dev-stats telemetry events, which the device publishes every 5s but which stop exactly when the device stops working. Fields include heapFree, heapMin, psramFree, dmaLargest (bytes); spkFrames and spkPlayed (20ms audio frames received vs played — equal means nothing was lost), spkOverflow (frames dropped because the playout ring was full), spkConceal, spkUnderruns, spkDiscarded, spkLagMaxMs; micCaptured, micDropped; connectionState, connGeneration (increments on every reconnect), rttMs, pings, bridgeLosses, livenessRestarts; sessionGeneration (a change means the conversation restarted rather than continued); callActive, wantsCall, talking, uptimeMs, resetReason.\n\nCALLS — this is the COMPLETE list; nothing else exists on this mount:\nconversation.start(), conversation.hangUp() — both safe to repeat; they record intent, so starting a live call or hanging up a dead one changes nothing. There is NO interrupt or interruptPlayback method here: to cut an answer short, call pushToTalk.start(), which cancels whatever is playing and opens the microphone.\npushToTalk.start(), pushToTalk.stop() — take one spoken turn; stop() commits what was said and asks for the answer.\nshowImage(url, seconds) — BASELINE JPEG only, full-screen for 1-30s, then the display is restored. PNG and progressive JPEG (SOF2, common from image CDNs) are refused; so is anything larger than 368x448. Redirects are followed up to 3 hops. Rejects with the reason: bad-url, unreachable, http-error, too-large, unsupported-format, decode-failed, timeout, no-memory, busy (one image request at a time).\ntakeScreenshot() then readScreenshotChunk(i) — reads the panel back in chunks; takeScreenshot() returns {width,height,format,bytes,chunkSize,chunks}.\nrecording.status(), recording.size(name), recording.read(name, byteOffset) — the current call recorded on the device: mic.pcm and speaker.pcm are 16kHz mono s16le, call.log is text.\nsetBackground(colour) — hex (#1e293b) or a name (navy, teal, iterate).\nsetVolume(0-100), setMicGain(0-48 dB).\nrestart() — reboots. Disruptive: drops any call, ~20s to come back, and the conversation path survives in flash.\n\nThe UPPER button is the only one that may be HELD (hold to talk). The LOWER button is tap-only: it is the power button and holding it switches the device off — never tell anyone to hold it.",
+      "path": ["kit", "waveshare"],
+      "providedAtOffset": 420,
+      "scope": "/",
+      "type": "live"
+    },
+    "mountDescribe": {
+      "instructions": "Iterate voice device (Waveshare ESP32-S3 AMOLED, 368x448 touch panel, microphone, speaker, two buttons). Calls are dotted paths on this mount.\n\nMETRICS: health() takes no arguments and returns ~70 live read-only numbers as one JSON object. This is the metrics surface — prefer it over the voicelab/dev-stats telemetry events, which the device publishes every 5s but which stop exactly when the device stops working. Fields include heapFree, heapMin, psramFree, dmaLargest (bytes); spkFrames and spkPlayed (20ms audio frames received vs played — equal means nothing was lost), spkOverflow (frames dropped because the playout ring was full), spkConceal, spkUnderruns, spkDiscarded, spkLagMaxMs; micCaptured, micDropped; connectionState, connGeneration (increments on every reconnect), rttMs, pings, bridgeLosses, livenessRestarts; sessionGeneration (a change means the conversation restarted rather than continued); callActive, wantsCall, talking, uptimeMs, resetReason.\n\nCALLS — this is the COMPLETE list; nothing else exists on this mount:\nconversation.start(), conversation.hangUp() — both safe to repeat; they record intent, so starting a live call or hanging up a dead one changes nothing. There is NO interrupt or interruptPlayback method here: to cut an answer short, call pushToTalk.start(), which cancels whatever is playing and opens the microphone.\npushToTalk.start(), pushToTalk.stop() — take one spoken turn; stop() commits what was said and asks for the answer.\nshowImage(url, seconds) — BASELINE JPEG only, full-screen for 1-30s, then the display is restored. PNG and progressive JPEG (SOF2, common from image CDNs) are refused; so is anything larger than 368x448. Redirects are followed up to 3 hops. Rejects with the reason: bad-url, unreachable, http-error, too-large, unsupported-format, decode-failed, timeout, no-memory, busy (one image request at a time).\ntakeScreenshot() then readScreenshotChunk(i) — reads the panel back in chunks; takeScreenshot() returns {width,height,format,bytes,chunkSize,chunks}.\nrecording.status(), recording.size(name), recording.read(name, byteOffset) — the current call recorded on the device: mic.pcm and speaker.pcm are 16kHz mono s16le, call.log is text.\nsetBackground(colour) — hex (#1e293b) or a name (navy, teal, iterate).\nsetVolume(0-100), setMicGain(0-48 dB).\nrestart() — reboots. Disruptive: drops any call, ~20s to come back, and the conversation path survives in flash.\n\nThe UPPER button is the only one that may be HELD (hold to talk). The LOWER button is tap-only: it is the power button and holding it switches the device off — never tell anyone to hold it.\n\nThis is a FLATTENED dispatch target: any dotted call under the mount compiles to one invokeCapability call with the remaining path — `kit.waveshare.a.b(x)` reaches the provider as `invokeCapability({ path: [\"a\",\"b\"], args: [x] })`. There is no object graph to walk; `children` is empty because sub-paths are routes the provider interprets, not members this host can list.",
+      "types": "",
+      "children": {},
+      "parent": "the capability host at scope \"/\" (mounted at \"kit.waveshare\", providedAtOffset 420)"
+    },
+    "agentScopeCapabilities": [
+      {
+        "path": ["workspace"],
+        "scope": "/agents/voice/dev-621cd7aa562613aa",
+        "type": "itx-call"
+      },
+      {
+        "path": ["kit", "waveshare"],
+        "scope": "/",
+        "type": "live"
+      }
+    ]
+  },
+  "project": "prj_0adef0e51c1648c99bfb1cd54d5e2a66",
+  "restored": {
+    "background": {
+      "ok": true,
+      "value": true
+    },
+    "micGain": {
+      "ok": true,
+      "value": 24
+    },
+    "volume": {
+      "ok": true,
+      "value": 85
+    }
+  },
+  "summary": {
+    "failed": ["health", "screenshot", "show-image-busy", "offline-is-explicit-and-fast"],
+    "proven": [
+      "set-background",
+      "set-volume",
+      "set-mic-gain",
+      "recording-discovery",
+      "recording",
+      "show-image",
+      "conversation-start",
+      "push-to-talk-start",
+      "push-to-talk-stop",
+      "conversation-hang-up"
+    ],
+    "refusedAsExpected": [
+      "show-image-seconds-zero",
+      "show-image-seconds-999",
+      "show-image-bad-scheme",
+      "show-image-png",
+      "show-image-progressive-jpeg",
+      "show-image-too-large",
+      "set-volume-over",
+      "set-volume-under",
+      "set-mic-gain-over",
+      "set-mic-gain-under",
+      "screenshot-chunk-out-of-range",
+      "no-interrupt-method",
+      "show-image-timeout"
+    ],
+    "skipped": ["restart"],
+    "pass": false
+  }
+}

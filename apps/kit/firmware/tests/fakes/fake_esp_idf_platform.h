@@ -34,6 +34,8 @@ enum {
   ESP_ERR_NVS_NEW_VERSION_FOUND = 0x1110,
 };
 
+typedef int wifi_ps_type_t;
+
 typedef const char *esp_event_base_t;
 typedef void *esp_event_handler_instance_t;
 typedef void (*esp_event_handler_t)(
@@ -105,11 +107,16 @@ typedef struct wifi_config {
   } sta;
 } wifi_config_t;
 
+typedef int wifi_bandwidth_t;
+
 enum {
   WIFI_STORAGE_RAM = 0,
   WIFI_MODE_STA = 1,
   WIFI_IF_STA = 0,
   WIFI_PS_NONE = 0,
+  WIFI_BW_HT20 = 1,
+  WIFI_BW20 = WIFI_BW_HT20,
+  WIFI_BW_HT40 = 2,
   WIFI_ALL_CHANNEL_SCAN = 0,
   WIFI_CONNECT_AP_BY_SIGNAL = 0,
   WIFI_AUTH_OPEN = 0,
@@ -122,7 +129,12 @@ esp_err_t esp_wifi_set_storage(int storage);
 esp_err_t esp_wifi_set_mode(int mode);
 esp_err_t esp_wifi_set_config(
     int interface_id, const wifi_config_t *configuration);
-esp_err_t esp_wifi_set_ps(int power_save);
+esp_err_t esp_wifi_set_ps(wifi_ps_type_t power_save);
+esp_err_t esp_wifi_get_ps(wifi_ps_type_t *power_save);
+esp_err_t esp_wifi_set_bandwidth(
+    int interface_id, wifi_bandwidth_t bandwidth);
+esp_err_t esp_wifi_get_bandwidth(
+    int interface_id, wifi_bandwidth_t *bandwidth);
 esp_err_t esp_wifi_start(void);
 esp_err_t esp_wifi_connect(void);
 esp_err_t esp_wifi_stop(void);
@@ -334,6 +346,13 @@ int iterate_kit_fake_network_task_core_id(void);
 
 /** Returns the FreeRTOS priority requested for the created fake task. */
 unsigned int iterate_kit_fake_network_task_priority(void);
+
+/**
+ * Returns the live fake station width. The fake resets to HT40 so a test that
+ * merely observes the SDK default cannot accidentally pass the voice
+ * transport's explicit interference-avoidance policy.
+ */
+wifi_bandwidth_t iterate_kit_fake_wifi_bandwidth(void);
 
 /**
  * Joins and releases the host thread after production stop() has proved its

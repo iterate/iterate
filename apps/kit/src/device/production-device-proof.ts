@@ -1,12 +1,16 @@
 import { resolve } from "node:path";
 import type { DeviceConfiguration } from "../firmware/config-image.ts";
 import { DEFAULT_DEVICE_ID, findFirmwareDevice } from "../firmware/catalog.ts";
+import {
+  productionSpokenCountFlag,
+  productionSpokenCountScenarioFromFlag,
+  type ProductionGrokProofScenario,
+} from "./production-grok-cli-options.ts";
 import { kitDeviceCapabilitySegment } from "../userspace/config-worker/device-id.ts";
 import { kitDeviceEventStreamPath } from "../userspace/config-worker/provider-event-stream.ts";
 
 const legacyStickDefaults = {
   deviceHost: "192.168.0.21",
-  port: "/dev/cu.usbmodem11201",
 } as const;
 const stableUsbSerialByDeviceId: Readonly<Record<string, string>> = {
   "home-assistant-voice-preview-edition": "D8:3B:DA:46:20:34",
@@ -30,6 +34,7 @@ export interface ProductionDeviceProofCliOptions {
   port: string;
   projectId?: string;
   projectSlug: string;
+  scenario: ProductionGrokProofScenario;
   turns: number;
   workerHost: string;
 }
@@ -73,9 +78,10 @@ interface ParsedValues {
 
 /**
  * Parses the unattended physical proof independently of secret provisioning
- * values. The legacy no-argument path intentionally preserves the reviewed
- * Stick command; every other board must name its current port and LAN host so
- * a stale enumeration cannot silently redirect a destructive flash.
+ * values. Every board must name its current port so a hub re-enumeration
+ * cannot silently redirect a destructive read/flash. The Stick retains only
+ * its non-destructive LAN default; its former serial default physically moved
+ * to a denylisted neighbouring board while this harness was running.
  */
 export function parseProductionDeviceProofCliOptions(
   args: readonly string[],
@@ -85,6 +91,7 @@ export function parseProductionDeviceProofCliOptions(
   const values: ParsedValues = {};
   let flashFirmware = environment.ITERATE_KIT_FLASH_FIRMWARE === "1";
   let installUserspace = environment.ITERATE_KIT_INSTALL_USERSPACE === "1";
+  let scenario: ProductionGrokProofScenario = "conversation";
 
   for (let index = 0; index < args.length; index += 1) {
     const option = args[index]!;
@@ -94,6 +101,14 @@ export function parseProductionDeviceProofCliOptions(
     }
     if (option === "--install-userspace") {
       installUserspace = true;
+      continue;
+    }
+    const spokenCountScenario = productionSpokenCountScenarioFromFlag(option);
+    if (spokenCountScenario) {
+      if (scenario !== "conversation") {
+        throw new Error("Only one spoken-count scenario may be selected.");
+      }
+      scenario = spokenCountScenario;
       continue;
     }
     const value = args[index + 1]?.trim();
@@ -151,10 +166,7 @@ export function parseProductionDeviceProofCliOptions(
   }
 
   const legacyStick = deviceId === DEFAULT_DEVICE_ID;
-  const port =
-    values.port ??
-    environment.ITERATE_KIT_PORT?.trim() ??
-    (legacyStick ? legacyStickDefaults.port : undefined);
+  const port = values.port ?? environment.ITERATE_KIT_PORT?.trim();
   const deviceHost =
     values.deviceHost ??
     environment.ITERATE_KIT_DEVICE_HOST?.trim() ??
@@ -221,6 +233,7 @@ export function parseProductionDeviceProofCliOptions(
     projectId,
     projectSlug:
       values.projectSlug ?? environment.ITERATE_KIT_PROJECT_SLUG?.trim() ?? defaultProjectSlug,
+    scenario,
     turns,
     workerHost,
   };
@@ -260,6 +273,8 @@ export function buildProductionDeviceProofPlan(
     "--remote-ptt",
   ];
   if (options.turns > 1) grokProofArgs.push("--turns", String(options.turns));
+  const spokenCountFlag = productionSpokenCountFlag(options.scenario);
+  if (spokenCountFlag) grokProofArgs.push(spokenCountFlag);
   return {
     flashArgs: [
       "--device",

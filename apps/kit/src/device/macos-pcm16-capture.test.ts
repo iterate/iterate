@@ -2,7 +2,12 @@ import { chmod, mkdtemp, open, readFile, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { decodePcm16Le, inspectPcm16Artifact, MacOsPcm16Capture } from "./macos-pcm16-capture.ts";
+import {
+  decodePcm16Le,
+  describePcm16ArtifactWindow,
+  inspectPcm16Artifact,
+  MacOsPcm16Capture,
+} from "./macos-pcm16-capture.ts";
 
 describe("macOS PCM16 microphone capture", () => {
   test("completes a ten-minute capture as artifact metadata rather than decoded PCM", async () => {
@@ -52,6 +57,41 @@ describe("macOS PCM16 microphone capture", () => {
     expect(() => decodePcm16Le(Uint8Array.of(0x01))).toThrow("whole PCM16 samples");
   });
 
+  test("retains exact byte and sample boundaries needed to reanalyse a physical interval", () => {
+    /*
+     * A provider-oracle bug was fixable from a retained recording, but the
+     * manifest had discarded the two live file-position markers used to slice
+     * that recording. Keeping both coordinate systems makes the evidence
+     * independently replayable without decoding the whole endurance artifact
+     * or rerunning the physical device.
+     */
+    expect(
+      describePcm16ArtifactWindow(
+        {
+          artifactPath: "/evidence/microphone.pcm16le",
+          capturedByteLength: 2_000,
+          capturedSampleCount: 1_000,
+          sampleRateHz: 48_000,
+        },
+        {
+          artifactPath: "/evidence/microphone.pcm16le",
+          capturedByteLength: 5_000,
+          capturedSampleCount: 2_500,
+          sampleRateHz: 48_000,
+        },
+      ),
+    ).toEqual({
+      artifactPath: "/evidence/microphone.pcm16le",
+      byteLength: 3_000,
+      endByte: 5_000,
+      endSample: 2_500,
+      sampleCount: 1_500,
+      sampleRateHz: 48_000,
+      startByte: 2_000,
+      startSample: 1_000,
+    });
+  });
+
   test.runIf(process.platform === "darwin")(
     "records through CoreAudio without collapsing timestamp gaps out of the PCM timeline",
     async () => {
@@ -68,6 +108,11 @@ describe("macOS PCM16 microphone capture", () => {
        * PCM contract rather than merely checking a helper that production
        * might bypass. The fake recorder writes enough startup evidence and
        * exits cleanly on SIGINT so a failed assertion cannot leak a process.
+       * Its version probe deliberately takes longer than the old two-second
+       * deadline: the full parallel Kit suite reproduced real child-process
+       * scheduling delays at that boundary even though the recorder was
+       * healthy. The production timeout must remain bounded without confusing
+       * host CPU contention with a missing or broken acoustic recorder.
        */
       const directory = await mkdtemp(join(tmpdir(), "iterate-kit-coreaudio-recorder-"));
       const executable = join(directory, "fake-sox.mjs");
@@ -77,6 +122,7 @@ describe("macOS PCM16 microphone capture", () => {
         `#!/usr/bin/env node
 import { writeFileSync } from "node:fs";
 if (process.argv[2] === "--version") {
+  await new Promise((resolve) => setTimeout(resolve, 2500));
   console.log("sox: SoX v fake-coreaudio-1");
   process.exit(0);
 }
@@ -137,6 +183,7 @@ setInterval(() => {}, 1000);
         await rm(directory, { force: true, recursive: true });
       }
     },
+    12_000,
   );
 
   test.runIf(process.platform === "darwin")(

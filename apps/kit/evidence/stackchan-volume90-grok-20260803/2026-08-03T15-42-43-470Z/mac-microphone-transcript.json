@@ -1,0 +1,181 @@
+{
+  "input": "evidence/stackchan-volume90-grok-20260803/2026-08-03T15-42-43-470Z/iterate-kit-acoustic-1nbJSN/microphone.pcm16le",
+  "interval": {
+    "endSample": 428032,
+    "startSample": 0
+  },
+  "result": {
+    "durationSeconds": 8.917,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"468066bc-74c8-4b65-8c13-944b80deea23\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"State or something where, where you just see, okay, like these three events are gonna be appended to the stream, but at a future time, which is just a, a much more\",\"words\":[{\"text\":\"state\",\"start\":0.541,\"end\":0.782},{\"text\":\"or\",\"start\":0.822,\"end\":0.882},{\"text\":\"something\",\"start\":0.922,\"end\":1.202},{\"text\":\"where,\",\"start\":1.202,\"end\":1.663},{\"text\":\"where\",\"start\":1.683,\"end\":1.804},{\"text\":\"you\",\"start\":1.804,\"end\":1.884},{\"text\":\"just\",\"start\":1.904,\"end\":2.064},{\"text\":\"see,\",\"start\":2.084,\"end\":2.204},{\"text\":\"okay,\",\"start\":2.264,\"end\":2.445},{\"text\":\"like\",\"start\":2.505,\"end\":2.645},{\"text\":\"these\",\"start\":2.665,\"end\":2.846},{\"text\":\"three\",\"start\":2.906,\"end\":3.086},{\"text\":\"events\",\"start\":3.126,\"end\":3.447},{\"text\":\"are\",\"start\":3.507,\"end\":3.607},{\"text\":\"gonna\",\"start\":3.607,\"end\":3.787},{\"text\":\"be\",\"start\":3.807,\"end\":3.888},{\"text\":\"appended\",\"start\":4.028,\"end\":4.509},{\"text\":\"to\",\"start\":4.609,\"end\":4.689},{\"text\":\"the\",\"start\":4.729,\"end\":4.809},{\"text\":\"stream,\",\"start\":4.91,\"end\":5.23},{\"text\":\"but\",\"start\":5.411,\"end\":5.531},{\"text\":\"at\",\"start\":5.571,\"end\":5.671},{\"text\":\"a\",\"start\":5.691,\"end\":5.711},{\"text\":\"future\",\"start\":5.771,\"end\":6.092},{\"text\":\"time,\",\"start\":6.112,\"end\":6.432},{\"text\":\"which\",\"start\":6.933,\"end\":7.074},{\"text\":\"is\",\"start\":7.094,\"end\":7.174},{\"text\":\"just\",\"start\":7.214,\"end\":7.394},{\"text\":\"a,\",\"start\":7.454,\"end\":7.475},{\"text\":\"a\",\"start\":7.695,\"end\":7.715},{\"text\":\"much\",\"start\":7.815,\"end\":7.975},{\"text\":\"more,\",\"start\":8.016,\"end\":8.156}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":8.917,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"State or something where, where you just see, okay, like these three events are gonna be appended to the stream, but at a future time, which is just a, a much more\",\"words\":[{\"text\":\"state\",\"start\":0.541,\"end\":0.782},{\"text\":\"or\",\"start\":0.822,\"end\":0.882},{\"text\":\"something\",\"start\":0.922,\"end\":1.202},{\"text\":\"where,\",\"start\":1.202,\"end\":1.663},{\"text\":\"where\",\"start\":1.683,\"end\":1.804},{\"text\":\"you\",\"start\":1.804,\"end\":1.884},{\"text\":\"just\",\"start\":1.904,\"end\":2.064},{\"text\":\"see,\",\"start\":2.084,\"end\":2.204},{\"text\":\"okay,\",\"start\":2.264,\"end\":2.445},{\"text\":\"like\",\"start\":2.505,\"end\":2.645},{\"text\":\"these\",\"start\":2.665,\"end\":2.846},{\"text\":\"three\",\"start\":2.906,\"end\":3.086},{\"text\":\"events\",\"start\":3.126,\"end\":3.447},{\"text\":\"are\",\"start\":3.507,\"end\":3.607},{\"text\":\"gonna\",\"start\":3.607,\"end\":3.787},{\"text\":\"be\",\"start\":3.807,\"end\":3.888},{\"text\":\"appended\",\"start\":4.028,\"end\":4.509},{\"text\":\"to\",\"start\":4.609,\"end\":4.689},{\"text\":\"the\",\"start\":4.729,\"end\":4.809},{\"text\":\"stream,\",\"start\":4.91,\"end\":5.23},{\"text\":\"but\",\"start\":5.411,\"end\":5.531},{\"text\":\"at\",\"start\":5.571,\"end\":5.671},{\"text\":\"a\",\"start\":5.691,\"end\":5.711},{\"text\":\"future\",\"start\":5.771,\"end\":6.092},{\"text\":\"time,\",\"start\":6.112,\"end\":6.432},{\"text\":\"which\",\"start\":6.933,\"end\":7.074},{\"text\":\"is\",\"start\":7.094,\"end\":7.174},{\"text\":\"just\",\"start\":7.214,\"end\":7.394},{\"text\":\"a,\",\"start\":7.454,\"end\":7.475},{\"text\":\"a\",\"start\":7.695,\"end\":7.715},{\"text\":\"much\",\"start\":7.815,\"end\":7.975},{\"text\":\"more,\",\"start\":8.016,\"end\":8.156}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":8.917,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":8.917}"
+    ],
+    "text": "state or something where, where you just see, okay, like these three events are gonna be appended to the stream, but at a future time, which is just a, a much more,",
+    "words": [
+      {
+        "text": "state",
+        "start": 0.541,
+        "end": 0.782
+      },
+      {
+        "text": "or",
+        "start": 0.822,
+        "end": 0.882
+      },
+      {
+        "text": "something",
+        "start": 0.922,
+        "end": 1.202
+      },
+      {
+        "text": "where,",
+        "start": 1.202,
+        "end": 1.663
+      },
+      {
+        "text": "where",
+        "start": 1.683,
+        "end": 1.804
+      },
+      {
+        "text": "you",
+        "start": 1.804,
+        "end": 1.884
+      },
+      {
+        "text": "just",
+        "start": 1.904,
+        "end": 2.064
+      },
+      {
+        "text": "see,",
+        "start": 2.084,
+        "end": 2.204
+      },
+      {
+        "text": "okay,",
+        "start": 2.264,
+        "end": 2.445
+      },
+      {
+        "text": "like",
+        "start": 2.505,
+        "end": 2.645
+      },
+      {
+        "text": "these",
+        "start": 2.665,
+        "end": 2.846
+      },
+      {
+        "text": "three",
+        "start": 2.906,
+        "end": 3.086
+      },
+      {
+        "text": "events",
+        "start": 3.126,
+        "end": 3.447
+      },
+      {
+        "text": "are",
+        "start": 3.507,
+        "end": 3.607
+      },
+      {
+        "text": "gonna",
+        "start": 3.607,
+        "end": 3.787
+      },
+      {
+        "text": "be",
+        "start": 3.807,
+        "end": 3.888
+      },
+      {
+        "text": "appended",
+        "start": 4.028,
+        "end": 4.509
+      },
+      {
+        "text": "to",
+        "start": 4.609,
+        "end": 4.689
+      },
+      {
+        "text": "the",
+        "start": 4.729,
+        "end": 4.809
+      },
+      {
+        "text": "stream,",
+        "start": 4.91,
+        "end": 5.23
+      },
+      {
+        "text": "but",
+        "start": 5.411,
+        "end": 5.531
+      },
+      {
+        "text": "at",
+        "start": 5.571,
+        "end": 5.671
+      },
+      {
+        "text": "a",
+        "start": 5.691,
+        "end": 5.711
+      },
+      {
+        "text": "future",
+        "start": 5.771,
+        "end": 6.092
+      },
+      {
+        "text": "time,",
+        "start": 6.112,
+        "end": 6.432
+      },
+      {
+        "text": "which",
+        "start": 6.933,
+        "end": 7.074
+      },
+      {
+        "text": "is",
+        "start": 7.094,
+        "end": 7.174
+      },
+      {
+        "text": "just",
+        "start": 7.214,
+        "end": 7.394
+      },
+      {
+        "text": "a,",
+        "start": 7.454,
+        "end": 7.475
+      },
+      {
+        "text": "a",
+        "start": 7.695,
+        "end": 7.715
+      },
+      {
+        "text": "much",
+        "start": 7.815,
+        "end": 7.975
+      },
+      {
+        "text": "more,",
+        "start": 8.016,
+        "end": 8.156
+      }
+    ]
+  },
+  "sampleRateHz": 48000,
+  "schemaVersion": 1
+}

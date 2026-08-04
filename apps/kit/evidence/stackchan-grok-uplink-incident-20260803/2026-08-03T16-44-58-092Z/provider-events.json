@@ -1,0 +1,86 @@
+[
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "session.created",
+      "raw": "{\"type\":\"session.created\",\"event_id\":\"bbf19d93-1e6a-4d02-99bd-0a2e81fe2eb0\",\"session\":{\"id\":\"d0267fdde96046d7812b2116fe44a98f\",\"object\":\"realtime.session\",\"instructions\":\"\",\"voice\":\"xai_ara\",\"modalities\":[\"audio\"],\"turn_detection\":{\"type\":null},\"tools\":[],\"model\":\"grok-voice-think-fast-2.0\"}}",
+      "receivedAtMs": 1785775475377,
+      "sequence": 1,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb:1",
+    "offset": 15390,
+    "createdAt": "2026-08-03T16:44:35.413Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "conversation.created",
+      "raw": "{\"type\":\"conversation.created\",\"event_id\":\"d48f8bc6-7d70-411b-90b9-0cd9ca5a7450\",\"conversation\":{\"id\":\"edb9c5d3-e84b-4188-a764-76aed3f3369a\",\"object\":\"realtime.conversation\"},\"previous_item_id\":null}",
+      "receivedAtMs": 1785775475377,
+      "sequence": 2,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb:2",
+    "offset": 15391,
+    "createdAt": "2026-08-03T16:44:35.448Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "ping",
+      "raw": "{\"type\":\"ping\",\"event_id\":\"44612d02-b9d9-46fd-ae87-5f983ce57357\",\"timestamp\":1785775475321,\"previous_item_id\":null}",
+      "receivedAtMs": 1785775475377,
+      "sequence": 3,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb:3",
+    "offset": 15392,
+    "createdAt": "2026-08-03T16:44:35.448Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "session.updated",
+      "raw": "{\"session\":{\"instructions\":\"Be concise, conversational, and useful.\",\"enable_noise_suppression\":true,\"turn_detection\":{\"type\":\"server_vad\",\"threshold\":0.1,\"silence_duration_ms\":1000,\"prefix_padding_ms\":400},\"model\":\"grok-voice-think-fast-2.0\",\"tools\":[{\"type\":\"function\",\"function\":{\"name\":\"changeSpriteSet\",\"description\":\"Change the active Iterate Kit device to one of its compiled sprite sets.\",\"parameters\":{\"additionalProperties\":false,\"properties\":{\"spriteSet\":{\"enum\":[\"dot-matrix-oracle\",\"gameboy-fine-black\",\"karakuri-brass\",\"starbyte\"],\"type\":\"string\"}},\"required\":[\"spriteSet\"],\"type\":\"object\"}}}],\"keep_context\":true,\"enable_phonetic_spelling\":false,\"input_audio_transcription\":{\"model\":\"grok-transcribe\"},\"modalities\":[\"audio\"],\"input_audio_format\":\"not specified\",\"output_audio_format\":\"not specified\",\"tool_choice\":\"auto\",\"temperature\":-1.0,\"max_response_output_tokens\":\"inf\",\"audio\":{\"input\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":16000},\"transport\":\"binary\",\"transcription\":{\"model\":\"grok-transcribe\"}},\"output\":{\"format\":{\"type\":\"audio/pcm\",\"rate\":16000},\"transport\":\"binary\"}}},\"type\":\"session.updated\",\"event_id\":\"4ab1e4d8-a5a5-4102-9150-d050402c176f\",\"previous_item_id\":null}",
+      "receivedAtMs": 1785775475493,
+      "sequence": 4,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb:4",
+    "offset": 15393,
+    "createdAt": "2026-08-03T16:44:35.555Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "ping",
+      "raw": "{\"type\":\"ping\",\"event_id\":\"ef5cfe3d-ed12-4db7-921f-2c28da7a5632\",\"timestamp\":1785775485321,\"previous_item_id\":null}",
+      "receivedAtMs": 1785775485379,
+      "sequence": 5,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb:5",
+    "offset": 15394,
+    "createdAt": "2026-08-03T16:44:45.408Z",
+    "path": "/devices/stackchan"
+  },
+  {
+    "type": "events.iterate.com/kit/provider-event",
+    "payload": {
+      "providerType": "ping",
+      "raw": "{\"type\":\"ping\",\"event_id\":\"ea227595-24c7-4f0c-9e16-9ade9951e778\",\"timestamp\":1785775495321,\"previous_item_id\":null}",
+      "receivedAtMs": 1785775495379,
+      "sequence": 6,
+      "sessionId": "prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb"
+    },
+    "idempotencyKey": "kit-provider-event:prj_0363ecd53eda492e972b07debd56eb46:stackchan:8f579a01-dc6b-4feb-8bbc-4f1cc4f7b5eb:6",
+    "offset": 15395,
+    "createdAt": "2026-08-03T16:44:55.407Z",
+    "path": "/devices/stackchan"
+  }
+]

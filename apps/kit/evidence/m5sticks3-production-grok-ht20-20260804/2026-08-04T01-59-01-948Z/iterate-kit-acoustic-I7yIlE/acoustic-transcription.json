@@ -1,0 +1,124 @@
+{
+  "assessment": {
+    "acceptance": "failed",
+    "boundaryWordOverage": -1,
+    "normalizedMicrophoneTranscript": "the game boy face is active and the zebra is the sound wave created",
+    "normalizedProviderTranscript": "the game boy face is active and the zebra is awake",
+    "passed": false,
+    "reasons": [
+      "The independent microphone transcript did not match Grok's completed output transcript."
+    ],
+    "relativeActiveWindowDeficit": 0,
+    "responseToBaselineMaximumRmsRatio": 12.820634649472215
+  },
+  "fixedThresholdAssessment": {
+    "activeThresholdRms": 122.95051617249655,
+    "activeWindowCount": 69,
+    "passed": true,
+    "reasons": []
+  },
+  "microphoneStt": {
+    "durationSeconds": 6.085,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"60c24148-11be-411e-ae51-b5b8f778bb04\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The Game Boy face is active and the zebra is the\",\"words\":[{\"text\":\"The\",\"start\":1.647,\"end\":1.707},{\"text\":\"Game\",\"start\":1.767,\"end\":2.028},{\"text\":\"Boy\",\"start\":2.048,\"end\":2.209},{\"text\":\"face\",\"start\":2.33,\"end\":2.611},{\"text\":\"is\",\"start\":2.671,\"end\":2.751},{\"text\":\"active\",\"start\":2.912,\"end\":3.354},{\"text\":\"and\",\"start\":3.434,\"end\":3.515},{\"text\":\"the\",\"start\":3.535,\"end\":3.615},{\"text\":\"zebra\",\"start\":3.675,\"end\":3.997},{\"text\":\"is\",\"start\":4.117,\"end\":4.177},{\"text\":\"the\",\"start\":4.398,\"end\":4.479}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.84}",
+      "{\"type\":\"transcript.partial\",\"text\":\"The Game Boy face is active and the zebra is the\",\"words\":[{\"text\":\"The\",\"start\":1.647,\"end\":1.707},{\"text\":\"Game\",\"start\":1.767,\"end\":2.028},{\"text\":\"Boy\",\"start\":2.048,\"end\":2.209},{\"text\":\"face\",\"start\":2.33,\"end\":2.611},{\"text\":\"is\",\"start\":2.671,\"end\":2.751},{\"text\":\"active\",\"start\":2.912,\"end\":3.354},{\"text\":\"and\",\"start\":3.434,\"end\":3.515},{\"text\":\"the\",\"start\":3.535,\"end\":3.615},{\"text\":\"zebra\",\"start\":3.675,\"end\":3.997},{\"text\":\"is\",\"start\":4.117,\"end\":4.177},{\"text\":\"the\",\"start\":4.398,\"end\":4.479}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":4.84}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Sound wave created\",\"words\":[{\"text\":\"Sound\",\"start\":4.94,\"end\":5.242},{\"text\":\"wave\",\"start\":5.302,\"end\":5.583},{\"text\":\"created\",\"start\":5.623,\"end\":6.065}],\"is_final\":true,\"speech_final\":false,\"start\":4.84,\"duration\":1.245,\"language\":\"en\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Sound wave created\",\"words\":[{\"text\":\"Sound\",\"start\":4.94,\"end\":5.242},{\"text\":\"wave\",\"start\":5.302,\"end\":5.583},{\"text\":\"created\",\"start\":5.623,\"end\":6.065}],\"is_final\":true,\"speech_final\":true,\"start\":4.84,\"duration\":1.245,\"language\":\"en\"}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":6.085}"
+    ],
+    "text": "The Game Boy face is active and the zebra is the Sound wave created",
+    "words": [
+      {
+        "text": "The",
+        "start": 1.647,
+        "end": 1.707
+      },
+      {
+        "text": "Game",
+        "start": 1.767,
+        "end": 2.028
+      },
+      {
+        "text": "Boy",
+        "start": 2.048,
+        "end": 2.209
+      },
+      {
+        "text": "face",
+        "start": 2.33,
+        "end": 2.611
+      },
+      {
+        "text": "is",
+        "start": 2.671,
+        "end": 2.751
+      },
+      {
+        "text": "active",
+        "start": 2.912,
+        "end": 3.354
+      },
+      {
+        "text": "and",
+        "start": 3.434,
+        "end": 3.515
+      },
+      {
+        "text": "the",
+        "start": 3.535,
+        "end": 3.615
+      },
+      {
+        "text": "zebra",
+        "start": 3.675,
+        "end": 3.997
+      },
+      {
+        "text": "is",
+        "start": 4.117,
+        "end": 4.177
+      },
+      {
+        "text": "the",
+        "start": 4.398,
+        "end": 4.479
+      },
+      {
+        "text": "Sound",
+        "start": 4.94,
+        "end": 5.242
+      },
+      {
+        "text": "wave",
+        "start": 5.302,
+        "end": 5.583
+      },
+      {
+        "text": "created",
+        "start": 5.623,
+        "end": 6.065
+      }
+    ]
+  },
+  "providerOutputTranscript": "The Game Boy face is active and the zebra is awake.",
+  "relativeEnergy": {
+    "analysis": {
+      "activeWindowCount": 69,
+      "clippedSampleCount": 0,
+      "maximumRms": 630.5214591246413,
+      "p50Rms": 53.76182040568691,
+      "p95Rms": 274.9071282572838,
+      "p99Rms": 371.591590885298,
+      "sampleCount": 292096,
+      "windowCount": 305,
+      "windowDurationMs": 20
+    },
+    "ambientMultiplier": 2.5,
+    "thresholdRms": 122.95051617249655
+  },
+  "schemaVersion": 1,
+  "transcriptionError": null
+}

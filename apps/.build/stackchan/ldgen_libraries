@@ -84,15 +84,16 @@
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/touch_element/libtouch_element.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/usb/libusb.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/wifi_provisioning/libwifi_provisioning.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/avatar/libavatar.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/capnweb/libcapnweb.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/core/libcore.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/capabilities/libcapabilities.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp_lcd_touch/libespressif__esp_lcd_touch.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp_jpeg/libespressif__esp_jpeg.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp32-camera/libespressif__esp32-camera.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp_codec_dev/libespressif__esp_codec_dev.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/lvgl__lvgl/liblvgl__lvgl.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp_lcd_ili9341/libespressif__esp_lcd_ili9341.a
-/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp_lcd_touch/libespressif__esp_lcd_touch.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp_lcd_touch_ft5x06/libespressif__esp_lcd_touch_ft5x06.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__m5stack_core_s3/libespressif__m5stack_core_s3.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__cjson/libespressif__cjson.a
@@ -101,6 +102,8 @@
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/espressif__esp-sr/libespressif__esp-sr.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/iterate_core_s3_audio/libiterate_core_s3_audio.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/iterate_esp_idf/libiterate_esp_idf.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/iterate_stackchan_avatar/libiterate_stackchan_avatar.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/iterate_stackchan_hardware/libiterate_stackchan_hardware.a
+/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/iterate_stackchan_body/libiterate_stackchan_body.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/stackchan/libstackchan.a
 /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/stackchan/esp-idf/main/libmain.a

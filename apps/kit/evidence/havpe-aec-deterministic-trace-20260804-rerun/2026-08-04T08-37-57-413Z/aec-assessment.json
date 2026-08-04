@@ -1,0 +1,111 @@
+{
+  "ambient": {
+    "dbfs": -91.9856396434818,
+    "peak": 3,
+    "rms": 0.8244568919395766
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -57.336730191519216,
+      "peak": 187,
+      "rms": 44.52597369326507
+    },
+    "farEndResidualDb": -42.42593841989369,
+    "farEndSimilarity": 0.010876507286331025,
+    "nearEndGain": 1.0961270721106593,
+    "nearEndSimilarity": 0.9240651749595363,
+    "passed": true,
+    "residualDegradationFromRepeatDb": 7.762039697182179,
+    "residualToNearEndDb": -6.870226229457956,
+    "similarityLossFromRepeat": 0.06216453120836096
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -89.3690942143965,
+        "peak": 6,
+        "rms": 1.1142822802144885
+      },
+      "kind": "tone",
+      "passed": true,
+      "source": {
+        "dbfs": -20.255037277522632,
+        "peak": 4500,
+        "rms": 3181.9845827329204
+      },
+      "sourceSimilarity": 0.021634798933433334
+    },
+    {
+      "clean": {
+        "dbfs": -85.22003140709727,
+        "peak": 11,
+        "rms": 1.7965874624039637
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": true,
+      "source": {
+        "dbfs": -23.265100635326633,
+        "peak": 3841,
+        "rms": 2250.0641657517235
+      },
+      "sourceSimilarity": 0.00409360418943429
+    },
+    {
+      "clean": {
+        "dbfs": -83.91971964181153,
+        "peak": 10,
+        "rms": 2.086718915746281
+      },
+      "kind": "speech-shaped",
+      "passed": true,
+      "source": {
+        "dbfs": -22.971610308836556,
+        "peak": 7832,
+        "rms": 2327.3913694708717
+      },
+      "sourceSimilarity": 0.04527285585076358
+    }
+  ],
+  "nearEnd": {
+    "aboveAmbientDb": 33.165897923749625,
+    "clean": {
+      "dbfs": -58.81974171973218,
+      "peak": 167,
+      "rms": 37.53728424291418
+    },
+    "passed": true,
+    "pathReferenceObserved": true,
+    "repeat": {
+      "clean": {
+        "dbfs": -57.81953231589546,
+        "peak": 186,
+        "rms": 42.11854104785682
+      },
+      "gain": 1.1063140891473313,
+      "passed": true,
+      "pathReferenceObserved": true,
+      "residualToReferenceDb": -14.632265926640136,
+      "similarity": 0.9862297061678973
+    },
+    "source": {
+      "dbfs": -15.176950127467181,
+      "peak": 26072,
+      "rms": 5709.55720506014
+    },
+    "sourceSimilarity": 0.5796753995347601
+  },
+  "passed": false,
+  "reasons": [
+    "The physical network interval was not valid.",
+    "The run observed 26 uplink frame drops.",
+    "The run observed 1 uplink restart."
+  ],
+  "validity": {
+    "passed": false,
+    "reasons": [
+      "The physical network interval was not valid.",
+      "The run observed 26 uplink frame drops.",
+      "The run observed 1 uplink restart."
+    ]
+  }
+}

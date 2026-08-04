@@ -1,0 +1,93 @@
+{
+  "deployedConfigCommit": "97213c36",
+  "headBefore": 241451,
+  "headAfter": 241473,
+  "correlated": [
+    {
+      "attempt": 1,
+      "setupMs": 13996,
+      "ok": true,
+      "token": "15ed0369-1ddf-4eaa-8b07-22a932fde248",
+      "askedAt": "2026-08-04T01:03:25.058Z",
+      "answerType": "voicelab/warmup-ready",
+      "answeredAt": "2026-08-04T01:03:38.668Z",
+      "roundTripMs": 13610,
+      "briefKey": "voice-agent/brief:0l2uva5:after0",
+      "protocolRevision": "warmup/2-brief-checked",
+      "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+      "exactBriefMatch": true
+    },
+    {
+      "attempt": 2,
+      "setupMs": 579,
+      "ok": true,
+      "token": "1cd629a3-a88d-4e2e-afd8-0be0ecaf86f3",
+      "askedAt": "2026-08-04T01:03:38.969Z",
+      "answerType": "voicelab/warmup-ready",
+      "answeredAt": "2026-08-04T01:03:39.157Z",
+      "roundTripMs": 188,
+      "briefKey": "voice-agent/brief:0l2uva5:after0",
+      "protocolRevision": "warmup/2-brief-checked",
+      "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+      "exactBriefMatch": true
+    },
+    {
+      "attempt": 3,
+      "setupMs": 637,
+      "ok": true,
+      "token": "e7445093-6b1c-481f-bf5f-f029348a937e",
+      "askedAt": "2026-08-04T01:03:39.670Z",
+      "answerType": "voicelab/warmup-ready",
+      "answeredAt": "2026-08-04T01:03:39.853Z",
+      "roundTripMs": 183,
+      "briefKey": "voice-agent/brief:0l2uva5:after0",
+      "protocolRevision": "warmup/2-brief-checked",
+      "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+      "exactBriefMatch": true
+    }
+  ],
+  "attempts": [
+    {
+      "attempt": 1,
+      "setupMs": 13996,
+      "warm": {
+        "ok": true,
+        "ms": 13738,
+        "token": "15ed0369-1ddf-4eaa-8b07-22a932fde248",
+        "acknowledged": true,
+        "briefMatched": true,
+        "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "protocolRevision": "warmup/2-brief-checked",
+        "seenBriefKey": "voice-agent/brief:0l2uva5:after0"
+      }
+    },
+    {
+      "attempt": 2,
+      "setupMs": 579,
+      "warm": {
+        "ok": true,
+        "ms": 332,
+        "token": "1cd629a3-a88d-4e2e-afd8-0be0ecaf86f3",
+        "acknowledged": true,
+        "briefMatched": true,
+        "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "protocolRevision": "warmup/2-brief-checked",
+        "seenBriefKey": "voice-agent/brief:0l2uva5:after0"
+      }
+    },
+    {
+      "attempt": 3,
+      "setupMs": 637,
+      "warm": {
+        "ok": true,
+        "ms": 247,
+        "token": "e7445093-6b1c-481f-bf5f-f029348a937e",
+        "acknowledged": true,
+        "briefMatched": true,
+        "expectedBriefKey": "voice-agent/brief:0l2uva5:after0",
+        "protocolRevision": "warmup/2-brief-checked",
+        "seenBriefKey": "voice-agent/brief:0l2uva5:after0"
+      }
+    }
+  ]
+}

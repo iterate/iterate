@@ -1,4 +1,5 @@
 #include "iterate/kit/platforms/esp_idf_pcm_transport.h"
+#include "pcm_transport_lifecycle.h"
 
 #include "iterate/kit/pcm_websocket.h"
 #include "iterate/kit/platforms/esp_idf_websocket_policy.h"
@@ -98,6 +99,26 @@ static void atomic_saturating_increment(uint32_t *value) {
              false,
              __ATOMIC_RELAXED,
              __ATOMIC_RELAXED)) {
+  }
+}
+
+static void atomic_saturating_add(
+    uint32_t *value, uint32_t addend) {
+  uint32_t current = __atomic_load_n(value, __ATOMIC_RELAXED);
+  while (current != UINT32_MAX) {
+    const uint32_t next =
+        addend > UINT32_MAX - current
+            ? UINT32_MAX
+            : current + addend;
+    if (__atomic_compare_exchange_n(
+            value,
+            &current,
+            next,
+            false,
+            __ATOMIC_RELAXED,
+            __ATOMIC_RELAXED)) {
+      break;
+    }
   }
 }
 
@@ -223,6 +244,8 @@ static bool mark_socket_connected(
   }
   atomic_store_u32(
       &transport->socket_generation, generation + 1U);
+  atomic_store_u32(
+      &transport->downlink_items_released_pending, 0U);
   atomic_store_u32(&transport->socket_connected, 1U);
   atomic_saturating_increment(&transport->websocket_connections);
   return true;
@@ -391,28 +414,14 @@ static bool receive_websocket_data(
     protocol_failure(transport);
     return false;
   }
-  status = iterate_kit_pcm_uplink_conductor_note_downlink_item(
-      &transport->uplink);
-  if (status != ITERATE_KIT_OK) {
-    atomic_saturating_increment(
-        &transport->downlink_receipt_failures);
-    /*
-     * The ordered item is already published, so silently omitting its receipt
-     * would leave userspace permanently out of credit while this socket still
-     * appears healthy. Cumulative-count exhaustion is an intentionally
-     * recoverable multi-year generation boundary; every other result means
-     * this owner violated its own lifecycle invariant and must latch fatal
-     * instead of reconnect-looping an implementation defect.
-     */
-    remember_platform_error(transport, ESP_ERR_INVALID_STATE);
-    if (status == ITERATE_KIT_LIMIT) {
-      mark_socket_disconnected(transport);
-      request_restart(transport);
-    } else {
-      latch_fatal_failure(transport);
-    }
-    return false;
-  }
+  /*
+   * Publication proves ownership transferred into a finite device ring; it
+   * does not prove capacity became reusable. Granting remote credit here made
+   * userspace's unreliable timer the playout master. The priority playback
+   * owner reports the later release through
+   * note_downlink_item_released(), and only that hardware-clocked fact can
+   * admit another item without hiding an expanding queue below send().
+   */
   if (transport->options.downlink_ready != NULL) {
     transport->options.downlink_ready(
         transport->options.downlink_ready_context);
@@ -595,6 +604,33 @@ send_uplink(
   return result;
 }
 
+static bool collect_released_downlink_credit(
+    struct iterate_kit_esp_idf_pcm_transport *transport) {
+  uint32_t released = atomic_exchange_u32(
+      &transport->downlink_items_released_pending, 0U);
+  while (released > 0U) {
+    const enum iterate_kit_status status =
+        iterate_kit_pcm_uplink_conductor_note_downlink_item_released(
+            &transport->uplink);
+    if (status != ITERATE_KIT_OK) {
+      atomic_saturating_increment(
+          &transport->downlink_receipt_failures);
+      remember_platform_error(
+          transport,
+          ESP_ERR_INVALID_STATE);
+      if (status == ITERATE_KIT_LIMIT) {
+        mark_socket_disconnected(transport);
+        request_restart(transport);
+      } else {
+        latch_fatal_failure(transport);
+      }
+      return false;
+    }
+    --released;
+  }
+  return true;
+}
+
 static void stop_websocket(
     struct iterate_kit_esp_idf_pcm_transport *transport,
     bool *websocket_open) {
@@ -722,6 +758,9 @@ static void network_task(void *context) {
      */
     now_us = esp_timer_get_time();
     if (downlink_generation_accepted(transport)) {
+      if (!collect_released_downlink_credit(transport)) {
+        continue;
+      }
       receive_downlink(
           transport, (uint64_t)now_us / 1000U);
     }
@@ -880,6 +919,7 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_poll(
   bool connected;
   uint32_t generation;
   uint32_t discarded = 0U;
+  uint32_t discarded_items = 0U;
   if (transport == NULL ||
       !transport->initialized ||
       !transport->started) {
@@ -923,7 +963,9 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_poll(
     }
     const enum iterate_kit_status discard_status =
         iterate_kit_pcm_lane_discard_downlink(
-            transport->options.lane, &discarded);
+            transport->options.lane,
+            &discarded,
+            &discarded_items);
     if (discard_status != ITERATE_KIT_OK) {
       transport->state = ITERATE_KIT_ESP_IDF_PCM_FAILED;
       return discard_status;
@@ -941,6 +983,15 @@ enum iterate_kit_status iterate_kit_esp_idf_pcm_transport_poll(
         generation != 0U &&
         generation ==
             atomic_load_u32(&transport->socket_generation)) {
+      /*
+       * The generation barrier has now destroyed every old retained/ring item.
+       * Discard release notices produced while that purge was pending before
+       * opening the new receive gate; applying them to the fresh cumulative
+       * ledger would grant credit for slots this generation never occupied.
+       */
+      atomic_store_u32(
+          &transport->downlink_items_released_pending, 0U);
+      (void)discarded_items;
       atomic_store_u32(
           &transport->accepted_socket_generation,
           generation);
@@ -964,6 +1015,29 @@ void iterate_kit_esp_idf_pcm_transport_notify_uplink(
   if (transport == NULL || !transport->initialized) {
     return;
   }
+  wake_network_task(transport);
+}
+
+void iterate_kit_esp_idf_pcm_transport_note_downlink_item_released(
+    void *context,
+    uint32_t released_items) {
+  struct iterate_kit_esp_idf_pcm_transport *transport = context;
+  if (transport == NULL || !transport->initialized ||
+      released_items == 0U) {
+    return;
+  }
+  /*
+   * Playback may run at priority 23 while TLS is stalled on Core 0. Retaining
+   * only a cumulative count makes this handoff constant-space and lets the
+   * codec continue without waiting for the network. A reset may release the
+   * whole bounded lane epoch at once; one atomic add and one task wake avoid
+   * multiplying priority-task work by queue depth. Saturation is defensive:
+   * the physical lane bounds ordinary pending releases to 32, but wrapping an
+   * unattended diagnostic incident to zero would silently withhold credit.
+   */
+  atomic_saturating_add(
+      &transport->downlink_items_released_pending,
+      released_items);
   wake_network_task(transport);
 }
 
@@ -1152,8 +1226,8 @@ void iterate_kit_esp_idf_pcm_transport_metrics(
   metrics->downlink_receipt_failures =
       atomic_load_u32(
           &transport->downlink_receipt_failures);
-  metrics->downlink_items_received =
-      uplink.downlink_items_received;
+  metrics->downlink_items_released =
+      uplink.downlink_items_released;
   metrics->downlink_items_acknowledged =
       uplink.downlink_items_acknowledged;
   metrics->downlink_receipts_sent =

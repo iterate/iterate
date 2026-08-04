@@ -9,6 +9,9 @@
 
 namespace iterate::kit::platforms {
 
+using RealtimePlaybackItemReleasedFn =
+    void (*)(void *context, std::uint32_t releasedItems);
+
 enum class RealtimePlaybackState : std::uint8_t {
   stopped = 0U,
   buffering,
@@ -215,6 +218,40 @@ class RealtimePlayback {
           SampleRate);
 
  public:
+  /**
+   * Binds the capacity receipt emitted after physical DMA completion.
+   *
+   * The WebSocket sender has a finite item window, but releasing an SPSC slot
+   * after copying it into cyclic DMA does not mean the speaker clock consumed
+   * it. Keeping this callback beside exact descriptor ownership prevents the
+   * network task from becoming a second, timer-based playback clock. Reset
+   * paths report only after stop/reset has successfully destroyed the old
+   * epoch; fatal paths deliberately grant no fresh sender credit.
+   */
+  iterate_kit_status bindItemReleased(
+      RealtimePlaybackItemReleasedFn callback,
+      void *context) {
+    if (metrics_.state != RealtimePlaybackState::stopped ||
+        callback == nullptr || itemReleased_ != nullptr) {
+      return ITERATE_KIT_INVALID_ARGUMENT;
+    }
+    itemReleased_ = callback;
+    itemReleasedContext_ = context;
+    return ITERATE_KIT_OK;
+  }
+
+  /**
+   * Reports items discarded by the same audio owner while policy is suspended.
+   *
+   * M5StickS3 capture temporarily owns the shared I2S pins, so its owner must
+   * purge downlink items without entering pump(). Keeping the actual callback
+   * private still prevents arbitrary producers from minting credit; this seam
+   * exists only for that already-completed consumer ownership transition.
+   */
+  void noteExternallyDiscardedItems(std::uint32_t discardedItems) {
+    releaseItems(discardedItems);
+  }
+
   template<typename Driver>
   iterate_kit_status begin(Driver &driver) {
     if (metrics_.state != RealtimePlaybackState::stopped) {
@@ -354,9 +391,10 @@ class RealtimePlayback {
     refillCredits_ = 0U;
 
     std::uint32_t laneFrames = 0U;
+    std::uint32_t laneItems = 0U;
     const auto discardStatus =
         iterate_kit_pcm_lane_discard_downlink(
-            &lane, &laneFrames);
+            &lane, &laneFrames, &laneItems);
     if (discardStatus != ITERATE_KIT_OK) {
       failState();
       return discardStatus;
@@ -367,6 +405,12 @@ class RealtimePlayback {
     if (resetStatus != ITERATE_KIT_OK) {
       return failDriverAndStop(driver, resetStatus);
     }
+    std::uint32_t releasedItems = 0U;
+    add(releasedItems, borrowedFrames);
+    add(releasedItems, hardwareFrames);
+    add(releasedItems, laneItems);
+    add(releasedItems, takePendingEndOfStreamItem());
+    releaseItems(releasedItems);
     acceptedGeneration_ = generation;
     nextSubmissionSequence_ = 0U;
     nextExpectedCompletionSequence_ = 0U;
@@ -411,9 +455,11 @@ class RealtimePlayback {
      * Commit its counters immediately so a later ring failure cannot erase
      * already-known losses.
      */
+    const std::uint32_t hardwareFrames =
+        metrics_.currentContentFrames;
     add(
         metrics_.generationFramesFlushed,
-        metrics_.currentContentFrames);
+        hardwareFrames);
     metrics_.currentContentFrames = 0U;
     nextExpectedCompletionSequence_ =
         nextSubmissionSequence_;
@@ -430,14 +476,21 @@ class RealtimePlayback {
         metrics_.writeBackpressureFramesDropped,
         borrowedFrames);
     std::uint32_t discarded = 0U;
+    std::uint32_t discardedItems = 0U;
     const auto discardStatus =
         iterate_kit_pcm_lane_discard_downlink(
-            &lane, &discarded);
+            &lane, &discarded, &discardedItems);
     if (discardStatus != ITERATE_KIT_OK) {
       failState();
       return discardStatus;
     }
     add(metrics_.generationFramesFlushed, discarded);
+    std::uint32_t releasedItems = 0U;
+    add(releasedItems, hardwareFrames);
+    add(releasedItems, borrowedFrames);
+    add(releasedItems, discardedItems);
+    add(releasedItems, takePendingEndOfStreamItem());
+    releaseItems(releasedItems);
     partialPrebufferStartedAtMs_ = 0U;
     partialPrebufferStarted_ = false;
     preloadedDescriptorCount_ = 0U;
@@ -673,9 +726,11 @@ class RealtimePlayback {
            * waste CPU and turn "no speech" into a fake playback interval.
            */
           increment(metrics_.endOfStreamResponses);
+          releaseItems(1U);
           enterBuffering();
           return {ITERATE_KIT_OK, submitted, false};
         }
+        endOfStreamItemPending_ = true;
         /*
          * Cyclic DMA cannot start with uninitialized descriptors. Silence is
          * safe only after all response content and is not counted as content:
@@ -977,6 +1032,7 @@ class RealtimePlayback {
          * target-sized ESP-IDF completion-queue bound.
          */
         increment(metrics_.endOfStreamMarkersConsumed);
+        endOfStreamItemPending_ = true;
         drainingEndOfStream_ = true;
         break;
       }
@@ -1202,6 +1258,7 @@ class RealtimePlayback {
          * response on the same socket.
          */
         increment(metrics_.endOfStreamMarkersConsumed);
+        endOfStreamItemPending_ = true;
         recoveryDropDebt_ = 0U;
         underrunActive_ = false;
         drainingEndOfStream_ = true;
@@ -1232,6 +1289,7 @@ class RealtimePlayback {
         return failStateAndStop(
             driver, ITERATE_KIT_STATE_ERROR);
       }
+      releaseItems(releasedFrames);
       --recoveryDropDebt_;
       increment(metrics_.underrunLateFramesDropped);
       ++(*work);
@@ -1391,6 +1449,7 @@ class RealtimePlayback {
       return failDriverAndStop(driver, resetStatus);
     }
     increment(metrics_.endOfStreamResponses);
+    releaseItems(takePendingEndOfStreamItem());
     enterBuffering();
     return ITERATE_KIT_OK;
   }
@@ -1540,6 +1599,7 @@ class RealtimePlayback {
           driver, ITERATE_KIT_STATE_ERROR);
     }
     add(metrics_.dmaFramesCompleted, completedContent);
+    releaseItems(completedContent);
     add(
         metrics_.endOfStreamPaddingDescriptorsCompleted,
         completedPadding);
@@ -1626,9 +1686,11 @@ class RealtimePlayback {
      * abandons them so stale descriptor contents cannot survive recovery.
      * Account for that loss separately from the incident count.
      */
+    const std::uint32_t hardwareFrames =
+        metrics_.currentContentFrames;
     add(
         metrics_.underrunFramesFlushed,
-        metrics_.currentContentFrames);
+        hardwareFrames);
     std::uint32_t borrowedFrames = 0U;
     const auto borrowedStatus =
         releaseBorrowedFrame(&lane, &borrowedFrames);
@@ -1654,6 +1716,11 @@ class RealtimePlayback {
     if (resetStatus != ITERATE_KIT_OK) {
       return failDriverAndStop(driver, resetStatus);
     }
+    std::uint32_t releasedItems = 0U;
+    add(releasedItems, hardwareFrames);
+    add(releasedItems, borrowedFrames);
+    add(releasedItems, takePendingEndOfStreamItem());
+    releaseItems(releasedItems);
     enterBuffering();
     return ITERATE_KIT_OK;
   }
@@ -1680,17 +1747,20 @@ class RealtimePlayback {
       return stopStatus;
     }
     retireOutstandingRecoverySilenceFrames();
+    const std::uint32_t hardwareFrames =
+        metrics_.currentContentFrames;
     add(
         metrics_.freshnessFramesDropped,
-        metrics_.currentContentFrames);
+        hardwareFrames);
     metrics_.currentContentFrames = 0U;
     nextExpectedCompletionSequence_ =
         nextSubmissionSequence_;
     refillCredits_ = 0U;
     std::uint32_t discarded = 0U;
+    std::uint32_t discardedItems = 0U;
     const auto discardStatus =
         iterate_kit_pcm_lane_discard_downlink(
-            &lane, &discarded);
+            &lane, &discarded, &discardedItems);
     if (discardStatus != ITERATE_KIT_OK) {
       return failStateAndStop(driver, discardStatus);
     }
@@ -1699,6 +1769,11 @@ class RealtimePlayback {
     if (resetStatus != ITERATE_KIT_OK) {
       return failDriverAndStop(driver, resetStatus);
     }
+    std::uint32_t releasedItems = alreadyReleased;
+    add(releasedItems, hardwareFrames);
+    add(releasedItems, discardedItems);
+    add(releasedItems, takePendingEndOfStreamItem());
+    releaseItems(releasedItems);
     enterBuffering();
     return ITERATE_KIT_OK;
   }
@@ -1707,9 +1782,11 @@ class RealtimePlayback {
   iterate_kit_status resetPartialPrebuffer(
       Driver &driver) {
     increment(metrics_.partialPrebufferIncidents);
+    const std::uint32_t hardwareFrames =
+        metrics_.currentContentFrames;
     add(
         metrics_.partialPrebufferFramesDropped,
-        metrics_.currentContentFrames);
+        hardwareFrames);
     const auto stopStatus = driver.stopAndRelease();
     if (stopStatus != ITERATE_KIT_OK) {
       increment(metrics_.driverFailures);
@@ -1726,6 +1803,9 @@ class RealtimePlayback {
     if (resetStatus != ITERATE_KIT_OK) {
       return failDriverAndStop(driver, resetStatus);
     }
+    std::uint32_t releasedItems = hardwareFrames;
+    add(releasedItems, takePendingEndOfStreamItem());
+    releaseItems(releasedItems);
     enterBuffering();
     return ITERATE_KIT_OK;
   }
@@ -1795,6 +1875,14 @@ class RealtimePlayback {
   }
 
   void clearFailedOwnership() {
+    /*
+     * Failure retires the socket generation instead of granting more sender
+     * credit. A stop failure cannot prove the old DMA epoch is quiet, while a
+     * reset failure cannot provide a usable destination for the next frame.
+     * Clearing the local EOS bit prevents a later healthy epoch from emitting
+     * a receipt for this abandoned session.
+     */
+    endOfStreamItemPending_ = false;
     add(
         metrics_.fatalFramesFlushed,
         metrics_.currentContentFrames);
@@ -1857,6 +1945,18 @@ class RealtimePlayback {
     clearFailedOwnership();
   }
 
+  void releaseItems(std::uint32_t count) {
+    if (count != 0U && itemReleased_ != nullptr) {
+      itemReleased_(itemReleasedContext_, count);
+    }
+  }
+
+  std::uint32_t takePendingEndOfStreamItem() {
+    if (!endOfStreamItemPending_) return 0U;
+    endOfStreamItemPending_ = false;
+    return 1U;
+  }
+
   RealtimePlaybackMetrics metrics_{};
   std::uint64_t lastOwnerNowMs_ = 0U;
   std::uint64_t partialPrebufferStartedAtMs_ = 0U;
@@ -1878,6 +1978,9 @@ class RealtimePlayback {
   std::uint64_t lastCompletionEofAtUs_ = 0U;
   bool completionEofObserved_ = false;
   bool underrunActive_ = false;
+  bool endOfStreamItemPending_ = false;
+  RealtimePlaybackItemReleasedFn itemReleased_ = nullptr;
+  void *itemReleasedContext_ = nullptr;
 };
 
 }  // namespace iterate::kit::platforms

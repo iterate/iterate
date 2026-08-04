@@ -1,0 +1,48 @@
+2026-08-04 14:34:43 W (15663) wifi:Haven't to connect to a suitable AP now!
+2026-08-04 14:34:44 I (16053) wifi:new:<4,0>, old:<4,0>, ap:<255,255>, sta:<4,0>, prof:1, snd_ch_cfg:0x0
+2026-08-04 14:34:44 I (16053) wifi:state: init -> auth (0xb0)
+2026-08-04 14:34:44 I (16513) wifi:state: auth -> assoc (0x0)
+2026-08-04 14:34:44 I (16543) wifi:state: assoc -> run (0x10)
+2026-08-04 14:34:44 I (16583) wifi:connected with mispwoso2, aid = 17, channel 4, BW20, bssid = 62:7f:f0:57:9d:87
+2026-08-04 14:34:44 I (16583) wifi:security: WPA3-SAE, phy: bgn, rssi: -44
+2026-08-04 14:34:44 I (16583) wifi:pm start, type: 0
+2026-08-04 14:34:44 
+2026-08-04 14:34:44 I (16583) wifi:dp: 1, bi: 102400, li: 3, scale listen interval from 307200 us to 307200 us
+2026-08-04 14:34:44 I (16583) wifi:set rx beacon pti, rx_bcn_pti: 0, bcn_timeout: 25000, mt_pti: 0, mt_time: 10000
+2026-08-04 14:34:44 I (16603) wifi:AP's beacon interval = 102400 us, DTIM period = 1
+2026-08-04 14:34:45 I (17093) wifi:<ba-add>idx:0 (ifx:0, 62:7f:f0:57:9d:87), tid:7, ssn:3, winSize:64
+2026-08-04 14:34:45 I (17093) wifi:<ba-del>idx:0, tid:7
+2026-08-04 14:34:45 I (17093) wifi:<ba-add>idx:0 (ifx:0, 62:7f:f0:57:9d:87), tid:7, ssn:3, winSize:64
+2026-08-04 14:34:46 I (18123) esp_netif_handlers: sta ip: 192.168.0.234, mask: 255.255.255.0, gw: 192.168.0.1
+2026-08-04 14:34:46 I (18123) iterate-stackchan: control state=websocket_connecting
+2026-08-04 14:34:46 I (18123) wifi:<ba-add>idx:1 (ifx:0, 62:7f:f0:57:9d:87), tid:0, ssn:1, winSize:64
+2026-08-04 14:34:46 I (18123) wifi:<ba-del>idx:1, tid:0
+2026-08-04 14:34:46 I (18123) wifi:<ba-add>idx:1 (ifx:0, 62:7f:f0:57:9d:87), tid:0, ssn:1, winSize:64
+2026-08-04 14:34:46 I (18753) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:34:48 I (20803) iterate-stackchan: control state=mounting
+2026-08-04 14:34:49 I (21023) iterate-stackchan: control state=ready
+2026-08-04 14:34:49 I (21023) iterate-stackchan: pcm session state=connecting status=0 platform=0
+2026-08-04 14:34:50 I (22183) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:34:53 I (25273) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:34:55 I (27853) iterate-stackchan: pcm session state=ready status=0 platform=32776
+2026-08-04 14:35:17 W (49233) iterate-stackchan-avatar: capture unavailable: ROM PNG encoder failed free_psram=6756140 largest_psram=6684672 free_internal=23055
+2026-08-04 14:36:47 W (139243) iterate-stackchan: control capability idle lease expired: generation=1 served=3 remounts=1
+2026-08-04 14:36:47 I (139253) iterate-stackchan: control state=websocket_connecting
+2026-08-04 14:36:48 I (140193) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:36:50 I (142383) iterate-stackchan: control state=mounting
+2026-08-04 14:36:50 I (142593) iterate-stackchan: control state=ready
+2026-08-04 14:36:50 I (142593) iterate-stackchan: pcm session state=connecting status=0 platform=32776
+2026-08-04 14:36:51 I (143973) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:36:59 I (151123) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:37:06 I (158903) iterate-stackchan: pcm session state=ready status=0 platform=32776
+2026-08-04 14:38:36 W (248993) iterate-stackchan: control capability idle lease expired: generation=2 served=5 remounts=2
+2026-08-04 14:38:37 I (249003) iterate-stackchan: control state=websocket_connecting
+2026-08-04 14:38:37 I (249933) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:38:39 I (251653) iterate-stackchan: control state=mounting
+2026-08-04 14:38:39 I (251853) iterate-stackchan: control state=ready
+2026-08-04 14:38:39 I (251863) iterate-stackchan: pcm session state=connecting status=0 platform=32776
+2026-08-04 14:38:41 I (253233) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:38:47 I (259523) esp-x509-crt-bundle: Certificate validated
+2026-08-04 14:38:50 I (262643) iterate-stackchan: pcm session state=ready status=0 platform=32776
+2026-08-04 14:40:10 I (342023) iterate-stackchan: whole-screen call toggle published: target=active
+2026-08-04 14:40:10 I (342023) iterate-stackchan: device_event type=2 source=0 result=0

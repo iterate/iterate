@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { connectItxReady } from "iterate/node";
+import { resolveProductionProjectApiKey } from "../src/device/production-project-api-key.ts";
 import { installKitVoiceUserspace, type InstallKitVoiceResult } from "../src/userspace/install.ts";
 import type { KitVoiceInstallMode } from "../src/userspace/install-plan.ts";
 
@@ -8,15 +9,19 @@ const runtimeSourceNames = [
   "app-ref.ts",
   "device-control.ts",
   "device-id.ts",
+  "device-pcm-wire.ts",
   "device-events.ts",
   "device-metrics.ts",
   "device-subscriptions.ts",
   "device-tools.ts",
+  "deterministic-aec-fixture.ts",
   "pcm-proxy.ts",
+  "pcm-diagnostic-capture.ts",
   "provider-event-stream.ts",
   "providers.ts",
   "routes.ts",
   "server-vad-policy.ts",
+  "sprite-sets.ts",
   "worker.ts",
   "workerd-globals.d.ts",
 ] as const;
@@ -48,11 +53,17 @@ export async function installUserspaceWorkerFromCli(
 ): Promise<InstallKitVoiceResult> {
   const options = parseInstallerCliOptions(args, environment);
   const appSources = await readRuntimeSources();
+  const projectApiKey = await resolveProductionProjectApiKey({
+    adminApiSecret: environment.APP_CONFIG_ADMIN_API_SECRET,
+    baseUrl: options.baseUrl,
+    projectApiKey: options.projectApiKey,
+    projectId: options.projectId,
+  });
   using project = await connectItxReady(
     {
       auth: {
         projectId: options.projectId,
-        secret: options.projectApiKey,
+        secret: projectApiKey,
         type: "project-secret",
       },
       baseUrl: options.baseUrl,
@@ -88,7 +99,7 @@ interface InstallerCliOptions {
   baseUrl: string;
   mode: KitVoiceInstallMode;
   printPlan: boolean;
-  projectApiKey: string;
+  projectApiKey?: string;
   projectId: string;
   xaiApiKey?: string;
 }
@@ -135,8 +146,12 @@ export function parseInstallerCliOptions(
   if (!/^prj_[A-Za-z0-9_-]+$/u.test(projectId)) {
     throw new Error("--project-id (or ITERATE_KIT_PROJECT_ID) must be a prj_ project ID.");
   }
-  const projectApiKey = environment.ITERATE_KIT_PROJECT_API_KEY?.trim() ?? "";
-  if (!projectApiKey) throw new Error("ITERATE_KIT_PROJECT_API_KEY is required.");
+  const projectApiKey = environment.ITERATE_KIT_PROJECT_API_KEY?.trim() || undefined;
+  if (!projectApiKey && !environment.APP_CONFIG_ADMIN_API_SECRET?.trim()) {
+    throw new Error(
+      "ITERATE_KIT_PROJECT_API_KEY or APP_CONFIG_ADMIN_API_SECRET is required for pairing.",
+    );
+  }
   const xaiApiKey = environment.XAI_API_KEY?.trim();
   const parsedBaseUrl = new URL(baseUrl);
   if (!["http:", "https:"].includes(parsedBaseUrl.protocol)) {

@@ -4,7 +4,7 @@ if(COMMAND idf_component_register)
   idf_component_register(
     SRCS "stackchan_hardware.c"
     INCLUDE_DIRS "include"
-    REQUIRES capabilities
+    REQUIRES capabilities core
   )
   target_compile_features(${COMPONENT_LIB} PUBLIC c_std_99)
   target_compile_options(${COMPONENT_LIB} PRIVATE
@@ -20,6 +20,7 @@ else()
   enable_testing()
   add_executable(iterate-stackchan-hardware-test
     "stackchan_hardware.c"
+    "../../components/core/src/conversation_lights.c"
     "tests/stackchan_hardware_test.c"
   )
   target_compile_features(iterate-stackchan-hardware-test PRIVATE c_std_99)

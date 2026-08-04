@@ -24,11 +24,9 @@ struct iterate_kit_aec_signal_window {
   uint64_t sampled_samples;
   uint64_t near_absolute_sum;
   uint64_t reference_absolute_sum;
-  uint64_t linear_absolute_sum;
   uint64_t clean_absolute_sum;
   uint32_t near_peak;
   uint32_t reference_peak;
-  uint32_t linear_peak;
   uint32_t clean_peak;
 };
 
@@ -37,19 +35,16 @@ struct iterate_kit_aec_signal_summary {
   uint32_t sampled_samples;
   uint32_t near_peak;
   uint32_t reference_peak;
-  uint32_t linear_peak;
   uint32_t clean_peak;
   uint32_t near_mean_absolute;
   uint32_t reference_mean_absolute;
-  uint32_t linear_mean_absolute;
   uint32_t clean_mean_absolute;
 };
 
-/** Measures aligned near/reference/linear/final positions into a fresh window. */
+/** Measures aligned near/reference/final positions into a fresh window. */
 enum iterate_kit_status iterate_kit_aec_signal_window_measure(
     const int16_t *near_samples,
     const int16_t *reference_samples,
-    const int16_t *linear_samples,
     const int16_t *clean_samples,
     size_t sample_count,
     size_t sample_stride,

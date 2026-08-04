@@ -1,0 +1,21 @@
+[
+  {
+    "assessment": {
+      "actualFrames": 156,
+      "durationMs": 3107,
+      "expectedFrames": 155,
+      "maximumExpectedFrames": 158,
+      "minimumExpectedFrames": 152,
+      "passed": true,
+      "reasons": []
+    },
+    "capture": {
+      "durationMs": 3107,
+      "frames": 156,
+      "truncatedFrames": 0
+    },
+    "name": "ambient",
+    "playbackObserved": false,
+    "responseIndex": null
+  }
+]

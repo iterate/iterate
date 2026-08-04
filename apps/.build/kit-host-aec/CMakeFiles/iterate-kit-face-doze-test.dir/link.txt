@@ -1,0 +1,1 @@
+/usr/bin/cc -g -arch arm64 -Wl,-search_paths_first -Wl,-headerpad_max_install_names "CMakeFiles/iterate-kit-face-doze-test.dir/components/avatar/tests/face_doze_test.c.o" -o iterate-kit-face-doze-test  libiterate-kit-avatar.a

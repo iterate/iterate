@@ -83,7 +83,7 @@ static void the_environment_fills_only_what_the_flags_left(void)
   assert(strcmp(options.project_id, "prj_flag") == 0);
   assert(strcmp(options.project_api_key, "key_env") == 0);
   /* Untouched by either: the default stands. */
-  assert(strcmp(options.stream_path, "/voicelab/device") == 0);
+  assert(strcmp(options.stream_path, "/voice-agent/device") == 0);
   assert(strcmp(options.name, "host") == 0);
 }
 

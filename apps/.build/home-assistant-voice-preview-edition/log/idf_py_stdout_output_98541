@@ -1,0 +1,69 @@
+[1/2] cd /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/esp-idf/esptool_py && /Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python /Users/jonastemplestein/esp/esp-idf/components/partition_table/check_sizes.py --offset 0x8000 partition --type app /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/partition_table/partition-table.bin /Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition/iterate-kit-home-assistant-voice-preview-edition.bin
+iterate-kit-home-assistant-voice-preview-edition.bin binary size 0x1095f0 bytes. Smallest app partition is 0x500000 bytes. 0x3f6a10 bytes (79%) free.
+[1/2] cd /Users/jonastemplestein/esp/esp-idf/components/esptool_py && /opt/homebrew/bin/cmake -D IDF_PATH=/Users/jonastemplestein/esp/esp-idf -D "SERIAL_TOOL=/Users/jonastemplestein/.espressif/python_env/idf5.4_py3.14_env/bin/python;;/Users/jonastemplestein/esp/esp-idf/components/esptool_py/esptool/esptool.py;--chip;esp32s3" -D "SERIAL_TOOL_ARGS=--before=default_reset;--after=hard_reset;write_flash;@app-flash_args" -D WORKING_DIRECTORY=/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition -P /Users/jonastemplestein/esp/esp-idf/components/esptool_py/run_serial_tool.cmake
+esptool.py --chip esp32s3 -p /dev/cu.usbmodem11101 -b 460800 --before=default_reset --after=hard_reset write_flash --flash_mode dio --flash_freq 80m --flash_size 16MB 0x10000 iterate-kit-home-assistant-voice-preview-edition.bin
+esptool.py v4.12.0
+Serial port /dev/cu.usbmodem11101
+Connecting...
+Chip is ESP32-S3 (QFN56) (revision v0.2)
+Features: WiFi, BLE, Embedded PSRAM 8MB (AP_3v3)
+Crystal is 40MHz
+USB mode: USB-Serial/JTAG
+MAC: d8:3b:da:46:20:34
+Uploading stub...
+Running stub...
+Stub running...
+Changing baud rate to 460800
+Changed.
+Configuring flash size...
+Flash will be erased from 0x00010000 to 0x00119fff...
+Compressed 1086960 bytes to 706137...
+Writing at 0x00010000... (2 %)
+Writing at 0x0001d060... (4 %)
+Writing at 0x000285d4... (6 %)
+Writing at 0x0002d1dd... (9 %)
+Writing at 0x0003205e... (11 %)
+Writing at 0x000374d2... (13 %)
+Writing at 0x0003eb90... (15 %)
+Writing at 0x0004ee55... (18 %)
+Writing at 0x00054e34... (20 %)
+Writing at 0x0005a848... (22 %)
+Writing at 0x0005ffa8... (25 %)
+Writing at 0x000663ee... (27 %)
+Writing at 0x0006ca17... (29 %)
+Writing at 0x00072300... (31 %)
+Writing at 0x000778d7... (34 %)
+Writing at 0x0007d430... (36 %)
+Writing at 0x00082575... (38 %)
+Writing at 0x00087864... (40 %)
+Writing at 0x0008ca67... (43 %)
+Writing at 0x00091d11... (45 %)
+Writing at 0x0009748b... (47 %)
+Writing at 0x0009c62b... (50 %)
+Writing at 0x000a1bd8... (52 %)
+Writing at 0x000a70e5... (54 %)
+Writing at 0x000ac5b2... (56 %)
+Writing at 0x000b17f9... (59 %)
+Writing at 0x000b6924... (61 %)
+Writing at 0x000bbb2f... (63 %)
+Writing at 0x000c1518... (65 %)
+Writing at 0x000c6b46... (68 %)
+Writing at 0x000cbf67... (70 %)
+Writing at 0x000d14d2... (72 %)
+Writing at 0x000d7670... (75 %)
+Writing at 0x000dc7b2... (77 %)
+Writing at 0x000e193b... (79 %)
+Writing at 0x000e6ad7... (81 %)
+Writing at 0x000ec1b4... (84 %)
+Writing at 0x000f4ae8... (86 %)
+Writing at 0x000fc932... (88 %)
+Writing at 0x0010202a... (90 %)
+Writing at 0x00107974... (93 %)
+Writing at 0x0010d7b3... (95 %)
+Writing at 0x00113646... (97 %)
+Writing at 0x00118c19... (100 %)
+Wrote 1086960 bytes (706137 compressed) at 0x00010000 in 9.9 seconds (effective 875.8 kbit/s)...
+Hash of data verified.
+
+Leaving...
+Hard resetting via RTS pin...

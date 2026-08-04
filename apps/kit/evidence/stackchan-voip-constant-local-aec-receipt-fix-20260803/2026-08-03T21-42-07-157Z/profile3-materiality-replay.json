@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "createdAt": "2026-08-03T22:39:17Z",
+  "source": "pcm/microphone-uplink.pcm16le",
+  "sampleRateHz": 16000,
+  "conclusion": {
+    "materialDoubleTalkFailure": true,
+    "reason": "Near-only and repeat were recognized identically, but double-talk changed every semantic word. Production server VAD opened on double-talk but did not emit speech_stopped or a completed transcription after the same two-second silence tail."
+  },
+  "independentStreamingStt": {
+    "nearOnly": {
+      "startSample": 442240,
+      "endSample": 490240,
+      "text": "That this nearby voice remains clear while the device speaker is"
+    },
+    "nearRepeat": {
+      "startSample": 595520,
+      "endSample": 643840,
+      "text": "That this nearby voice remains clear while the device speaker is"
+    },
+    "doubleTalk": {
+      "startSample": 750080,
+      "endSample": 797760,
+      "text": "I think this year my growth remains pretty moderate despite the increase",
+      "comparisonToNearOnly": {
+        "wordErrorRate": 1,
+        "sequenceRatio": 0.2609,
+        "expectedWords": 11,
+        "observedWords": 12,
+        "editDistance": 11
+      }
+    }
+  },
+  "productionGrokServerVad": {
+    "profile": "low-level-aec",
+    "trailingDigitalSilenceMs": 2000,
+    "nearOnly": {
+      "speechStarted": true,
+      "speechStopped": true,
+      "completedTranscript": "As at this nearby voice remains clear while the device speaker is",
+      "responseCompleted": true
+    },
+    "doubleTalk": {
+      "speechStarted": true,
+      "speechStopped": false,
+      "lastUpdatedTranscript": "This is.",
+      "completedTranscript": null,
+      "responseCompleted": false
+    }
+  },
+  "interpretation": [
+    "This is a byte-for-byte replay of retained post-AEC uplink samples; it does not use the physical network or make a new acoustic measurement.",
+    "VAD opening proves the double-talk interval was not merely too quiet. Its semantic destruction and failure to close prove the remaining profile-3 defect matters to the production provider contract.",
+    "This result selects the one-variable 24 dB to 18 dB microphone-headroom experiment. It does not justify a gain expander or a looser acoustic threshold."
+  ]
+}

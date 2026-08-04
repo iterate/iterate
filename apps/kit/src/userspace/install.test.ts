@@ -1,3 +1,4 @@
+import { posix } from "node:path";
 import { describe, expect, test, vi } from "vitest";
 import {
   formatInstallerResult,
@@ -17,7 +18,7 @@ function projectFixture() {
     }),
   };
   const secret = {
-    __describe: vi.fn(async () => ({ created: false })),
+    __describe: vi.fn(async () => ({ created: false, hasMaterial: false })),
     create: vi.fn(async () => {
       operations.push("secret");
       return secret;
@@ -69,8 +70,19 @@ describe("kit voice userspace install", () => {
      * cannot silently create that production-only failure again.
      */
     for (const [importer, source] of Object.entries(sources)) {
-      for (const match of source.matchAll(/from\s+["']\.\/([^"']+)["']/gu)) {
-        const imported = `apps/kit-voice/${match[1]}`;
+      for (const match of source.matchAll(/from\s+["'](\.\.?\/[^"']+)["']/gu)) {
+        const imported = posix.normalize(posix.join(posix.dirname(importer), match[1]!));
+        /*
+         * kitVoiceWorkerRef deliberately snapshots only apps/kit-voice/**.
+         * Merely committing an imported file elsewhere in the config repo is
+         * therefore insufficient: the repository mutation succeeds, but the
+         * production builder cannot see that file and cold-start fails. Keep
+         * every relative dependency inside the same deployable app boundary.
+         */
+        expect(
+          imported.startsWith("apps/kit-voice/"),
+          `${importer} imports ${imported} outside the worker source mask`,
+        ).toBe(true);
         expect(sources, `${importer} imports omitted runtime module ${imported}`).toHaveProperty(
           imported,
         );
@@ -139,6 +151,45 @@ describe("kit voice userspace install", () => {
     });
   });
 
+  test("reuses an already-populated Grok secret for source-only upgrades", async () => {
+    /*
+     * Production credentials are deliberately write-only. Requiring operators
+     * to replace that credential merely to install a code or VAD-policy change
+     * makes safe iteration depend on recovering plaintext that the platform is
+     * designed never to reveal. Existing material is already pinned to xAI;
+     * preserving it is both the least-privilege and the atomic upgrade path.
+     */
+    const { operations, project, secret } = projectFixture();
+    secret.__describe.mockResolvedValueOnce({ created: true, hasMaterial: true });
+
+    await installKitVoiceUserspace({
+      apply: true,
+      appSources: { "apps/kit-voice/worker.ts": "export class KitVoiceWorker {}" },
+      mode: "grok",
+      project,
+      projectId: "prj_test",
+    });
+
+    expect(operations).toEqual(["source", "mode", "restart"]);
+    expect(secret.create).not.toHaveBeenCalled();
+    expect(secret.update).not.toHaveBeenCalled();
+  });
+
+  test("refuses Grok mode before source mutation when neither a key nor stored material exists", async () => {
+    const { operations, project } = projectFixture();
+
+    await expect(
+      installKitVoiceUserspace({
+        apply: true,
+        appSources: { "apps/kit-voice/worker.ts": "export class KitVoiceWorker {}" },
+        mode: "grok",
+        project,
+        projectId: "prj_test",
+      }),
+    ).rejects.toThrow("XAI_API_KEY is required when no populated Grok secret exists");
+    expect(operations).toEqual([]);
+  });
+
   test("does not mistake an unexplained worker restart failure for a completed install", async () => {
     const { project, worker } = projectFixture();
     worker.kill.mockRejectedValueOnce(new Error("worker reset permission denied"));
@@ -190,6 +241,13 @@ describe("kit voice userspace install", () => {
         ITERATE_KIT_PROJECT_ID: "prj_test",
       }),
     ).toMatchObject({ printPlan: true });
+
+    const sourceOnlyUpgrade = parseInstallerCliOptions(["--apply", "--mode", "grok"], {
+      ITERATE_KIT_PROJECT_API_KEY: "itxk_test",
+      ITERATE_KIT_PROJECT_ID: "prj_test",
+    });
+    expect(sourceOnlyUpgrade).toMatchObject({ apply: true, mode: "grok" });
+    expect(sourceOnlyUpgrade).not.toHaveProperty("xaiApiKey");
   });
 
   test("forces a successful CLI exit only after its concise output has flushed", () => {

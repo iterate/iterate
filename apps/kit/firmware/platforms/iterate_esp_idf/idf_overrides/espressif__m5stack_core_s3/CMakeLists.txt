@@ -30,7 +30,7 @@ endfunction()
 
 iterate_kit_require_core_s3_input(
   "m5stack_core_s3.c"
-  "4281159aaee455c6430cfc4d21896e73ee2a9f414d4996499e8569b04be6fb20")
+  "aad53d84f33da583eeece4d5f6eef697b0249e1801dcc94d2277b431cab781a2")
 iterate_kit_require_core_s3_input(
   "m5stack_core_s3_idf5.c"
   "bddf9d5f0610375a6f7cb5e445f0012be0ba965893cc8af4b731c30c0c563d09")
@@ -54,7 +54,7 @@ iterate_kit_require_core_s3_input(
   "a7120cf6c96422772b6c46290a91b5e20c8e2accf087f6e7a878854c20e75feb")
 iterate_kit_require_core_s3_input(
   "include/bsp/m5stack_core_s3.h"
-  "9ce2180c964414cffae96e032279953bcd5108e619ac4a70437a46ee58ed8533")
+  "b131d080a1a826cd6d897fa2237f69a8fac1c888bcde18a63503f322f4c5bd88")
 iterate_kit_require_core_s3_input(
   "include/bsp/touch.h"
   "435d5c5f516516901174921da546606b84ad5a35bf346a612e78b5d3d97fee4d")
@@ -90,10 +90,11 @@ if("${IDF_VERSION_MAJOR}.${IDF_VERSION_MINOR}" VERSION_GREATER_EQUAL "5.3")
     esp_driver_sdmmc
     esp_driver_sdspi
     esp_driver_i2c
+    espressif__esp_lcd_touch
   )
   set(priv_req esp_driver_spi esp_driver_ledc)
 else()
-  set(req driver)
+  set(req driver espressif__esp_lcd_touch)
   set(priv_req "")
 endif()
 

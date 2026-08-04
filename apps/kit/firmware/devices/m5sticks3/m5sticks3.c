@@ -17,9 +17,11 @@
  */
 static const char description[] =
     "{\"instructions\":\"An Iterate M5StickS3 with health metrics, a small "
-    "screen, call-toggle button, manual push-to-talk button, microphone, and "
-    "speaker. Toggle a call with the top button, then hold the front button "
-    "only while speaking.\","
+    "screen, context-menu button, manual push-to-talk button, microphone, and "
+    "speaker. Tap the top button to open or advance the menu. Hold the front "
+    "button to talk, or double-tap it to lock or unlock a longer turn. With "
+    "the menu open, the front button chooses the selected action. The bottom "
+    "button remains the hardware reset control.\","
     "\"children\":{"
     "\"subscribeToMetrics\":\"Call a callback immediately and once per "
     "configured interval with bounded runtime metrics.\","
@@ -33,12 +35,15 @@ static const char description[] =
     "\"renderOnScreen\":\"Download and render a PNG from {url}.\"," 
     "\"captureScreen\":\"Return the pixels currently shown on the panel as a "
     "bounded PNG byte array.\"," 
-    "\"changeSpriteSet\":\"Select dot-matrix-oracle, gameboy-fine-black, "
-    "karakuri-brass, or starbyte.\","
+    "\"changeSpriteSet\":\"Select dot-matrix-oracle, karakuri-brass, or "
+    "starbyte.\","
     "\"conversation\":{\"start\":\"Open the PCM conversation.\","
     "\"hangUp\":\"End the current conversation.\"},"
     "\"pushToTalk\":{\"start\":\"Start one manual microphone turn.\","
-    "\"stop\":\"Commit the current microphone turn.\"}}}";
+    "\"stop\":\"Commit the current microphone turn.\"},"
+    "\"logicalInput\":{"
+    "\"talk\":{\"setPressed\":\"Inject the remote TALK down/up level.\"},"
+    "\"menu\":{\"setPressed\":\"Inject the remote MENU down/up level.\"}}}}";
 
 const struct iterate_kit_device_manifest iterate_kit_m5sticks3_manifest = {
   "m5sticks3",
@@ -211,7 +216,10 @@ enum capnweb_status iterate_kit_m5sticks3_init(
       iterate_kit_conversation_init(
           &device->conversation, &device->events) != ITERATE_KIT_OK ||
       iterate_kit_push_to_talk_init(
-          &device->push_to_talk, &device->events) != ITERATE_KIT_OK) {
+          &device->push_to_talk, &device->events) != ITERATE_KIT_OK ||
+      iterate_kit_logical_input_init(
+          &device->logical_input,
+          &options->logical_input) != ITERATE_KIT_OK) {
     return CAPNWEB_E_INVALID_ARGUMENT;
   }
 
@@ -234,6 +242,8 @@ enum capnweb_status iterate_kit_m5sticks3_init(
   device->modules[6] =
       iterate_kit_push_to_talk_module(&device->push_to_talk);
   device->modules[7] = iterate_kit_audio_module(&device->audio);
+  device->modules[8] =
+      iterate_kit_logical_input_module(&device->logical_input);
   /*
    * A flat module table is sufficient: modules themselves publish the desired
    * method paths (for example conversation.start). Building a heap capability
@@ -365,6 +375,14 @@ iterate_kit_m5sticks3_audio_metrics(
 bool iterate_kit_m5sticks3_is_capturing(
     const struct iterate_kit_m5sticks3 *device) {
   return device != NULL && device->audio.capture_active;
+}
+
+enum iterate_kit_status iterate_kit_m5sticks3_set_media_ready(
+    struct iterate_kit_m5sticks3 *device, bool ready) {
+  if (device == NULL) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
+  return iterate_kit_audio_set_media_ready(&device->audio, ready);
 }
 
 void iterate_kit_m5sticks3_event_metrics(

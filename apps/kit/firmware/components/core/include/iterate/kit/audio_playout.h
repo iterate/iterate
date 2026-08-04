@@ -113,7 +113,34 @@ struct iterate_kit_playout {
    */
   uint32_t abandoned_frame;
   uint32_t appended;
+  /**
+   * New answers that displaced the previous one. ONE PER ANSWER, ALWAYS.
+   *
+   * Every answer carries a higher number than the last, so the first frame of
+   * every answer takes the REPLACE path — this is the ordinary "a new answer
+   * begins" transition, not a fault, and it moves on a perfect turn. It was
+   * being read as an error counter, which made every clean turn look damaged.
+   */
   uint32_t replaced;
+  /**
+   * New answers that arrived while the previous one was STILL PLAYING.
+   *
+   * The subset of `replaced` that actually costs the listener something: audio
+   * was queued, unplayed, and thrown away because something newer arrived. A
+   * barge-in produces this deliberately; nothing else should.
+   */
+  uint32_t superseded_midplay;
+  /**
+   * Whether the current answer still has audio the listener has not heard.
+   *
+   * SEPARATE FROM `answer_started`, which is protocol history: it records that
+   * frames for this answer were accepted and never becomes false again, so
+   * testing it called every later answer a mid-play supersede. This layer sees
+   * only arriving frames — it cannot know what has drained — so the owner of
+   * the speaker says when an answer has finished being heard, via
+   * iterate_kit_playout_mark_drained().
+   */
+  bool answer_audible;
   uint32_t ignored_other_call;
   uint32_t ignored_stale_answer;
   uint32_t ignored_duplicate;
@@ -131,6 +158,17 @@ struct iterate_kit_playout {
  * across a hang-up plays the end of the last conversation into the start of
  * the next one.
  */
+/**
+ * The current answer has finished being heard: the source ran dry and the
+ * speaker has nothing left of it.
+ *
+ * Called from the layer that owns the buffer and the playout clock, because
+ * that is the only place the fact exists. Without it, `superseded_midplay`
+ * cannot tell a new answer following a completed one from a new answer cutting
+ * a live one off.
+ */
+void iterate_kit_playout_mark_drained(struct iterate_kit_playout *playout);
+
 void iterate_kit_playout_reset(
     struct iterate_kit_playout *playout, uint32_t call);
 

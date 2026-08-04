@@ -1,0 +1,24 @@
+{
+  "closeEvents": [],
+  "openEvents": [
+    {
+      "endpoint": "/api",
+      "protocol": "",
+      "remoteAddress": "192.168.0.33",
+      "remotePort": 61272,
+      "startedAtMonotonicMs": 25643.992375
+    },
+    {
+      "endpoint": "/pcm",
+      "protocol": "iterate.kit.pcm.v1",
+      "remoteAddress": "192.168.0.33",
+      "remotePort": 61273,
+      "startedAtMonotonicMs": 25728.969333
+    }
+  ],
+  "progress": {
+    "microphoneBytes": 30720,
+    "speakerBytes": 0,
+    "speakerFrames": 0
+  }
+}

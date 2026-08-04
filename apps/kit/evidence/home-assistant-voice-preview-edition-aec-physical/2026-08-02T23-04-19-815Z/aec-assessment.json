@@ -1,0 +1,89 @@
+{
+  "ambient": {
+    "dbfs": -90.77956152192738,
+    "peak": 3,
+    "rms": 0.9472658021907051
+  },
+  "doubleTalk": {
+    "clean": {
+      "dbfs": -67.35715099017773,
+      "peak": 59,
+      "rms": 14.047284731695779
+    },
+    "nearEndGain": 0.8336658866787798,
+    "nearEndSimilarity": 0.8783449861545644,
+    "passed": false,
+    "residualToFarEndDb": -51.400991805864365,
+    "residualToNearEndDb": -6.864408193402144
+  },
+  "farEnd": [
+    {
+      "clean": {
+        "dbfs": -90.21502095579055,
+        "peak": 5,
+        "rms": 1.0108783309577865
+      },
+      "kind": "tone",
+      "passed": true,
+      "source": {
+        "dbfs": -19.339884567655986,
+        "peak": 5000,
+        "rms": 3535.53960513809
+      },
+      "sourceSimilarity": 0.0029655488343285873
+    },
+    {
+      "clean": {
+        "dbfs": -81.86052655684739,
+        "peak": 14,
+        "rms": 2.6449873975755223
+      },
+      "kind": "dual-carrier-prbs31",
+      "passed": true,
+      "source": {
+        "dbfs": -22.350138854101736,
+        "peak": 4268,
+        "rms": 2500.017174941004
+      },
+      "sourceSimilarity": 0.006547279043136521
+    },
+    {
+      "clean": {
+        "dbfs": -75.36850266289932,
+        "peak": 25,
+        "rms": 5.585020889247715
+      },
+      "kind": "speech-shaped",
+      "passed": true,
+      "source": {
+        "dbfs": -22.056464522318358,
+        "peak": 8702,
+        "rms": 2585.989212278511
+      },
+      "sourceSimilarity": 0.0005765712603778584
+    }
+  ],
+  "nearEnd": {
+    "aboveAmbientDb": 23.856351114874656,
+    "clean": {
+      "dbfs": -66.92321040705272,
+      "peak": 55,
+      "rms": 14.76690274453877
+    },
+    "passed": true,
+    "source": {
+      "dbfs": -15.176950127467181,
+      "peak": 26072,
+      "rms": 5709.55720506014
+    },
+    "sourceSimilarity": 0.7018741307939584
+  },
+  "passed": false,
+  "reasons": [
+    "Double-talk clean uplink did not preserve the Mac-only capture: similarity 0.878, gain 0.834, residual -6.86 dB."
+  ],
+  "validity": {
+    "passed": true,
+    "reasons": []
+  }
+}

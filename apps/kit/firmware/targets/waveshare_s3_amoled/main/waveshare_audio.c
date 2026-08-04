@@ -39,6 +39,7 @@
 #include "esp_codec_dev_defaults.h"
 #include "bsp/esp-bsp.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "esp_rom_sys.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -55,6 +56,10 @@
 static const char tag[] = "waveshare-audio";
 
 enum {
+  /* 6 descriptors x 240 frames at 16kHz = the ring's depth in milliseconds. */
+  DMA_RING_MS = 90,
+  /* One descriptor: 240 frames at 16kHz. */
+  DMA_DESCRIPTOR_MS = 15,
   PIN_I2C_SDA = 15,
   PIN_I2C_SCL = 14,
   PIN_I2S_MCLK = 16,
@@ -142,6 +147,12 @@ static volatile uint32_t dma_underruns;
  */
 static volatile bool dma_watch;
 /*
+ * True while the software has stopped handing over audio on purpose. Separate
+ * from dma_watch being false, because the difference between "an answer is
+ * ending" and "no answer is happening" is worth keeping in the numbers.
+ */
+static volatile bool dma_draining;
+/*
  * Underruns in the first descriptors after playback starts, separated from
  * the rest. The two have different causes and only one is worth chasing: an
  * answer's opening plays into a DMA ring that has been idle, so the first
@@ -150,33 +161,120 @@ static volatile bool dma_watch;
  * up, which is the real defect.
  */
 static volatile uint32_t dma_underruns_opening;
+/*
+ * Cleared descriptors sent while the source was DRY — the normal end of every
+ * answer, and not a fault.
+ *
+ * The DMA ring is 90 ms deep and the speaker task blocks up to 60 ms for the
+ * next frame, so between answers the hardware keeps sending descriptors the
+ * software has deliberately stopped filling. Those were landing in
+ * dma_underruns: 6-12 of them on every short turn, on turns where every
+ * single frame sent was played. A counter that moves on a perfect turn tells
+ * nobody anything, so the drain is counted here and starvation stays over
+ * there.
+ */
+static volatile uint32_t dma_sends_draining;
 static volatile uint32_t dma_sends_since_start;
+/*
+ * MILLISECONDS OF AUDIO handed over since feeding began.
+ *
+ * The opening window used to be six SENDS — one ring's worth of descriptors —
+ * which assumed each send was preceded by a full frame. After a barge-in that is
+ * false: the discard boundary can split a read, so the replacement answer's
+ * first write is a fragment, six sends elapse in 90ms regardless, and the window
+ * closes while the ring is still mostly empty. The sends that follow were then
+ * charged as starvation. Intermittent exactly as observed, because it depends on
+ * whether the discard split a read.
+ *
+ * An answer is "opening" until a ring's worth of AUDIO has actually been handed
+ * over. That is the real condition the window was reaching for.
+ */
+static volatile uint32_t dma_written_ms_since_start;
+/*
+ * Microseconds since the last write, captured at the moment an underrun is
+ * counted. THE decisive number: if we were genuinely late the gap is at least a
+ * descriptor (15ms); if it is small, the ring emptied while we were feeding it
+ * and the accounting is wrong rather than the pipeline.
+ */
+static volatile int64_t dma_last_write_us;
+/*
+ * AUDIO HANDED OVER BUT NOT YET SENT, in milliseconds. The starvation test.
+ *
+ * Replaces a content heuristic that called any descriptor whose first four words
+ * were zero an underrun. That counted legitimate silent PCM: the decisive
+ * measurement was a "starved" descriptor sent 14.983ms after a successful write
+ * — one descriptor time — which cannot be an empty 90ms ring. A 20ms frame does
+ * not divide into 15ms descriptors, so the tail of every write is a partly
+ * filled descriptor and its opening samples are whatever was there before.
+ *
+ * Ownership needs no heuristic. Every write adds what it wrote; every send
+ * consumes one descriptor. If the hardware sends a descriptor we never paid
+ * for, it is sending one we never filled, and that is starvation whatever the
+ * samples happen to contain.
+ */
+static volatile int32_t dma_owed_ms;
+/*
+ * ONE LOCK OVER THE LEDGER, because it is read-modify-written from two contexts.
+ *
+ * The ISR subtracts a descriptor; the playback task adds a reservation. `+=` and
+ * `-=` are not atomic on Xtensa however volatile the variable is, so a callback
+ * landing inside reserve_write could lose the credit entirely — which shows up
+ * as an intermittent false fault, or worse, a missed one. A spinlock is the
+ * right size for three integers touched for a handful of instructions, and it
+ * lives in DRAM because the ISR is in IRAM and must not fault on it.
+ */
+static DRAM_ATTR portMUX_TYPE dma_ledger_lock = portMUX_INITIALIZER_UNLOCKED;
+static volatile uint32_t dma_underrun_gap_us;
+/*
+ * WHERE the first counted underrun happened, as a send index since this answer
+ * started feeding. Instrumentation, because two explanations fit the same
+ * counter and only this number tells them apart: a small index means the
+ * opening window is simply too short for the real refill, and a large one means
+ * the pipeline genuinely starved mid-answer. Guessing between those is how a
+ * counter gets masked instead of fixed.
+ */
+static volatile uint32_t dma_underrun_first_send;
+static volatile uint32_t dma_underrun_last_send;
+/* Milliseconds of feeding the speaker task must skip, for fault injection. */
+static volatile uint32_t inject_starvation_ms;
 
 static bool IRAM_ATTR on_dma_sent(
     i2s_chan_handle_t handle, i2s_event_data_t *event, void *context) {
-  const uint32_t *words;
   (void)handle;
   (void)context;
-  if (!dma_watch) return false;
-  if (event == NULL || event->dma_buf == NULL || event->size < 4U) return false;
+  if (event == NULL || event->dma_buf == NULL) return false;
+
   /*
-   * A cleared buffer starts with zeros. Speech does too, briefly, so this
-   * over-reports at the very start of an answer rather than missing a real
-   * underrun — which is the right way round for a diagnostic.
+   * EVERYTHING UNDER ONE CRITICAL SECTION.
+   *
+   * The watch flag, the ledger, the send index and the classification are one
+   * decision and must be taken together. Reading dma_watch before the lock let
+   * an intentional disarm land in between, so a barge-in could still be charged
+   * as starvation — and the send index could be reset by an arm between the
+   * decrement and the classification that quoted it.
    */
-  words = (const uint32_t *)event->dma_buf;
-  if (words[0] == 0U) {
-    /*
-     * Six descriptors is the whole ring: past that, every buffer the hardware
-     * sends is one the software has had a chance to fill.
-     */
-    if (dma_sends_since_start < 6U) {
-      ++dma_underruns_opening;
-    } else {
-      ++dma_underruns;
+  portENTER_CRITICAL_ISR(&dma_ledger_lock);
+  if (dma_watch) {
+    dma_owed_ms -= (int32_t)DMA_DESCRIPTOR_MS;
+    if (dma_sends_since_start < 0xffffffffU) ++dma_sends_since_start;
+    if (dma_owed_ms < 0) {
+      dma_owed_ms = 0; /* Don't accumulate debt across a gap. */
+      if (dma_draining) {
+        ++dma_sends_draining;
+      } else if (dma_written_ms_since_start < DMA_RING_MS) {
+        ++dma_underruns_opening;
+      } else {
+        if (dma_underruns == 0U) {
+          dma_underrun_first_send = dma_sends_since_start;
+          dma_underrun_gap_us =
+              (uint32_t)(esp_timer_get_time() - dma_last_write_us);
+        }
+        dma_underrun_last_send = dma_sends_since_start;
+        ++dma_underruns;
+      }
     }
   }
-  if (dma_sends_since_start < 6U) ++dma_sends_since_start;
+  portEXIT_CRITICAL_ISR(&dma_ledger_lock);
   return false;
 }
 
@@ -184,9 +282,175 @@ uint32_t waveshare_audio_dma_underruns(void) {
   return dma_underruns;
 }
 
+int32_t waveshare_audio_dma_owed_ms(void) {
+  return dma_owed_ms;
+}
+
+uint32_t waveshare_audio_dma_sends(void) {
+  return dma_sends_since_start;
+}
+
+uint32_t waveshare_audio_dma_written_ms(void) {
+  return dma_written_ms_since_start;
+}
+
+uint32_t waveshare_audio_dma_underrun_gap_us(void) {
+  return dma_underrun_gap_us;
+}
+
+/*
+ * STARVATION MEASURED ON THE WRITING TASK, not inferred from callbacks.
+ *
+ * The ledger in the ISR can only see a gap if the driver keeps issuing on_sent
+ * while nothing is queued, and a 600ms injected starvation moved it by zero —
+ * the descriptors it used to catch were the REFILL after the gap, which the
+ * ownership model correctly pays for. So the gap is measured where it is
+ * unambiguous: at the previous write the ring held `owed` milliseconds of audio,
+ * so if more than that has elapsed before the next write, the DAC ran dry for
+ * the difference. One task, one clock, no race.
+ */
+static volatile uint32_t dma_starved_ms;
+static volatile uint32_t dma_starve_events;
+/*
+ * WHEN THE RING WILL BE EMPTY, as an absolute time. The conserved timeline.
+ *
+ * The first attempt compared the interval since the last write against the
+ * ownership REMAINING after the ISR had decremented it, which double-counts what
+ * the callbacks already consumed: a normal 20ms interval with 20ms credited and
+ * one 15ms callback leaves owed at 5 and reports 15ms of starvation that never
+ * happened. A deadline conserves instead of accumulating — every reservation
+ * pushes it out by exactly the audio written, callbacks never touch it, and a
+ * write is late only when it arrives after the deadline has already passed.
+ */
+static volatile int64_t dma_empty_at_us;
+/*
+ * The hardware ring may still hold audio nobody will credit again.
+ *
+ * An intentional cut discards the SOFTWARE buffer; the DMA ring keeps whatever
+ * was already queued — up to one ring. Re-arming used to set the empty-deadline
+ * to `now`, which asserts an empty ring and is false by up to 90ms, so the first
+ * writes after a cut looked late and a barge-in produced spkStarveEvents on a
+ * gate that must never move. Set only at a real flush, so an ordinary answer
+ * end — where the ring genuinely drained — keeps the exact deadline.
+ */
+static volatile bool dma_stale_ring;
+
+uint32_t waveshare_audio_starved_ms(void) {
+  return dma_starved_ms;
+}
+
+uint32_t waveshare_audio_starve_events(void) {
+  return dma_starve_events;
+}
+
+void waveshare_audio_reserve_write(uint32_t ms) {
+  /*
+   * CREDITED BEFORE THE WRITE, NOT AFTER.
+   *
+   * esp_codec_dev_write blocks until DMA accepts the frame, and the on_sent
+   * callbacks fire DURING that block. Crediting afterwards charged every write's
+   * own descriptors against a ledger that did not yet know about them: 265
+   * "opening" underruns for 275 frames played, which is the accounting being
+   * pathological rather than the pipeline. Reserving first means a callback that
+   * fires mid-write sees the audio it is sending.
+   */
+  const int64_t now_us = esp_timer_get_time();
+  int64_t base_us;
+  portENTER_CRITICAL(&dma_ledger_lock);
+  /*
+   * Late only if the ring had already run out. Meaningful only while we were
+   * meant to be feeding — an intentional pause disarms the watch — and only once
+   * the ring has been filled for the first time.
+   */
+  if (dma_watch && !dma_draining && dma_empty_at_us > 0 &&
+      dma_written_ms_since_start >= DMA_RING_MS && now_us > dma_empty_at_us) {
+    dma_starved_ms += (uint32_t)((now_us - dma_empty_at_us) / 1000);
+    ++dma_starve_events;
+  }
+  /* The deadline moves out by exactly the audio this write hands over. */
+  base_us = now_us > dma_empty_at_us ? now_us : dma_empty_at_us;
+  dma_empty_at_us = base_us + (int64_t)ms * 1000;
+  dma_last_write_us = now_us;
+  dma_owed_ms += (int32_t)ms;
+  if (dma_written_ms_since_start < 0xffff0000U) dma_written_ms_since_start += ms;
+  portEXIT_CRITICAL(&dma_ledger_lock);
+}
+
+void waveshare_audio_rollback_write(uint32_t ms) {
+  /* The write failed, so the audio never went in: take the credit back. */
+  portENTER_CRITICAL(&dma_ledger_lock);
+  /* Undo the reservation, deadline included: this audio never went in. */
+  dma_empty_at_us -= (int64_t)ms * 1000;
+  dma_owed_ms -= (int32_t)ms;
+  if (dma_owed_ms < 0) dma_owed_ms = 0;
+  if (dma_written_ms_since_start >= ms) dma_written_ms_since_start -= ms;
+  portEXIT_CRITICAL(&dma_ledger_lock);
+}
+
 void waveshare_audio_dma_watch(bool active) {
-  if (active && !dma_watch) dma_sends_since_start = 0U;
+  /* One lock over the whole transition — see on_dma_sent. */
+  portENTER_CRITICAL(&dma_ledger_lock);
+  if (active && !dma_watch) {
+    dma_sends_since_start = 0U;
+    dma_written_ms_since_start = 0U;
+    dma_owed_ms = 0;
+    /*
+     * How much the hardware may still be holding. Zero after a normal drain;
+     * one ring after an intentional flush, because that audio was never
+     * un-queued and will be sent without any new credit.
+     */
+    dma_empty_at_us = esp_timer_get_time() +
+        (dma_stale_ring ? (int64_t)DMA_RING_MS * 1000 : 0);
+    dma_stale_ring = false;
+  }
+  if (active) dma_draining = false;
   dma_watch = active;
+  portEXIT_CRITICAL(&dma_ledger_lock);
+}
+
+void waveshare_audio_note_flush(void) {
+  /* The software buffer was discarded; the ring was not. See dma_stale_ring. */
+  portENTER_CRITICAL(&dma_ledger_lock);
+  dma_stale_ring = true;
+  portEXIT_CRITICAL(&dma_ledger_lock);
+}
+
+void waveshare_audio_dma_draining(void) {
+  portENTER_CRITICAL(&dma_ledger_lock);
+  /*
+   * Called the moment the source runs dry, BEFORE the task blocks waiting for
+   * a frame that is not coming. The watch stays on so a genuine stall inside
+   * the drain is still visible — it just lands in the draining bucket, where
+   * it describes the end of an answer instead of a defect.
+   */
+  dma_draining = true;
+  portEXIT_CRITICAL(&dma_ledger_lock);
+}
+
+uint32_t waveshare_audio_dma_sends_draining(void) {
+  return dma_sends_draining;
+}
+
+void waveshare_audio_inject_starvation(uint32_t ms) {
+  inject_starvation_ms = ms;
+}
+
+bool waveshare_audio_starvation_pending(void) {
+  return inject_starvation_ms > 0U;
+}
+
+uint32_t waveshare_audio_take_injected_starvation(void) {
+  const uint32_t ms = inject_starvation_ms;
+  inject_starvation_ms = 0U;
+  return ms;
+}
+
+uint32_t waveshare_audio_dma_underrun_first_send(void) {
+  return dma_underrun_first_send;
+}
+
+uint32_t waveshare_audio_dma_underrun_last_send(void) {
+  return dma_underrun_last_send;
 }
 
 uint32_t waveshare_audio_dma_underruns_opening(void) {

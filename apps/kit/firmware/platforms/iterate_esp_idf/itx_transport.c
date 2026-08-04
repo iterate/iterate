@@ -1028,6 +1028,8 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
   wifi_init_config_t wifi_initialization =
       WIFI_INIT_CONFIG_DEFAULT();
   wifi_config_t wifi_configuration = {0};
+  wifi_bandwidth_t actual_bandwidth;
+  wifi_ps_type_t actual_power_save;
   esp_err_t error;
   size_t ssid_length;
   size_t password_length;
@@ -1134,14 +1136,6 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
     error = esp_wifi_set_config(
         WIFI_IF_STA, &wifi_configuration);
   }
-  if (error == ESP_OK) {
-    error = esp_wifi_set_ps(WIFI_PS_NONE);
-  }
-  /*
-   * Disable Wi-Fi power save for the voice prototype. Modem-sleep latency is
-   * acceptable for many sensors but can delay bidirectional 20 ms PCM frames;
-   * battery policy can be reconsidered only with end-to-end delay evidence.
-   */
   if (error != ESP_OK) {
     remember_platform_error(transport, error);
     return ITERATE_KIT_IO_ERROR;
@@ -1168,9 +1162,50 @@ enum iterate_kit_status iterate_kit_esp_idf_itx_transport_start(
     return ITERATE_KIT_IO_ERROR;
   }
   error = esp_wifi_start();
+  /*
+   * Voice PCM is latency-sensitive but tiny relative to even HT20 capacity.
+   * A physical M5StickS3 associated to this 2.4 GHz AP at HT40 while the Mac
+   * and otherwise healthy HAVPE used 20 MHz; only the Stick then showed
+   * repeatable 2--3 second reachability holes. ESP32-S3 does not implement
+   * HT20/40 coexistence, so accepting the wider SDK/AP default also occupies a
+   * secondary channel with no useful throughput benefit to this application.
+   * Pin all voice stations to HT20 after the interface is enabled, as required
+   * by ESP-IDF. Readback makes a silently ignored policy a startup error rather
+   * than allowing network-invalid audio evidence.
+   */
+  if (error == ESP_OK) {
+    error = esp_wifi_set_bandwidth(
+        WIFI_IF_STA, WIFI_BW_HT20);
+  }
+  if (error == ESP_OK) {
+    error = esp_wifi_get_bandwidth(
+        WIFI_IF_STA, &actual_bandwidth);
+  }
+  if (error == ESP_OK && actual_bandwidth != WIFI_BW_HT20) {
+    error = ESP_ERR_INVALID_STATE;
+  }
+  /*
+   * Disable modem sleep only after the Wi-Fi driver is started. This follows
+   * ESP-IDF's own low-latency/throughput examples. Calling set_ps before start
+   * returned ESP_OK on the physical Stick, but the board then showed periodic
+   * ICMP loss and a one-second Cap'n Web stall despite strong RSSI. Read the
+   * policy back instead of assuming a successful setter means the live driver
+   * retained it. A voice device with unknown power policy is not allowed to
+   * continue into a timing proof.
+   */
+  if (error == ESP_OK) {
+    error = esp_wifi_set_ps(WIFI_PS_NONE);
+  }
+  if (error == ESP_OK) {
+    error = esp_wifi_get_ps(&actual_power_save);
+  }
+  if (error == ESP_OK && actual_power_save != WIFI_PS_NONE) {
+    error = ESP_ERR_INVALID_STATE;
+  }
   if (error != ESP_OK) {
     atomic_store_u32(&transport->network_task_running, 0U);
     wake_network_task(transport);
+    (void)esp_wifi_stop();
     remember_platform_error(transport, error);
     return ITERATE_KIT_IO_ERROR;
   }

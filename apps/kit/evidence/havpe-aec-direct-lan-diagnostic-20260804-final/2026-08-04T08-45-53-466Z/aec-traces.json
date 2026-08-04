@@ -1,0 +1,289 @@
+{
+  "ambient": {
+    "metadata": {
+      "abortedCaptures": 0,
+      "availablePlanes": 17,
+      "captureSamples": 16000,
+      "capturedSamples": 16000,
+      "completedCaptures": 1,
+      "firstFrameSequence": 968,
+      "frameSamples": 320,
+      "generation": 1,
+      "lastFrameSequence": 1017,
+      "maximumReadSamples": 320,
+      "rejectedStarts": 0,
+      "sampleRateHz": 16000,
+      "schema": 1,
+      "startedCaptures": 1,
+      "state": 3
+    },
+    "planes": {
+      "near": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/ambient/raw-microphone.pcm16le",
+        "sha256": "6829dfb6053f64412b7d400d07500ae2c02305b00b81ad73e0ffc880d1ea909a"
+      },
+      "clean": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/ambient/clean.pcm16le",
+        "sha256": "e4b8a5bc8abe5fccab7c8d5149fb91a001e564609bae23ca6b335308d78a8733"
+      },
+      "fixtureDownlink": {
+        "bytes": 0,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/ambient/fixture-downlink.pcm16le",
+        "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "pcmUplink": {
+        "bytes": 99200,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/ambient/pcm-uplink.pcm16le",
+        "sha256": "d67b7b514b4cef50f717aeddce2fb36bc9cdae8843092f7a72d36d84a3b51c83"
+      }
+    }
+  },
+  "far-tone": {
+    "metadata": {
+      "abortedCaptures": 0,
+      "availablePlanes": 17,
+      "captureSamples": 16000,
+      "capturedSamples": 16000,
+      "completedCaptures": 2,
+      "firstFrameSequence": 1168,
+      "frameSamples": 320,
+      "generation": 2,
+      "lastFrameSequence": 1217,
+      "maximumReadSamples": 320,
+      "rejectedStarts": 0,
+      "sampleRateHz": 16000,
+      "schema": 1,
+      "startedCaptures": 2,
+      "state": 3
+    },
+    "planes": {
+      "near": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-tone/raw-microphone.pcm16le",
+        "sha256": "c0cca87097c0bca942e2bd25c726c2aa51e0f1894b39ea00221814fbee72aa57"
+      },
+      "clean": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-tone/clean.pcm16le",
+        "sha256": "7d483abf57171e48024a55e7b3cd1c0c43389539d0442609da2ed4345e18351b"
+      },
+      "fixtureDownlink": {
+        "bytes": 96000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-tone/fixture-downlink.pcm16le",
+        "sha256": "ad415414357632455712df1360e34826c636ecc704bec5b7b14c7722ddc295b8"
+      },
+      "pcmUplink": {
+        "bytes": 96000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-tone/pcm-uplink.pcm16le",
+        "sha256": "bf9ae1bd41efad5b55feeed8d4793c38656af517a775ce5109c5aab1ad64ab01"
+      }
+    }
+  },
+  "far-dual-carrier-prbs31": {
+    "metadata": {
+      "abortedCaptures": 0,
+      "availablePlanes": 17,
+      "captureSamples": 16000,
+      "capturedSamples": 16000,
+      "completedCaptures": 3,
+      "firstFrameSequence": 1520,
+      "frameSamples": 320,
+      "generation": 3,
+      "lastFrameSequence": 1569,
+      "maximumReadSamples": 320,
+      "rejectedStarts": 0,
+      "sampleRateHz": 16000,
+      "schema": 1,
+      "startedCaptures": 3,
+      "state": 3
+    },
+    "planes": {
+      "near": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-dual-carrier-prbs31/raw-microphone.pcm16le",
+        "sha256": "c9f651aa02fb7ca40014b04057965b2da142aa6fa82d682b3af6fdfea7dbc5ca"
+      },
+      "clean": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-dual-carrier-prbs31/clean.pcm16le",
+        "sha256": "2879d666650549479671ff3e60566c1ffab7f546681bd9275ad9bd3654ea2817"
+      },
+      "fixtureDownlink": {
+        "bytes": 96000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-dual-carrier-prbs31/fixture-downlink.pcm16le",
+        "sha256": "f9f05b7aee222143748ed624bc7715b5934853b7891326116c7fb5521ca1394a"
+      },
+      "pcmUplink": {
+        "bytes": 96000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-dual-carrier-prbs31/pcm-uplink.pcm16le",
+        "sha256": "1ba423c9bd6ff7795795437c6aae3c02933a0f6da67fe17affe37a1609c71c7a"
+      }
+    }
+  },
+  "far-speech-shaped": {
+    "metadata": {
+      "abortedCaptures": 0,
+      "availablePlanes": 17,
+      "captureSamples": 16000,
+      "capturedSamples": 16000,
+      "completedCaptures": 4,
+      "firstFrameSequence": 1871,
+      "frameSamples": 320,
+      "generation": 4,
+      "lastFrameSequence": 1920,
+      "maximumReadSamples": 320,
+      "rejectedStarts": 0,
+      "sampleRateHz": 16000,
+      "schema": 1,
+      "startedCaptures": 4,
+      "state": 3
+    },
+    "planes": {
+      "near": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-speech-shaped/raw-microphone.pcm16le",
+        "sha256": "37e635d1ac1c388ed72042bd1a416c5632df677c8e042c9d8695546bdb1bf105"
+      },
+      "clean": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-speech-shaped/clean.pcm16le",
+        "sha256": "94fd3c4a3946080872c481c3709c0a7dd07ae4ff085f7ba20a63f9128dd93eed"
+      },
+      "fixtureDownlink": {
+        "bytes": 96000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-speech-shaped/fixture-downlink.pcm16le",
+        "sha256": "880c105a9fe8bd7a0e4aa237eb8bf28574b3992797ec3f7cfc19f39587091b94"
+      },
+      "pcmUplink": {
+        "bytes": 98560,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/far-speech-shaped/pcm-uplink.pcm16le",
+        "sha256": "59ce3ee95b7e1678fac624486575cce6f7a5300d9537c99728dd6ada3fc39d45"
+      }
+    }
+  },
+  "near-only": {
+    "metadata": {
+      "abortedCaptures": 0,
+      "availablePlanes": 17,
+      "captureSamples": 16000,
+      "capturedSamples": 16000,
+      "completedCaptures": 5,
+      "firstFrameSequence": 2221,
+      "frameSamples": 320,
+      "generation": 5,
+      "lastFrameSequence": 2270,
+      "maximumReadSamples": 320,
+      "rejectedStarts": 0,
+      "sampleRateHz": 16000,
+      "schema": 1,
+      "startedCaptures": 5,
+      "state": 3
+    },
+    "planes": {
+      "near": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/near-only/raw-microphone.pcm16le",
+        "sha256": "ef4bff19f9e04540cf4baf0dbad2fb5c2eece241a1cdf7043cd956e67319dac0"
+      },
+      "clean": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/near-only/clean.pcm16le",
+        "sha256": "26545e5ad9196c6e1b332c1fb8f2e0e18aac4fa83a212569256878bf0c7df47b"
+      },
+      "fixtureDownlink": {
+        "bytes": 96000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/near-only/fixture-downlink.pcm16le",
+        "sha256": "44e8550efe620357850c1954bef7da2fb7013548c70abd27ff92c84eff8d5799"
+      },
+      "pcmUplink": {
+        "bytes": 96000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/near-only/pcm-uplink.pcm16le",
+        "sha256": "930917dcf27defa00d0486c29147abbe02696c11bdfb46e8be71551731ec07c0"
+      }
+    }
+  },
+  "near-repeat": {
+    "metadata": {
+      "abortedCaptures": 0,
+      "availablePlanes": 17,
+      "captureSamples": 16000,
+      "capturedSamples": 16000,
+      "completedCaptures": 6,
+      "firstFrameSequence": 2701,
+      "frameSamples": 320,
+      "generation": 6,
+      "lastFrameSequence": 2750,
+      "maximumReadSamples": 320,
+      "rejectedStarts": 0,
+      "sampleRateHz": 16000,
+      "schema": 1,
+      "startedCaptures": 6,
+      "state": 3
+    },
+    "planes": {
+      "near": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/near-repeat/raw-microphone.pcm16le",
+        "sha256": "c52dab70dfabc8f6ea6c60267dc8980a168e5b6ded13e694e747e52e4b8b0889"
+      },
+      "clean": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/near-repeat/clean.pcm16le",
+        "sha256": "e0eef816092ea1b0e45996b5b09fd4d463a072b6312596c7d17226194e76e46c"
+      },
+      "fixtureDownlink": {
+        "bytes": 96000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/near-repeat/fixture-downlink.pcm16le",
+        "sha256": "44e8550efe620357850c1954bef7da2fb7013548c70abd27ff92c84eff8d5799"
+      },
+      "pcmUplink": {
+        "bytes": 95360,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/near-repeat/pcm-uplink.pcm16le",
+        "sha256": "ac34e0c6b90b562365f973bf12d00104aaffb9f7a9a8f35bd6632e09c98f108e"
+      }
+    }
+  },
+  "double-talk": {
+    "metadata": {
+      "abortedCaptures": 0,
+      "availablePlanes": 17,
+      "captureSamples": 16000,
+      "capturedSamples": 16000,
+      "completedCaptures": 7,
+      "firstFrameSequence": 3178,
+      "frameSamples": 320,
+      "generation": 7,
+      "lastFrameSequence": 3227,
+      "maximumReadSamples": 320,
+      "rejectedStarts": 0,
+      "sampleRateHz": 16000,
+      "schema": 1,
+      "startedCaptures": 7,
+      "state": 3
+    },
+    "planes": {
+      "near": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/double-talk/raw-microphone.pcm16le",
+        "sha256": "d0ddd52ccafa3f2c4826852adcf0ba5ad65ccd602314dd75ef236b1e03d2c3c7"
+      },
+      "clean": {
+        "bytes": 32000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/double-talk/clean.pcm16le",
+        "sha256": "7c941a2c4627e482b3332493dd08d375943e7428dcb6829e6bec2fa548851ee3"
+      },
+      "fixtureDownlink": {
+        "bytes": 96000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/double-talk/fixture-downlink.pcm16le",
+        "sha256": "d1816c877edcedd2f13b21bfbf84c7456b36ff7c27b5102c88b81ddbc01fe0f0"
+      },
+      "pcmUplink": {
+        "bytes": 96000,
+        "path": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/kit/evidence/havpe-aec-direct-lan-diagnostic-20260804-final/2026-08-04T08-45-53-466Z/aec-traces/double-talk/pcm-uplink.pcm16le",
+        "sha256": "782756ec2d48fd643ba28406376f69fd53b1745a930eb8460bb23da0b3de2949"
+      }
+    }
+  }
+}

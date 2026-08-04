@@ -33,8 +33,8 @@ struct fixture {
   uint16_t pixels[ITERATE_KIT_STACKCHAN_LED_COUNT];
   size_t led_calls;
   size_t fail_led_call;
-  int16_t absolute_yaw;
-  int16_t absolute_pitch;
+  int16_t yaw;
+  int16_t pitch;
   uint16_t duration_ms;
   size_t servo_calls;
   size_t capture_calls;
@@ -76,12 +76,12 @@ static enum iterate_kit_status write_leds(
 
 static enum iterate_kit_status move_head(
     void *context,
-    int16_t absolute_yaw,
-    int16_t absolute_pitch,
+    int16_t yaw,
+    int16_t pitch,
     uint16_t duration_ms) {
   struct fixture *fixture = context;
-  fixture->absolute_yaw = absolute_yaw;
-  fixture->absolute_pitch = absolute_pitch;
+  fixture->yaw = yaw;
+  fixture->pitch = pitch;
   fixture->duration_ms = duration_ms;
   ++fixture->servo_calls;
   return ITERATE_KIT_OK;
@@ -197,10 +197,40 @@ static void leds_convert_rgb565_and_commit_only_success(void) {
 }
 
 /*
- * The public yaw is relative to a forward-facing head, but the official
- * SCS0009 body uses 150 degrees as its absolute yaw centre. Pitch is already
- * the body's absolute 0..90-degree coordinate. Duration goes through without
- * an easing queue; the body servos perform the timed move themselves.
+ * StackChan's two physical six-pixel runs are a different geometry, not a
+ * different product language. This test protects the direct index mapping of
+ * the shared HAVPE-compatible twelve-pixel render: good Wi-Fi occupies the
+ * first three green pixels on one side, while an idle device leaves the audio
+ * sectors dark. A future target-local status painter would fail here.
+ */
+static void status_uses_the_shared_twelve_pixel_grammar(void) {
+  struct fixture fixture;
+  const struct iterate_kit_conversation_visual_state state = {
+      .network = ITERATE_KIT_NETWORK_CONNECTED,
+      .has_wifi_rssi = true,
+      .wifi_rssi_dbm = -48,
+  };
+  fixture_init(&fixture);
+
+  assert(
+      iterate_kit_stackchan_hardware_show_status(
+          &fixture.hardware, &state) == ITERATE_KIT_OK);
+  assert(fixture.led_calls == 1U);
+  for (size_t index = 0U; index < 3U; ++index) {
+    assert(fixture.pixels[index] == 0x00e0U);
+  }
+  for (size_t index = 3U;
+       index < ITERATE_KIT_STACKCHAN_LED_COUNT;
+       ++index) {
+    assert(fixture.pixels[index] == 0U);
+  }
+}
+
+/*
+ * The platform boundary uses the same relative degree coordinate as the
+ * official M5Stack Motion API. Raw zero calibration belongs to the physical
+ * SCS0009 owner, not this reusable capability adapter. Duration goes through
+ * without an easing queue; the body servos perform the timed move themselves.
  */
 static void servos_translate_to_official_stackchan_geometry(void) {
   struct fixture fixture;
@@ -209,8 +239,8 @@ static void servos_translate_to_official_stackchan_geometry(void) {
   driver = iterate_kit_stackchan_servo_driver(&fixture.hardware);
 
   assert(driver.move(driver.context, -25, 40, 275U) == ITERATE_KIT_OK);
-  assert(fixture.absolute_yaw == 125);
-  assert(fixture.absolute_pitch == 40);
+  assert(fixture.yaw == -25);
+  assert(fixture.pitch == 40);
   assert(fixture.duration_ms == 275U);
   assert(fixture.servo_calls == 1U);
 }
@@ -291,6 +321,7 @@ static void adapter_state_remains_small_and_fixed(void) {
 int main(void) {
   screen_maps_contract_and_rejects_insecure_urls();
   leds_convert_rgb565_and_commit_only_success();
+  status_uses_the_shared_twelve_pixel_grammar();
   servos_translate_to_official_stackchan_geometry();
   camera_allows_exactly_one_borrowed_frame();
   absent_hardware_fails_explicitly();

@@ -1,0 +1,197 @@
+{
+  "input": "evidence/stackchan-count-to-100-pre-nlp/2026-08-03T02-48-07-296Z/iterate-kit-acoustic-4JXn4k/microphone.pcm16le",
+  "interval": {
+    "endSample": 5048320,
+    "startSample": 0
+  },
+  "result": {
+    "durationSeconds": 105.173,
+    "rawEvents": [
+      "{\"type\":\"transcript.created\",\"id\":\"813fdf8b-613d-49b9-94bd-4775e7c06ff1\"}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":1.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":3.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":4.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":9.84}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":14.32}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Count from one through one hundred in order including both endpoints saying every number exactly once with no preamble and no omissions.\",\"words\":[{\"text\":\"Count\",\"start\":5.588,\"end\":5.868},{\"text\":\"from\",\"start\":5.908,\"end\":6.068},{\"text\":\"one\",\"start\":6.189,\"end\":6.329},{\"text\":\"through\",\"start\":6.389,\"end\":6.569},{\"text\":\"one\",\"start\":6.649,\"end\":6.749},{\"text\":\"hundred\",\"start\":6.789,\"end\":7.11},{\"text\":\"in\",\"start\":7.13,\"end\":7.21},{\"text\":\"order\",\"start\":7.29,\"end\":7.53},{\"text\":\"including\",\"start\":7.811,\"end\":8.331},{\"text\":\"both\",\"start\":8.372,\"end\":8.592},{\"text\":\"endpoints\",\"start\":8.672,\"end\":9.373},{\"text\":\"saying\",\"start\":9.753,\"end\":10.054},{\"text\":\"every\",\"start\":10.094,\"end\":10.314},{\"text\":\"number\",\"start\":10.414,\"end\":10.695},{\"text\":\"exactly\",\"start\":10.775,\"end\":11.276},{\"text\":\"once\",\"start\":11.456,\"end\":11.816},{\"text\":\"with\",\"start\":12.097,\"end\":12.237},{\"text\":\"no\",\"start\":12.277,\"end\":12.357},{\"text\":\"preamble\",\"start\":12.437,\"end\":12.918},{\"text\":\"and\",\"start\":12.938,\"end\":13.038},{\"text\":\"no\",\"start\":13.098,\"end\":13.178},{\"text\":\"omissions.\",\"start\":13.278,\"end\":13.899}],\"is_final\":true,\"speech_final\":false,\"start\":0.0,\"duration\":14.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"Count from one through one hundred in order including both endpoints saying every number exactly once with no preamble and no omissions.\",\"words\":[{\"text\":\"Count\",\"start\":5.588,\"end\":5.868},{\"text\":\"from\",\"start\":5.908,\"end\":6.068},{\"text\":\"one\",\"start\":6.189,\"end\":6.329},{\"text\":\"through\",\"start\":6.389,\"end\":6.569},{\"text\":\"one\",\"start\":6.649,\"end\":6.749},{\"text\":\"hundred\",\"start\":6.789,\"end\":7.11},{\"text\":\"in\",\"start\":7.13,\"end\":7.21},{\"text\":\"order\",\"start\":7.29,\"end\":7.53},{\"text\":\"including\",\"start\":7.811,\"end\":8.331},{\"text\":\"both\",\"start\":8.372,\"end\":8.592},{\"text\":\"endpoints\",\"start\":8.672,\"end\":9.373},{\"text\":\"saying\",\"start\":9.753,\"end\":10.054},{\"text\":\"every\",\"start\":10.094,\"end\":10.314},{\"text\":\"number\",\"start\":10.414,\"end\":10.695},{\"text\":\"exactly\",\"start\":10.775,\"end\":11.276},{\"text\":\"once\",\"start\":11.456,\"end\":11.816},{\"text\":\"with\",\"start\":12.097,\"end\":12.237},{\"text\":\"no\",\"start\":12.277,\"end\":12.357},{\"text\":\"preamble\",\"start\":12.437,\"end\":12.918},{\"text\":\"and\",\"start\":12.938,\"end\":13.038},{\"text\":\"no\",\"start\":13.098,\"end\":13.178},{\"text\":\"omissions.\",\"start\":13.278,\"end\":13.899}],\"is_final\":true,\"speech_final\":true,\"start\":0.0,\"duration\":14.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":1.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":3.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":4.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":6.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":7.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":9.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":10.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":12.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":13.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":15.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":16.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":18.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":19.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":21.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":22.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":24.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":25.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":27.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":28.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":30.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":31.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":33.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":34.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":36.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":37.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":39.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":40.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":42.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":43.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":45.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":46.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":48.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":49.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":51.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":52.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":54.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":55.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":57.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":14.5,\"duration\":58.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":0.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":1.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":3.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":4.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":6.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":7.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":9.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":10.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":12.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":13.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":15.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":16.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":18.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":19.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":21.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":22.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":24.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":25.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":27.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":28.5}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":30.0}",
+      "{\"type\":\"transcript.partial\",\"text\":\"\",\"words\":[],\"is_final\":true,\"speech_final\":false,\"start\":74.5,\"duration\":30.673}",
+      "{\"type\":\"transcript.done\",\"text\":\"\",\"words\":[],\"duration\":105.173}"
+    ],
+    "text": "Count from one through one hundred in order including both endpoints saying every number exactly once with no preamble and no omissions.",
+    "words": [
+      {
+        "text": "Count",
+        "start": 5.588,
+        "end": 5.868
+      },
+      {
+        "text": "from",
+        "start": 5.908,
+        "end": 6.068
+      },
+      {
+        "text": "one",
+        "start": 6.189,
+        "end": 6.329
+      },
+      {
+        "text": "through",
+        "start": 6.389,
+        "end": 6.569
+      },
+      {
+        "text": "one",
+        "start": 6.649,
+        "end": 6.749
+      },
+      {
+        "text": "hundred",
+        "start": 6.789,
+        "end": 7.11
+      },
+      {
+        "text": "in",
+        "start": 7.13,
+        "end": 7.21
+      },
+      {
+        "text": "order",
+        "start": 7.29,
+        "end": 7.53
+      },
+      {
+        "text": "including",
+        "start": 7.811,
+        "end": 8.331
+      },
+      {
+        "text": "both",
+        "start": 8.372,
+        "end": 8.592
+      },
+      {
+        "text": "endpoints",
+        "start": 8.672,
+        "end": 9.373
+      },
+      {
+        "text": "saying",
+        "start": 9.753,
+        "end": 10.054
+      },
+      {
+        "text": "every",
+        "start": 10.094,
+        "end": 10.314
+      },
+      {
+        "text": "number",
+        "start": 10.414,
+        "end": 10.695
+      },
+      {
+        "text": "exactly",
+        "start": 10.775,
+        "end": 11.276
+      },
+      {
+        "text": "once",
+        "start": 11.456,
+        "end": 11.816
+      },
+      {
+        "text": "with",
+        "start": 12.097,
+        "end": 12.237
+      },
+      {
+        "text": "no",
+        "start": 12.277,
+        "end": 12.357
+      },
+      {
+        "text": "preamble",
+        "start": 12.437,
+        "end": 12.918
+      },
+      {
+        "text": "and",
+        "start": 12.938,
+        "end": 13.038
+      },
+      {
+        "text": "no",
+        "start": 13.098,
+        "end": 13.178
+      },
+      {
+        "text": "omissions.",
+        "start": 13.278,
+        "end": 13.899
+      }
+    ]
+  },
+  "sampleRateHz": 48000,
+  "schemaVersion": 1
+}

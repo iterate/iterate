@@ -1,0 +1,56 @@
+{
+  "assessmentPassed": false,
+  "buildDirectory": "/Users/jonastemplestein/.herdr/worktrees/iterate/c-capabilities/apps/.build/home-assistant-voice-preview-edition",
+  "createdAt": "2026-08-02T22:46:29.052Z",
+  "device": "home-assistant-voice-preview-edition",
+  "networkClassification": "audio-invalid",
+  "networkVerdict": "valid",
+  "pcm": {
+    "microphoneBytes": 1344000,
+    "microphoneSha256": "22836f32cb03da2436804dfc274954d1139a39599cc9d72790a8afe63a3e06fb",
+    "speakerBytes": 768000,
+    "speakerSha256": "d2656a8b55a9d4a9199b783e4d482f07dbeb3c223f49c66408f76586c88111f2"
+  },
+  "port": "/dev/cu.usbmodem11101",
+  "schemaVersion": 1,
+  "stableUsbSerial": "D8:3B:DA:46:20:34",
+  "startupLifecycle": {
+    "observed": {
+      "captureFailures": 0,
+      "captureFrameDrops": 0,
+      "playbackDroppedFrames": 0,
+      "playbackIntegrityFailures": 0,
+      "playbackResets": 1,
+      "uplinkFrameDrops": 0,
+      "uplinkRestarts": 0
+    },
+    "passed": true,
+    "reasons": []
+  },
+  "stimuli": {
+    "acousticProfile": {
+      "macOutputVolumePercent": 20,
+      "nearEndSpeechRendererAmplitude": 2500,
+      "prbsCarrierAmplitude": 2500,
+      "speechRendererAmplitude": 2500,
+      "toneAmplitude": 5000
+    },
+    "doubleTalkPrbsCommitment": "c922dccf738d24dd63ee3b803b283ab595d81b5613b32886b16c3a8cf9cc409c",
+    "farPrbsCommitment": "664bb4783fc8a0ae2e9c7947aecea1991ed848012bdcebf03b0abab0993cbdf6",
+    "nearSourceSha256": "a487087f5e8f41553820f9f1e5b7f1d8b866d4c5a10e9e056e523344f75b9d55"
+  },
+  "transportValidity": {
+    "captureFailures": 0,
+    "captureFrameDrops": 0,
+    "clockDiscontinuities": 0,
+    "networkValid": true,
+    "playbackDroppedFrames": 0,
+    "playbackIntegrityFailures": 0,
+    "playbackResets": 0,
+    "playbackUnderrunIncidents": 0,
+    "recorderComplete": true,
+    "uplinkFrameDrops": 0,
+    "uplinkRestarts": 0,
+    "websocketReconnects": 0
+  }
+}

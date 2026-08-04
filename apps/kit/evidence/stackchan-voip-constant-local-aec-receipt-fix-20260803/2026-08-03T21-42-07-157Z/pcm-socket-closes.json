@@ -1,0 +1,12 @@
+[
+  {
+    "close": {
+      "classification": "unexpected",
+      "code": 1005,
+      "origin": "device",
+      "reason": ""
+    },
+    "expectedByHarness": true,
+    "observedAtMonotonicMs": 77545.895875
+  }
+]
