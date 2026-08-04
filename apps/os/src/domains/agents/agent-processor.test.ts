@@ -1278,7 +1278,7 @@ describe("AgentProcessor script execution", () => {
     expect(rendered!.payload.content).toContain("Inferred type:");
     expect(rendered!.payload.content).toContain("type Result = {");
     expect(rendered!.payload.content).toContain("items: string");
-    expect(rendered!.payload.content).toContain("const data: Result = JSON.parse(");
+    expect(rendered!.payload.content).toContain("const data = JSON.parse(");
     expect(rendered!.payload.content).not.toContain("x".repeat(200)); // preview stays bounded
   });
 

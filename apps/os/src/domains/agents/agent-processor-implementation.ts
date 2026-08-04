@@ -1963,8 +1963,6 @@ function renderOversizedJsonResult(input: {
     console.error("[agent] failed to build preview for oversized script result", { error });
     previewText = `${input.text.slice(0, Math.min(OVERSIZED_JSON_PREVIEW_MAX_BYTES, input.historyLimit))}\n… (cut mid-document)`;
   }
-  const dataBinding = typeText === null ? "const data" : "const data: Result";
-  const typeComment = typeText === null ? "" : " // matches the inferred type above";
   return [
     `Your script returned ${input.text.length.toLocaleString("en-US")} chars of JSON — too big to show in full.${typeText === null ? "" : " Inferred type:"}`,
     ...(typeText === null ? [] : ["```ts", `type Result = ${typeText}`, "```"]),
@@ -1975,8 +1973,8 @@ function renderOversizedJsonResult(input: {
     `The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
     "```ts",
     "async (itx) => {",
-    `  ${dataBinding} = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));${typeComment}`,
-    "  return Object.keys(data); // then slice/filter/regex to return only what you need",
+    `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
+    "  // you can now do whatever you see fit with `data`",
     "}",
     "```",
   ].join("\n");
