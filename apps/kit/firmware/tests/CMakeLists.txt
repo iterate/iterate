@@ -89,6 +89,30 @@ if(APPLE)
     iterate-kit-cli-device-profile-test
     ../targets/host_cli/cli_device_profile.c
     cli_device_profile_test.c)
+  add_executable(
+    iterate-kit-cli-device-controls-test
+    ../targets/host_cli/cli_device_controls.c
+    cli_device_controls_test.c)
+  target_include_directories(
+    iterate-kit-cli-device-controls-test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli")
+  target_compile_features(
+    iterate-kit-cli-device-controls-test PRIVATE c_std_11)
+  target_compile_options(iterate-kit-cli-device-controls-test PRIVATE
+    -UNDEBUG
+    -Wall
+    -Wextra
+    -Werror
+    -Wpedantic
+    -Wconversion
+    -Wshadow)
+  target_link_libraries(
+    iterate-kit-cli-device-controls-test PRIVATE
+    iterate-kit-capabilities
+    iterate-kit-darwin)
+  add_test(
+    NAME iterate-kit-cli-device-controls-test
+    COMMAND iterate-kit-cli-device-controls-test)
   iterate_kit_add_cli_test(
     iterate-kit-cli-fault-schedule-test
     ../targets/host_cli/cli_fault_schedule.c

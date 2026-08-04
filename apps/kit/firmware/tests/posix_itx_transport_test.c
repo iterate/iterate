@@ -1,6 +1,7 @@
 #include "fake_posix_websocket.h"
 #include "iterate/kit/peer.h"
 #include "iterate/kit/platforms/posix_itx_transport.h"
+#include "iterate/kit/voice_device_profile.h"
 
 #include <assert.h>
 #include <string.h>
@@ -28,7 +29,14 @@ struct fixture {
   struct iterate_kit_spsc_ring outbox;
   uint8_t outbox_storage[SLOT_COUNT][ITERATE_KIT_POSIX_CONTROL_MESSAGE_CAPACITY];
   size_t outbox_lengths[SLOT_COUNT];
+  int64_t now_us;
 };
+
+static int64_t fixture_now_us(void *context) {
+  const struct fixture *fixture = context;
+  assert(fixture != NULL);
+  return fixture->now_us;
+}
 
 static struct iterate_kit_poll_result close_module(void *context) {
   (void)context;
@@ -96,10 +104,49 @@ static void fixture_init(struct fixture *fixture) {
     .connection = &fixture->connection,
     .control_inbox = &fixture->inbox,
     .control_outbox = &fixture->outbox,
+    .now_us = fixture_now_us,
+    .now_us_context = fixture,
   };
   assert(iterate_kit_posix_itx_transport_prepare(
              &fixture->transport, &transport_options) == ITERATE_KIT_OK);
   assert(iterate_kit_posix_itx_transport_start(&fixture->transport) ==
+         ITERATE_KIT_OK);
+}
+
+/*
+ * DNS/TCP/TLS/upgrade is one bounded attempt. A nonblocking platform can keep
+ * returning WOULD_BLOCK, but it cannot leave the device in CONNECTING forever.
+ * The timeout is a classified retriable outcome rather than unexplained error
+ * telemetry, and the same owner proves the next generation can recover.
+ */
+static void stalled_open_times_out_and_recovers(void) {
+  struct fixture fixture;
+  struct iterate_kit_posix_itx_transport_metrics metrics;
+  fixture_init(&fixture);
+  iterate_kit_fake_posix_websocket_set_open_result(
+      ITERATE_KIT_POSIX_WEBSOCKET_OPEN_WOULD_BLOCK);
+
+  assert(iterate_kit_posix_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(fixture.transport.websocket_open_attempt_active);
+  fixture.now_us =
+      (int64_t)ITERATE_KIT_VOICE_CONNECTION_OPEN_TIMEOUT_MS * 1000;
+  assert(iterate_kit_posix_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(!fixture.transport.websocket_open_attempt_active);
+  assert(!fixture.transport.socket_connected);
+  iterate_kit_posix_itx_transport_metrics(&fixture.transport, &metrics);
+  assert(metrics.websocket_open_timeouts == 1U);
+  assert(metrics.websocket_errors == 0U);
+
+  iterate_kit_fake_posix_websocket_set_open_result(
+      ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY);
+  fixture.transport.websocket_retry.ready_at_us = fixture.now_us;
+  assert(iterate_kit_posix_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(fixture.transport.socket_connected);
+  assert(fixture.transport.socket_generation == 1U);
+  assert(iterate_kit_posix_itx_transport_stop(&fixture.transport) ==
          ITERATE_KIT_OK);
 }
 
@@ -129,6 +176,7 @@ static void peer_close_reconnects_with_new_generation(void) {
 }
 
 int main(void) {
+  stalled_open_times_out_and_recovers();
   peer_close_reconnects_with_new_generation();
   return 0;
 }

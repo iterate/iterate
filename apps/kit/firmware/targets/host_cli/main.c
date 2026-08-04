@@ -95,6 +95,7 @@ static bool cli_main_init_input(struct cli_runtime *runtime);
 
 /* Assembles every runtime boundary before polling can begin. */
 static bool cli_main_init_runtime(struct cli_runtime *runtime);
+static bool cli_main_init_device_controls(struct cli_runtime *runtime);
 
 /* Releases every opened platform resource. Safe after partial initialization. */
 static void cli_main_close_runtime(struct cli_runtime *runtime);
@@ -183,6 +184,18 @@ static void cli_main_apply_key(
 
 /* Ends the call, then the process, giving the far end a bounded chance. */
 static void cli_main_begin_hangup(
+    struct cli_runtime *runtime,
+    uint64_t now_ms,
+    enum iterate_kit_device_event_source source);
+
+/* Publishes one desired talk edge; queue failure is terminal and observable. */
+static bool cli_main_request_talk(
+    struct cli_runtime *runtime,
+    bool active,
+    enum iterate_kit_device_event_source source);
+
+/* Publishes the maximum-turn edge before this loop drains device controls. */
+static void cli_main_enforce_talk_deadline(
     struct cli_runtime *runtime, uint64_t now_ms);
 
 /* Advances the interactive session: keys, the deadline, and the hang-up. */
@@ -457,10 +470,6 @@ static bool cli_main_init_configuration(struct cli_runtime *runtime)
       cli_main_copy_field(
           runtime->configuration.os_base_url,
           sizeof(runtime->configuration.os_base_url),
-          runtime->options.os_base_url) &&
-      cli_main_copy_field(
-          runtime->configuration.pcm_base_url,
-          sizeof(runtime->configuration.pcm_base_url),
           runtime->options.os_base_url);
   if (copied) return true;
   cli_runtime_log("error", "configuration value missing or exceeds firmware bound");
@@ -470,18 +479,29 @@ static bool cli_main_init_configuration(struct cli_runtime *runtime)
 static bool cli_main_init_peer(struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
-  runtime->module = cli_capabilities_module(
+  runtime->modules[0] = cli_capabilities_module(
       &runtime->capabilities, runtime);
+  runtime->modules[1] = cli_device_controls_module(
+      &runtime->device_controls);
   size_t description_length = 0U;
   const char *description = cli_capabilities_description(&description_length);
   const struct iterate_kit_peer_options options = {
     .description_expression = description,
     .description_expression_length = description_length,
-    .modules = &runtime->module,
-    .module_count = 1U,
+    .modules = runtime->modules,
+    .module_count = sizeof(runtime->modules) / sizeof(runtime->modules[0]),
   };
   if (iterate_kit_peer_init(&runtime->peer, &options) == CAPNWEB_OK) return true;
   cli_runtime_log("error", "capability peer initialization failed");
+  return false;
+}
+
+static bool cli_main_init_device_controls(struct cli_runtime *runtime)
+{
+  assert(runtime != NULL);
+  if (cli_device_controls_init(&runtime->device_controls, runtime) ==
+      ITERATE_KIT_OK) return true;
+  cli_runtime_log("error", "bounded device control initialization failed");
   return false;
 }
 
@@ -865,6 +885,7 @@ static bool cli_main_init_runtime(struct cli_runtime *runtime)
   assert(runtime != NULL);
   if (!cli_main_init_configuration(runtime)) return false;
   if (!cli_main_init_control_rings(runtime)) return false;
+  if (!cli_main_init_device_controls(runtime)) return false;
   if (!cli_main_init_peer(runtime)) return false;
   if (!cli_main_init_connection(runtime)) return false;
   if (!cli_main_init_transport(runtime)) return false;
@@ -889,6 +910,7 @@ static void cli_main_close_runtime(struct cli_runtime *runtime)
   /* The terminal goes back first; everything after it can take its time. */
   cli_keyboard_close(&runtime->keyboard);
   (void)iterate_kit_posix_itx_transport_stop(&runtime->transport);
+  (void)iterate_kit_peer_close(&runtime->peer);
   cli_wav_source_close(&runtime->source);
   cli_wav_sink_close(&runtime->sink);
   cli_wav_sink_close(&runtime->mic_sink);
@@ -1045,7 +1067,8 @@ static void cli_main_on_control(
     ++runtime->calls_lost;
     runtime->talking = false;
     runtime->flushing_turn = false;
-    runtime->wants_talk = false;
+    (void)cli_main_request_talk(
+        runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
     cli_runtime_log(
         "warn", "call ended; wantsCall=%s",
         runtime->wants_call ? "true" : "false");
@@ -1421,7 +1444,8 @@ static void cli_main_start_talk(
     if (cli_wav_source_open(&runtime->source, runtime->options.mic_wav) !=
         CLI_WAV_OK) {
       cli_runtime_log("error", "cannot rewind microphone WAV for new turn");
-      runtime->wants_talk = false;
+      (void)cli_main_request_talk(
+          runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
       return;
     }
     runtime->source_finished = false;
@@ -1466,9 +1490,6 @@ static void cli_main_reconcile_talk(
     runtime->talking = false;
     runtime->flushing_turn = false;
   }
-  if (runtime->talking && !runtime->flushing_turn &&
-      iterate_kit_voice_elapsed_ms(now_ms, runtime->turn_started_ms) >
-          ITERATE_KIT_VOICE_TURN_MAX_MS) runtime->wants_talk = false;
   cli_main_start_talk(runtime, now_ms, outbox_free);
   const bool wants_talk = runtime->wants_call && runtime->wants_talk;
   if (!wants_talk && runtime->talking && !runtime->flushing_turn) {
@@ -1653,13 +1674,14 @@ static void cli_main_announce_transport_failure(
   cli_runtime_log(
       "error",
       "transport state=failed url=%s errno=%d capnweb=%d starts=%u opens=%u "
-      "errors=%u disconnects=%u mountTimeouts=%u protoFail=%u recvFail=%u "
-      "fatal=%u/%u",
+      "openTimeouts=%u errors=%u disconnects=%u mountTimeouts=%u "
+      "protoFail=%u recvFail=%u fatal=%u/%u",
       runtime->transport.websocket_url,
       (int)runtime->transport.last_platform_error,
       (int)runtime->transport.last_capnweb_status,
       runtime->transport.websocket_start_attempts,
       runtime->transport.websocket_connections,
+      runtime->transport.websocket_open_timeouts,
       runtime->transport.websocket_errors,
       runtime->transport.websocket_disconnects,
       runtime->transport.mount_timeouts, runtime->transport.protocol_failures,
@@ -1812,7 +1834,8 @@ static void cli_main_apply_key(
   assert(runtime != NULL);
   switch (event) {
     case CLI_KEYBOARD_TALK_START:
-      runtime->wants_talk = true;
+      (void)cli_main_request_talk(
+          runtime, true, ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
       cli_runtime_log("info", "talking");
       break;
     case CLI_KEYBOARD_TALK_STOP:
@@ -1822,11 +1845,13 @@ static void cli_main_apply_key(
        * turn. Committing here instead would bypass the flush and cut the last
        * word off every sentence.
        */
-      runtime->wants_talk = false;
+      (void)cli_main_request_talk(
+          runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
       cli_runtime_log("info", "sent");
       break;
     case CLI_KEYBOARD_HANG_UP:
-      cli_main_begin_hangup(runtime, now_ms);
+      cli_main_begin_hangup(
+          runtime, now_ms, ITERATE_KIT_DEVICE_EVENT_SOURCE_PHYSICAL);
       break;
     case CLI_KEYBOARD_NONE:
     default:
@@ -1835,12 +1860,14 @@ static void cli_main_apply_key(
 }
 
 static void cli_main_begin_hangup(
-    struct cli_runtime *runtime, uint64_t now_ms)
+    struct cli_runtime *runtime,
+    uint64_t now_ms,
+    enum iterate_kit_device_event_source source)
 {
   assert(runtime != NULL);
   if (runtime->hanging_up) return;
   runtime->hanging_up = true;
-  runtime->wants_talk = false;
+  (void)cli_main_request_talk(runtime, false, source);
   runtime->wants_call = false;
   runtime->hangup_deadline_ms = now_ms + CLI_MAIN_HANGUP_GRACE_MS;
   cli_runtime_log("info", "hanging up");
@@ -1863,7 +1890,8 @@ static void cli_main_poll_interactive(
   }
   if (runtime->finish_at_ms != 0U && now_ms >= runtime->finish_at_ms) {
     cli_runtime_log("info", "session time is up");
-    cli_main_begin_hangup(runtime, now_ms);
+    cli_main_begin_hangup(
+        runtime, now_ms, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
     return;
   }
   if (!runtime->options.push_to_talk) return;
@@ -1873,6 +1901,34 @@ static void cli_main_poll_interactive(
   if (cli_keyboard_poll(&runtime->keyboard, now_ms, &event) !=
       CLI_KEYBOARD_OK) return;
   cli_main_apply_key(runtime, event, now_ms);
+}
+
+static bool cli_main_request_talk(
+    struct cli_runtime *runtime,
+    bool active,
+    enum iterate_kit_device_event_source source)
+{
+  const enum iterate_kit_status status = cli_device_controls_request_talk(
+      &runtime->device_controls, active, source);
+  if (status == ITERATE_KIT_OK) return true;
+  cli_runtime_log(
+      "error", "device control queue rejected talk=%s source=%s status=%d",
+      active ? "true" : "false",
+      iterate_kit_device_event_source_name(source),
+      (int)status);
+  runtime->stop_requested = true;
+  return false;
+}
+
+static void cli_main_enforce_talk_deadline(
+    struct cli_runtime *runtime, uint64_t now_ms)
+{
+  assert(runtime != NULL);
+  if (!runtime->talking || runtime->flushing_turn ||
+      iterate_kit_voice_elapsed_ms(now_ms, runtime->turn_started_ms) <=
+          ITERATE_KIT_VOICE_TURN_MAX_MS) return;
+  (void)cli_main_request_talk(
+      runtime, false, ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM);
 }
 
 /**
@@ -1960,6 +2016,12 @@ static void cli_main_run_loop(struct cli_runtime *runtime)
     cli_audio_out_pump(&runtime->live_out, cli_runtime_now_us());
     cli_main_poll_interactive(runtime, now_ms);
     cli_conversation_poll(runtime, now_ms);
+    cli_main_enforce_talk_deadline(runtime, now_ms);
+    if (cli_device_controls_poll(&runtime->device_controls) !=
+        ITERATE_KIT_OK) {
+      cli_runtime_log("error", "device control handler failed");
+      runtime->stop_requested = true;
+    }
     struct iterate_kit_spsc_ring_metrics outbox = {0};
     iterate_kit_spsc_ring_metrics(&runtime->control_outbox, &outbox);
     const size_t outbox_free = ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS -

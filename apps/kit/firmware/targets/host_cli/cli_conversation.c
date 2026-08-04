@@ -328,7 +328,13 @@ static enum cli_conversation_status cli_conversation_start_turn(
   cli_conversation_begin_report(runtime, path, back_office, now_ms);
   runtime->answer_done = false;
   runtime->source_finished = false;
-  runtime->wants_talk = true;
+  if (cli_device_controls_request_talk(
+          &runtime->device_controls,
+          true,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM) != ITERATE_KIT_OK) {
+    cli_runtime_log("error", "scripted talk start exceeded device event bound");
+    return CLI_CONVERSATION_ERR_REPORT;
+  }
   conversation->state = CLI_CONVERSATION_SENDING;
   cli_runtime_log("info", "turn=%zu colleague=%s utterance=%s", number,
                   back_office ? "true" : "false", path);
@@ -341,7 +347,14 @@ static void cli_conversation_finish_sending(
   assert(runtime != NULL);
   if (!runtime->source_finished ||
       cli_microphone_queued(&runtime->microphone) != 0U) return;
-  runtime->wants_talk = false;
+  if (cli_device_controls_request_talk(
+          &runtime->device_controls,
+          false,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM) != ITERATE_KIT_OK) {
+    cli_runtime_log("error", "scripted talk stop exceeded device event bound");
+    runtime->stop_requested = true;
+    return;
+  }
   runtime->conversation.state = CLI_CONVERSATION_WAIT_ANSWER;
   if (runtime->conversation.current_turn != NULL) {
     runtime->conversation.current_turn->committed_ms = now_ms;
@@ -374,7 +387,12 @@ static void cli_conversation_finish_run(
     struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
-  runtime->wants_talk = false;
+  if (cli_device_controls_request_talk(
+          &runtime->device_controls,
+          false,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_SYSTEM) != ITERATE_KIT_OK) {
+    cli_runtime_log("error", "scripted shutdown exceeded device event bound");
+  }
   runtime->wants_call = false;
   if (runtime->conversation.current_turn != NULL) {
     /*

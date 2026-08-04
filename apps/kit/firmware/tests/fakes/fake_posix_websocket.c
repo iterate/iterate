@@ -3,9 +3,16 @@
 #include <string.h>
 
 static bool peer_close_queued;
+static enum iterate_kit_posix_websocket_open_result open_result =
+    ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY;
 
 void iterate_kit_fake_posix_websocket_queue_peer_close(void) {
   peer_close_queued = true;
+}
+
+void iterate_kit_fake_posix_websocket_set_open_result(
+    enum iterate_kit_posix_websocket_open_result result) {
+  open_result = result;
 }
 
 enum iterate_kit_status iterate_kit_posix_websocket_client_prepare(
@@ -18,6 +25,7 @@ enum iterate_kit_status iterate_kit_posix_websocket_client_prepare(
   client->options = *options;
   client->initialized = true;
   peer_close_queued = false;
+  open_result = ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY;
   return ITERATE_KIT_OK;
 }
 
@@ -27,8 +35,9 @@ iterate_kit_posix_websocket_client_open(
   if (client == NULL || !client->initialized) {
     return ITERATE_KIT_POSIX_WEBSOCKET_OPEN_FAILED;
   }
-  client->upgraded = true;
-  return ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY;
+  client->upgraded =
+      open_result == ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY;
+  return open_result;
 }
 
 enum iterate_kit_posix_websocket_receive_result

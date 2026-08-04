@@ -67,6 +67,7 @@ struct iterate_kit_posix_itx_transport_options {
 struct iterate_kit_posix_itx_transport_metrics {
   uint32_t websocket_connections;
   uint32_t websocket_start_attempts;
+  uint32_t websocket_open_timeouts;
   uint32_t websocket_disconnects;
   uint32_t websocket_errors;
   uint32_t ready_socket_generation;
@@ -118,6 +119,7 @@ struct iterate_kit_posix_itx_transport {
   struct iterate_kit_retry_gate websocket_retry;
   enum iterate_kit_posix_itx_transport_state state;
   enum capnweb_status last_capnweb_status;
+  int64_t websocket_open_deadline_us;
   int64_t mount_deadline_us;
   uint32_t mount_deadline_generation;
   uint32_t socket_generation;
@@ -125,6 +127,7 @@ struct iterate_kit_posix_itx_transport {
   uint32_t ready_socket_generation;
   uint32_t websocket_connections;
   uint32_t websocket_start_attempts;
+  uint32_t websocket_open_timeouts;
   uint32_t websocket_disconnects;
   uint32_t websocket_errors;
   uint32_t mount_timeouts;

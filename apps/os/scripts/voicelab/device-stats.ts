@@ -110,6 +110,7 @@ export interface DeviceStats {
   batches?: number;
   batchAgeMs?: number;
   wsSent?: number;
+  openTimeouts?: number;
   rttMs?: number;
   pings?: number;
   pingFailures?: number;
@@ -156,6 +157,7 @@ export const MUST_NOT_MOVE = [
   "sendFailures",
   "recvFailures",
   "protoFailures",
+  "openTimeouts",
   "inboxDiscarded",
   "outboxDiscarded",
   "pingFailures",

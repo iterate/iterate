@@ -1,7 +1,9 @@
 #include "iterate/kit/platforms/posix_itx_transport.h"
 
 #include "iterate/kit/atomic.h"
+#include "iterate/kit/voice_device_profile.h"
 
+#include <errno.h>
 #include <limits.h>
 #include <string.h>
 #include <time.h>
@@ -65,6 +67,7 @@ static void close_generation(
   }
   transport->socket_connected = false;
   transport->websocket_open_attempt_active = false;
+  transport->websocket_open_deadline_us = 0;
   /* Reset the writer before its borrowed ring head can be released. */
   iterate_kit_posix_websocket_client_close(&transport->websocket);
   iterate_kit_itx_outbox_sender_discard(&transport->control_sender);
@@ -232,14 +235,27 @@ static void drive_socket(
     if (!transport->websocket_open_attempt_active) {
       increment(&transport->websocket_start_attempts);
       transport->websocket_open_attempt_active = true;
+      transport->websocket_open_deadline_us = now_us +
+          (int64_t)ITERATE_KIT_VOICE_CONNECTION_OPEN_TIMEOUT_MS * 1000;
     }
     result = iterate_kit_posix_websocket_client_open(
         &transport->websocket);
     if (result == ITERATE_KIT_POSIX_WEBSOCKET_OPEN_WOULD_BLOCK) {
+      if (now_us >= transport->websocket_open_deadline_us) {
+        increment(&transport->websocket_open_timeouts);
+        transport->last_platform_error = ETIMEDOUT;
+        transport->websocket_open_attempt_active = false;
+        transport->websocket_open_deadline_us = 0;
+        iterate_kit_posix_websocket_client_close(
+            &transport->websocket);
+        iterate_kit_retry_gate_defer(
+            &transport->websocket_retry, now_us);
+      }
       return;
     }
     if (result == ITERATE_KIT_POSIX_WEBSOCKET_OPEN_FAILED) {
       transport->websocket_open_attempt_active = false;
+      transport->websocket_open_deadline_us = 0;
       transport->last_platform_error =
           transport->websocket.last_error;
       increment(&transport->websocket_errors);
@@ -260,6 +276,7 @@ static void drive_socket(
     }
     ++transport->socket_generation;
     transport->websocket_open_attempt_active = false;
+    transport->websocket_open_deadline_us = 0;
     transport->socket_connected = true;
     increment(&transport->websocket_connections);
   }
@@ -556,6 +573,7 @@ void iterate_kit_posix_itx_transport_metrics(
       &transport->control_sender, &sender_metrics);
   metrics->websocket_connections = transport->websocket_connections;
   metrics->websocket_start_attempts = transport->websocket_start_attempts;
+  metrics->websocket_open_timeouts = transport->websocket_open_timeouts;
   metrics->websocket_disconnects = transport->websocket_disconnects;
   metrics->websocket_errors = transport->websocket_errors;
   metrics->ready_socket_generation = transport->ready_socket_generation;

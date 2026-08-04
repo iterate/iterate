@@ -22,7 +22,6 @@ enum {
   CONFIGURATION_FIELD_OS_BASE_URL = 3,
   CONFIGURATION_FIELD_PROJECT_ID = 4,
   CONFIGURATION_FIELD_PROJECT_API_KEY = 5,
-  CONFIGURATION_FIELD_PCM_BASE_URL = 6,
 };
 
 static const uint8_t configuration_magic_prefix[] = {
@@ -127,7 +126,7 @@ static bool valid_base_url(const char *value) {
         *cursor == '#') {
       /*
        * Store only an origin-like base. Allowing paths, userinfo, fragments, or
-       * escaped control characters would make fixed `/api` and `/pcm` endpoint
+       * escaped control characters would make fixed `/api` endpoint
        * construction ambiguous and could redirect credentials unexpectedly.
        */
       return false;
@@ -235,15 +234,6 @@ iterate_kit_configuration_build_itx_websocket_url(
     size_t destination_capacity) {
   return build_websocket_url(
       os_base_url, "/api", destination, destination_capacity);
-}
-
-enum iterate_kit_configuration_error
-iterate_kit_configuration_build_pcm_websocket_url(
-    const char *pcm_base_url,
-    char *destination,
-    size_t destination_capacity) {
-  return build_websocket_url(
-      pcm_base_url, "/pcm", destination, destination_capacity);
 }
 
 enum iterate_kit_configuration_error iterate_kit_configuration_decode(
@@ -356,10 +346,6 @@ enum iterate_kit_configuration_error iterate_kit_configuration_decode(
         destination = configuration->project_api_key;
         capacity = sizeof(configuration->project_api_key);
         break;
-      case CONFIGURATION_FIELD_PCM_BASE_URL:
-        destination = configuration->pcm_base_url;
-        capacity = sizeof(configuration->pcm_base_url);
-        break;
       default:
         /*
          * Unknown tags are length-delimited and integrity-protected, so older
@@ -388,21 +374,7 @@ enum iterate_kit_configuration_error iterate_kit_configuration_decode(
         configuration,
         ITERATE_KIT_CONFIGURATION_MISSING_FIELD);
   }
-  if ((seen_fields &
-          (UINT32_C(1) << CONFIGURATION_FIELD_PCM_BASE_URL)) == 0U) {
-    /*
-     * Tag 6 was added without changing ITERKIT1 so already-flashed local rigs
-     * continue to boot. They retain the old one-origin behavior deliberately;
-     * every newly encoded production image writes tag 6 and takes the direct
-     * userspace path.
-     */
-    memcpy(
-        configuration->pcm_base_url,
-        configuration->os_base_url,
-        strlen(configuration->os_base_url) + 1U);
-  }
   if (!valid_base_url(configuration->os_base_url) ||
-      !valid_base_url(configuration->pcm_base_url) ||
       !valid_project_id(configuration->project_id)) {
     return fail(
         configuration,

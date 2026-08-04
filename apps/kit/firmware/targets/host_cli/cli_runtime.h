@@ -19,6 +19,7 @@
 #include "cli_audio_out.h"
 #include "cli_capabilities.h"
 #include "cli_conversation.h"
+#include "cli_device_controls.h"
 #include "cli_keyboard.h"
 #include "cli_microphone.h"
 #include "cli_options.h"
@@ -59,8 +60,9 @@ struct cli_runtime {
   size_t outbox_lengths[ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_posix_itx_transport transport;
   struct iterate_kit_peer peer;
-  struct iterate_kit_module module;
+  struct iterate_kit_module modules[2];
   struct cli_capabilities capabilities;
+  struct cli_device_controls device_controls;
   struct iterate_kit_voicelab voicelab;
   uint32_t voicelab_generation;
   /* The connection borrows this array until process shutdown. */

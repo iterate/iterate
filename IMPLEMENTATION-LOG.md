@@ -140,3 +140,49 @@ realtime API, so the proof is locally hosted but not provider-hermetic.
 **Open:** A fake-provider option could make the conversation proof independent
 of xAI availability, but it is not part of Phase 1 and is not required for the
 product path. The preservation archive's iCloud upload remains pending.
+
+## 2026-08-04 — phase 1: mandatory re-review corrections
+
+**Did:** Removed the retired `/pcm` origin, endpoint builder, backward fallback,
+tests, and callback-generation helpers so the configuration and capability
+surface now describe only the single `/api` lane. Replaced the host rig's
+parallel push-to-talk implementation with the shared bounded capability module
+and one device-event owner for remote, physical, and scripted edges. Bounded a
+POSIX DNS/TCP/TLS/upgrade attempt at 10,000 ms with separate retriable timeout
+telemetry. Audited the voice dynamic worker's Cap'n Web ownership, retaining and
+disposing connection handles, capability stubs, and result wrappers through
+bounded teardown.
+
+**Measured:** The host suite passed 34/34 ASan/UBSan CTests, including a
+deterministic stalled-open timeout/recovery test and a host integration test
+that sends remote and physical talk edges through the same queue and mutation
+point. On a fresh local project, a 384-frame scripted turn completed with 35
+response frames played, zero gaps, 18 concealments, one underrun, 945 ms to
+first audio, 2,009 ms to answer, and zero failures, transport failures, lost
+calls, or cancellations. Its exact 2,654-line dev-server log window contained
+zero undisposed RPC stub warnings, undisposed RPC result warnings, disposal
+failures, or error outcomes. Full repository typecheck, zero-warning lint, and
+workspace tests passed; OS contributed 2,704 passing tests, 12 expected
+failures, and one skip.
+
+**Surprised by:** Cap'n Web method return values carry disposal ownership as
+well as long-lived capability stubs. Closing connection handles alone removed
+some warnings, but a GC cycle then named the still-live `Stream.append` result;
+disposing the resolved result wrapper closed the remaining telemetry defect.
+An exploratory structural-proxy disposal probe also demonstrated that reading
+an arbitrary symbol on a client path constructs a remote method expression, so
+that approach was reverted and the damaged local project was preserved for
+diagnosis rather than reset.
+
+**Reviewer said:** The fresh fable review hit its account usage limit, so the
+user-authorized `gpt-5.6-sol` maximum-effort fallback found four release
+blockers: stale dual-lane architecture, shared push-to-talk linked only by its
+unit test, an unbounded pre-upgrade connection state, and undisposed RPC warning
+telemetry in the real local proof. → **did:** Removed the dead lane, integrated
+the shared module into the actual host, added and surfaced the open-attempt
+deadline, and made RPC ownership explicit until a full local turn emitted a
+clean server-log window.
+
+**Open:** Run the independent Phase 1 review once more against this correction
+commit. Phase 2 still owns the formal codec/processor seams and audio quality
+work. The preservation archive's iCloud upload remains pending.

@@ -19,7 +19,7 @@
  * The browser/CLI flasher writes this image with TypeScript and firmware reads
  * it with C, so neither implementation's round-trip test can prove wire
  * compatibility alone. Decode the checked-in cross-language golden image and
- * pin the complete credential set. The 424-byte gate is permanent device RAM,
+ * pin the complete credential set. The size gate is permanent device RAM,
  * not cosmetic struct size: growing it must be an explicit firmware budget
  * decision rather than accidental padding or field creep.
  */
@@ -39,17 +39,9 @@ static void decodes_the_typescript_golden_image(void) {
   CHECK(strcmp(
       configuration.os_base_url,
       "https://os.iterate.com") == 0);
-  /*
-   * Images flashed before the lane split do not carry tag 6. Falling back to
-   * the OS origin preserves local single-server rigs while every new
-   * production image pins the userspace PCM origin explicitly.
-   */
-  CHECK(strcmp(
-      configuration.pcm_base_url,
-      "https://os.iterate.com") == 0);
   CHECK(strcmp(configuration.project_id, "prj_voice_lab") == 0);
   CHECK(strcmp(configuration.project_api_key, "itxk_secret") == 0);
-  CHECK(sizeof(configuration) <= 553U);
+  CHECK(sizeof(configuration) <= 424U);
 }
 
 /*
@@ -123,26 +115,6 @@ static void builds_the_itx_websocket_endpoint_without_allocation(void) {
 }
 
 /*
- * Cap'n Web control traffic and high-volume PCM deliberately use independent
- * sockets: a large audio frame must never head-of-line block capabilities,
- * reconnect, or diagnostics. Pin `/pcm` separately from `/api` so a future URL
- * refactor cannot silently merge the lanes and reintroduce that coupling.
- */
-static void builds_the_independent_pcm_websocket_endpoint(void) {
-  char endpoint[ITERATE_KIT_PCM_WEBSOCKET_URL_CAPACITY];
-
-  CHECK(iterate_kit_configuration_build_pcm_websocket_url(
-      "https://os.iterate.com", endpoint, sizeof(endpoint)) ==
-      ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(endpoint, "wss://os.iterate.com/pcm") == 0);
-
-  CHECK(iterate_kit_configuration_build_pcm_websocket_url(
-      "http://localhost:8787", endpoint, sizeof(endpoint)) ==
-      ITERATE_KIT_CONFIGURATION_OK);
-  CHECK(strcmp(endpoint, "ws://localhost:8787/pcm") == 0);
-}
-
-/*
  * Truncating an endpoint would often leave a syntactically plausible hostname,
  * and preserving an old output buffer after validation failure could connect
  * with stale authority. Reject non-origin base URLs and insufficient capacity,
@@ -169,7 +141,6 @@ int main(void) {
   classifies_corruption_without_partial_credentials();
   rejects_truncated_and_wrong_version_images();
   builds_the_itx_websocket_endpoint_without_allocation();
-  builds_the_independent_pcm_websocket_endpoint();
   rejects_invalid_or_truncated_itx_websocket_endpoints();
   return 0;
 }

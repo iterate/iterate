@@ -69,10 +69,6 @@ static enum capnweb_status cli_capabilities_start_call(
     void *context, const struct capnweb_call *call, struct capnweb_reply *reply);
 static enum capnweb_status cli_capabilities_hang_up(
     void *context, const struct capnweb_call *call, struct capnweb_reply *reply);
-static enum capnweb_status cli_capabilities_talk_start(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply);
-static enum capnweb_status cli_capabilities_talk_stop(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply);
 static enum capnweb_status cli_capabilities_health(
     void *context, const struct capnweb_call *call, struct capnweb_reply *reply);
 static enum capnweb_status cli_capabilities_restart(
@@ -82,10 +78,6 @@ static const char *const CLI_CAPABILITIES_START_PATH[] = {
   "conversation", "start"};
 static const char *const CLI_CAPABILITIES_HANG_UP_PATH[] = {
   "conversation", "hangUp"};
-static const char *const CLI_CAPABILITIES_TALK_START_PATH[] = {
-  "pushToTalk", "start"};
-static const char *const CLI_CAPABILITIES_TALK_STOP_PATH[] = {
-  "pushToTalk", "stop"};
 static const char *const CLI_CAPABILITIES_HEALTH_PATH[] = {"health"};
 static const char *const CLI_CAPABILITIES_RESTART_PATH[] = {"restart"};
 
@@ -98,14 +90,6 @@ static const struct iterate_kit_method CLI_CAPABILITIES_METHODS[] = {
    sizeof(CLI_CAPABILITIES_HANG_UP_PATH) /
        sizeof(CLI_CAPABILITIES_HANG_UP_PATH[0]),
    cli_capabilities_hang_up},
-  {CLI_CAPABILITIES_TALK_START_PATH,
-   sizeof(CLI_CAPABILITIES_TALK_START_PATH) /
-       sizeof(CLI_CAPABILITIES_TALK_START_PATH[0]),
-   cli_capabilities_talk_start},
-  {CLI_CAPABILITIES_TALK_STOP_PATH,
-   sizeof(CLI_CAPABILITIES_TALK_STOP_PATH) /
-       sizeof(CLI_CAPABILITIES_TALK_STOP_PATH[0]),
-   cli_capabilities_talk_stop},
   {CLI_CAPABILITIES_HEALTH_PATH,
    sizeof(CLI_CAPABILITIES_HEALTH_PATH) /
        sizeof(CLI_CAPABILITIES_HEALTH_PATH[0]),
@@ -314,13 +298,15 @@ static void cli_capabilities_write_health_transport(
       "\"outboxDiscarded\":%u,\"inboxPublished\":%u,"
       "\"inboxConsumed\":%u,\"inboxDiscarded\":%u,"
       "\"inboxHighWater\":%u,\"sessionGeneration\":%u,"
-      "\"protoFailures\":%u,\"recvFailures\":%u,\"sendFailures\":%u,"
+      "\"openTimeouts\":%u,\"protoFailures\":%u,"
+      "\"recvFailures\":%u,\"sendFailures\":%u,"
       "\"inboxDeferrals\":%u,\"lastAppStatus\":%d,\"dmaLargest\":0",
       metrics->control_messages_sent, metrics->control_outbox_discarded,
       metrics->control_inbox.messages_published,
       metrics->control_inbox.messages_consumed,
       metrics->control_inbox_discarded, metrics->control_inbox.high_water_slots,
-      runtime->connection.generation, metrics->protocol_failures,
+      runtime->connection.generation, metrics->websocket_open_timeouts,
+      metrics->protocol_failures,
       metrics->control_receive_failures, metrics->control_send_failures,
       metrics->control_inbox_deferrals, metrics->last_capnweb_status);
 }
@@ -362,30 +348,14 @@ static enum capnweb_status cli_capabilities_hang_up(
   (void)call;
   struct cli_capabilities *capabilities = context;
   assert(capabilities != NULL && capabilities->runtime != NULL);
-  capabilities->runtime->wants_talk = false;
+  if (cli_device_controls_request_talk(
+          &capabilities->runtime->device_controls,
+          false,
+          ITERATE_KIT_DEVICE_EVENT_SOURCE_REMOTE) != ITERATE_KIT_OK) {
+    return capnweb_reply_set_error(
+        reply, "Error", "device control queue is full");
+  }
   capabilities->runtime->wants_call = false;
-  return cli_capabilities_reply_true(reply);
-}
-
-static enum capnweb_status cli_capabilities_talk_start(
-    void *context,
-    const struct capnweb_call *call,
-    struct capnweb_reply *reply)
-{
-  (void)call;
-  struct cli_capabilities *capabilities = context;
-  assert(capabilities != NULL && capabilities->runtime != NULL);
-  capabilities->runtime->wants_talk = true;
-  return cli_capabilities_reply_true(reply);
-}
-
-static enum capnweb_status cli_capabilities_talk_stop(
-    void *context, const struct capnweb_call *call, struct capnweb_reply *reply)
-{
-  (void)call;
-  struct cli_capabilities *capabilities = context;
-  assert(capabilities != NULL && capabilities->runtime != NULL);
-  capabilities->runtime->wants_talk = false;
   return cli_capabilities_reply_true(reply);
 }
 

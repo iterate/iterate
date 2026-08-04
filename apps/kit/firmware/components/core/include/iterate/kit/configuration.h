@@ -19,12 +19,9 @@ enum {
   ITERATE_KIT_WIFI_SSID_CAPACITY = 33,
   ITERATE_KIT_WIFI_PASSWORD_CAPACITY = 65,
   ITERATE_KIT_OS_BASE_URL_CAPACITY = 129,
-  ITERATE_KIT_PCM_BASE_URL_CAPACITY = 129,
   ITERATE_KIT_PROJECT_ID_CAPACITY = 65,
   ITERATE_KIT_PROJECT_API_KEY_CAPACITY = 129,
   ITERATE_KIT_ITX_WEBSOCKET_URL_CAPACITY =
-      ITERATE_KIT_OS_BASE_URL_CAPACITY + 2,
-  ITERATE_KIT_PCM_WEBSOCKET_URL_CAPACITY =
       ITERATE_KIT_OS_BASE_URL_CAPACITY + 2,
 };
 
@@ -39,13 +36,6 @@ struct iterate_kit_configuration {
   char wifi_ssid[ITERATE_KIT_WIFI_SSID_CAPACITY];
   char wifi_password[ITERATE_KIT_WIFI_PASSWORD_CAPACITY];
   char os_base_url[ITERATE_KIT_OS_BASE_URL_CAPACITY];
-  /*
-   * Cap'n Web is a platform connection to OS, while PCM belongs to whichever
-   * userspace app owns the realtime conversation. Keeping both origins in the
-   * immutable boot record prevents a proxy hop from coupling their upgrade,
-   * reconnect, authentication, or backpressure behavior.
-   */
-  char pcm_base_url[ITERATE_KIT_PCM_BASE_URL_CAPACITY];
   char project_id[ITERATE_KIT_PROJECT_ID_CAPACITY];
   char project_api_key[ITERATE_KIT_PROJECT_API_KEY_CAPACITY];
 };
@@ -86,17 +76,6 @@ enum iterate_kit_configuration_error iterate_kit_configuration_decode(
 enum iterate_kit_configuration_error
 iterate_kit_configuration_build_itx_websocket_url(
     const char *os_base_url,
-    char *destination,
-    size_t destination_capacity);
-
-/**
- * Converts a validated HTTP(S) OS base URL to the corresponding WS(S) `/pcm`
- * endpoint in caller-owned storage. This stays separate from the Cap'n Web
- * endpoint because realtime PCM has its own binary protocol and lifecycle.
- */
-enum iterate_kit_configuration_error
-iterate_kit_configuration_build_pcm_websocket_url(
-    const char *pcm_base_url,
     char *destination,
     size_t destination_capacity);
 

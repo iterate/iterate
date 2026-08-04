@@ -6,6 +6,7 @@ add_executable(iterate-kit-cli
   cli_audio_out.c
   cli_capabilities.c
   cli_conversation.c
+  cli_device_controls.c
   cli_delivery_fault.c
   cli_device_profile.c
   cli_fault_schedule.c
@@ -34,6 +35,7 @@ target_compile_options(iterate-kit-cli PRIVATE
   -Wconversion
   -Wshadow)
 target_link_libraries(iterate-kit-cli PRIVATE
+  iterate-kit-capabilities
   iterate-kit-darwin
   ${ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK}
   ${ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK})
