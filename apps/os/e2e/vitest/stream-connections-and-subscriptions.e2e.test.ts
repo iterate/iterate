@@ -119,10 +119,10 @@ test("replaying earlier events, receiving new appends, filters, state callbacks,
   const selectedOffsets = selected.map((event) => event.offset);
   expect(selectedOffsets).toEqual([
     historicalMatch!.offset,
+    historicalEphemeral!.offset,
     liveMatch!.offset,
     liveEphemeral!.offset,
   ]);
-  expect(selectedOffsets).not.toContain(historicalEphemeral!.offset);
   expect(selectedOffsets).not.toContain(historicalNonMatch!.offset);
   expect(live.map((event) => event.offset)).toEqual([
     liveMatch!.offset,
@@ -398,10 +398,9 @@ test("waitForEvent records one open and close pair and cleans up after a timeout
       afterOffset: 0,
       eventTypes: [MATCHING_EVENT_TYPE],
       predicate: (event) => event.payload?.phase === "historical-ephemeral",
-      timeoutMs: 1_000,
+      timeoutMs: 10_000,
     }),
-  ).rejects.toThrow(/Timed out waiting for stream event/);
-  expect(historicalEphemeral).toMatchObject({ ephemeral: true });
+  ).resolves.toMatchObject({ offset: historicalEphemeral!.offset, ephemeral: true });
 
   const liveEphemeralWait = stream.waitForEvent({
     afterOffset: coreState(await stream.runtimeState()).maxOffset,
@@ -409,10 +408,8 @@ test("waitForEvent records one open and close pair and cleans up after a timeout
     predicate: (event) => event.payload?.phase === "live-ephemeral",
     timeoutMs: 10_000,
   });
-  // Ephemeral rows are never replayed, so the append must not race the wait's
-  // arming: only an armed wait can observe it. The earlier waits in this test
-  // have already closed their connections, so any waitForEvent connection
-  // present now is this one.
+  // The earlier waits have already closed their connections, so any
+  // waitForEvent connection present now is this one.
   await waitForCondition(
     async () =>
       Object.values(runtimeState(await stream.runtimeState()).runtime.connections).some(

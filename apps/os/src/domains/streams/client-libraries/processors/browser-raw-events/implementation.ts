@@ -9,9 +9,9 @@ import type { SqlClient, SqlValue } from "../../browser/stream-browser-db.ts";
 import { BrowserRawEventsContract } from "./contract.ts";
 export { BrowserRawEventsContract } from "./contract.ts";
 
-// v7 clears local event tables that may contain replayed historical ephemeral rows. The
-// durable-only replay contract cannot leave those old rows visible after the
-// live-only ephemeral cutover.
+// v7 clears local event tables that may contain ephemeral events persisted by
+// the previous browser projection. Ephemeral events now feed only the volatile
+// UI overlay, so those old rows cannot remain visible after an upgrade.
 export const BROWSER_RAW_EVENTS_SCHEMA_VERSION = 7;
 
 /**
@@ -60,8 +60,8 @@ export class BrowserRawEventsProcessor extends StreamProcessor<
     const event = args.event;
     // Event-less caught-up call: this projection has no caught-up work.
     if (event === null) return;
-    // Sparse offsets are expected: historical ephemerals are intentionally
-    // absent. The runner validates the enclosing scan envelope before this
+    // Sparse offsets are expected: memory-only ephemeral events are
+    // intentionally absent. The runner validates the enclosing scan envelope before this
     // hook runs, so accepting a gap here means "proved omitted", not "lost".
     this.projectionBuffer.append(event.offset, [
       {
@@ -111,9 +111,9 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             --
             -- local_index is deliberately separate from offset. Today it is offset - 1,
             -- because server offsets are one-based and TanStack Virtual indexes are
-            -- zero-based. Neither column is guaranteed dense: the server may evict
-            -- ephemeral rows (their offsets stay consumed), so replays can carry
-            -- permanent gaps. The actual consumers (inspector panels' offset point
+            -- zero-based. Neither column is guaranteed dense: ephemeral event
+            -- bodies are never written to durable storage, while their offsets
+            -- stay consumed, so replays can carry permanent gaps. The actual consumers (inspector panels' offset point
             -- reads and ORDER BY offset walks) are gap-proof.
             CREATE TABLE IF NOT EXISTS events (
               local_index INTEGER PRIMARY KEY,
@@ -172,9 +172,8 @@ const ensureBrowserRawEventsSchema = createSchemaEnsurer({
             --    "first stored locally".
             -- 2. Same offset with different JSON is a conflicting duplicate.
             -- 3. New rows must append in increasing offset order. Gaps are legal:
-            --    the server may evict ephemeral rows (offsets stay consumed), so a
-            --    strict-continuity check would wedge every replay of a stream whose
-            --    chunks were swept.
+            --    memory-only ephemeral events consume offsets without entering
+            --    durable replay, so strict continuity would wedge every later row.
             CREATE TRIGGER IF NOT EXISTS events_before_insert
             BEFORE INSERT ON events
             BEGIN

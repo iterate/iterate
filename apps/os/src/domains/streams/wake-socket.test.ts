@@ -75,7 +75,7 @@ describe("WakeSocketRegistry", () => {
     expect(socket.sent).toHaveLength(1); // wakeSentAtOffset dedupes until re-bind
   });
 
-  it("never wakes on lifecycle facts or ephemeral rows unless the filter names them", () => {
+  it("wakes for matching ephemeral events but not unnamed lifecycle facts", () => {
     const plain = fakeSocket(dormant());
     const lifecycleNamed = fakeSocket(
       dormant({
@@ -88,11 +88,11 @@ describe("WakeSocketRegistry", () => {
 
     registry.wakeDormant([event(11, "events.iterate.com/stream/woken")]);
     registry.wakeDormant([event(12, "example.com/tick", true)]);
-    expect(plain.sent).toEqual([]);
+    expect(plain.sent).toEqual(['{"type":"wake"}']);
     expect(lifecycleNamed.sent).toEqual([]);
 
     registry.wakeDormant([event(13, "events.iterate.com/stream/connection-closed")]);
-    expect(plain.sent).toEqual([]); // lifecycle-excluded for unfiltered subscribers
+    expect(plain.sent).toEqual(['{"type":"wake"}']); // no second wake for the lifecycle fact
     expect(lifecycleNamed.sent).toEqual(['{"type":"wake"}']); // explicit naming opts in
   });
 

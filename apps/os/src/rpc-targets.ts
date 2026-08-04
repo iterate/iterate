@@ -558,7 +558,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
 
   async __describe(): Promise<Description> {
     return describeNode({
-      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), openConnection(), subscribeToEventsFrom(), unsubscribeFromEvents(), kill(). Processors and agents communicate by appending and reducing events. A processor on stream A can react only to events appended to A; call subscribeToEventsFrom({ sourceStreamPath, subscriptionKey }) on the receiving stream to make the named source append matching copies here. Omit subscriptionKey only when supplying idempotencyKey for retry-safe generated-key setup. Each copy records the source stream and offset in source.copiedFrom. The source stores each durable subscription and its cursor under a source-local subscriptionKey. append({ ..., ephemeral: true }) commits a transient event: connections opened before the append receive it, while default reads and durable subscriptions always exclude it. The row may be deleted later, so append durable product truth separately.`,
+      instructions: `A durable event stream at path "${this.props.path}": append(events), readEvents(), getEvents(), waitForEvent(), openConnection(), subscribeToEventsFrom(), unsubscribeFromEvents(), kill(). Processors and agents communicate by appending and reducing events. A processor on stream A can react only to events appended to A; call subscribeToEventsFrom({ sourceStreamPath, subscriptionKey }) on the receiving stream to make the named source append matching copies here. Omit subscriptionKey only when supplying idempotencyKey for retry-safe generated-key setup. Each copy records the source stream and offset in source.copiedFrom. The source stores each durable subscription and its cursor under a source-local subscriptionKey. append({ ..., ephemeral: true }) assigns a real offset but keeps the event body only in bounded Durable Object memory. Reads with includeEphemeral and session connections can replay it while buffered; a restart or FIFO eviction forgets it. Durable subscriptions always exclude it. Ephemeral events reject idempotency keys, so append durable product truth separately.`,
       children: {
         append: "Commit events; returns them with offsets.",
         at: "The stream at a sub-path.",
@@ -697,8 +697,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   }
 
   /** One event by offset or idempotencyKey; undefined when it does not exist.
-   * Point reads return ephemeral rows too — but those rows are evictable, so
-   * an offset that once resolved may later read as undefined. */
+   * An offset read returns a buffered ephemeral event too, but restart or FIFO
+   * eviction can make that same offset read as undefined later. Ephemeral
+   * events cannot have idempotency keys. */
   async getEvent(
     args: { offset: number; idempotencyKey?: never } | { idempotencyKey: string; offset?: never },
   ): Promise<StreamEvent | undefined> {
@@ -746,9 +747,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Block until an event lands that is after `afterOffset`, matches
    * `eventTypes`, and passes `predicate`; rejects after `timeoutMs`.
-   * Durable rows after `afterOffset` are replayed. It can also match an
-   * `ephemeral: true` event appended after this wait opens, but historical
-   * ephemeral rows are never replayed.
+   * Durable events and currently buffered ephemeral events after `afterOffset`
+   * are replayed; it can also match a new event appended after this wait opens.
    */
   async waitForEvent(args: {
     afterOffset?: number;
@@ -953,9 +953,8 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Open one session-owned callback connection to this stream.
    *
-   * `processEventBatch` first receives durable history after
-   * `replayAfterOffset`, then new commits. Transient events are delivered only
-   * when appended after this exact connection opens and are never replayed.
+   * `processEventBatch` first receives durable events plus any ephemeral events
+   * still buffered after `replayAfterOffset`, then new commits.
    * The stream forgets the connection when the session disconnects. Durable
    * event sending is configured separately by appending events to the source
    * stream.

@@ -232,15 +232,23 @@ coordinates.
 
 ## Events marked ephemeral
 
-`append({ ..., ephemeral: true })` writes an offset-ordered row that may later
-be deleted. Never derive durable product truth from it.
+`append({ ..., ephemeral: true })` assigns a real offset but never writes the
+event body to Durable Object SQLite. The current Durable Object incarnation
+keeps up to 10 MiB of serialized ephemeral events in memory and evicts the
+oldest first. A restart forgets the complete buffer. Never derive durable
+product truth from an ephemeral event.
 
-- Range reads exclude it unless `includeEphemeral: true`.
-- Point reads may return it while the row still exists.
-- A session callback sees it only when it is appended after that callback
-  opens; it is never replayed during session catch-up.
+- Range reads exclude it unless `includeEphemeral: true`; those reads merge
+  currently buffered ephemeral events with durable rows in offset order.
+- Point reads by offset may return it while it remains buffered. Ephemeral
+  events cannot have idempotency keys.
+- A session callback replays currently buffered ephemeral events after its
+  cursor and then receives new ones live. Browser catch-up requests this
+  ephemeral-inclusive view for its in-memory UI projection.
 - Durable subscriptions never deliver it.
 - Stream control events cannot be ephemeral.
+- One ephemeral event larger than the complete memory budget rejects its
+  append before an offset is consumed.
 
 Emit a separate durable result after transient progress:
 
@@ -257,9 +265,11 @@ await stream.append({
 });
 ```
 
-Deleting ephemeral rows can leave valid offset gaps. The allocator floor must
-survive deletion, and rebuilding state counts surviving events instead of
-assuming `eventCount === maxOffset`.
+Forgotten ephemeral events leave valid offset gaps. A small SQLite metadata
+row durably records the highest assigned offset so those offsets are never
+reused; it contains no ephemeral event type, payload, metadata, or body.
+Rebuilding core state counts durable events instead of assuming
+`eventCount === maxOffset`.
 
 ## Product-event retries and cursors
 

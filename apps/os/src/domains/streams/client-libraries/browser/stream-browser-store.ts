@@ -43,7 +43,7 @@ import {
   type StreamBrowserDatabase,
   type StreamDatabaseInfo,
 } from "./stream-browser-db.ts";
-import { catchUpDurableHistory, catchUpToLiveReplayBoundary } from "./catch-up-page.ts";
+import { catchUpAvailableHistory, catchUpToLiveReplayBoundary } from "./catch-up-page.ts";
 import { reconcileBrowserProcessorCache } from "./processor-cache-reconciliation.ts";
 import {
   browserStreamSubscriberUserUpdate,
@@ -77,8 +77,9 @@ const DEFAULT_STREAM_PROJECT_ID = "default";
 // batches and redelivered 3.26× through reconnect churn). So the writer PULLS history
 // with paged `getEvents` reads — client-paced, so backpressure is structural — and only
 // opens the callback once the remaining replay interval fits inside
-// MAX_LIVE_REPLAY_OFFSET_GAP. Historical reads deliberately exclude ephemeral
-// rows; only the callback's post-open interval may contain them.
+// MAX_LIVE_REPLAY_OFFSET_GAP. Historical reads explicitly include whatever
+// ephemeral events the current Stream Durable Object incarnation still holds;
+// browser projections apply those only to their in-memory overlay.
 
 /** `getEvents` page size (its server-side maximum). */
 const CATCHUP_PAGE_LIMIT = 500;
@@ -1264,8 +1265,9 @@ function createStreamRuntime(
                 // the runner's own construction (runnerHooks) fails loudly on
                 // anything that is not a real StreamProcessor instance.
                 processor: browserProcessor as unknown as StreamProcessor<any, any>,
-                // Range reads are durable-only. Live ephemeral rows exist only
-                // in the group's per-connection in-memory overlay.
+                // The runner's own recovery reads remain durable-only. The
+                // group intercepts ephemeral events from the browser catch-up
+                // and callback paths for its in-memory overlay.
                 stream: election.connection,
                 durability: { progress },
                 // No recovery adapter: a browser tab has no keepalive alarm — a
@@ -1299,12 +1301,11 @@ function createStreamRuntime(
           );
         }
 
-        // Pull every pre-open historical offset through a bounded, durable-only
-        // scan. The scan envelope advances across omitted ephemeral rows, so
-        // old chunks neither replay nor leave a permanent cursor hole. Once
-        // the remaining interval fits the server's atomic open guard, the
-        // callback opens after the captured boundary and only post-open
-        // ephemeral events can enter the in-memory overlay.
+        // Pull every still-available pre-open event through bounded pages.
+        // Durable events feed the persistent runners; buffered ephemeral
+        // events feed only the in-memory UI overlay. Missing ephemeral offsets
+        // are scanned as gaps. Once the remaining interval fits the server's
+        // atomic open guard, the callback opens after the captured boundary.
         const caughtUp = await catchUpToLiveReplayBoundary({
           afterOffset: opened.checkpointOffset,
           throughOffset: serverMaxOffset,
@@ -1313,7 +1314,7 @@ function createStreamRuntime(
           expectedStreamId: serverStreamId,
           shouldContinue: ownsRuntime,
           catchUp: ({ afterOffset, throughOffset, pageLimit }) =>
-            catchUpDurableHistory({
+            catchUpAvailableHistory({
               afterOffset,
               throughOffset,
               pageLimit,
@@ -1326,6 +1327,7 @@ function createStreamRuntime(
                     afterOffset: cursor,
                     beforeOffset,
                     limit,
+                    includeEphemeral: true,
                   }),
                 )) as { streamId: string; events: StreamEvent[] },
               ingest: async ({ events, scannedAfterOffset, scannedThroughOffset }) => {
@@ -1366,8 +1368,6 @@ function createStreamRuntime(
         if (caughtUp === undefined || !ownsRuntime()) return undefined;
         const replayAfterOffset = caughtUp.replayAfterOffset;
         lastDeliveredOffset = replayAfterOffset;
-        processor.clearVolatileState();
-        updateLiveAgentUiState(null);
         // The live capabilities ride as SIBLINGS of the serializable
         // descriptor — the same position as in a hosted processor's wake response,
         // built by the same shared helper so the two hosts cannot drift.
@@ -1418,8 +1418,8 @@ function createStreamRuntime(
         // Claim the volatile relay immediately before the atomic live open.
         // Any old writer's overlay disappears even if it crashed without a
         // release message; state published below belongs to this session only.
-        updateLiveAgentUiState(null);
-        liveAgentStateChannel.claim(null);
+        updateLiveAgentUiState(ready.processor.agentUiState);
+        liveAgentStateChannel.claim(ready.processor.agentUiState);
         const handle = await withDeadline(
           "open event callback",
           election.connection.openConnection({
