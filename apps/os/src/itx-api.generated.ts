@@ -2442,7 +2442,7 @@ export type AgentProcessorState = {
           )[]
         | undefined;
       actor?:
-        | { type: "user"; origin: "mcp" | "web" }
+        | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
         | { type: "agent"; path: string }
         | { type: "script"; executionId: string }
         | { type: "integration"; name: string }
@@ -2630,7 +2630,7 @@ export type AgentEventInput =
             )[]
           | undefined;
         actor?:
-          | { type: "user"; origin: "mcp" | "web" }
+          | { type: "user"; origin: "mcp" | "web"; userId?: string | undefined }
           | { type: "agent"; path: string }
           | { type: "script"; executionId: string }
           | { type: "integration"; name: string }
@@ -3933,6 +3933,7 @@ export type DeviceAppendInput =
   | TypedConsumedEventInput<
       "events.iterate.com/device/notification-requested",
       {
+        agentReplyEventOffset?: number | undefined;
         approvalRequestEventOffset?: number | undefined;
         body: string;
         destination:
