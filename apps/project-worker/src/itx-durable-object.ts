@@ -1,13 +1,15 @@
-// The ItxDurableObject — the capability host (target-core §4.1). One DO per {projectId, path}, addressed by
-// name. It is the single host for a context:
-//   • NATIVE fetch — the ONE method a WS upgrade (101) can flow through. `/connect` → a capnweb provider
-//     session; a WS upgrade → ingress (acceptWebSocket); a non-WS request → EGRESS (secret-sub → fallback).
-//   • invokeCapability — the single dispatch: built-ins (whoami/kv/secrets) → live provider mounts → local
-//     static/alias mounts → fall back to the enclosing shell. "Reads fall back, writes stay local" (§4.4).
+// The ItxDurableObject — the capability host (target-core §4.1). One DO per {projectId, path} (a faux-URL
+// name), the single host for a context:
+//   • NATIVE fetch — the ONE method a WS upgrade (101) can flow through. `/register` → a hibernatable WAKE
+//     socket (no pin); `/connect` → a capnweb provider RPC leg; a WS upgrade → ingress (acceptWebSocket); a
+//     non-WS request → EGRESS (secret-sub → fallback). `/state` → observability.
+//   • invokeCapability — the single dispatch: built-ins (whoami/kv/secrets/streams) → live provider mounts →
+//     WAKE-ON-CALL (page a hibernatable device) → local static/alias mounts → fall back to the PARENT PATH,
+//     then the SHELL. "Reads fall back, writes stay local" (§4.4 / D21).
 //   • provideCapability — mount at a callPath. load — run confined code IN this context (env.ITX = self-stub).
 //
-// NOT YET: wake-on-call for live mounts (hibernation, spikes 3-4); streams built-in; the real
-// DurableObjectNameCodec + parent-path fallthrough. Solo: the DO name IS the projectId.
+// Wake-on-call (spike-4): a live RPC leg is the ONLY thing that pins the DO; wake sockets are hibernatable, so
+// 1000 registered devices cost ~nothing while idle. Deferred: the control-plane join (a real shell worker).
 
 import { DurableObject } from "cloudflare:workers";
 import { newWorkersRpcResponse, RpcTarget } from "capnweb";
