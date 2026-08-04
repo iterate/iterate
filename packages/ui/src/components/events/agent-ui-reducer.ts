@@ -146,6 +146,36 @@ export function formatAgentUiActivitySummary(
   return parts.join(" · ");
 }
 
+/** One activity round: the llm step that writes a script and the code step that runs it. */
+export type AgentUiActivityRound = {
+  llm: AgentUiLlmStep | null;
+  code: AgentUiCodeStep | null;
+};
+
+/**
+ * Group an activity's steps into ROUNDS: the llm step that writes a script
+ * and the code step that runs it belong together, and an agent that returns
+ * itself a value for the next attempt produces round 2, 3, … A round opens at
+ * every llm step (or at a code step with no llm before it — replays can drop
+ * the llm half). Both round renderers — mobile's activity card
+ * (apps/mobile/src/components/activity-card.tsx) and the os web feed
+ * (apps/os/src/components/agent-feed.tsx) — group through this one function.
+ */
+export function groupActivityRounds(steps: readonly AgentUiStep[]): AgentUiActivityRound[] {
+  const rounds: AgentUiActivityRound[] = [];
+  for (const step of steps) {
+    const current = rounds.at(-1);
+    if (step.kind === "llm") {
+      rounds.push({ llm: step, code: null });
+    } else if (current !== undefined && current.code === null) {
+      current.code = step;
+    } else {
+      rounds.push({ llm: null, code: step });
+    }
+  }
+  return rounds;
+}
+
 export function formatAgentUiDuration(durationMs: number): string {
   if (durationMs < 1000) return `${Math.round(durationMs)} ms`;
   if (durationMs < 60_000) return `${(durationMs / 1000).toFixed(1).replace(/\.0$/, "")} s`;

@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import {
   formatAgentUiActivitySummary,
+  groupActivityRounds,
   isAgentUiActivityWorking,
   summarizeAgentUiActivity,
   type AgentUiActivity,
@@ -33,17 +34,16 @@ import { Spinner } from "@iterate-com/ui/components/spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@iterate-com/ui/components/tooltip";
 import { cn } from "@iterate-com/ui/lib/utils";
 import { deriveAgentDisplayState } from "~/domains/agents/agent-presence.ts";
+import type { StreamBrowserDatabase } from "~/domains/streams/client-libraries/browser/stream-browser-db.ts";
 import {
-  formatClockTime,
   formatDateTime,
   formatDateTimeAttribute,
   formatElapsedSeconds,
   formatFileSize,
-  formatSeconds,
-  formatTokens,
   liveActivityLabel,
   looksLikeCode,
 } from "~/lib/feed-format.ts";
+import { AgentActivityRoundRow, AgentActivityRounds } from "~/components/agent-activity-rounds.tsx";
 import { linkOptionsForStreamPath } from "~/lib/stream-routes.ts";
 import { useTickingNowMs } from "~/lib/use-ticking-now-ms.ts";
 
@@ -64,6 +64,7 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   onInspectLlmRequest,
   onInspectScriptExecution,
   projectSlug,
+  database,
 }: {
   item: AgentUiItem;
   toggledIds: ReadonlySet<string>;
@@ -73,6 +74,8 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
   /** Opens the script execution inspector at this execution id (code steps only). */
   onInspectScriptExecution?: (executionId: string) => void;
   projectSlug?: string;
+  /** The raw-event mirror; when present, a round's Meta tab replays its exact prompt. */
+  database?: StreamBrowserDatabase;
 }) {
   if (item.kind === "stream-woken") {
     return <StreamWakeRow item={item} />;
@@ -146,6 +149,7 @@ export const AgentFeedItemRow = memo(function AgentFeedItemRow({
         onToggle={onToggle}
         onInspectLlmRequest={onInspectLlmRequest}
         onInspectScriptExecution={onInspectScriptExecution}
+        database={database}
       />
     );
   }
@@ -328,12 +332,14 @@ function AgentActivityRow({
   onToggle,
   onInspectLlmRequest,
   onInspectScriptExecution,
+  database,
 }: {
   activity: AgentUiActivity;
   expanded: boolean;
   onToggle: (id: string) => void;
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
   onInspectScriptExecution?: (executionId: string) => void;
+  database?: StreamBrowserDatabase;
 }) {
   const summary = summarizeAgentUiActivity(activity);
   const failed = summary.outcome === "failed";
@@ -368,15 +374,15 @@ function AgentActivityRow({
         />
       </Button>
       {expanded ? (
-        <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
-          {activity.steps.map((step) => (
-            <AgentActivityStep
-              key={step.id}
-              step={step}
-              onInspectLlmRequest={onInspectLlmRequest}
-              onInspectScriptExecution={onInspectScriptExecution}
-            />
-          ))}
+        <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-1 border-l-2 border-muted py-1 pl-4">
+          {/* Rounds, like mobile's activity card: the llm request's meta moved
+              into each round's Meta tab instead of spending a feed row. */}
+          <AgentActivityRounds
+            rounds={groupActivityRounds(activity.steps)}
+            database={database}
+            onInspectLlmRequest={onInspectLlmRequest}
+            onInspectScriptExecution={onInspectScriptExecution}
+          />
         </div>
       ) : null}
     </div>
@@ -539,91 +545,6 @@ function MessageAttachment({ file }: { file: AgentUiFileAttachment }) {
 }
 
 // ---------------------------------------------------------------------------
-// Steps: condensed LLM request and code-run rows that open their inspectors
-// ---------------------------------------------------------------------------
-
-function AgentActivityStep({
-  step,
-  onInspectLlmRequest,
-  onInspectScriptExecution,
-}: {
-  step: AgentUiStep;
-  onInspectLlmRequest?: (llmRequestOffset: number) => void;
-  onInspectScriptExecution?: (executionId: string) => void;
-}) {
-  const failed = step.kind === "code" ? step.success === false : step.outcome === "failed";
-  const inspect =
-    step.kind === "llm"
-      ? onInspectLlmRequest == null
-        ? undefined
-        : () => onInspectLlmRequest(step.llmRequestOffset)
-      : onInspectScriptExecution == null
-        ? undefined
-        : () => onInspectScriptExecution(step.executionId);
-  return (
-    <div className="flex flex-col items-start">
-      <Button
-        variant="ghost"
-        size="xs"
-        title={
-          step.kind === "llm" ? "Open this LLM request trace" : "Open this script's code and result"
-        }
-        data-testid={
-          step.kind === "llm"
-            ? "agent-feed-inspect-llm-request"
-            : "agent-feed-inspect-script-execution"
-        }
-        onClick={inspect}
-        className={cn(
-          "-ml-2 self-start font-normal",
-          failed && "text-destructive hover:text-destructive",
-        )}
-      >
-        {step.kind === "llm" && step.outcome === "cancelled" ? (
-          <BanIcon data-icon="inline-start" className="text-destructive" />
-        ) : step.kind === "llm" ? (
-          <span className="shrink-0 text-[11px] leading-none text-muted-foreground/50">✦</span>
-        ) : (
-          <CodeIcon data-icon="inline-start" className="text-muted-foreground" />
-        )}
-        <span className={cn("font-mono text-xs text-foreground/70", failed && "text-destructive")}>
-          {stepLabel(step)}
-        </span>
-        <span className="font-mono text-xs text-muted-foreground/70">{stepMeta(step)}</span>
-        <ChevronRightIcon data-icon="inline-end" className="text-muted-foreground/50" />
-      </Button>
-    </div>
-  );
-}
-
-function stepLabel(step: AgentUiStep): string {
-  if (step.kind === "code") {
-    if (step.status === "running") return "Running code";
-    return step.success === false ? "Code failed" : "Ran code";
-  }
-  if (step.cancelReason === "interrupted-by-user-input") return "Stopped for your new message";
-  if (step.cancelReason === "expired") return "Request expired";
-  if (step.outcome === "cancelled") return "Request cancelled";
-  return step.model ?? "LLM request";
-}
-
-function stepMeta(step: AgentUiStep): string {
-  if (step.kind === "code") {
-    const parts = [`Started ${formatClockTime(step.startedAtMs)}`];
-    if (step.durationMs != null) parts.push(formatSeconds(step.durationMs));
-    return parts.join(" · ");
-  }
-  const parts: string[] = [];
-  if (step.cancelReason != null && step.model != null) parts.push(step.model);
-  if (step.inputTokens != null || step.outputTokens != null) {
-    parts.push(`${formatTokens(step.inputTokens)} → ${formatTokens(step.outputTokens)} tok`);
-  }
-  if (step.durationMs != null) parts.push(formatSeconds(step.durationMs));
-  if (step.outcome === "failed") parts.push("failed");
-  return parts.join(" · ");
-}
-
-// ---------------------------------------------------------------------------
 // The live element: accumulated activity followed by the current timed phase.
 // ---------------------------------------------------------------------------
 
@@ -639,6 +560,7 @@ export function AgentLiveActivity({
   onToggle,
   onInspectLlmRequest,
   onInspectScriptExecution,
+  database,
 }: {
   live: AgentUiActivity;
   runtime: AgentRuntime;
@@ -646,6 +568,7 @@ export function AgentLiveActivity({
   onToggle: (id: string) => void;
   onInspectLlmRequest?: (llmRequestOffset: number) => void;
   onInspectScriptExecution?: (executionId: string) => void;
+  database?: StreamBrowserDatabase;
 }) {
   const runningSteps = live.steps.filter((step) => step.status === "running");
   const liveStep = runningSteps.at(-1);
@@ -707,6 +630,7 @@ export function AgentLiveActivity({
         onToggle={onToggle}
         onInspectLlmRequest={onInspectLlmRequest}
         onInspectScriptExecution={onInspectScriptExecution}
+        database={database}
       />
     );
   }
@@ -744,25 +668,25 @@ export function AgentLiveActivity({
         </Button>
       ) : null}
       {showStepRail ? (
-        <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-0.5 border-l-2 border-muted py-1 pl-4">
-          {doneSteps.map((step) => (
-            <AgentActivityStep
-              key={step.id}
-              step={step}
-              onInspectLlmRequest={onInspectLlmRequest}
-              onInspectScriptExecution={onInspectScriptExecution}
-            />
-          ))}
-          {runningSteps.map((step) =>
-            step.kind === "code" ? (
-              <AgentActivityStep
-                key={step.id}
-                step={step}
+        <div className="mb-1.5 ml-1 mt-0.5 flex flex-col gap-1 border-l-2 border-muted py-1 pl-4">
+          {/* Rounds, like the settled rail — except the round whose llm step is
+              still streaming (no code step, so no tab bar yet): its
+              thinking/response text streams in place, exactly as before. */}
+          {groupActivityRounds(live.steps).map((round, index) =>
+            round.code == null && round.llm != null && round.llm.status === "running" ? (
+              round.llm === liveStep && liveStepHasVisibleContent(round.llm) ? (
+                <LiveStepStream key={round.llm.id} step={round.llm} />
+              ) : null
+            ) : (
+              <AgentActivityRoundRow
+                key={round.code?.id ?? round.llm?.id ?? index}
+                round={round}
+                index={index}
+                database={database}
+                onInspectLlmRequest={onInspectLlmRequest}
                 onInspectScriptExecution={onInspectScriptExecution}
               />
-            ) : step === liveStep && liveStepHasVisibleContent(step) ? (
-              <LiveStepStream key={step.id} step={step} />
-            ) : null,
+            ),
           )}
         </div>
       ) : null}
