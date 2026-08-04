@@ -2,7 +2,6 @@ import git from "isomorphic-git";
 import { describe, expect, it, vi } from "vitest";
 import {
   GithubTemplateSourceError,
-  createBoundedGitHttpClient,
   createGithubTemplateSource,
   isRetryableGithubTemplateSourceError,
 } from "./github-template-source.ts";
@@ -30,12 +29,12 @@ describe("GitHub template source", () => {
     const workerBlob = await blobSha(worker);
     const linkBlob = await blobSha(link);
     const logoBlob = await blobSha(logo);
-    const readServerRefs = vi.fn(async () => [
-      { oid: COMMIT_SHA, ref: "HEAD", target: "refs/heads/main" },
-      { oid: COMMIT_SHA, ref: "refs/heads/main" },
-    ]);
     const fetcher = vi.fn<typeof fetch>(async (url) => {
       const path = String(url);
+      if (path === "https://api.github.com/repos/iterate/iterate") {
+        return Response.json({ default_branch: "main" });
+      }
+      if (path.endsWith("/commits/main")) return Response.json({ sha: COMMIT_SHA });
       if (path.endsWith("/worker.ts")) return bytesResponse(worker);
       if (path.endsWith("/worker-link")) return bytesResponse(link);
       if (path.endsWith("/assets/logo.bin")) return bytesResponse(logo);
@@ -54,7 +53,7 @@ describe("GitHub template source", () => {
       ],
       [ASSETS_TREE, [{ hash: logoBlob, mode: "100644", name: "logo.bin", type: "blob" }]],
     ]);
-    const source = createGithubTemplateSource({ fetch: fetcher, readServerRefs });
+    const source = createGithubTemplateSource({ fetch: fetcher });
 
     const resolved = await source.resolve({
       owner: "iterate",
@@ -68,10 +67,10 @@ describe("GitHub template source", () => {
       path: "configs/with-voice",
       repo: "iterate",
     });
-    expect(readServerRefs).toHaveBeenCalledWith("https://github.com/iterate/iterate.git", {
-      prefix: "HEAD",
-      symrefs: true,
-    });
+    expect(fetcher).toHaveBeenCalledWith(
+      "https://api.github.com/repos/iterate/iterate",
+      expect.objectContaining({ signal: expect.any(AbortSignal) }),
+    );
 
     const files = await source.files(resolved, {
       readTree: async (hash) => trees.get(hash),
@@ -88,50 +87,52 @@ describe("GitHub template source", () => {
     );
   });
 
-  it("resolves branches before tags and peels annotated tags", async () => {
-    const readServerRefs = vi.fn(
-      async (_url: string, _query: { peelTags?: boolean; prefix: string; symrefs?: boolean }) => [
-        { oid: OTHER_SHA, ref: "refs/tags/release", peeled: COMMIT_SHA },
-        { oid: COMMIT_SHA, ref: "refs/heads/release" },
-        { oid: OTHER_SHA, ref: "refs/tags/tag-only", peeled: COMMIT_SHA },
-      ],
-    );
-    const source = createGithubTemplateSource({
-      readServerRefs,
+  it("resolves branches before tags and commits", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (url) => {
+      const path = String(url);
+      if (path.endsWith("/branches/release")) {
+        return Response.json({ commit: { sha: COMMIT_SHA } });
+      }
+      if (path.endsWith("/branches/tag-only")) return new Response(null, { status: 404 });
+      if (path.endsWith("/commits/tag-only")) return Response.json({ sha: OTHER_SHA });
+      return new Response(null, { status: 404 });
     });
+    const source = createGithubTemplateSource({ fetch: fetcher });
 
     await expect(source.resolve({ owner: "o", ref: "release", repo: "r" })).resolves.toMatchObject({
       branch: "release",
       commitSha: COMMIT_SHA,
     });
     const tag = await source.resolve({ owner: "o", ref: "tag-only", repo: "r" });
-    expect(tag).toMatchObject({ commitSha: COMMIT_SHA });
+    expect(tag).toMatchObject({ commitSha: OTHER_SHA });
     expect(tag).not.toHaveProperty("branch");
-    expect(readServerRefs.mock.calls.map(([, query]) => query)).toEqual([
-      { prefix: "refs/heads/release" },
-      { prefix: "refs/heads/tag-only" },
-      { peelTags: true, prefix: "refs/tags/tag-only" },
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+      "https://api.github.com/repos/o/r/branches/release",
+      "https://api.github.com/repos/o/r/branches/tag-only",
+      "https://api.github.com/repos/o/r/commits/tag-only",
     ]);
   });
 
-  it("accepts a full commit without ref discovery and resolves an unadvertised short commit", async () => {
-    const fetcher = vi.fn<typeof fetch>(async () => Response.json({ sha: COMMIT_SHA }));
-    const readServerRefs = vi.fn(async () => [{ oid: OTHER_SHA, ref: "HEAD" }]);
-    const source = createGithubTemplateSource({ fetch: fetcher, readServerRefs });
+  it("accepts a full commit without ref discovery and resolves a short commit", async () => {
+    const fetcher = vi.fn<typeof fetch>(async (url) =>
+      String(url).includes("/branches/")
+        ? new Response(null, { status: 404 })
+        : Response.json({ sha: COMMIT_SHA }),
+    );
+    const source = createGithubTemplateSource({ fetch: fetcher });
 
     await expect(source.resolve({ owner: "o", ref: COMMIT_SHA, repo: "r" })).resolves.toMatchObject(
       { commitSha: COMMIT_SHA },
     );
-    expect(readServerRefs).not.toHaveBeenCalled();
     expect(fetcher).not.toHaveBeenCalled();
 
     await expect(
       source.resolve({ owner: "o", ref: COMMIT_SHA.slice(0, 12), repo: "r" }),
     ).resolves.toMatchObject({ commitSha: COMMIT_SHA });
-    expect(fetcher).toHaveBeenCalledWith(
+    expect(fetcher.mock.calls.map(([url]) => String(url))).toEqual([
+      `https://api.github.com/repos/o/r/branches/${COMMIT_SHA.slice(0, 12)}`,
       `https://api.github.com/repos/o/r/commits/${COMMIT_SHA.slice(0, 12)}`,
-      expect.objectContaining({ signal: expect.any(AbortSignal) }),
-    );
+    ]);
   });
 
   it("uses the public GitHub tree fallback for tag and commit sources", async () => {
@@ -154,7 +155,7 @@ describe("GitHub template source", () => {
           })
         : bytesResponse(content),
     );
-    const source = createGithubTemplateSource({ fetch: fetcher, readServerRefs: async () => [] });
+    const source = createGithubTemplateSource({ fetch: fetcher });
 
     await expect(
       source.files({ commitSha: COMMIT_SHA, owner: "o", path: "template", ref: "v1", repo: "r" }),
@@ -164,7 +165,7 @@ describe("GitHub template source", () => {
   });
 
   it("rejects missing and non-directory subtrees as terminal source outcomes", async () => {
-    const source = createGithubTemplateSource({ readServerRefs: async () => [] });
+    const source = createGithubTemplateSource();
     const reader = {
       readTree: async () => [{ hash: OTHER_SHA, mode: "100644", name: "file", type: "blob" }],
       rootTreeHash: ROOT_TREE,
@@ -178,16 +179,14 @@ describe("GitHub template source", () => {
     ).rejects.toMatchObject({ retryable: false });
   });
 
-  it("classifies Git smart-HTTP outages as retryable and non-public repos as terminal", async () => {
+  it("classifies GitHub API outages as retryable and non-public repos as terminal", async () => {
     for (const [status, retryable] of [
       [401, false],
       [503, true],
       [429, true],
     ] as const) {
       const source = createGithubTemplateSource({
-        readServerRefs: async () => {
-          throw { code: "HttpError", data: { statusCode: status } };
-        },
+        fetch: async () => new Response(null, { status }),
       });
       const error = await source
         .resolve({ owner: "o", repo: "r" })
@@ -197,11 +196,11 @@ describe("GitHub template source", () => {
     }
   });
 
-  it("rejects an oversized ref advertisement instead of retaining it", async () => {
-    const client = createBoundedGitHttpClient(async () =>
-      bytesResponse(new Uint8Array(2 * 1024 * 1024 + 1)),
-    );
-    await expect(client.request({ url: "https://github.com/o/r.git" })).rejects.toMatchObject({
+  it("rejects an oversized ref response instead of retaining it", async () => {
+    const source = createGithubTemplateSource({
+      fetch: async () => bytesResponse(new Uint8Array(1024 * 1024 + 1)),
+    });
+    await expect(source.resolve({ owner: "o", repo: "r" })).rejects.toMatchObject({
       retryable: false,
     });
   });
@@ -209,7 +208,6 @@ describe("GitHub template source", () => {
   it("keeps a raw blob mismatch retryable instead of copying inconsistent bytes", async () => {
     const source = createGithubTemplateSource({
       fetch: async () => bytesResponse("wrong"),
-      readServerRefs: async () => [],
     });
 
     await expect(

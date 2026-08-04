@@ -1,11 +1,11 @@
-import git, { type GitHttpRequest, type HttpClient, type ServerRef } from "isomorphic-git";
+import git from "isomorphic-git";
 import { z } from "zod";
 import { isSafeConfigRepoTemplatePath } from "../../lib/config-repo-template-reference.ts";
 
 const MAX_FILE_COUNT = 500;
 const MAX_FILE_BYTES = 8 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 32 * 1024 * 1024;
-const MAX_GIT_ADVERTISEMENT_BYTES = 2 * 1024 * 1024;
+const MAX_GITHUB_REF_BYTES = 1024 * 1024;
 const MAX_GITHUB_TREE_BYTES = 8 * 1024 * 1024;
 const MAX_PATH_BYTES = 1_024;
 const MAX_TREE_ENTRY_COUNT = 5_000;
@@ -17,12 +17,8 @@ const REQUEST_TIMEOUT_MS = 8_000;
 
 const GitSha = z.string().regex(/^[0-9a-f]{40}$/);
 const Commit = z.object({ sha: GitSha });
-const GitFailure = z
-  .object({
-    code: z.string().optional(),
-    data: z.object({ statusCode: z.number().int().optional() }).loose().optional(),
-  })
-  .loose();
+const Repository = z.object({ default_branch: z.string().min(1) });
+const Branch = z.object({ commit: Commit });
 const TreeEntry = z.object({
   hash: GitSha,
   mode: z.string(),
@@ -73,12 +69,6 @@ type ListedFile = {
   sourcePath: string;
 };
 
-type ServerRefQuery = {
-  peelTags?: boolean;
-  prefix: string;
-  symrefs?: boolean;
-};
-
 /** A source failure whose classification controls whether the repo creation
  * obligation remains open for recovery or terminates as create-failed. */
 export class GithubTemplateSourceError extends Error {
@@ -95,20 +85,6 @@ export function isRetryableGithubTemplateSourceError(
   error: unknown,
 ): error is GithubTemplateSourceError {
   return error instanceof GithubTemplateSourceError && error.retryable;
-}
-
-function classifyGitFailure(message: string, error: unknown): GithubTemplateSourceError {
-  if (error instanceof GithubTemplateSourceError) return error;
-  const parsed = GitFailure.safeParse(error);
-  const status = parsed.success ? parsed.data.data?.statusCode : undefined;
-  const code = parsed.success ? parsed.data.code : undefined;
-  return new GithubTemplateSourceError(message, {
-    cause: error,
-    retryable:
-      status === 429 ||
-      (status !== undefined && status >= 500) ||
-      (status === undefined && code !== "NotFoundError"),
-  });
 }
 
 async function readBoundedBytes(
@@ -155,69 +131,6 @@ async function readBoundedBytes(
     offset += chunk.byteLength;
   }
   return bytes;
-}
-
-async function collectRequestBody(body: GitHttpRequest["body"]): Promise<Uint8Array | undefined> {
-  if (body === undefined) return undefined;
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  for await (const chunk of body) {
-    size += chunk.byteLength;
-    if (size > MAX_GIT_ADVERTISEMENT_BYTES) {
-      throw new GithubTemplateSourceError("Git smart-HTTP request body is unexpectedly large.", {
-        retryable: false,
-      });
-    }
-    chunks.push(chunk);
-  }
-  const bytes = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) {
-    bytes.set(chunk, offset);
-    offset += chunk.byteLength;
-  }
-  return bytes;
-}
-
-/** Isomorphic Git's stock web adapter does not pass its reserved `signal`
- * through to fetch. Ref discovery uses this adapter instead: protocol-v2
- * discovery and prefix-filtered responses, fully bounded and consumed under
- * a network deadline shorter than the processor-host liveness deadline. */
-export function createBoundedGitHttpClient(request: typeof globalThis.fetch): HttpClient {
-  return {
-    request: async ({ body, headers = {}, method = "GET", url }) => {
-      let response: Response;
-      try {
-        const requestBytes = await collectRequestBody(body);
-        response = await request(url, {
-          body: requestBytes === undefined ? undefined : Uint8Array.from(requestBytes).buffer,
-          headers,
-          method,
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
-        });
-      } catch (error) {
-        throw new GithubTemplateSourceError("Public Git smart-HTTP request failed.", {
-          cause: error,
-          retryable: true,
-        });
-      }
-      const bytes = await readBoundedBytes(
-        response,
-        MAX_GIT_ADVERTISEMENT_BYTES,
-        "Git ref advertisement",
-      );
-      return {
-        body: (async function* () {
-          yield bytes;
-        })(),
-        headers: Object.fromEntries(response.headers),
-        method,
-        statusCode: response.status,
-        statusMessage: response.statusText,
-        url: response.url || url,
-      };
-    },
-  };
 }
 
 function assertSafeTreeName(name: string): void {
@@ -546,33 +459,29 @@ async function downloadFiles(
 }
 
 /** A bounded, read-only GitHub adapter for copying a public repository
- * subtree. Isomorphic Git resolves public refs without credentials. Branch
- * trees can then come from a Cloudflare Artifacts server-side shallow import;
- * tags/commits use GitHub's public recursive-tree endpoint. In both cases only
- * selected raw files cross the Worker, and every body is checked against its
- * immutable Git blob hash. */
+ * subtree. GitHub's public API resolves a ref to an immutable commit and says
+ * whether it is an importable branch. Branch trees can then come from a
+ * Cloudflare Artifacts server-side shallow import; tags/commits use GitHub's
+ * public recursive-tree endpoint. In both cases only selected raw files cross
+ * the Worker, and isomorphic-git checks every body against its immutable Git
+ * blob hash. */
 export function createGithubTemplateSource(
   input: {
     fetch?: typeof globalThis.fetch;
-    readServerRefs?: (url: string, query: ServerRefQuery) => Promise<ServerRef[]>;
   } = {},
 ) {
   const request = input.fetch ?? globalThis.fetch;
-  const readServerRefs =
-    input.readServerRefs ??
-    ((url: string, query: ServerRefQuery) =>
-      git.listServerRefs({
-        http: createBoundedGitHttpClient(request),
-        ...query,
-        protocolVersion: 2,
-        url,
-      }));
 
-  async function resolveUnadvertisedRef(source: GithubTemplateRequest, ref: string) {
+  async function requestGithubJson(
+    source: GithubTemplateRequest,
+    path: string,
+    description: string,
+    options: { allowNotFound?: boolean } = {},
+  ): Promise<unknown | undefined> {
     let response: Response;
     try {
       response = await request(
-        `https://api.github.com/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}/commits/${encodeURIComponent(ref)}`,
+        `https://api.github.com/repos/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}${path}`,
         {
           headers: {
             accept: "application/vnd.github+json",
@@ -583,27 +492,39 @@ export function createGithubTemplateSource(
         },
       );
     } catch (error) {
-      throw new GithubTemplateSourceError(
-        `GitHub could not resolve template ref ${JSON.stringify(ref)}.`,
-        { cause: error, retryable: true },
-      );
+      throw new GithubTemplateSourceError(`${description}.`, { cause: error, retryable: true });
+    }
+    if (response.status === 404 && options.allowNotFound === true) {
+      await response.body?.cancel().catch(() => undefined);
+      return undefined;
     }
     if (!response.ok) {
       await response.body?.cancel().catch(() => undefined);
-      throw new GithubTemplateSourceError(
-        `GitHub could not resolve template ref ${JSON.stringify(ref)}: HTTP ${response.status}.`,
-        { retryable: isRateLimited(response) || response.status >= 500 },
-      );
+      throw new GithubTemplateSourceError(`${description}: HTTP ${response.status}.`, {
+        retryable: isRateLimited(response) || response.status >= 500,
+      });
     }
-    let body: unknown;
     try {
-      body = await response.json();
+      return JSON.parse(
+        new TextDecoder("utf-8", { fatal: true }).decode(
+          await readBoundedBytes(response, MAX_GITHUB_REF_BYTES, "GitHub ref response"),
+        ),
+      );
     } catch (error) {
+      if (error instanceof GithubTemplateSourceError) throw error;
       throw new GithubTemplateSourceError(
-        `GitHub returned invalid JSON while resolving template ref ${JSON.stringify(ref)}.`,
+        `GitHub returned invalid JSON while ${description.toLowerCase()}.`,
         { cause: error, retryable: false },
       );
     }
+  }
+
+  async function resolveCommit(source: GithubTemplateRequest, ref: string): Promise<string> {
+    const body = await requestGithubJson(
+      source,
+      `/commits/${encodeURIComponent(ref)}`,
+      `GitHub could not resolve template ref ${JSON.stringify(ref)}`,
+    );
     const parsed = Commit.safeParse(body);
     if (!parsed.success) {
       throw new GithubTemplateSourceError(
@@ -626,43 +547,41 @@ export function createGithubTemplateSource(
         return { ...source, commitSha: source.ref };
       }
 
-      const remote = `https://github.com/${encodeURIComponent(source.owner)}/${encodeURIComponent(source.repo)}.git`;
-      const refs = async (query: ServerRefQuery) => {
-        try {
-          return await readServerRefs(remote, query);
-        } catch (error) {
-          throw classifyGitFailure(
-            `Could not read public Git refs for ${source.owner}/${source.repo}.`,
-            error,
-          );
-        }
-      };
-
       if (source.ref === undefined) {
-        const head = (await refs({ prefix: "HEAD", symrefs: true })).find(
-          (candidate) => candidate.ref === "HEAD",
+        const repository = Repository.safeParse(
+          await requestGithubJson(
+            source,
+            "",
+            `GitHub could not read public repository ${source.owner}/${source.repo}`,
+          ),
         );
-        if (head === undefined) {
+        if (!repository.success) {
           throw new GithubTemplateSourceError(
-            `Public GitHub template ${source.owner}/${source.repo} has no default branch.`,
-            { retryable: false },
+            `GitHub returned an unexpected response for public repository ${source.owner}/${source.repo}.`,
+            { cause: repository.error, retryable: false },
           );
         }
-        const branch = head.target?.startsWith("refs/heads/")
-          ? head.target.slice("refs/heads/".length)
-          : undefined;
-        return { ...source, ...(branch === undefined ? {} : { branch }), commitSha: head.oid };
+        const branch = repository.data.default_branch;
+        return { ...source, branch, commitSha: await resolveCommit(source, branch) };
       }
 
-      const branch = (await refs({ prefix: `refs/heads/${source.ref}` })).find(
-        (candidate) => candidate.ref === `refs/heads/${source.ref}`,
+      const branchBody = await requestGithubJson(
+        source,
+        `/branches/${encodeURIComponent(source.ref)}`,
+        `GitHub could not resolve template branch ${JSON.stringify(source.ref)}`,
+        { allowNotFound: true },
       );
-      if (branch !== undefined) return { ...source, branch: source.ref, commitSha: branch.oid };
-      const tag = (await refs({ peelTags: true, prefix: `refs/tags/${source.ref}` })).find(
-        (candidate) => candidate.ref === `refs/tags/${source.ref}`,
-      );
-      if (tag !== undefined) return { ...source, commitSha: tag.peeled ?? tag.oid };
-      return { ...source, commitSha: await resolveUnadvertisedRef(source, source.ref) };
+      if (branchBody !== undefined) {
+        const branch = Branch.safeParse(branchBody);
+        if (!branch.success) {
+          throw new GithubTemplateSourceError(
+            `GitHub returned an unexpected response while resolving template branch ${JSON.stringify(source.ref)}.`,
+            { cause: branch.error, retryable: false },
+          );
+        }
+        return { ...source, branch: source.ref, commitSha: branch.data.commit.sha };
+      }
+      return { ...source, commitSha: await resolveCommit(source, source.ref) };
     },
 
     async files(
