@@ -1,18 +1,15 @@
 name: Mobile PR Preview Cleanup
 permissions:
   contents: write # deletes the PR's QR assets from the gh-attach-assets release
+# Deliberately NO paths filter (matching cloudflare-preview-cleanup.yml):
+# publish reacts to intermediate pushes but `closed` evaluates the FINAL
+# diff, so a PR that published a channel and later reverted its mobile
+# changes would leak on close. Every close runs the script; it exits clean
+# when there's nothing to delete.
 on:
   pull_request:
     types:
       - closed
-    # Mirrors mobile-pr-preview.yml's publish trigger exactly: anything that
-    # can create a channel must also get cleaned up on close.
-    paths:
-      - .depot/workflows/mobile-pr-preview.yml
-      - scripts/ci/publish-mobile-pr-preview.ts
-      - scripts/ci/mobile-preview.ts
-      - scripts/ci/github.ts
-      - apps/mobile/**
 jobs:
   cleanup:
     runs-on:
