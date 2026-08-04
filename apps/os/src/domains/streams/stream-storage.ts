@@ -70,28 +70,16 @@ export class StreamEventLog {
     `);
 
     const highestStoredOffset = this.highestOffset();
-    const legacySequence =
+    const sqliteSequence =
       this.sql
         .exec<{ seq: number | null }>("select seq from sqlite_sequence where name = 'events'")
         .toArray()[0]?.seq ?? 0;
-    const legacyAssignedOffset = Math.max(highestStoredOffset, legacySequence);
+    const initialAssignedOffset = Math.max(highestStoredOffset, sqliteSequence);
     this.sql.exec(
       "insert or ignore into stream_metadata (singleton, highest_assigned_offset) values (1, ?)",
-      legacyAssignedOffset,
+      initialAssignedOffset,
     );
-    this.advanceHighestAssignedOffset(legacyAssignedOffset);
-
-    const eventColumns = this.sql
-      .exec<{ name: string }>("pragma table_info('events')")
-      .toArray()
-      .map((column) => column.name);
-    if (eventColumns.includes("ephemeral")) {
-      this.sql.exec(
-        "delete from event_chunks where offset in (select offset from events where ephemeral = 1)",
-      );
-      this.sql.exec("delete from events where ephemeral = 1");
-      this.sql.exec("alter table events drop column ephemeral");
-    }
+    this.advanceHighestAssignedOffset(initialAssignedOffset);
   }
 
   highestOffset(): number {

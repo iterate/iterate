@@ -149,60 +149,6 @@ describe("StreamEventLog.getRange", () => {
     expect(reopened.highestAssignedOffset()).toBe(2);
     expect(reopened.getByOffset(2)).toBeUndefined();
   });
-
-  it("removes legacy ephemeral rows while preserving their assigned offsets", () => {
-    const db = new DatabaseSync(":memory:");
-    db.exec(`
-      create table events (
-        offset integer primary key autoincrement,
-        type text not null,
-        created_at text not null,
-        idempotency_key text unique,
-        ephemeral integer not null default 0
-      );
-      create table event_chunks (
-        offset integer not null,
-        chunk_index integer not null,
-        chunk_bytes blob not null,
-        primary key (offset, chunk_index),
-        foreign key (offset) references events(offset) on delete cascade
-      ) without rowid;
-    `);
-    const durable = event(1, "events.iterate.com/test/durable");
-    const ephemeral = { ...event(2, "events.iterate.com/test/ephemeral"), ephemeral: true };
-    for (const legacyEvent of [durable, ephemeral]) {
-      db.prepare(
-        `insert into events (offset, type, created_at, idempotency_key, ephemeral)
-         values (?, ?, ?, null, ?)`,
-      ).run(
-        legacyEvent.offset,
-        legacyEvent.type,
-        legacyEvent.createdAt,
-        legacyEvent.ephemeral === true ? 1 : 0,
-      );
-      db.prepare(
-        "insert into event_chunks (offset, chunk_index, chunk_bytes) values (?, 0, ?)",
-      ).run(legacyEvent.offset, new TextEncoder().encode(JSON.stringify(legacyEvent)));
-    }
-
-    const log = new StreamEventLog(wrapSqlStorage(db), "/tests/stream");
-
-    expect(log.getByOffset(1)).toEqual(durable);
-    expect(log.getByOffset(2)).toBeUndefined();
-    expect(log.highestOffset()).toBe(1);
-    expect(log.highestAssignedOffset()).toBe(2);
-    expect(db.prepare("select count(*) as count from event_chunks where offset = 2").get()).toEqual(
-      {
-        count: 0,
-      },
-    );
-    expect(
-      db
-        .prepare("pragma table_info('events')")
-        .all()
-        .map((column) => column.name),
-    ).not.toContain("ephemeral");
-  });
 });
 
 describe("SqliteSubscriptionCursorStore hosted delivery watchdog", () => {
