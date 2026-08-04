@@ -51,6 +51,15 @@
 
 #include "capnweb/capnweb.h"
 #include "iterate/kit/audio_playout.h"
+#include "iterate/kit/control_recovery.h"
+#include "iterate/kit/speaker_abandon.h"
+
+/*
+ * Throw away whatever speaker audio is queued, in the one safe order. Declared
+ * here because the abandon sites are spread across the receive path and the app
+ * loop; defined once, beside the runtime it acts on.
+ */
+static uint32_t abandon_speaker_audio(void);
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/device_menu.h"
 #include "iterate/kit/itx_connection.h"
@@ -148,6 +157,10 @@ enum {
   MIC_OUTBOX_RESERVE = ITERATE_KIT_VOICE_MIC_OUTBOX_RESERVE,
   FRAME_MS = ITERATE_KIT_VOICE_FRAME_MS,
   FRAME_SAMPLES = ITERATE_KIT_VOICE_FRAME_SAMPLES,
+  /* One frame of speaker audio, in milliseconds. */
+  SPEAKER_FRAME_MS = 20,
+  /* One hardware ring of credited audio: the point an answer is under way. */
+  DMA_RING_CREDIT_MS = 90,
   FRAME_BYTES = ITERATE_KIT_VOICE_FRAME_BYTES,
   MIC_QUEUE_DEPTH = ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH,
   MIC_FRAMES_PER_APPEND = ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
@@ -315,7 +328,12 @@ EXT_RAM_BSS_ATTR static uint8_t
  * The default is the historical one, so a device that has never been asked for
  * anything else behaves exactly as it did.
  */
-#define STREAM_PATH_DEFAULT "/voicelab/device"
+/*
+ * Under /agents/voice/ because the conversation's stream IS its agent: the
+ * voice half and the thinking half are one identity at one path. A default
+ * outside /agents/ gave the device a conversation with no agent behind it.
+ */
+#define STREAM_PATH_DEFAULT "/agents/voice/device"
 static char stream_path[96] = STREAM_PATH_DEFAULT;
 /*
  * The path a setup call is preparing. Kept apart from the live one so a setup
@@ -356,6 +374,11 @@ static struct {
   struct iterate_kit_module modules[1];
   struct iterate_kit_voicelab voicelab;
   struct iterate_kit_playout playout;
+  /* The shared, unit-tested recovery decision — the same one stackchan drives. */
+  struct iterate_kit_control_recovery control_recovery;
+  /* How many idle remounts this boot has ASKED for, so a device stuck in the
+   * loop says so in its own telemetry instead of looking idle. */
+  uint32_t idle_remounts;
   uint32_t voicelab_generation;
   uint32_t frame_sequence;
   /*
@@ -364,7 +387,13 @@ static struct {
    * would go dark exactly when someone added the counter that explains a
    * bug. The overflow is logged for the same reason.
    */
-  char stats_buffer[1536];
+  /*
+   * 2560, not 1536. Nine added fields overflowed it and the device went dark:
+   * every downstream reader then sees "no stats", which looks like a broken
+   * speaker rather than a full buffer. The guard names the field it stopped at,
+   * which is how this was found in one read.
+   */
+  char stats_buffer[2560];
   uint32_t stats_sequence;
   enum iterate_kit_esp_idf_itx_transport_state last_transport_state;
   enum iterate_kit_voicelab_state last_voicelab_state;
@@ -460,22 +489,97 @@ static struct {
   volatile uint64_t answer_started_ms;
   volatile uint32_t answer_emitted_ms;
   /** When an RPC was last answered: the mount's own liveness, not the socket's. */
-  volatile uint64_t last_served_ms;
   /* What the two buttons mean between calls; see device_menu.h. */
   struct iterate_kit_menu menu;
   uint32_t speaker_lag_max_ms;
   volatile bool speaker_answer_done;
+  /*
+   * The SENDER said this answer is complete, latched until the speaker actually
+   * drains it. `speaker_answer_done` is consumed by the playback clock the
+   * moment it is seen, long before the buffer empties, so it cannot answer
+   * "has this answer finished being heard?" — and that question is the whole
+   * difference between an answer that ended and an answer that was cut off.
+   */
+  volatile bool answer_declared_done;
   uint32_t flush_frames_left;
   uint64_t flush_deadline_ms;
   uint64_t turn_started_ms;
 } runtime;
 
 /* What `itx.kit.waveshare` looks like to whoever holds the capability. */
+/*
+ * What an agent is told this device is, and how to use it. See the note at the
+ * assignment in initialise_connection() for why this string rather than
+ * peer_description is the model-facing one.
+ */
+static const char instructions[] =
+    "Iterate voice device (Waveshare ESP32-S3 AMOLED, 368x448 touch panel, "
+    "microphone, speaker, two buttons). Calls are dotted paths on this mount.\n"
+    "\n"
+    "METRICS: health() takes no arguments and returns ~70 live read-only "
+    "numbers as one JSON object. This is the metrics surface — prefer it over "
+    "the voicelab/dev-stats telemetry events, which the device publishes every "
+    "5s but which stop exactly when the device stops working. Fields include "
+    "heapFree, heapMin, psramFree, dmaLargest (bytes); spkFrames and spkPlayed "
+    "(20ms audio frames received vs played — equal means nothing was lost), "
+    "spkStarvedMs and spkStarveEvents (THE audible-failure gate: milliseconds the "
+    "DAC had an empty ring while the device was meant to be feeding it; zero on a "
+    "healthy call), spkOverflow (frames dropped because the playout ring was "
+    "full), spkSoftDryTicks and spkSoftDryRefills (the SOFTWARE buffer running "
+    "dry and refilling — absorbed by the 90ms hardware ring, so source lateness "
+    "rather than an audible gap), dmaLedgerDeficit (a DMA ledger artefact at "
+    "intentional cuts, diagnostic only), spkDiscarded, spkLagMaxMs; micCaptured, "
+    "micDropped; connectionState, connGeneration (increments on every "
+    "reconnect), rttMs, pings, bridgeLosses, livenessRestarts, idleRemounts "
+    "(self-healed remounts after nothing inbound arrived), servedDispatches "
+    "(inbound calls answered — the idle watchdog's liveness proof); "
+    "sessionGeneration (a change means the conversation restarted rather than "
+    "continued); callActive, wantsCall, talking, uptimeMs, resetReason.\n"
+    "\n"
+    "CALLS — this is the COMPLETE list; nothing else exists on this mount:\n"
+    "conversation.start(), conversation.hangUp() — both safe to repeat; they "
+    "record intent, so starting a live call or hanging up a dead one changes "
+    "nothing. There is NO interrupt or interruptPlayback method here: to cut "
+    "an answer short, call pushToTalk.start(), which cancels whatever is "
+    "playing and opens the microphone.\n"
+    "pushToTalk.start(), pushToTalk.stop() — take one spoken turn; stop() "
+    "commits what was said and asks for the answer.\n"
+    "showImage(url, seconds) — BASELINE JPEG only, full-screen for 1-30s, then "
+    "the display is restored. PNG and progressive JPEG (SOF2, common from image "
+    "CDNs) are refused; so is anything larger than 368x448. Redirects are "
+    "followed up to 3 hops. Rejects with the reason: bad-url, unreachable, "
+    "http-error, too-large, unsupported-format, decode-failed, timeout, "
+    "no-memory, busy (one image request at a time).\n"
+    "takeScreenshot() then readScreenshotChunk(i) — reads the panel back in "
+    "chunks; takeScreenshot() returns {width,height,format,bytes,chunkSize,"
+    "chunks}.\n"
+    "recording.status(), recording.size(name), recording.read(name, byteOffset) "
+    "— the current call recorded on the device: mic.pcm and speaker.pcm are "
+    "16kHz mono s16le, call.log is text.\n"
+    "setBackground(colour) — hex (#1e293b) or a name (navy, teal, iterate).\n"
+    "setVolume(0-100), setMicGain(0-48 dB).\n"
+    "restart() — reboots. Disruptive: drops any call, ~20s to come back, and "
+    "the conversation path survives in flash.\n"
+#ifdef ITERATE_KIT_DIAGNOSTIC_STARVATION
+    "injectStarvation(ms) — DIAGNOSTIC BUILD ONLY, 20-2000ms: makes the speaker "
+    "skip feeding once, mid-answer, so the DMA underrun detector can be shown "
+    "to fire. Causes a real audible gap.\n"
+#endif
+    "\n"
+    "The UPPER button is the only one that may be HELD (hold to talk). The "
+    "LOWER button is tap-only: it is the power button and holding it switches "
+    "the device off — never tell anyone to hold it.";
+
 static const char peer_description[] =
     "{\"instructions\":\"An Iterate voice device: a 368x448 AMOLED showing "
-    "the call state and live transcript, two physical buttons (BOOT toggles "
-    "the call, PWR is held to speak), a microphone and a speaker. Turn "
-    "taking is manual: hold to talk, release to get an answer.\","
+    "the call state and live transcript, two physical buttons, a microphone "
+    "and a speaker. The UPPER button is the only one that may be HELD: "
+    "hold it to speak, tap it to start a call or take the selected menu "
+    "option. The LOWER button is TAP ONLY — tap to move the on-device "
+    "menu, or to hang up a live call. Never tell anyone to hold the lower "
+    "button: it is the power button and holding it switches the device "
+    "off. Turn taking is manual: hold the upper button to talk, release "
+    "to get an answer.\","
     "\"children\":{"
     "\"setBackground\":\"Fill the screen background with a colour — hex "
     "(#1e293b) or a name (navy, teal, iterate).\","
@@ -483,7 +587,7 @@ static const char peer_description[] =
     "format,bytes,chunkSize,chunks} and readScreenshotChunk(i) returns each "
     "chunk as bytes.\","
     "\"readScreenshotChunk\":\"Read chunk i of the last takeScreenshot.\","
-    "\"setVolume\":\"Speaker volume 0-100.\","
+    "\"showImage\":\"showImage(url, seconds) — fetch an image over http(s) and show it full-screen for that many seconds (1-30), then reveal whatever the device is doing. BASELINE JPEG ONLY: the decoder is the chip ROM's TJpgDec, so PNG is refused and so is progressive JPEG (SOF2), which many image CDNs serve by default — re-encode as baseline JPEG. Redirects are followed (up to 3). The image must fit 368x448; larger is refused, never scaled. Resolves true once the picture is up, or rejects saying which: bad-url, unreachable, http-error, too-large, unsupported-format, decode-failed, timeout, no-memory, busy.\",""\"health\":\"health() — THE DEVICE METRICS SURFACE. No arguments; returns one JSON object of ~70 read-only numbers. Cheap, safe to poll. MEMORY (bytes): heapFree, heapMin (lowest since boot), psramFree, dmaLargest. SPEAKER: spkFrames and spkPlayed are 20ms frames received and played — equal means nothing was lost; spkOverflow counts frames dropped because the playout ring was full, spkStarvedMs and spkStarveEvents are THE starvation gate (milliseconds the DAC had an empty ring while the device was meant to be feeding it, measured against an absolute audio-empty deadline; zero on a healthy call). spkSoftDryTicks and spkSoftDryRefills are the SOFTWARE buffer running dry and refilling — absorbed by the 90ms hardware ring, so they are source lateness, not audible gaps. dmaLedgerDeficit is an epoch-relative DMA ledger artefact, diagnostic only — it moves at intentional cuts and is not starvation, spkDiscarded/spkIgnoredDup/spkIgnoredStale frames refused, spkLagMaxMs and spkMarginMinMs/spkMarginMaxMs timing in ms. MICROPHONE: micCaptured, micDropped, micGated. LINK: connectionState, connGeneration (increments on every reconnect), rttMs, pings, pingFailures, bridgeLosses, livenessRestarts, downlinkRecycles. CONVERSATION: sessionGeneration — a change means the conversation restarted rather than continued. STATE: callActive, wantsCall, talking, gateOpen, uptimeMs, resetReason, lowerReadFailures. Prefer pulling this over waiting for telemetry: the device publishes the same object as voicelab/dev-stats every 5s, but that stops exactly when the device stops working, and this does not.\",""\"restart\":\"Reboot the device. Disruptive — drops any call and takes about 20s to come back. For a wedged device, not for routine use.\",""\"setVolume\":\"Speaker volume 0-100.\","
     "\"setMicGain\":\"Microphone PGA in dB, 0-48.\","
     "\"recording\":{\"size\":\"Bytes of a recorded file from the current "
     "call: mic.pcm and speaker.pcm are 16kHz mono s16le, call.log is text.\","
@@ -548,9 +652,21 @@ static void on_speaker_pcm(
      * Snapshot exactly the stale prefix and have playback skip that many
      * bytes; the replacement frame appended below is therefore retained.
      */
-    runtime.speaker_discard_bytes =
-        (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
-    runtime.speaker_reprime = true;
+    /* Ordering-safe: the watch comes off before the audio does. */
+    (void)abandon_speaker_audio();
+    /*
+     * WE ARE ABOUT TO ABANDON AUDIO, SO SAY SO NOW.
+     *
+     * Disarmed here rather than in the speaker task's reprime branch, because
+     * the flush happens on THIS task while the speaker task is blocked in its
+     * 60ms receive with the watch still armed. The ring plays out the last 90ms
+     * of the abandoned answer and then goes dry waiting for the replacement's
+     * first frame — and that gap was landing in the DMA ledger deficit at send index 164:
+     * deep into feeding, nowhere near an opening, and only ever on a barge-in.
+     *
+     * The gap is real and the listener hears it. It is also entirely ours and
+     * entirely intended, which is the whole difference from starvation.
+     */
     /* A new answer is a new timeline: lag does not carry across answers. */
     runtime.answer_started_ms = 0U;
     runtime.answer_emitted_ms = 0U;
@@ -583,6 +699,56 @@ static void on_speaker_pcm(
   (void)xStreamBufferSend(runtime.speaker_buffer, pcm, pcm_length, 0);
 }
 
+/*
+ * ONE FUNNEL FOR THROWING QUEUED SPEAKER AUDIO AWAY.
+ *
+ * Five sites used to do this by hand — barge-in, a superseded answer, a call
+ * accepted, the bridge hanging up, a new turn's flush — in three different
+ * orders. Two disarmed the starvation watch AFTER taking the audio away, two
+ * never disarmed at all, and one was right. On 2026-08-04 the wrong ordering
+ * cost the acceptance run at 5/10: the bridge had raced 13,020ms ahead, the
+ * hang-up arrived with the ring that deep, and `spkStarveEvents` — the
+ * never-tier gate — recorded a starvation the device had caused on purpose.
+ *
+ * The ordering now lives in `iterate_kit_speaker_abandon`, which is unit-tested
+ * on the host, and every site calls this.
+ */
+static void on_abandon_disarm(void *context) {
+  (void)context;
+  waveshare_audio_dma_watch(false);
+}
+
+static void on_abandon_note_flush(void *context) {
+  (void)context;
+  waveshare_audio_note_flush();
+}
+
+static uint32_t on_abandon_buffered(void *context) {
+  (void)context;
+  return (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
+}
+
+static void on_abandon_set_discard(void *context, uint32_t bytes) {
+  (void)context;
+  runtime.speaker_discard_bytes = bytes;
+}
+
+static void on_abandon_set_reprime(void *context) {
+  (void)context;
+  runtime.speaker_reprime = true;
+}
+
+static uint32_t abandon_speaker_audio(void) {
+  static const struct iterate_kit_speaker_abandon_hooks hooks = {
+    on_abandon_disarm,
+    on_abandon_note_flush,
+    on_abandon_buffered,
+    on_abandon_set_discard,
+    on_abandon_set_reprime,
+  };
+  return iterate_kit_speaker_abandon(&hooks, NULL);
+}
+
 static void on_control(
     void *context, enum iterate_kit_voicelab_control control) {
   (void)context;
@@ -592,9 +758,21 @@ static void on_control(
     /* Barge-in: tell the playback task to skip everything queued so far.
      * The buffer itself is only reset by its reader; a racing writer would
      * corrupt it. */
-    runtime.speaker_discard_bytes =
-        (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
-    runtime.speaker_reprime = true;
+    /* Ordering-safe: the watch comes off before the audio does. */
+    (void)abandon_speaker_audio();
+    /*
+     * WE ARE ABOUT TO ABANDON AUDIO, SO SAY SO NOW.
+     *
+     * Disarmed here rather than in the speaker task's reprime branch, because
+     * the flush happens on THIS task while the speaker task is blocked in its
+     * 60ms receive with the watch still armed. The ring plays out the last 90ms
+     * of the abandoned answer and then goes dry waiting for the replacement's
+     * first frame — and that gap was landing in the DMA ledger deficit at send index 164:
+     * deep into feeding, nowhere near an opening, and only ever on a barge-in.
+     *
+     * The gap is real and the listener hears it. It is also entirely ours and
+     * entirely intended, which is the whole difference from starvation.
+     */
     iterate_kit_playout_interrupt(&runtime.playout);
     ++runtime.barge_in_flushes;
     waveshare_display_set_state(WAVESHARE_UI_LISTENING);
@@ -607,6 +785,7 @@ static void on_control(
      * concealed frames and the metric could never reach zero.
      */
     runtime.speaker_answer_done = true;
+    runtime.answer_declared_done = true;
     /*
      * It must NOT interrupt the playout, however tempting "the answer is
      * over, reset for the next one" looks. `response.done` is one small text
@@ -625,6 +804,29 @@ static void on_control(
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
     waveshare_display_set_status("hold the upper button to talk");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED) {
+    /*
+     * A NEW CALL IS A NEW SENDER. RESET THE PLAYOUT, HERE.
+     *
+     * Answer and frame numbers restart with every call, so a second call on the
+     * same mount opens numerically BEHIND wherever the last one finished, and
+     * the classifier correctly refuses those frames as duplicates. Measured on
+     * the first turn of a fresh call: 539 of 583 delivered frames never reached
+     * the speaker — 330 refused as duplicates, 209 skipped as catch-up — 10.78s
+     * of an answer nobody heard.
+     *
+     * THIS is the place, not the app loop's display observation where it was
+     * first written: that runs later and could easily follow the first audio
+     * frame of the new call, classifying it against stale state before the reset
+     * landed. This branch is the stream's own call-accepted, on the same
+     * serialized receive path that classifies frames — so the reset provably
+     * precedes every frame of the call it belongs to, and cannot race the
+     * classifier because they are the same task.
+     */
+    iterate_kit_playout_reset(&runtime.playout, 1U);
+    (void)abandon_speaker_audio();
+    runtime.speaker_answer_done = false;
+    runtime.answer_declared_done = false;
+    ESP_LOGI(tag, "new call accepted: playout reset for a fresh sender");
     waveshare_display_set_call_active(true);
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
     waveshare_display_set_status("hold the upper button to talk");
@@ -633,10 +835,18 @@ static void on_control(
      * Drop whatever is still queued. The ring holds thirty seconds, so a call
      * that ends mid-answer otherwise plays the dead conversation out after
      * the screen has already said it is over.
+     *
+     * AND STOP MEASURING FIRST. Abandoning queued audio is the device's own
+     * decision, so the starvation detector must be disarmed before the source
+     * goes away — otherwise the audio-empty deadline it is holding passes with
+     * nothing more written, and a deliberate abandon is recorded as a real
+     * starve event. Every other discard site pairs these three lines; this one
+     * did not, and it survived by luck: the local hang-up path usually drains
+     * first. Measured on 2026-08-04, session 5 turn 7 of the acceptance run —
+     * the bridge had raced 13,020ms of audio ahead of realtime, so CALL_ENDED
+     * arrived with the ring still deep, and `spkStarveEvents` moved by 1.
      */
-    runtime.speaker_discard_bytes =
-        (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
-    runtime.speaker_reprime = true;
+    (void)abandon_speaker_audio();
     waveshare_recorder_end_call("bridge hung up");
     /*
      * The BELIEF ends here; the INTENT does not.
@@ -712,6 +922,18 @@ static void playback_task(void *argument) {
     if (runtime.speaker_reprime) {
       runtime.speaker_reprime = false;
       runtime.speaker_answer_done = false;
+      runtime.answer_declared_done = false;
+      /*
+       * A REPRIME EMPTIES THE RING ON PURPOSE.
+       *
+       * A barge-in throws away what was queued and refills from the new
+       * answer's first frame, so the descriptors the hardware sends in between
+       * are cleared because WE cleared them. Disarming (rather than only
+       * labelling the drain) also resets the opening window, so the refill that
+       * follows is measured as an answer starting — which is what it is.
+       */
+      waveshare_audio_dma_watch(false);
+      waveshare_audio_note_flush();
       iterate_kit_voice_playback_clock_reprime(&playout_clock);
     }
     if (runtime.speaker_answer_done) {
@@ -721,6 +943,18 @@ static void playback_task(void *argument) {
     if (!iterate_kit_voice_playback_clock_ready(
             &playout_clock,
             (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer))) {
+      /*
+       * NOT FEEDING, SO NOT WATCHING.
+       *
+       * The watch means "we are handing the DAC audio right now". This branch
+       * decides not to, while the clock builds its prefill — and leaving the
+       * watch armed across it made the DAC's correct silence read as
+       * starvation at every boundary that re-primes: a cold first turn, a turn
+       * after idle, the refill after a barge-in, and teardown. That was the
+       * whole of the systematic DMA ledger deficits, and it is one missing disarm
+       * rather than four separate causes.
+       */
+      waveshare_audio_dma_watch(false);
       ++runtime.speaker_waits_priming;
       /* Idle, not starving: nothing is playing, so write nothing. */
       if (last_write_ms != 0U &&
@@ -752,6 +986,29 @@ static void playback_task(void *argument) {
      * concealed, while the remaining third still bounds how long this task
      * can sit before the ring genuinely empties.
      */
+    /*
+     * ARMED ACROSS THE WAIT UNLESS THE ANSWER IS OVER.
+     *
+     * The window that matters is between one frame and the next: the ring holds
+     * 90ms, this receive blocks for up to 60ms, and if the source fails to
+     * deliver inside that the DAC really does run dry and the listener really
+     * does hear it. So the watch stays ARMED across the wait — disarming here
+     * unconditionally (which I tried) makes every inter-feed gap invisible and
+     * buys a clean run by blinding the detector.
+     *
+     * The one case where a dry ring is legitimate is an answer that is OVER:
+     * the sender said `response.done` and the tail is draining. That is exactly
+     * `answer_declared_done`, latched until the drain completes, so it is the
+     * only condition that disarms.
+     *
+     * Arming happens at the write. Between a write and the next one the watch is
+     * on; past a declared end it is off; during priming, a reprime flush or a
+     * fully skipped frame it is off because we are deliberately not feeding.
+     */
+    if (runtime.answer_declared_done) {
+      waveshare_audio_dma_draining();
+      waveshare_audio_dma_watch(false);
+    }
     received = xStreamBufferReceive(
         runtime.speaker_buffer, chunk, sizeof(chunk),
         pdMS_TO_TICKS(SPEAKER_DRY_WAIT_MS));
@@ -770,6 +1027,18 @@ static void playback_task(void *argument) {
     if (received > 0U && runtime.speaker_reprime) {
       runtime.speaker_reprime = false;
       runtime.speaker_answer_done = false;
+      runtime.answer_declared_done = false;
+      /*
+       * A REPRIME EMPTIES THE RING ON PURPOSE.
+       *
+       * A barge-in throws away what was queued and refills from the new
+       * answer's first frame, so the descriptors the hardware sends in between
+       * are cleared because WE cleared them. Disarming (rather than only
+       * labelling the drain) also resets the opening window, so the refill that
+       * follows is measured as an answer starting — which is what it is.
+       */
+      waveshare_audio_dma_watch(false);
+      waveshare_audio_note_flush();
       iterate_kit_voice_playback_clock_reprime(&playout_clock);
       /* Put it back: it belongs to the answer we are about to prime for. */
       (void)xStreamBufferSend(runtime.speaker_buffer, chunk, received, 0);
@@ -801,6 +1070,18 @@ static void playback_task(void *argument) {
        */
       /* Nothing to play: the zeros the DAC now sends are correct. */
       waveshare_audio_dma_watch(false);
+      /*
+       * The answer has finished being HEARD — but ONLY if the sender had
+       * already declared it complete.
+       *
+       * A dry buffer mid-answer is starvation, not an ending, and clearing the
+       * flag for it would forgive a supersede that really did cut a live answer
+       * off. Both facts are required: `response.done` arrived (latched in
+       * answer_declared_done) AND there is nothing left to play.
+       */
+      if (runtime.answer_declared_done) {
+        iterate_kit_playout_mark_drained(&runtime.playout);
+      }
       ++runtime.speaker_waits_dry;
       if (iterate_kit_voice_playback_clock_empty(
               &playout_clock, now_ms(NULL)) ==
@@ -819,7 +1100,11 @@ static void playback_task(void *argument) {
       runtime.speaker_discard_bytes = (uint32_t)(discard - skipped);
       runtime.speaker_discarded_frames +=
           (uint32_t)(skipped / (FRAME_SAMPLES * sizeof(int16_t)));
-      if (skipped == received) continue;
+      if (skipped == received) {
+        /* The whole frame was dropped to catch up: nothing was fed this pass. */
+        waveshare_audio_dma_watch(false);
+        continue;
+      }
       memmove(chunk, (const uint8_t *)chunk + skipped, received - skipped);
       received -= skipped;
     }
@@ -881,6 +1166,32 @@ static void playback_task(void *argument) {
 
     const uint64_t write_started_ms = now_ms(NULL);
     waveshare_audio_dma_watch(true);
+#ifdef ITERATE_KIT_DIAGNOSTIC_STARVATION
+    /*
+     * FAULT INJECTION, and it must land where a real gap would.
+     *
+     * Placed AFTER the arm and gated on a full ring already credited, because
+     * the first attempt sat before the arm: a recent dry receive had disarmed
+     * the watch, the delay ran unarmed, and the arm that followed reset the
+     * written-audio counter — telemetry showed sends=2 written=20 at the moment
+     * of the injection, which is that reset. Pending is not consumed until the
+     * answer is genuinely under way, so it waits for the right frame rather than
+     * being spent on the wrong one.
+     */
+    if (waveshare_audio_starvation_pending() &&
+        waveshare_audio_dma_written_ms() >= DMA_RING_CREDIT_MS) {
+      const uint32_t starve_ms = waveshare_audio_take_injected_starvation();
+      ESP_LOGW(tag, "injecting %ums of starvation mid-answer", (unsigned)starve_ms);
+      DELAY_MS(starve_ms);
+    }
+#endif
+    /*
+     * Reserve the credit BEFORE the write, because the write blocks until DMA
+     * accepts the frame and the send callbacks fire inside it.
+     */
+    const uint32_t chunk_ms =
+        (uint32_t)((received / 2U) * SPEAKER_FRAME_MS / FRAME_SAMPLES);
+    waveshare_audio_reserve_write(chunk_ms);
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
       waveshare_recorder_write_speaker(chunk, received);
@@ -929,6 +1240,8 @@ static void playback_task(void *argument) {
             (uint32_t)(received / (FRAME_BYTES / FRAME_MS));
       }
     } else {
+      /* The write failed: the audio never reached the DAC, so un-reserve it. */
+      waveshare_audio_rollback_write(chunk_ms);
       ++runtime.speaker_write_failures;
     }
 
@@ -1045,7 +1358,19 @@ static bool initialise_connection(void) {
   options.mount_path = mount_path;
   options.mount_path_count = sizeof(mount_path) / sizeof(mount_path[0]);
   options.capability = iterate_kit_peer_capability(&runtime.peer);
-  options.instructions = "Iterate voice device (Waveshare ESP32-S3 AMOLED)";
+  /*
+   * THE ONLY DESCRIPTION A MODEL EVER SEES.
+   *
+   * Not peer_description above — the capability host flattens this mount and
+   * reports `children: {}` because sub-paths are routes the device interprets,
+   * not members the host can list. So peer_description documents the device for
+   * people reading this file, and THIS string is what an agent discovers in
+   * itx.__describe().capabilities. It was one 46-character line, which is why a
+   * back-office agent asked for the device's metrics went looking through
+   * telemetry streams instead of calling health(): nothing told it the call
+   * existed.
+   */
+  options.instructions = instructions;
   options.session_ended = on_session_ended;
   options.session_ended_context = NULL;
   if (iterate_kit_itx_connection_init(&runtime.connection, &options) !=
@@ -1076,11 +1401,19 @@ void waveshare_request_restart(void) {
 
 size_t waveshare_health_json(char *out, size_t capacity) {
   /*
-   * Answering an RPC is the only proof the mount is still reachable. Pings
-   * ride the socket and prove nothing about it — which is how a device whose
-   * capability had gone offline sat healthy and unreachable for minutes.
+   * PURE. This serializes local statistics and records nothing.
+   *
+   * It used to stamp "somebody asked us something" here, on the reasoning that
+   * answering an RPC is the only proof the mount is still reachable — which is
+   * true, and was defeated by the placement: `append_stats` calls this every
+   * five seconds to build the dev-stats telemetry body, so the device renewed
+   * its own liveness lease twelve times a minute by talking to itself. On
+   * 2026-08-04 that left the pinned board unreachable for over seven minutes
+   * with a 90s watchdog armed and a server holding zero connections.
+   *
+   * Reachability now comes from `iterate_kit_peer_served_dispatches` — INBOUND
+   * dispatches, which no amount of outbound telemetry can inflate.
    */
-  runtime.last_served_ms = now_ms(NULL);
   /*
    * NAME AND VALUE TRAVEL TOGETHER.
    *
@@ -1136,14 +1469,57 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkFrames", runtime.voicelab.spk_frames_received},
     {"spkPlayed", runtime.speaker_frames_played},
     {"spkOverflow", runtime.speaker_overflow_drops},
-    {"spkUnderruns", runtime.speaker_underruns},
-    {"dmaUnderruns", waveshare_audio_dma_underruns()},
+    /* Audio arriving just after a software-dry tick. Same signal, one step on. */
+    {"spkSoftDryRefills", runtime.speaker_underruns},
+    /*
+     * NOT A STARVATION MEASURE — an epoch-relative ledger deficit, kept for
+     * diagnosis and named so nobody gates on it again.
+     *
+     * The ISR credits audio per feeding epoch and debits a descriptor per send.
+     * An intentional cut discards the software buffer but NOT the DMA ring, so
+     * the ring keeps sending descriptors credited in the PREVIOUS epoch while
+     * the re-arm has reset the ledger to zero. Measured across one barge-in:
+     * written fell 380ms -> 20ms and eleven such descriptors arrived; they were
+     * charged to dmaOpening that time and to this counter (+4, +2) on an earlier
+     * run, differing only in how much new audio had been credited when they
+     * landed. The same physical event under two names is not a gate.
+     *
+     * spkStarvedMs is the authoritative one: wall-clock lateness against an
+     * absolute audio-empty deadline, which stayed at 0 through both cuts.
+     */
+    {"dmaLedgerDeficit", waveshare_audio_dma_underruns()},
     {"dmaOpening", waveshare_audio_dma_underruns_opening()},
-    {"spkConceal", runtime.speaker_conceal_frames},
+    /* Normal answer-end drain, kept apart from the ledger deficit on purpose. */
+    {"dmaDraining", waveshare_audio_dma_sends_draining()},
+#ifdef ITERATE_KIT_DIAGNOSTIC_STARVATION
+    /*
+     * DIAGNOSTIC BUILD ONLY. These six were added to find the starvation bug and
+     * they overflowed the stats line in production: the device logged
+     * `health json full at "recvFailures" (1476 bytes)` and went telemetry-dark,
+     * which reads downstream as "the speaker never started". The gates below are
+     * what production needs; this is scaffolding.
+     */
+    {"dmaUnderrunFirstSend", waveshare_audio_dma_underrun_first_send()},
+    {"dmaUnderrunLastSend", waveshare_audio_dma_underrun_last_send()},
+    {"dmaUnderrunGapUs", waveshare_audio_dma_underrun_gap_us()},
+    {"dmaOwedMs", (uint32_t)waveshare_audio_dma_owed_ms()},
+    {"dmaSends", waveshare_audio_dma_sends()},
+    {"dmaWrittenMs", waveshare_audio_dma_written_ms()},
+#endif
+    /* The task-side starvation measure: ms the ring was empty, and how often. */
+    {"spkStarvedMs", waveshare_audio_starved_ms()},
+    {"spkStarveEvents", waveshare_audio_starve_events()},
+    /*
+     * SOFTWARE-BUFFER LATENESS, absorbed by the hardware ring — not an audible
+     * gap, and named so nobody gates on it. The 90ms DMA ring sits between this
+     * and the listener: on the turns that moved it, spkStarvedMs was 0 and every
+     * frame received was played. spkStarvedMs is the audible-failure gate.
+     */
+    {"spkSoftDryTicks", runtime.speaker_conceal_frames},
     {"spkCatchup", runtime.speaker_catchup_frames},
     {"spkDebtPaid", runtime.speaker_debt_paid},
     {"spkWriteFailures", runtime.speaker_write_failures},
-    {"talkReadFailures", waveshare_buttons_lower_read_failures()},
+    {"lowerReadFailures", waveshare_buttons_lower_read_failures()},
     {"spkMarginMaxMs", runtime.speaker_margin_max_ms},
     {"spkLagMaxMs", runtime.speaker_lag_max_ms},
     {"spkMarginMinMs", runtime.speaker_margin_min_ms},
@@ -1161,9 +1537,16 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkIgnoredCall", runtime.playout.ignored_other_call},
     {"spkIgnoredStale", runtime.playout.ignored_stale_answer},
     {"spkIgnoredDup", runtime.playout.ignored_duplicate},
-    {"spkReplaced", runtime.playout.replaced},
+    /*
+     * NORMAL TRANSITIONS, named so nobody tiers them as faults again. Both move
+     * once per answer on a perfect turn: every answer begins by replacing the
+     * last, and every answer ends by the source going dry.
+     */
+    {"spkAnswerStarts", runtime.playout.replaced},
+    /* The subset that cost the listener audio: superseded while still playing. */
+    {"spkSupersededMidplay", runtime.playout.superseded_midplay},
     {"spkWaitPriming", runtime.speaker_waits_priming},
-    {"spkWaitDry", runtime.speaker_waits_dry},
+    {"spkAnswerDrains", runtime.speaker_waits_dry},
     {"bargeIns", runtime.barge_in_flushes},
     {"batches", runtime.voicelab.batches_on_connection},
     {"connGeneration", runtime.voicelab.connection_generation},
@@ -1171,6 +1554,12 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"pings", runtime.voicelab.ping_count},
     {"pingFailures", runtime.voicelab.ping_failures},
     {"livenessRestarts", runtime.liveness_restarts},
+    /* Idle remounts this boot: the recovery this device asked for because
+     * nothing inbound had reached it. Non-zero means it healed itself. */
+    {"idleRemounts", runtime.idle_remounts},
+    /* Inbound capability dispatches served. This is the liveness proof the idle
+     * watchdog keys on — telemetry publishing does not move it. */
+    {"servedDispatches", iterate_kit_peer_served_dispatches(&runtime.peer)},
     {"bridgeLosses", runtime.bridge_losses},
     {"bridgeAgeMs",
      runtime.voicelab.last_bridge_ms == 0U
@@ -1186,6 +1575,8 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"resetReason", (uint32_t)esp_reset_reason()},
     {"heapFree", (uint32_t)esp_get_free_heap_size()},
     {"heapMin", (uint32_t)esp_get_minimum_free_heap_size()},
+    /* Image buffers are PSRAM, so a leak there is invisible in heapFree. */
+    {"psramFree", (uint32_t)heap_caps_get_free_size(MALLOC_CAP_SPIRAM)},
     {"dmaLargest", (uint32_t)heap_caps_get_largest_free_block(MALLOC_CAP_DMA)},
     {"wsSent", metrics.control_messages_sent},
     {"outboxDiscarded", metrics.control_outbox_discarded},
@@ -1436,6 +1827,10 @@ void app_main(void) {
   }
   (void)waveshare_buttons_init();
   (void)waveshare_recorder_init();
+  if (!waveshare_tools_start_image_worker()) {
+    /* Not fatal: everything except showImage still works, and showImage says so. */
+    ESP_LOGW(tag, "image worker did not start; showImage will refuse");
+  }
   /*
    * Resume the conversation this device was last put on. Choosing a new one
    * is deliberate, so forgetting it at the next power cut would silently drop
@@ -1539,6 +1934,15 @@ void app_main(void) {
       next_button_poll_at = now_ms(NULL) + BUTTON_POLL_MS;
       waveshare_buttons_poll();
     }
+    /*
+     * Give the capability modules a turn.
+     *
+     * Nothing on this device did this before, which meant any method that
+     * DEFERRED its reply — showImage, and conversation.interruptPlayback —
+     * left the caller waiting forever. A deferred reply is only a promise that
+     * something will come back to it; this is the something.
+     */
+    (void)iterate_kit_peer_poll(&runtime.peer, now_ms(NULL));
     /*
      * WHICH BUTTON MEANS WHAT, AND WHY IT IS THIS WAY ROUND.
      *
@@ -1746,16 +2150,56 @@ void app_main(void) {
        * pings keep answering, and every RPC fails until somebody power-cycles
        * it. Replacing the session re-mounts the capability, which is the one
        * thing that fixes it.
+       *
+       * This target used to carry its own copy of that decision. It diverged
+       * from the shared one in the way that mattered — its idle clock was a
+       * timestamp the telemetry path also wrote — and on 2026-08-04 it never
+       * fired at all. The decision now comes from `control_recovery`, which is
+       * unit-tested against exactly that failure and is what stackchan already
+       * drives. `served_dispatches` counts INBOUND calls, so publishing cannot
+       * renew the lease.
        */
-      if (runtime.voicelab_generation == runtime.connection.generation &&
-          runtime.last_served_ms != 0U &&
-          iterate_kit_voice_elapsed_ms(now, runtime.last_served_ms) >
-              IDLE_REMOUNT_MS) {
-        ESP_LOGW(
-            tag, "no RPC served in %us — replacing the session to re-mount",
-            (unsigned int)(IDLE_REMOUNT_MS / 1000U));
-        runtime.last_served_ms = now;
-        iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
+      switch (iterate_kit_control_recovery_poll(
+          &runtime.control_recovery,
+          &(const struct iterate_kit_control_recovery_observation){
+              .now_ms = now,
+              .fatal_restart_after_ms = UNHEALTHY_RESTART_MS,
+              .idle_remount_after_ms = IDLE_REMOUNT_MS,
+              .ready_generation = runtime.connection.generation,
+              .served_dispatches =
+                  iterate_kit_peer_served_dispatches(&runtime.peer),
+              .fatal_latched =
+                  runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_FAILED,
+              .control_ready =
+                  runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+                  runtime.voicelab_generation == runtime.connection.generation,
+              .conversation_active = runtime.voicelab.call_active,
+          })) {
+        case ITERATE_KIT_CONTROL_RECOVERY_REMOUNT_CONTROL:
+          if (runtime.idle_remounts < UINT32_MAX) ++runtime.idle_remounts;
+          ESP_LOGW(
+              tag,
+              "no inbound call served in %us (remount %u) — replacing the "
+              "session to re-mount",
+              (unsigned int)(IDLE_REMOUNT_MS / 1000U),
+              (unsigned int)runtime.idle_remounts);
+          waveshare_display_set_status("re-mounting");
+          iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
+          break;
+        case ITERATE_KIT_CONTROL_RECOVERY_RESTART_PROCESS:
+          /* Replacing the transport did not help and the failure has latched:
+           * escalate once, loudly, with the reason it happened. */
+          ESP_LOGE(
+              tag,
+              "transport latched failed for %us after %u idle remount(s) — "
+              "restarting",
+              (unsigned int)(UNHEALTHY_RESTART_MS / 1000U),
+              (unsigned int)runtime.idle_remounts);
+          waveshare_recorder_end_call("transport latched failed");
+          esp_restart();
+          break;
+        case ITERATE_KIT_CONTROL_RECOVERY_NONE:
+          break;
       }
       /*
        * A prepared conversation is adopted only once the server says it is
@@ -2043,6 +2487,16 @@ void app_main(void) {
         }
       }
       if (!wants_call && runtime.voicelab.call_active && outbox_free >= 3U) {
+        /*
+         * ENDING A CALL ABANDONS WHATEVER WAS PLAYING.
+         *
+         * Same reasoning as the barge-in flush: the ring still holds the last
+         * 90ms of an answer nobody will hear the rest of, and it drains while
+         * the speaker task sits armed. That gap was counted as starvation on
+         * every hang-up-mid-answer — send index 44 in the run that showed it.
+         * Ours, intended, and declared at the moment we cause it.
+         */
+        waveshare_audio_dma_watch(false);
         (void)iterate_kit_voicelab_end_call(&runtime.voicelab, "button");
         waveshare_recorder_end_call("button");
         waveshare_display_set_status("call ended");
@@ -2074,6 +2528,11 @@ void app_main(void) {
         call_active_shown = runtime.voicelab.call_active;
         waveshare_display_set_call_active(call_active_shown);
         if (call_active_shown) {
+          /*
+           * Display only. The playout reset for a new call lives in on_control's
+           * CALL_ACCEPTED branch, on the receive path that classifies frames —
+           * this observation runs later and could follow the call's first frame.
+           */
           waveshare_display_set_state(WAVESHARE_UI_IDLE);
           waveshare_display_set_status("hold the upper button to talk");
         }
@@ -2108,15 +2567,15 @@ void app_main(void) {
         runtime.flushing_turn = false;
         ESP_LOGI(tag, "turn start");
         waveshare_recorder_log("turn start");
-        runtime.speaker_discard_bytes =
-            (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
         /*
-         * The discard empties the ring, so the next answer's first frame
-         * would otherwise play with zero cushion and starve immediately —
-         * putting a hole at the START of every answer after a turn. Ask the
-         * playback task to re-buy its cushion.
+         * Pressing to talk abandons whatever is still playing, which is an
+         * intentional flush like any other — and this site never disarmed the
+         * starvation watch at all. The funnel also reprimes: the discard empties
+         * the ring, so the next answer's first frame would otherwise play with
+         * zero cushion and starve immediately, putting a hole at the START of
+         * every answer after a turn.
          */
-        runtime.speaker_reprime = true;
+        (void)abandon_speaker_audio();
         iterate_kit_playout_interrupt(&runtime.playout);
         (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
         runtime.frame_sequence = 0U;

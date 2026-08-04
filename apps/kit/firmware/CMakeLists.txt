@@ -28,6 +28,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/configuration.c
   components/core/src/conversation_lights.c
   components/core/src/control_recovery.c
+  components/core/src/speaker_abandon.c
   components/core/src/cpu_usage.c
   components/core/src/debounced_button.c
   components/core/src/device_events.c
@@ -720,6 +721,26 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-control-recovery-test
   COMMAND iterate-kit-control-recovery-test
+)
+
+add_executable(iterate-kit-speaker-abandon-test
+  tests/speaker_abandon_test.c
+)
+target_compile_features(
+  iterate-kit-speaker-abandon-test PRIVATE c_std_99)
+target_compile_options(
+  iterate-kit-speaker-abandon-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-speaker-abandon-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-speaker-abandon-test
+  COMMAND iterate-kit-speaker-abandon-test
 )
 
 add_executable(iterate-kit-runtime-diagnostics-fixture

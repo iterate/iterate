@@ -10,6 +10,7 @@ idf_component_register(
     "src/configuration.c"
     "src/conversation_lights.c"
     "src/control_recovery.c"
+    "src/speaker_abandon.c"
     "src/cpu_usage.c"
     "src/debounced_button.c"
     "src/device_events.c"
