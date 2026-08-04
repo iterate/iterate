@@ -92,7 +92,7 @@ export const renderBodySection = (input: {
     "",
     qrDetails({
       open: plan.runtimeMatchesInstalled,
-      summary: `OTA — switch the installed app to this PR's channel (\`${input.headSha.slice(0, 9)}\`)`,
+      summary: `OTA — switch the installed app to this PR's channel (\`${input.headSha.slice(0, 7)}\`)`,
       qrImageUrl: input.deepLinkQrUrl,
       href: plan.deepLinkUrl,
       caption: "Deep link (only works with the app installed)",
@@ -100,7 +100,7 @@ export const renderBodySection = (input: {
     qrDetails({
       open: !plan.runtimeMatchesInstalled,
       summary: `Full install — if the app is uninstalled or the runtime differs (\`${
-        input.installBuildSha?.slice(0, 9) || "unknown sha"
+        input.installBuildSha?.slice(0, 7) || "unknown sha"
       }\`)`,
       qrImageUrl: input.installQrUrl,
       href: plan.installUrl,

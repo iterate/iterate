@@ -58,7 +58,7 @@ export default function BuildInfoScreen() {
       <Stack.Screen options={{ title: "Build info" }} />
       <Section title="Bundle">
         <Row label="Branch" value={buildInfo.branch} />
-        <Row label="Commit" value={buildInfo.commit.slice(0, 12)} />
+        <Row label="Commit" value={buildInfo.commit.slice(0, 7)} />
         <Row label="Message" value={buildInfo.message} />
         <Row
           label="Built by"
