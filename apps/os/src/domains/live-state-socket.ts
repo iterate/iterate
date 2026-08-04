@@ -18,7 +18,9 @@
 // no replay, and no revision guard anywhere: a reconnect is just a fresh
 // first frame. State only changes while the DO is awake, and every change
 // runs the host's one materialization point, so pushing there is complete
-// coverage; outgoing sends are billing-free.
+// coverage. Outgoing frames carry no per-message request charge, and a
+// hibernated DO bills no duration while its watchers stay attached — but the
+// execution that materializes and sends a frame is billed like any other.
 //
 // Delete this module when hibernatable RPC ships: a retained callback that
 // survives hibernation makes the socket redundant.
@@ -138,18 +140,35 @@ export class LiveStateSockets {
       Promise.resolve()
         .then(() => this.#hooks.refresh())
         .then(() => this.scheduleFlush())
-        .catch((error) => {
-          // The relay is awaiting its seed frame; failing the socket promptly
-          // beats letting that wait run into its timeout.
-          console.warn("liveState socket seed refresh failed; closing socket", { error });
-          try {
-            pair[1].close(1011, "seed refresh failed");
-          } catch {
-            // Already closing.
-          }
-        }),
+        .catch((error: unknown) => this.#dropWatchers("seed refresh failed", error)),
     );
     return new Response(null, { status: 101, webSocket: pair[0] });
+  }
+
+  /**
+   * The ONE recovery action for "this host cannot push correct state": drop the
+   * watchers. A closed socket is the relay's cue to re-dial and re-seed, and it
+   * makes the subscription's `ping()` false so the client watchdog
+   * re-subscribes — so a dropped watcher self-heals, while a watcher left
+   * attached after a failed push is stale forever with nothing to say so.
+   * Every failure path below funnels here rather than inventing its own
+   * degrade, because no other repair exists on this side of the socket.
+   */
+  #dropWatchers(reason: string, error: unknown, sockets?: readonly WebSocket[]): void {
+    console.warn("liveState watchers dropped; the relay will re-dial", { reason, error });
+    for (const ws of sockets ?? this.#hooks.getWebSockets(LIVE_STATE_SOCKET_TAG)) {
+      try {
+        ws.close(1011, reason);
+      } catch {
+        // Already closing.
+      }
+    }
+  }
+
+  /** A platform-reported socket fault (the hosts' `webSocketError` hook). */
+  socketError(error: unknown): void {
+    // The socket is already failing; this only makes it explicable afterwards.
+    console.warn("liveState socket reported an error", { error });
   }
 
   /** Whether any watcher socket is attached (state pushes wanted). */
@@ -178,7 +197,9 @@ export class LiveStateSockets {
    * otherwise leave watchers permanently unaware of the committed change, so
    * while watchers exist it loads every runner once (single-flight); the
    * completed load re-runs assembly for real, which lands back here and
-   * flushes.
+   * flushes. A reload that FAILS cannot be retried into correctness here — the
+   * committed change would stay invisible until some later assembly happened
+   * to succeed — so it drops the watchers and lets them re-seed from scratch.
    */
   refreshAfterAssembly(assembly: { skippedUnloadedRunners: boolean }): void {
     if (!this.hasSockets()) return;
@@ -190,9 +211,7 @@ export class LiveStateSockets {
     this.#reloadInFlight = Promise.resolve()
       .then(() => this.#hooks.refresh())
       .then(() => undefined)
-      .catch((error: unknown) => {
-        console.warn("liveState reload after runner-wall-skipped assembly failed", { error });
-      })
+      .catch((error: unknown) => this.#dropWatchers("runner reload failed", error))
       .finally(() => {
         this.#reloadInFlight = undefined;
       });
@@ -206,14 +225,18 @@ export class LiveStateSockets {
     try {
       frame = JSON.stringify({ type: "state", state: this.#hooks.readState() });
     } catch (error) {
-      console.warn("liveState flush could not materialize state", { error });
+      this.#dropWatchers("state could not be serialized", error, sockets);
       return;
     }
     for (const ws of sockets) {
       try {
         ws.send(frame);
-      } catch {
-        // A closing socket drops off getWebSockets on its own.
+      } catch (error) {
+        // Includes the frame exceeding the platform's WebSocket message limit
+        // (liveState is full-state and some hosts' state is unbounded). A
+        // socket that is merely closing lands here too and is dropped anyway —
+        // it was leaving regardless.
+        this.#dropWatchers("frame send failed", error, [ws]);
       }
     }
   }

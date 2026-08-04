@@ -255,7 +255,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** A closed watcher socket simply drops off `getWebSockets`; nothing to clean up. */
   webSocketClose(): void {}
 
-  webSocketError(): void {}
+  webSocketError(_ws: WebSocket, error: unknown): void {
+    this.#liveStateSockets.socketError(error);
+  }
 
   /**
    * The head of a branch, resolved from a durable cache on the hot path.

@@ -1794,7 +1794,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  webSocketError(): void {}
+  /** Shared by both socket lanes; a fault is only ever explicable after the fact. */
+  webSocketError(_ws: WebSocket, error: unknown): void {
+    this.#liveStateSockets.socketError(error);
+  }
 
   // ===========================================================================
   // Operator/admin verbs.

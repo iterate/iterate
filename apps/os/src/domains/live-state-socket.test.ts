@@ -30,6 +30,14 @@ function fakeSocket(): FakeSocket {
   return socket;
 }
 
+/** `WebSocketPair` is a workerd global; the upgrade path needs one to exist. */
+function withWebSocketPair(): void {
+  (globalThis as Record<string, unknown>).WebSocketPair ??= class {
+    0 = fakeSocket();
+    1 = fakeSocket();
+  };
+}
+
 function socketsOver(input: {
   sockets: FakeSocket[];
   readState?: () => unknown;
@@ -130,6 +138,77 @@ describe("LiveStateSockets", () => {
     host.refreshAfterAssembly({ skippedUnloadedRunners: true });
     await Promise.all(waits);
     expect(refreshes).toBe(0);
+  });
+
+  // Every way this host can fail to push correct state has ONE recovery: drop
+  // the watchers so the relay re-dials and re-seeds. A watcher left attached
+  // after a failed push is stale forever with nothing to say so.
+  it("drops watchers when the runner-wall reload fails, instead of leaving them stale", async () => {
+    const watcher = fakeSocket();
+    const { host, waits } = socketsOver({
+      sockets: [watcher],
+      refresh: () => Promise.reject(new Error("runner load failed")),
+    });
+
+    host.refreshAfterAssembly({ skippedUnloadedRunners: true });
+    await Promise.all(waits);
+
+    expect(watcher.sent).toEqual([]);
+    expect(watcher.closed).toEqual([{ code: 1011, reason: "runner reload failed" }]);
+  });
+
+  it("drops watchers when the seed refresh fails", async () => {
+    withWebSocketPair();
+    const watcher = fakeSocket();
+    const { host, waits } = socketsOver({
+      sockets: [watcher],
+      refresh: () => Promise.reject(new Error("cold load failed")),
+    });
+
+    // The seed work is registered before the 101 is built, so the drop still
+    // happens under Node, whose `Response` rejects status 101 (workerd allows
+    // it — the upgrade itself is covered by the e2e lane).
+    await host
+      .acceptUpgrade(
+        new Request("https://x.internal/", {
+          headers: { Upgrade: "websocket", [LIVE_STATE_SOCKET_HEADER]: "watch" },
+        }),
+      )
+      .catch(() => undefined);
+    await Promise.all(waits);
+
+    expect(watcher.closed).toEqual([{ code: 1011, reason: "seed refresh failed" }]);
+  });
+
+  it("drops only the watcher whose frame could not be sent", async () => {
+    const healthy = fakeSocket();
+    const broken = fakeSocket();
+    broken.send = () => {
+      // Stands in for the platform rejecting the frame — an oversized
+      // full-state message is the realistic case.
+      throw new Error("message too large");
+    };
+    const { host } = socketsOver({ sockets: [healthy, broken] });
+
+    host.scheduleFlush();
+    vi.runAllTimers();
+
+    expect(healthy.sent).toHaveLength(1);
+    expect(healthy.closed).toEqual([]);
+    expect(broken.closed).toEqual([{ code: 1011, reason: "frame send failed" }]);
+  });
+
+  it("drops watchers when the state cannot be serialized", () => {
+    const watcher = fakeSocket();
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    const { host } = socketsOver({ sockets: [watcher], readState: () => cyclic });
+
+    host.scheduleFlush();
+    vi.runAllTimers();
+
+    expect(watcher.sent).toEqual([]);
+    expect(watcher.closed).toEqual([{ code: 1011, reason: "state could not be serialized" }]);
   });
 });
 

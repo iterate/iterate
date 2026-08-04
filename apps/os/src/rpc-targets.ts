@@ -7703,18 +7703,32 @@ class LiveStateRelayRpcTarget<State extends object>
           });
   }
 
+  /**
+   * Each acquisition releases itself: the DO stub's `finally` covers a
+   * REJECTED `.liveState` property read, and separate `finally`s stop one
+   * failed release from skipping the other. Both matter because this runs
+   * inside a long-lived Cap'n Web session, where a leaked stub pins the
+   * Durable Object until the session ends — the exact leak this method fixes.
+   */
   async #transientGet(): Promise<State> {
     const doStub = await this.#stub();
-    const liveState = await doStub.liveState;
     try {
-      return await liveState.get();
-    } finally {
+      const liveState = await doStub.liveState;
       try {
-        disposeIgnoredRpcResult(liveState);
-        disposeIgnoredRpcResult(doStub);
-      } catch (error) {
-        console.warn("liveState read stub dispose failed", { label: this.#label, error });
+        return await liveState.get();
+      } finally {
+        this.#release(liveState);
       }
+    } finally {
+      this.#release(doStub);
+    }
+  }
+
+  #release(stub: unknown): void {
+    try {
+      disposeIgnoredRpcResult(stub);
+    } catch (error) {
+      console.warn("liveState read stub dispose failed", { label: this.#label, error });
     }
   }
 

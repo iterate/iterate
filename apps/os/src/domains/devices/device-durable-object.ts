@@ -150,7 +150,9 @@ export class DeviceDurableObject extends DurableObject<Env> {
   /** A closed watcher socket simply drops off `getWebSockets`; nothing to clean up. */
   webSocketClose(): void {}
 
-  webSocketError(): void {}
+  webSocketError(_ws: WebSocket, error: unknown): void {
+    this.#liveStateSockets.socketError(error);
+  }
 
   enroll(input: DeviceEnrollInput & { ownerId: string }) {
     return this.#serializeCredentialUpdate(() => this.#enroll(input));
