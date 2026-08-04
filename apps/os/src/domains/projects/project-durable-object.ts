@@ -92,7 +92,12 @@ export class ProjectDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  /** liveState watcher sockets (domains/live-state-socket.ts) — a watched idle project hibernates at zero pin. */
+  /** liveState watcher sockets (domains/live-state-socket.ts) — a watched idle project hibernates at zero pin.
+   * The explicit field type is NOT inferable decoration: it breaks the
+   * field-initializer inference cycle with #registry (its hooks read the
+   * registry, whose onLiveAssembled reads this field back — TS7022 without
+   * it), the same pattern as the registry option getLiveState's explicit
+   * return type. */
   readonly #liveStateSockets: LiveStateSockets = new LiveStateSockets({
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
