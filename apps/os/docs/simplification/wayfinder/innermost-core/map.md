@@ -440,6 +440,18 @@ substrate: 4 spikes in `spikes/` (pipelining, fallthrough, wake, fused-1000-devi
   own wrangler config (`wrangler.jsonc`, `wrangler.control-plane.jsonc`). Both workers import the same core
   modules directly — the "write code the same way inner and outer" ideal (D26) achieved WITHOUT a package
   boundary. (Implemented as `apps/project-worker` across increments 1–11.) Resolves target-core §8 open Q #1.
+- **D35 — Stateful dynamic workers = DO FACETS; both lanes go over `fetch` (a facet-method stub is
+  non-transferable). (proven, increment 14, 2026-08-04.)** The clean room mirrors apps/os's stateless/stateful
+  `DynamicWorkerRef` split: **stateless** = a repo fn loaded per call (the `code` mount, content-addressed, no
+  identity); **stateful** = a repo `DurableObject` class hosted as a **facet** of the `ItxDurableObject`
+  (`ctx.facets.get("facet:<callPath>", () => ({ class }))`) with its **own isolated SQLite**, aborted+recreated
+  against the same storage on a source change. **Constraint (binary-confirmed in workerd 1.20260701.1):** a stub
+  to a Worker-Loader facet **cannot be transferred between Workers** — _"have the parent Worker … forward to
+  it."_ `facet.fetch()` works (Response by value); a custom facet-**method** result gets pipelined → tries to
+  transfer the facet stub → throws. So BOTH lanes are a `fetch` into the facet: a host-owned `__HostedActor`
+  wrapper adds a `/__itx_rpc` tunnel (RPC lane returns `{method,args}` result by value); the native `/facet`
+  fetch is the WS/streaming lane into the user class's own `fetch`. This is the same "fetch is the special lane
+  RPC can't cross" as D32. (Deferred: a facet reaching BACK into its host via `itx`; facet alarms — workerd#6810.)
 - **D14 — Cost/billing is USERSPACE, not a control-plane primitive.** Budgets/spend limits are a key PRODUCT
   concern but implemented in userspace: a **stream processor that consumes cost-bearing events** across
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core

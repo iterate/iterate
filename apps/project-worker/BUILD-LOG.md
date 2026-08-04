@@ -216,6 +216,39 @@ dormant:true}` after idle — the device stays registered while **nothing pins t
 
 ---
 
+## Increment 14 — stateful + stateless dynamic workers (lightest version of apps/os's model)
+
+**Commit** `<pending>`. Bring apps/os's stateless/stateful dynamic-worker split into the clean room, lightest
+possible (Jonas). The stateless half already existed (`code` mount = a repo fn); this adds the **stateful**
+half and proves both.
+
+- **Stateless** (`code`) — a repo file exporting `(itx, ...args) => result`, loaded per call, content-addressed,
+  no durable identity. (apps/os "stateless" ref, function-shaped.)
+- **Stateful** (`stateful`) — a repo file exporting a `DurableObject` class (`className`), hosted as a **facet**
+  of THIS `ItxDurableObject`: `ctx.facets.get("facet:<callPath>", () => ({ class }))`. The facet gets its **own
+  isolated SQLite** `ctx.storage`, durable across calls. On a source change the facet is **aborted + recreated
+  against the same storage** (new code, state kept) — apps/os's version-marker pattern.
+- **The workerd constraint (found the hard way, binary-confirmed):** a stub to a Worker-Loader facet is
+  **non-transferable across the Worker boundary** — _"Entrypoints to dynamically-loaded workers cannot be
+  transferred to other Workers … have the parent Worker expose an entrypoint which constructs the dynamic
+  worker and forwards to it."_ `facet.fetch()` works (a `Response` passes **by value**); a custom facet-**method**
+  result gets pipelined, and the pipeline hands the caller a facet-stub reference → thrown. This is the SAME
+  reason WS/ingress already lives on the fetch lane (D32). **So BOTH lanes are a plain `fetch` into the facet:**
+  a host-owned `__HostedActor` wrapper subclass adds a `/__itx_rpc` fetch-dispatch (the RPC lane tunnels
+  `{method,args}` and returns the result by value); the `/facet` native fetch is the WS/streaming lane into the
+  user class's own `fetch`. The user still just writes normal methods.
+- **Proven** (deployed `project-worker`, fresh `prj_facet_l`): a `Counter extends DurableObject` (SQLite) →
+  `itx.counter.increment(2/3/5)` → **2, 5, 10** (RPC lane); `GET /facet` → `{value:10, via:"facet-fetch-lane"}`
+  (fetch lane, same storage); put a **v2** source → `itx.counter.value` **STILL 10** (facet aborted+recreated,
+  SQLite survived) and the new `itx.counter.hello()` → `"hello from counter v2, value=10"`; and the stateless
+  pair `itx.greet("world")` still returns its repo-fn result.
+- **Deferred:** a facet reaching BACK into its host via `itx` (env is empty for now — the DO-stub-in-env path
+  needs the same non-transferable-stub care); alarms for facets (workerd#6810 — apps/os keeps them on the outer
+  DO). Also added a `/version` smoke marker (workers.dev propagation lags ~1-2min; **DO code lags the worker
+  code by a further ~minute** — poll a behavioral probe, not just `/version`, before trusting a stateful smoke).
+
+---
+
 ## Status after increment 13 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project

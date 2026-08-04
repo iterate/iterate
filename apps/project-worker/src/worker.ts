@@ -114,8 +114,7 @@ export class DummyControlPlane extends WorkerEntrypoint<Env> {
   }
 }
 
-type LoopbackStub = Fetcher & ((o: { props: unknown }) => Fetcher);
-type CtxWithExports = { exports: Record<string, LoopbackStub> };
+type CtxWithExports = { exports: Record<string, Fetcher & ((o: { props: unknown }) => Fetcher)> };
 
 /** Resolve the configured fallback to a Fetcher (target-core §3.4). Solo → the DummyControlPlane loopback.
  *  A ctx.exports entrypoint stub is itself a Fetcher (the default instance); you only CALL it to pass props. */
@@ -126,9 +125,14 @@ function resolveFallback(ctx: unknown, env: Env, cfg: AppConfig): Fetcher {
   return { fetch: (r: Request) => fetch(r) } as unknown as Fetcher; // terminal
 }
 
+// Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
+const CODE_VERSION = "stateful-tunnel-1";
+
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
+
+    if (url.pathname === "/version") return new Response(CODE_VERSION + "\n");
 
     // ── INGRESS WS → the itx DO (proves a DO-stub fetch carries the 101) ──
     if (
@@ -141,6 +145,13 @@ export default {
 
     // ── wake-on-call observability: the DO reports incarnation + what is pinning it right now ──
     if (url.pathname === "/state") {
+      return env.ITX_HOST.getByName(canonicalName(url.searchParams.get("ctx") ?? "prj_demo")).fetch(
+        request,
+      );
+    }
+
+    // ── STATEFUL worker fetch lane: forward to the DO's /facet (carries WS into the hosted facet) ──
+    if (url.pathname === "/facet") {
       return env.ITX_HOST.getByName(canonicalName(url.searchParams.get("ctx") ?? "prj_demo")).fetch(
         request,
       );
@@ -176,9 +187,14 @@ export default {
     }
     if (url.pathname === "/call") {
       const ctxName = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
-      const path = url.searchParams.get("path") ?? "itx.whoami";
+      // POST JSON body { path, args } (for large args like source text), else query ?path=&args=.
+      const body =
+        request.method === "POST"
+          ? ((await request.json()) as { path?: string; args?: unknown[] })
+          : {};
+      const path = body.path ?? url.searchParams.get("path") ?? "itx.whoami";
       const argsRaw = url.searchParams.get("args"); // a JSON array, e.g. ?args=["k","v"]
-      const args = argsRaw ? (JSON.parse(argsRaw) as unknown[]) : [];
+      const args = body.args ?? (argsRaw ? (JSON.parse(argsRaw) as unknown[]) : []);
       try {
         return Response.json({
           ok: true,
