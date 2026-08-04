@@ -1335,6 +1335,10 @@ bool initialiseDevice(Runtime &state) {
       },
       .capture = state.platform.audioCaptureDriver(),
     },
+    .logical_input = {
+      .context = &state,
+      .set_pressed = setRemoteLogicalControlPressed,
+    },
     .event_storage = state.eventStorage,
     .event_capacity = eventCapacity,
     .event_stream = {
