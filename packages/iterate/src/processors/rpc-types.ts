@@ -512,14 +512,20 @@ export type GetProcessorRuntimeState = () => ProcessorRuntimeState | Promise<Pro
  * Durable Object incarnation is gone. Either non-`true` outcome means the
  * owner should open another connection.
  *
- * The handle is a pure capability: it carries no data properties, because
- * data on a capability does not materialize across the RPC wire. Connection
- * facts arrive in the delivery batches instead — every connection receives
- * an initial (possibly empty) batch immediately on open, and its
- * `streamMaxOffset` / `scannedThroughOffset` are the offsets to seed a
- * resume cursor from.
+ * CAUTION ON THE DATA PROPERTIES BELOW. A handle obtained across the worker
+ * relay was measured NOT to materialize `streamMaxOffset` as a number — it is
+ * present inside the Stream DO and can arrive undefined to a remote consumer.
+ * Prefer the delivery batches for offsets: every connection receives an initial
+ * (possibly empty) batch immediately on open, carrying `streamMaxOffset` and
+ * `scannedThroughOffset`, and those are the values to seed a resume cursor
+ * from. A consumer that advances its cursor from the handle can silently
+ * resume at zero.
  */
 export type StreamConnectionHandle = Disposable & {
+  /** Stable identity of this live connection. */
+  connectionKey: ConnectionKey;
+  /** The stream's max offset when the connection opened. See the caution above. */
+  streamMaxOffset: number;
   ping(): boolean | Promise<boolean>;
   /** Close this connection; safe to call more than once. */
   close(): void;

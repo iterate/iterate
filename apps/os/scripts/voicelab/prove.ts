@@ -617,7 +617,6 @@ export async function prove(options: ProveOptions) {
           `exact values of uptimeMs, connectionState and resetReason. Do not guess any number.`,
       );
       const direct = (await device.health()) as Record<string, number>;
-      const reported = firstSucceededResult(agent, "health(");
       const reportedUptime = reportedNumber(agent, "uptimeMs");
       // uptimeMs only ever goes up while the device stays booted, so the
       // direct read must not be BEHIND what the agent was told. A smaller
@@ -650,7 +649,6 @@ export async function prove(options: ProveOptions) {
           `with readScreenshotChunk(i) and reply with width, height, bytes, chunks, and the ` +
           `total number of bytes you actually read back.`,
       );
-      const reported = firstSucceededResult(agent, "readScreenshotChunk(");
       // Read the panel again ourselves. takeScreenshot is a latch the next
       // readScreenshotChunk reads from, so this must not interleave with the
       // agent's reads — hence after the turn has fully settled.

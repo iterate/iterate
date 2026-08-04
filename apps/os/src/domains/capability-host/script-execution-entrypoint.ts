@@ -2,7 +2,7 @@ import { WorkerEntrypoint } from "cloudflare:workers";
 import type { Env } from "../../env.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { StreamContext } from "../projects/stream-context.ts";
-import type { JsonValue, StatelessDynamicWorkerRef } from "../workers/schemas.ts";
+import type { StatelessDynamicWorkerRef } from "../workers/schemas.ts";
 import { DynamicWorkerRunner } from "../workers/worker-runner.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import { SCRIPT_EXTERNAL_CLEANUP_GRACE_MS } from "./script-execution-budgets.ts";

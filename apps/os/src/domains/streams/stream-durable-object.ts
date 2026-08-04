@@ -1639,6 +1639,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     return new StreamConnectionRpcTarget({
       close: () => connection.close("closed-by-owner"),
       isLive: () => connection.isLive(),
+      connectionKey,
+      streamMaxOffset: this.#coreProcessorState.maxOffset,
     });
   }
 

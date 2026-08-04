@@ -158,6 +158,11 @@ async function newestConversation(itx: {
   return newest.replace(/^\/workspaces/, "");
 }
 
+interface StreamReader {
+  getEventPage(args: { limit: number }): Promise<{ streamMaxOffset?: number } | null>;
+  getEvents(args: { afterOffset: number; limit: number }): Promise<StreamEventLike[] | null>;
+}
+
 export async function chronology(options: ChronologyOptions) {
   const width = options.width ?? 200;
   using itx = await connectProject(options);
@@ -236,9 +241,4 @@ function isSetup(row: Row): boolean {
     row.line.startsWith("brief-current") ||
     row.line.startsWith("warmup")
   );
-}
-
-interface StreamReader {
-  getEventPage(args: { limit: number }): Promise<{ streamMaxOffset?: number } | null>;
-  getEvents(args: { afterOffset: number; limit: number }): Promise<StreamEventLike[] | null>;
 }

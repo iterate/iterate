@@ -6930,6 +6930,18 @@ export class StreamConnectionRpcTarget extends IterateRpcRelay<"StreamConnection
     super();
     this.#close = args.close;
     this.#isLive = args.isLive;
+    this.#streamMaxOffset = args.streamMaxOffset;
+    this.#connectionKey = args.connectionKey;
+  }
+
+  /** Stable identity of this callback connection. */
+  get connectionKey(): string {
+    return this.#connectionKey;
+  }
+
+  /** The stream's max offset when the connection opened. */
+  get streamMaxOffset(): number {
+    return this.#streamMaxOffset;
   }
 
   /**

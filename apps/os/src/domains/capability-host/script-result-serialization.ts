@@ -1,20 +1,6 @@
 import type { JsonValue } from "../workers/schemas.ts";
 
 /**
- * What of an error is safe and useful to hand back to a script's caller.
- *
- * The message and the name, and nothing else. The message is the explanation —
- * it is what a capability chose to say about the refusal — while a stack names
- * internal files and line numbers, and the properties workerd attaches when an
- * error crosses an RPC boundary (`remote`, `durableObjectId`) identify
- * infrastructure rather than describing anything the caller can act on.
- */
-interface SerializedError {
-  name: string;
-  message: string;
-}
-
-/**
  * An error, however it reached us.
  *
  * `instanceof Error` is not enough on its own: an error that crossed a
@@ -63,6 +49,20 @@ function errorLike(value: unknown): { name?: unknown; message: string; stack?: u
  * rejection semantics (a cyclic or unsupported value throws here rather than
  * being quietly reshaped).
  */
+/**
+ * What of an error is safe and useful to hand back to a script's caller.
+ *
+ * The message and the name, and nothing else. The message is the explanation —
+ * it is what a capability chose to say about the refusal — while a stack names
+ * internal files and line numbers, and the properties workerd attaches when an
+ * error crosses an RPC boundary (`remote`, `durableObjectId`) identify
+ * infrastructure rather than describing anything the caller can act on.
+ */
+interface SerializedError {
+  name: string;
+  message: string;
+}
+
 export function serializeScriptResult(result: unknown): JsonValue | undefined {
   if (result === undefined) return undefined;
   const json = JSON.stringify(result, (_key, value: unknown) => {
