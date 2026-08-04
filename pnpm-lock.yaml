@@ -143,8 +143,8 @@ importers:
         specifier: ^16.2.7
         version: 16.3.2
       middlewright:
-        specifier: https://pkg.pr.new/middlewright@14
-        version: https://pkg.pr.new/middlewright@14(patch_hash=f7dbe0f4bb32aee1bcb06b07a5db2f18ecbd15cb21748c08d5bd8e9c44855074)(@playwright/test@1.60.0)
+        specifier: 0.1.4
+        version: 0.1.4(patch_hash=f7dbe0f4bb32aee1bcb06b07a5db2f18ecbd15cb21748c08d5bd8e9c44855074)(@playwright/test@1.60.0)
       oxfmt:
         specifier: ^0.35.0
         version: 0.35.0
@@ -10674,9 +10674,8 @@ packages:
     resolution: {integrity: sha512-PXwfBhYu0hBCPw8Dn0E+WDYb7af3dSLVWKi3HGv84IdF4TyFoC0ysxFd0Goxw7nSv4T/PzEJQxsYsEiFCKo2BA==}
     engines: {node: '>=8.6'}
 
-  middlewright@https://pkg.pr.new/middlewright@14:
-    resolution: {tarball: https://pkg.pr.new/middlewright@14}
-    version: 0.1.0
+  middlewright@0.1.4:
+    resolution: {integrity: sha512-19aZN/yCYOlh3CmpUNmKsQu8709Zbw72VFWXtCidjj5tqi2eLu6QCT1nDqhqKB4eurkQsEFB5vHVYbh03UkuxA==}
     engines: {node: '>=20'}
     peerDependencies:
       '@playwright/test': '>=1.49.0'
@@ -25140,7 +25139,7 @@ snapshots:
       braces: 3.0.3
       picomatch: 2.3.1
 
-  middlewright@https://pkg.pr.new/middlewright@14(patch_hash=f7dbe0f4bb32aee1bcb06b07a5db2f18ecbd15cb21748c08d5bd8e9c44855074)(@playwright/test@1.60.0):
+  middlewright@0.1.4(patch_hash=f7dbe0f4bb32aee1bcb06b07a5db2f18ecbd15cb21748c08d5bd8e9c44855074)(@playwright/test@1.60.0):
     dependencies:
       '@playwright/test': 1.60.0
       dedent: 1.7.2
