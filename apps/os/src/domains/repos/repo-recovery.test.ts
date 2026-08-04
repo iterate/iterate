@@ -18,40 +18,10 @@ const EMPTY_REQUEST = {
   type: "events.iterate.com/repos/create-requested" as const,
   payload: { type: "empty" as const },
 };
-const TEMPLATE_REQUEST = {
-  type: "events.iterate.com/repos/create-requested" as const,
-  payload: {
-    type: "github-public-template" as const,
-    owner: "iterate",
-    path: "configs/with-voice",
-    ref: "main",
-    repo: "iterate",
-  },
-};
-const RESOLVED_TEMPLATE = {
-  commitSha: "a".repeat(40),
-  owner: "iterate",
-  path: "configs/with-voice",
-  ref: "main",
-  repo: "iterate",
-};
-
 function makeHarness() {
-  const creationQueue = { calls: 0, queued: false };
   const createEmpty: { impl: () => Promise<typeof CREATED_ARTIFACT> } = {
     impl: () => {
       throw new Error("must not create an artifact in this scenario");
-    },
-  };
-  const createTemplate: { impl: () => Promise<typeof CREATED_ARTIFACT> } = {
-    impl: async () => {
-      throw new Error("must not create a template artifact in this scenario");
-    },
-  };
-  const resolveTemplate: { calls: number; impl: () => Promise<typeof RESOLVED_TEMPLATE> } = {
-    calls: 0,
-    impl: async () => {
-      throw new Error("must not resolve a template in this scenario");
     },
   };
   const harness = makeProcessorHarness<RepoProcessorContract, RepoProcessor>({
@@ -60,13 +30,8 @@ function makeHarness() {
       new RepoProcessor({
         ...deps,
         projectId: "prj_1",
-        enqueueCreation: async () => {
-          if (creationQueue.queued) return;
-          creationQueue.queued = true;
-          creationQueue.calls += 1;
-        },
+        enqueueTemplateCreation: async () => {},
         createEmptyArtifact: () => createEmpty.impl(),
-        createGithubTemplateArtifact: () => createTemplate.impl(),
         importPublicGithubArtifact: async () => {
           throw new Error("must not import in this scenario");
         },
@@ -80,13 +45,9 @@ function makeHarness() {
           throw new Error("must not sync a push in this scenario");
         },
         observeArtifactPush: () => {},
-        resolveGithubTemplateSource: async () => {
-          resolveTemplate.calls += 1;
-          return await resolveTemplate.impl();
-        },
       }),
   });
-  return { ...harness, creationQueue, createEmpty, createTemplate, resolveTemplate };
+  return { ...harness, createEmpty };
 }
 
 describe("RepoProcessor eviction recovery", () => {
@@ -201,64 +162,5 @@ describe("RepoProcessor eviction recovery", () => {
       },
     ]);
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
-  });
-
-  it("recovery materializes the journaled commit without resolving a moved ref again", async () => {
-    const h = makeHarness();
-    h.resolveTemplate.impl = async () => RESOLVED_TEMPLATE;
-    h.createTemplate.impl = async () => {
-      throw new RepoNotSeededError("template Artifact is still materializing");
-    };
-    await h.append(TEMPLATE_REQUEST);
-
-    expect(h.resolveTemplate.calls).toBe(0);
-    expect(h.creationQueue).toEqual({ calls: 1, queued: true });
-    await expect(h.processor().driveCreation(h.state())).rejects.toThrow(
-      "template Artifact is still materializing",
-    );
-    await h.settle();
-    expect(h.events("events.iterate.com/repos/template-source-resolved")).toHaveLength(1);
-    expect(h.resolveTemplate.calls).toBe(1);
-    h.crash();
-    await h.runner().catchUp();
-
-    h.resolveTemplate.impl = async () => {
-      throw new Error("recovery must not resolve the ref again");
-    };
-    h.createTemplate.impl = async () => CREATED_ARTIFACT;
-    await h.processor().driveCreation(h.state());
-    await h.settle();
-
-    expect(h.resolveTemplate.calls).toBe(1);
-    expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
-    expect(h.state().templateSource).toEqual(RESOLVED_TEMPLATE);
-  });
-
-  it("reads the journaled source when the local fold has not observed its append", async () => {
-    const h = makeHarness();
-    h.resolveTemplate.impl = async () => RESOLVED_TEMPLATE;
-    h.createTemplate.impl = async () => {
-      throw new RepoNotSeededError("template Artifact is still materializing");
-    };
-    await h.append(TEMPLATE_REQUEST);
-    await expect(h.processor().driveCreation(h.state())).rejects.toThrow(
-      "template Artifact is still materializing",
-    );
-
-    // Do not settle the source append into the processor. This is the alarm
-    // retry window Cursor found: the stream has the immutable SHA while the
-    // runner snapshot still reports templateSource: null.
-    expect(h.state().templateSource).toBeNull();
-    h.resolveTemplate.impl = async () => {
-      throw new Error("the journaled source must win over the moved ref");
-    };
-    h.createTemplate.impl = async () => CREATED_ARTIFACT;
-
-    await h.processor().driveCreation(h.state());
-    await h.settle();
-
-    expect(h.resolveTemplate.calls).toBe(1);
-    expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
-    expect(h.state().templateSource).toEqual(RESOLVED_TEMPLATE);
   });
 });

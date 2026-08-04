@@ -17,9 +17,8 @@ import {
   makeProcessorHarness,
   type HarnessSubstrate,
 } from "iterate/processors/testing";
-import { RepoProcessorContract, type RepoProcessorState } from "./repo-processor-contract.ts";
+import { RepoProcessorContract, type RepoCreateRequest } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
-import { GithubTemplateSourceError } from "./github-template-source.ts";
 
 type RepoEventInput = ConsumedInput<RepoProcessorContract>;
 
@@ -33,15 +32,6 @@ const SEEDED_ARTIFACT = {
   defaultBranch: "main",
   remote: "https://example.artifacts.cloudflare.net/git/ns/proj_harness--L3JlcG9zL2NvbmZpZw.git",
 };
-const RESOLVED_TEMPLATE = {
-  branch: "main",
-  commitSha: "a".repeat(40),
-  owner: "iterate",
-  path: "configs/with-voice",
-  ref: "main",
-  repo: "iterate",
-};
-
 const CREATE_REQUESTED = {
   type: "events.iterate.com/repos/create-requested",
   payload: { type: "empty" },
@@ -133,7 +123,13 @@ function artifactPush(branch: string, oids?: { after?: string; before?: string }
 /** The generic harness plus the repo's scriptable vendor fakes. Pass another
  * harness's substrate for a replay incarnation over the SAME stream. */
 function makeRepoHarness(substrate?: HarnessSubstrate) {
-  const creationQueue = { calls: 0, queued: false };
+  const creationQueue = {
+    calls: [] as Array<{
+      request: Extract<RepoCreateRequest, { type: "github-public-template" }>;
+      streamId: string;
+    }>,
+    queued: false,
+  };
   const createEmpty = {
     calls: 0,
     impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
@@ -141,14 +137,6 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
   const importPublic = {
     calls: [] as { depth?: number; owner: string; repo: string }[],
     impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
-  };
-  const createTemplate = {
-    calls: [] as NonNullable<RepoProcessorState["templateSource"]>[],
-    impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
-  };
-  const resolveTemplate = {
-    calls: [] as { owner: string; path?: string; ref?: string; repo: string }[],
-    impl: async (): Promise<typeof RESOLVED_TEMPLATE> => RESOLVED_TEMPLATE,
   };
   const link = {
     calls: [] as { connection: string; owner: string; repo: string }[],
@@ -175,18 +163,14 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
         stream: deps.stream,
         path: deps.path,
         projectId: deps.projectId,
-        enqueueCreation: async () => {
+        enqueueTemplateCreation: async (input) => {
           if (creationQueue.queued) return;
           creationQueue.queued = true;
-          creationQueue.calls += 1;
+          creationQueue.calls.push(input);
         },
         createEmptyArtifact: () => {
           createEmpty.calls += 1;
           return createEmpty.impl();
-        },
-        createGithubTemplateArtifact: (source) => {
-          createTemplate.calls.push(source);
-          return createTemplate.impl();
         },
         importPublicGithubArtifact: (input) => {
           importPublic.calls.push(input);
@@ -205,10 +189,6 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
           return githubSync.impl();
         },
         observeArtifactPush: (input) => void headCache.observed.push(input),
-        resolveGithubTemplateSource: (input) => {
-          resolveTemplate.calls.push(input);
-          return resolveTemplate.impl();
-        },
       }),
     path: REPO_PATH,
     substrate,
@@ -218,18 +198,11 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
     creationQueue,
     createEmpty,
     importPublic,
-    createTemplate,
-    resolveTemplate,
     link,
     syncPrivate,
     githubSync,
     headCache,
   };
-}
-
-async function driveCreation(harness: ReturnType<typeof makeRepoHarness>): Promise<void> {
-  await harness.processor().driveCreation(harness.state());
-  await harness.settle();
 }
 
 // =============================================================================
@@ -279,12 +252,6 @@ describe("RepoProcessor creation saga", () => {
       },
     ]);
 
-    // The hosted source callback only arms the Repo DO. Vendor work and
-    // outcome appends start later, from the alarm's independent call tree.
-    expect(h.importPublic.calls).toEqual([]);
-    expect(h.creationQueue).toEqual({ calls: 1, queued: true });
-    await driveCreation(h);
-
     expect(h.importPublic.calls).toMatchObject([{ depth: 1, owner: "acme", repo: "widgets" }]);
     expect(h.link.calls).toMatchObject([
       { connection: "install-789", owner: "acme", repo: "widgets" },
@@ -294,7 +261,7 @@ describe("RepoProcessor creation saga", () => {
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
   });
 
-  it("journals an immutable GitHub template source before materializing it", async () => {
+  it("hands an exact public-template obligation to the independent coordinator", async () => {
     const h = makeRepoHarness();
     const request = {
       type: "github-public-template" as const,
@@ -308,35 +275,26 @@ describe("RepoProcessor creation saga", () => {
       { type: "events.iterate.com/repos/create-requested", payload: request },
     ]);
 
-    expect(h.resolveTemplate.calls).toEqual([]);
-    expect(h.createTemplate.calls).toEqual([]);
-    expect(h.creationQueue).toEqual({ calls: 1, queued: true });
-    await driveCreation(h);
-
-    expect(h.resolveTemplate.calls).toEqual([request]);
-    expect(h.events("events.iterate.com/repos/template-source-resolved")).toMatchObject([
-      {
-        idempotencyKey:
-          'iterate-internal/repo-template-source-resolved:["proj_harness","/repos/config"]',
-        payload: RESOLVED_TEMPLATE,
-      },
-    ]);
-    expect(h.createTemplate.calls).toEqual([RESOLVED_TEMPLATE]);
-    expect(h.events("events.iterate.com/repos/created")).toMatchObject([{ payload: { request } }]);
-    expect(h.state()).toMatchObject({ templateSource: RESOLVED_TEMPLATE });
+    expect(h.creationQueue).toEqual({
+      calls: [{ request, streamId: h.stream.streamId }],
+      queued: true,
+    });
+    expect(h.events("events.iterate.com/repos/template-source-resolved")).toEqual([]);
+    expect(h.events("events.iterate.com/repos/created")).toEqual([]);
   });
 
   it("arms template creation before a hosted delivery reaches the raw stream head", async () => {
     const h = makeRepoHarness();
+    const requestPayload = {
+      type: "github-public-template" as const,
+      owner: "iterate",
+      path: "configs/with-voice",
+      ref: "main",
+      repo: "iterate",
+    };
     await h.stream.append({
       type: "events.iterate.com/repos/create-requested",
-      payload: {
-        type: "github-public-template",
-        owner: "iterate",
-        path: "configs/with-voice",
-        ref: "main",
-        repo: "iterate",
-      },
+      payload: requestPayload,
     });
     await h.stream.append({ type: "stream/connection-opened", payload: {} });
     const request = h.stream.events[0]!;
@@ -353,58 +311,33 @@ describe("RepoProcessor creation saga", () => {
     });
 
     await expect(h.runner().snapshot()).resolves.toMatchObject({ offset: request.offset });
-    expect(h.creationQueue).toEqual({ calls: 1, queued: true });
-    expect(h.resolveTemplate.calls).toEqual([]);
-    expect(h.createTemplate.calls).toEqual([]);
+    expect(h.creationQueue).toEqual({
+      calls: [{ request: requestPayload, streamId: h.stream.streamId }],
+      queued: true,
+    });
+    expect(h.events("events.iterate.com/repos/template-source-resolved")).toEqual([]);
   });
 
-  it("keeps retryable GitHub failures open and settles missing template input", async () => {
+  it("does not pull an already-queued template retry forward", async () => {
     const request = {
       type: "github-public-template" as const,
       owner: "iterate",
       path: "configs/missing",
       repo: "iterate",
     };
-    const retry = makeRepoHarness();
-    retry.resolveTemplate.impl = async () => {
-      throw new GithubTemplateSourceError("GitHub unavailable", { retryable: true });
-    };
-    await retry.stream.append({
-      type: "events.iterate.com/repos/create-requested",
-      payload: request,
+    const h = makeRepoHarness();
+    await h.play([
+      "append",
+      { type: "events.iterate.com/repos/create-requested", payload: request },
+    ]);
+    await h.play([
+      "append",
+      { type: "events.iterate.com/repos/create-requested", payload: request },
+    ]);
+    expect(h.creationQueue).toEqual({
+      calls: [{ request, streamId: h.stream.streamId }],
+      queued: true,
     });
-    await retry.settle();
-    await expect(retry.processor().driveCreation(retry.state())).rejects.toThrow(
-      "GitHub unavailable",
-    );
-    expect(retry.events("events.iterate.com/repos/create-failed")).toEqual([]);
-
-    // The coordinator owns the retry cadence. A later caught-up source
-    // callback may confirm the obligation is still open, but duplicate
-    // enqueue calls must not pull that retry forward into a hot loop.
-    const queueCalls = retry.creationQueue.calls;
-    await retry.play([
-      "append",
-      { type: "events.iterate.com/repos/create-requested", payload: request },
-    ]);
-    expect(retry.creationQueue).toEqual({ calls: queueCalls, queued: true });
-
-    retry.resolveTemplate.impl = async () => RESOLVED_TEMPLATE;
-    await driveCreation(retry);
-    expect(retry.events("events.iterate.com/repos/created")).toHaveLength(1);
-
-    const terminal = makeRepoHarness();
-    terminal.resolveTemplate.impl = async () => {
-      throw new GithubTemplateSourceError("Template path does not exist", { retryable: false });
-    };
-    await terminal.play([
-      "append",
-      { type: "events.iterate.com/repos/create-requested", payload: request },
-    ]);
-    await driveCreation(terminal);
-    expect(terminal.events("events.iterate.com/repos/create-failed")).toMatchObject([
-      { payload: { error: "Template path does not exist", request } },
-    ]);
   });
 
   it("seeds an Artifact, links a private GitHub repo, then performs its depth-one sync", async () => {
@@ -421,8 +354,6 @@ describe("RepoProcessor creation saga", () => {
         },
       },
     ]);
-    await driveCreation(h);
-
     expect(h.createEmpty.calls).toBe(1);
     expect(h.link.calls).toMatchObject([
       { connection: "install-789", owner: "acme", repo: "widgets" },
@@ -450,8 +381,6 @@ describe("RepoProcessor creation saga", () => {
       "append",
       { type: "events.iterate.com/repos/create-requested", payload: request },
     ]);
-    await driveCreation(h);
-
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(0);
     expect(h.events("events.iterate.com/repos/create-failed")).toMatchObject([
       {

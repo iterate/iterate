@@ -2,7 +2,6 @@ import { StreamProcessor } from "iterate/processors";
 import type { EmittedInput, ProcessEventArgs, ReduceArgs } from "iterate/processors";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
-import { isRetryableGithubTemplateSourceError } from "./github-template-source.ts";
 import {
   RepoProcessorContract,
   type RepoCreateRequest,
@@ -29,16 +28,16 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  * is short must-complete work, so the at-head pass holds the stream checkpoint
  * with `blockProcessorWhile`; an interrupted attempt is redelivered by the
  * stream spine immediately instead of depending on another event to wake a
- * quiet config repo. GitHub-backed creation is a state-derived ALARM
- * obligation. The source Stream DO invokes this processor over a retained
- * callback; starting long work in that callback and later appending its
- * outcome to the same Stream DO creates a cyclic actor-drain tree. The
- * callback therefore only enqueues a separate creation-coordinator DO. The
- * create event itself performs that handoff even when the source reports more
- * raw offsets ahead; relying only on an at-head pass can strand creation when
- * a hosted filtered delivery advances the cursor without producing that pass.
- * The coordinator's alarm drives the vendor work from an independent event,
- * then journals the immutable source and terminal fact. The terminal
+ * quiet config repo. Public-template creation is a state-derived ALARM
+ * obligation because it reads GitHub bodies and seeds an Artifact before
+ * appending an outcome. The source Stream DO invokes this processor over a
+ * retained callback; doing that work there creates a cyclic actor-drain tree.
+ * The callback therefore gives the exact request and stream lifetime to a
+ * separate coordinator. Its alarm performs the vendor work and appends the
+ * immutable source plus terminal fact through the Stream binding—it never
+ * calls the retained Repo actor. The create event performs that handoff even
+ * before a filtered delivery reaches raw head. Other GitHub-backed creation
+ * keeps its established background/revival lane. The terminal
  * certificate's idempotency keys are offset-free (`created` /
  * `create-failed`), so a
  * redelivery or revival cannot rotate them and double-birth. A vendor/domain
@@ -47,9 +46,8 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  * Artifact (RepoNotSeededError), an Artifacts service-availability failure,
  * or a Durable Object lifecycle interruption is not a domain failure: no
  * terminal fact is journaled and the durable obligation remains open for
- * redelivery/revival. The coordinator owns its own alarm and calls back into
- * the Repo DO only after the hosted batch has committed, so a permanently
- * retained source callback cannot suppress the wake-up.
+ * redelivery/revival. The coordinator's stream-ID fence prevents an obsolete
+ * saga from writing into a replacement stream lifetime.
  *
  * Every default-branch advance becomes one `repo/commit-completed` fact.
  * OS-owned writes append it directly from the Repo Durable Object's durable
@@ -82,14 +80,18 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  *
  * RECOVERY is the same code path as normal operation: an incarnation that
  * dies owing work gets the keepalive's `stream/processor-revived` fact
- * appended; its wake produces the eventless at-head pass. An open creation
- * re-arms the Repo DO alarm that owns its attempt, while an import with no live
- * driver (fresh incarnations have empty runtime sets) is re-driven under the
- * same request identity. A zombie attempt racing the successor collapses on
- * the shared idempotency keys.
+ * appended; its wake produces the eventless at-head pass. An open template
+ * re-enqueues its coordinator; other GitHub creation and imports with no live
+ * driver (fresh incarnations have empty runtime sets) are re-driven under the
+ * same request identity. Zombie attempts collapse on the shared idempotency
+ * keys.
  */
 export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
   readonly contract = RepoProcessorContract;
+
+  /** One background attempt for non-template GitHub creation per incarnation.
+   * The open request on the stream, not this flag, survives eviction. */
+  #longCreationAttemptedThisIncarnation = false;
 
   /**
    * RUNTIME state: request ids of GitHub imports THIS incarnation is driving.
@@ -105,11 +107,10 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   //   handoff) use
   //   `blockProcessorWhile`: each derives from an event delivered once, so a
   //   dropped append loses the fact forever.
-  // - STATE-DERIVED consequences run after the switch, at head only: creation
-  //   durably enqueues an independent coordinator DO, while GitHub syncs use
-  //   `runInBackground`. Any later at-head pass re-derives an undriven
-  //   obligation from state, and slow vendor work must not hold the stream
-  //   cursor or append into the source stream's retained callback tree.
+  // - STATE-DERIVED consequences run after the switch, at head only: public
+  //   templates durably enqueue an independent coordinator; the other GitHub
+  //   creation/sync lanes use `runInBackground`. Any later at-head pass
+  //   re-derives an undriven obligation from state.
   protected override processEvent(args: ProcessEventArgs<RepoProcessorContract>): undefined {
     const { event, state, delivery, append, blockProcessorWhile, runInBackground } = args;
 
@@ -126,8 +127,14 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         // independently durable wake-up if no later consumed event arrives.
         // The coordinator preserves an already-queued retry rather than
         // pulling it forward when this intent is replayed.
-        if (event.payload.type !== "empty" && state.birthCertificate === null) {
-          blockProcessorWhile(() => this.deps.enqueueCreation());
+        if (event.payload.type === "github-public-template" && state.birthCertificate === null) {
+          const request = event.payload;
+          blockProcessorWhile(() =>
+            this.deps.enqueueTemplateCreation({
+              request,
+              streamId: delivery.streamId,
+            }),
+          );
         }
         break;
       }
@@ -210,12 +217,10 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // The creation saga. Empty seeding is short and must complete before this
     // frame is acknowledged: if an Artifacts DO is reset during a deployment,
     // the stream spine redelivers the uncommitted frame and retries promptly.
-    // GitHub-backed creation can be a long import. The source Stream DO is
-    // still waiting for this hosted callback's acknowledgement, so this turn
-    // MUST NOT start work that later appends back to that same Stream DO. Arm
-    // a dedicated coordinator DO instead; its alarm runs outside this callback
-    // tree and calls driveCreation(). Offset-free terminal keys make a retried
-    // alarm converge on one certificate.
+    // Template creation must not run in the retained callback: its independent
+    // coordinator owns the whole network/materialization attempt and writes
+    // through the fenced Stream binding. Other GitHub creation keeps the
+    // established background/revival path.
     const createRequest = state.createRequest;
     if (
       createRequest !== null &&
@@ -223,8 +228,30 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       createRequest.type === "empty"
     ) {
       blockProcessorWhile(async () => append(await this.#createRepoTerminal(createRequest)));
-    } else if (createRequest !== null && state.birthCertificate === null) {
-      blockProcessorWhile(() => this.deps.enqueueCreation());
+    } else if (
+      createRequest?.type === "github-public-template" &&
+      state.birthCertificate === null
+    ) {
+      blockProcessorWhile(() =>
+        this.deps.enqueueTemplateCreation({
+          request: createRequest,
+          streamId: delivery.streamId,
+        }),
+      );
+    } else if (
+      createRequest !== null &&
+      state.birthCertificate === null &&
+      !this.#longCreationAttemptedThisIncarnation
+    ) {
+      this.#longCreationAttemptedThisIncarnation = true;
+      runInBackground(async () => {
+        try {
+          await append(await this.#createRepoTerminal(createRequest));
+        } catch (error) {
+          this.#longCreationAttemptedThisIncarnation = false;
+          throw error;
+        }
+      });
     }
 
     // The GitHub import obligation: start it when nobody in THIS incarnation
@@ -237,78 +264,6 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       this.#liveGithubImports.add(githubImport.requestId);
       runInBackground(() => this.#runGithubImport(args, githubImport));
     }
-  }
-
-  /**
-   * Drive one open GitHub-backed creation obligation for the independent
-   * creation coordinator, never from the source Stream DO's hosted callback.
-   * The caller supplies a runner-backed committed snapshot. A resolved source
-   * is journaled before any bytes are materialized; if materialization then
-   * fails retryably, the next alarm folds that fact and never resolves a moved
-   * ref again. Every append is idempotency-keyed, so an alarm retry after a
-   * lost response converges on the same source and terminal certificate.
-   */
-  async driveCreation(state: RepoProcessorState): Promise<void> {
-    const createRequest = state.createRequest;
-    if (
-      createRequest === null ||
-      createRequest.type === "empty" ||
-      state.birthCertificate !== null ||
-      state.createFailure !== null
-    ) {
-      return;
-    }
-
-    let templateSource = state.templateSource;
-    if (createRequest.type === "github-public-template" && templateSource === null) {
-      // The source fact may have committed while this runner's local fold was
-      // evicted or before its callback observed the append. Point-read the
-      // offset-free journal key before resolving a moving ref again. The
-      // stream remains the sole source of truth; this adds no shadow KV state.
-      templateSource = await this.#readJournaledTemplateSource(createRequest);
-    }
-    if (createRequest.type === "github-public-template" && templateSource === null) {
-      try {
-        templateSource = await this.deps.resolveGithubTemplateSource(createRequest);
-      } catch (error) {
-        await this.append(this.#creationFailureOrThrow(createRequest, error));
-        return;
-      }
-      await this.append({
-        type: "events.iterate.com/repos/template-source-resolved",
-        idempotencyKey: internalStreamId(
-          "repo-template-source-resolved",
-          this.projectId,
-          this.path,
-        ),
-        payload: templateSource,
-      });
-    }
-
-    await this.append(await this.#createRepoTerminal(createRequest, templateSource));
-  }
-
-  async #readJournaledTemplateSource(
-    request: Extract<RepoCreateRequest, { type: "github-public-template" }>,
-  ): Promise<NonNullable<RepoProcessorState["templateSource"]> | null> {
-    const event = await this.stream.getEvent({
-      idempotencyKey: internalStreamId("repo-template-source-resolved", this.projectId, this.path),
-    });
-    if (event === undefined) return null;
-
-    const parsed = RepoProcessorContract.parseEvent(event);
-    if (
-      parsed.type !== "events.iterate.com/repos/template-source-resolved" ||
-      parsed.payload.owner !== request.owner ||
-      parsed.payload.repo !== request.repo ||
-      parsed.payload.ref !== request.ref ||
-      parsed.payload.path !== request.path
-    ) {
-      throw new Error(
-        "The journaled GitHub template source does not match the repo creation request.",
-      );
-    }
-    return parsed.payload;
   }
 
   /**
@@ -325,10 +280,9 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
    */
   async #createRepoTerminal(
     request: RepoCreateRequest,
-    templateSource: RepoProcessorState["templateSource"] = null,
   ): Promise<EmittedInput<RepoProcessorContract>> {
     try {
-      const artifact = await this.#createRepo(request, templateSource);
+      const artifact = await this.#createRepo(request);
       return {
         type: "events.iterate.com/repos/created",
         idempotencyKey: this.idempotencyKey("created"),
@@ -346,8 +300,7 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (
       isRepoNotSeededError(error) ||
       isRetryableArtifactsInfrastructureError(error) ||
-      isRetryableDurableObjectAvailabilityError(error) ||
-      isRetryableGithubTemplateSourceError(error)
+      isRetryableDurableObjectAvailabilityError(error)
     ) {
       throw error;
     }
@@ -361,17 +314,11 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     };
   }
 
-  async #createRepo(
-    request: RepoCreateRequest,
-    templateSource: RepoProcessorState["templateSource"],
-  ) {
+  async #createRepo(request: RepoCreateRequest) {
     if (request.type === "empty") return await this.deps.createEmptyArtifact();
 
     if (request.type === "github-public-template") {
-      if (templateSource === null) {
-        throw new Error("GitHub template source was not durably resolved before materialization.");
-      }
-      return await this.deps.createGithubTemplateArtifact(templateSource);
+      throw new Error("Public template creation must be driven by the durable coordinator.");
     }
 
     const artifact =
@@ -558,9 +505,12 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 // -----------------------------------------------------------------------------
 
 type RepoProcessorDeps = {
-  /** Durably hand long creation to a separate coordinator DO. Duplicate
+  /** Durably hand public-template creation to a separate coordinator DO. Duplicate
    * enqueue calls preserve an already-queued attempt and its retry cadence. */
-  enqueueCreation(): Promise<void>;
+  enqueueTemplateCreation(input: {
+    request: Extract<RepoCreateRequest, { type: "github-public-template" }>;
+    streamId: string;
+  }): Promise<void>;
   /** Seed the backing Cloudflare Artifacts repository with the starter files.
    * Idempotent: leaves an existing branch untouched and gives concurrent
    * first seeds the same commit oid. */
@@ -569,19 +519,6 @@ type RepoProcessorDeps = {
     defaultBranch: string;
     remote: string;
   }>;
-  /** Materialize a previously journaled immutable GitHub commit as a fresh
-   * Artifact root commit. Idempotent: an existing branch is left untouched. */
-  createGithubTemplateArtifact(source: NonNullable<RepoProcessorState["templateSource"]>): Promise<{
-    artifactName: string;
-    defaultBranch: string;
-    remote: string;
-  }>;
-  /** Resolve a branch, tag, commit, or default branch to immutable Git
-   * coordinates. This performs no blob downloads; the caller journals the
-   * result before materialization. */
-  resolveGithubTemplateSource(
-    input: Extract<RepoCreateRequest, { type: "github-public-template" }>,
-  ): Promise<NonNullable<RepoProcessorState["templateSource"]>>;
   /** Have Cloudflare Artifacts clone a public GitHub repository directly —
    * the history never transfers through the Worker. Throws RepoNotSeededError
    * while the import is still materializing. */
