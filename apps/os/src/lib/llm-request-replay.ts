@@ -7,7 +7,7 @@ import { AgentProcessorContract } from "../domains/agents/agent-processor-contra
 import {
   buildAgentLlmRequestBody,
   flattenMessageToText,
-} from "../domains/agents/agent-processor-implementation.ts";
+} from "../domains/agents/agent-prompt-fold.ts";
 
 // The agent processor never journals an LLM request's input — it REBUILDS it
 // from committed history on every attempt (buildAgentLlmRequestBody), keyed by

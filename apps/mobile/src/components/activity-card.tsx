@@ -221,8 +221,7 @@ function CodeStepTabs({
       (event) =>
         LLM_REPLAY_EVENT_TYPES.includes(event.type) &&
         (event.offset <= llm.llmRequestOffset ||
-          (event.payload as { llmRequestOffset?: number }).llmRequestOffset ===
-            llm.llmRequestOffset),
+          event.payload?.llmRequestOffset === llm.llmRequestOffset),
     );
     return replayLlmRequest({
       rawEventJsons: relevant.map((event) => JSON.stringify(event)),
