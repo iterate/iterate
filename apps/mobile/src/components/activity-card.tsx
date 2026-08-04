@@ -4,9 +4,11 @@
 // approval marks once the run parked batches at the egress door). Expanded
 // (tap, or automatically while live-streaming): the run organized into
 // ROUNDS — the llm step that writes a script and the code step that runs it
-// — where each code step is a tabbed view: Script | Approvals | Result. The
-// Approvals tab renders the SAME shared ApprovalBatchBody the Notifications
-// expansion uses, so the in-context view can never drift from the archive.
+// — where each code step is a tabbed view: Script | Approvals | Result |
+// Meta. The Approvals tab renders the SAME shared ApprovalBatchBody the
+// Notifications expansion uses, so the in-context view can never drift from
+// the archive; Meta holds the step stat lines (model, duration, tokens) that
+// used to sit above the tab bar.
 
 import { useId, useState } from "react";
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
@@ -79,6 +81,7 @@ export function ActivityCard({
                 <CodeStepTabs
                   approvals={approvals}
                   batches={batchesByExecution.get(round.code.executionId) || []}
+                  llm={round.llm}
                   step={round.code}
                 />
               ) : null}
@@ -139,9 +142,10 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
   const responseText = llmResponseForDisplay(step.responseText, code?.code);
   return (
     <View style={styles.stepBody}>
-      <Text style={styles.stepLabel}>
-        {`llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`}
-      </Text>
+      {/* Once the round has a code step, this stat line lives in its Meta
+          tab instead; with no code step there is no tab bar, so it renders
+          here (streaming llm, or a round whose code half never arrived). */}
+      {code === null ? <Text style={styles.stepLabel}>{llmMetaLabel(step)}</Text> : null}
       {step.thinkingText !== "" ? (
         <Text style={styles.thinking}>{tail(step.thinkingText, 600)}</Text>
       ) : null}
@@ -158,12 +162,15 @@ function LlmStepView({ code, step }: { code: AgentUiCodeStep | null; step: Agent
  * run parked batches at the egress door (rendered through the shared
  * ApprovalBatchBody — the same component the Notifications expansion uses,
  * so the two can't drift); Result only once the run settled with a value or
- * an error. Tab choice follows the card's useState precedent, falling back
- * to Script whenever the chosen tab isn't offered.
+ * an error; Meta always trails, holding the stat lines (llm model, duration,
+ * tokens; code duration) that used to spend rows above the tab bar. Tab
+ * choice follows the card's useState precedent, falling back to Script
+ * whenever the chosen tab isn't offered.
  */
 function CodeStepTabs({
   approvals,
   batches,
+  llm,
   step,
 }: {
   approvals: ActivityApprovalContext;
@@ -173,9 +180,10 @@ function CodeStepTabs({
     resolved: ResolvedBatch | null;
     expired: boolean;
   }[];
+  llm: AgentUiLlmStep | null;
   step: AgentUiCodeStep;
 }) {
-  const [selected, setSelected] = useState<"script" | "approvals" | "result" | null>(null);
+  const [selected, setSelected] = useState<"script" | "approvals" | "result" | "meta" | null>(null);
   // `as const` throughout: without them the literals widen to string and
   // the inferred tab union collapses.
   const tabs = [
@@ -184,32 +192,32 @@ function CodeStepTabs({
     ...(step.status === "done" && (step.result !== undefined || step.errorMessage)
       ? ["result" as const]
       : []),
+    "meta" as const,
   ];
   const active = selected !== null && tabs.includes(selected) ? selected : "script";
   return (
     <View style={styles.stepBody}>
-      <Text style={styles.stepLabel}>
-        {`code${step.durationMs ? ` · ${(step.durationMs / 1000).toFixed(1)}s` : ""}${
-          step.status === "done" && step.success === false ? " · failed" : ""
-        }`}
-      </Text>
-      {tabs.length > 1 ? (
-        <View style={styles.tabRow}>
-          {tabs.map((tab) => (
-            <Pressable
-              accessibilityRole="button"
-              accessibilityState={{ selected: tab === active }}
-              key={tab}
-              onPress={() => setSelected(tab)}
-              style={[styles.tab, tab === active && styles.tabActive]}
-            >
-              <Text style={[styles.tabLabel, tab === active && styles.tabLabelActive]}>
-                {tab === "script" ? "Script" : tab === "approvals" ? "Approvals" : "Result"}
-              </Text>
-            </Pressable>
-          ))}
-        </View>
-      ) : null}
+      <View style={styles.tabRow}>
+        {tabs.map((tab) => (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityState={{ selected: tab === active }}
+            key={tab}
+            onPress={() => setSelected(tab)}
+            style={[styles.tab, tab === active && styles.tabActive]}
+          >
+            <Text style={[styles.tabLabel, tab === active && styles.tabLabelActive]}>
+              {tab === "script"
+                ? "Script"
+                : tab === "approvals"
+                  ? "Approvals"
+                  : tab === "result"
+                    ? "Result"
+                    : "Meta"}
+            </Text>
+          </Pressable>
+        ))}
+      </View>
       {active === "script" ? (
         <>
           {step.code !== "" ? (
@@ -263,6 +271,11 @@ function CodeStepTabs({
             </View>
           ))}
         </View>
+      ) : active === "meta" ? (
+        <View style={styles.tabBody}>
+          {llm ? <Text style={styles.stepLabel}>{llmMetaLabel(llm)}</Text> : null}
+          <Text style={styles.stepLabel}>{codeMetaLabel(step)}</Text>
+        </View>
       ) : (
         <View style={styles.tabBody}>
           {step.result !== undefined ? (
@@ -273,6 +286,16 @@ function CodeStepTabs({
       )}
     </View>
   );
+}
+
+function llmMetaLabel(step: AgentUiLlmStep): string {
+  return `llm${step.model ? ` · ${step.model}` : ""}${footerStats(step)}`;
+}
+
+function codeMetaLabel(step: AgentUiCodeStep): string {
+  return `code${step.durationMs ? ` · ${(step.durationMs / 1000).toFixed(1)}s` : ""}${
+    step.status === "done" && step.success === false ? " · failed" : ""
+  }`;
 }
 
 function footerStats(step: Extract<AgentUiStep, { kind: "llm" }>): string {

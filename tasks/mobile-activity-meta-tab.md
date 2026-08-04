@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: implemented
 size: small
 ---
 
@@ -7,7 +7,8 @@ size: small
 
 ## Status
 
-Spec committed, implementation starting. Nothing done yet.
+Implemented; typecheck/lint/test green. Awaiting review on
+https://github.com/iterate/iterate/pull/2398.
 
 ## Ask
 
@@ -47,10 +48,21 @@ Script | Approvals | Result | Meta
 
 ## Checklist
 
-- [ ] Add `meta` to the tab union + tabs array in `CodeStepTabs`
-      (apps/mobile/src/components/activity-card.tsx)
-- [ ] Render Meta tab body with llm + code meta lines; pass the round's llm
-      step into `CodeStepTabs`
-- [ ] Drop the `code · …` label above the tab bar; drop the llm meta label
-      from `LlmStepView` when the round has a code step
-- [ ] typecheck / lint / test for apps/mobile
+- [x] Add `meta` to the tab union + tabs array in `CodeStepTabs`
+      (apps/mobile/src/components/activity-card.tsx) _`"meta" as const`
+      appended unconditionally; tab bar now renders unconditionally since
+      tabs.length ≥ 2 always_
+- [x] Render Meta tab body with llm + code meta lines; pass the round's llm
+      step into `CodeStepTabs` _new `llm` prop; label strings extracted to
+      `llmMetaLabel`/`codeMetaLabel` shared with the streaming fallback_
+- [x] Drop the `code · …` label above the tab bar; drop the llm meta label
+      from `LlmStepView` when the round has a code step _LlmStepView renders
+      the label only when `code === null` (streaming, or code half missing)_
+- [x] typecheck / lint / test for apps/mobile _tsc clean, oxlint clean,
+      83 tests pass, knip clean_
+
+## Implementation notes
+
+- Single-file change: `apps/mobile/src/components/activity-card.tsx`.
+- No component render tests exist for this card (mobile tests are lib-level);
+  behavior change is presentational, so no new tests added.
