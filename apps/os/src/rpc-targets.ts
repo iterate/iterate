@@ -6727,7 +6727,11 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
           : null,
       };
     });
-    channels.sort((a: any, b: any) => (a.updatedAt < b.updatedAt ? 1 : -1));
+    // Sort by what the UI shows: the latest update's publish time. The
+    // channel record's own updatedAt only moves on channel/branch-mapping
+    // changes, not on publishes.
+    const sortKey = (c: any) => c.latestUpdate?.createdAt || c.updatedAt;
+    channels.sort((a: any, b: any) => (sortKey(a) < sortKey(b) ? 1 : -1));
     return { available: true, channels };
   }
 
