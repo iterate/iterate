@@ -8,6 +8,64 @@ not deleted.
 
 ---
 
+## 0035 — Only TWO deployment topologies for now: self-host-all-workers · iterate-hosts-all-workers (differ only in config)
+
+**The lock (Jonas, 2026-08-03).** Stop supporting a lattice of mixed deployments. For now there are exactly
+**two** topologies, differing **only in config**:
+
+1. **Self-host all workers** — the customer runs every worker (project + control-plane + MCP + auth). No product.
+2. **Iterate hosts all workers** — byte-identical, **plus one extra outer "product" worker**.
+
+No mixed topology: **no project worker in a customer's Cloudflare account talking to our hosted control
+plane; no cross-account capnweb dial; no connection-holder DO; no BYO-Cloudflare-account-per-project** — all
+**deferred**. **Data residency is NOT a deployment axis** — it is a **per-capability provider override**:
+"bring your own streams / bring your own repos" = override that collection's RpcTarget so its backing lives
+elsewhere (ADR 0021 / jam §2c–d, promoted to the primary residency mechanism). **Billing/cost is userspace**
+(a stream processor), not a control-plane primitive. **Egress STILL always flows through the control plane**
+(ADR 0017 holds — from the project's perspective its outbound `fetch` goes through the control-plane egress
+capability, in BOTH topologies). The lock actually makes this _cheap_: because both topologies co-locate the
+control plane (same account), egress-through-CP is a **same-account service binding**, never a cross-account
+capnweb session. What is a PRODUCT concern is only the **metering + first-party-key substitution layered into
+that egress door** — not the door itself; a bare self-hosted control plane's egress door may just pass
+through to `fetch()`, but the project still goes _through_ it.
+
+**The network path is a SHELL ONION (both directions).** The shells nest — project ⊂ control plane ⊂ product
+— and network traffic traverses all present shells:
+
+- **Egress (inside→out):** project → control plane → **[iterate product, when hosted]** → internet.
+- **Ingress (outside→in):** internet → **[iterate product, when hosted]** → control plane → project.
+  So the **iterate product is the OUTERMOST network shell** (the actual edge when we host); the control plane is
+  the edge in self-host. This is the §4 "fetch-middleware onion": ingress = _outer calls inner_, egress =
+  _inner calls outer_. It reconciles "ingress/egress are just `fetch`" (D13) with "egress flows through the
+  control plane": both are `fetch` traversing the shell onion, and each outer shell is where that shell's
+  concerns live (product = metering/first-party keys/rich onboarding; control plane = routing/directory/
+  capability provision).
+
+**The precise line (resolves the sweep's flagged tension).** What is deferred is the mixed **worker-deployment**
+topology — project _workers_ running in a different CF account than the control plane, joined by a standing
+project↔CP capnweb session. What **still holds** is an **external capability provider dialing INTO a
+deployment** via the wake socket (a Pi/browser/device providing a stream — spikes `capability-wake`/`fused`):
+that is orthogonal to worker placement and works in **both** topologies. So "BYO streams via a Pi" is a
+_capability provider dialing in_ (holds), not the _cross-account worker boundary_ (deferred). The
+connection-holder DO (jam §8/D10) is the deferred **outbound project→CP** form; the inbound pager is not.
+
+**Supersedes / defers** (see wayfinder/innermost-core/issues/11 for the full sweep):
+**SUPERSEDED** — 0006 (level-2 transit contract), 0007 (always-a-billing-relationship → userspace), 0027
+(BYO-account-per-project), and the four-archetypes / lattice / Level-2 framings in `topologies-and-axes.md`,
+`CONTEXT.md`, `MAP.md`. **0017 HOLDS (corrected):** "egress always flows through the control plane" is
+UNCHANGED — egress traverses the shell onion (project → control plane → [product] → internet), made cheap by
+co-location (same-account service binding, not a cross-account dial); only the _metering/first-party-key
+layer_ on the egress door is a product concern. `control-plane-and-product.md` §4 HOLDS.
+**DEFERRED** — 0008 (BYO-account API-key handoff), 0009 (pinned cross-account capnweb session), 0010
+(cross-account provisioning script), 0013 (home-assistant _mixed topology_ — its Pi-as-provider fragment
+survives as a capability override), and the cross-account remote legs of 0001 / 0014 / 0034 (the HTTP `/serve`
+dial) + deployment-topology 4. **SIMPLIFIED** — 0023 (`pnpm dev` collapses to full-stack-only), 0022 (MCP
+test battery shrinks to two config variants). **STILL HOLD** — 0020/0025/0031 (routing + reserved CP host),
+0032/0033 (auth worker + D1 directory), 0021 (capability presence = "is the product worker mounted?"),
+0028/0012. **REFRAMED** — 0030 / `control-plane-and-product.md` (product is a _separate outer worker_, not an
+empty config bag — already revised by jam §1). _(Jonas — "let's actually just lock this in; it simplifies a
+lot of stuff.")_
+
 ## 0034 — Project worker (the runner) is a separate worker; control plane dials it (service binding OR HTTP)
 
 The two-worker split is realized: **control plane worker** (front desk — login/session/directory/OAuth
