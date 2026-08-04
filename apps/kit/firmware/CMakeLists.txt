@@ -14,9 +14,9 @@ if(ITERATE_KIT_SANITIZE AND CMAKE_C_COMPILER_ID MATCHES "AppleClang|Clang|GNU")
   add_link_options(-fsanitize=address,undefined)
 endif()
 
-# The device profile is maintained in the first-party Cap'n Web repository.
-# Pinning a commit keeps firmware builds reproducible without copying upstream
-# implementation files into this monorepo.
+# The bounded C Cap'n Web peer is maintained in its first-party repository.
+# Pinning a commit keeps firmware builds reproducible without copying the
+# upstream implementation into this monorepo.
 include(FetchContent)
 set(CAPNWEB_BUILD_TOOLS OFF CACHE BOOL "" FORCE)
 set(CAPNWEB_BUILD_FUZZER OFF CACHE BOOL "" FORCE)

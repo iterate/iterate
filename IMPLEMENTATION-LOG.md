@@ -105,3 +105,38 @@ work and the formal codec/processor seams. Physical microphone and speaker
 proof remains a later hardware phase; this phase's unattended run used the
 real C transport and server conversation with a WAV utterance and file-backed
 speaker timeline so it was reproducible.
+
+## 2026-08-04 — phase 1: independent review corrections
+
+**Did:** Corrected §5.1's adoption ledger to name the complete load-bearing
+Tier 1 graph: configuration and device events, ITX peer/mount/outbox plumbing,
+the bounded WebSocket stack, playback clock and status, push-to-talk RPC
+support, Darwin transport, and the complete host rig. Added the donor branch's
+real `audio.h` god-header spelling to the forbidden core include check.
+Removed the now-redundant `test:web` script and clarified that the pinned
+dependency is the bounded C Cap'n Web peer, not the unrelated voice device
+profile.
+
+**Measured:** The reviewer classified all 102 byte-identical donor files and 11
+adapted files as load-bearing, found zero evidence binaries, forbidden modules,
+vendored upstream files, or orphan tests, and independently reproduced 33/33
+sanitizer CTests, typecheck, zero-warning lint, the full workspace test suite,
+and the exact local conversation report.
+
+**Surprised by:** Narrowing `iterate/kit/audio` to `iterate/kit/audio/` correctly
+allowed the core policy header `audio_playout.h`, but also allowed the donor's
+actual `iterate/kit/audio.h` hardware god-header. The explicit `audio.h` pattern
+closes that high-probability board-port bypass.
+
+**Reviewer said:** The runtime and exit evidence are genuine. Before Phase 2,
+record the previously implicit adoption ledger, close the `audio.h` boundary
+hole, remove or consciously accept the duplicate web test command, clarify the
+Cap'n Web comment, and state the meaning of “no cloud.” → **did:** Applied all
+four code/documentation corrections. Here “no cloud” means no deployed
+Cloudflare environment: OS, project, stream, and dynamic worker ran in local
+Miniflare/workerd. The dynamic voice worker deliberately still used xAI's
+realtime API, so the proof is locally hosted but not provider-hermetic.
+
+**Open:** A fake-provider option could make the conversation proof independent
+of xAI availability, but it is not part of Phase 1 and is not required for the
+product path. The preservation archive's iCloud upload remains pending.

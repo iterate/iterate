@@ -155,13 +155,18 @@ Nothing else. Copy the file, read it, delete what the new structure does not nee
 
 **Tier 1 — take:**
 
-- `components/core/include/iterate/kit/voice_device_profile.h` — the global table (D6)
-- `components/core/src/voicelab_stream.{h,c}` + its host tests — this IS the A1 lane
-- `components/core/src/audio_playout.c` — the `(call, answer, frame)` classifier
+- `components/core`: `voice_device_profile`, `voicelab_stream`,
+  `audio_playout`, `configuration`, `device_events`, `itx_connection`,
+  `itx_mount`, `itx_outbox_sender`, `peer`, `voice_playback_clock`, the
+  WebSocket frame/RX/text/TX stack, `status.h`, `spsc_ring`, `retry_gate`,
+  `talk_button`, and `atomic.h`, with their host tests. These are the complete
+  load-bearing control and transport graph for the A1 lane; do not copy any
+  other core module.
+- `components/capabilities`: `push_to_talk`, `subscription.h`, and its private
+  `rpc_internal` support, with their host tests
+- `platforms/darwin/` — the Mac transport implementation
+- `targets/host_cli/` — the Mac conversation and fault-injection rig
 - `targets/waveshare_s3_amoled/main/` — the reference implementation
-- `targets/host_cli/` fault-injection modules
-- `components/capabilities/src/push_to_talk.c`, `talk_button.c`
-- `spsc_ring`, `retry_gate`, `atomic.h`
 
 **Tier 2 — take only when the board that needs it is being ported:**
 
