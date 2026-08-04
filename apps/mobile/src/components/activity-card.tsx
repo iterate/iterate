@@ -84,7 +84,20 @@ export function ActivityCard({
       {expanded
         ? rounds.map((round, index) => (
             <View key={round.code?.id || round.llm?.id || index} style={styles.step}>
-              {rounds.length > 1 ? <Text style={styles.roundLabel}>Round {index + 1}</Text> : null}
+              {rounds.length > 1 ? (
+                <View style={styles.roundHeader}>
+                  <Text style={styles.roundLabel}>Round {index + 1}</Text>
+                  {/* The agent's summary status as of this round (the reducer
+                      stamps the latest agent/summary-updated fold onto each
+                      code step). Summaries aren't forced short — one line,
+                      ellipsized. */}
+                  {roundHeaderMeta(round) === "" ? null : (
+                    <Text numberOfLines={1} style={styles.roundMeta}>
+                      {roundHeaderMeta(round)}
+                    </Text>
+                  )}
+                </View>
+              ) : null}
               {round.llm ? <LlmStepView code={round.code} step={round.llm} /> : null}
               {round.code ? (
                 <CodeStepTabs
@@ -135,6 +148,22 @@ function ApprovalGlyphs({
       ))}
     </View>
   );
+}
+
+/**
+ * The round header's muted suffix: the agent's summary `activity` as of the
+ * round plus its code duration — "Searching the five most recent FirstFT
+ * emails · 0.2s". Same idea as the os web feed's roundHeaderMeta
+ * (apps/os/src/components/agent-activity-rounds.tsx); with no summary the
+ * header stays bare (the Meta tab carries the stats).
+ */
+function roundHeaderMeta(round: { llm: AgentUiLlmStep | null; code: AgentUiCodeStep | null }) {
+  const code = round.code;
+  if (code == null) return "";
+  return [
+    ...(code.activitySummary ? [code.activitySummary] : []),
+    ...(code.durationMs == null ? [] : [`${(code.durationMs / 1000).toFixed(1)}s`]),
+  ].join(" · ");
 }
 
 function liveSummary(activity: AgentUiActivity): string {
@@ -318,7 +347,7 @@ function CodeStepTabs({
       ) : (
         <View style={styles.tabBody}>
           {step.result !== undefined ? (
-            <CodeBlock language="json" text={previewJson(step.result)} muted />
+            <CodeBlock language="yaml" text={previewResultYaml(step.result)} muted />
           ) : null}
           {step.errorMessage ? <Text style={styles.error}>{step.errorMessage}</Text> : null}
         </View>
@@ -346,9 +375,9 @@ function metaYaml(
       ? {
           llm: {
             ...(llm.model ? { model: llm.model } : {}),
-            ...(llm.durationMs ? { duration: seconds(llm.durationMs) } : {}),
-            ...(llm.inputTokens ? { inputTokens: llm.inputTokens } : {}),
-            ...(llm.outputTokens ? { outputTokens: llm.outputTokens } : {}),
+            ...(llm.durationMs == null ? {} : { duration: seconds(llm.durationMs) }),
+            ...(llm.inputTokens == null ? {} : { inputTokens: llm.inputTokens }),
+            ...(llm.outputTokens == null ? {} : { outputTokens: llm.outputTokens }),
             ...(llm.outcome && llm.outcome !== "completed" ? { outcome: llm.outcome } : {}),
             ...(llm.cancelReason ? { cancelReason: llm.cancelReason } : {}),
           },
@@ -356,7 +385,7 @@ function metaYaml(
       : {}),
     code: {
       ...(code.status === "running" ? { status: "running" } : {}),
-      ...(code.durationMs ? { duration: seconds(code.durationMs) } : {}),
+      ...(code.durationMs == null ? {} : { duration: seconds(code.durationMs) }),
       ...(code.status === "done" && code.success === false ? { failed: true } : {}),
     },
     ...(promptMessages && promptMessages.length > 0
@@ -483,10 +512,23 @@ function tail(text: string, max: number): string {
   return text.length <= max ? text : `…${text.slice(-max)}`;
 }
 
-function previewJson(value: unknown): string {
+/**
+ * A script result as display YAML — same fold as the os web feed's
+ * resultYaml (apps/os/src/lib/agent-round-meta-yaml.ts), plus the bounded
+ * preview cap the JSON view used to apply.
+ */
+function previewResultYaml(value: unknown) {
   try {
-    const json = JSON.stringify(value, null, 1);
-    return json.length > 2000 ? `${json.slice(0, 2000)}…` : json;
+    const doc = new Document(value);
+    visit(doc, {
+      Scalar(_key, node) {
+        if (typeof node.value === "string" && node.value.includes("\n")) {
+          node.type = Scalar.BLOCK_LITERAL;
+        }
+      },
+    });
+    const text = doc.toString({ lineWidth: 0 }).trimEnd();
+    return text.length > 2000 ? `${text.slice(0, 2000)}…` : text;
   } catch {
     return String(value);
   }
@@ -520,7 +562,9 @@ const styles = StyleSheet.create({
   },
   stepBody: { gap: spacing.xs },
   stepLabel: { color: colors.textFaint, fontSize: 11, textTransform: "uppercase" },
+  roundHeader: { flexDirection: "row", alignItems: "baseline", gap: spacing.sm },
   roundLabel: { color: colors.text, fontSize: 12, fontWeight: "700" },
+  roundMeta: { color: colors.textFaint, fontSize: 11, flexShrink: 1 },
   glyphRow: { flexDirection: "row", gap: 4, marginLeft: "auto" },
   glyph: { fontSize: 12, fontWeight: "700" },
   glyphOpen: { color: colors.working },

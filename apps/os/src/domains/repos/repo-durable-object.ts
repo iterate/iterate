@@ -13,6 +13,7 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { LiveStateSockets } from "../live-state-socket.ts";
 import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
@@ -126,11 +127,25 @@ export class RepoDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
+  /** liveState watcher sockets (domains/live-state-socket.ts) — watched repos hibernate at zero pin.
+   * The explicit field type is NOT inferable decoration: it breaks the
+   * field-initializer inference cycle with #registry (its hooks read the
+   * registry, whose onLiveAssembled reads this field back — TS7022 without
+   * it), the same pattern as the registry option getLiveState's explicit
+   * return type. */
+  readonly #liveStateSockets: LiveStateSockets = new LiveStateSockets({
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    readState: () => this.#registry.live.getState(),
+    refresh: () => this.#registry.loadAndRefreshLive(),
+    waitUntil: (work) => this.ctx.waitUntil(work),
+  });
   readonly #registry = createStreamProcessorRegistry(this.ctx, {
     stream: this.#stream,
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
+    onLiveAssembled: (assembly) => this.#liveStateSockets.refreshAfterAssembly(assembly),
   });
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
@@ -221,6 +236,27 @@ export class RepoDurableObject extends DurableObject<Env> {
   /** The repo's live state — the get/set/assign/subscribe surface behind `itx.repos.get(path).liveState`. */
   get liveState() {
     return new LiveStateRpcTarget(this.#registry);
+  }
+
+  /** The repo DO's only fetch surface: the liveState-socket upgrade (see LiveStateSockets). */
+  async fetch(request: Request): Promise<Response> {
+    return (
+      (await this.#liveStateSockets.acceptUpgrade(request)) ??
+      Response.json(
+        { error: "repo durable objects accept only liveState-socket upgrades" },
+        { status: 400 },
+      )
+    );
+  }
+
+  /** liveState sockets are one-way (this DO → relay); inbound frames are ignored. */
+  webSocketMessage(): void {}
+
+  /** A closed watcher socket simply drops off `getWebSockets`; nothing to clean up. */
+  webSocketClose(): void {}
+
+  webSocketError(_ws: WebSocket, error: unknown): void {
+    this.#liveStateSockets.socketError(error);
   }
 
   /**

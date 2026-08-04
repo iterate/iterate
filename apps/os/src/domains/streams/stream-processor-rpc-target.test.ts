@@ -60,7 +60,11 @@ describe("StreamRpcTarget", () => {
     expect(updates).toEqual([
       { type: "snapshot", revision: expect.any(Number), state: runtimeState },
     ]);
-    expect(handle.ping()).toBe(true);
+    // This fixture serves the DEGRADED path (the upgrade above returns no
+    // socket), so the subscription is frozen at its first paint and must
+    // report unhealthy — that is what makes the owner's watchdog re-subscribe
+    // and try for a socket again.
+    expect(handle.ping()).toBe(false);
     handle.unsubscribe();
 
     // One transient snapshot read per get/subscribe; zero DO-side liveState.

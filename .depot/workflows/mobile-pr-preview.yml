@@ -1,0 +1,35 @@
+name: Mobile PR Preview
+permissions:
+  contents: write # QR PNGs upload to the gh-attach-assets release
+  pull-requests: write
+concurrency:
+  # Within one PR the newest push wins - cancel stale publishes. Across PRs
+  # channels are independent, so runs proceed in parallel.
+  group: mobile-pr-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+on:
+  pull_request:
+    paths:
+      - apps/mobile/**
+jobs:
+  publish:
+    runs-on:
+      size: 2x8
+      image: 0p91s0lz49.registry.depot.dev/iterate-preview-ci:node24-pnpm10-worktree
+    timeout-minutes: 30
+    env:
+      GITHUB_TOKEN: ${{ github.token }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          clean: false
+          ref: ${{ github.event.pull_request.head.sha }}
+      - name: Reconcile dependencies (baked)
+        run: pnpm install --frozen-lockfile --prefer-offline
+      # EXPO_TOKEN lives in the Doppler _shared project and is inherited by
+      # os/prd; eas-cli picks it up from the environment.
+      - name: Publish PR channel and update PR body
+        env:
+          DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+        run: doppler run --project os --config prd -- pnpm tsx scripts/ci/publish-mobile-pr-preview.ts

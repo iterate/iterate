@@ -34,26 +34,8 @@ import { compileEventFilter, EventFilter } from "./event-filter.ts";
 /** Internal upgrade header carrying the wake-socket binding; never routed from external requests. */
 export const STREAM_WAKE_SOCKET_HEADER = "x-iterate-stream-wake";
 
-/** Header body for a STATE-socket upgrade (the liveState lane). */
-export const STATE_SOCKET_HEADER_BODY = JSON.stringify({ stateSocket: true });
-
 /** The hibernation tag every wake socket is accepted under. */
 const WAKE_SOCKET_TAG = "wake";
-
-/**
- * The hibernation tag for STATE sockets — the liveState lane. Where wake
- * sockets carry a dumb "re-dial your RPC leg" signal (delivery correctness
- * lives in batch replay), liveState is latest-wins snapshot semantics, which
- * is exactly what a raw hibernatable socket provides — so state rides the
- * socket outright: no RPC leg, no idle machinery, no loop-breakers. The
- * worker-side relay seeds itself with one transient runtimeState() call and
- * then just listens; the DO pushes on change, and state only changes while
- * the DO is awake anyway.
- */
-const STATE_SOCKET_TAG = "live-state";
-
-/** The JSON body of {@link STREAM_WAKE_SOCKET_HEADER} for a state socket. */
-const StateSocketUpgradeHeader = z.object({ stateSocket: z.literal(true) });
 
 /** The JSON body of {@link STREAM_WAKE_SOCKET_HEADER} on the upgrade request. */
 const WakeSocketUpgradeHeader = z.object({
@@ -116,25 +98,6 @@ export function parseWakeSocketFrame(data: unknown): WakeSocketFrame | undefined
 }
 
 /**
- * A frame sent DO → relay on a STATE socket: the full runtime debug state,
- * latest-wins. Loose object for the same forward-compat posture as
- * {@link WakeSocketFrame}. The payload stays `unknown` here — the relay
- * feeds it to a typed engine whose consumers already validate shape by use.
- */
-const StateSocketFrame = z.object({ type: z.literal("state"), state: z.unknown() });
-
-/** Decode one inbound state-socket frame; anything unparseable is dropped whole. */
-export function parseStateSocketFrame(data: unknown): { state: unknown } | undefined {
-  if (typeof data !== "string") return undefined;
-  try {
-    const parsed = StateSocketFrame.safeParse(JSON.parse(data));
-    return parsed.success ? { state: parsed.data.state } : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/**
  * Stream lifecycle bookkeeping never wakes a dormant subscriber. The idle
  * close itself appends `connection-closed`, every cold boot appends `woken`,
  * and a wake re-dial appends `connection-opened` — waking on any of those
@@ -178,11 +141,10 @@ export class WakeSocketRegistry {
   }
 
   /**
-   * The Stream DO's only fetch surface: the wake-socket upgrade, dialed by
-   * the relay through the DO's stub (a 101 response cannot cross an RPC
-   * method call, so this rides a real `fetch()`). Unreachable from external
-   * requests — no ingress lane routes fetches to Stream DOs — and
-   * additionally gated on the internal header.
+   * The wake-socket upgrade, dialed by the relay through the DO's stub (a
+   * 101 response cannot cross an RPC method call, so this rides a real
+   * `fetch()`). Unreachable from external requests — no ingress lane routes
+   * fetches to Stream DOs — and additionally gated on the internal header.
    */
   acceptUpgrade(request: Request): Response {
     const wakeHeader = request.headers.get(STREAM_WAKE_SOCKET_HEADER);
@@ -204,14 +166,6 @@ export class WakeSocketRegistry {
       );
     }
 
-    // The state lane: latest-wins liveState frames, no attachment needed —
-    // the socket's existence IS its whole state.
-    if (StateSocketUpgradeHeader.safeParse(parsedHeader).success) {
-      const pair = new WebSocketPair();
-      this.#hooks.acceptWebSocket(pair[1], [STATE_SOCKET_TAG]);
-      return new Response(null, { status: 101, webSocket: pair[0] });
-    }
-
     const binding = WakeSocketUpgradeHeader.safeParse(parsedHeader);
     if (!binding.success) {
       return Response.json(
@@ -227,30 +181,6 @@ export class WakeSocketRegistry {
       socketId: binding.data.socketId,
     } satisfies WakeSocketAttachment);
     return new Response(null, { status: 101, webSocket: pair[0] });
-  }
-
-  /** Whether any liveState watcher socket is attached (state pushes wanted). */
-  hasStateSockets(): boolean {
-    return this.#hooks.getWebSockets(STATE_SOCKET_TAG).length > 0;
-  }
-
-  /**
-   * Push the current runtime debug state to every liveState watcher.
-   * Latest-wins and best-effort by design: a dropped frame is corrected by
-   * the next change (or the watcher's next transient snapshot read), and
-   * outgoing sends are billing-free.
-   */
-  pushState(state: unknown): void {
-    const sockets = this.#hooks.getWebSockets(STATE_SOCKET_TAG);
-    if (sockets.length === 0) return;
-    const frame = JSON.stringify({ type: "state", state });
-    for (const ws of sockets) {
-      try {
-        ws.send(frame);
-      } catch {
-        // A closing socket drops off getWebSockets on its own.
-      }
-    }
   }
 
   /**

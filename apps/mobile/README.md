@@ -74,9 +74,23 @@ same merges are the ones that need a manual dev-client rebuild
 `eas update` publishes stamp `src/build-info.json` via
 `scripts/write-build-info.mjs` (EAS native builds run it through the
 `eas-build-pre-install` hook). The checked-in file is an all-empty
-placeholder — don't commit a stamped one. Manual publish, e.g. to push a
-branch's JS to your installed preview app without waiting for a merge:
+placeholder — don't commit a stamped one. Manual publish to the shared
+main channel (rare — see per-PR channels below):
 `pnpm --dir apps/mobile update:preview`.
+
+### Per-PR channels
+
+The `preview` channel is main-only; publishing PR work to it would be
+last-write-wins chaos. PRs touching `apps/mobile/**` get their own channel
+named after the branch: CI (`.depot/workflows/mobile-pr-preview.yml` →
+`scripts/ci/publish-mobile-pr-preview.ts`) publishes on every push and
+maintains a PR-body section with two tappable QR codes — an
+`iterate://preview-channel/<channel>` deep link that switches the installed
+app to the PR's channel (confirm screen, then fetch + reload), and the
+matching build's install page for when the runtime differs or the app isn't
+installed. Whichever the fingerprint heuristic says you need is expanded.
+The switch persists across restarts; get back with **Build info → Reset to
+default channel**.
 
 ## Run and test it in a browser
 
