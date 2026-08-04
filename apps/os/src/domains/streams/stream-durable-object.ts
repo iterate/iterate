@@ -433,7 +433,10 @@ function createSubscriptionReceiverCalls(deps: {
         } catch {
           return {};
         }
-        const confirmedOffset = (body as { confirmedOffset?: unknown } | null)?.confirmedOffset;
+        const confirmedOffset =
+          typeof body === "object" && body !== null && "confirmedOffset" in body
+            ? body.confirmedOffset
+            : undefined;
         return typeof confirmedOffset === "number" &&
           Number.isSafeInteger(confirmedOffset) &&
           confirmedOffset >= 0
@@ -935,6 +938,10 @@ export class StreamDurableObject extends DurableObject<Env> {
         'facet placement requires the OS worker to export the "ProcessorFacet" entrypoint',
       );
     }
+    // Safe: ctx.facets.get returns an untyped Fetcher stub (workerd's facet
+    // API carries no class-level typing), but the instance behind it is
+    // always the ProcessorFacet class passed in the startup callback above —
+    // ProcessorFacetStub is exactly that class's RPC surface.
     const facet = this.ctx.facets.get(name, () => ({
       class: facetClass,
     })) as unknown as ProcessorFacetStub;

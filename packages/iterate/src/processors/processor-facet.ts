@@ -200,7 +200,7 @@ export abstract class ProcessorFacet<Env = unknown> extends DurableObject<Env> {
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
-    if (typeof (this as { alarm?: unknown }).alarm === "function") {
+    if ("alarm" in this && typeof this.alarm === "function") {
       throw new Error(
         `${this.constructor.name} must not define alarm(): facets have no native alarms ` +
           `(workerd#6810 — a failed setAlarm would poison this facet's output gate). ` +

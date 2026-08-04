@@ -100,7 +100,7 @@ class ProofProcessor extends StreamProcessor<typeof ProofContract, ProofDeps> {
       return {
         ...state,
         count: state.count + 1,
-        lastNote: (event.payload as { note: string }).note,
+        lastNote: event.payload.note,
       };
     }
     return state;
@@ -110,7 +110,7 @@ class ProofProcessor extends StreamProcessor<typeof ProofContract, ProofDeps> {
     const { event } = args;
     if (event === null) return undefined;
     if (event.type === "test/noted") {
-      const note = (event.payload as { note: string }).note;
+      const note = event.payload.note;
       // Blocking: the per-event consequence that must not be lost — the effect
       // append. Idempotency-keyed, so at-least-once redelivery dedupes on the
       // stream while the raw recordEffect log still shows the re-run.
@@ -183,12 +183,15 @@ class KvStream implements ProcessorStream {
         }
       }
       const offset = this.#max() + 1;
-      const event = {
+      // StreamEvent = StreamEventInput + the commit-time fields; this fake
+      // transport stamps exactly those three, so the object is complete by
+      // construction (no cast needed).
+      const event: StreamEvent = {
         ...input,
         offset,
         createdAt: new Date().toISOString(),
         path: this.path,
-      } as StreamEvent;
+      };
       this.#kv.put(`fs:e:${pad(offset)}`, event);
       this.#kv.put("fs:max", offset);
       if (input.idempotencyKey !== undefined) this.#kv.put(`fs:k:${input.idempotencyKey}`, offset);
@@ -363,6 +366,18 @@ type RetainedWake = {
   call: ((batch: StreamWakeEventBatch) => unknown) & Disposable;
 };
 
+/** The facet-era workerd surface of a parent DurableObjectState the package's
+ * ambient DurableObjectState stub does not declare (it covers only the seams
+ * production source touches; facets/exports/id are test-worker-only). */
+type FacetTestParentCtx = {
+  facets: {
+    get(name: string, startup: () => { class: unknown }): FacetStub;
+    abort(name: string, reason?: unknown): void;
+  };
+  exports: { ProofProcessorFacet: unknown };
+  id: { name?: string };
+};
+
 export class FacetTestParent extends DurableObject<Env> {
   #wake: RetainedWake | undefined;
 
@@ -372,23 +387,23 @@ export class FacetTestParent extends DurableObject<Env> {
     this.ctx.storage.kv.put("parent-log", log);
   }
 
+  /** The one sanctioned escape hatch onto {@link FacetTestParentCtx}: at
+   * runtime `this.ctx` is a real workerd DurableObjectState in the test
+   * worker's facet-enabled runtime, which carries all three members — only
+   * the package's ambient stub type is narrower. */
+  get #testCtx(): FacetTestParentCtx {
+    return this.ctx as unknown as FacetTestParentCtx;
+  }
+
   #facet(): FacetStub {
-    // The package's ambient DurableObjectState stub covers only the seams
-    // production source touches; facets/exports/id are test-worker-only, so
-    // the narrow structural view lives here.
-    const ctx = this.ctx as unknown as {
-      facets: {
-        get(name: string, startup: () => { class: unknown }): FacetStub;
-        abort(name: string, reason?: unknown): void;
-      };
-      exports: { ProofProcessorFacet: unknown };
-      id: { name?: string };
-    };
+    const ctx = this.#testCtx;
     return ctx.facets.get(FACET_NAME, () => ({ class: ctx.exports.ProofProcessorFacet }));
   }
 
   #ownName(): string {
-    return (this.ctx as unknown as { id: { name?: string } }).id.name!;
+    // Non-null: the vitest driver only ever dials this class through
+    // env.PARENT.getByName(...), so the id always carries its name.
+    return this.#testCtx.id.name!;
   }
 
   // --- alarm proxy doors (called BY the facet over RPC) ----------------------
@@ -559,6 +574,10 @@ export class FacetTestParent extends DurableObject<Env> {
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        // The JSON round trip detaches the result from the facet's RPC turn
+        // (the raw object may carry stub-backed members that die with the
+        // call). StreamWakeDeliveryResult is a plain JSON shape — string
+        // literals and numbers only — so the clone reproduces it exactly.
         resolve(JSON.parse(JSON.stringify(deliveryResult)) as StreamWakeDeliveryResult);
       };
       try {
@@ -593,9 +612,7 @@ export class FacetTestParent extends DurableObject<Env> {
       }
       this.#wake = undefined;
     }
-    (
-      this.ctx as unknown as { facets: { abort(name: string, reason?: unknown): void } }
-    ).facets.abort(FACET_NAME, args?.reason ?? "test abort");
+    this.#testCtx.facets.abort(FACET_NAME, args?.reason ?? "test abort");
     return { aborted: true };
   }
 
@@ -622,11 +639,18 @@ export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     if (url.pathname === "/invoke" && request.method === "POST") {
+      // Trusted-driver contract, not validation: the vitest suite is this
+      // endpoint's only client and always POSTs { run, verb, args }. A
+      // malformed body can only fail its own test run.
       const { run, verb, args } = (await request.json()) as {
         run: string;
         verb: string;
         args?: unknown;
       };
+      // The driver dispatches by verb NAME (a runtime string), so the typed
+      // FacetTestParent stub is widened to a method record. Every verb the
+      // suite sends is a public RPC method on FacetTestParent; an unknown
+      // verb throws here and surfaces as the 500 below.
       const parent = env.PARENT.getByName(`proof-${run}`) as unknown as Record<
         string,
         (args: unknown) => Promise<unknown>
@@ -636,7 +660,7 @@ export default {
         return Response.json({ ok: true, result: result ?? null });
       } catch (error) {
         return Response.json(
-          { ok: false, error: String((error as Error)?.stack ?? error) },
+          { ok: false, error: String(error instanceof Error ? (error.stack ?? error) : error) },
           { status: 500 },
         );
       }

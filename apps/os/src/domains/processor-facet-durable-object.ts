@@ -138,6 +138,14 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   }
 
   #parentStub(identity: ProcessorFacetIdentity): ParentStreamStub {
+    // Safe: the parent is always a StreamDurableObject — facets are only ever
+    // created by StreamDurableObject.#dialProcessorFacet, which configures
+    // them with its own ctx.id.name as parentName — and ParentStreamStub
+    // hand-declares the plain subset of that RPC surface the facet dials
+    // back. The cast swaps out the generated DurableObjectStub type: its
+    // Rpc-mapped signatures don't match plain method declarations, and
+    // keeping the full stub type here would deep-instantiate the Stream DO's
+    // surface through this facet's fields.
     return this.env.STREAM.getByName(identity.parentName) as unknown as ParentStreamStub;
   }
 
@@ -158,6 +166,10 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         const registry = this.#registry;
         const primary = registry?.names[0];
         if (registry === undefined || primary === undefined) return {};
+        // Safe: every registered contract's stateSchema is a z.object, so a
+        // committed fold is always a plain JSON object; the by-name registry
+        // read erases the per-contract state type, and Record<string, unknown>
+        // is the honest wide view the live-state door publishes.
         return (registry.reads(primary).currentState ?? {}) as Record<string, unknown>;
       },
       registerProcessors: (registry) => {
@@ -337,6 +349,12 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   }
 
   #scriptExecutionEntrypoint(identity: ProcessorFacetIdentity): ScriptExecutionEntrypointHandle {
+    // Safe: this worker exports ScriptExecutionEntrypoint (see worker.ts), so
+    // ctx.exports always carries a loopback constructor for it with exactly
+    // this props/run surface. The shallow hand-written view replaces the
+    // generated ctx.exports type on purpose — see the
+    // ScriptExecutionEntrypointHandle comment above for why the deep
+    // instantiation cannot be used here.
     const exports = this.ctx.exports as unknown as ScriptExecutionLoopbackExports;
     return exports.ScriptExecutionEntrypoint({
       props: { projectId: identity.projectId!, scopePath: identity.path },
@@ -504,6 +522,11 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         getAgentRuntimeTransition: () => this.#latestAgentRuntimeTransition,
         fetchSlackChannelName: async ({ channel, connection }) => {
           try {
+            // Unknown-first structural read of the third-party response:
+            // conversations.info answers { channel: { name, ... } } on
+            // success, but nothing here trusts that — `name` is only used
+            // after the typeof string check below, and any other shape
+            // degrades to the null (no enrichment) path.
             const result = (await callProjectSlackWebApi({
               body: { channel },
               connection,
@@ -601,6 +624,10 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
             projectId,
             streamContext: { kind: "scope", scopePath: path },
           });
+          // Unknown-first structural read of the third-party response:
+          // Telegram's sendMessage answers { result: { message_id, ... } },
+          // but nothing here trusts that — the typeof check below rejects
+          // every other shape and fails the batch (held checkpoint, retry).
           const messageId = (result.result as { message_id?: unknown } | undefined)?.message_id;
           if (typeof messageId !== "number") {
             throw new Error("Telegram sendMessage returned no message_id");

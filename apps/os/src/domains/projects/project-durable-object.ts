@@ -83,6 +83,11 @@ export class ProjectDurableObject extends DurableObject<Env> {
   async #processorFacade(): Promise<{
     snapshot(): Promise<{ offset: number; state: ProjectProcessorState }>;
   }> {
+    // Safe: the root stream's facet composition registers the
+    // ProjectProcessor under ProjectProcessorContract.slug on "/", so the
+    // facade the Stream DO answers with for that name serves the project
+    // contract's fold. The RPC-generated facade type is untyped per name
+    // (the name is a runtime string), hence the assertion.
     return (await this.env.STREAM.getByName(
       DurableObjectNameCodec.stringify({ path: "/", projectId: this.#name.projectId }),
     ).processorFacade({ name: ProjectProcessorContract.slug })) as unknown as {

@@ -44,6 +44,12 @@ export class DeviceDurableObject extends DurableObject<Env> {
   #credentialUpdates: Promise<void> = Promise.resolve();
 
   async #processorFacade(): Promise<DeviceProcessorFacade> {
+    // Safe: the Stream DO's processorFacade(name) forwards to the facet
+    // subclass registered for this path family, and the facet composition
+    // registers the DeviceProcessor under DeviceProcessorContract.slug on
+    // /devices/* paths — so snapshot() serves the device contract's fold.
+    // The RPC-generated facade type is untyped per name (the name is a
+    // runtime string), hence the assertion instead of a typed boundary.
     return (await this.env.STREAM.getByName(
       DurableObjectNameCodec.stringify({
         path: this.#name.path,

@@ -2012,6 +2012,10 @@ export async function listIntegrationConnections(
     DurableObjectNameCodec.stringify({ projectId, path: "/" }),
   ).processorFacade({ name: ProjectProcessorContract.slug });
   const snapshot = await facade.snapshot();
+  // Safe: the root stream's facet composition registers the ProjectProcessor
+  // under ProjectProcessorContract.slug, so the facade selected by that name
+  // snapshots the project contract's fold. The facade's snapshot type is
+  // untyped per name (the name is a runtime string), hence the assertion.
   const state = snapshot.state as ProjectProcessorState;
   const entries: { connection: string; integration: string; path: string }[] = [];
   for (const stream of state.streams) {

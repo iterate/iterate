@@ -1002,6 +1002,9 @@ function rowFromRecord(record: SubscriptionCursorRowRecord): SubscriptionCursorR
     name: record.name,
     deliveredOffset: record.delivered_offset,
     confirmedOffset: record.confirmed_offset,
+    // Safe: the TEXT column is written exclusively by this store from typed
+    // SubscriptionCursorRow values, so it only ever holds
+    // SubscriptionCursorState members; SQLite just can't express the union.
     state: record.state as SubscriptionCursorState,
     configuredAtOffset: record.configured_at_offset,
     attempt: record.attempt,

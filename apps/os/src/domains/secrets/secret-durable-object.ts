@@ -80,6 +80,12 @@ export class SecretDurableObject extends DurableObject<Env> {
 
   /** The facet-hosted secret processor's read surface on the stream. */
   async #processorFacade(): Promise<SecretProcessorFacade> {
+    // Safe: the Stream DO's processorFacade(name) forwards to the facet
+    // subclass registered for this path family, and the facet composition
+    // registers the SecretProcessor under SecretProcessorContract.slug on
+    // /secrets/* paths — so snapshot() serves the secret contract's fold.
+    // The RPC-generated facade type is untyped per name (the name is a
+    // runtime string), hence the assertion instead of a typed boundary.
     return (await this.env.STREAM.getByName(
       DurableObjectNameCodec.stringify({
         path: this.#name.path,

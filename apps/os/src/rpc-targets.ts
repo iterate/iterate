@@ -1240,6 +1240,10 @@ class StreamSubscriptionCollectionRpcTarget extends IterateRpcTarget<"StreamSubs
       message: "subscription catalog read retrying after Durable Object reset",
       operation: () => Promise.resolve(this.#stub().listSubscriptions()),
     }).catch(rethrowStreamUnavailable);
+    // Safe: listSubscriptions is declared to return plain
+    // StreamSubscriptionListEntry rows; over RPC they arrive as a
+    // disposable-augmented array, detachPlainRpcResult copies the plain data
+    // off it, and the cast restores the method's declared row type.
     return detachPlainRpcResult(result) as StreamSubscriptionListEntry[];
   }
 
@@ -1302,6 +1306,10 @@ class StreamSubscriptionRpcTarget extends IterateRpcTarget<"StreamSubscription">
           }),
         ),
     }).catch(rethrowStreamUnavailable);
+    // Safe: describeSubscription is declared to return a plain
+    // StreamSubscriptionDescription (or null); detachPlainRpcResult copies
+    // the plain data off the disposable-augmented RPC result, and the cast
+    // restores the method's declared type.
     return result === null ? null : (detachPlainRpcResult(result) as StreamSubscriptionDescription);
   }
 
@@ -2894,6 +2902,11 @@ class SecretRpcTarget extends IterateRpcTarget<"Secret"> {
   /** The secret stream processor; its public state IS the SecretDescription
    * (the ciphertext never leaves — the relay's projection redacts it). */
   get processor(): StreamProcessorRpc<SecretDescription> {
+    // Safe: the relay serves the facet registered for the secret contract's
+    // slug on this secret's stream, and describeSecretState projects its fold
+    // into the public SecretDescription — so every state this surface returns
+    // is a SecretDescription. The cast bridges the relay's untyped-per-name
+    // generics to the domain-typed itx surface.
     return facetProcessorRelay({
       auth: this.props.auth,
       name: SecretProcessorContract.slug,
@@ -3011,6 +3024,11 @@ class DeviceRpcTarget extends IterateRpcTarget<"Device"> {
   }
 
   get processor(): StreamProcessorRpc<DeviceDescription> {
+    // Safe: the relay serves the facet registered for the device contract's
+    // slug on this device's stream, and describeDeviceState projects its fold
+    // into the public DeviceDescription — so every state this surface returns
+    // is a DeviceDescription. The cast bridges the relay's untyped-per-name
+    // generics to the domain-typed itx surface.
     return facetProcessorRelay({
       auth: this.props.auth,
       name: DeviceProcessorContract.slug,
@@ -6762,6 +6780,11 @@ export async function projectProcessorState(projectId: string) {
   try {
     const facade = await stream.processorFacade({ name: ProjectProcessorContract.slug });
     try {
+      // Safe: the root stream's facet composition registers the
+      // ProjectProcessor under ProjectProcessorContract.slug, so the facade
+      // selected by that name snapshots the project contract's fold. The
+      // facade's snapshot type is untyped per name (the name is a runtime
+      // string), hence the assertion.
       return detachPlainRpcResult(await facade.snapshot()).state as ProjectProcessorState;
     } finally {
       disposeProjectProcessorStateResource(facade, "processor", projectId);
@@ -7860,6 +7883,12 @@ function streamProcessorFacade(input: {
   path: string;
   projectId: string | null;
 }): PromiseLike<StreamProcessorFacadeStub> {
+  // Safe: the Stream DO's processorFacade answers with its
+  // StreamProcessorFacadeRpcTarget, whose doors forward to the facet hosting
+  // this subscription's processors — exactly the surface
+  // StreamProcessorFacadeStub declares (methods a given facet composition
+  // lacks reject at call time, matching each caller's contract). The cast
+  // swaps the generated Rpc-mapped stub type for that plain declaration.
   return env.STREAM.getByName(
     DurableObjectNameCodec.stringify(
       { projectId: input.projectId, path: input.path },
@@ -7884,7 +7913,7 @@ function facetProcessorRelay<State = unknown, PublicState = State>(input: {
 }): ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState> {
   return new ProcessorRelayRpcTarget<State, ProcessorHostStub, PublicState>({
     auth: input.auth,
-    host: () => streamProcessorFacade(input) as unknown as PromiseLike<ProcessorHostStub>,
+    host: () => streamProcessorFacade(input),
     processorFacade: (host) => Promise.resolve(host),
     ...(input.publicState === undefined ? {} : { publicState: input.publicState }),
   });
@@ -7897,6 +7926,11 @@ function facetProcessorLiveStateRelay<State>(input: {
   path: string;
   projectId: string | null;
 }): LiveStateRpc<State> {
+  // Safe: the facade's liveState door serves the facet composition's
+  // per-family projection for this path, and each domain caller instantiates
+  // State as exactly that family's published live-state shape — the cast
+  // re-types the facade's untyped Record<string, unknown> live-state surface
+  // to the domain State the relay's caller declared.
   return new LiveStateRelayRpcTarget<State>(
     () => streamProcessorFacade(input) as unknown as PromiseLike<LiveStateDurableObjectStub<State>>,
   );
