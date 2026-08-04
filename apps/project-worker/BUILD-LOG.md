@@ -135,17 +135,36 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
 - **Platform note:** DO _code_ propagates slower / more skewed than worker code after a deploy — poll for a
   code-version marker (e.g. `whoami` parsing) before smoke-testing.
 
+## Increment 10 — wake-on-call: 1000 devices provide capabilities WITHOUT pinning the DO
+
+**Commit** `<pending>`. Ports spike-4 (ContextDO) into the clean room.
+
+- A device connects a **hibernatable** wake socket at `/register?connectionKey=&caps=`
+  (`ctx.acceptWebSocket(_, ["wake"])` + `serializeAttachment({connectionKey, caps})`). It does NOT pin the DO
+  and survives hibernation — 1000 of them cost ~nothing while idle. The RPC leg (`/connect`, capnweb) is the
+  only pin.
+- `invokeCapability`: live mount → **WAKE** (page the hibernatable socket that declares the cap; the device
+  dials its RPC leg back + re-provides; then dispatch) → local mount → fallback. After `IDLE_MS` the RPC leg is
+  torn down (`{type:"idle"}` → the device closes it), so the DO can hibernate again. A durable `incarnation`
+  counter + `/state` give observability.
+- **Proven** (node "device"): registered a wake-socket-only device, then `/call itx.myTool.echo` **paged it on
+  demand** → dialed the RPC leg → dispatched → `"echo-from-provider:hi"`. `/state` showed
+  `{wakeSockets:1, liveMounts:1, dormant:false}` during the call, then `{wakeSockets:1, liveMounts:0,
+dormant:true}` after idle — the device stays registered while **nothing pins the DO**. (Full
+  99.5%-idle-over-minutes at 1000-scale is spike-4's billing proof; identical mechanism.)
+
 ---
 
-## Status after increment 9 — the inner core end to end (solo)
+## Status after increment 10 — the inner core end to end (solo)
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project
 secret-sub → fallback → terminal), the **capability model** (`invokeCapability`/`provideCapability` +
 parent-path-then-shell fallback), **execution** (`load` a confined agent bound to its own host), **built-ins**
 (`itx.kv`, `itx.secrets.set`, `itx.streams` — all project-prefixed + isolated), **live providers** (capnweb
-`/connect` → dispatch back to a device/browser/worker), the **ergonomic `itx.a.b()` surface**, and
-**path-addressed contexts** (faux-URL names; deep paths inherit from their parent path). All proven on
+`/connect` → dispatch back to a device/browser/worker), the **ergonomic `itx.a.b()` surface**,
+**path-addressed contexts** (faux-URL names; deep paths inherit from their parent path), and **wake-on-call**
+(1000 devices provide capabilities via hibernatable wake sockets without pinning the DO). All proven on
 `project-worker.iterate.workers.dev`.
 
-**Next:** wake-on-call for live mounts (hibernation, spikes 3-4); then the control-plane join (self-host /
-hosted topologies).
+**Next:** the control-plane join (a real second worker as the shell, replacing DummyControlPlane → the
+self-host / hosted topologies); optional: billing-analytics verification of hibernation at scale.

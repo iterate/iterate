@@ -17,9 +17,25 @@ import { parseName, stringifyName, parentPath } from "./core/names.ts";
 import type { StreamDurableObject, StreamEventInput } from "./stream-durable-object.ts";
 import type { ItxCallPath } from "./core/config.ts";
 
-/** A capnweb stub to a provider-supplied capability. `.dup()` retains it past a call; other keys are its
- *  (remote) methods, which return promises that resolve back on the provider. */
-type LiveStub = { dup(): LiveStub; [method: string]: (...a: unknown[]) => unknown };
+/** A capnweb stub to a provider-supplied capability. `.dup()` retains it past a call; `onRpcBroken` fires when
+ *  the provider's socket drops; other keys are its (remote) methods, which resolve back on the provider. */
+type LiveStub = {
+  dup(): LiveStub;
+  onRpcBroken?(cb: (e: unknown) => void): void;
+  [method: string]: unknown;
+};
+
+// `Symbol.dispose` isn't in the current lib target; reference it defensively to free a capnweb stub.
+const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
+function disposeStub(stub: LiveStub): void {
+  const fn = DISPOSE ? (stub as Record<symbol, unknown>)[DISPOSE] : undefined;
+  if (typeof fn === "function") (fn as () => void).call(stub);
+}
+
+// Wake-on-call timings (spike-4). Kept short so the RPC leg is torn down fast and the DO can hibernate; the
+// wake sockets themselves are hibernatable and never pin.
+const IDLE_MS = 2000; // tear the on-demand RPC leg down this long after the last call
+const WAKE_TIMEOUT_MS = 8000; // give a paged device this long to dial its RPC leg back
 
 /** The control surface a capability PROVIDER (device / browser / worker) gets when it connects over capnweb
  *  (target-core §4.1, "live" mounts / D7). It can mount LIVE capabilities at a callPath; invocations of them
@@ -65,14 +81,25 @@ export type ProvideCapabilityInput = { path: ItxCallPath } & Mount;
 
 export class ItxDurableObject extends DurableObject<Env> {
   #mounts = new Map<string, Mount>(); // callPath -> mount (mirrors DO storage; the event-sourced fold is later)
-  #liveMounts = new Map<string, LiveStub>(); // callPath -> a connected provider's stub (IN-MEMORY; a live pin,
-  //                                             lost on eviction — wake-on-call reconnection is a later increment)
+  // Wake-on-call state (spike-4). All IN-MEMORY: a live RPC leg is the only thing that pins the DO; the wake
+  // sockets are hibernatable and survive eviction, so 1000 registered devices cost ~nothing while idle.
+  #liveMounts = new Map<string, { stub: LiveStub; connectionKey: string }>(); // callPath -> connected provider
+  #liveByConn = new Map<string, Set<string>>(); // connectionKey -> callPaths it currently provides
+  #pending = new Map<
+    string,
+    { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
+  >();
+  #idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  incarnation = 0; // durable, bumped on every (re)construction — grows across an idle gap ⇒ the DO hibernated
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     ctx.blockConcurrencyWhile(async () => {
       const stored = (await ctx.storage.get<Record<string, Mount>>("mounts")) ?? {};
       this.#mounts = new Map(Object.entries(stored));
+      const n = (await ctx.storage.get<number>("incarnation")) ?? 0;
+      this.incarnation = n + 1;
+      await ctx.storage.put("incarnation", this.incarnation);
     });
   }
 
@@ -91,17 +118,44 @@ export class ItxDurableObject extends DurableObject<Env> {
   //    (WS EGRESS from a DO-loaded agent is ambiguous with WS ingress here — deferred; agents egress over HTTP
   //     today. A marker will disambiguate when needed.) ──
   async fetch(request: Request): Promise<Response> {
-    // A capability PROVIDER connecting over capnweb: serve the ProviderControl surface. The session pins the
-    // DO awake while the provider is connected; its live mounts dispatch back over this socket.
-    if (new URL(request.url).pathname === "/connect") {
+    const url = new URL(request.url);
+
+    // A device REGISTERS a hibernatable wake socket declaring the capabilities it can provide. This socket does
+    // NOT pin the DO (it survives hibernation) — 1000 of these cost ~nothing. It only carries pages (DO→device).
+    if (url.pathname === "/register") {
+      const connectionKey = url.searchParams.get("connectionKey") ?? crypto.randomUUID();
+      const caps = (url.searchParams.get("caps") ?? "").split(",").filter(Boolean);
+      const pair = new WebSocketPair();
+      this.ctx.acceptWebSocket(pair[1], ["wake"]); // hibernatable
+      pair[1].serializeAttachment({ connectionKey, caps }); // survives hibernation
+      return new Response(null, { status: 101, webSocket: pair[0] });
+    }
+
+    // The on-demand RPC leg: a device dials this (usually after a wake page) and re-provides its capability
+    // over capnweb. This IS a live pin — torn down after IDLE_MS so the DO can hibernate again.
+    if (url.pathname === "/connect") {
+      const connectionKey = url.searchParams.get("connectionKey") ?? crypto.randomUUID();
       return newWorkersRpcResponse(
         request,
-        new ProviderControl((p, s) => this.#liveMounts.set(p, s)),
+        new ProviderControl((p, s) => this.#mountLive(connectionKey, p, s)),
       );
     }
+
+    // Observability: incarnation (the hibernation tell) + how much is pinning right now.
+    if (url.pathname === "/state") {
+      return Response.json({
+        incarnation: this.incarnation,
+        wakeSockets: this.ctx.getWebSockets("wake").length,
+        liveMounts: this.#liveMounts.size,
+        idleTimers: this.#idleTimers.size,
+        dormant:
+          this.#liveMounts.size === 0 && this.#idleTimers.size === 0 && this.#pending.size === 0,
+      });
+    }
+
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
       const pair = new WebSocketPair();
-      this.ctx.acceptWebSocket(pair[1]); // hibernatable — survives eviction (spikes 3-4)
+      this.ctx.acceptWebSocket(pair[1], ["echo"]); // hibernatable ingress echo
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
     const sub = await substituteHeaderSecrets(request, "project", (name) =>
@@ -111,8 +165,15 @@ export class ItxDurableObject extends DurableObject<Env> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    const text = typeof message === "string" ? message : new TextDecoder().decode(message);
-    ws.send(`echo:${text}`);
+    // Only the ingress-echo socket echoes; a wake socket receives pages and sends nothing back that we act on.
+    if (this.ctx.getTags(ws).includes("echo")) {
+      const text = typeof message === "string" ? message : new TextDecoder().decode(message);
+      ws.send(`echo:${text}`);
+    }
+  }
+  webSocketClose(ws: WebSocket): void {
+    const att = ws.deserializeAttachment() as { connectionKey?: string } | null;
+    if (att?.connectionKey) this.#dropConn(att.connectionKey); // a device's wake socket dropped → clean up
   }
   webSocketError(): void {
     /* keep the DO from crashing on a transport error */
@@ -151,10 +212,15 @@ export class ItxDurableObject extends DurableObject<Env> {
       return { ok: true }; // write-only from userspace (referenced by placeholder in egress — never read back)
     }
 
-    // LIVE mounts (a connected provider): longest-prefix match; the remaining segment is the method to call
-    // ON the provider — the call travels back over its capnweb socket (target-core §4.1 "live" / D7).
-    const live = this.#liveMountFor(callPath);
-    if (live) return live.stub[live.method](...args);
+    // LIVE mounts (a provider with an OPEN RPC leg): dispatch, refresh the idle timer (target-core §4.1 / D7).
+    let live = this.#liveMountFor(callPath);
+    if (live) return this.#dispatchLive(live, args);
+    // WAKE-ON-CALL (spike-4): a registered device declares this cap but has no live leg → page its hibernatable
+    // wake socket, wait for it to dial its RPC leg back and re-provide, then dispatch. The DO was hibernating.
+    if (await this.#wake(callPath)) {
+      live = this.#liveMountFor(callPath);
+      if (live) return this.#dispatchLive(live, args);
+    }
 
     const mount = this.#mounts.get(callPath);
     if (mount) {
@@ -172,13 +238,109 @@ export class ItxDurableObject extends DurableObject<Env> {
   }
 
   /** Longest dotted-prefix live mount; the remaining segment(s) name the provider method to call. */
-  #liveMountFor(callPath: string): { stub: LiveStub; method: string } | null {
+  #liveMountFor(
+    callPath: string,
+  ): { stub: LiveStub; method: string; connectionKey: string } | null {
     const parts = callPath.split(".");
     for (let i = parts.length - 1; i >= 2; i--) {
-      const stub = this.#liveMounts.get(parts.slice(0, i).join("."));
-      if (stub) return { stub, method: parts.slice(i).join(".") };
+      const hit = this.#liveMounts.get(parts.slice(0, i).join("."));
+      if (hit)
+        return {
+          stub: hit.stub,
+          method: parts.slice(i).join("."),
+          connectionKey: hit.connectionKey,
+        };
     }
     return null;
+  }
+
+  #dispatchLive(
+    live: { stub: LiveStub; method: string; connectionKey: string },
+    args: unknown[],
+  ): unknown {
+    this.#armIdle(live.connectionKey);
+    return (live.stub[live.method] as (...a: unknown[]) => unknown)(...args);
+  }
+
+  /** A device connected its RPC leg and provided a capability. Record it, resolve any pending wake, arm idle. */
+  #mountLive(connectionKey: string, path: string, stub: LiveStub): void {
+    this.#liveMounts.set(path, { stub, connectionKey });
+    let paths = this.#liveByConn.get(connectionKey);
+    if (!paths) this.#liveByConn.set(connectionKey, (paths = new Set()));
+    paths.add(path);
+    stub.onRpcBroken?.(() => this.#dropConn(connectionKey)); // leg dropped → forget its mounts
+    const p = this.#pending.get(connectionKey);
+    if (p) {
+      this.#pending.delete(connectionKey);
+      clearTimeout(p.timer);
+      p.resolve();
+    }
+    this.#armIdle(connectionKey);
+  }
+
+  /** Page the hibernatable wake socket that declares `callPath`, then wait for its RPC leg to arrive. */
+  async #wake(callPath: string): Promise<boolean> {
+    const target = this.#wakeSocketFor(callPath);
+    if (!target) return false;
+    const { ws, connectionKey } = target;
+    const arrived = new Promise<void>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        if (this.#pending.delete(connectionKey))
+          reject(new Error(`wake timed out for ${connectionKey}`));
+      }, WAKE_TIMEOUT_MS);
+      this.#pending.set(connectionKey, { resolve, reject, timer });
+    });
+    ws.send(JSON.stringify({ type: "wake", cap: callPath }));
+    await arrived;
+    return true;
+  }
+
+  /** The wake socket whose declared caps cover `callPath` (a declared cap is a dotted prefix of it). */
+  #wakeSocketFor(callPath: string): { ws: WebSocket; connectionKey: string } | null {
+    for (const ws of this.ctx.getWebSockets("wake")) {
+      const att = ws.deserializeAttachment() as { connectionKey: string; caps: string[] } | null;
+      if (att && att.caps.some((c) => callPath === c || callPath.startsWith(`${c}.`)))
+        return { ws, connectionKey: att.connectionKey };
+    }
+    return null;
+  }
+
+  #armIdle(connectionKey: string): void {
+    const prev = this.#idleTimers.get(connectionKey);
+    if (prev !== undefined) clearTimeout(prev);
+    this.#idleTimers.set(
+      connectionKey,
+      setTimeout(() => this.#teardown(connectionKey), IDLE_MS),
+    );
+  }
+
+  /** Idle: tell the device to close its RPC leg (freeing the pin) and forget its live mounts. The device keeps
+   *  its hibernatable wake socket, so the DO can hibernate and still be paged later. */
+  #teardown(connectionKey: string): void {
+    this.#idleTimers.delete(connectionKey);
+    for (const ws of this.ctx.getWebSockets("wake")) {
+      const att = ws.deserializeAttachment() as { connectionKey: string } | null;
+      if (att?.connectionKey === connectionKey) {
+        try {
+          ws.send(JSON.stringify({ type: "idle" }));
+        } catch {
+          /* socket gone */
+        }
+      }
+    }
+    this.#dropConn(connectionKey);
+  }
+
+  #dropConn(connectionKey: string): void {
+    const prev = this.#idleTimers.get(connectionKey);
+    if (prev !== undefined) clearTimeout(prev);
+    this.#idleTimers.delete(connectionKey);
+    for (const path of this.#liveByConn.get(connectionKey) ?? []) {
+      const hit = this.#liveMounts.get(path);
+      if (hit) disposeStub(hit.stub);
+      this.#liveMounts.delete(path);
+    }
+    this.#liveByConn.delete(connectionKey);
   }
 
   /** itx.kv — a project-prefixed view of env.ITX_KV. `${projectId}:` prefix makes byte-identical project code

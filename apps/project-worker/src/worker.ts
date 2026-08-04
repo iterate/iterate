@@ -134,6 +134,13 @@ export default {
       return env.ITX_HOST.getByName(name).fetch(request);
     }
 
+    // ── wake-on-call observability: the DO reports incarnation + what is pinning it right now ──
+    if (url.pathname === "/state") {
+      return env.ITX_HOST.getByName(canonicalName(url.searchParams.get("ctx") ?? "prj_demo")).fetch(
+        request,
+      );
+    }
+
     // ── the capability model: provide a mount, then invoke a callPath (built-in / local / fallback) ──
     if (url.pathname === "/provide") {
       const ctxName = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
