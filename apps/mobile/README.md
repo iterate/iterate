@@ -93,10 +93,10 @@ The switch persists across restarts; get back with **Build info → Reset to
 default channel**.
 
 Lifecycle: closing a PR deletes its channel, update branch, and QR assets
-(`.depot/workflows/mobile-pr-preview-cleanup.yml`). In the app, the drawer's
-**Preview channels** screen lists active channels (via
-`Session.mobilePreviewChannels` — OS proxies the EAS API with its server-side
-Expo token) with tap-through to the same switch-confirm screen the QRs use.
+(`.depot/workflows/mobile-pr-preview-cleanup.yml`). Channel discovery is the
+PR bodies' QR sections — deliberately no in-app channel list, because listing
+channels needs the EAS API and we don't ship `EXPO_TOKEN` to the deployment
+(a CI-pushed snapshot could enable it tokenlessly later).
 
 ## Run and test it in a browser
 

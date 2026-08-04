@@ -79,9 +79,6 @@ export const OPTIONAL_SECRETS = [
   // works; also the only mode local dev supports).
   "R2_ACCESS_KEY_ID",
   "R2_SECRET_ACCESS_KEY",
-  // Expo access token (lives in Doppler _shared): Session.mobilePreviewChannels
-  // lists the mobile app's EAS Update channels for the in-app channel browser.
-  "EXPO_TOKEN",
 ];
 
 /**

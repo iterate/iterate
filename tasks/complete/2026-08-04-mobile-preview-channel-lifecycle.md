@@ -16,8 +16,8 @@ size: medium
 ## Checklist
 
 - [x] `scripts/ci/cleanup-mobile-pr-preview.ts` + `.depot/workflows/mobile-pr-preview-cleanup.yml`
-- [x] OS route serving the channel list from EAS GraphQL (cache a minute or two; EAS rate limits are unknown)
-- [x] app: channels screen + drawer entry, tap-through to the confirm screen
+- [x] ~~OS route serving the channel list from EAS GraphQL~~ _built, then removed: Misha ruled out shipping EXPO_TOKEN to the deployment. Channel discovery stays on PR-body QRs; a CI-pushed snapshot could enable a tokenless in-app list later_
+- [x] ~~app: channels screen + drawer entry~~ _removed with the above_
 - [x] tests: cleanup decision logic (pure, DI'd), channel-list response shaping; workflow schema test picks up the new yml
 - [x] README: per-PR channels section gains the lifecycle story
 

@@ -153,13 +153,6 @@ export interface Env {
   /** See {@link Env.R2_ACCESS_KEY_ID}. */
   R2_SECRET_ACCESS_KEY?: string;
   /**
-   * Expo access token (optional Doppler secret, `_shared`): lets the session
-   * API list the mobile app's EAS Update preview channels
-   * (Session.mobilePreviewChannels) so the phone can browse and switch to PR
-   * previews. Absent, that method reports the feature unavailable.
-   */
-  EXPO_TOKEN?: string;
-  /**
    * Project file storage backing `itx.files` and agent file attachments
    * (domains/files/project-files.ts). Keys follow the durable-object name
    * convention `{projectId}.iterate{path}`; bytes are served publicly through
