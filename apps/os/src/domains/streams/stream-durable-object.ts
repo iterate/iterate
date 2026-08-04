@@ -34,6 +34,12 @@ import {
 } from "../../rpc-targets.ts";
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
+import {
+  LiveStateSockets,
+  liveStateSocketLaneKey,
+  liveStateSocketLaneTag,
+  parseLiveStateSocketLaneTag,
+} from "../live-state-socket.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
@@ -762,6 +768,71 @@ export class StreamDurableObject extends DurableObject<Env> {
     maxOffset: () => this.#coreProcessorState.maxOffset,
     hasConnection: (connectionKey) => this.#eventSender.connections.has(connectionKey),
   });
+  /** liveState watcher sockets (live-state-socket.ts) — push-driven runtime debug state at zero pin. */
+  readonly #liveStateSockets = new LiveStateSockets({
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    readState: () => this.#readRuntimeState(),
+    // Runtime state is always materializable — no runner loading here; the
+    // refresh just requests a ping-sample round so a fresh watcher's first
+    // frame carries real connection RTTs, mirroring the getter's behavior.
+    refresh: () => this.#eventSender.connections.samplePingsSoon(),
+    waitUntil: (work) => this.ctx.waitUntil(work),
+  });
+  /**
+   * KEYED liveState lanes, one per facet-hosted processor subscription (lane
+   * key = subscription name — the same name `processorFacade` dials). This is
+   * how the retired hosting DOs' socket lanes survive the facet move: the
+   * worker relay (`facetProcessorLiveStateRelay`) dials THIS Durable Object
+   * with the lane key, and the lane pushes that facet's live state. The state
+   * is materialized inside the facet, so each lane pushes from a parent-held
+   * cache: `refresh` pulls the facet's current projection through its
+   * liveState door, and `#refreshLiveState` — which fires on every durable
+   * cursor mutation, i.e. after every hosted delivery — triggers
+   * `refreshThenFlush`. That is complete change coverage because a facet fold
+   * only advances on committed events, and every commit is followed by a
+   * parent-driven delivery whose cursor row mutates here. Entries are created
+   * on upgrade and rebuilt by #finishInitialization for watcher sockets that
+   * hibernated across an eviction.
+   */
+  readonly #facetLiveStateLanes = new Map<string, LiveStateSockets>();
+
+  #facetLiveStateLane(name: string): LiveStateSockets {
+    let lane = this.#facetLiveStateLanes.get(name);
+    if (lane === undefined) {
+      // The cache the flusher reads (readState must be synchronous — the
+      // flusher sends what it read with no await in between). Pulls are
+      // chained so a slower OLDER pull can never overwrite a newer one — the
+      // wire has no revision guard by design, so cache monotonicity is the
+      // whole rewind defense.
+      let state: Record<string, unknown> = {};
+      let chain: Promise<void> = Promise.resolve();
+      const pull = async () => {
+        const facet = await this.#dialProcessorFacet(name);
+        state = await (await facet.liveState()).get();
+      };
+      const tag = liveStateSocketLaneTag(name);
+      lane = new LiveStateSockets({
+        getWebSockets: () => this.ctx.getWebSockets(tag),
+        acceptWebSocket: (ws) => this.ctx.acceptWebSocket(ws, [tag]),
+        readState: () => state,
+        refresh: () => {
+          // Every refresh gets a FRESH pull that starts after its trigger
+          // (sharing an in-flight pull could return state read before the
+          // triggering change), serialized behind whatever is in flight.
+          const next = chain.then(pull, pull);
+          chain = next.then(
+            () => undefined,
+            () => undefined,
+          );
+          return next;
+        },
+        waitUntil: (work) => this.ctx.waitUntil(work),
+      });
+      this.#facetLiveStateLanes.set(name, lane);
+    }
+    return lane;
+  }
   #coreProcessorState: CoreProcessorState;
   #invalidCheckpointError: unknown = undefined;
   readonly #coreProcessor = new StreamCoreProcessor({
@@ -815,6 +886,18 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   #finishInitialization(): void {
     this.#liveState = new LiveState(this.#readRuntimeState());
+
+    // Re-create keyed facet lanes for watcher sockets that hibernated across
+    // an eviction: their hibernation tags name the lane, and a lane object
+    // must exist for the parent-side triggers in #refreshLiveState to reach
+    // them. (The unkeyed runtime lane needs no rebuild — its instance is a
+    // field.)
+    for (const ws of this.ctx.getWebSockets()) {
+      for (const tag of this.ctx.getTags(ws)) {
+        const lane = parseLiveStateSocketLaneTag(tag);
+        if (lane !== undefined) this.#facetLiveStateLane(lane);
+      }
+    }
 
     // Level-triggered boot repair for the facet alarm slice: the native alarm
     // normally survives eviction, but a crash between markFired and the
@@ -2290,22 +2373,22 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /** Materialize at most once per mutation burst, and only while observed. */
   #refreshLiveState(): void {
-    // Cursor cleanup can reach this before the constructor assigns
-    // #liveState; the optional read is therefore intentional.
+    // liveState watchers on the hibernatable socket lane: state only changes
+    // while this DO is awake, so scheduling here — the one materialization
+    // point — is complete coverage; the flusher reads state at flush time.
+    // Cursor cleanup can reach this before the constructor assigns the
+    // fields; the optional reads are therefore intentional.
+    this.#liveStateSockets?.scheduleFlush();
+    // Facet lanes refresh-then-flush: a cursor mutation is the parent-side
+    // signal that a hosted delivery just landed in a facet, so its watchers'
+    // state must be re-pulled before pushing (no-op per lane without sockets).
+    for (const lane of this.#facetLiveStateLanes?.values() ?? []) lane.refreshThenFlush();
     const liveState = this.#liveState;
-    const wantsStatePush = this.#wakeSockets.hasStateSockets();
-    if ((liveState?.observed !== true && !wantsStatePush) || this.#liveStateRefreshScheduled) {
-      return;
-    }
+    if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
     this.#liveStateRefreshScheduled = true;
     queueMicrotask(() => {
       this.#liveStateRefreshScheduled = false;
-      const state = this.#readRuntimeState();
-      if (liveState?.observed === true) liveState.setState(state);
-      // liveState watchers on the hibernatable state lane: state only
-      // changes while this DO is awake, so pushing here — the one
-      // materialization point — is complete coverage, and sends are free.
-      this.#wakeSockets.pushState(state);
+      liveState.setState(this.#readRuntimeState());
     });
   }
 
@@ -2328,9 +2411,24 @@ export class StreamDurableObject extends DurableObject<Env> {
   // this class only routes the platform entry points to it.
   // ===========================================================================
 
-  /** The Stream DO's only fetch surface: the wake-socket upgrade (see WakeSocketRegistry.acceptUpgrade). */
+  /** The Stream DO's fetch surface: the liveState-socket (unkeyed = runtime
+   * debug state; keyed = one facet processor's live state) and wake-socket
+   * upgrades, nothing else. */
   async fetch(request: Request): Promise<Response> {
-    return this.#wakeSockets.acceptUpgrade(request);
+    const lane = liveStateSocketLaneKey(request);
+    if (lane !== undefined) {
+      return (
+        (await this.#facetLiveStateLane(lane).acceptUpgrade(request)) ??
+        Response.json(
+          { error: "facet liveState lanes accept only lane-headed WebSocket upgrades" },
+          { status: 400 },
+        )
+      );
+    }
+    return (
+      (await this.#liveStateSockets.acceptUpgrade(request)) ??
+      this.#wakeSockets.acceptUpgrade(request)
+    );
   }
 
   /** Wake sockets are one-way (this DO → relay); inbound frames are ignored. */
@@ -2361,7 +2459,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  webSocketError(): void {}
+  /** Shared by both socket lanes; a fault is only ever explicable after the fact. */
+  webSocketError(_ws: WebSocket, error: unknown): void {
+    this.#liveStateSockets.socketError(error);
+  }
 
   // ===========================================================================
   // Operator/admin verbs.

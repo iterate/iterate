@@ -6,6 +6,7 @@ import { parseConfig } from "../../config.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { ProjectEgressInterceptRpcTarget, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { LiveStateSockets } from "../live-state-socket.ts";
 import { deepRetainRpcStubs } from "../capability-host/live-capability.ts";
 import { fetchWithCredentialRedirects } from "../secrets/credential-fetch.ts";
 import { withWebSocketHandshakeHeaders } from "../secrets/websocket-handshake.ts";
@@ -113,6 +114,20 @@ export class ProjectDurableObject extends DurableObject<Env> {
     liveDemo: this.#liveDemo,
   });
 
+  /** liveState watcher sockets (domains/live-state-socket.ts) — a watched
+   * idle project hibernates at zero pin. Wired to the COMPOSITE engine above
+   * (there is no processor registry here anymore — the project processor is
+   * facet-hosted on the root stream): the flusher reads the engine's last
+   * assembled state, and a socket seed refreshes through the same
+   * `#loadAndRefreshLive` the RPC liveState node uses. */
+  readonly #liveStateSockets = new LiveStateSockets({
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    readState: () => this.#liveState.getState(),
+    refresh: () => this.#loadAndRefreshLive(),
+    waitUntil: (work) => this.ctx.waitUntil(work),
+  });
+
   #assembleLive(): void {
     const reduced = this.#lastReduced;
     if (reduced === undefined) return;
@@ -124,6 +139,10 @@ export class ProjectDurableObject extends DurableObject<Env> {
       streamsIndex: this.#streamDatabase.all(),
       liveDemo: this.#liveDemo,
     });
+    // Socket watchers hear about every assembly: the flusher re-reads the
+    // engine at flush time, so scheduling here — the one materialization
+    // point — is complete coverage.
+    this.#liveStateSockets.scheduleFlush();
   }
 
   async #loadAndRefreshLive(): Promise<void> {
@@ -169,14 +188,20 @@ export class ProjectDurableObject extends DurableObject<Env> {
   async indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void> {
     this.#streamDatabase.touch(input.stream);
     // The reduced slice's refresh is a cross-DO snapshot now (the fold lives
-    // in the root stream's facet); only pay it while someone is watching.
-    if (this.#liveState.observed) {
+    // in the root stream's facet); only pay it while someone is watching —
+    // an engine subscriber (the pinning fallback path) or a socket watcher.
+    if (this.#liveState.observed || this.#liveStateSockets.hasSockets()) {
       await this.#refreshReducedState();
       this.#assembleLive();
     }
   }
 
   async fetch(request: Request): Promise<Response> {
+    // The liveState lane routes FIRST and never falls through on a bad token:
+    // this same fetch serves egress requests whose headers user scripts
+    // control, and a request wearing the internal header must not egress.
+    const liveStateUpgrade = await this.#liveStateSockets.acceptUpgrade(request);
+    if (liveStateUpgrade !== undefined) return liveStateUpgrade;
     const taken = takeStreamContext(request);
     if (this.#egressInterceptor !== undefined) {
       // Egress interceptors run before secret substitution. They must never
@@ -184,6 +209,16 @@ export class ProjectDurableObject extends DurableObject<Env> {
       return await this.#egressInterceptor.value(taken.request);
     }
     return this.#egressWithApprovalGate(taken.request, taken.streamContext);
+  }
+
+  /** liveState sockets are one-way (this DO → relay); inbound frames are ignored. */
+  webSocketMessage(): void {}
+
+  /** A closed watcher socket simply drops off `getWebSockets`; nothing to clean up. */
+  webSocketClose(): void {}
+
+  webSocketError(_ws: WebSocket, error: unknown): void {
+    this.#liveStateSockets.socketError(error);
   }
 
   /**

@@ -51,6 +51,7 @@ import {
   disposeIgnoredRpcResult,
   LiveState,
   LiveStateRpcTarget,
+  LiveStateSubscriptionRpcTarget,
   type LiveStateRpc,
   type LiveStateSubscriptionHandle,
   type LiveUpdate,
@@ -205,10 +206,12 @@ import type {
   ProjectWorker,
   StatefulDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
+import { openRelayedStreamConnection } from "./domains/streams/stream-connection-relay.ts";
 import {
+  dialLiveStateSocket,
   openRelayedLiveState,
-  openRelayedStreamConnection,
-} from "./domains/streams/stream-connection-relay.ts";
+  type LiveStateSocketUpgrade,
+} from "./domains/live-state-socket.ts";
 import {
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
@@ -920,15 +923,21 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Push-driven stream runtime state for polling-free debug surfaces.
    *
-   * Deliberately NOT the generic DO-subscription relay: that shape retains a
-   * diff callback inside the Stream DO and pins it for the watcher's life.
-   * Stream liveState rides the hibernatable STATE socket instead
-   * (stream-connection-relay.ts) — a watched idle stream hibernates at zero
-   * duration and pushes frames only when something actually changes.
+   * Rides the hibernatable liveState socket (domains/live-state-socket.ts) —
+   * a watched idle stream hibernates at zero duration and pushes frames only
+   * when something actually changes. Snapshot-only degrade on purpose, never
+   * the pinning fallback the generic hosts use: the DO's `liveState` property
+   * is deliberately never traversed from here (a retained diff callback
+   * would pin the stream), and `runtimeState()` is the transient read.
    */
   get liveState(): LiveStateRpc<StreamRuntimeDebugState> {
-    return new LiveStateRpcTarget<StreamRuntimeDebugState>(
-      openRelayedLiveState({ stub: () => this[STREAM_DURABLE_OBJECT_STUB] }),
+    return new RelayedLiveStateRpcTarget<StreamRuntimeDebugState>(
+      openRelayedLiveState({
+        dialSocket: () => dialLiveStateSocket(this[STREAM_DURABLE_OBJECT_STUB]),
+        readSnapshot: () => this.runtimeState(),
+        socketFailureDegrade: "snapshot-only",
+        label: `stream ${this.props.path}`,
+      }),
     );
   }
 
@@ -5772,8 +5781,7 @@ type ProjectRpcTargetProps = ExistingProjectRpcTargetProps | ProspectiveProjectR
  * The project Durable Object's methods this isolate reaches — one typed view
  * instead of re-declaring each signature at every `durableObjectStub` cast.
  */
-type ProjectDurableObjectRpc = {
-  liveState: PromiseLike<LiveStateRpc<ProjectLiveState>>;
+type ProjectDurableObjectRpc = LiveStateDurableObjectStub<ProjectLiveState> & {
   incrementLiveDemo(): Promise<void>;
   indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void>;
 };
@@ -6390,7 +6398,9 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
 
   /** The project's live state — reduced processor state plus non-folded slices. See {@link LiveStateRpc}. */
   get liveState(): LiveStateRpc<ProjectLiveState> {
-    return new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo);
+    return new LiveStateRelayRpcTarget<ProjectLiveState>(() => this.#projectDo, {
+      label: `project ${this.#projectId}`,
+    });
   }
 
   /** Demo capability for the live-state playground — `ticker` (stateless) + `increment()` (a durable server-side counter). */
@@ -7830,36 +7840,134 @@ export class ProcessorRelayRpcTarget<
   }
 }
 
-/** A Durable Object stub exposing a `.liveState` node — the one property the isolate relay dials. */
-type LiveStateDurableObjectStub<State> = { liveState: PromiseLike<LiveStateRpc<State>> };
+/** Adapts an openRelayedLiveState relay to the LiveStateRpc wire surface, for hosts with no `.liveState` stub node to fall back to. */
+class RelayedLiveStateRpcTarget<State extends object>
+  extends IterateRpcRelay<"LiveStateRpc">
+  implements LiveStateRpc<State>
+{
+  readonly #relay: ReturnType<typeof openRelayedLiveState<State>>;
+
+  constructor(relay: ReturnType<typeof openRelayedLiveState<State>>) {
+    super();
+    this.#relay = relay;
+  }
+
+  async get(): Promise<State> {
+    return await this.#relay.get();
+  }
+
+  async subscribe(
+    onUpdate: (update: LiveUpdate<State>) => unknown,
+  ): Promise<LiveStateSubscriptionHandle> {
+    return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
+  }
+}
+
+/** A Durable Object stub exposing a `.liveState` node — plus the real `fetch()` the socket lane dials. */
+type LiveStateDurableObjectStub<State> = {
+  liveState: PromiseLike<LiveStateRpc<State>>;
+  fetch(
+    input: string,
+    init?: RequestInit,
+  ): Promise<{ status: number; webSocket?: WebSocket | null }>;
+};
 
 /**
- * Isolate-side relay for a DO-hosted `.liveState` node — awaits the DO stub's
- * `.liveState` property (a Workers RPC property read can't be pipelined through)
- * then forwards. Mirrors {@link ProcessorRelayRpcTarget}.
+ * Isolate-side relay for a DO-hosted `.liveState` node. `get()` is a
+ * transient forward that releases every stub it materialized — a one-shot
+ * read must never leave a capability pinning the DO for the session's life.
+ * `subscribe()` rides the hibernatable liveState socket
+ * (domains/live-state-socket.ts) when the host declares the lane, so a
+ * watched idle DO leaves memory; a host without the lane — and any socket
+ * failure — falls back to forwarding the subscription into the DO, which
+ * retains the callback there and pins it (exactly the pre-socket behavior,
+ * loudly logged so pinning regressions are greppable).
  */
-class LiveStateRelayRpcTarget<State>
+class LiveStateRelayRpcTarget<State extends object>
   extends IterateRpcRelay<"LiveStateRpc">
   implements LiveStateRpc<State>
 {
   readonly #stub: () =>
     | LiveStateDurableObjectStub<State>
     | PromiseLike<LiveStateDurableObjectStub<State>>;
+  readonly #relay: ReturnType<typeof openRelayedLiveState<State>> | undefined;
+  readonly #label: string | undefined;
 
   constructor(
     stub: () => LiveStateDurableObjectStub<State> | PromiseLike<LiveStateDurableObjectStub<State>>,
+    socketLane?: {
+      label: string;
+      /**
+       * Dial the socket somewhere OTHER than the `.liveState` stub's own
+       * `fetch()` — the facet relays, whose stub is the Stream DO's facade
+       * RpcTarget (no real fetch) while the socket lane lives on the Stream
+       * Durable Object itself, keyed by subscription name. Omitted, the
+       * stub's fetch is dialed (the plain DO hosts).
+       */
+      dialSocket?: () => Promise<LiveStateSocketUpgrade>;
+    },
   ) {
     super();
     this.#stub = stub;
+    this.#label = socketLane?.label;
+    this.#relay =
+      socketLane === undefined
+        ? undefined
+        : openRelayedLiveState<State>({
+            dialSocket:
+              socketLane.dialSocket ?? (async () => dialLiveStateSocket(await this.#stub())),
+            readSnapshot: () => this.#transientGet(),
+            socketFailureDegrade: "reject",
+            label: socketLane.label,
+          });
+  }
+
+  /**
+   * Each acquisition releases itself: the DO stub's `finally` covers a
+   * REJECTED `.liveState` property read, and separate `finally`s stop one
+   * failed release from skipping the other. Both matter because this runs
+   * inside a long-lived Cap'n Web session, where a leaked stub pins the
+   * Durable Object until the session ends — the exact leak this method fixes.
+   */
+  async #transientGet(): Promise<State> {
+    const doStub = await this.#stub();
+    try {
+      const liveState = await doStub.liveState;
+      try {
+        return await liveState.get();
+      } finally {
+        this.#release(liveState);
+      }
+    } finally {
+      this.#release(doStub);
+    }
+  }
+
+  #release(stub: unknown): void {
+    try {
+      disposeIgnoredRpcResult(stub);
+    } catch (error) {
+      console.warn("liveState read stub dispose failed", { label: this.#label, error });
+    }
   }
 
   async get(): Promise<State> {
-    return await (await (await this.#stub()).liveState).get();
+    return await this.#transientGet();
   }
 
   async subscribe(
     onUpdate: (update: LiveUpdate<State>) => unknown,
   ): Promise<LiveStateSubscriptionHandle> {
+    if (this.#relay !== undefined) {
+      try {
+        return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
+      } catch (error) {
+        console.warn(
+          "liveState socket relay unavailable; subscription falls back to pinning the durable object",
+          { label: this.#label, error },
+        );
+      }
+    }
     return await (await (await this.#stub()).liveState).subscribe(onUpdate);
   }
 }
@@ -7927,9 +8035,19 @@ function facetProcessorRelay<State = unknown, PublicState = State>(input: {
   });
 }
 
-/** The live-state relay for a facet-hosted subscription (the facade exposes
- * the re-wrapped `liveState` node the ordinary relay expects). */
-function facetProcessorLiveStateRelay<State>(input: {
+/**
+ * The live-state relay for a facet-hosted subscription. `subscribe` rides the
+ * hibernatable liveState socket against the STREAM Durable Object hosting the
+ * facet — the lane is keyed by the subscription name, and the Stream DO
+ * pushes that facet's live state from its parent-held cache (see the facet
+ * lanes in stream-durable-object.ts) — so a watched idle stream+facet
+ * hibernates at zero pin. On any socket failure the relay falls back to
+ * forwarding the subscription through the facade's re-wrapped `liveState`
+ * node, which retains the callback in the facet and pins the Stream DO
+ * (exactly the pre-socket behavior, loudly logged). `get()` stays a transient
+ * facade read either way.
+ */
+function facetProcessorLiveStateRelay<State extends object>(input: {
   name: string;
   path: string;
   projectId: string | null;
@@ -7941,6 +8059,19 @@ function facetProcessorLiveStateRelay<State>(input: {
   // to the domain State the relay's caller declared.
   return new LiveStateRelayRpcTarget<State>(
     () => streamProcessorFacade(input) as unknown as PromiseLike<LiveStateDurableObjectStub<State>>,
+    {
+      label: `facet ${input.name} ${input.path}`,
+      dialSocket: () =>
+        dialLiveStateSocket(
+          env.STREAM.getByName(
+            DurableObjectNameCodec.stringify(
+              { projectId: input.projectId, path: input.path },
+              { allowNullProjectId: true },
+            ),
+          ),
+          { lane: input.name },
+        ),
+    },
   );
 }
 

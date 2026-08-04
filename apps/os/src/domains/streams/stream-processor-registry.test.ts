@@ -96,7 +96,12 @@ class RecorderProcessor extends StreamProcessor<
 // abandoned, like an eviction); the journal, KV, and durable alarm survive.
 // -----------------------------------------------------------------------------
 
-function makeHarness(opts: { betaRecovery?: boolean } = {}) {
+function makeHarness(
+  opts: {
+    betaRecovery?: boolean;
+    onLiveAssembled?: (assembly: { skippedUnloadedRunners: boolean }) => void;
+  } = {},
+) {
   const clock = { now: Date.parse("2026-07-14T12:00:00Z") };
   const stream = new MemoryStream(HOME);
   stream.streamId = STREAM_ID;
@@ -133,6 +138,7 @@ function makeHarness(opts: { betaRecovery?: boolean } = {}) {
       projectId: null,
       version: "v-test",
       now: () => clock.now,
+      ...(opts.onLiveAssembled === undefined ? {} : { onLiveAssembled: opts.onLiveAssembled }),
     });
     registry.register(
       new RecorderProcessor({
@@ -692,6 +698,24 @@ describe("live state", () => {
     expect(h.registry.live.getState()).toEqual({});
 
     await h.registry.loadAndRefreshLive();
+    expect(h.registry.live.getState()).toEqual({ ids: ["a"] });
+  });
+
+  it("notifies onLiveAssembled on every pass — skipped behind the runner wall, real once loaded", async () => {
+    const assemblies: { skippedUnloadedRunners: boolean }[] = [];
+    const h = makeHarness({ onLiveAssembled: (assembly) => assemblies.push(assembly) });
+
+    // One runner folds while the other is still cold — the exact incarnation
+    // shape a liveState-socket host must hear about (a silent skip here means
+    // watchers never learn of the committed change).
+    await h.stream.append({ type: REQUESTED, payload: { id: "a" } });
+    await h.deliverPending("alpha-proc");
+    expect(assemblies).toContainEqual({ skippedUnloadedRunners: true });
+    expect(assemblies.filter((assembly) => !assembly.skippedUnloadedRunners)).toEqual([]);
+
+    // Loading everything turns the next pass into a real assembly.
+    await h.registry.loadAndRefreshLive();
+    expect(assemblies.at(-1)).toEqual({ skippedUnloadedRunners: false });
     expect(h.registry.live.getState()).toEqual({ ids: ["a"] });
   });
 });

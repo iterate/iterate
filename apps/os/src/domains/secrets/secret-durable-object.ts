@@ -6,6 +6,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import { LIVE_STATE_SOCKET_HEADER } from "../live-state-socket.ts";
 import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
@@ -374,6 +375,20 @@ export class SecretDurableObject extends DurableObject<Env> {
    * that used to do exactly this.
    */
   async fetch(request: Request): Promise<Response> {
+    // The liveState lane header CLAIMS the request and never falls through:
+    // this same fetch serves substitution requests whose headers user scripts
+    // control, and a request wearing the internal header must not egress.
+    // There is no lane to SERVE here anymore — the secret's liveState is
+    // facet-hosted and rides the secret STREAM Durable Object's socket lane
+    // (see live-state-socket.ts and the stream DO's facet lanes) — so a
+    // claimed request is refused outright. An old-deploy relay that still
+    // dials this DO gets the 400 and degrades to its pinning fallback.
+    if (request.headers.get(LIVE_STATE_SOCKET_HEADER) !== null) {
+      return Response.json(
+        { error: "secret liveState rides the secret stream's liveState-socket lane" },
+        { status: 400 },
+      );
+    }
     return await this.#fetch(request, { kind: "any-revision" });
   }
 
