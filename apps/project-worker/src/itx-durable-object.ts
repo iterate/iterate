@@ -9,14 +9,17 @@
 // navigation, run/load in the DO, the real DurableObjectNameCodec. Solo: the DO name IS the projectId.
 
 import { DurableObject } from "cloudflare:workers";
+import { substituteHeaderSecrets } from "./core/egress.ts";
 import type { ItxCallPath } from "./core/config.ts";
 
 interface Env {
   ITX_HOST: DurableObjectNamespace<ItxDurableObject>;
   LOADER: WorkerLoader;
+  SECRETS_KV?: KVNamespace;
   // The fallback (target-core §4.4 / D30). Solo: a self service-binding to DummyControlPlane. A DO can't mint
   // ctx.exports loopbacks, so it reaches the fallback via a binding rather than the worker's ctx.exports.
-  FALLBACK: { invokeCapability(callPath: string, args?: unknown[]): Promise<unknown> };
+  // It IS a whole shell: `fetch` (egress → terminal) + `invokeCapability` (capability fallthrough).
+  FALLBACK: Fetcher & { invokeCapability(callPath: string, args?: unknown[]): Promise<unknown> };
 }
 
 /** djb2 — a stable content hash so the loader cache key changes when the source changes. */
@@ -50,16 +53,22 @@ export class ItxDurableObject extends DurableObject<Env> {
     return this.ctx.id.name ?? "?";
   }
 
-  // ── native fetch: ingress + WS upgrade (target-core §4.1, §6.0) ──
+  // ── native fetch (target-core §4.1, §6.0). Two callers, disambiguated by the Upgrade header:
+  //    • WS upgrade → INGRESS: accept a hibernatable socket (a client connecting in).
+  //    • non-WS     → EGRESS: a loaded agent reaching OUT via its globalOutbound self-stub → substitute the
+  //      project's own secrets, then delegate to the fallback (→ terminal). This is `itx.egress.fetch`.
+  //    (WS EGRESS from a DO-loaded agent is ambiguous with WS ingress here — deferred; agents egress over HTTP
+  //     today. A marker will disambiguate when needed.) ──
   async fetch(request: Request): Promise<Response> {
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1]); // hibernatable — survives eviction (spikes 3-4)
       return new Response(null, { status: 101, webSocket: pair[0] });
     }
-    return new Response(`itx-do ${this.#projectId} ok\n`, {
-      headers: { "content-type": "text/plain" },
-    });
+    const sub = await substituteHeaderSecrets(request, "project", (name) =>
+      this.env.SECRETS_KV ? this.env.SECRETS_KV.get(`secret:${this.#projectId}:${name}`) : null,
+    );
+    return this.env.FALLBACK.fetch(sub);
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {

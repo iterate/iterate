@@ -65,7 +65,15 @@ export default {
     // env.ITX is a stub to the agent's OWN capability host (the DO). These calls re-enter that DO.
     const who = await env.ITX.invokeCapability("itx.whoami");
     const auth = await env.ITX.invokeCapability("itx.auth.gate");
-    return Response.json({ who, auth, ranInContext: true });
+    // plain fetch() → globalOutbound (self-stub) → the host's fetch = EGRESS (secret-sub → fallback → terminal).
+    // postman-echo /get reflects request headers, so we can SEE the substituted secret came out the far side.
+    let egress = null;
+    try {
+      const r = await fetch("https://postman-echo.com/get", { headers: { Authorization: "Bearer {{secret:project:demo}}" } });
+      const j = await r.json();
+      egress = { status: r.status, seenAuth: (j.headers || {}).authorization };
+    } catch (e) { egress = { error: String(e && e.message || e) }; }
+    return Response.json({ who, auth, egress, ranInContext: true });
   }
 };
 `;

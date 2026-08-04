@@ -37,7 +37,7 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
 
 ## Increment 3 — execution in the DO (host.load), with intra-DO re-entrancy
 
-**Commit** `<pending>`.
+**Commit** `88a947f2f`.
 
 - `ItxDurableObject.load(source)` (target-core §4.1 mode 2 / D23) loads `source` as a confined dynamic worker
   whose only binding is `env.ITX` = `globalOutbound` = a **self-stub** to THIS host
@@ -51,3 +51,19 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
   DO while the DO awaits `load` works (the input gate is open during the await). A DO stub is also accepted as
   `globalOutbound`. (Calling a method the DO doesn't implement fails with workerd's "receiver does not
   implement the method" — the same brand-check family as #6873.)
+
+## Increment 4 — egress unified into the DO (the DO is now the single host)
+
+**Commit** `<pending>`.
+
+- `ItxDurableObject.fetch` for a NON-WS request now IS the egress door: substitute the project's own secrets
+  (`env.SECRETS_KV`, keyed by the DO's own projectId) → delegate to `env.FALLBACK.fetch` (→ terminal). WS
+  upgrades still accept (ingress). So one DO does ingress WS + egress + capabilities + execution.
+- Because a DO-loaded agent's `globalOutbound` is a self-stub, its plain `fetch()` now egresses through its
+  own host with secret substitution — no separate egress entrypoint needed for loaded agents.
+- **Proven** (`/load`): the agent's `fetch("https://postman-echo.com/get", {Authorization:"Bearer {{secret:project:demo}}"})`
+  returned `status:200` with the reflected header `Bearer sk-demo-REALVALUE-9x8y7z` — the substituted secret
+  came out the far side. Ingress WS still green.
+- **Note (deferred):** WS-egress from a DO-loaded agent is ambiguous with WS-ingress at `DO.fetch` (same
+  Upgrade header); a marker will disambiguate. Agents egress over HTTP today. The worker's `EgressEntrypoint` +
+  `/egress-test` remain as the WS-egress proof.
