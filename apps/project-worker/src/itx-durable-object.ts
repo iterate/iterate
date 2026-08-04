@@ -1,16 +1,18 @@
 // The ItxDurableObject — the capability host (target-core §4.1). One DO per {projectId, path}, addressed by
-// name. Two jobs:
-//   1. NATIVE fetch — the ONE method a WS upgrade (101) can flow through (a 101 can't cross an RPC hop). The
-//      edge calls it directly; here it accepts a hibernatable socket + echoes (ingress WS / wake attach point).
-//   2. The CAPABILITY MODEL — provideCapability (mount at a callPath) + invokeCapability (the single dynamic
-//      dispatch: built-in → local mount → fall back). "Reads fall back, writes stay local" (§4.4).
+// name. It is the single host for a context:
+//   • NATIVE fetch — the ONE method a WS upgrade (101) can flow through. `/connect` → a capnweb provider
+//     session; a WS upgrade → ingress (acceptWebSocket); a non-WS request → EGRESS (secret-sub → fallback).
+//   • invokeCapability — the single dispatch: built-ins (whoami/kv/secrets) → live provider mounts → local
+//     static/alias mounts → fall back to the enclosing shell. "Reads fall back, writes stay local" (§4.4).
+//   • provideCapability — mount at a callPath. load — run confined code IN this context (env.ITX = self-stub).
 //
-// NOT YET (next increments): `live` RPC-stub mounts + the prototype hop (need capnweb), longest-prefix
-// navigation, run/load in the DO, the real DurableObjectNameCodec. Solo: the DO name IS the projectId.
+// NOT YET: wake-on-call for live mounts (hibernation, spikes 3-4); streams built-in; the real
+// DurableObjectNameCodec + parent-path fallthrough. Solo: the DO name IS the projectId.
 
 import { DurableObject } from "cloudflare:workers";
 import { newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { substituteHeaderSecrets } from "./core/egress.ts";
+import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
 import type { ItxCallPath } from "./core/config.ts";
 
 /** A capnweb stub to a provider-supplied capability. `.dup()` retains it past a call; other keys are its
@@ -195,7 +197,8 @@ export class ItxDurableObject extends DurableObject<Env> {
     const worker = this.env.LOADER.get(`load:${this.ctx.id.name}:${hashSource(source)}`, () => ({
       compatibilityDate: "2026-07-01",
       mainModule: "agent.js",
-      modules: { "agent.js": source },
+      // `itx.js` gives the agent the ergonomic `itx.a.b(args)` surface over the raw host stub (§4.2).
+      modules: { "agent.js": source, "itx.js": ITX_SURFACE_MODULE },
       env: { ITX: self }, // the agent sees ONLY its itx (the confinement)
       globalOutbound: self, // plain fetch() → this host's fetch (egress)
     }));

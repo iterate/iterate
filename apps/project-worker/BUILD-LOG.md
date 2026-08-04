@@ -83,7 +83,7 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
 
 ## Increment 6 — live capability providers over capnweb (device/browser/worker as provider)
 
-**Commit** `<pending>`. Adds the `capnweb` dep (`@iterate-com/capnweb`, mirroring kernel).
+**Commit** `ef552c3c3`. Adds the `capnweb` dep (`@iterate-com/capnweb`, mirroring kernel).
 
 - `ItxDurableObject.fetch` at `/connect` serves a capnweb `ProviderControl` surface
   (`newWorkersRpcResponse`). A provider calls `provideCapability(callPath, <live RpcTarget>)`; the DO keeps the
@@ -94,3 +94,28 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
 - **Proven:** a node provider connected (`newWebSocketRpcSession`), provided `itx.myTool` (echo + add), then an
   HTTP `/call?path=itx.myTool.echo` returned `"echo-from-provider:hi"` and `itx.myTool.add [2,3]` → `5` — the
   invocations travelled back to the provider. capnweb bundles into the pure-play worker with no nodejs_compat.
+
+## Increment 7 — the ergonomic Itx surface (client-side prototype hop)
+
+**Commit** `<pending>`.
+
+- `core/agent-runtime.ts` exports `ITX_SURFACE_MODULE`, injected into every loaded agent as `itx.js`. It wraps
+  the raw `env.ITX` host stub in an accumulating Proxy so `itx.a.b(args)` compiles to
+  `stub.invokeCapability("itx.a.b", [args])` (target-core §4.2/§4.3). Plain Proxy in the agent's own isolate
+  (never crosses a wire → no #6873 brand-check); pipelining is a later refinement.
+- **Proven** (`/load`): the demo agent now calls `itx.whoami()` / `itx.auth.gate()` and plain `fetch()` — all
+  green (`{"who":…,"auth":{"ok":true},"egress":{…,"seenAuth":"Bearer sk-demo-…"},"ranInContext":true}`). The
+  injected `itx.js` + a relative `import "./itx.js"` resolve inside Worker Loader.
+
+---
+
+## Status after increment 7 — the inner core end to end (solo)
+
+A single `ItxDurableObject` is the host for a context: **ingress WS**, **egress** (project secret-sub → fallback
+→ terminal), the **capability model** (`invokeCapability`/`provideCapability` + fallback), **execution**
+(`load` a confined agent bound to its own host), **built-ins** (`itx.kv` project-prefixed + isolated,
+`itx.secrets.set`), **live providers** (capnweb `/connect` → dispatch back to a device/browser/worker), and the
+**ergonomic `itx.a.b()` surface**. All proven on `project-worker.iterate.workers.dev`.
+
+**Next:** wake-on-call for live mounts (hibernation, spikes 3-4); `itx.streams` (StreamDurableObject); the real
+`DurableObjectNameCodec` + parent-path fallthrough (deep `/agents/x` contexts); then the control-plane join.

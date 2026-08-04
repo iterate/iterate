@@ -60,11 +60,13 @@ const AGENT_VERSION = "skeleton-2";
 // A confined agent run BY the DO (host.load). It calls back into its own capability host via env.ITX — an
 // intra-DO re-entrancy probe: whoami (built-in) + invokeCapability (falls back to the DummyControlPlane).
 const ITX_CALLBACK_AGENT = /* js */ `
+import { itxFromStub } from "./itx.js";
 export default {
   async fetch(request, env) {
-    // env.ITX is a stub to the agent's OWN capability host (the DO). These calls re-enter that DO.
-    const who = await env.ITX.invokeCapability("itx.whoami");
-    const auth = await env.ITX.invokeCapability("itx.auth.gate");
+    // The ergonomic surface over the agent's OWN capability host (the DO). Each dotted call re-enters the DO.
+    const itx = itxFromStub(env.ITX);
+    const who = await itx.whoami();      // → invokeCapability("itx.whoami")
+    const auth = await itx.auth.gate();  // → invokeCapability("itx.auth.gate")
     // plain fetch() → globalOutbound (self-stub) → the host's fetch = EGRESS (secret-sub → fallback → terminal).
     // postman-echo /get reflects request headers, so we can SEE the substituted secret came out the far side.
     let egress = null;
