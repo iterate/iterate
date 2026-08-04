@@ -1,6 +1,6 @@
 name: Mobile EAS Update
 permissions:
-  contents: read
+  contents: write # commit comments + QR PNGs on the gh-attach-assets release
 concurrency:
   # Updates must publish in commit order so the preview channel's latest
   # update is always the latest main. Serialize, never cancel.
@@ -37,4 +37,5 @@ jobs:
       - name: Publish update (and native build on fingerprint change)
         env:
           DOPPLER_TOKEN: ${{ secrets.DOPPLER_TOKEN }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: doppler run --project os --config prd -- pnpm tsx scripts/ci/publish-mobile-update.ts
