@@ -30,10 +30,14 @@ async function deleteTemporaryArtifact(
     try {
       await artifacts.get(name);
     } catch (error) {
-      if ((error as { code?: unknown })?.code === "NOT_FOUND") return;
+      // The Artifacts client rejects with an undocumented optional `code`.
+      // This read-only structural cast is the narrowest usable view: the
+      // binding exports no error type, and every other value yields undefined.
+      const code = (error as { code?: unknown } | null | undefined)?.code;
+      if (code === "NOT_FOUND") return;
       // IMPORT_IN_PROGRESS still means the deterministic temporary repo
       // exists. Its queued deletion has not become visible yet.
-      if ((error as { code?: unknown })?.code !== "IMPORT_IN_PROGRESS") throw error;
+      if (code !== "IMPORT_IN_PROGRESS") throw error;
     }
     if (attempt + 1 < pollAttempts) await sleep(pollIntervalMs);
   }
@@ -68,6 +72,10 @@ export async function readGithubTemplateFiles(input: {
   if (input.source.branch === undefined) return await sourceAdapter.files(input.source);
 
   try {
+    // getOrImportGithubArtifact preserves the underlying Artifacts repo
+    // capability, whose runtime API includes log/readTree. The generated
+    // ArtifactsRepo type omits those content methods, so there is no typed
+    // narrowing available; this cast only exposes the two methods used here.
     const repo = (await getOrImportGithubArtifact(input.artifacts, {
       branch: input.source.branch,
       depth: 1,
