@@ -47,7 +47,7 @@ const published = easJson([
   "--message",
   message,
 ]);
-const updates: any[] = Array.isArray(published) ? published : [published];
+const updates = Array.isArray(published) ? published : [published];
 const runtimeVersion = updates[0]?.runtimeVersion;
 if (!runtimeVersion) {
   throw new Error(`unexpected eas update output: ${JSON.stringify(published)}`);
