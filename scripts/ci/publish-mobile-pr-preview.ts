@@ -75,6 +75,9 @@ export const renderBodySection = (input: {
   deepLinkQrUrl: string;
   installQrUrl: string;
   headSha: string;
+  /** Commit the install build was compiled from — often older than headSha
+   * when a still-compatible build is reused. */
+  installBuildSha: string | undefined;
   publishedRuntime: string;
 }) => {
   const { plan } = input;
@@ -85,18 +88,20 @@ export const renderBodySection = (input: {
       plan.runtimeMatchesInstalled
         ? "**JS-only** — the installed app can run it"
         : "**native changes** — needs a fresh install"
-    } · ${input.headSha.slice(0, 9)}`,
+    }`,
     "",
     qrDetails({
       open: plan.runtimeMatchesInstalled,
-      summary: "OTA — switch the installed app to this PR's channel",
+      summary: `OTA — switch the installed app to this PR's channel (\`${input.headSha.slice(0, 9)}\`)`,
       qrImageUrl: input.deepLinkQrUrl,
       href: plan.deepLinkUrl,
       caption: "Deep link (only works with the app installed)",
     }),
     qrDetails({
       open: !plan.runtimeMatchesInstalled,
-      summary: "Full install — if the app is uninstalled or the runtime differs",
+      summary: `Full install — if the app is uninstalled or the runtime differs (\`${
+        input.installBuildSha?.slice(0, 9) || "unknown sha"
+      }\`)`,
       qrImageUrl: input.installQrUrl,
       href: plan.installUrl,
       caption: "EAS build install page",
@@ -249,6 +254,7 @@ async function publishMobilePrPreview() {
     deepLinkQrUrl,
     installQrUrl,
     headSha,
+    installBuildSha: installBuild.gitCommitHash,
     publishedRuntime,
   });
   const github = getOctokit();

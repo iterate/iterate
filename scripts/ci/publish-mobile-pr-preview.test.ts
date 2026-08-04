@@ -26,9 +26,13 @@ test("a runtime-matching PR renders with the OTA details open and install collap
     deepLinkQrUrl: "https://github.com/o/r/releases/download/gh-attach-assets/ota.png",
     installQrUrl: "https://github.com/o/r/releases/download/gh-attach-assets/install.png",
     headSha: "abcdef1234567890",
+    installBuildSha: "0123456789abcdef",
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
   });
   expect(section).toContain("**JS-only** — the installed app can run it");
+  // Each summary carries its own sha - the install build is often older than the head.
+  expect(section).toContain("channel (\`abcdef123\`)");
+  expect(section).toContain("differs (\`012345678\`)");
   expect(section).toContain("<details open><summary>OTA");
   expect(section).toContain("<details><summary>Full install");
   // Both QRs are tappable links.
@@ -55,6 +59,7 @@ test("a native-change PR flips the expanded details to the install QR", () => {
     deepLinkQrUrl: "https://example.test/ota.png",
     installQrUrl: "https://example.test/install.png",
     headSha: "abcdef1234567890",
+    installBuildSha: "0123456789abcdef",
     publishedRuntime: "aaaa000000000000000000000000000000000000",
   });
   expect(section).toContain("**native changes** — needs a fresh install");
