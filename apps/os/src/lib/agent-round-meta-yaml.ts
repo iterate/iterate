@@ -11,7 +11,7 @@ import { formatClockTime } from "~/lib/feed-format.ts";
  * apps/mobile/src/components/activity-card.tsx). Multiline strings render as
  * |- blocks, long lines never fold.
  */
-export function resultYaml(value: unknown): string {
+export function resultYaml(value: unknown) {
   const doc = new Document(value);
   visit(doc, {
     Scalar(_key, node) {

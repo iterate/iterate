@@ -426,7 +426,7 @@ function MetaYamlBlock({ yamlText }: { yamlText: string }) {
  * the five most recent FirstFT emails · 223 ms" instead of "Started
  * 15:28:11 · 223 ms".
  */
-function roundHeaderMeta(round: AgentUiActivityRound): string {
+function roundHeaderMeta(round: AgentUiActivityRound) {
   const { code, llm } = round;
   if (code != null) {
     const parts = [
@@ -445,14 +445,14 @@ function roundHeaderMeta(round: AgentUiActivityRound): string {
   return [llmStepLabel(llm), llmStepMeta(llm)].filter((part) => part !== "").join(" · ");
 }
 
-function llmStepLabel(llm: AgentUiLlmStep): string {
+function llmStepLabel(llm: AgentUiLlmStep) {
   if (llm.cancelReason === "interrupted-by-user-input") return "Stopped for your new message";
   if (llm.cancelReason === "expired") return "Request expired";
   if (llm.outcome === "cancelled") return "Request cancelled";
   return llm.model ?? "LLM request";
 }
 
-function llmStepMeta(llm: AgentUiLlmStep): string {
+function llmStepMeta(llm: AgentUiLlmStep) {
   const parts: string[] = [];
   if (llm.cancelReason != null && llm.model != null) parts.push(llm.model);
   if (llm.inputTokens != null || llm.outputTokens != null) {

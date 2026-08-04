@@ -167,7 +167,7 @@ export type AgentUiActivityRound = {
  * (apps/mobile/src/components/activity-card.tsx) and the os web feed
  * (apps/os/src/components/agent-feed.tsx) — group through this one function.
  */
-export function groupActivityRounds(steps: readonly AgentUiStep[]): AgentUiActivityRound[] {
+export function groupActivityRounds(steps: readonly AgentUiStep[]) {
   const rounds: AgentUiActivityRound[] = [];
   for (const step of steps) {
     const current = rounds.at(-1);

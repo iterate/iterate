@@ -517,7 +517,7 @@ function tail(text: string, max: number): string {
  * resultYaml (apps/os/src/lib/agent-round-meta-yaml.ts), plus the bounded
  * preview cap the JSON view used to apply.
  */
-function previewResultYaml(value: unknown): string {
+function previewResultYaml(value: unknown) {
   try {
     const doc = new Document(value);
     visit(doc, {
