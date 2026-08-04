@@ -131,6 +131,9 @@ static void update_idle_motion(face_animator_t *animator)
     }
 }
 
+/* 300 ms of playout with no fresh viseme returns the mouth to rest. */
+enum { VISEME_TTL_WINDOWS = 30 };
+
 static void finish_analysis_window(face_animator_t *animator)
 {
     const uint32_t level = animator->sum_abs / animator->window_samples;
@@ -160,18 +163,32 @@ static void finish_analysis_window(face_animator_t *animator)
         &animator->state.level,
         (uint16_t)(level > UINT16_MAX ? UINT16_MAX : level),
         __ATOMIC_RELAXED);
-    __atomic_store_n(
-        &animator->state.mouth_open, mouth_open, __ATOMIC_RELAXED);
-    __atomic_store_n(
-        &animator->state.mouth_width, mouth_width, __ATOMIC_RELAXED);
-    __atomic_store_n(
-        &animator->state.mouth_round,
-        (uint8_t)(UINT8_MAX - mouth_width), __ATOMIC_RELAXED);
-    __atomic_store_n(
-        &animator->state.mouth_press, 0, __ATOMIC_RELAXED);
-    __atomic_store_n(
-        &animator->state.mouth_teeth,
-        (uint8_t)((UINT8_MAX - mouth_width) / 3U), __ATOMIC_RELAXED);
+    if (!animator->external_mouth) {
+        __atomic_store_n(
+            &animator->state.mouth_open, mouth_open, __ATOMIC_RELAXED);
+        __atomic_store_n(
+            &animator->state.mouth_width, mouth_width, __ATOMIC_RELAXED);
+        __atomic_store_n(
+            &animator->state.mouth_round,
+            (uint8_t)(UINT8_MAX - mouth_width), __ATOMIC_RELAXED);
+        __atomic_store_n(
+            &animator->state.mouth_press, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(
+            &animator->state.mouth_teeth,
+            (uint8_t)((UINT8_MAX - mouth_width) / 3U), __ATOMIC_RELAXED);
+    }
+    if (__atomic_load_n(&animator->state.viseme, __ATOMIC_RELAXED) !=
+        FACE_VISEME_NONE) {
+        if (animator->viseme_windows_left > 0) {
+            animator->viseme_windows_left -= 1;
+        }
+        if (animator->viseme_windows_left == 0) {
+            __atomic_store_n(
+                &animator->state.viseme, FACE_VISEME_NONE, __ATOMIC_RELAXED);
+            __atomic_store_n(
+                &animator->state.confidence, 0, __ATOMIC_RELAXED);
+        }
+    }
     __atomic_store_n(
         &animator->state.speaking,
         !listening && mouth_open != 0,
@@ -258,7 +275,23 @@ void face_animator_push_pcm(face_animator_t *animator,
         __atomic_fetch_add(
             &animator->state.playout_samples, 1U, __ATOMIC_RELAXED);
 
-        if (animator->window_fill == animator->window_samples) {
+        /*
+         * `>=`, NOT `==`, AND THAT IS NOT PEDANTRY.
+         *
+         * `window_fill` only ever moves by one here, so for a correct
+         * single-writer caller the two are the same test. They stop being the
+         * same the moment a second task touches this counter: one lost
+         * increment steps the count straight past the boundary, the equality
+         * never holds again, and no analysis window ever completes for the
+         * rest of the boot. The pose then never changes — which is a dead
+         * mouth and a frozen level meter, reported from the Waveshare board as
+         * two unrelated complaints before it was one bug.
+         *
+         * That caller has been fixed to have one writer. This keeps the failure
+         * bounded to a single bad window if it is ever reintroduced, instead of
+         * permanently silent.
+         */
+        if (animator->window_fill >= animator->window_samples) {
             finish_analysis_window(animator);
         }
     }
@@ -309,6 +342,48 @@ void face_animator_push_event(
     default:
         break;
     }
+}
+
+void face_animator_set_external_mouth(face_animator_t *animator, bool enabled)
+{
+    if (animator == NULL || animator->external_mouth == enabled) {
+        return;
+    }
+    publish_begin(animator);
+    animator->external_mouth = enabled;
+    if (enabled) {
+        __atomic_store_n(&animator->state.mouth_open, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&animator->state.mouth_width, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&animator->state.mouth_round, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&animator->state.mouth_press, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&animator->state.mouth_teeth, 0, __ATOMIC_RELAXED);
+    }
+    publish_end(animator);
+}
+
+void face_animator_apply_viseme(face_animator_t *animator,
+                                uint8_t viseme, uint8_t confidence)
+{
+    if (animator == NULL) {
+        return;
+    }
+    publish_begin(animator);
+    __atomic_store_n(&animator->state.viseme, viseme, __ATOMIC_RELAXED);
+    __atomic_store_n(&animator->state.confidence, confidence, __ATOMIC_RELAXED);
+    animator->viseme_windows_left = VISEME_TTL_WINDOWS;
+    publish_end(animator);
+}
+
+void face_animator_clear_viseme(face_animator_t *animator)
+{
+    if (animator == NULL) {
+        return;
+    }
+    publish_begin(animator);
+    __atomic_store_n(
+        &animator->state.viseme, FACE_VISEME_NONE, __ATOMIC_RELAXED);
+    __atomic_store_n(&animator->state.confidence, 0, __ATOMIC_RELAXED);
+    publish_end(animator);
 }
 
 bool face_animator_snapshot(const face_animator_t *animator,

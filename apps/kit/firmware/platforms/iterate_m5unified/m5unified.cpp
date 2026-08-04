@@ -2,6 +2,7 @@
 #include "iterate/kit/platforms/m5sticks3_direct_audio.hpp"
 #include "iterate/kit/platforms/m5sticks3_visual_layout.hpp"
 
+#include "iterate/kit/avatar/face_doze.h"
 #include "iterate/kit/avatar/face_keyframe.h"
 #include "iterate/kit/avatar/face_render.h"
 
@@ -26,6 +27,49 @@
 namespace iterate::kit::platforms {
 
 static constexpr std::uint32_t m5StickS3Background = 0x000000U;
+
+static bool callUiIsDozing(M5StickS3CallUiState state) {
+  /*
+   * “Awake” means that one conversation lifetime owns the media lane, not
+   * merely that Wi-Fi or the control socket is alive. Boot, ready, and failed
+   * states are therefore doze-ELIGIBLE; connecting/listening/thinking/
+   * speaking/ending states remain awake until that lifetime actually closes.
+   * Eligibility is not yet sleep: advanceFaceDoze() adds a three-minute
+   * awake-idle grace after boot or hang-up before the sleeping face shows.
+   */
+  switch (state) {
+    case M5StickS3CallUiState::callConnecting:
+    case M5StickS3CallUiState::callReady:
+    case M5StickS3CallUiState::listening:
+    case M5StickS3CallUiState::waitingForReply:
+    case M5StickS3CallUiState::speaking:
+    case M5StickS3CallUiState::endingCall:
+      return false;
+    case M5StickS3CallUiState::booting:
+    case M5StickS3CallUiState::controlConnecting:
+    case M5StickS3CallUiState::ready:
+    case M5StickS3CallUiState::callFailed:
+      return true;
+  }
+  return true;
+}
+
+static bool advanceFaceDoze(
+    M5StickS3CallUiState state,
+    std::int64_t nowMicroseconds,
+    std::int64_t dozeDelayMicroseconds,
+    std::int64_t &lastAwakeMicroseconds) {
+  /*
+   * Doze is earned by minutes of neglect, not by the first out-of-call frame.
+   * Any awake state refreshes the stamp, so after boot or the end of a call
+   * the face stays awake-idle for the fixed delay before the lids close.
+   */
+  if (!callUiIsDozing(state)) {
+    lastAwakeMicroseconds = nowMicroseconds;
+    return false;
+  }
+  return nowMicroseconds - lastAwakeMicroseconds >= dozeDelayMicroseconds;
+}
 
 static void saturatingIncrement(std::uint32_t &value) {
   if (value != std::numeric_limits<std::uint32_t>::max()) {
@@ -89,6 +133,18 @@ bool M5UnifiedHalfDuplex::begin() {
   config.external_imu = false;
   config.external_rtc = false;
   config.led_brightness = 0;
+  /*
+   * This adapter is linked only by the fixed M5StickS3 firmware target. On a
+   * USB-Serial/JTAG warm reset the panel can occasionally miss M5GFX's first
+   * autodetection probe; M5Unified then intentionally uses `fallback_board`.
+   * Its generic ESP32-S3 default is AtomS3Lite, which made our process reject
+   * the real Stick and return from app_main even though the board identity was
+   * already fixed by the image being flashed. Select M5Unified's documented
+   * target fallback instead of adding retries, sleeps, or a second ad-hoc
+   * hardware detector. A positively detected different board still wins over
+   * this fallback and is rejected by the check immediately below.
+   */
+  config.fallback_board = m5::board_t::board_M5StickS3;
   M5.begin(config);
   if (M5.getBoard() != m5::board_t::board_M5StickS3) {
     /*
@@ -112,6 +168,8 @@ bool M5UnifiedHalfDuplex::begin() {
   M5.Display.setSwapBytes(true);
   M5.Display.setBrightness(96);
   startedMicroseconds_ = esp_timer_get_time();
+  /* Boot earns the same awake-idle grace as the end of a call. */
+  lastAwakeMicroseconds_ = startedMicroseconds_;
   if (iterate_kit_cpu_usage_meter_init(
           &cpuUsage_, CONFIG_FREERTOS_NUMBER_OF_CORES) !=
       ITERATE_KIT_OK) {
@@ -172,8 +230,8 @@ void M5UnifiedHalfDuplex::update() {
   }
   if (M5.BtnB.wasPressed()) {
     /*
-     * BtnB is the StickS3 top button. Only its debounced press matters for a
-     * toggle; retaining releases would make an ordinary click two actions.
+     * BtnB is the StickS3 top/MENU button. Only its debounced press matters;
+     * retaining releases would make an ordinary click advance twice.
      */
     buttonBPressPending_ = true;
   }
@@ -234,8 +292,10 @@ M5UnifiedHalfDuplex::audioCaptureDriver() {
 }
 
 iterate_kit_status M5UnifiedHalfDuplex::bindPcmLane(
-    iterate_kit_pcm_lane *lane) {
-  if (lane == nullptr || !lane->initialized) {
+    iterate_kit_pcm_lane *lane,
+    RealtimePlaybackItemReleasedFn itemReleased,
+    void *itemReleasedContext) {
+  if (lane == nullptr || !lane->initialized || itemReleased == nullptr) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   pcmLane_ = lane;
@@ -245,7 +305,8 @@ iterate_kit_status M5UnifiedHalfDuplex::bindPcmLane(
    * layers; constructing hidden global links would make host tests and a second
    * device target difficult to isolate.
    */
-  return audioOwner_.begin(lane);
+  return audioOwner_.begin(
+      lane, itemReleased, itemReleasedContext);
 }
 
 RealtimePlaybackPumpResult
@@ -312,7 +373,8 @@ void M5UnifiedHalfDuplex::showStatus(
 
 void M5UnifiedHalfDuplex::showCallUi(
     M5StickS3CallUiState state,
-    const iterate_kit_conversation_visual_state &visualState) {
+    const iterate_kit_conversation_visual_state &visualState,
+    bool talkLocked) {
   auto nextVisualState = visualState;
   if (state == M5StickS3CallUiState::speaking) {
     /*
@@ -329,12 +391,17 @@ void M5UnifiedHalfDuplex::showCallUi(
   const bool visualChanged =
       !iterate_kit_conversation_lights_equal(
           &nextVisualState, &conversationVisualState_);
+  const bool lockChanged = talkLocked != talkLocked_;
   if (stateChanged) {
     callUiState_ = state;
     avatarNeedsRender_ = true;
   }
   if (visualChanged) {
     conversationVisualStateDrawn_ = false;
+  }
+  if (lockChanged) {
+    talkLocked_ = talkLocked;
+    callUiDrawn_ = false;
   }
   /*
    * View equality intentionally ignores RSSI movement inside one rendered
@@ -343,7 +410,25 @@ void M5UnifiedHalfDuplex::showCallUi(
    * Metrics remain the authoritative high-resolution observation channel.
    */
   conversationVisualState_ = nextVisualState;
-  if (!stateChanged && !visualChanged &&
+  /*
+   * Out of a call the face acts on its own wall clock — breathing, glances,
+   * expression shifts — so it needs repaints that no lifecycle edge will ever
+   * request. Reuse the avatar cadence gate; once the doze frame has reached
+   * the panel the face is still again and this stops asking. advanceFaceDoze()
+   * also refreshes the awake stamp on every 10 ms owner pass during calls.
+   */
+  const auto nowMicroseconds = esp_timer_get_time();
+  const bool dozeDue = advanceFaceDoze(
+      callUiState_,
+      nowMicroseconds,
+      dozeDelayMicroseconds,
+      lastAwakeMicroseconds_);
+  const bool idleFaceDue =
+      callUiIsDozing(callUiState_) &&
+      (!dozeDue || !dozeShown_) &&
+      nowMicroseconds >= nextAvatarRenderMicroseconds_;
+  if (idleFaceDue) avatarNeedsRender_ = true;
+  if (!stateChanged && !visualChanged && !lockChanged && !idleFaceDue &&
       callUiState_ != M5StickS3CallUiState::speaking) {
     return;
   }
@@ -359,6 +444,7 @@ void M5UnifiedHalfDuplex::showCallUi(
 }
 
 void M5UnifiedHalfDuplex::renderCallUi(bool force) {
+  if (menuVisible_) return;
   const auto nowMicroseconds = esp_timer_get_time();
   bool panelNeedsRender =
       force || !callUiDrawn_ || !conversationVisualStateDrawn_;
@@ -419,13 +505,13 @@ void M5UnifiedHalfDuplex::renderStatusPanel() {
       break;
     case M5StickS3CallUiState::ready:
       headline = "RDY";
-      instruction = "TOP";
-      secondary = "GO";
+      instruction = "FRN";
+      secondary = "HLD";
       break;
     case M5StickS3CallUiState::callConnecting:
       headline = "CON";
       instruction = "TOP";
-      secondary = "END";
+      secondary = "MNU";
       break;
     case M5StickS3CallUiState::callReady:
       headline = "ON";
@@ -433,9 +519,15 @@ void M5UnifiedHalfDuplex::renderStatusPanel() {
       secondary = "HLD";
       break;
     case M5StickS3CallUiState::listening:
-      headline = "MIC";
-      instruction = "REL";
-      secondary = "SND";
+      if (talkLocked_) {
+        headline = "LCK";
+        instruction = "DBL";
+        secondary = "END";
+      } else {
+        headline = "MIC";
+        instruction = "REL";
+        secondary = "SND";
+      }
       break;
     case M5StickS3CallUiState::waitingForReply:
       headline = "AI";
@@ -455,7 +547,7 @@ void M5UnifiedHalfDuplex::renderStatusPanel() {
     case M5StickS3CallUiState::callFailed:
       headline = "ERR";
       instruction = "TOP";
-      secondary = "RST";
+      secondary = "MNU";
       break;
   }
 
@@ -480,24 +572,21 @@ void M5UnifiedHalfDuplex::renderStatusPanel() {
        index < layout.statusRing.size();
        ++index) {
     const auto &cell = layout.statusRing[index];
+    const auto colour = displayStatusColour(pixels[index]);
     /*
-     * A 3x3 package with a 1x1 semantic centre is intentionally tiny: the ring
-     * stays recognizable across devices without becoming the main subject.
-     * The neutral bezel preserves all twelve positions when sectors are off;
-     * only the centre carries the portable colour.
+     * The old 3x3 bezel left only one illuminated LCD pixel. It looked like a
+     * dead ring at physical viewing distance even though capture screenshots
+     * could find the centre. Keep the complete ring tiny, but let an active
+     * logical LED own its whole 3x3 cell. Dark cells retain a subdued package
+     * marker so the cross-device ring shape remains recognizable without
+     * competing with the face.
      */
     M5.Display.fillRect(
         cell.x,
         cell.y,
         cell.width,
         cell.height,
-        0x383838U);
-    M5.Display.fillRect(
-        cell.x + 1U,
-        cell.y + 1U,
-        cell.width - 2U,
-        cell.height - 2U,
-        displayStatusColour(pixels[index]));
+        colour == 0U ? 0x202020U : colour);
   }
 
   M5.Display.setTextWrap(false);
@@ -509,7 +598,79 @@ void M5UnifiedHalfDuplex::renderStatusPanel() {
   M5.Display.println(instruction);
   M5.Display.setCursor(1, 58);
   M5.Display.println(secondary);
+  if (conversationVisualState_.media_failed ||
+      conversationVisualState_.network ==
+          ITERATE_KIT_NETWORK_DISCONNECTED) {
+    /*
+     * ERR copy alone is too easy to miss on a device viewed at arm's length,
+     * and a disconnected control plane previously left users guessing whether
+     * the top button was broken. Keep one stable high-contrast mark until the
+     * underlying state recovers; unlike transient copy, this is a health
+     * oracle rather than decorative chrome.
+     */
+    M5.Display.setTextColor(TFT_RED, m5StickS3Background);
+    M5.Display.setTextSize(2);
+    M5.Display.setCursor(4, 76);
+    M5.Display.print("!");
+  }
   M5.Display.endWrite();
+}
+
+void M5UnifiedHalfDuplex::showMenu(
+    const char *item,
+    std::uint8_t selected,
+    std::uint8_t itemCount) {
+  /*
+   * The menu is a retained semantic view, not another framebuffer. Giving it
+   * the whole 240x135 panel keeps the selected action legible at arm's length;
+   * the newest call/avatar state continues to be retained and is repainted on
+   * dismissal rather than trying to merge two interfaces into the tiny rail.
+   */
+  menuVisible_ = true;
+  M5.Display.startWrite();
+  M5.Display.fillScreen(m5StickS3Background);
+  M5.Display.setTextWrap(true);
+  M5.Display.setTextColor(TFT_CYAN, m5StickS3Background);
+  M5.Display.setTextSize(1);
+  M5.Display.setCursor(8, 8);
+  M5.Display.printf(
+      "MENU %u/%u",
+      static_cast<unsigned int>(selected + 1U),
+      static_cast<unsigned int>(itemCount));
+  M5.Display.setTextColor(TFT_WHITE, m5StickS3Background);
+  M5.Display.setTextSize(2);
+  M5.Display.setCursor(8, 42);
+  M5.Display.println(item == nullptr ? "unknown" : item);
+  M5.Display.setTextSize(1);
+  M5.Display.setTextColor(TFT_DARKGREY, m5StickS3Background);
+  M5.Display.setCursor(8, 116);
+  M5.Display.print("TOP next  FRONT choose");
+  M5.Display.endWrite();
+}
+
+void M5UnifiedHalfDuplex::hideMenu() {
+  if (!menuVisible_) return;
+  menuVisible_ = false;
+  /*
+   * The menu overwrote both screen regions. Force exactly one complete
+   * restoration; ordinary transition gates resume after this synchronous
+   * repaint, so closing the menu cannot cause a continuous SPI workload.
+   */
+  callUiDrawn_ = false;
+  conversationVisualStateDrawn_ = false;
+  avatarNeedsRender_ = true;
+  renderCallUi(true);
+}
+
+bool M5UnifiedHalfDuplex::selectNextSprite() {
+  if (!face_avatar_registry_next(&avatarRegistry_)) return false;
+  avatarNeedsRender_ = true;
+  if (!menuVisible_) renderCallUi(false);
+  return true;
+}
+
+const char *M5UnifiedHalfDuplex::currentSpriteSlug() const {
+  return face_avatar_registry_current_slug(&avatarRegistry_);
 }
 
 bool M5UnifiedHalfDuplex::renderAvatar(
@@ -567,6 +728,12 @@ bool M5UnifiedHalfDuplex::renderAvatar(
 
   face_render_key_t renderKey{};
   face_render_key_from_pose(&pose, &renderKey);
+  const bool dozing = advanceFaceDoze(
+      callUiState_,
+      nowMicroseconds,
+      dozeDelayMicroseconds,
+      lastAwakeMicroseconds_);
+  if (dozing) face_doze_prepare_render_key(&renderKey);
   const auto idleElapsed = nowMicroseconds > startedMicroseconds_
       ? static_cast<std::uint64_t>(
             nowMicroseconds - startedMicroseconds_)
@@ -583,6 +750,13 @@ bool M5UnifiedHalfDuplex::renderAvatar(
           sampleClock,
           avatarFramebuffer_,
           FACE_RENDER_PIXEL_COUNT)) {
+    saturatingIncrement(avatarRenderFailures_);
+    return false;
+  }
+  if (dozing && !face_doze_apply_overlay(
+                     avatarFramebuffer_,
+                     FACE_RENDER_PIXEL_COUNT,
+                     sampleClock)) {
     saturatingIncrement(avatarRenderFailures_);
     return false;
   }
@@ -614,6 +788,8 @@ bool M5UnifiedHalfDuplex::renderAvatar(
   M5.Display.endWrite();
   renderedAvatarPublication_ =
       hasSnapshot ? snapshot.publicationSequence : 0U;
+  /* The doze face is on the panel; idle repaints may stop until it wakes. */
+  dozeShown_ = dozing;
   conversationVisualState_.speaker_peak =
       callUiState_ == M5StickS3CallUiState::speaking
       ? pose.level

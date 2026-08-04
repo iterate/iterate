@@ -111,6 +111,18 @@ typedef void (*iterate_kit_voicelab_control_fn)(
 typedef void (*iterate_kit_voicelab_transcript_fn)(
     void *context, bool from_user, const char *text, bool final);
 
+/**
+ * One scheduled assistant mouth shape, decoded from a voice-agent/viseme
+ * event. `offset_samples` counts 16 kHz samples from the first sample of
+ * `answer`, so the shape belongs to a position in the audio rather than to a
+ * moment on any clock — the same identity rule spk-frames already live by,
+ * which is what lets a superseded answer take its mouth track down with it.
+ * `viseme` is a FACE_VISEME_* id (0..14); `confidence` is 0..255.
+ */
+typedef void (*iterate_kit_voicelab_viseme_fn)(
+    void *context, uint32_t answer, uint32_t offset_samples,
+    uint8_t viseme, uint8_t confidence);
+
 enum iterate_kit_voicelab_failure {
   ITERATE_KIT_VOICELAB_FAILURE_NONE = 0,
   ITERATE_KIT_VOICELAB_FAILURE_INVALID_OPTIONS,
@@ -135,7 +147,7 @@ struct iterate_kit_voicelab_options {
   struct capnweb_session *session;
   const char *project_id;
   const char *project_api_key;
-  /** Stream path for the call, e.g. "/voicelab/dev-waveshare". */
+  /** Stream path for the call, e.g. "/voice-agent/dev-waveshare". */
   const char *stream_path;
   /** Short call identity stamped into every frame payload. */
   const char *call_id;
@@ -150,6 +162,8 @@ struct iterate_kit_voicelab_options {
   iterate_kit_voicelab_speaker_fn on_speaker;
   iterate_kit_voicelab_control_fn on_control;
   iterate_kit_voicelab_transcript_fn on_transcript;
+  /** NULL when this device has no face; the subscription still asks. */
+  iterate_kit_voicelab_viseme_fn on_viseme;
   void *downlink_context;
 };
 
@@ -157,8 +171,8 @@ struct iterate_kit_voicelab_options {
  * The device end of the voicelab stream protocol over ONE Cap'n Web session:
  * authenticate(project-secret) -> projects.get -> streams.get(path), then
  * high-frequency one-way `append` calls carrying ephemeral
- * `voicelab/mic-frame` events (base64 PCM16), with a low-rate pulled
- * `voicelab/ping` append as the RTT/health probe (one-way appends never
+ * `voice-agent/mic-frame` events (base64 PCM16), with a low-rate pulled
+ * `voice-agent/ping` append as the RTT/health probe (one-way appends never
  * report peer-side errors by design).
  *
  * Single-owner, callback-driven, no internal retry — the enclosing
@@ -292,7 +306,7 @@ enum capnweb_status iterate_kit_voicelab_start(
     const struct iterate_kit_voicelab_options *options);
 
 /**
- * One-way append of one ephemeral voicelab/mic-frame event. `pcm` is raw
+ * One-way append of one ephemeral voice-agent/mic-frame event. `pcm` is raw
  * PCM16 bytes (at most ITERATE_KIT_VOICELAB_FRAME_BYTES). Returns
  * CAPNWEB_E_STATE while the module is not READY; transport-full statuses
  * are counted in frame_send_failures and returned for the caller's pacing.
@@ -328,7 +342,7 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
     size_t length);
 
 /**
- * Append a durable voicelab/call-requested event to this stream. The installed
+ * Append a durable voice-agent/call-requested event to this stream. The installed
  * voice-agent guest processor opens the Grok call; the project worker is not
  * involved. Nothing outside the platform holds the call open afterwards: no
  * laptop bridge, no second socket. One start in flight at a time;
@@ -340,7 +354,7 @@ enum capnweb_status iterate_kit_voicelab_start_call(
     struct iterate_kit_voicelab *voicelab, const char *greeting);
 
 /**
- * Hang up: a durable voicelab/call-ended event carrying this call's id, which
+ * Hang up: a durable voice-agent/call-ended event carrying this call's id, which
  * is what the bridge watches for. One-way — the bridge's own call-ended echo
  * confirms it.
  */
@@ -376,7 +390,7 @@ enum capnweb_status iterate_kit_voicelab_mark_turn(
     enum iterate_kit_voicelab_turn turn);
 
 /**
- * Pulled append of a tiny durable voicelab/ping event. The resolution echo
+ * Pulled append of a tiny durable voice-agent/ping event. The resolution echo
  * is small (no PCM), so it is safe inside the bounded inbox and token
  * budget; completion updates last_rtt_ms. One probe in flight at a time.
  */

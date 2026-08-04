@@ -276,3 +276,30 @@ bool face_stage_cue_apply(
     }
     return true;
 }
+
+bool face_stage_apply_held_expression(
+    face_expression_t expression,
+    face_render_key_t *render_key)
+{
+    if (expression >= FACE_EXPRESSION_COUNT || render_key == NULL) {
+        return false;
+    }
+
+    /*
+     * Reusing the normal cue resolver matters more than saving a handful of
+     * integer operations at a display refresh boundary. It gives lifecycle
+     * states exactly the same selector coordinates as remotely directed
+     * expressions and prevents the two copies drifting when the art rig is
+     * tuned. HOLD_FINAL makes the result independent of any wall/sample clock.
+     */
+    const face_stage_cue_t held = {
+        .expression = (uint8_t)expression,
+        .gaze_target = FACE_GAZE_AUTO,
+        .blend_mode = FACE_STAGE_BLEND_REPLACE,
+        .easing = FACE_STAGE_EASE_LINEAR,
+        .interrupt_mode = FACE_STAGE_INTERRUPT_CUT,
+        .intensity = UINT8_MAX,
+        .flags = FACE_STAGE_FLAG_HOLD_FINAL,
+    };
+    return face_stage_cue_apply(&held, 0U, render_key);
+}

@@ -25,15 +25,21 @@ static void all_device_avatars_are_renderable(void)
 {
     face_avatar_registry_t registry;
     face_render_key_t pose = {0};
-    uint64_t hashes[4] = {0};
-    static const uint64_t expected_hashes[4] = {
+    uint64_t hashes[5] = {0};
+    static const uint64_t expected_hashes[5] = {
         UINT64_C(0x2df9b52f3aa0d923),
-        UINT64_C(0x672b92829ae26edb),
+        UINT64_C(0x5b01fa08b25f11ab),
         UINT64_C(0x027f1d1513846793),
+        UINT64_C(0xbf5535b8d0f3720b),
         UINT64_C(0x7c95b6bf8d8d5793),
     };
 
-    assert(face_avatar_registry_count() == 4U);
+    /*
+     * Catalogue membership is a product contract, not merely a renderer
+     * implementation detail. This exact count prevents a removed character
+     * from silently remaining reachable through button rotation or Grok.
+     */
+    assert(face_avatar_registry_count() == 5U);
     assert(face_avatar_registry_init(&registry));
     pose.controls.eye_left_open = UINT8_MAX;
     pose.controls.eye_right_open = UINT8_MAX;
@@ -51,21 +57,29 @@ static void all_device_avatars_are_renderable(void)
         hashes[index] = frame_hash(pixels);
         assert(hashes[index] != 0U);
         /*
-         * These endianness-independent pixel hashes preserve the exact four
-         * faces we are restoring. A renderer optimization must deliberately
-         * update the visual goldens rather than silently changing the art.
+         * These endianness-independent pixel hashes preserve the exact five
+         * faces we ship. A renderer optimization must deliberately update
+         * the visual goldens rather than silently changing the art. To
+         * regenerate the goldens after an intentional art change, build with
+         * -DFACE_AVATAR_REGISTRY_TEST_CAPTURE_HASHES and copy the printed
+         * avatar[N] hashes into expected_hashes above.
          */
+#ifndef FACE_AVATAR_REGISTRY_TEST_CAPTURE_HASHES
         assert(hashes[index] == expected_hashes[index]);
+#else
+        (void)expected_hashes;
+#endif
         assert(face_avatar_registry_current_index(&registry) == index);
         assert(face_avatar_registry_current_slug(&registry) != NULL);
     }
 
     /*
      * A different hash for every atlas catches a generated catalogue which
-     * accidentally aliases one visual four times while still returning true.
+     * accidentally aliases one visual several times while still returning
+     * true.
      */
-    for (size_t left = 0U; left < 4U; ++left) {
-        for (size_t right = left + 1U; right < 4U; ++right) {
+    for (size_t left = 0U; left < 5U; ++left) {
+        for (size_t right = left + 1U; right < 5U; ++right) {
             assert(hashes[left] != hashes[right]);
         }
         printf("avatar[%zu]=0x%016" PRIx64 "\n", left, hashes[left]);
@@ -79,8 +93,8 @@ static void registries_do_not_share_selection_state(void)
 
     assert(face_avatar_registry_init(&first));
     assert(face_avatar_registry_init(&second));
-    assert(face_avatar_registry_select(&first, 3U));
-    assert(face_avatar_registry_current_index(&first) == 3U);
+    assert(face_avatar_registry_select(&first, 2U));
+    assert(face_avatar_registry_current_index(&first) == 2U);
     assert(face_avatar_registry_current_index(&second) == 0U);
 }
 
@@ -104,8 +118,20 @@ static void selects_sprite_sets_by_exact_public_slug(void)
         &registry, "star", strlen("star")));
     assert(!face_avatar_registry_select_slug(
         &registry, "starbyte-extra", strlen("starbyte-extra")));
+    assert(face_avatar_registry_select_slug(
+        &registry, "furnace-imp", strlen("furnace-imp")));
     assert(strcmp(
-        face_avatar_registry_current_slug(&registry), "starbyte") == 0);
+        face_avatar_registry_current_slug(&registry), "furnace-imp") == 0);
+    assert(face_avatar_registry_select_slug(
+        &registry, "moonscope", strlen("moonscope")));
+    assert(strcmp(
+        face_avatar_registry_current_slug(&registry), "moonscope") == 0);
+    assert(!face_avatar_registry_select_slug(
+        &registry,
+        "gameboy-fine-black",
+        strlen("gameboy-fine-black")));
+    assert(strcmp(
+        face_avatar_registry_current_slug(&registry), "moonscope") == 0);
 }
 
 int main(void)

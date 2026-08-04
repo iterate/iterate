@@ -144,17 +144,13 @@ static void receive(struct fixture *fixture, const char *message) {
 
 static void start_and_mount(struct fixture *fixture) {
   const struct iterate_kit_voicelab_options options = {
-    &fixture->session,
-    "prj_test",
-    "itxk_secret-never-log",
-    "/voicelab/dev-test",
-    "wsdev",
-    fixture_now_ms,
-    fixture,
-    NULL,
-    NULL,
-    NULL,
-    NULL,
+    .session = &fixture->session,
+    .project_id = "prj_test",
+    .project_api_key = "itxk_secret-never-log",
+    .stream_path = "/voice-agent/dev-test",
+    .call_id = "wsdev",
+    .now_ms = fixture_now_ms,
+    .clock_context = fixture,
   };
   assert(
       iterate_kit_voicelab_start(&fixture->voicelab, &options) ==
@@ -184,7 +180,7 @@ static void start_and_mount(struct fixture *fixture) {
   assert(strcmp(
       fixture->captured[7],
       "[\"push\",[\"pipeline\",-11,[\"streams\",\"get\"],"
-      "[\"/voicelab/dev-test\"]]]") == 0);
+      "[\"/voice-agent/dev-test\"]]]") == 0);
   assert(strcmp(fixture->captured[8], "[\"pull\",3]") == 0);
 
   receive(fixture, "[\"resolve\",3,[\"export\",-12]]");
@@ -250,6 +246,23 @@ static void record_control(
   }
 }
 
+static int viseme_count;
+static uint32_t viseme_answer;
+static uint32_t viseme_offset_samples;
+static uint8_t viseme_id;
+static uint8_t viseme_confidence;
+
+static void record_viseme(
+    void *context, uint32_t answer, uint32_t offset_samples,
+    uint8_t viseme, uint8_t confidence) {
+  (void)context;
+  ++viseme_count;
+  viseme_answer = answer;
+  viseme_offset_samples = offset_samples;
+  viseme_id = viseme;
+  viseme_confidence = confidence;
+}
+
 /*
  * Full downlink shape: the module exports a callback capability, opens the
  * live connection with the constrained-consumer caps, decodes inbound
@@ -261,17 +274,18 @@ static void downlink_flow(void) {
   fixture_init(&fixture);
   {
     const struct iterate_kit_voicelab_options options = {
-      &fixture.session,
-      "prj_test",
-      "itxk_secret-never-log",
-      "/voicelab/dev-test",
-      "wsdev",
-      fixture_now_ms,
-      &fixture,
-      record_speaker,
-      record_control,
-      record_transcript,
-      NULL,
+      .session = &fixture.session,
+      .project_id = "prj_test",
+      .project_api_key = "itxk_secret-never-log",
+      .stream_path = "/voice-agent/dev-test",
+      .call_id = "wsdev",
+      .now_ms = fixture_now_ms,
+      .clock_context = &fixture,
+      .on_speaker = record_speaker,
+      .on_control = record_control,
+      .on_transcript = record_transcript,
+      .on_viseme = record_viseme,
+      .downlink_context = NULL,
     };
     assert(
         iterate_kit_voicelab_start(&fixture.voicelab, &options) ==
@@ -303,11 +317,11 @@ static void downlink_flow(void) {
     assert(
         strstr(
             open_message,
-            "\"eventTypes\":[[\"voicelab/spk-frame\",\"voicelab/grok-event\","
-      "\"voicelab/call-ended\",\"voicelab/call-accepted\","
-      "\"voicelab/pong\"]]") !=
+            "\"eventTypes\":[[\"voice-agent/spk-frame\",\"voice-agent/grok-event\","
+      "\"voice-agent/call-ended\",\"voice-agent/call-accepted\","
+      "\"voice-agent/pong\",\"voice-agent/viseme\"]]") !=
         NULL);
-    assert(strstr(open_message, "\"maxDeliveryEvents\":12") != NULL);
+    assert(strstr(open_message, "\"maxDeliveryEvents\":16") != NULL);
     assert(strstr(open_message, "\"maxDeliveryBytes\":13000") != NULL);
     assert(strstr(open_message, "\"state\":false") != NULL);
     assert(strstr(open_message, "\"processEventBatch\":[\"export\",-1]") != NULL);
@@ -322,10 +336,10 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"projectId\":\"prj_test\","
-      "\"path\":\"/voicelab/dev-test\",\"streamId\":\"sid\",\"events\":[["
-      "{\"type\":\"voicelab/spk-frame\",\"offset\":40,"
+      "\"path\":\"/voice-agent/dev-test\",\"streamId\":\"sid\",\"events\":[["
+      "{\"type\":\"voice-agent/spk-frame\",\"offset\":40,"
       "\"payload\":{\"seq\":0,\"pcm\":\"QUJDRA\"}},"
-      "{\"type\":\"voicelab/grok-event\",\"offset\":41,"
+      "{\"type\":\"voice-agent/grok-event\",\"offset\":41,"
       "\"payload\":{\"event\":{\"type\":\"input_audio_buffer.speech_started\"}}}"
       "]],\"scannedAfterOffset\":39,\"scannedThroughOffset\":41,"
       "\"streamMaxOffset\":41,\"state\":null}]]]");
@@ -342,9 +356,9 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voicelab/grok-event\",\"offset\":43,"
+      "{\"type\":\"voice-agent/grok-event\",\"offset\":43,"
       "\"payload\":{\"event\":{\"type\":\"response.created\"}}},"
-      "{\"type\":\"voicelab/grok-event\",\"offset\":44,"
+      "{\"type\":\"voice-agent/grok-event\",\"offset\":44,"
       "\"payload\":{\"event\":{\"type\":"
       "\"response.output_audio_transcript.delta\",\"delta\":\"Hel\"}}}"
       "]],\"scannedThroughOffset\":44,\"state\":null}]]]");
@@ -355,10 +369,10 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voicelab/grok-event\",\"offset\":45,"
+      "{\"type\":\"voice-agent/grok-event\",\"offset\":45,"
       "\"payload\":{\"event\":{\"type\":"
       "\"response.output_audio_transcript.delta\",\"delta\":\"lo.\"}}},"
-      "{\"type\":\"voicelab/grok-event\",\"offset\":46,"
+      "{\"type\":\"voice-agent/grok-event\",\"offset\":46,"
       "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
       "]],\"scannedThroughOffset\":46,\"state\":null}]]]");
   receive(&fixture, "[\"release\",3,1]");
@@ -368,7 +382,7 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voicelab/grok-event\",\"offset\":47,"
+      "{\"type\":\"voice-agent/grok-event\",\"offset\":47,"
       "\"payload\":{\"event\":{\"type\":\"conversation.item.added\","
       "\"item\":{\"id\":\"item_1\",\"role\":\"user\",\"content\":[[{\"type\":"
       "\"input_audio\",\"transcript\":\"what is the capital of France\"}]]}}}}"
@@ -382,7 +396,7 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voicelab/grok-event\",\"offset\":48,"
+      "{\"type\":\"voice-agent/grok-event\",\"offset\":48,"
       "\"payload\":{\"event\":{\"type\":"
       "\"conversation.item.input_audio_transcription.completed\","
       "\"item_id\":\"item_1\","
@@ -395,7 +409,7 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voicelab/grok-event\",\"offset\":49,"
+      "{\"type\":\"voice-agent/grok-event\",\"offset\":49,"
       "\"payload\":{\"event\":{\"type\":"
       "\"conversation.item.input_audio_transcription.completed\","
       "\"item_id\":\"item_2\","
@@ -409,23 +423,49 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voicelab/call-accepted\",\"offset\":50,"
+      "{\"type\":\"voice-agent/call-accepted\",\"offset\":50,"
       "\"payload\":{\"callId\":\"wsdev\",\"bridge\":\"worker\"}}"
       "]],\"scannedThroughOffset\":50,\"state\":null}]]]");
   receive(&fixture, "[\"release\",7,1]");
   assert(fixture.voicelab.call_active);
+
+  /*
+   * The mouth track: a well-formed viseme reaches the callback with the
+   * identity it carried; a shape with an out-of-range viseme id or a missing
+   * position is dropped whole rather than clamped into a confidently wrong
+   * mouth.
+   */
+  receive(
+      &fixture,
+      "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
+      "{\"type\":\"voice-agent/viseme\",\"offset\":51,"
+      "\"payload\":{\"callId\":\"wsdev\",\"answer\":3,"
+      "\"playoutSamples\":6400,\"viseme\":9,\"confidence\":204}},"
+      "{\"type\":\"voice-agent/viseme\",\"offset\":52,"
+      "\"payload\":{\"callId\":\"wsdev\",\"answer\":3,"
+      "\"playoutSamples\":9600,\"viseme\":15,\"confidence\":204}},"
+      "{\"type\":\"voice-agent/viseme\",\"offset\":53,"
+      "\"payload\":{\"callId\":\"wsdev\",\"answer\":3,\"viseme\":2,"
+      "\"confidence\":100}}"
+      "]],\"scannedThroughOffset\":53,\"state\":null}]]]");
+  receive(&fixture, "[\"release\",8,1]");
+  assert(viseme_count == 1);
+  assert(viseme_answer == 3U);
+  assert(viseme_offset_samples == 6400U);
+  assert(viseme_id == 9U);
+  assert(viseme_confidence == 204U);
 
   /* Redelivery of the same offsets (recycle overlap) is deduped; every
    * invocation is push + release, and pending slots must recycle. */
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voicelab/spk-frame\",\"offset\":40,"
+      "{\"type\":\"voice-agent/spk-frame\",\"offset\":40,"
       "\"payload\":{\"seq\":0,\"pcm\":\"QUJDRA\"}},"
-      "{\"type\":\"voicelab/grok-event\",\"offset\":42,"
+      "{\"type\":\"voice-agent/grok-event\",\"offset\":42,"
       "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
       "]],\"scannedThroughOffset\":42,\"state\":null}]]]");
-  receive(&fixture, "[\"release\",8,1]");
+  receive(&fixture, "[\"release\",9,1]");
   assert(fixture.voicelab.spk_frames_received == 1U);
   assert(response_done_count == 1);
   assert(capnweb_session_get_state(&fixture.session) == CAPNWEB_SESSION_OPEN);
@@ -478,7 +518,7 @@ int main(void) {
   assert(strcmp(
       fixture.captured[before],
       "[\"push\",[\"pipeline\",-12,[\"append\"],"
-      "[{\"type\":\"voicelab/mic-frame\",\"ephemeral\":true,"
+      "[{\"type\":\"voice-agent/mic-frame\",\"ephemeral\":true,"
       "\"payload\":{\"callId\":\"wsdev\",\"seq\":7,\"t\":1234,"
       "\"pcm\":\"QUJDRAAB\"}}]]]") == 0);
   assert(strstr(fixture.captured[before + 1U], "[\"release\",") != NULL);
@@ -492,7 +532,7 @@ int main(void) {
   assert(fixture.voicelab.ping_pending);
   assert(strstr(
       fixture.captured[before],
-      "{\"type\":\"voicelab/ping\",\"ephemeral\":true,"
+      "{\"type\":\"voice-agent/ping\",\"ephemeral\":true,"
       "\"payload\":{\"id\":\"wsdev-0\",\"t0\":2000}}") != NULL);
   /* Second probe while pending is refused. */
   assert(
@@ -541,7 +581,7 @@ int main(void) {
     }
     assert(start_message != NULL);
     assert(strstr(start_message, "[\"append\"]") != NULL);
-    assert(strstr(start_message, "\"type\":\"voicelab/call-requested\"") != NULL);
+    assert(strstr(start_message, "\"type\":\"voice-agent/call-requested\"") != NULL);
     assert(strstr(start_message, "\"callId\":\"wsdev\"") != NULL);
     assert(strstr(start_message, "\"colleague\":true") != NULL);
     assert(strstr(start_message, "\"turns\":\"manual\"") != NULL);
@@ -579,7 +619,7 @@ int main(void) {
   /* Raw diagnostics appends share the one-way lane. */
   {
     static const char stats[] =
-        "[{\"type\":\"voicelab/dev-stats\",\"ephemeral\":true,"
+        "[{\"type\":\"voice-agent/dev-stats\",\"ephemeral\":true,"
         "\"payload\":{\"heapFree\":123456}}]";
     assert(
         iterate_kit_voicelab_append_raw(

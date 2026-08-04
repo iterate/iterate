@@ -7,9 +7,9 @@
  *
  * ONE Cap'n Web WebSocket to /api carries everything, exactly like the
  * TypeScript voicelab client: authenticate -> projects.get -> streams.get,
- * then 50 Hz one-way appends of ephemeral voicelab/mic-frame events (real
+ * then 50 Hz one-way appends of ephemeral voice-agent/mic-frame events (real
  * ES8311 microphone), and a live openConnection callback delivering
- * voicelab/spk-frame events (decoded to the speaker) plus grok-events
+ * voice-agent/spk-frame events (decoded to the speaker) plus grok-events
  * (speech_started = barge-in flush, response.done = end of answer,
  * transcript deltas to the screen).
  *
@@ -24,7 +24,7 @@
  * AEC reference — the speaker is never live into an open microphone, and
  * pressing PWR cancels an answer in flight instead of talking over it.
  *
- * Observability is the stream itself (durable voicelab/dev-stats every 5s);
+ * Observability is the stream itself (durable voice-agent/dev-stats every 5s);
  * opening the USB console resets the board.
  *
  * DELIBERATE DEPARTURE from the dual-WebSocket decision in
@@ -35,10 +35,12 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <time.h>
 
 #include "esp_attr.h"
 #include "esp_heap_caps.h"
 #include "esp_log.h"
+#include "esp_netif_sntp.h"
 #include "esp_random.h"
 #include "esp_system.h"
 #include "esp_task_wdt.h"
@@ -53,6 +55,16 @@
 #include "iterate/kit/audio_playout.h"
 #include "iterate/kit/control_recovery.h"
 #include "iterate/kit/speaker_abandon.h"
+
+/*
+ * UTC as YYYY-MM-DD-HHMMSS, or false when the clock has not arrived.
+ *
+ * Declared up here because two very distant places need the same string: the
+ * name of a new conversation, and `health()`. One function so that what the
+ * metrics report is literally what a new path would be called, rather than two
+ * formats that agree until one of them is edited.
+ */
+static bool clock_slug(char *out, size_t capacity);
 
 /*
  * Throw away whatever speaker audio is queued, in the one safe order. Declared
@@ -71,11 +83,13 @@ static uint32_t abandon_speaker_audio(void);
 #include "iterate/kit/voice_device_profile.h"
 #include "iterate/kit/voice_playback_clock.h"
 #include "waveshare_audio.h"
+#include "waveshare_avatar.h"
 #include "waveshare_buttons.h"
 #include "waveshare_conversation_store.h"
 #include "waveshare_display.h"
 #include "waveshare_recorder.h"
 #include "waveshare_tools.h"
+#include "waveshare_touch.h"
 
 static const char tag[] = "iterate-voicelab";
 
@@ -341,6 +355,25 @@ static char stream_path[96] = STREAM_PATH_DEFAULT;
  * pointed at a stream nobody has prepared.
  */
 static char pending_stream_path[96];
+
+/*
+ * EVERY CALL GETS ITS OWN STREAM.
+ *
+ * A conversation IS its stream, so a second call on the same path is a second
+ * conversation wearing the first one's history — the agent reads it, and the
+ * person gets answers about something they said ten minutes ago.
+ *
+ * `stream_used` starts TRUE, deliberately: the path this device boots on is
+ * either the default or one it used before, and both have a past. So the first
+ * call after a boot makes a fresh stream like every other call.
+ *
+ * `awaiting_fresh_stream` is what stops that from looping. Adopting a new
+ * conversation asks for a call, which would ask for a new conversation, which
+ * would ask for a call; the flag says "the stream being prepared is for the
+ * call already asked for" and is cleared the moment it is adopted.
+ */
+static bool stream_used = true;
+static bool awaiting_fresh_stream;
 #define CALL_ID "wsdev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
 
@@ -518,7 +551,7 @@ static const char instructions[] =
     "\n"
     "METRICS: health() takes no arguments and returns ~70 live read-only "
     "numbers as one JSON object. This is the metrics surface — prefer it over "
-    "the voicelab/dev-stats telemetry events, which the device publishes every "
+    "the voice-agent/dev-stats telemetry events, which the device publishes every "
     "5s but which stop exactly when the device stops working. Fields include "
     "heapFree, heapMin, psramFree, dmaLargest (bytes); spkFrames and spkPlayed "
     "(20ms audio frames received vs played — equal means nothing was lost), "
@@ -587,7 +620,7 @@ static const char peer_description[] =
     "format,bytes,chunkSize,chunks} and readScreenshotChunk(i) returns each "
     "chunk as bytes.\","
     "\"readScreenshotChunk\":\"Read chunk i of the last takeScreenshot.\","
-    "\"showImage\":\"showImage(url, seconds) — fetch an image over http(s) and show it full-screen for that many seconds (1-30), then reveal whatever the device is doing. BASELINE JPEG ONLY: the decoder is the chip ROM's TJpgDec, so PNG is refused and so is progressive JPEG (SOF2), which many image CDNs serve by default — re-encode as baseline JPEG. Redirects are followed (up to 3). The image must fit 368x448; larger is refused, never scaled. Resolves true once the picture is up, or rejects saying which: bad-url, unreachable, http-error, too-large, unsupported-format, decode-failed, timeout, no-memory, busy.\",""\"health\":\"health() — THE DEVICE METRICS SURFACE. No arguments; returns one JSON object of ~70 read-only numbers. Cheap, safe to poll. MEMORY (bytes): heapFree, heapMin (lowest since boot), psramFree, dmaLargest. SPEAKER: spkFrames and spkPlayed are 20ms frames received and played — equal means nothing was lost; spkOverflow counts frames dropped because the playout ring was full, spkStarvedMs and spkStarveEvents are THE starvation gate (milliseconds the DAC had an empty ring while the device was meant to be feeding it, measured against an absolute audio-empty deadline; zero on a healthy call). spkSoftDryTicks and spkSoftDryRefills are the SOFTWARE buffer running dry and refilling — absorbed by the 90ms hardware ring, so they are source lateness, not audible gaps. dmaLedgerDeficit is an epoch-relative DMA ledger artefact, diagnostic only — it moves at intentional cuts and is not starvation, spkDiscarded/spkIgnoredDup/spkIgnoredStale frames refused, spkLagMaxMs and spkMarginMinMs/spkMarginMaxMs timing in ms. MICROPHONE: micCaptured, micDropped, micGated. LINK: connectionState, connGeneration (increments on every reconnect), rttMs, pings, pingFailures, bridgeLosses, livenessRestarts, downlinkRecycles. CONVERSATION: sessionGeneration — a change means the conversation restarted rather than continued. STATE: callActive, wantsCall, talking, gateOpen, uptimeMs, resetReason, lowerReadFailures. Prefer pulling this over waiting for telemetry: the device publishes the same object as voicelab/dev-stats every 5s, but that stops exactly when the device stops working, and this does not.\",""\"restart\":\"Reboot the device. Disruptive — drops any call and takes about 20s to come back. For a wedged device, not for routine use.\",""\"setVolume\":\"Speaker volume 0-100.\","
+    "\"showImage\":\"showImage(url, seconds) — fetch an image over http(s) and show it full-screen for that many seconds (1-30), then reveal whatever the device is doing. BASELINE JPEG ONLY: the decoder is the chip ROM's TJpgDec, so PNG is refused and so is progressive JPEG (SOF2), which many image CDNs serve by default — re-encode as baseline JPEG. Redirects are followed (up to 3). The image must fit 368x448; larger is refused, never scaled. Resolves true once the picture is up, or rejects saying which: bad-url, unreachable, http-error, too-large, unsupported-format, decode-failed, timeout, no-memory, busy.\",""\"health\":\"health() — THE DEVICE METRICS SURFACE. No arguments; returns one JSON object of ~70 read-only numbers. Cheap, safe to poll. MEMORY (bytes): heapFree, heapMin (lowest since boot), psramFree, dmaLargest. SPEAKER: spkFrames and spkPlayed are 20ms frames received and played — equal means nothing was lost; spkOverflow counts frames dropped because the playout ring was full, spkStarvedMs and spkStarveEvents are THE starvation gate (milliseconds the DAC had an empty ring while the device was meant to be feeding it, measured against an absolute audio-empty deadline; zero on a healthy call). spkSoftDryTicks and spkSoftDryRefills are the SOFTWARE buffer running dry and refilling — absorbed by the 90ms hardware ring, so they are source lateness, not audible gaps. dmaLedgerDeficit is an epoch-relative DMA ledger artefact, diagnostic only — it moves at intentional cuts and is not starvation, spkDiscarded/spkIgnoredDup/spkIgnoredStale frames refused, spkLagMaxMs and spkMarginMinMs/spkMarginMaxMs timing in ms. MICROPHONE: micCaptured, micDropped, micGated. LINK: connectionState, connGeneration (increments on every reconnect), rttMs, pings, pingFailures, bridgeLosses, livenessRestarts, downlinkRecycles. CONVERSATION: sessionGeneration — a change means the conversation restarted rather than continued. STATE: callActive, wantsCall, talking, gateOpen, uptimeMs, resetReason, lowerReadFailures. Prefer pulling this over waiting for telemetry: the device publishes the same object as voice-agent/dev-stats every 5s, but that stops exactly when the device stops working, and this does not.\",""\"restart\":\"Reboot the device. Disruptive — drops any call and takes about 20s to come back. For a wedged device, not for routine use.\",""\"setVolume\":\"Speaker volume 0-100.\","
     "\"setMicGain\":\"Microphone PGA in dB, 0-48.\","
     "\"recording\":{\"size\":\"Bytes of a recorded file from the current "
     "call: mic.pcm and speaker.pcm are 16kHz mono s16le, call.log is text.\","
@@ -697,6 +730,17 @@ static void on_speaker_pcm(
     runtime.starve_at_ms = 0U;
   }
   (void)xStreamBufferSend(runtime.speaker_buffer, pcm, pcm_length, 0);
+  /* Counted only for frames actually admitted: the viseme ledger must see
+   * exactly the samples the analyzer will eventually be fed. */
+  waveshare_avatar_note_accepted(identity->answer, pcm_length / 2U);
+}
+
+/* Scheduled mouth shapes ride the same lane as the audio they describe. */
+static void on_viseme(
+    void *context, uint32_t answer, uint32_t offset_samples,
+    uint8_t viseme, uint8_t confidence) {
+  (void)context;
+  waveshare_avatar_note_viseme(answer, offset_samples, viseme, confidence);
 }
 
 /*
@@ -746,6 +790,11 @@ static uint32_t abandon_speaker_audio(void) {
     on_abandon_set_discard,
     on_abandon_set_reprime,
   };
+  /* The face was animating this audio; it must forget what nobody will hear. */
+  waveshare_avatar_note_abandoned();
+  /* And the mouth track scheduled against it dies with it. All abandon
+   * sites run on the app task, which is what the viseme ledger requires. */
+  waveshare_avatar_viseme_reset();
   return iterate_kit_speaker_abandon(&hooks, NULL);
 }
 
@@ -828,6 +877,8 @@ static void on_control(
     runtime.answer_declared_done = false;
     ESP_LOGI(tag, "new call accepted: playout reset for a fresh sender");
     waveshare_display_set_call_active(true);
+    /* The viseme lane owns the mouth for the duration of the call. */
+    waveshare_avatar_set_call_active(true);
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
     waveshare_display_set_status("hold the upper button to talk");
   } else if (control == ITERATE_KIT_VOICELAB_CONTROL_CALL_ENDED) {
@@ -865,18 +916,25 @@ static void on_control(
      * device that already agrees. Anything else is a call to reopen.
      */
     waveshare_display_set_call_active(false);
+    /* Envelope mouth returns for whatever local life the face has next. */
+    waveshare_avatar_set_call_active(false);
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
     waveshare_display_set_status(
         waveshare_display_call_requested() ? "reconnecting" : "call ended");
   }
 }
 
-/* Transcript deltas land on screen as they arrive; the assistant's open line
- * is replaced until it is final. */
+/*
+ * Transcript deltas go to the recorder, not to the screen.
+ *
+ * They used to be drawn under the face. The face is now the whole screen, so
+ * the completed lines land on the SD card — where a whole conversation can be
+ * read back afterwards, rather than the last two exchanges of it being visible
+ * for as long as they happened to fit.
+ */
 static void on_transcript(
     void *context, bool from_user, const char *text, bool final) {
   (void)context;
-  waveshare_display_push_transcript(from_user ? "you" : "iterate", text, final);
   if (final) {
     waveshare_recorder_log("%s %s", from_user ? "you:" : "iterate:", text);
   }
@@ -1195,6 +1253,13 @@ static void playback_task(void *argument) {
     if (waveshare_audio_write(chunk, received / 2U)) {
       ++runtime.speaker_frames_played;
       waveshare_recorder_write_speaker(chunk, received);
+      /*
+       * The mouth, from audio the DAC has accepted rather than audio that
+       * arrived. This is the only place on the device where those two are the
+       * same thing, which is why the tap is here and not on the receive path:
+       * see waveshare_avatar.h for what the delay line does with it.
+       */
+      waveshare_avatar_observe_playout(chunk, received / 2U);
       /*
        * HOW FAR BEHIND REALTIME THIS ANSWER HAS FALLEN.
        *
@@ -1548,6 +1613,18 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkWaitPriming", runtime.speaker_waits_priming},
     {"spkAnswerDrains", runtime.speaker_waits_dry},
     {"bargeIns", runtime.barge_in_flushes},
+    /*
+     * THE FACE, AND THE ONE NUMBER THAT SAYS IT IS ALIVE.
+     *
+     * `faceFrames` counts completed analysis windows — 100 a second while audio
+     * plays. A mouth that has stopped moving is either this number standing
+     * still or the audio never arriving, and nothing on the screen tells those
+     * apart. The frozen-pose bug was diagnosed from source because there was no
+     * counter to look at; there is one now.
+     */
+    {"faceFrames", waveshare_avatar_frames_analysed()},
+    {"faceDropped", waveshare_avatar_dropped_samples()},
+    {"faceRenderFails", waveshare_avatar_render_failures()},
     {"batches", runtime.voicelab.batches_on_connection},
     {"connGeneration", runtime.voicelab.connection_generation},
     {"rttMs", runtime.voicelab.last_rtt_ms},
@@ -1594,16 +1671,29 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"lastAppStatus", (uint32_t)metrics.last_application_capnweb_status},
   };
 
+  /*
+   * What the clock says, in exactly the form a new conversation would be named.
+   *
+   * Empty until the time server answers, which is the useful distinction: a
+   * device with no clock names conversations from the RNG, and this is the only
+   * way to tell that from outside. A READ, so health_json stays pure — see the
+   * comment on this function about what recording anything here once cost.
+   */
+  char clock[20];
+  if (!clock_slug(clock, sizeof(clock))) clock[0] = '\0';
+
   /* The strings and the one 64-bit field, which do not fit the pair table. */
   written = snprintf(
       out,
       capacity,
       "{\"transport\":\"%s\",\"voicelab\":\"%s\",\"voicelabFailure\":\"%s\","
+      "\"clock\":\"%s\","
       "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,\"talking\":%s,"
       "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
       iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
+      clock,
       runtime.voicelab.call_active ? "true" : "false",
       runtime.voicelab.call_pending ? "true" : "false",
       waveshare_display_call_requested() ? "true" : "false",
@@ -1642,7 +1732,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
 
 static void append_stats(uint64_t now) {
   static const char prefix[] =
-      "[{\"type\":\"voicelab/dev-stats\",\"ephemeral\":true,\"payload\":";
+      "[{\"type\":\"voice-agent/dev-stats\",\"ephemeral\":true,\"payload\":";
   const size_t prefix_length = sizeof(prefix) - 1U;
   size_t body;
   (void)now;
@@ -1684,25 +1774,74 @@ static const char *environment_from_base_url(const char *url) {
 }
 
 /*
+ * What the menu's items depend on: whether there is a call to hang up.
+ *
+ * A call REQUESTED counts, not only one the bridge has accepted. Somebody who
+ * has changed their mind two seconds into dialling wants the same item as
+ * somebody mid-conversation, and offering it only once the far end answers
+ * would make the menu useless for exactly the seconds it takes to connect.
+ */
+enum {
+  /* "face: dot-matrix-oracle" and the longest slug, with room to spare. */
+  MENU_ITEM_LABEL_CHARS = 40,
+};
+
+static struct iterate_kit_menu_context menu_context(void) {
+  struct iterate_kit_menu_context context;
+  memset(&context, 0, sizeof(context));
+  context.call_active =
+      runtime.voicelab.call_active || waveshare_display_call_requested();
+  context.new_conversation_available = true;
+  context.next_sprite_available = true;
+  context.reboot_available = true;
+  return context;
+}
+
+/*
  * Paint the menu, plus the facts a person needs in order to know which device
  * and which conversation they are looking at.
  */
 static void show_menu(void) {
+  const struct iterate_kit_menu_context context = menu_context();
   struct waveshare_menu_view view;
   uint8_t index;
 
   if (!runtime.menu.open) {
-    waveshare_display_set_state(WAVESHARE_UI_IDLE);
+    /*
+     * Back to whatever the call is doing. LISTENING rather than IDLE while one
+     * is up: closing the menu during a call must not tell the screen the call
+     * has ended, which is what the old unconditional IDLE did when the menu
+     * could only exist between calls.
+     */
+    waveshare_display_set_state(
+        context.call_active ? WAVESHARE_UI_LISTENING : WAVESHARE_UI_IDLE);
     return;
   }
   memset(&view, 0, sizeof(view));
-  view.item_count = (uint8_t)ITERATE_KIT_MENU_ITEM_COUNT;
+  view.item_count = iterate_kit_menu_item_count(context);
   if (view.item_count > (uint8_t)WAVESHARE_MENU_ITEMS_MAX) {
     view.item_count = (uint8_t)WAVESHARE_MENU_ITEMS_MAX;
   }
   for (index = 0U; index < view.item_count; ++index) {
-    view.items[index] =
-        iterate_kit_menu_item_name((enum iterate_kit_menu_item)index);
+    const enum iterate_kit_menu_item item =
+        iterate_kit_menu_item_at(context, index);
+    if (item == ITERATE_KIT_MENU_NEXT_SPRITE) {
+      /*
+       * The face item says which face you HAVE, not what pressing does.
+       *
+       * The menu covers the face while it is open, so cycling with the item
+       * labelled "next face" would be choosing blind. Naming the current one
+       * turns it into a list you read: press, read the new name, press again.
+       * Static because the view borrows every string it is given.
+       */
+      static char face_label[MENU_ITEM_LABEL_CHARS];
+      (void)snprintf(
+          face_label, sizeof(face_label), "face: %s",
+          waveshare_avatar_slug());
+      view.items[index] = face_label;
+      continue;
+    }
+    view.items[index] = iterate_kit_menu_item_name(item);
   }
   view.stream_path = stream_path;
   view.project = runtime.configuration.project_id;
@@ -1714,19 +1853,78 @@ static void show_menu(void) {
 }
 
 /*
+ * A CLOCK, KEPT ONLY SO A CONVERSATION CAN BE NAMED AFTER WHEN IT HAPPENED.
+ *
+ * Nothing else on this device needs the time: every deadline it has is measured
+ * with esp_timer, which counts from boot and cannot be wrong. This exists
+ * because a person scrolling a list of streams has to be able to tell which one
+ * was this morning's, and `dev-6f0b6ae2562613aa` cannot tell them.
+ *
+ * Started once, and never waited for. A device whose clock has not arrived is
+ * fully usable — it just names conversations the old way — so blocking startup
+ * on a UDP round trip to somebody else's server would trade the whole device
+ * for a nicety.
+ */
+static void start_clock_once(void) {
+  static bool started;
+  esp_sntp_config_t config = ESP_NETIF_SNTP_DEFAULT_CONFIG("pool.ntp.org");
+
+  if (started) return;
+  started = true;
+  if (esp_netif_sntp_init(&config) != ESP_OK) {
+    ESP_LOGW(tag, "no time source; new conversations keep their random names");
+    return;
+  }
+  ESP_LOGI(tag, "asked pool.ntp.org for the time");
+}
+
+enum {
+  /*
+   * 2023-11-14. Any timestamp before this is the system clock's power-on value
+   * rather than the real time, and a conversation called "1970-01-01-000012"
+   * is worse than one called after a random number: it looks like a date.
+   */
+  CLOCK_TRUSTWORTHY_AFTER = 1700000000,
+};
+
+/** UTC, as YYYY-MM-DD-HHMMSS. False when the clock has not arrived yet. */
+static bool clock_slug(char *out, size_t capacity) {
+  const time_t seconds = time(NULL);
+  struct tm parts;
+
+  if (seconds < (time_t)CLOCK_TRUSTWORTHY_AFTER) return false;
+  if (gmtime_r(&seconds, &parts) == NULL) return false;
+  return strftime(out, capacity, "%Y-%m-%d-%H%M%S", &parts) > 0U;
+}
+
+/*
  * A conversation nobody has had before.
  *
  * The path IS the conversation's identity, so a new path is the whole of
  * "start fresh" — there is no history to clear, because a stream nobody has
- * written to has none. Named from the hardware RNG rather than a clock: the
- * device may not have a trustworthy one this early, and two devices choosing
- * the same path would drop two people into one conversation.
+ * written to has none.
+ *
+ * NAMED AFTER THE SECOND IT WAS STARTED, with nothing random appended. The
+ * name used to be two words from the hardware RNG, which made collisions
+ * impossible but also made every conversation in a list indistinguishable from
+ * every other. Seconds are unique per device by construction — a device cannot
+ * start two conversations in the same second — and two DEVICES doing it in the
+ * same second would have to be in the same project and pressed within that
+ * second of each other. That is the trade: a readable name everywhere, against
+ * a collision nobody in this lab will ever see. The RNG name remains for the
+ * case that genuinely cannot be named after a time: a clock that has not
+ * arrived.
  */
 static void begin_new_conversation(void) {
   char candidate[sizeof(stream_path)];
+  char when[20];
 
-  (void)snprintf(candidate, sizeof(candidate), "/agents/voice/dev-%08lx%08lx",
-                 (unsigned long)esp_random(), (unsigned long)esp_random());
+  if (clock_slug(when, sizeof(when))) {
+    (void)snprintf(candidate, sizeof(candidate), "/agents/voice/%s", when);
+  } else {
+    (void)snprintf(candidate, sizeof(candidate), "/agents/voice/dev-%08lx%08lx",
+                   (unsigned long)esp_random(), (unsigned long)esp_random());
+  }
   if (iterate_kit_voicelab_setup_conversation(&runtime.voicelab, candidate) !=
       CAPNWEB_OK) {
     /* Leave the menu screen either way: it has already closed underneath. */
@@ -1750,12 +1948,45 @@ static void take_menu_action(enum iterate_kit_menu_action action) {
     esp_restart();
     return;
   }
+  if (action == ITERATE_KIT_MENU_ACTION_START_CALL) {
+    ESP_LOGI(tag, "start call chosen from the menu");
+    waveshare_display_request_call(true);
+    return;
+  }
+  if (action == ITERATE_KIT_MENU_ACTION_HANG_UP) {
+    ESP_LOGI(tag, "hang up chosen from the menu");
+    waveshare_display_request_call(false);
+    return;
+  }
+  if (action == ITERATE_KIT_MENU_ACTION_NEXT_SPRITE) {
+    waveshare_avatar_request_next();
+    /* The menu stays, cursor where it was, so the next press is the next face.
+     * The face itself is hidden behind the menu while you choose — closing it is
+     * how you see what you picked. */
+    iterate_kit_menu_reopen_on(
+        &runtime.menu, menu_context(), ITERATE_KIT_MENU_NEXT_SPRITE);
+    show_menu();
+    return;
+  }
   if (action == ITERATE_KIT_MENU_ACTION_NEW) {
+    /*
+     * A new path while a call is up ends that call first. The device can only
+     * be mounted on one stream, and setting up a second one under a live
+     * conversation would leave audio flowing into a stream nobody is reading.
+     */
+    if (menu_context().call_active) {
+      ESP_LOGI(tag, "new conversation chosen during a call: ending it first");
+      waveshare_display_request_call(false);
+    }
     begin_new_conversation();
     return;
   }
-  /* CONTINUE: this stream is already mounted, so it is simply a call. */
-  waveshare_display_request_call(true);
+  /*
+   * CLOSE, and nothing else. It is the item an accidental press lands on, and
+   * doing anything here — including the call this used to start — would make
+   * the safe option the dangerous one.
+   */
+  show_menu();
 }
 
 void app_main(void) {
@@ -1826,6 +2057,7 @@ void app_main(void) {
     return;
   }
   (void)waveshare_buttons_init();
+  (void)waveshare_touch_init();
   (void)waveshare_recorder_init();
   if (!waveshare_tools_start_image_worker()) {
     /* Not fatal: everything except showImage still works, and showImage says so. */
@@ -1914,7 +2146,7 @@ void app_main(void) {
       recorder_task, "vl-recorder", 4096, NULL, 1, NULL, 0);
   ESP_LOGI(
       tag,
-      "voicelab voice client ready: static_bytes=%u stream=/voicelab/dev-waveshare",
+      "voicelab voice client ready: static_bytes=%u stream=/voice-agent/dev-waveshare",
       (unsigned int)sizeof(runtime));
 
   uint64_t next_stats_at = 0;
@@ -1944,6 +2176,36 @@ void app_main(void) {
      */
     (void)iterate_kit_peer_poll(&runtime.peer, now_ms(NULL));
     /*
+     * WHETHER THIS DEVICE CAN DO ANYTHING, published every time it changes.
+     *
+     * The same gate every producer sits behind and that `health()` reports as
+     * `gateOpen`: transport ready, stream mounted, generations agreed. The
+     * screen needs it continuously rather than at one transition, because the UI
+     * state it used to be folded into is written from nine places and any of
+     * them would erase it — which is exactly how the board came to read "ready"
+     * while the server was refusing it every three seconds.
+     *
+     * On change only: publishing marks the snapshot dirty, and doing that on
+     * every pass would repaint the whole screen at the app loop's rate.
+     */
+    {
+      static bool published_link_ready = true;
+      const bool ready =
+          runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
+          runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+          runtime.voicelab_generation == runtime.connection.generation;
+      if (ready != published_link_ready) {
+        published_link_ready = ready;
+        waveshare_display_set_link_ready(ready);
+      }
+    }
+    /*
+     * Let the face's delay line drain on this task, which is the only one that
+     * writes to the analyzer. Without it the last 90ms of every answer would
+     * never be animated and the mouth would stop open — see waveshare_avatar.h.
+     */
+    waveshare_avatar_tick();
+    /*
      * WHICH BUTTON MEANS WHAT, AND WHY IT IS THIS WAY ROUND.
      *
      * The lower button is PWR, wired into the board's power path: hold it and
@@ -1953,25 +2215,51 @@ void app_main(void) {
      * held gesture belongs to the upper button, and the lower one is only
      * ever tapped.
      *
-     * LOWER, tap:  no call -> move the menu cursor;  call up -> hang up.
-     * UPPER, tap:  menu open -> take the option;     otherwise -> call.
+     * LOWER, tap:  open the menu, or move its cursor. ALWAYS — including
+     *              during a call, where hanging up is now an item rather than
+     *              this button's second meaning.
+     * UPPER, tap:  menu open -> take the option;  menu closed -> call.
      * UPPER, held: the microphone. Read further down, where the turn is.
      */
-    if (waveshare_buttons_take_lower_press()) {
-      if (runtime.voicelab.call_active || waveshare_display_call_requested()) {
-        ESP_LOGI(tag, "lower button: ending the call");
-        waveshare_display_request_call(false);
+    /*
+     * A TAP ANYWHERE STARTS OR ENDS THE CALL.
+     *
+     * The third control, and the one a person reaches for first: this is a touch
+     * screen, and a screen showing a face that cannot be tapped reads as broken.
+     * It toggles rather than only starting, because the same gesture undoing
+     * itself is the whole of what makes it learnable without a label.
+     *
+     * Read here rather than by LVGL — see waveshare_touch.h for what that cost.
+     * A tap while the menu is open is deliberately NOT a call: the menu has the
+     * screen, and the two buttons are its verbs.
+     */
+    waveshare_touch_poll();
+    if (waveshare_touch_take_tap()) {
+      if (runtime.menu.open) {
+        ESP_LOGD(tag, "tap ignored: the menu has the screen");
       } else {
-        iterate_kit_menu_cycle(&runtime.menu);
-        ESP_LOGI(
-            tag, "menu: %s",
-            iterate_kit_menu_item_name(
-                (enum iterate_kit_menu_item)runtime.menu.selected));
-        show_menu();
+        const bool wanted = menu_context().call_active;
+        ESP_LOGI(tag, "tap: %s the call", wanted ? "ending" : "starting");
+        waveshare_display_request_call(!wanted);
       }
     }
+    if (waveshare_buttons_take_lower_press()) {
+      const struct iterate_kit_menu_context context = menu_context();
+      iterate_kit_menu_cycle(&runtime.menu, context);
+      ESP_LOGI(
+          tag, "menu: %s",
+          iterate_kit_menu_item_name(
+              iterate_kit_menu_item_at(context, runtime.menu.selected)));
+      show_menu();
+    }
     if (waveshare_buttons_take_upper_press()) {
-      if (runtime.voicelab.call_active || waveshare_display_call_requested()) {
+      const struct iterate_kit_menu_context context = menu_context();
+      const enum iterate_kit_menu_action action =
+          iterate_kit_menu_activate(&runtime.menu, context);
+      if (action != ITERATE_KIT_MENU_ACTION_NONE) {
+        ESP_LOGI(tag, "menu: chose option %d", (int)action);
+        take_menu_action(action);
+      } else if (context.call_active) {
         /*
          * Drained on purpose. Every push-to-talk press puts a press here, and
          * one left waiting would fire the moment the call ended — opening the
@@ -1979,21 +2267,33 @@ void app_main(void) {
          */
         ESP_LOGD(tag, "upper press while a call is up: that press meant talk");
       } else {
-        const enum iterate_kit_menu_action action =
-            iterate_kit_menu_activate(&runtime.menu);
-        if (action == ITERATE_KIT_MENU_ACTION_NONE) {
-          ESP_LOGI(tag, "upper button: calling");
-          waveshare_display_request_call(true);
-        } else {
-          ESP_LOGI(tag, "menu: chose option %d", (int)action);
-          take_menu_action(action);
-        }
+        ESP_LOGI(tag, "upper button: calling");
+        waveshare_display_request_call(true);
       }
     }
-    /* A call takes the buttons back; the menu has no business being open. */
-    if (runtime.voicelab.call_active && runtime.menu.open) {
-      iterate_kit_menu_close(&runtime.menu);
-      waveshare_display_set_state(WAVESHARE_UI_LISTENING);
+    /*
+     * A call starting or ending moves "hang up" in or out of the item list. The
+     * menu stays open across that — it is the same menu — so the cursor has to
+     * be moved to wherever the item it was pointing at lives now. Without this
+     * a call ending under an open menu slides the cursor from "new
+     * conversation" onto "reboot", one item along at the same index.
+     */
+    {
+      static struct iterate_kit_menu_context shown_menu_context;
+      static bool menu_context_known;
+      const struct iterate_kit_menu_context context = menu_context();
+
+      if (!menu_context_known) {
+        menu_context_known = true;
+        shown_menu_context = context;
+      } else if (context.call_active != shown_menu_context.call_active) {
+        if (runtime.menu.open) {
+          iterate_kit_menu_recontext(
+              &runtime.menu, shown_menu_context, context);
+          show_menu();
+        }
+        shown_menu_context = context;
+      }
     }
     {
       static bool talk_logged;
@@ -2032,8 +2332,21 @@ void app_main(void) {
             metrics.control_outbox_discarded,
             metrics.last_application_capnweb_status);
       }
+      if (runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
+        /* The socket is up, so DNS and UDP work: a good moment to ask what
+         * time it is. Once, and never blocking on the answer. */
+        start_clock_once();
+      }
       if (runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_FAILED) {
         struct iterate_kit_esp_idf_itx_transport_metrics metrics;
+        /*
+         * The reason, on the screen. Whether the screen SAYS offline is decided
+         * by the published link flag rather than here — nine other places set
+         * the UI state, and a one-shot "offline" survived only until the next of
+         * them ran.
+         */
+        waveshare_display_set_status(
+            iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
         iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &metrics);
         ESP_LOGE(
             tag,
@@ -2220,7 +2533,12 @@ void app_main(void) {
         if (!waveshare_conversation_store(stream_path)) {
           ESP_LOGW(tag, "could not remember %s; it lasts until reboot", stream_path);
         }
-        waveshare_display_set_status(stream_path);
+        /* NOT the path: the menu draws that as its headline, and printing it
+         * again here put the same string on screen twice. */
+        waveshare_display_set_status("new conversation ready");
+        /* Fresh, and the call that was waiting for it may now happen here. */
+        stream_used = false;
+        awaiting_fresh_stream = false;
         /* Remount: the mount is bound to the path it was made with. */
         runtime.voicelab_generation = 0U;
         waveshare_display_request_call(true);
@@ -2228,6 +2546,10 @@ void app_main(void) {
       if (runtime.voicelab.setup_failed) {
         runtime.voicelab.setup_failed = false;
         ESP_LOGE(tag, "could not prepare %s", pending_stream_path);
+        /* The call it was for cannot happen; drop the intent rather than
+         * leaving the device retrying a stream that was never made. */
+        awaiting_fresh_stream = false;
+        waveshare_display_request_call(false);
         waveshare_display_set_state(WAVESHARE_UI_IDLE);
         waveshare_display_set_status("could not start a new conversation");
       }
@@ -2244,18 +2566,24 @@ void app_main(void) {
     if (runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
         runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY &&
         runtime.voicelab_generation != runtime.connection.generation) {
+      /*
+       * Designated on purpose: this init used to be positional, and the
+       * voicelab options struct grows fields — a silent mis-binding here is
+       * exactly the hazard the header warns about.
+       */
       const struct iterate_kit_voicelab_options options = {
-        &runtime.connection.session,
-        runtime.configuration.project_id,
-        runtime.configuration.project_api_key,
-        stream_path,
-        CALL_ID,
-        now_ms,
-        NULL,
-        on_speaker_pcm,
-        on_control,
-        on_transcript,
-        NULL,
+        .session = &runtime.connection.session,
+        .project_id = runtime.configuration.project_id,
+        .project_api_key = runtime.configuration.project_api_key,
+        .stream_path = stream_path,
+        .call_id = CALL_ID,
+        .now_ms = now_ms,
+        .clock_context = NULL,
+        .on_speaker = on_speaker_pcm,
+        .on_control = on_control,
+        .on_transcript = on_transcript,
+        .on_viseme = on_viseme,
+        .downlink_context = NULL,
       };
       const enum capnweb_status started =
           iterate_kit_voicelab_start(&runtime.voicelab, &options);
@@ -2308,7 +2636,13 @@ void app_main(void) {
       runtime.last_voicelab_state = runtime.voicelab.state;
       if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) {
         waveshare_display_set_state(WAVESHARE_UI_IDLE);
-        waveshare_display_set_status(stream_path);
+        /*
+         * NOTHING. The menu's headline is the path and its context line already
+         * carries the connection state, so "ready" here was the same word twice
+         * on adjacent rows. The status line is for transients — "reconnecting",
+         * "call ended" — and being empty is the honest steady state.
+         */
+        waveshare_display_set_status("");
       } else if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED) {
         /* A dead session takes the call with it; the button starts over. */
         waveshare_display_request_call(false);
@@ -2479,11 +2813,24 @@ void app_main(void) {
       if (wants_call && !runtime.voicelab.call_active &&
           !runtime.voicelab.call_pending && outbox_free >= 3U &&
           now >= next_call_attempt_at) {
-        call_pending_since = now;
-        next_call_attempt_at = now + 8000U; /* a start takes ~1-3s; don't spam */
-        if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==
-            CAPNWEB_OK) {
-          waveshare_display_set_status("starting call");
+        if (stream_used && !awaiting_fresh_stream) {
+          /*
+           * This stream has a past, so the call does not happen here. Preparing
+           * one costs a couple of seconds before the call starts; carrying the
+           * last conversation into this one costs the person an answer that
+           * makes no sense.
+           */
+          awaiting_fresh_stream = true;
+          next_call_attempt_at = now + 8000U;
+          ESP_LOGI(tag, "call asked for: preparing a fresh conversation first");
+          begin_new_conversation();
+        } else if (!awaiting_fresh_stream) {
+          call_pending_since = now;
+          next_call_attempt_at = now + 8000U; /* a start takes ~1-3s; don't spam */
+          if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==
+              CAPNWEB_OK) {
+            waveshare_display_set_status("starting call");
+          }
         }
       }
       if (!wants_call && runtime.voicelab.call_active && outbox_free >= 3U) {
@@ -2527,7 +2874,18 @@ void app_main(void) {
       if (runtime.voicelab.call_active != call_active_shown) {
         call_active_shown = runtime.voicelab.call_active;
         waveshare_display_set_call_active(call_active_shown);
+        /*
+         * Belt to on_control's braces: a call forgotten for lost liveness
+         * never sends CALL_ENDED, and the envelope mouth must not stay gated
+         * on a call that no longer exists. Idempotent when on_control already
+         * flipped it.
+         */
+        waveshare_avatar_set_call_active(call_active_shown);
         if (call_active_shown) {
+          /* This stream has now hosted a conversation, so the next call will
+           * be made somewhere else. Marked on the ACCEPTED edge rather than on
+           * the request, because a call that never connected left no history. */
+          stream_used = true;
           /*
            * Display only. The playout reset for a new call lives in on_control's
            * CALL_ACCEPTED branch, on the receive path that classifies frames —
@@ -2581,6 +2939,13 @@ void app_main(void) {
         runtime.frame_sequence = 0U;
         (void)iterate_kit_voicelab_mark_turn(
             &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_START);
+        /*
+         * The face attends and shuts its mouth. Told rather than inferred from
+         * silence: the audio it was animating has just been discarded, and
+         * without this the last shape of the interrupted word would sit on the
+         * face for the whole time the person is speaking.
+         */
+        waveshare_avatar_set_listening(true);
         waveshare_display_set_state(WAVESHARE_UI_LISTENING);
         waveshare_display_set_status("listening — release to send");
       }
@@ -2618,6 +2983,8 @@ void app_main(void) {
             "turn commit%s", timed_out ? " (uplink behind; tail dropped)" : "");
         (void)iterate_kit_voicelab_mark_turn(
             &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_COMMIT);
+        /* Done listening: the face waits for the answer rather than for us. */
+        waveshare_avatar_set_listening(false);
         waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
         waveshare_display_set_status("thinking");
       }

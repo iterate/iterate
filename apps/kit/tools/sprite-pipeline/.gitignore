@@ -1,0 +1,4 @@
+# Everything under characters/*/generated/ is derived from avatar.json +
+# source PNGs; `avatar_pipeline.py build`/`publish` recreate it.
+characters/*/generated/
+__pycache__/

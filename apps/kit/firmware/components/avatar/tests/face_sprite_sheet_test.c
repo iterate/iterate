@@ -616,6 +616,94 @@ static void test_arbitrary_surface(void)
     assert(!face_sprite_render_to(&player, &key, 0U, &surface));
 }
 
+/*
+ * Render the same key at the same clocks through two validated players and
+ * count the clocks whose frames differ. The stride is twice the palette-cycle
+ * period, so the cycled overlay pixel is identical inside every compared pair
+ * and any divergence belongs to the players' atlas flags alone. One default
+ * blink window (64000 samples) also spans three default gaze windows.
+ */
+static uint32_t count_flag_divergence(
+    const face_sprite_player_t *flagged,
+    const face_sprite_player_t *plain)
+{
+    face_render_key_t key = neutral_key();
+    static uint16_t flagged_pixels[FACE_RENDER_PIXEL_COUNT];
+    static uint16_t plain_pixels[FACE_RENDER_PIXEL_COUNT];
+    uint32_t differing = 0U;
+    for (uint32_t clock = 0U; clock < 64000U; clock += 200U) {
+        assert(face_sprite_render_snapshot(
+            flagged, &key, clock, flagged_pixels,
+            FACE_RENDER_PIXEL_COUNT));
+        assert(face_sprite_render_snapshot(
+            plain, &key, clock, plain_pixels,
+            FACE_RENDER_PIXEL_COUNT));
+        if (memcmp(flagged_pixels, plain_pixels,
+                   sizeof(uint16_t) * FACE_RENDER_PIXEL_COUNT) != 0) {
+            ++differing;
+        }
+    }
+    return differing;
+}
+
+/*
+ * The idle-motion engines are gated on atlas flags, but a flag is not motion:
+ * automatic_blink draws only through a bank's lid cells and compute_saccade
+ * only through its pupil cell. Both directions are proven here. With authored
+ * lid/pupil layers (this synthetic atlas has them), enabling a flag changes
+ * rendered pixels somewhere inside one blink/gaze window. With the layers
+ * emptied to the exact shape today's pipeline-published atlases have — eyes
+ * baked into each bank's base cell, lid cell_count zero, pupils CELL_NONE —
+ * the same flags change nothing. That inertness is why the sprite pipeline
+ * only emits AUTO_BLINK for characters that authored a blink rig, and never
+ * emits IDLE_SACCADES; the doze face's shut eyes come from the sleepy
+ * expression bank, not from this blink machinery.
+ */
+static void test_idle_motion_needs_layers_not_just_flags(void)
+{
+    face_sprite_player_t plain;
+    face_sprite_player_t blinking;
+    face_sprite_player_t glancing;
+    assert(face_sprite_player_init(&plain, &TEST_ATLAS));
+
+    face_sprite_atlas_t blink_atlas = TEST_ATLAS;
+    blink_atlas.flags = FACE_SPRITE_ATLAS_AUTO_BLINK;
+    assert(face_sprite_player_init(&blinking, &blink_atlas));
+    /* Authored lid cells make the automatic blink visible motion. */
+    assert(count_flag_divergence(&blinking, &plain) > 0U);
+
+    face_sprite_atlas_t saccade_atlas = TEST_ATLAS;
+    saccade_atlas.flags = FACE_SPRITE_ATLAS_IDLE_SACCADES;
+    assert(face_sprite_player_init(&glancing, &saccade_atlas));
+    /* Authored pupil cells make idle saccades visible motion. */
+    assert(count_flag_divergence(&glancing, &plain) > 0U);
+
+    face_sprite_bank_t baked_banks[
+        sizeof(TEST_BANKS) / sizeof(TEST_BANKS[0])];
+    memcpy(baked_banks, TEST_BANKS, sizeof(baked_banks));
+    for (size_t bank = 0U;
+         bank < sizeof(baked_banks) / sizeof(baked_banks[0]);
+         ++bank) {
+        baked_banks[bank].eye_left.cell_count = 0U;
+        baked_banks[bank].eye_right.cell_count = 0U;
+        baked_banks[bank].pupil_left.cell = FACE_SPRITE_CELL_NONE;
+        baked_banks[bank].pupil_right.cell = FACE_SPRITE_CELL_NONE;
+    }
+    face_sprite_atlas_t baked_plain = TEST_ATLAS;
+    baked_plain.banks = baked_banks;
+    face_sprite_atlas_t baked_flagged = baked_plain;
+    baked_flagged.flags = FACE_SPRITE_ATLAS_AUTO_BLINK |
+        FACE_SPRITE_ATLAS_IDLE_SACCADES;
+    face_sprite_player_t baked_plain_player;
+    face_sprite_player_t baked_flagged_player;
+    assert(face_sprite_player_init(&baked_plain_player, &baked_plain));
+    assert(face_sprite_player_init(
+        &baked_flagged_player, &baked_flagged));
+    /* Baked-in eyes: both engines run, neither can draw anything. */
+    assert(count_flag_divergence(
+        &baked_flagged_player, &baked_plain_player) == 0U);
+}
+
 int main(void)
 {
     assert(sizeof(face_render_key_t) == FACE_RENDER_KEY_BYTES);
@@ -629,6 +717,7 @@ int main(void)
     test_determinism_and_palette_cycle();
     test_pure_snapshot_path();
     test_arbitrary_surface();
+    test_idle_motion_needs_layers_not_just_flags();
 
     printf(
         "face_sprite_sheet_test: PASS "

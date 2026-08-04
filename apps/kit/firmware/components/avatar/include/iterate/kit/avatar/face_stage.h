@@ -106,3 +106,13 @@ bool face_stage_cue_apply(
     const face_stage_cue_t *cue,
     uint32_t sample_clock,
     face_render_key_t *render_key);
+
+/*
+ * Select one authored expression as a stable state rather than a timeline.
+ * Lifecycle UI such as dozing must not duplicate the selector coordinates
+ * emitted by the sprite pipeline: those coordinates are the contract that
+ * maps an emotion to each atlas's AI-authored, quantized expression bank.
+ */
+bool face_stage_apply_held_expression(
+    face_expression_t expression,
+    face_render_key_t *render_key);

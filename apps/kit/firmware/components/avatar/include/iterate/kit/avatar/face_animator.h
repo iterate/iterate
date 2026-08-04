@@ -29,6 +29,8 @@ typedef struct {
     int8_t last_sign;
     uint8_t blink_phase;
     bool listening_lock;
+    bool external_mouth;
+    uint8_t viseme_windows_left;
     face_animator_state_t state;
 } face_animator_t;
 
@@ -44,6 +46,22 @@ void face_animator_push_pcm(face_animator_t *animator,
                             size_t sample_count);
 void face_animator_push_event(
     face_animator_t *animator, const face_stream_event_t *event);
+/**
+ * Hands the mouth to an external viseme track. The envelope keeps producing
+ * level, activity, blink and gaze, but stops writing the five mouth controls;
+ * enabling zeroes them once so the mouth does not freeze mid-envelope shape.
+ */
+void face_animator_set_external_mouth(face_animator_t *animator, bool enabled);
+/**
+ * Applies one viseme from the external track, valid until the next call or
+ * until 300 ms of playout passes with no replacement — the expiry is the
+ * safety net that returns a stalled stream's mouth to rest instead of
+ * freezing it on the last shape the worker happened to send.
+ */
+void face_animator_apply_viseme(face_animator_t *animator,
+                                uint8_t viseme, uint8_t confidence);
+/** Drops the external viseme immediately. For barge-in purge and call end. */
+void face_animator_clear_viseme(face_animator_t *animator);
 /**
  * Attempts one bounded coherent snapshot.
  *

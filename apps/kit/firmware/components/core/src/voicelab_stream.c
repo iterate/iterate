@@ -351,6 +351,46 @@ static void handle_spk_frame(
   }
 }
 
+static void handle_viseme(
+    struct iterate_kit_voicelab *voicelab,
+    const struct capnweb_value *payload) {
+  struct capnweb_value field;
+  int64_t answer = 0;
+  int64_t offset_samples = -1;
+  int64_t viseme = -1;
+  int64_t confidence = -1;
+  if (voicelab->options.on_viseme == NULL) {
+    return;
+  }
+  if (capnweb_value_object_get(payload, "answer", &field)) {
+    (void)capnweb_value_get_int64(&field, &answer);
+  }
+  if (capnweb_value_object_get(payload, "playoutSamples", &field)) {
+    (void)capnweb_value_get_int64(&field, &offset_samples);
+  }
+  if (capnweb_value_object_get(payload, "viseme", &field)) {
+    (void)capnweb_value_get_int64(&field, &viseme);
+  }
+  if (capnweb_value_object_get(payload, "confidence", &field)) {
+    (void)capnweb_value_get_int64(&field, &confidence);
+  }
+  /*
+   * A malformed shape is dropped whole rather than clamped: a clamped wrong
+   * viseme would render as a confidently wrong mouth, where a missing one
+   * merely leaves the previous shape to expire.
+   */
+  if (answer < 0 || offset_samples < 0 || viseme < 0 || viseme > 14 ||
+      confidence < 0 || confidence > 255) {
+    return;
+  }
+  voicelab->options.on_viseme(
+      voicelab->options.downlink_context,
+      (uint32_t)answer,
+      (uint32_t)offset_samples,
+      (uint8_t)viseme,
+      (uint8_t)confidence);
+}
+
 /** Emit the assistant line accumulated so far, then reset the buffer. */
 static void flush_assistant_transcript(
     struct iterate_kit_voicelab *voicelab, bool final) {
@@ -610,14 +650,16 @@ static enum capnweb_status batch_dispatch(
      */
     voicelab->last_bridge_ms =
         voicelab->options.now_ms(voicelab->options.clock_context);
-    if (capnweb_value_string_equals(&type_value, "voicelab/spk-frame")) {
+    if (capnweb_value_string_equals(&type_value, "voice-agent/spk-frame")) {
       handle_spk_frame(voicelab, &payload);
-    } else if (capnweb_value_string_equals(&type_value, "voicelab/grok-event")) {
+    } else if (capnweb_value_string_equals(&type_value, "voice-agent/grok-event")) {
       handle_grok_event(voicelab, &payload);
-    } else if (capnweb_value_string_equals(&type_value, "voicelab/pong")) {
+    } else if (capnweb_value_string_equals(&type_value, "voice-agent/viseme")) {
+      handle_viseme(voicelab, &payload);
+    } else if (capnweb_value_string_equals(&type_value, "voice-agent/pong")) {
       /* Liveness only; the RTT number comes from the append's own echo. */
     } else if (capnweb_value_string_equals(
-                   &type_value, "voicelab/call-accepted")) {
+                   &type_value, "voice-agent/call-accepted")) {
       /*
        * The stream is what says a call is live, not the startCall reply: the
        * reply can be slow or lost, and a call opened by anyone else counts
@@ -642,7 +684,7 @@ static enum capnweb_status batch_dispatch(
             voicelab->options.downlink_context,
             ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED);
       }
-    } else if (capnweb_value_string_equals(&type_value, "voicelab/call-ended")) {
+    } else if (capnweb_value_string_equals(&type_value, "voice-agent/call-ended")) {
       /* Only the bridge serving this call may end it. */
       struct capnweb_value bridge_value;
       char ended_by[sizeof(voicelab->live_bridge_id)] = {0};
@@ -743,7 +785,7 @@ bool iterate_kit_voicelab_needs_recycle(
 enum capnweb_status iterate_kit_voicelab_recycle_connection(
     struct iterate_kit_voicelab *voicelab) {
   static const char *const open_path[] = {"openConnection"};
-  struct capnweb_expression event_type_items[5];
+  struct capnweb_expression event_type_items[6];
   struct capnweb_expression event_types;
   struct capnweb_expression connection_key;
   struct capnweb_expression max_events;
@@ -790,19 +832,19 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
 
   event_type_items[0] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voicelab/spk-frame", sizeof("voicelab/spk-frame") - 1U}},
+    {.string = {"voice-agent/spk-frame", sizeof("voice-agent/spk-frame") - 1U}},
   };
   event_type_items[1] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voicelab/grok-event", sizeof("voicelab/grok-event") - 1U}},
+    {.string = {"voice-agent/grok-event", sizeof("voice-agent/grok-event") - 1U}},
   };
   event_type_items[2] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voicelab/call-ended", sizeof("voicelab/call-ended") - 1U}},
+    {.string = {"voice-agent/call-ended", sizeof("voice-agent/call-ended") - 1U}},
   };
   event_type_items[3] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voicelab/call-accepted", sizeof("voicelab/call-accepted") - 1U}},
+    {.string = {"voice-agent/call-accepted", sizeof("voice-agent/call-accepted") - 1U}},
   };
   /*
    * The pong exists to be heard, not read: it is the only bridge-sourced
@@ -811,33 +853,40 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
    */
   event_type_items[4] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voicelab/pong", sizeof("voicelab/pong") - 1U}},
+    {.string = {"voice-agent/pong", sizeof("voice-agent/pong") - 1U}},
+  };
+  /* The mouth track rides the same lane as the audio it describes. */
+  event_type_items[5] = (struct capnweb_expression){
+    CAPNWEB_EXPRESSION_STRING,
+    {.string = {"voice-agent/viseme", sizeof("voice-agent/viseme") - 1U}},
   };
   event_types = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_ARRAY,
-    {.array = {event_type_items, 5U}},
+    {.array = {event_type_items, 6U}},
   };
   connection_key = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
     {.string = {key_text, (size_t)key_length}},
   };
   /*
-   * TWELVE events per batch — 240 ms of audio — because delivery is one
-   * batch at a time and the batch is therefore the unit of BANDWIDTH, not
-   * just of memory.
+   * SIXTEEN events per batch, because delivery is one batch at a time and
+   * the batch is therefore the unit of BANDWIDTH, not just of memory.
    *
    * Measured: 5.7 batches a second, so four events per batch carried 80 ms
    * of speech every 175 ms. Under half realtime. The device played 94 of the
    * 200 frames in one answer and concealed 122 — heard as speech that breaks
-   * up and then stops. Twelve carries 1.37x realtime at the same rate, which
-   * both keeps up and rebuilds the cushion after a hiccup.
+   * up and then stops. Twelve carried 1.37x realtime at the same rate; now
+   * that viseme events (~10/s during speech, tiny) share the lane with the
+   * 50/s of audio, sixteen keeps the audio at ~1.5x realtime so the mouth
+   * track never costs the voice its cushion.
    *
-   * The floor on this is the inbox slot (16 KiB); the ceiling is politeness
-   * to the platform's own read budget.
+   * The floor on this is the inbox slot (16 KiB) — sixteen mu-law frames are
+   * ~10 KiB of batch, still inside it; the ceiling is politeness to the
+   * platform's own read budget.
    */
   max_events = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_INT64,
-    {.integer = 12},
+    {.integer = 16},
   };
   max_bytes = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_INT64,
@@ -1138,7 +1187,7 @@ enum capnweb_status iterate_kit_voicelab_append_frame(
   prefix_length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"voicelab/mic-frame\",\"ephemeral\":true,"
+      "[{\"type\":\"voice-agent/mic-frame\",\"ephemeral\":true,"
       "\"payload\":{\"callId\":\"%s\",\"seq\":%" PRIu32
       ",\"t\":%" PRIu64 ",\"pcm\":\"",
       voicelab->options.call_id,
@@ -1210,7 +1259,7 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
     written = snprintf(
         voicelab->args_buffer + offset,
         sizeof(voicelab->args_buffer) - offset,
-        "%s{\"type\":\"voicelab/mic-frame\",\"ephemeral\":true,"
+        "%s{\"type\":\"voice-agent/mic-frame\",\"ephemeral\":true,"
         "\"payload\":{\"callId\":\"%s\",\"seq\":%" PRIu32
         ",\"t\":%" PRIu64 ",\"enc\":\"u\",\"pcm\":\"",
         index == 0U ? "" : ",",
@@ -1313,7 +1362,7 @@ enum capnweb_status iterate_kit_voicelab_start_call(
        * think in; anything that has to be RIGHT is asked of a colleague with
        * no clock on it, and the voice says so and keeps talking meanwhile.
        */
-      "[{\"type\":\"voicelab/call-requested\",\"payload\":{"
+      "[{\"type\":\"voice-agent/call-requested\",\"payload\":{"
       "\"callId\":\"%s\",\"colleague\":true,\"turns\":\"manual\"%s%s%s}}]",
       voicelab->options.call_id,
       greeting != NULL ? ",\"greet\":\"" : "",
@@ -1359,7 +1408,7 @@ enum capnweb_status iterate_kit_voicelab_end_call(
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"voicelab/call-ended\",\"payload\":{"
+      "[{\"type\":\"voice-agent/call-ended\",\"payload\":{"
       "\"callId\":\"%s\",\"reason\":\"%s\"}}]",
       voicelab->options.call_id,
       reason != NULL ? reason : "hangup");
@@ -1394,7 +1443,7 @@ enum capnweb_status iterate_kit_voicelab_mark_turn(
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"voicelab/turn\",\"ephemeral\":true,\"payload\":{"
+      "[{\"type\":\"voice-agent/turn\",\"ephemeral\":true,\"payload\":{"
       "\"callId\":\"%s\",\"action\":\"%s\",\"t\":%" PRIu64 "}}]",
       voicelab->options.call_id,
       turn == ITERATE_KIT_VOICELAB_TURN_START ? "start" : "commit",
@@ -1441,7 +1490,7 @@ enum capnweb_status iterate_kit_voicelab_ping(
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"voicelab/ping\",\"ephemeral\":true,"
+      "[{\"type\":\"voice-agent/ping\",\"ephemeral\":true,"
       "\"payload\":{\"id\":\"%s-%" PRIu32 "\",\"t0\":%" PRIu64 "}}]",
       voicelab->options.call_id,
       voicelab->ping_count,

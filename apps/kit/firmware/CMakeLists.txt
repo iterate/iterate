@@ -20,7 +20,9 @@ add_subdirectory(vendor/capnweb)
 add_library(iterate-kit-core STATIC
   components/core/src/aec_capture_bridge.c
   components/core/src/aec_diagnostic_trace.c
+  components/core/src/aec_reference_scaler.c
   components/core/src/aec_signal_window.c
+  components/core/src/aec_uplink_selector.c
   components/core/src/audio_intent_reconciler.c
   components/core/src/audio_playout.c
   components/core/src/device_menu.c
@@ -38,6 +40,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/pcm_clock_playback.c
   components/core/src/pcm_capture_turn.c
   components/core/src/pcm_generation_fence.c
+  components/core/src/pcm_high_pass.c
   components/core/src/pcm_lane.c
   components/core/src/pcm_playback_interruption.c
   components/core/src/pcm_uplink_conductor.c
@@ -47,6 +50,7 @@ add_library(iterate-kit-core STATIC
   components/core/src/retry_gate.c
   components/core/src/runtime_diagnostics.c
   components/core/src/spsc_ring.c
+  components/core/src/talk_button.c
   components/core/src/touch_tap.c
   components/core/src/voicelab_stream.c
   components/core/src/voice_playback_clock.c
@@ -71,15 +75,18 @@ target_link_libraries(iterate-kit-core PUBLIC capnweb)
 add_library(iterate-kit-avatar STATIC
   components/avatar/src/face_animator.c
   components/avatar/src/face_avatar_registry.c
+  components/avatar/src/face_doze.c
   components/avatar/src/face_driver.c
   components/avatar/src/face_keyframe.c
   components/avatar/src/face_performance.c
   components/avatar/src/face_scale.c
   components/avatar/src/face_sprite_sheet.c
   components/avatar/src/face_stage.c
+  components/avatar/src/face_viseme_queue.c
   components/avatar/src/fspp_dot_matrix_oracle_cores3_fine_atlas.c
-  components/avatar/src/fspp_gameboy_bot_cores3_fine_atlas.c
+  components/avatar/src/fspp_furnace_imp_cores3_fine_atlas.c
   components/avatar/src/fspp_karakuri_brass_cores3_fine_atlas.c
+  components/avatar/src/fspp_moonscope_cores3_fine_atlas.c
   components/avatar/src/fspp_starbyte_cores3_fine_atlas.c
 )
 target_include_directories(iterate-kit-avatar PUBLIC
@@ -186,12 +193,14 @@ if(APPLE)
 endif()
 
 add_library(iterate-kit-capabilities STATIC
+  components/capabilities/src/aec_diagnostic_trace.c
   components/capabilities/src/avatar.c
   components/capabilities/src/callback_budget.c
   components/capabilities/src/conversation.c
   components/capabilities/src/camera.c
   components/capabilities/src/device_event_stream.c
   components/capabilities/src/leds.c
+  components/capabilities/src/logical_input.c
   components/capabilities/src/metrics.c
   components/capabilities/src/push_to_talk.c
   components/capabilities/src/rpc_internal.c
@@ -344,11 +353,13 @@ add_compile_options(-UNDEBUG)
 foreach(ITERATE_KIT_AVATAR_TEST
     face-animator
     face-avatar-registry
+    face-doze
     face-keyframe
     face-performance
     face-scale
     face-sprite-sheet
-    face-stage)
+    face-stage
+    face-viseme-queue)
   string(REPLACE "-" "_" ITERATE_KIT_AVATAR_TEST_SOURCE
     "${ITERATE_KIT_AVATAR_TEST}")
   set(ITERATE_KIT_AVATAR_TEST_TARGET
@@ -415,6 +426,41 @@ add_test(
   NAME iterate-kit-aec-capture-bridge-test
   COMMAND iterate-kit-aec-capture-bridge-test)
 
+add_executable(iterate-kit-aec-reference-scaler-test
+  tests/aec_reference_scaler_test.c
+)
+target_compile_features(
+  iterate-kit-aec-reference-scaler-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-aec-reference-scaler-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-aec-reference-scaler-test PRIVATE iterate-kit-core)
+add_test(
+  NAME iterate-kit-aec-reference-scaler-test
+  COMMAND iterate-kit-aec-reference-scaler-test)
+
+add_executable(iterate-kit-pcm-high-pass-test
+  tests/pcm_high_pass_test.c
+)
+target_compile_features(
+  iterate-kit-pcm-high-pass-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-pcm-high-pass-test PRIVATE
+  -UNDEBUG
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-pcm-high-pass-test PRIVATE iterate-kit-core)
+add_test(
+  NAME iterate-kit-pcm-high-pass-test
+  COMMAND iterate-kit-pcm-high-pass-test)
+
 add_executable(iterate-kit-aec-diagnostic-trace-test
   tests/aec_diagnostic_trace_test.c
 )
@@ -432,8 +478,44 @@ add_test(
   NAME iterate-kit-aec-diagnostic-trace-test
   COMMAND iterate-kit-aec-diagnostic-trace-test)
 
+add_executable(iterate-kit-aec-diagnostic-trace-capability-test
+  tests/aec_diagnostic_trace_capability_test.c
+)
+target_compile_features(
+  iterate-kit-aec-diagnostic-trace-capability-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-aec-diagnostic-trace-capability-test PRIVATE
+  -UNDEBUG
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-aec-diagnostic-trace-capability-test
+  PRIVATE iterate-kit-capabilities)
+add_test(
+  NAME iterate-kit-aec-diagnostic-trace-capability-test
+  COMMAND iterate-kit-aec-diagnostic-trace-capability-test)
+
 add_executable(iterate-kit-aec-signal-window-test
   tests/aec_signal_window_test.c
+)
+
+add_executable(iterate-kit-aec-uplink-selector-test
+  tests/aec_uplink_selector_test.c
+)
+target_compile_features(iterate-kit-aec-uplink-selector-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-aec-uplink-selector-test PRIVATE
+  -UNDEBUG
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(iterate-kit-aec-uplink-selector-test PRIVATE iterate-kit-core)
+add_test(
+  NAME iterate-kit-aec-uplink-selector-test
+  COMMAND iterate-kit-aec-uplink-selector-test
 )
 target_compile_features(
   iterate-kit-aec-signal-window-test PRIVATE c_std_99)
@@ -533,6 +615,32 @@ add_test(
   NAME iterate-kit-voice-pe-hardware-config-test
   COMMAND iterate-kit-voice-pe-hardware-config-test)
 
+add_executable(iterate-kit-voice-pe-hardware-config-aec-override-test
+  tests/voice_pe_hardware_config_aec_override_test.c
+  platforms/iterate_voice_pe_audio/voice_pe_hardware_config.c
+)
+target_include_directories(
+  iterate-kit-voice-pe-hardware-config-aec-override-test PRIVATE
+  platforms/iterate_voice_pe_audio/include
+  components/core/include
+)
+target_compile_definitions(
+  iterate-kit-voice-pe-hardware-config-aec-override-test PRIVATE
+  ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1
+)
+target_compile_features(
+  iterate-kit-voice-pe-hardware-config-aec-override-test PRIVATE c_std_99)
+target_compile_options(
+  iterate-kit-voice-pe-hardware-config-aec-override-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+add_test(
+  NAME iterate-kit-voice-pe-hardware-config-aec-override-test
+  COMMAND iterate-kit-voice-pe-hardware-config-aec-override-test)
+
 add_executable(iterate-kit-voice-satellite-test
   tests/voice_satellite_test.c
 )
@@ -585,6 +693,25 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-debounced-button-test
   COMMAND iterate-kit-debounced-button-test
+)
+
+add_executable(iterate-kit-talk-button-test
+  tests/talk_button_test.c
+)
+target_compile_features(
+  iterate-kit-talk-button-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-talk-button-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-talk-button-test PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-talk-button-test
+  COMMAND iterate-kit-talk-button-test
 )
 
 add_executable(iterate-kit-havpe-ui-test
@@ -1834,6 +1961,7 @@ add_executable(iterate-kit-esp-idf-pcm-transport-test
 target_include_directories(
   iterate-kit-esp-idf-pcm-transport-test PRIVATE
   tests/fakes
+  platforms/iterate_esp_idf
   platforms/iterate_esp_idf/include
 )
 target_compile_features(
@@ -1852,6 +1980,34 @@ target_link_libraries(
 add_test(
   NAME iterate-kit-esp-idf-pcm-transport-test
   COMMAND iterate-kit-esp-idf-pcm-transport-test
+)
+
+add_executable(iterate-kit-esp-idf-pcm-session-test
+  tests/esp_idf_pcm_session_test.c
+  platforms/iterate_esp_idf/pcm_session.c
+)
+target_include_directories(
+  iterate-kit-esp-idf-pcm-session-test PRIVATE
+  tests/fakes
+  platforms/iterate_esp_idf
+  platforms/iterate_esp_idf/include
+)
+target_compile_features(
+  iterate-kit-esp-idf-pcm-session-test PRIVATE c_std_99)
+target_compile_options(
+  iterate-kit-esp-idf-pcm-session-test PRIVATE
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic
+)
+target_link_libraries(
+  iterate-kit-esp-idf-pcm-session-test
+  PRIVATE iterate-kit-core
+)
+add_test(
+  NAME iterate-kit-esp-idf-pcm-session-test
+  COMMAND iterate-kit-esp-idf-pcm-session-test
 )
 
 add_executable(iterate-kit-configuration-decoder-fixture

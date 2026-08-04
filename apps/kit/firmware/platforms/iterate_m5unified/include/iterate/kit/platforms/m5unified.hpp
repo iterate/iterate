@@ -95,11 +95,10 @@ class M5UnifiedHalfDuplex {
    */
   bool takeButtonAChange(bool *pressed);
   /**
-   * Consumes one BtnB press used as a call-lifecycle toggle.
+   * Consumes one BtnB press used as the MENU control.
    *
-   * A release is deliberately not exposed: mapping both edges to a toggle
-   * would open and immediately close every call, while retaining full level
-   * state would add no information to this one-shot control.
+   * A release is deliberately not exposed: MENU advances once per press, and
+   * retaining full level state would add no information to that action.
    */
   bool takeButtonBPress();
 
@@ -110,7 +109,10 @@ class M5UnifiedHalfDuplex {
   iterate_kit_metrics_driver metricsDriver();
   iterate_kit_audio_hardware audioHardware();
   iterate_kit_audio_capture_driver audioCaptureDriver();
-  iterate_kit_status bindPcmLane(iterate_kit_pcm_lane *lane);
+  iterate_kit_status bindPcmLane(
+      iterate_kit_pcm_lane *lane,
+      RealtimePlaybackItemReleasedFn itemReleased,
+      void *itemReleasedContext);
   /**
    * Consumes coalesced status/lifecycle edges published by the audio owner.
    * It does not touch the lane, policy, or speaker hardware.
@@ -138,13 +140,26 @@ class M5UnifiedHalfDuplex {
       std::uint64_t capturedFrames,
       std::uint64_t droppedFrames);
   /**
-   * Repaints only on a semantic transition (or a sprite-set change).
-   * Calling this from every application-owner pass is therefore cheap and
-   * cannot turn the 10 ms control cadence into continuous display/SPI work.
+   * Repaints on a semantic transition (or a sprite-set change), plus — while
+   * the device is out of a call but not yet dozing — at the bounded avatar
+   * cadence so the awake-idle face keeps acting. Calling this from every
+   * application-owner pass therefore stays cheap: the 10 ms control cadence
+   * becomes at most 15 Hz visual work, and only until the doze frame lands.
    */
   void showCallUi(
       M5StickS3CallUiState state,
-      const iterate_kit_conversation_visual_state &visualState);
+      const iterate_kit_conversation_visual_state &visualState,
+      bool talkLocked);
+  /** Gives the small display to the context menu until hideMenu() is called. */
+  void showMenu(
+      const char *item,
+      std::uint8_t selected,
+      std::uint8_t itemCount);
+  /** Restores the newest retained call/avatar model after menu dismissal. */
+  void hideMenu();
+  /** Allocation-free local avatar cycling used by the menu action. */
+  bool selectNextSprite();
+  const char *currentSpriteSlug() const;
 
  private:
   using Capture = BoundedCapture<captureSampleCount, captureSampleRate>;
@@ -155,6 +170,13 @@ class M5UnifiedHalfDuplex {
    */
   static constexpr std::uint8_t microphoneStartupFramesToDiscard = 1U;
   static constexpr std::int64_t avatarRenderIntervalMicroseconds = 66'000;
+  /*
+   * How long the face stays awake-idle after boot or after a call lifetime
+   * closes before the sleeping face returns. Three deterministic minutes,
+   * measured on the same clock that paces avatar renders.
+   */
+  static constexpr std::int64_t dozeDelayMicroseconds =
+      3LL * 60LL * 1'000'000LL;
 
   static iterate_kit_status renderPngUrl(
       void *context, const char *url, std::size_t urlLength);
@@ -177,7 +199,6 @@ class M5UnifiedHalfDuplex {
   void renderCallUi(bool force);
   void renderStatusPanel();
   bool renderAvatar(std::int64_t nowMicroseconds, bool force);
-
   /*
    * Capture buffers remain inline because M5Unified retains their pointers.
    * Speaker scratch/DMA/task storage belongs to audioOwner_, whose separate
@@ -206,10 +227,16 @@ class M5UnifiedHalfDuplex {
   iterate_kit_conversation_visual_state conversationVisualState_{};
   std::uint32_t renderedAvatarPublication_ = 0U;
   std::int64_t nextAvatarRenderMicroseconds_ = 0;
+  /* When an awake state last held the panel; boot re-arms it in begin(). */
+  std::int64_t lastAwakeMicroseconds_ = 0;
   std::uint32_t avatarRenderFailures_ = 0U;
   bool callUiDrawn_ = false;
   bool conversationVisualStateDrawn_ = false;
   bool avatarNeedsRender_ = true;
+  /* True while the panel already shows the doze face; stops idle repaints. */
+  bool dozeShown_ = false;
+  bool talkLocked_ = false;
+  bool menuVisible_ = false;
 };
 
 }  // namespace iterate::kit::platforms

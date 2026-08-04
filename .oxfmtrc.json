@@ -23,6 +23,7 @@
     ".wrangler/",
     "routeTree.gen.ts",
     "config-repo-template.generated.ts",
+    "viseme-model.generated.ts",
     "worker-configuration.d.ts",
     "apps/auth/wrangler.jsonc",
     "apps/semaphore/wrangler.jsonc",
