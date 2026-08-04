@@ -14,7 +14,7 @@
 import { DurableObject } from "cloudflare:workers";
 import { newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { substituteHeaderSecrets } from "./core/egress.ts";
-import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
+import { ITX_SURFACE_MODULE, CODE_CAP_RUNNER } from "./core/agent-runtime.ts";
 import { parseName, stringifyName, parentPath } from "./core/names.ts";
 import type { StreamDurableObject, StreamEventInput } from "./stream-durable-object.ts";
 import type { ItxCallPath } from "./core/config.ts";
@@ -73,11 +73,13 @@ function hashSource(s: string): string {
   return (h >>> 0).toString(36);
 }
 
-// A mount (target-core §4.1). `itx-expression` = an ALIAS to another callPath. `static` = a plain value (a
-// test affordance). `live` RPC-stub mounts land with capnweb.
+// A mount (target-core §4.1). `itx-expression` = an ALIAS to another callPath. `static` = a plain value.
+// `code` = a DYNAMIC capability whose implementation is a file in the project's repo (loaded + run on call).
+// (`live` RPC-stub mounts are the capnweb path, above.)
 type Mount =
   | { type: "itx-expression"; expression: ItxCallPath }
-  | { type: "static"; value: unknown };
+  | { type: "static"; value: unknown }
+  | { type: "code"; module: string };
 
 export type ProvideCapabilityInput = { path: ItxCallPath } & Mount;
 
@@ -207,6 +209,14 @@ export class ItxDurableObject extends DurableObject<Env> {
       const [path, after] = args as [string, number?];
       return this.#stream(path).read(after ?? 0);
     }
+    // The project's REPO (a file store) + registering/configuring dynamic capabilities in terms of it.
+    if (callPath.startsWith("itx.repo."))
+      return this.#repo(callPath.slice("itx.repo.".length), args);
+    if (callPath === "itx.provideCapability") {
+      await this.provideCapability(args[0] as ProvideCapabilityInput);
+      return { ok: true };
+    }
+    if (callPath === "itx.configure") return this.#configure(); // run the repo's config worker
     if (callPath === "itx.secrets.set") {
       const [name, value] = args as [string, string];
       if (!this.env.SECRETS_KV) throw new Error("no SECRETS_KV bound");
@@ -227,6 +237,7 @@ export class ItxDurableObject extends DurableObject<Env> {
     const mount = this.#mounts.get(callPath);
     if (mount) {
       if (mount.type === "itx-expression") return this.invokeCapability(mount.expression, args); // alias
+      if (mount.type === "code") return this.#runCode(mount.module, args); // repo-defined dynamic capability
       return mount.value; // static
     }
 
@@ -375,6 +386,58 @@ export class ItxDurableObject extends DurableObject<Env> {
   #stream(path: string) {
     if (!this.env.STREAM_DO) throw new Error("no STREAM_DO bound");
     return this.env.STREAM_DO.getByName(`${this.#projectId}:${path}`);
+  }
+
+  /** itx.repo — the project's file store (where the config worker + capability code live). Really lightweight:
+   *  a `${projectId}:repo:` view over env.ITX_KV (a real content-addressed RepoDurableObject can slot in behind
+   *  this same API later). */
+  async #repo(op: string, args: unknown[]): Promise<unknown> {
+    if (!this.env.ITX_KV) throw new Error("no ITX_KV bound");
+    const kv = this.env.ITX_KV;
+    const prefix = `${this.#projectId}:repo:`;
+    switch (op) {
+      case "get":
+        return kv.get(prefix + String(args[0]));
+      case "put":
+        await kv.put(prefix + String(args[0]), String(args[1]));
+        return { ok: true };
+      case "list": {
+        const r = await kv.list({ prefix });
+        return { files: r.keys.map((k) => k.name.slice(prefix.length)) };
+      }
+      default:
+        throw new Error(`itx.repo: no op "${op}"`);
+    }
+  }
+
+  /** Run a repo file as a dynamic capability: load its `(itx, ...args) => result` default export confined (with
+   *  env.ITX = a self-stub) and return the result. The capability's behaviour is thus DEFINED by the repo. */
+  async #runCode(module: string, args: unknown[]): Promise<unknown> {
+    const source = (await this.#repo("get", [module])) as string | null;
+    if (source == null) throw new Error(`itx.repo: no file "${module}" for the capability`);
+    const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?");
+    const worker = this.env.LOADER.get(
+      `code:${this.ctx.id.name}:${module}:${hashSource(source)}`,
+      () => ({
+        compatibilityDate: "2026-07-01",
+        mainModule: "run.js",
+        modules: { "run.js": CODE_CAP_RUNNER, "cap.js": source, "itx.js": ITX_SURFACE_MODULE },
+        env: { ITX: self },
+        globalOutbound: self,
+      }),
+    );
+    const resp = await worker
+      .getEntrypoint()
+      .fetch(new Request("https://code.local/", { method: "POST", body: JSON.stringify(args) }));
+    return ((await resp.json()) as { result: unknown }).result;
+  }
+
+  /** Run the project's config worker: load `/worker.js` from the repo and execute it in THIS context. It
+   *  typically registers the project's dynamic capabilities (itx.provideCapability) in terms of the repo. */
+  async #configure(): Promise<unknown> {
+    const source = (await this.#repo("get", ["/worker.js"])) as string | null;
+    if (source == null) throw new Error("itx.repo: no /worker.js (config worker)");
+    return (await (await this.load(source)).json()) as unknown;
   }
 
   /** Execute code IN this context (target-core §4.1 mode 2 / D23). Loads `source` as a confined dynamic

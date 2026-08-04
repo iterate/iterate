@@ -194,7 +194,29 @@ dormant:true}` after idle — the device stays registered while **nothing pins t
 
 ---
 
-## Status after increment 12 — the inner core end to end
+## Increment 13 — repo + config worker + dynamic capabilities expressed in terms of the repo
+
+**Commit** `<pending>`. A really-lightweight version (Jonas).
+
+- **`itx.repo.{get,put,list}`** — the project's file store (where config + capability code lives). Lightweight:
+  a `${projectId}:repo:` view over `env.ITX_KV` (a real content-addressed RepoDurableObject can slot in behind
+  the same API later).
+- **`code` mount kind** — a dynamic capability whose implementation is a repo file:
+  `provideCapability({ path, type:"code", module:"/tools/x.js" })`. On invoke, `#runCode` loads that repo file
+  and runs its `(itx, ...args) => result` default export confined (env.ITX = self-stub), returns the result.
+- **`itx.provideCapability`** is now also a built-in call path (so agents / the config worker register
+  capabilities ergonomically via the `itx.a.b()` surface). **`itx.configure`** loads `/worker.js` from the repo
+  and runs it — the config worker, which registers the project's dynamic capabilities in terms of the repo.
+- **Proven** (`/call`, fresh `prj_repo`): put `/tools/greet.js` + `/worker.js` → `itx.greet` misses →
+  `itx.configure` ran the config worker (`{configured:["itx.greet -> /tools/greet.js"]}`) → `itx.greet("world")`
+  returned `"hello world (from a repo-defined capability)"`. The whole loop: repo → config worker → dynamic
+  capability (code from the repo) → invoke.
+- **Note:** `itx.repo.list` is KV-`list` eventually-consistent (~60s); `get`-based ops (`configure`, code caps)
+  read writes immediately. A `RepoDurableObject` (sqlite) would list instantly — deferred.
+
+---
+
+## Status after increment 13 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project
 secret-sub → fallback → terminal), the **capability model** (`invokeCapability`/`provideCapability` +

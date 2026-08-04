@@ -22,3 +22,19 @@ export function itxFromStub(stub) {
   return build(["itx"]);
 }
 `;
+
+// Wraps a repo file whose default export is a capability function `(itx, ...args) => result` so the host can
+// run it confined as a dynamic capability (target-core §4.1). The args arrive as a JSON body; the result goes
+// back as JSON. `cap.js` is the repo file; `itx.js` is the surface above.
+export const CODE_CAP_RUNNER = /* js */ `
+import cap from "./cap.js";
+import { itxFromStub } from "./itx.js";
+export default {
+  async fetch(request, env) {
+    const args = await request.json();
+    const itx = itxFromStub(env.ITX);
+    const result = typeof cap === "function" ? await cap(itx, ...args) : cap;
+    return Response.json({ result });
+  }
+};
+`;
