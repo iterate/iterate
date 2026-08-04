@@ -32,6 +32,7 @@ import { Route as AdminStreamsRouteRouteImport } from './routes/admin/streams/ro
 import { Route as AppProjectsRouteRouteImport } from './routes/_app/projects/route'
 import { Route as AdminStreamsIndexRouteImport } from './routes/admin/streams/index'
 import { Route as AppProjectsIndexRouteImport } from './routes/_app/projects/index'
+import { Route as MPreviewChannelChannelRouteImport } from './routes/m.preview-channel.$channel'
 import { Route as AdminStreamsProjectIdRouteRouteImport } from './routes/admin/streams/$projectId/route'
 import { Route as AppProjectsProjectSlugRouteRouteImport } from './routes/_app/projects/$projectSlug/route'
 import { Route as DocsStreamsProcessorsIndexRouteImport } from './routes/docs.streams.processors.index'
@@ -173,6 +174,11 @@ const AppProjectsIndexRoute = AppProjectsIndexRouteImport.update({
   id: '/',
   path: '/',
   getParentRoute: () => AppProjectsRouteRoute,
+} as any)
+const MPreviewChannelChannelRoute = MPreviewChannelChannelRouteImport.update({
+  id: '/m/preview-channel/$channel',
+  path: '/m/preview-channel/$channel',
+  getParentRoute: () => rootRouteImport,
 } as any)
 const AdminStreamsProjectIdRouteRoute =
   AdminStreamsProjectIdRouteRouteImport.update({
@@ -348,6 +354,7 @@ export interface FileRoutesByFullPath {
   '/docs/': typeof DocsIndexRoute
   '/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
   '/admin/streams/$projectId': typeof AdminStreamsProjectIdRouteRouteWithChildren
+  '/m/preview-channel/$channel': typeof MPreviewChannelChannelRoute
   '/projects/': typeof AppProjectsIndexRoute
   '/admin/streams/': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
@@ -391,6 +398,7 @@ export interface FileRoutesByTo {
   '/sign-up/$': typeof SignUpSplatRoute
   '/admin': typeof AdminIndexRoute
   '/docs': typeof DocsIndexRoute
+  '/m/preview-channel/$channel': typeof MPreviewChannelChannelRoute
   '/projects': typeof AppProjectsIndexRoute
   '/admin/streams': typeof AdminStreamsIndexRoute
   '/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
@@ -441,6 +449,7 @@ export interface FileRoutesById {
   '/docs/': typeof DocsIndexRoute
   '/_app/projects/$projectSlug': typeof AppProjectsProjectSlugRouteRouteWithChildren
   '/admin/streams/$projectId': typeof AdminStreamsProjectIdRouteRouteWithChildren
+  '/m/preview-channel/$channel': typeof MPreviewChannelChannelRoute
   '/_app/projects/': typeof AppProjectsIndexRoute
   '/admin/streams/': typeof AdminStreamsIndexRoute
   '/_app/projects/$projectSlug/integrations': typeof AppProjectsProjectSlugIntegrationsRoute
@@ -492,6 +501,7 @@ export interface FileRouteTypes {
     | '/docs/'
     | '/projects/$projectSlug'
     | '/admin/streams/$projectId'
+    | '/m/preview-channel/$channel'
     | '/projects/'
     | '/admin/streams/'
     | '/projects/$projectSlug/integrations'
@@ -535,6 +545,7 @@ export interface FileRouteTypes {
     | '/sign-up/$'
     | '/admin'
     | '/docs'
+    | '/m/preview-channel/$channel'
     | '/projects'
     | '/admin/streams'
     | '/projects/$projectSlug/integrations'
@@ -584,6 +595,7 @@ export interface FileRouteTypes {
     | '/docs/'
     | '/_app/projects/$projectSlug'
     | '/admin/streams/$projectId'
+    | '/m/preview-channel/$channel'
     | '/_app/projects/'
     | '/admin/streams/'
     | '/_app/projects/$projectSlug/integrations'
@@ -624,6 +636,7 @@ export interface RootRouteChildren {
   ESplatRoute: typeof ESplatRoute
   SignInSplatRoute: typeof SignInSplatRoute
   SignUpSplatRoute: typeof SignUpSplatRoute
+  MPreviewChannelChannelRoute: typeof MPreviewChannelChannelRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -788,6 +801,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/projects/'
       preLoaderRoute: typeof AppProjectsIndexRouteImport
       parentRoute: typeof AppProjectsRouteRoute
+    }
+    '/m/preview-channel/$channel': {
+      id: '/m/preview-channel/$channel'
+      path: '/m/preview-channel/$channel'
+      fullPath: '/m/preview-channel/$channel'
+      preLoaderRoute: typeof MPreviewChannelChannelRouteImport
+      parentRoute: typeof rootRouteImport
     }
     '/admin/streams/$projectId': {
       id: '/admin/streams/$projectId'
@@ -1158,6 +1178,7 @@ const rootRouteChildren: RootRouteChildren = {
   ESplatRoute: ESplatRoute,
   SignInSplatRoute: SignInSplatRoute,
   SignUpSplatRoute: SignUpSplatRoute,
+  MPreviewChannelChannelRoute: MPreviewChannelChannelRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)
