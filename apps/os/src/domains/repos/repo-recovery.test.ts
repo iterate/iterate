@@ -37,6 +37,7 @@ const RESOLVED_TEMPLATE = {
 };
 
 function makeHarness() {
+  const creationAlarm = { at: null as number | null };
   const createEmpty: { impl: () => Promise<typeof CREATED_ARTIFACT> } = {
     impl: () => {
       throw new Error("must not create an artifact in this scenario");
@@ -59,6 +60,13 @@ function makeHarness() {
       new RepoProcessor({
         ...deps,
         projectId: "prj_1",
+        now: deps.now,
+        ensureCreationAlarm: async (atMs) => {
+          creationAlarm.at ??= atMs;
+        },
+        repointCreationAlarm: async (atMs) => {
+          creationAlarm.at = atMs;
+        },
         createEmptyArtifact: () => createEmpty.impl(),
         createGithubTemplateArtifact: () => createTemplate.impl(),
         importPublicGithubArtifact: async () => {
@@ -80,7 +88,7 @@ function makeHarness() {
         },
       }),
   });
-  return { ...harness, createEmpty, createTemplate, resolveTemplate };
+  return { ...harness, creationAlarm, createEmpty, createTemplate, resolveTemplate };
 }
 
 describe("RepoProcessor eviction recovery", () => {
@@ -173,7 +181,7 @@ describe("RepoProcessor eviction recovery", () => {
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
   });
 
-  it("re-drives an interrupted creation obligation after the keepalive alarm", async () => {
+  it("re-drives an interrupted empty creation obligation after the keepalive alarm", async () => {
     const h = makeHarness();
     h.createEmpty.impl = () => new Promise<never>(() => {});
     await h.append(EMPTY_REQUEST);
@@ -200,19 +208,28 @@ describe("RepoProcessor eviction recovery", () => {
   it("recovery materializes the journaled commit without resolving a moved ref again", async () => {
     const h = makeHarness();
     h.resolveTemplate.impl = async () => RESOLVED_TEMPLATE;
-    h.createTemplate.impl = () => new Promise<never>(() => {});
+    h.createTemplate.impl = async () => {
+      throw new RepoNotSeededError("template Artifact is still materializing");
+    };
     await h.append(TEMPLATE_REQUEST);
 
+    expect(h.resolveTemplate.calls).toBe(0);
+    expect(h.creationAlarm.at).toBe(h.clock.now);
+    await expect(h.processor().driveCreation(h.state())).rejects.toThrow(
+      "template Artifact is still materializing",
+    );
+    await h.settle();
     expect(h.events("events.iterate.com/repos/template-source-resolved")).toHaveLength(1);
     expect(h.resolveTemplate.calls).toBe(1);
     h.crash();
-    await h.settle();
+    await h.runner().catchUp();
 
     h.resolveTemplate.impl = async () => {
       throw new Error("recovery must not resolve the ref again");
     };
     h.createTemplate.impl = async () => CREATED_ARTIFACT;
-    await h.advanceTime(KEEPALIVE_ALARM_LEAD_MS + 1);
+    await h.processor().driveCreation(h.state());
+    await h.settle();
 
     expect(h.resolveTemplate.calls).toBe(1);
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);

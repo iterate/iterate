@@ -29,8 +29,13 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  * is short must-complete work, so the at-head pass holds the stream checkpoint
  * with `blockProcessorWhile`; an interrupted attempt is redelivered by the
  * stream spine immediately instead of depending on another event to wake a
- * quiet config repo. GitHub imports remain state-derived background
- * obligations because they can be long-running. The terminal certificate's
+ * quiet config repo. GitHub-backed creation is a state-derived ALARM
+ * obligation. The source Stream DO invokes this processor over a retained
+ * callback; starting long work in that callback and later appending its
+ * outcome to the same Stream DO creates a cyclic actor-drain tree. The
+ * callback therefore only arms the Repo DO's creation slice. `alarm()` drives
+ * the vendor work after the source callback has closed, then journals the
+ * immutable source and terminal fact. The terminal certificate's
  * idempotency keys are offset-free (`created` / `create-failed`), so a
  * redelivery or revival cannot rotate them and double-birth. A vendor/domain
  * error settles the saga as `repos/create-failed` — FAIL-CLOSED: a failed
@@ -71,28 +76,18 @@ import { isRepoNotSeededError, isRetryableArtifactsInfrastructureError } from ".
  *
  * RECOVERY is the same code path as normal operation: an incarnation that
  * dies owing work gets the keepalive's `stream/processor-revived` fact
- * appended; its wake produces the eventless at-head pass — an open creation
- * request with no live attempt is re-driven, and an import with no live driver
- * (fresh incarnations have empty runtime sets) is re-driven under the same
- * request identity, so a zombie attempt racing the
- * successor collapses on the shared idempotency keys.
+ * appended; its wake produces the eventless at-head pass. An open creation
+ * re-arms the Repo DO alarm that owns its attempt, while an import with no live
+ * driver (fresh incarnations have empty runtime sets) is re-driven under the
+ * same request identity. A zombie attempt racing the successor collapses on
+ * the shared idempotency keys.
  */
 export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoProcessorDeps> {
   readonly contract = RepoProcessorContract;
 
   /**
-   * RUNTIME state: whether THIS incarnation already launched a creation
-   * attempt. In-memory, dies with the isolate, never persisted — the stream
-   * (the request and its terminal fact), not this flag, is what survives an
-   * eviction. A fresh incarnation finds the open request in state, sees no
-   * attempt here, and drives it again.
-   */
-  #longCreationAttemptedThisIncarnation = false;
-
-  /**
    * RUNTIME state: request ids of GitHub imports THIS incarnation is driving.
-   * Same lifecycle as the creation flag — the requested/started facts on the
-   * stream are the durable truth.
+   * The requested/started facts on the stream are the durable truth.
    */
   readonly #liveGithubImports = new Set<string>();
 
@@ -103,10 +98,11 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
   // - PER-EVENT consequences (commit facts, the import request) use
   //   `blockProcessorWhile`: each derives from an event delivered once, so a
   //   dropped append loses the fact forever.
-  // - STATE-DERIVED consequences run after the switch, at head only, in
-  //   `runInBackground`: any later at-head pass re-derives an undriven
-  //   obligation from state, and slow vendor work (a full public import, a
-  //   Git transfer) must not hold the stream cursor.
+  // - STATE-DERIVED consequences run after the switch, at head only: creation
+  //   durably arms an independent Repo DO alarm, while GitHub syncs use
+  //   `runInBackground`. Any later at-head pass re-derives an undriven
+  //   obligation from state, and slow vendor work must not hold the stream
+  //   cursor or append into the source stream's retained callback tree.
   protected override processEvent(args: ProcessEventArgs<RepoProcessorContract>): undefined {
     const { event, state, delivery, append, blockProcessorWhile, runInBackground } = args;
 
@@ -195,9 +191,12 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // The creation saga. Empty seeding is short and must complete before this
     // frame is acknowledged: if an Artifacts DO is reset during a deployment,
     // the stream spine redelivers the uncommitted frame and retries promptly.
-    // GitHub-backed creation can be a long import, so it remains a background
-    // obligation re-derived from state after eviction. Offset-free terminal
-    // keys make both paths converge on one certificate.
+    // GitHub-backed creation can be a long import. The source Stream DO is
+    // still waiting for this hosted callback's acknowledgement, so this turn
+    // MUST NOT start work that later appends back to that same Stream DO. Arm
+    // the Repo DO's dedicated alarm slice instead; its handler runs outside
+    // this callback tree and calls driveCreation(). Offset-free terminal keys
+    // make a retried alarm converge on one certificate.
     const createRequest = state.createRequest;
     if (
       createRequest !== null &&
@@ -205,40 +204,8 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       createRequest.type === "empty"
     ) {
       blockProcessorWhile(async () => append(await this.#createRepoTerminal(createRequest)));
-    } else if (
-      createRequest !== null &&
-      state.birthCertificate === null &&
-      !this.#longCreationAttemptedThisIncarnation
-    ) {
-      this.#longCreationAttemptedThisIncarnation = true;
-      runInBackground(async () => {
-        try {
-          let templateSource = state.templateSource;
-          if (createRequest.type === "github-public-template" && templateSource === null) {
-            try {
-              templateSource = await this.deps.resolveGithubTemplateSource(createRequest);
-            } catch (error) {
-              await append(this.#creationFailureOrThrow(createRequest, error));
-              return;
-            }
-            await append({
-              type: "events.iterate.com/repos/template-source-resolved",
-              idempotencyKey: internalStreamId(
-                "repo-template-source-resolved",
-                this.projectId,
-                this.path,
-              ),
-              payload: templateSource,
-            });
-          }
-          await append(await this.#createRepoTerminal(createRequest, templateSource));
-        } catch (error) {
-          // No terminal fact landed, so a later at-head/revival pass in this
-          // incarnation must be allowed to re-drive the obligation.
-          this.#longCreationAttemptedThisIncarnation = false;
-          throw error;
-        }
-      });
+    } else if (createRequest !== null && state.birthCertificate === null) {
+      blockProcessorWhile(() => this.deps.ensureCreationAlarm(this.deps.now()));
     }
 
     // The GitHub import obligation: start it when nobody in THIS incarnation
@@ -251,6 +218,51 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
       this.#liveGithubImports.add(githubImport.requestId);
       runInBackground(() => this.#runGithubImport(args, githubImport));
     }
+  }
+
+  /**
+   * Drive one open GitHub-backed creation obligation from the Repo DO's alarm
+   * handler, never from the source Stream DO's hosted callback. The caller
+   * supplies runner-backed committed state after catch-up. A resolved source
+   * is journaled before any bytes are materialized; if materialization then
+   * fails retryably, the next alarm folds that fact and never resolves a moved
+   * ref again. Every append is idempotency-keyed, so an alarm retry after a
+   * lost response converges on the same source and terminal certificate.
+   */
+  async driveCreation(state: RepoProcessorState): Promise<void> {
+    const createRequest = state.createRequest;
+    if (
+      createRequest === null ||
+      createRequest.type === "empty" ||
+      state.birthCertificate !== null ||
+      state.createFailure !== null
+    ) {
+      await this.deps.repointCreationAlarm(null);
+      return;
+    }
+
+    let templateSource = state.templateSource;
+    if (createRequest.type === "github-public-template" && templateSource === null) {
+      try {
+        templateSource = await this.deps.resolveGithubTemplateSource(createRequest);
+      } catch (error) {
+        await this.stream.append(this.#creationFailureOrThrow(createRequest, error));
+        await this.deps.repointCreationAlarm(null);
+        return;
+      }
+      await this.stream.append({
+        type: "events.iterate.com/repos/template-source-resolved",
+        idempotencyKey: internalStreamId(
+          "repo-template-source-resolved",
+          this.projectId,
+          this.path,
+        ),
+        payload: templateSource,
+      });
+    }
+
+    await this.stream.append(await this.#createRepoTerminal(createRequest, templateSource));
+    await this.deps.repointCreationAlarm(null);
   }
 
   /**
@@ -500,6 +512,17 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 // -----------------------------------------------------------------------------
 
 type RepoProcessorDeps = {
+  /** Current epoch milliseconds; injected so alarm scheduling is deterministic
+   * in the processor harness. */
+  now(): number;
+  /** Arm the Repo DO's creation slice only when it has no existing desire.
+   * A caught-up callback after a retryable failure must not pull the coarse
+   * retry that alarm() already scheduled back to `now`. */
+  ensureCreationAlarm(atMs: number): Promise<void>;
+  /** Point the Repo DO's dedicated creation alarm slice at an epoch ms, or
+   * disarm it with null. The alarm, not the hosted source callback, owns all
+   * long creation work so outcome appends cannot form a cyclic DO call tree. */
+  repointCreationAlarm(atMs: number | null): Promise<void>;
   /** Seed the backing Cloudflare Artifacts repository with the starter files.
    * Idempotent: leaves an existing branch untouched and gives concurrent
    * first seeds the same commit oid. */

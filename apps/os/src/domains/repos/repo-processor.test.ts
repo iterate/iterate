@@ -133,6 +133,10 @@ function artifactPush(branch: string, oids?: { after?: string; before?: string }
 /** The generic harness plus the repo's scriptable vendor fakes. Pass another
  * harness's substrate for a replay incarnation over the SAME stream. */
 function makeRepoHarness(substrate?: HarnessSubstrate) {
+  const creationAlarm = {
+    at: null as number | null,
+    calls: [] as Array<number | null>,
+  };
   const createEmpty = {
     calls: 0,
     impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
@@ -168,12 +172,22 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
       branch: string;
     }[],
   };
-  const harness = makeProcessorHarness<RepoProcessorContract>({
+  const harness = makeProcessorHarness<RepoProcessorContract, RepoProcessor>({
     createProcessor: (deps) =>
       new RepoProcessor({
         stream: deps.stream,
         path: deps.path,
         projectId: deps.projectId,
+        now: deps.now,
+        ensureCreationAlarm: async (atMs) => {
+          if (creationAlarm.at !== null) return;
+          creationAlarm.at = atMs;
+          creationAlarm.calls.push(atMs);
+        },
+        repointCreationAlarm: async (atMs) => {
+          creationAlarm.at = atMs;
+          creationAlarm.calls.push(atMs);
+        },
         createEmptyArtifact: () => {
           createEmpty.calls += 1;
           return createEmpty.impl();
@@ -209,6 +223,7 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
   });
   return {
     ...harness,
+    creationAlarm,
     createEmpty,
     importPublic,
     createTemplate,
@@ -218,6 +233,11 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
     githubSync,
     headCache,
   };
+}
+
+async function driveCreation(harness: ReturnType<typeof makeRepoHarness>): Promise<void> {
+  await harness.processor().driveCreation(harness.state());
+  await harness.settle();
 }
 
 // =============================================================================
@@ -267,6 +287,12 @@ describe("RepoProcessor creation saga", () => {
       },
     ]);
 
+    // The hosted source callback only arms the Repo DO. Vendor work and
+    // outcome appends start later, from the alarm's independent call tree.
+    expect(h.importPublic.calls).toEqual([]);
+    expect(h.creationAlarm.at).toBe(h.clock.now);
+    await driveCreation(h);
+
     expect(h.importPublic.calls).toMatchObject([{ depth: 1, owner: "acme", repo: "widgets" }]);
     expect(h.link.calls).toMatchObject([
       { connection: "install-789", owner: "acme", repo: "widgets" },
@@ -289,6 +315,11 @@ describe("RepoProcessor creation saga", () => {
       "append",
       { type: "events.iterate.com/repos/create-requested", payload: request },
     ]);
+
+    expect(h.resolveTemplate.calls).toEqual([]);
+    expect(h.createTemplate.calls).toEqual([]);
+    expect(h.creationAlarm.at).toBe(h.clock.now);
+    await driveCreation(h);
 
     expect(h.resolveTemplate.calls).toEqual([request]);
     expect(h.events("events.iterate.com/repos/template-source-resolved")).toMatchObject([
@@ -319,12 +350,25 @@ describe("RepoProcessor creation saga", () => {
       payload: request,
     });
     await retry.settle();
+    await expect(retry.processor().driveCreation(retry.state())).rejects.toThrow(
+      "GitHub unavailable",
+    );
     expect(retry.events("events.iterate.com/repos/create-failed")).toEqual([]);
-    retry.resolveTemplate.impl = async () => RESOLVED_TEMPLATE;
+
+    // alarm() owns the retry cadence. A later caught-up source callback may
+    // confirm the obligation is still open, but must not pull that coarse
+    // retry forward and create a hot loop during a vendor outage.
+    retry.creationAlarm.at = retry.clock.now + 60_000;
+    const alarmCalls = retry.creationAlarm.calls.length;
     await retry.play([
       "append",
       { type: "events.iterate.com/repos/create-requested", payload: request },
     ]);
+    expect(retry.creationAlarm.at).toBe(retry.clock.now + 60_000);
+    expect(retry.creationAlarm.calls).toHaveLength(alarmCalls);
+
+    retry.resolveTemplate.impl = async () => RESOLVED_TEMPLATE;
+    await driveCreation(retry);
     expect(retry.events("events.iterate.com/repos/created")).toHaveLength(1);
 
     const terminal = makeRepoHarness();
@@ -335,6 +379,7 @@ describe("RepoProcessor creation saga", () => {
       "append",
       { type: "events.iterate.com/repos/create-requested", payload: request },
     ]);
+    await driveCreation(terminal);
     expect(terminal.events("events.iterate.com/repos/create-failed")).toMatchObject([
       { payload: { error: "Template path does not exist", request } },
     ]);
@@ -354,6 +399,7 @@ describe("RepoProcessor creation saga", () => {
         },
       },
     ]);
+    await driveCreation(h);
 
     expect(h.createEmpty.calls).toBe(1);
     expect(h.link.calls).toMatchObject([
@@ -382,6 +428,7 @@ describe("RepoProcessor creation saga", () => {
       "append",
       { type: "events.iterate.com/repos/create-requested", payload: request },
     ]);
+    await driveCreation(h);
 
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(0);
     expect(h.events("events.iterate.com/repos/create-failed")).toMatchObject([

@@ -91,6 +91,8 @@ const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 // must produce the same root commit instead of racing two timestamped seeds.
 const REPO_SEED_COMMIT_TIMESTAMP_SECONDS = 1_577_836_800;
 const REPO_DIR = "/repo";
+const CREATION_ALARM_SLICE = "repo-creation";
+const CREATION_RETRY_DELAY_MS = 60_000;
 
 // The durable GitHub link record: the mirror-push hot path (every commit)
 // reads it from KV instead of re-folding the stream. The link lifecycle events
@@ -155,9 +157,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   });
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
-  // Registered WITH recovery: creation and GitHub imports are consequential
-  // `runInBackground` work (stream-committed requested/started obligations whose
-  // OUTCOME matters). An incarnation that dies owing either must be revived.
+  // Registered WITH recovery because GitHub imports are consequential
+  // `runInBackground` work (stream-committed requested/started obligations
+  // whose OUTCOME matters). Long creation uses its own alarm slice below.
   // The keepalive alarm appends the `stream/processor-revived` fact, whose wake
   // produces the eventless at-head pass that re-drives the obligations (see the
   // registry module doc's recovery rule).
@@ -166,6 +168,12 @@ export class RepoDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
+      now: () => Date.now(),
+      ensureCreationAlarm: (atMs) =>
+        this.#registry.getAlarmSlice(CREATION_ALARM_SLICE) === null
+          ? this.#registry.setAlarmSlice(CREATION_ALARM_SLICE, atMs)
+          : Promise.resolve(),
+      repointCreationAlarm: (atMs) => this.#registry.setAlarmSlice(CREATION_ALARM_SLICE, atMs),
       // Creation and public mutations all move the same branch. A recovered
       // creation attempt is retry-safe, but it must not move the ref between a
       // mutation's checked clone and push.
@@ -230,9 +238,29 @@ export class RepoDurableObject extends DurableObject<Env> {
     return this.#registry.wakeStreamProcessor(args);
   }
 
-  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
-  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#registry.handleAlarm(alarmInfo);
+  /**
+   * The registry's shared DO alarm: runner keepalives plus the long repo
+   * creation slice. Long creation runs here, outside the source Stream DO's
+   * hosted-callback call tree, so its outcome can append to that same stream
+   * without cyclically waiting on its own callback acknowledgement.
+   */
+  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    await this.#registry.handleAlarm(alarmInfo);
+    try {
+      await this.#registry.catchUp(RepoProcessorContract.slug);
+      await this.#repoProcessor.driveCreation(this.#reads.currentState);
+      await this.#registry.catchUp(RepoProcessorContract.slug);
+    } catch (error) {
+      // Cloudflare retries a throwing alarm only a bounded number of times.
+      // Keep the stream-backed obligation live across a longer vendor outage
+      // by durably arming a coarse retry before surrendering this attempt to
+      // the platform's observable alarm retry lane.
+      await this.#registry.setAlarmSlice(
+        CREATION_ALARM_SLICE,
+        Date.now() + CREATION_RETRY_DELAY_MS,
+      );
+      throw error;
+    }
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
