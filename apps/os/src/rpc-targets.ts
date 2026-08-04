@@ -2949,12 +2949,12 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions:
-        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents to Markdown. TEXT generation (summarize, draft, classify, answer) is the common case: run a 'Text Generation' model from models() with { messages: [{ role, content }, …] } and read result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
+        "Cloudflare Workers AI: run(model, body) executes a model, models() lists the catalog, toMarkdown({ name, blob }) converts documents — including an in-hand HTML string via new Blob([html], { type: 'text/html' }) — to Markdown. run() is for what YOU cannot do: image/audio/video generation, transcription, embeddings, classification at volume. Don't run() a text model to summarize, draft, or answer over content you are about to read or relay — you are usually a more intelligent model; return the data and write it yourself. Text models take { messages: [{ role, content }, …] } and answer in result.response. First-party docs: Workers AI binding https://developers.cloudflare.com/workers-ai/configuration/bindings/ ; Markdown Conversion https://developers.cloudflare.com/workers-ai/features/markdown-conversion/ ; conversion options https://developers.cloudflare.com/workers-ai/features/markdown-conversion/conversion-options/ ; image model example https://developers.cloudflare.com/ai/models/%40cf/black-forest-labs/flux-2-klein-9b/ ; speech model example https://developers.cloudflare.com/ai/models/xai/grok-tts/ ; transcription example https://developers.cloudflare.com/ai/models/xai/grok-stt/ ; video model example https://developers.cloudflare.com/ai/models/xai/grok-imagine-video/ .",
       children: {
         models: "List available models.",
-        run: "Run one model invocation.",
+        run: "Run one model invocation — for outputs the caller cannot produce itself (images, audio, transcription, bulk classification), not for text the caller will read or relay.",
         toMarkdown:
-          "Convert one document or an array of { name, blob } to Markdown; call with no args for supported formats.",
+          "Convert one document or an array of { name, blob } to Markdown — an in-hand HTML string converts via new Blob([html], { type: 'text/html' }); call with no args for supported formats.",
       },
       parent: "a project itx (itx.ai)",
     });
@@ -2970,6 +2970,10 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
   }
 
   /** Run one model invocation (`run("@cf/meta/llama-3.1-8b-instruct", { prompt })`).
+   * For outputs the caller cannot produce itself — images, audio, transcription,
+   * embeddings, classification at volume. An LLM agent shouldn't run a text
+   * model over content it is about to read or relay (summarize, draft, answer):
+   * return the data and write that yourself.
    * Outputs are model-shaped: instantiate `run<T>` with the response shape you
    * read (`run<{ response?: string }>(…)`); uninstantiated it stays the honest
    * `unknown`. The optional third argument is the binding's own options object
@@ -2987,7 +2991,9 @@ class AiRpcTarget extends IterateRpcTarget<"Ai"> {
 
   /** Calling with no arguments lists the file formats the converter accepts. */
   toMarkdown(): Promise<CfMarkdownSupportedFormat[]>;
-  /** Convert one document (`{ name, blob }`) to Markdown. */
+  /** Convert one document (`{ name, blob }`) to Markdown — an in-hand HTML
+   * string (a fetched page, an email body) converts via
+   * `new Blob([html], { type: "text/html" })`; never strip HTML by hand. */
   toMarkdown(
     document: CfMarkdownDocument,
     options?: CfMarkdownConversionOptions,
