@@ -9,8 +9,28 @@
 // navigation, run/load in the DO, the real DurableObjectNameCodec. Solo: the DO name IS the projectId.
 
 import { DurableObject } from "cloudflare:workers";
+import { newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { substituteHeaderSecrets } from "./core/egress.ts";
 import type { ItxCallPath } from "./core/config.ts";
+
+/** A capnweb stub to a provider-supplied capability. `.dup()` retains it past a call; other keys are its
+ *  (remote) methods, which return promises that resolve back on the provider. */
+type LiveStub = { dup(): LiveStub; [method: string]: (...a: unknown[]) => unknown };
+
+/** The control surface a capability PROVIDER (device / browser / worker) gets when it connects over capnweb
+ *  (target-core §4.1, "live" mounts / D7). It can mount LIVE capabilities at a callPath; invocations of them
+ *  travel back over the same socket to the provider. */
+class ProviderControl extends RpcTarget {
+  #mount: (path: string, stub: LiveStub) => void;
+  constructor(mount: (path: string, stub: LiveStub) => void) {
+    super();
+    this.#mount = mount;
+  }
+  provideCapability(path: string, capability: LiveStub): { ok: true } {
+    this.#mount(path, capability.dup()); // dup: the param is disposed when this call returns; keep ours
+    return { ok: true };
+  }
+}
 
 interface Env {
   ITX_HOST: DurableObjectNamespace<ItxDurableObject>;
@@ -40,6 +60,8 @@ export type ProvideCapabilityInput = { path: ItxCallPath } & Mount;
 
 export class ItxDurableObject extends DurableObject<Env> {
   #mounts = new Map<string, Mount>(); // callPath -> mount (mirrors DO storage; the event-sourced fold is later)
+  #liveMounts = new Map<string, LiveStub>(); // callPath -> a connected provider's stub (IN-MEMORY; a live pin,
+  //                                             lost on eviction — wake-on-call reconnection is a later increment)
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -61,6 +83,14 @@ export class ItxDurableObject extends DurableObject<Env> {
   //    (WS EGRESS from a DO-loaded agent is ambiguous with WS ingress here — deferred; agents egress over HTTP
   //     today. A marker will disambiguate when needed.) ──
   async fetch(request: Request): Promise<Response> {
+    // A capability PROVIDER connecting over capnweb: serve the ProviderControl surface. The session pins the
+    // DO awake while the provider is connected; its live mounts dispatch back over this socket.
+    if (new URL(request.url).pathname === "/connect") {
+      return newWorkersRpcResponse(
+        request,
+        new ProviderControl((p, s) => this.#liveMounts.set(p, s)),
+      );
+    }
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
       const pair = new WebSocketPair();
       this.ctx.acceptWebSocket(pair[1]); // hibernatable — survives eviction (spikes 3-4)
@@ -105,6 +135,11 @@ export class ItxDurableObject extends DurableObject<Env> {
       return { ok: true }; // write-only from userspace (referenced by placeholder in egress — never read back)
     }
 
+    // LIVE mounts (a connected provider): longest-prefix match; the remaining segment is the method to call
+    // ON the provider — the call travels back over its capnweb socket (target-core §4.1 "live" / D7).
+    const live = this.#liveMountFor(callPath);
+    if (live) return live.stub[live.method](...args);
+
     const mount = this.#mounts.get(callPath);
     if (mount) {
       if (mount.type === "itx-expression") return this.invokeCapability(mount.expression, args); // alias
@@ -113,6 +148,16 @@ export class ItxDurableObject extends DurableObject<Env> {
 
     // reads fall back — the SAME method on the fallback, which recurses to the terminal (target-core §4.4)
     return this.env.FALLBACK.invokeCapability(callPath, args);
+  }
+
+  /** Longest dotted-prefix live mount; the remaining segment(s) name the provider method to call. */
+  #liveMountFor(callPath: string): { stub: LiveStub; method: string } | null {
+    const parts = callPath.split(".");
+    for (let i = parts.length - 1; i >= 2; i--) {
+      const stub = this.#liveMounts.get(parts.slice(0, i).join("."));
+      if (stub) return { stub, method: parts.slice(i).join(".") };
+    }
+    return null;
   }
 
   /** itx.kv — a project-prefixed view of env.ITX_KV. `${projectId}:` prefix makes byte-identical project code

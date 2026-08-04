@@ -70,7 +70,7 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
 
 ## Increment 5 — real built-in capabilities: itx.kv (project-prefixed) + itx.secrets.set
 
-**Commit** `<pending>`.
+**Commit** `5b604bfbe`.
 
 - `invokeCapability` now resolves built-ins in-place (target-core §4.0): `itx.kv.{get,put,delete,list}` over
   `env.ITX_KV`, keyed `${projectId}:${k}` — the prefix comes from the DO's OWN (unforgeable) projectId.
@@ -80,3 +80,17 @@ Convention: each increment ends at a **working gate** — typecheck green + prov
   `ctx=prj_other` reading the same key returns `null` (a different DO name → a different prefix → invisible).
   This is the D8 portability proof point: byte-identical project code, isolated in a shared namespace, and
   swappable for a BYO KV by config.
+
+## Increment 6 — live capability providers over capnweb (device/browser/worker as provider)
+
+**Commit** `<pending>`. Adds the `capnweb` dep (`@iterate-com/capnweb`, mirroring kernel).
+
+- `ItxDurableObject.fetch` at `/connect` serves a capnweb `ProviderControl` surface
+  (`newWorkersRpcResponse`). A provider calls `provideCapability(callPath, <live RpcTarget>)`; the DO keeps the
+  stub (`.dup()`) in an in-memory `#liveMounts` map (a live pin; lost on eviction — wake-on-call is later).
+- `invokeCapability` checks live mounts first (longest dotted-prefix; the remaining segment is the method):
+  a call to `itx.myTool.echo` dispatches `stub.echo(...)` back over the provider's socket (target-core §4.1
+  "live" / D7).
+- **Proven:** a node provider connected (`newWebSocketRpcSession`), provided `itx.myTool` (echo + add), then an
+  HTTP `/call?path=itx.myTool.echo` returned `"echo-from-provider:hi"` and `itx.myTool.add [2,3]` → `5` — the
+  invocations travelled back to the provider. capnweb bundles into the pure-play worker with no nodejs_compat.

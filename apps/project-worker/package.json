@@ -8,6 +8,9 @@
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit"
   },
+  "dependencies": {
+    "capnweb": "npm:@iterate-com/capnweb@^0.10.0"
+  },
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260621.1",
     "typescript": "^5.9.3",
