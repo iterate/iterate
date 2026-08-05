@@ -10,6 +10,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { RpcTarget } from "capnweb";
 import { connectItx } from "iterate/node";
+import type { ItxAuthCredentials } from "../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "./test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -20,7 +21,7 @@ if (!baseUrl || !secret) throw new Error("need APP_CONFIG_BASE_URL + APP_CONFIG_
 const iterations = positiveInteger(process.argv[2] ?? "20", "iterations");
 const providerCount = positiveInteger(process.argv[3] ?? "100", "providers");
 const disconnectDelays = [0, 500, 1_500, 3_000, 6_000];
-const auth = { type: "admin-secret" as const, secret };
+const auth: ItxAuthCredentials = { type: "admin-secret", secret };
 const monitorSession = connectItx({ baseUrl });
 const monitorRoot = monitorSession.authenticate(auth);
 const slug = `live-lease-close-race-${crypto.randomUUID()}`;

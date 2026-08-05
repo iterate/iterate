@@ -40,13 +40,11 @@ type PendingProvision = {
 };
 
 type ProviderEntry = {
-  active: boolean;
   activeLeg: Disposable | undefined;
-  attaching: boolean;
-  hostRetired: boolean;
-  idlePending: boolean;
+  attachPhase: "idle" | "attaching" | "idle-pending";
   leaseKey: string;
   provision: MountedProvision | undefined;
+  retired: "channel" | "host" | undefined;
   retainedProvider: LiveCapability;
   wakePending: boolean;
 };
@@ -127,13 +125,11 @@ export class LiveCapabilityProviderChannel {
     }
 
     const entry: ProviderEntry = {
-      active: true,
       activeLeg: undefined,
-      attaching: false,
-      hostRetired: false,
-      idlePending: false,
+      attachPhase: "idle",
       leaseKey: crypto.randomUUID(),
       provision: undefined,
+      retired: undefined,
       retainedProvider: retainLiveCapabilityProvider(input.capability, {
         flattenNestedPath: input.flattenNestedPaths === true,
       }),
@@ -145,7 +141,7 @@ export class LiveCapabilityProviderChannel {
     try {
       channel = await this.#openChannel();
     } catch (error) {
-      this.#retire(entry);
+      this.#retire(entry, "channel");
       throw error;
     }
 
@@ -179,33 +175,33 @@ export class LiveCapabilityProviderChannel {
       // provide RPC returns. Replay that latched edge once its durable offset
       // is known.
       this.#attachPendingProvider(entry);
-      if (!entry.active) {
+      if (entry.retired !== undefined) {
         // An addressed retire means the durable table already superseded or
         // revoked this exact mount. The provide command still succeeded and
         // returns its normal, already-inactive ownership handle. Physical
         // channel loss is different: its possibly committed record must be
         // exact-rolled back and the command must reject.
-        if (entry.hostRetired) return this.#provisionHandle(entry, mounted);
+        if (entry.retired === "host") return this.#provisionHandle(entry, mounted);
         await this.#durableObject.revokeCapability(entry.provision);
         throw new Error(`live capability "${input.path.join(".")}" channel closed while mounting`);
       }
       return this.#provisionHandle(entry, mounted);
     } catch (error) {
-      this.#retire(entry);
+      this.#retire(entry, "channel");
       throw error;
     }
   }
 
   #provisionHandle(entry: ProviderEntry, mounted: MountedProvision): LiveCapabilityRelayProvision {
     return {
-      isActive: () => entry.active && !this.#terminal,
+      isActive: () => entry.retired === undefined && !this.#terminal,
       path: mounted.path,
       providedAtOffset: mounted.providedAtOffset,
       revoke: async (revokeInput) => {
         try {
           await this.#queueRevocation(revokeInput);
         } finally {
-          this.#retire(entry);
+          this.#retire(entry, "host");
         }
       },
     };
@@ -216,7 +212,7 @@ export class LiveCapabilityProviderChannel {
     record: CapabilityProvidedPayload,
     channel: { socketId: string },
   ): Promise<MountedProvision> {
-    if (this.#terminal || !entry.active) {
+    if (this.#terminal || entry.retired !== undefined) {
       return Promise.reject(new Error("live capability provider channel is closed"));
     }
     const result = new Promise<MountedProvision>((resolve, reject) => {
@@ -238,7 +234,7 @@ export class LiveCapabilityProviderChannel {
     const candidates = this.#pendingProvisions.splice(0, MAX_PROVISION_BATCH_SIZE);
     const batch: PendingProvision[] = [];
     for (const pending of candidates) {
-      if (this.#terminal || !pending.entry.active) {
+      if (this.#terminal || pending.entry.retired !== undefined) {
         pending.reject(new Error("live capability provider channel closed while mounting"));
       } else {
         batch.push(pending);
@@ -344,30 +340,28 @@ export class LiveCapabilityProviderChannel {
     const frame = parseLiveCapabilityLeaseFrame(data);
     if (frame === undefined) return;
     const entry = this.#providers.get(frame.leaseKey);
-    if (entry === undefined || !entry.active) return;
+    if (entry === undefined || entry.retired !== undefined) return;
     if (frame.type === "wake") {
       entry.wakePending = true;
       this.#attachPendingProvider(entry);
     } else if (frame.type === "idle") {
-      if (entry.attaching) {
-        entry.idlePending = true;
+      if (entry.attachPhase !== "idle") {
+        entry.attachPhase = "idle-pending";
       } else {
         this.#releaseActiveLeg(entry);
       }
     } else {
-      entry.hostRetired = true;
-      this.#retire(entry);
+      this.#retire(entry, "host");
     }
   }
 
   #attachPendingProvider(entry: ProviderEntry): void {
-    if (!entry.active || entry.attaching || !entry.wakePending) return;
+    if (entry.retired !== undefined || entry.attachPhase !== "idle" || !entry.wakePending) return;
     const provision = entry.provision;
     const channel = this.#socket;
     if (provision === undefined || channel === undefined) return;
     entry.wakePending = false;
-    entry.attaching = true;
-    entry.idlePending = false;
+    entry.attachPhase = "attaching";
     const attachment = (async () => {
       try {
         const activatedLeg = await this.#durableObject.activateLiveCapability({
@@ -382,12 +376,12 @@ export class LiveCapabilityProviderChannel {
         // moved on. It does not damage sibling leases on this channel.
         if (activatedLeg !== undefined) {
           this.#releaseActiveLeg(entry);
-          if (entry.active && !entry.idlePending) {
+          if (entry.retired === undefined && entry.attachPhase === "attaching") {
             entry.activeLeg = activatedLeg;
           } else {
             activatedLeg[Symbol.dispose]();
           }
-        } else if (entry.idlePending) {
+        } else if (entry.attachPhase === "idle-pending") {
           // A timed-out wake can be retried before its slow attach returns.
           // The first attach may satisfy the retry and go idle while the
           // relay is issuing a now-refused second attach. Preserve that idle
@@ -401,7 +395,7 @@ export class LiveCapabilityProviderChannel {
           path: provision.path,
           providedAtOffset: provision.providedAtOffset,
         });
-        this.#retire(entry);
+        this.#retire(entry, "channel");
         try {
           await this.#durableObject.revokeCapability(provision);
         } catch (revokeError) {
@@ -416,8 +410,7 @@ export class LiveCapabilityProviderChannel {
           );
         }
       } finally {
-        entry.attaching = false;
-        entry.idlePending = false;
+        entry.attachPhase = "idle";
         this.#attachPendingProvider(entry);
       }
     })();
@@ -435,9 +428,9 @@ export class LiveCapabilityProviderChannel {
     }
   }
 
-  #retire(entry: ProviderEntry): void {
-    if (!entry.active) return;
-    entry.active = false;
+  #retire(entry: ProviderEntry, reason: "channel" | "host"): void {
+    if (entry.retired !== undefined) return;
+    entry.retired = reason;
     this.#providers.delete(entry.leaseKey);
     this.#releaseActiveLeg(entry);
     try {
@@ -458,7 +451,7 @@ export class LiveCapabilityProviderChannel {
     if (this.#terminal) return;
     this.#terminal = true;
     const entries = [...this.#providers.values()];
-    for (const entry of entries) this.#retire(entry);
+    for (const entry of entries) this.#retire(entry, "channel");
     try {
       this.#socket?.socket.close(1011, reason);
     } catch {

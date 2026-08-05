@@ -114,7 +114,7 @@ export class LiveCapabilityLeaseServer {
   readonly #activeProviders = new Map<string, ActiveProvider>();
   readonly #departedSockets = new Set<string>();
   readonly #pendingProviders = new Map<string, PendingProvider>();
-  readonly #retiredRecords = new Set<string>();
+  readonly #retiredRecords = new Map<string, number>();
 
   constructor(hooks: LiveCapabilityLeaseHooks) {
     this.#leases = new HibernatableRpcLeaseSockets({
@@ -146,9 +146,7 @@ export class LiveCapabilityLeaseServer {
       return false;
     }
     if (this.#departedSockets.has(bindingKey(channel))) return false;
-    const bound = this.#leases.claim(channel) !== undefined;
-    if (bound) this.#retiredRecords.delete(recordKey(record));
-    return bound;
+    return this.#leases.claim(channel) !== undefined;
   }
 
   /** True when a durable record still has a live hibernatable owner channel. */
@@ -221,14 +219,14 @@ export class LiveCapabilityLeaseServer {
   }
 
   /** Remove one exact logical lease without disturbing its sibling providers. */
-  remove(record: LiveCapabilityRecord, options: { notifyRelay?: boolean } = {}): void {
+  remove(record: LiveCapabilityRecord, options: { notifyRelay?: boolean } = {}): Disposable {
     const key = recordKey(record);
     const entry = this.#entryFor(record);
     const leaseKey = record.providerBinding?.leaseKey;
     if (options.notifyRelay !== false && entry !== undefined && leaseKey !== undefined) {
       this.#leases.send(entry.ws, { type: "retire", leaseKey });
     }
-    this.#retiredRecords.add(key);
+    this.#retiredRecords.set(key, (this.#retiredRecords.get(key) ?? 0) + 1);
 
     const active = this.#activeProviders.get(key);
     if (active !== undefined) {
@@ -244,6 +242,16 @@ export class LiveCapabilityLeaseServer {
       }
     }
     this.#failPending(key, new Error(`capability "${record.path.join(".")}" is offline`));
+    let settled = false;
+    return {
+      [Symbol.dispose]: () => {
+        if (settled) return;
+        settled = true;
+        const remaining = (this.#retiredRecords.get(key) ?? 1) - 1;
+        if (remaining === 0) this.#retiredRecords.delete(key);
+        else this.#retiredRecords.set(key, remaining);
+      },
+    };
   }
 
   /** Mark one exact physical-channel epoch departed, even if a replacement exists. */
@@ -254,6 +262,40 @@ export class LiveCapabilityLeaseServer {
       bindingKey({ leaseKey: attachment.channelKey, socketId: attachment.socketId }),
     );
     return { channelKey: attachment.channelKey, socketId: attachment.socketId };
+  }
+
+  /** Release one departed-socket guard after every record it owned is durably gone. */
+  settleDeparture(binding: { channelKey: string; socketId: string }): void {
+    const leaseBinding = { leaseKey: binding.channelKey, socketId: binding.socketId };
+    const stillOwned = this.#leases
+      .entries(binding.channelKey)
+      .some(({ binding: candidate }) => candidate.socketId === binding.socketId);
+    if (!stillOwned) this.#departedSockets.delete(bindingKey(leaseBinding));
+  }
+
+  /**
+   * Recover guards whose mutation returned ambiguously but whose caught-up
+   * durable state now proves that the guarded record or socket is unreferenced.
+   */
+  settleDurableState(records: LiveCapabilityRecord[]): void {
+    const recordKeys = new Set(records.map(recordKey));
+    for (const key of this.#retiredRecords.keys()) {
+      if (!recordKeys.has(key)) this.#retiredRecords.delete(key);
+    }
+    const bindingKeys = new Set(
+      records.flatMap((record) => {
+        const binding = record.providerBinding;
+        return binding?.socketId === undefined
+          ? []
+          : [bindingKey({ leaseKey: binding.channelKey, socketId: binding.socketId })];
+      }),
+    );
+    const runtimeBindingKeys = new Set(
+      this.#leases.entries().map(({ binding }) => bindingKey(binding)),
+    );
+    for (const key of this.#departedSockets) {
+      if (!bindingKeys.has(key) && !runtimeBindingKeys.has(key)) this.#departedSockets.delete(key);
+    }
   }
 
   handleError(ws: WebSocket, error: unknown): void {

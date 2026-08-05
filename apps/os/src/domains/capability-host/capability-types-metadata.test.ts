@@ -76,8 +76,10 @@ async function makeProcessor(options: {
   itx?: unknown;
   path?: string;
   validateCapabilityTypes?: (types: string) => Promise<string[]>;
+  waitUntilEventFailure?: Error;
 }): Promise<Harness> {
   let runner!: Harness["runner"];
+  let waitUntilEventFailure = options.waitUntilEventFailure;
   const processor = new CapabilityHostProcessor({
     stream: options.stream,
     itx: (options.itx ?? {}) as Project,
@@ -91,8 +93,14 @@ async function makeProcessor(options: {
     validateCapabilityTypes: options.validateCapabilityTypes,
     reads: {
       snapshot: () => runner.snapshot(),
-      waitUntilEvent: (input) =>
-        "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
+      waitUntilEvent: (input) => {
+        if (waitUntilEventFailure !== undefined) {
+          const failure = waitUntilEventFailure;
+          waitUntilEventFailure = undefined;
+          return Promise.reject(failure);
+        }
+        return "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input);
+      },
     },
   });
   runner = new StreamProcessorRunner({ processor, stream: options.stream });
@@ -243,17 +251,53 @@ describe("CapabilityHostProcessor transport binding", () => {
 
     const events = stream.events.filter(
       (event) =>
-        event.type.endsWith("/capability-provided") || event.type.endsWith("/capability-revoked"),
+        event.type.endsWith("/capability-provided") || event.type.endsWith("/capabilities-revoked"),
     );
     expect(events.map((event) => event.type)).toEqual([
       "events.iterate.com/capability-host/capability-provided",
-      "events.iterate.com/capability-host/capability-revoked",
+      "events.iterate.com/capability-host/capabilities-revoked",
     ]);
     expect(events[1]?.payload).toEqual({
-      path: ["tools"],
-      providedAtOffset: events[0]?.offset,
+      revocations: [
+        {
+          path: ["tools"],
+          providedAtOffset: events[0]?.offset,
+        },
+      ],
     });
     expect(harness.runner.currentState.capabilities).toEqual([]);
+  });
+
+  it("rolls a committed mount back when its readiness proof fails", async () => {
+    const stream = capabilityHostStream();
+    const readinessError = new Error("processor ingestion timed out");
+    const harness = await makeProcessor({ stream, waitUntilEventFailure: readinessError });
+    const settleTransport = vi.fn();
+    const pending = harness.processor.provideCapability(
+      { path: ["tools"], type: "live" },
+      {
+        afterCommit: () => ({ [Symbol.dispose]: settleTransport }),
+      },
+    );
+    const rejected = expect(pending).rejects.toBe(readinessError);
+    let settled = false;
+    pending.finally(() => (settled = true)).catch(() => {});
+    await vi.waitFor(async () => {
+      await harness.runner.catchUp();
+      expect(settled).toBe(true);
+    });
+    await rejected;
+
+    const durableMutations = stream.events.filter(
+      (event) =>
+        event.type.endsWith("/capability-provided") || event.type.endsWith("/capabilities-revoked"),
+    );
+    expect(durableMutations.map((event) => event.type)).toEqual([
+      "events.iterate.com/capability-host/capability-provided",
+      "events.iterate.com/capability-host/capabilities-revoked",
+    ]);
+    expect(harness.runner.currentState.capabilities).toEqual([]);
+    expect(settleTransport).toHaveBeenCalledOnce();
   });
 });
 

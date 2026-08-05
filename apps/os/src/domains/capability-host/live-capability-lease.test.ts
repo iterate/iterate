@@ -403,6 +403,42 @@ describe("LiveCapabilityLeaseServer", () => {
     expect(socket.closed).toEqual([]);
   });
 
+  it("releases exact retirement guards only after every overlapping mutation settles", () => {
+    const socket = unboundSocket();
+    const lease = leaseOver([socket]);
+    lease.bindProvision(record, { leaseKey: "channel-1", socketId: "socket-1" });
+
+    const first = lease.remove(record, { notifyRelay: false });
+    const second = lease.remove(record, { notifyRelay: false });
+    expect(lease.hasLease(record)).toBe(false);
+
+    first[Symbol.dispose]();
+    expect(lease.hasLease(record)).toBe(false);
+    second[Symbol.dispose]();
+    expect(lease.hasLease(record)).toBe(true);
+  });
+
+  it("prunes ambiguous retirement and departure guards from caught-up durable state", () => {
+    const socket = unboundSocket();
+    const sockets = [socket];
+    const lease = leaseOver(sockets);
+    lease.bindProvision(record, { leaseKey: "channel-1", socketId: "socket-1" });
+    lease.remove(record, { notifyRelay: false });
+    lease.departedOnClose(socket);
+    expect(lease.hasLease(record)).toBe(false);
+
+    lease.settleDurableState([]);
+    expect(lease.bindProvision(record, { leaseKey: "channel-1", socketId: "socket-1" })).toBe(
+      false,
+    );
+
+    socket.closed.push({ code: 1000, reason: "test departure" });
+    lease.settleDurableState([]);
+    sockets.push(unboundSocket());
+
+    expect(lease.bindProvision(record, { leaseKey: "channel-1", socketId: "socket-1" })).toBe(true);
+  });
+
   it("fails an invalid provider attach without closing its sibling's shared channel", async () => {
     const socket = unboundSocket();
     const lease = leaseOver([socket]);

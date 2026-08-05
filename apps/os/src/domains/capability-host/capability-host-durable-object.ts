@@ -177,33 +177,44 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       throw new Error("live capability provision requires a hibernatable provider lease");
     }
     const provide = () =>
-      this.#serializeCapabilityMutation(input.path, async () => {
-        const { state } = await this.#reads.snapshot();
-        const replaced = state.capabilities.find(
-          (record) =>
-            record.path.length === input.path.length &&
-            record.path.every((segment, index) => segment === input.path[index]),
-        );
-        return await this.#capabilityHostProcessor.provideCapability(input, {
-          afterCommit: ({ record }) => {
-            if (replaced?.type === "live") this.#liveCapabilityLeases.remove(replaced);
-            if (input.type !== "live") {
-              return;
-            }
-            if (liveLease === undefined) {
-              throw new Error("live capability provision lost its validated provider lease");
-            }
-            if (record.type !== "live") {
-              throw new Error("live capability provision committed a non-live record");
-            }
-            if (!this.#liveCapabilityLeases.bindProvision(record, liveLease)) {
-              throw new Error(`live capability "${input.path.join(".")}" lease socket disappeared`);
-            }
-          },
-        });
-      });
+      this.#serializeMutations(
+        this.#capabilityMutationTails,
+        [JSON.stringify(input.path)],
+        async () => {
+          const { state } = await this.#reads.snapshot();
+          const replaced = state.capabilities.find(
+            (record) =>
+              record.path.length === input.path.length &&
+              record.path.every((segment, index) => segment === input.path[index]),
+          );
+          return await this.#capabilityHostProcessor.provideCapability(input, {
+            afterCommit: ({ record }) => {
+              if (input.type === "live") {
+                if (liveLease === undefined) {
+                  throw new Error("live capability provision lost its validated provider lease");
+                }
+                if (record.type !== "live") {
+                  throw new Error("live capability provision committed a non-live record");
+                }
+                if (!this.#liveCapabilityLeases.bindProvision(record, liveLease)) {
+                  throw new Error(
+                    `live capability "${input.path.join(".")}" lease socket disappeared`,
+                  );
+                }
+              }
+              return replaced?.type === "live"
+                ? this.#liveCapabilityLeases.remove(replaced)
+                : undefined;
+            },
+          });
+        },
+      );
     return input.type === "live" && liveLease !== undefined
-      ? await this.#serializeLiveChannelMutation(liveLease.leaseKey, provide)
+      ? await this.#serializeMutations(
+          this.#liveChannelMutationTails,
+          [liveLease.leaseKey],
+          provide,
+        )
       : await provide();
   }
 
@@ -228,60 +239,80 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         throw new Error("live provider batch does not belong to its hibernatable channel");
       }
     }
-    return await this.#serializeLiveChannelMutation(liveLease.leaseKey, () =>
-      this.#serializeCapabilityMutations(
-        inputs.map(({ path }) => path),
-        async () => {
-          const { state } = await this.#reads.snapshot();
-          const winnerByPath = new Map(
-            state.capabilities.map((record) => [JSON.stringify(record.path), record] as const),
-          );
-          return await this.#capabilityHostProcessor.provideCapabilities(inputs, {
-            afterCommit: ({ mounts }) => {
-              // Validate every physical binding before retiring anything. A
-              // channel that disappeared halfway through the commit rolls the
-              // whole batch back without making sibling replacement cleanup
-              // depend on iteration order.
-              for (const { record } of mounts) {
-                if (record.type !== "live") {
-                  throw new Error("live capability batch committed a non-live record");
+    return await this.#serializeMutations(
+      this.#liveChannelMutationTails,
+      [liveLease.leaseKey],
+      () =>
+        this.#serializeMutations(
+          this.#capabilityMutationTails,
+          inputs.map(({ path }) => JSON.stringify(path)),
+          async () => {
+            const { state } = await this.#reads.snapshot();
+            const winnerByPath = new Map<string, CapabilityRecord>();
+            for (const record of state.capabilities) {
+              winnerByPath.set(JSON.stringify(record.path), record);
+            }
+            return await this.#capabilityHostProcessor.provideCapabilities(inputs, {
+              afterCommit: ({ mounts }) => {
+                // Validate every physical binding before retiring anything. A
+                // channel that disappeared halfway through the commit rolls the
+                // whole batch back without making sibling replacement cleanup
+                // depend on iteration order.
+                for (const { record } of mounts) {
+                  if (record.type !== "live") {
+                    throw new Error("live capability batch committed a non-live record");
+                  }
+                  if (!this.#liveCapabilityLeases.bindProvision(record, liveLease)) {
+                    throw new Error(
+                      `live capability "${record.path.join(".")}" lease socket disappeared`,
+                    );
+                  }
                 }
-                if (!this.#liveCapabilityLeases.bindProvision(record, liveLease)) {
-                  throw new Error(
-                    `live capability "${record.path.join(".")}" lease socket disappeared`,
-                  );
+                const retirements: Disposable[] = [];
+                for (const { record } of mounts) {
+                  const key = JSON.stringify(record.path);
+                  const replaced = winnerByPath.get(key);
+                  if (replaced?.type === "live") {
+                    retirements.push(this.#liveCapabilityLeases.remove(replaced));
+                  }
+                  winnerByPath.set(key, record);
                 }
-              }
-              for (const { record } of mounts) {
-                const key = JSON.stringify(record.path);
-                const replaced = winnerByPath.get(key);
-                if (replaced?.type === "live") this.#liveCapabilityLeases.remove(replaced);
-                winnerByPath.set(key, record);
-              }
-            },
-          });
-        },
-      ),
+                return retirements.length === 0
+                  ? undefined
+                  : {
+                      [Symbol.dispose]: () => {
+                        for (const retirement of retirements) retirement[Symbol.dispose]();
+                      },
+                    };
+              },
+            });
+          },
+        ),
     );
   }
 
   async revokeCapability(input: RevokeCapabilityInput): Promise<void> {
     await this.#reconcileLiveCapabilityLeases();
-    await this.#serializeCapabilityMutation(input.path, async () => {
-      const { state } = await this.#reads.snapshot();
-      const record = state.capabilities.find(
-        (candidate) =>
-          candidate.path.length === input.path.length &&
-          candidate.path.every((segment, index) => segment === input.path[index]),
-      );
-      await this.#capabilityHostProcessor.revokeCapability(input);
-      if (
-        record?.type === "live" &&
-        (input.providedAtOffset === undefined || input.providedAtOffset === record.providedAtOffset)
-      ) {
-        this.#liveCapabilityLeases.remove(record);
-      }
-    });
+    await this.#serializeMutations(
+      this.#capabilityMutationTails,
+      [JSON.stringify(input.path)],
+      async () => {
+        const { state } = await this.#reads.snapshot();
+        const record = state.capabilities.find(
+          (candidate) =>
+            candidate.path.length === input.path.length &&
+            candidate.path.every((segment, index) => segment === input.path[index]),
+        );
+        await this.#capabilityHostProcessor.revokeCapability(input);
+        if (
+          record?.type === "live" &&
+          (input.providedAtOffset === undefined ||
+            input.providedAtOffset === record.providedAtOffset)
+        ) {
+          this.#liveCapabilityLeases.remove(record)[Symbol.dispose]();
+        }
+      },
+    );
   }
 
   /** Revoke a burst of exact mounts with one durable table-reduction event. */
@@ -308,7 +339,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       })),
     );
     for (const record of current) {
-      if (record.type === "live") this.#liveCapabilityLeases.remove(record);
+      if (record.type === "live") this.#liveCapabilityLeases.remove(record)[Symbol.dispose]();
     }
   }
 
@@ -331,14 +362,18 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       // The DO owns activation admission, so it also owns making a rejected
       // provider durably disappear. The relay repeats this exact revocation
       // for transport-ambiguous failures; providedAtOffset makes it idempotent.
-      this.#liveCapabilityLeases.remove(record);
+      const retirement = this.#liveCapabilityLeases.remove(record);
       try {
-        await this.#serializeCapabilityMutation(record.path, async () => {
-          await this.#capabilityHostProcessor.revokeCapability({
-            path: record.path,
-            providedAtOffset: record.providedAtOffset,
-          });
-        });
+        await this.#serializeMutations(
+          this.#capabilityMutationTails,
+          [JSON.stringify(record.path)],
+          () =>
+            this.#capabilityHostProcessor.revokeCapability({
+              path: record.path,
+              providedAtOffset: record.providedAtOffset,
+            }),
+        );
+        retirement[Symbol.dispose]();
       } catch (rollbackError) {
         this.#invalidateLiveLeaseReconciliation();
         throw new AggregateError(
@@ -395,15 +430,17 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
           record.providerBinding?.channelKey === departed.channelKey &&
           record.providerBinding.socketId === departed.socketId,
       );
-      for (const record of records) {
-        this.#liveCapabilityLeases.remove(record, { notifyRelay: false });
-      }
+      const retirements = records.map((record) =>
+        this.#liveCapabilityLeases.remove(record, { notifyRelay: false }),
+      );
       await this.#capabilityHostProcessor.revokeCapabilities(
         records.map((record) => ({
           path: record.path,
           providedAtOffset: record.providedAtOffset,
         })),
       );
+      for (const retirement of retirements) retirement[Symbol.dispose]();
+      this.#liveCapabilityLeases.settleDeparture(departed);
     } catch (error) {
       // A failed close callback must not become the warm incarnation's final
       // answer. Invalidate again in case a concurrent sweep completed after
@@ -437,9 +474,11 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       const reconciliation = (async () => {
         await this.#registry.catchUp(CapabilityHostProcessorContract.slug);
         const { state } = await this.#reads.snapshot();
-        const stale = state.capabilities.filter(
-          (record): record is LiveCapabilityRecord =>
-            record.type === "live" && !this.#liveCapabilityLeases.hasLease(record),
+        const live = state.capabilities.filter(
+          (record): record is LiveCapabilityRecord => record.type === "live",
+        );
+        const stale = live.filter(
+          (record): record is LiveCapabilityRecord => !this.#liveCapabilityLeases.hasLease(record),
         );
         if (stale.length > 0) {
           await this.#capabilityHostProcessor.revokeCapabilities(
@@ -449,9 +488,17 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
             })),
           );
           for (const record of stale) {
-            this.#liveCapabilityLeases.remove(record, { notifyRelay: false });
+            this.#liveCapabilityLeases.remove(record, { notifyRelay: false })[Symbol.dispose]();
           }
         }
+        const staleKeys = new Set(
+          stale.map((record) => exactMountKey(record.path, record.providedAtOffset)),
+        );
+        this.#liveCapabilityLeases.settleDurableState(
+          live.filter(
+            (record) => !staleKeys.has(exactMountKey(record.path, record.providedAtOffset)),
+          ),
+        );
         if (this.#liveLeaseRevision === revision) this.#liveLeasesReconciled = true;
       })();
       this.#liveLeaseReconciliation = reconciliation;
@@ -472,62 +519,32 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Serialize mutations of one mount path through commit, transport binding,
-   * and read-your-writes. Without this gate, two racing provides can commit in
-   * one order but bind their session sockets in the opposite order, allowing
-   * the older call to revoke or supersede the durable winner.
+   * Serialize overlapping keys inside either mutation domain. Path gates keep
+   * commit, transport binding, and read-your-writes in one order; channel
+   * gates keep close cleanup behind every admitted provide for that socket.
    */
-  async #serializeCapabilityMutation<T>(path: string[], mutation: () => Promise<T>): Promise<T> {
-    return await this.#serializeCapabilityMutations([path], mutation);
-  }
-
-  /** Lock an overlapping set of mount paths without serializing unrelated batches. */
-  async #serializeCapabilityMutations<T>(
-    paths: string[][],
+  async #serializeMutations<T>(
+    tails: Map<string, Promise<void>>,
+    inputKeys: string[],
     mutation: () => Promise<T>,
   ): Promise<T> {
-    const keys = [...new Set(paths.map((path) => JSON.stringify(path)))].sort();
-    const predecessors = keys.map(
-      (key) => this.#capabilityMutationTails.get(key) ?? Promise.resolve(),
-    );
+    const keys = [...new Set(inputKeys)].sort();
+    const predecessors = keys.map((key) => tails.get(key) ?? Promise.resolve());
     let release!: () => void;
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
     const tail = Promise.all(predecessors).then(() => gate);
-    for (const key of keys) this.#capabilityMutationTails.set(key, tail);
+    for (const key of keys) tails.set(key, tail);
     await Promise.all(predecessors);
     try {
       return await mutation();
     } finally {
       release();
       for (const key of keys) {
-        if (this.#capabilityMutationTails.get(key) === tail) {
-          this.#capabilityMutationTails.delete(key);
+        if (tails.get(key) === tail) {
+          tails.delete(key);
         }
-      }
-    }
-  }
-
-  /** Keep close cleanup behind every provide admitted on one physical channel. */
-  async #serializeLiveChannelMutation<T>(
-    channelKey: string,
-    mutation: () => Promise<T>,
-  ): Promise<T> {
-    const predecessor = this.#liveChannelMutationTails.get(channelKey) ?? Promise.resolve();
-    let release!: () => void;
-    const gate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const tail = predecessor.then(() => gate);
-    this.#liveChannelMutationTails.set(channelKey, tail);
-    await predecessor;
-    try {
-      return await mutation();
-    } finally {
-      release();
-      if (this.#liveChannelMutationTails.get(channelKey) === tail) {
-        this.#liveChannelMutationTails.delete(channelKey);
       }
     }
   }

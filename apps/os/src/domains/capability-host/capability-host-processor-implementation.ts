@@ -1,5 +1,11 @@
 import { StreamProcessor } from "iterate/processors";
-import type { ProcessEventArgs, ProcessorState, ReduceArgs, StreamEvent } from "iterate/processors";
+import type {
+  EmittedInput,
+  ProcessEventArgs,
+  ProcessorState,
+  ReduceArgs,
+  StreamEvent,
+} from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
@@ -330,52 +336,16 @@ export class CapabilityHostProcessor extends StreamProcessor<
       afterCommit?(input: {
         provision: { path: string[]; providedAtOffset: number };
         record: CapabilityRecord;
-      }): void | Promise<void>;
+      }): Disposable | void | Promise<Disposable | void>;
     } = {},
   ) {
-    await this.#assertCreated();
-    const record = await this.#prepareCapabilityRecord(input);
-    const { path } = record;
-    const [committed] = await this.append({
-      type: "events.iterate.com/capability-host/capability-provided",
-      payload: record,
+    const [mount] = await this.#commitCapabilities([input], (mounts) => {
+      const committed = mounts[0];
+      if (committed === undefined) throw new Error("capability commit returned no mount");
+      return options.afterCommit?.(committed);
     });
-    const committedOffset = committed.offset;
-    const provision = { path, providedAtOffset: committedOffset };
-
-    // The append is the mount's commit point. Bind any incarnation-local
-    // transport to that exact identity before waiting for the processor to
-    // ingest its own fact; doing it after the wait leaves a committed mount
-    // briefly visible without the provider channel that makes it callable.
-    try {
-      await options.afterCommit?.({
-        provision,
-        record: { ...record, providedAtOffset: committedOffset },
-      });
-    } catch (error) {
-      try {
-        const [revoked] = await this.append({
-          type: "events.iterate.com/capability-host/capability-revoked",
-          payload: provision,
-        });
-        await this.deps.reads.waitUntilEvent({
-          offset: revoked.offset,
-          timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-        });
-      } catch (rollbackError) {
-        throw new AggregateError(
-          [error, rollbackError],
-          `capability "${path.join(".")}" transport binding and durable rollback both failed`,
-        );
-      }
-      throw error;
-    }
-
-    await this.deps.reads.waitUntilEvent({
-      offset: committedOffset,
-      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-    });
-    return provision;
+    if (mount === undefined) throw new Error("capability commit returned no mount");
+    return mount.provision;
   }
 
   /**
@@ -396,17 +366,39 @@ export class CapabilityHostProcessor extends StreamProcessor<
           provision: { path: string[]; providedAtOffset: number };
           record: CapabilityRecord;
         }[];
-      }): void | Promise<void>;
+      }): Disposable | void | Promise<Disposable | void>;
     } = {},
   ): Promise<{ path: string[]; providedAtOffset: number }[]> {
+    const mounts = await this.#commitCapabilities(inputs, (committed) =>
+      options.afterCommit?.({ mounts: committed }),
+    );
+    return mounts.map(({ provision }) => provision);
+  }
+
+  /**
+   * Commit, physically bind, and ingest one or many mounts as one transaction.
+   * Any failure after the append is compensated by one exact durable rollback,
+   * including a readiness wait failure after a successful physical binding.
+   */
+  async #commitCapabilities(
+    inputs: CapabilityProvidedPayload[],
+    afterCommit: (
+      mounts: {
+        provision: { path: string[]; providedAtOffset: number };
+        record: CapabilityRecord;
+      }[],
+    ) => Disposable | void | Promise<Disposable | void>,
+  ) {
     if (inputs.length === 0) return [];
     await this.#assertCreated();
     const records = await Promise.all(inputs.map((input) => this.#prepareCapabilityRecord(input)));
     const committed = await this.append(
-      ...records.map((record) => ({
-        type: "events.iterate.com/capability-host/capability-provided" as const,
-        payload: record,
-      })),
+      ...records.map(
+        (record): EmittedInput<CapabilityHostProcessorContract> => ({
+          type: "events.iterate.com/capability-host/capability-provided",
+          payload: record,
+        }),
+      ),
     );
     if (committed.length !== records.length) {
       throw new Error(
@@ -421,16 +413,26 @@ export class CapabilityHostProcessor extends StreamProcessor<
         record: { ...record, providedAtOffset: event.offset } satisfies CapabilityRecord,
       };
     });
+    const last = committed.at(-1);
+    if (last === undefined) throw new Error("capability batch committed no events");
 
+    // The append is the mount's commit point. Bind incarnation-local transport
+    // before ingestion makes the mount visible, then prove the complete mount
+    // is readable. A failed proof is just as unsafe as a failed binding.
+    let transportSettlement: Disposable | undefined;
     try {
-      await options.afterCommit?.({ mounts });
+      transportSettlement = (await afterCommit(mounts)) ?? undefined;
+      await this.deps.reads.waitUntilEvent({
+        offset: last.offset,
+        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+      });
     } catch (error) {
       try {
         const [revoked] = await this.append({
           type: "events.iterate.com/capability-host/capabilities-revoked",
           payload: { revocations: mounts.map(({ provision }) => provision) },
         });
-        if (revoked === undefined) throw new Error("capability batch rollback committed no event");
+        if (revoked === undefined) throw new Error("capability rollback committed no event");
         await this.deps.reads.waitUntilEvent({
           offset: revoked.offset,
           timeoutMs: INGEST_WAIT_TIMEOUT_MS,
@@ -438,19 +440,14 @@ export class CapabilityHostProcessor extends StreamProcessor<
       } catch (rollbackError) {
         throw new AggregateError(
           [error, rollbackError],
-          `capability batch transport binding and durable rollback both failed`,
+          "capability commit and durable rollback both failed",
         );
       }
+      transportSettlement?.[Symbol.dispose]();
       throw error;
     }
-
-    const last = committed.at(-1);
-    if (last === undefined) throw new Error("capability batch committed no events");
-    await this.deps.reads.waitUntilEvent({
-      offset: last.offset,
-      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
-    });
-    return mounts.map(({ provision }) => provision);
+    transportSettlement?.[Symbol.dispose]();
+    return mounts;
   }
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
@@ -572,6 +569,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     input: CapabilityProvidedPayload,
   ): Promise<CapabilityProvidedPayload> {
     const { path } = input;
+    const inputType: unknown = input.type;
     assertCapabilityPath(path);
     let record: CapabilityProvidedPayload;
     if (input.type === "live") {
@@ -603,7 +601,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       };
     } else {
       input satisfies never;
-      throw new Error(`unsupported capability input ${(input as { type?: unknown }).type}`);
+      throw new Error(`unsupported capability input ${String(inputType)}`);
     }
     // Authored types must compile before they enter the stream — a typo'd
     // declaration rejected here is a fixable error; one recorded durably is

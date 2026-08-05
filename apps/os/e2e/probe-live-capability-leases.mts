@@ -13,7 +13,11 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { RpcTarget, type RpcStub } from "capnweb";
 import { connectItx } from "iterate/node";
-import type { CapabilityHost, CapabilityProvision } from "../src/itx-api.generated.ts";
+import type {
+  CapabilityHost,
+  CapabilityProvision,
+  ItxAuthCredentials,
+} from "../src/itx-api.generated.ts";
 import { resolveBaseUrl } from "./test-support/dev-server.ts";
 
 const appRoot = fileURLToPath(new URL("..", import.meta.url));
@@ -29,7 +33,7 @@ const cleanupConcurrency = positiveInteger(process.argv[6] ?? "1", "cleanup conc
 const hostCount = positiveInteger(process.argv[7] ?? "1", "hosts");
 const cleanupStrategy = cleanupStrategyFrom(process.argv[8] ?? "disconnect");
 const accessPattern = accessPatternFrom(process.argv[9] ?? "cached");
-const auth = { type: "admin-secret" as const, secret };
+const auth: ItxAuthCredentials = { type: "admin-secret", secret };
 
 class SoakProvider extends RpcTarget {
   readonly calls: string[] = [];
