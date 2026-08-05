@@ -573,3 +573,34 @@ physical adapter.
 **Open:** Commit and independently re-review this exact correction. Phase 3
 remains gated. The preservation archive's remote-upload confirmation remains
 pending.
+
+## 2026-08-05 — phase 2: final gate
+
+**Did:** Ran the mandatory fresh review of the surgical fail-closed correction
+range `e0ead72af..c94990665`. The reviewer inspected every return path, searched
+for wrapper bypasses and stale-count assumptions, rebuilt from a clean host
+configuration, and mutation-tested both the old validation ordering and a
+deleted null guard.
+
+**Measured:** Fresh ASan/UBSan host verification passed 37/37 in 5.61 s. Reverting
+the count-clearing order made the suite fail at the seeded stale-count
+assertion. Deleting the null guard produced an ASan null dereference caught by
+the new test. The review found four changed files, no unrelated behavior, and
+returned `PASS`.
+
+**Surprised by:** The reviewer identified a distinct pre-existing defense whose
+line is present but whose exact mutation is not yet killed: an adapter could
+write a count and then return failure, relying on the wrapper's second clearing
+write. That behavior is already correct; its dedicated fake belongs alongside
+the first physical adapter rather than in another Phase 2 correction cycle.
+
+**Reviewer said:** The blocker is genuinely closed, contract, wrapper, and tests
+agree, and Phase 3 is unblocked. It suggested pinning the scribble-then-fail
+adapter case and naming the wrapper as the postcondition enforcer when physical
+adapters arrive. → **did:** Accepted both as Phase 3 seam-hardening work. Kept
+the remaining wording-only cleanup deferred.
+
+**Open:** Phase 3 Waveshare structural port, build, and safe proof. Physical
+access remains blocked by the explicit Waveshare denylist; do not open or flash
+that serial device without new authorization. The preservation archive's
+remote-upload confirmation remains pending.
