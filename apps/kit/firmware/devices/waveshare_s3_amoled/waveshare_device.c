@@ -711,8 +711,10 @@ static void on_viseme(
  * Keep these five effects together. The ordering is the correctness proof:
  * disarm -> note flush -> invalidate -> discard -> reprime. In particular,
  * invalidating before disarming creates a window in which an intentional cut
- * is counted as listener-visible starvation. Queue reset is synchronized by
- * FreeRTOS; a frame already copied into the consumer is rejected by generation.
+ * is counted as listener-visible starvation. ESP-IDF 5.4.2's
+ * FreeRTOS-Kernel-SMP/queue.c:xQueueGenericReset holds the queue lock and leaves
+ * blocked receivers waiting when an existing queue is reset. A frame copied
+ * before that lock was taken is rejected by generation.
  */
 static uint32_t abandon_speaker_audio(void) {
   waveshare_audio_dma_watch(false);
