@@ -59,6 +59,9 @@ uint32_t havpe_audio_capture_queue_overflows(void);
 /** TX DMA send-queue overflows reported by the driver ISR. */
 uint32_t havpe_audio_playback_queue_overflows(void);
 
+/** Samples the x16 capture make-up gain had to clip (lifetime). */
+uint32_t havpe_audio_capture_gain_clipped(void);
+
 /* The absolute-deadline starvation ledger; semantics identical to the other
  * boards (see m5sticks3_audio.h). */
 void havpe_audio_watch(bool active);

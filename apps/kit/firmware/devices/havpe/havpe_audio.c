@@ -55,6 +55,15 @@ static const char tag[] = "havpe-audio";
 enum {
   PLAYBACK_RATE_HZ = 48000,
   /*
+   * The XMOS NS tap is deliberately quiet, and the donor validated a fixed
+   * x16 make-up gain for provider VAD (worker-side then; measured 3/3 with
+   * VAD threshold 0.1). On this lane the wire is mu-law — a logarithmic
+   * companding that spends resolution where the signal lives — so the gain
+   * belongs BEFORE encoding, on the device. Saturating, with a lifetime
+   * clip counter so an abnormal level stays observable; never adaptive.
+   */
+  CAPTURE_MAKEUP_GAIN = 16,
+  /*
    * DMA geometry from Espressif's standard-mode sizing formula:
    *
    *   playback descriptor bytes = 480 frames * 2 slots * 32 bits / 8
@@ -127,6 +136,7 @@ static volatile uint32_t capture_driver_failures;
 static volatile uint32_t playback_driver_failures;
 static volatile uint32_t capture_queue_overflow_count;
 static volatile uint32_t playback_queue_overflow_count;
+static volatile uint32_t capture_gain_clipped_samples;
 
 /* --- the shared codec seam ------------------------------------------------ */
 
@@ -339,6 +349,19 @@ static void capture_hardware_task(void *argument) {
         frames_written != HAVPE_AUDIO_FRAME_SAMPLES) {
       ++capture_driver_failures;
       continue;
+    }
+    for (size_t index = 0U; index < HAVPE_AUDIO_FRAME_SAMPLES; ++index) {
+      const int32_t amplified =
+          (int32_t)frame.samples[index] * CAPTURE_MAKEUP_GAIN;
+      if (amplified > INT16_MAX) {
+        frame.samples[index] = INT16_MAX;
+        ++capture_gain_clipped_samples;
+      } else if (amplified < INT16_MIN) {
+        frame.samples[index] = INT16_MIN;
+        ++capture_gain_clipped_samples;
+      } else {
+        frame.samples[index] = (int16_t)amplified;
+      }
     }
     if (atomic_load_explicit(
             &capture_consumer_started, memory_order_acquire) &&
@@ -809,4 +832,8 @@ uint32_t havpe_audio_capture_queue_overflows(void) {
 
 uint32_t havpe_audio_playback_queue_overflows(void) {
   return playback_queue_overflow_count;
+}
+
+uint32_t havpe_audio_capture_gain_clipped(void) {
+  return capture_gain_clipped_samples;
 }

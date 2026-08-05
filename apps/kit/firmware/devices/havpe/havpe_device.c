@@ -1001,6 +1001,7 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkDebtPaid", runtime.speaker_debt_paid},
     {"spkWriteFailures", runtime.speaker_write_failures},
     {"codecPlaybackFailures", havpe_audio_playback_driver_failures()},
+    {"captureGainClipped", havpe_audio_capture_gain_clipped()},
     /* Driver-level DMA overflows: the slave buses' own loss signals. */
     {"captureQueueOverflows", havpe_audio_capture_queue_overflows()},
     {"playbackQueueOverflows", havpe_audio_playback_queue_overflows()},
