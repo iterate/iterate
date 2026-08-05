@@ -732,3 +732,54 @@ reset, when the exact frozen range will be submitted afresh.
 **Open:** Commit and rebuild this final correction, then obtain the mandatory
 independent Phase 3 PASS after the reported reset. The preservation archive no
 longer has an open upload-confirmation gap.
+
+## 2026-08-05 — phase 4a+4b: M5StickS3 and HAVPE structural ports
+
+**Did:** Ported both boards onto the shared single-socket lane as rhyming
+compositions of the same portable modules, per the standing
+conventions-over-frameworks preference: no extracted app-runtime framework,
+three device roots a reader can diff. The M5StickS3 port preserves the donor
+codec bring-up exactly — the 8-register ES8311 table with the brownout-proven
+-18 dB DAC ceiling (0x32=0x9B), the BCLK-sourced codec clock, and the M5PM1
+amplifier latch — and makes the board's half duplex literal: the ADC and DAC
+share I2S clock pins, so a four-stage pin-ownership fence (channel deletion,
+not disable, is the boundary) hands the hardware between push-to-talk capture
+and playback. The HAVPE port adopts §5.1 Tier 2's voice_pe_hardware_config
+and its pcm-format companion nearly verbatim with their host tests, fails
+boot closed on XMOS firmware != 1.3.1 or unverified pipeline stages, and
+declares the load-bearing seam fact: capture_is_echo_cancelled with
+has_reference_channel=false, passthrough processor. Both new boards measure
+playback starvation against the absolute audio-empty deadline only; the
+per-descriptor ISR ledger stays Waveshare-only because a 600 ms injected gap
+moved it by zero there. Deferred the mandatory per-phase reviews on explicit
+user instruction ("straightest possible line... don't do the subagent review
+runs until later"); they are batched as later work alongside the still-open
+Phase 3 review.
+
+**Measured:** Host suite 49/49 under ASan/UBSan (46 prior + the three adopted
+HAVPE pure tests) in 2.76 s. Native ESP-IDF 5.4.2 builds pass with -Wall
+-Wextra -Werror on first configure for both: iterate-kit-m5sticks3.bin is
+0x117ae0 bytes (45% of its 2 MiB partition free), iterate-kit-havpe.bin is
+0xf0d90 bytes (81% of 5 MiB free). Both partition tables keep donor offsets
+so the ITERKIT1 blobs at 0x210000/0x510000 on the physical units survive a
+plain app flash. The Waveshare target and Mac host path are untouched by
+these commits except tests/CMakeLists.txt additions.
+
+**Surprised by:** The donor M5StickS3 microphone is not a PDM part — several
+donor docs claim PDM, but the source-verified fact is the same ES8311's ADC
+on I2S1 (DIN GPIO 16) sharing the clock pins, which is exactly why the
+half-duplex fence must delete the playback channel: ESP-IDF leaves MCLK
+routed after disable. Also HAVPE's donor never gated its speaker rail after
+boot — the XMOS AEC reference rides the always-running TX stream, so the amp
+discipline that protects the no-AEC boards would be an AEC outage here.
+
+**Reviewer said:** Deferred (user directive). → **did:** Recorded the exact
+per-phase commit boundaries for the later batched reviews: 4a = 99a88f90b,
+4b = d2e54d5ee.
+
+**Open:** Hardware conversation proof for both boards (both are on the hub
+and flashable; the Waveshare denylist does not apply to them) in a dedicated
+session against local dev over LAN ws://. StackChan (4c) port next, compile
+and host-test only. User amendment 2026-08-05: StackChan explicitly wanted
+even while offline — servos, camera, speaker, AEC, touchscreen — with the
+donor's final tuned AEC and levels preserved exactly.
