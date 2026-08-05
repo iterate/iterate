@@ -9,11 +9,13 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-Implementation is about 80% complete. Both skips are removed, failures now
+Implementation is about 85% complete. Both skips are removed, failures now
 name the first missing durable transition, and the two dynamic-worker
 ownership leaks plus the foreground-approval ordering race have red/green
-regression coverage. Fresh preview validation and the 25-run restoration gate
-remain.
+regression coverage. A fresh preview passed both restored flows, then exposed
+an interrupted CLI lifecycle while correctly rejecting the run for unrelated
+Cloudflare storage resets. Its empty-output diagnostic is now explicit. Another
+clean preview and the 25-run restoration gate remain.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -88,6 +90,14 @@ notification journal.
   removed the subscription at root offset 56, and therefore could not copy the
   second notification at root offset 59. The failure diagnostic correctly
   named `notification/requested copied to device` as the first missing link.
+- Final-head preview run `9wgmlm2ztp` passed approvals in 52.2 seconds and
+  notifications in 1.1 minutes without either test retrying. The workflow was
+  rejected because `workspace-edit-and-push` retried once after two Cloudflare
+  Durable Object storage resets (`rnobmgjufmksoiinfovt95q1` and
+  `hubulkncdqrp82raijd9a82b`) in its execution window. The interrupted CLI child
+  exited without its promised JSON document, which the matrix previously
+  surfaced as the generic parser error `Unexpected end of JSON input`. The
+  adapter now names that missing result and interrupted lifecycle directly.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -202,3 +212,10 @@ Test these in order; do not treat the first plausible one as the conclusion.
   red state-machine spec, durable pending-claim/high-water state, and a contract
   version bump; all 24 device processor tests, OS typecheck, lint, and format
   checks pass.
+- 2026-08-05: A final-head preview passed both restored mobile cases, but an
+  unrelated catalogue case retried. PostHog placed the retry at 22:20:19Z and
+  Cloudflare traces showed two internal storage resets in the same window. The
+  reset interrupted the CLI child before it wrote its result. Added an explicit
+  empty-result diagnostic so a repeat names the lifecycle boundary instead of
+  failing later in `JSON.parse`; the next canonical preview is the
+  production-shaped regression check.

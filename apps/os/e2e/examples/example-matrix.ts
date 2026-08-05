@@ -106,6 +106,11 @@ async function runInCli(input: {
       },
     );
     await reportCliDiagnostics(stderr, input.onInitialConnectionRetry);
+    if (!stdout.trim()) {
+      throw new Error(
+        "CLI process exited successfully before writing its JSON result; the command lifecycle was interrupted",
+      );
+    }
     return JSON.parse(stdout);
   } catch (error) {
     if (abortController.signal.aborted) {
