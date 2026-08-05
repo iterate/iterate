@@ -1,8 +1,8 @@
-#ifndef ITERATE_KIT_CLI_AUDIO_IN_H
-#define ITERATE_KIT_CLI_AUDIO_IN_H
+#ifndef ITERATE_KIT_PLATFORMS_DARWIN_AUDIO_INPUT_H
+#define ITERATE_KIT_PLATFORMS_DARWIN_AUDIO_INPUT_H
 
 /*
- * cli_audio_in: this Mac's microphone, as a source behind the existing seam.
+ * iterate_kit_darwin_audio_input: this Mac's microphone ring.
  *
  * ORIGINATING FAILURE. The target's only microphone was a WAV file, so nobody
  * could talk to the stack by hand. Every turn was a recording, and a recording
@@ -10,18 +10,18 @@
  * came back sounding wrong. Whole classes of complaint had to wait for a board
  * to be flashed before anybody could hear them.
  *
- * IT IS A SOURCE, NOT A SECOND PATH. Captured frames go into the same
- * cli_microphone queue, by the same route, gated by the same talk flag as a
- * file source. The entire value of this target is that the code under test is
- * the device's own; a live-microphone path that reached the uplink some other
- * way would prove nothing about the device and would be the first thing to
- * drift.
+ * IT IS A SOURCE, NOT A SECOND PATH. The Darwin codec adapter drains this ring
+ * only through audio_codec.read(); its caller then applies the selected audio
+ * processor and the same microphone queue and talk gate used by a file source.
+ * A live-microphone path that reached the uplink some other way would prove
+ * nothing about the device and would be the first thing to drift.
  *
  * CONCURRENCY. CoreAudio fills buffers on its own capture thread and calls
  * back there; the cooperative poll owner drains. One producer, one consumer,
  * no locks: the producer only ever advances `write`, and `read` belongs to the
  * consumer alone. On overrun the CONSUMER discards the oldest frames and
- * counts them, which is cli_microphone's policy and for the same reason — a
+ * counts them, which is the portable microphone queue's policy for the same
+ * reason — a
  * queue that keeps the oldest speech sends a sentence that falls further
  * behind the speaker with every frame.
  *
@@ -51,21 +51,21 @@ enum {
    * cover a scheduling gap; more than this only delays the discovery that the
    * consumer has stopped draining.
    */
-  CLI_AUDIO_IN_BUFFER_COUNT = 8,
+  ITERATE_KIT_DARWIN_AUDIO_INPUT_BUFFER_COUNT = 8,
   /*
    * The handoff ring, sized to the device's own microphone queue depth so the
    * host cannot quietly hold more speech than the board does.
    */
-  CLI_AUDIO_IN_RING_FRAMES = ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH,
+  ITERATE_KIT_DARWIN_AUDIO_INPUT_RING_FRAMES = ITERATE_KIT_VOICE_MIC_QUEUE_DEPTH,
 };
 
 /** One status per way capture can refuse work. */
-enum cli_audio_in_status {
-  CLI_AUDIO_IN_OK = 0,
-  CLI_AUDIO_IN_ERR_ARG,
-  CLI_AUDIO_IN_ERR_PLATFORM,
+enum iterate_kit_darwin_audio_input_status {
+  ITERATE_KIT_DARWIN_AUDIO_INPUT_OK = 0,
+  ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_ARG,
+  ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_PLATFORM,
   /** Nothing captured yet. Normal between frames, not an error. */
-  CLI_AUDIO_IN_ERR_EMPTY,
+  ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_EMPTY,
 };
 
 /**
@@ -75,16 +75,16 @@ enum cli_audio_in_status {
  * ever produced rather than a slot index: the difference against `read` is
  * then the true backlog even after either wraps.
  */
-struct cli_audio_in {
+struct iterate_kit_darwin_audio_input {
   AudioQueueRef queue;
-  AudioQueueBufferRef buffers[CLI_AUDIO_IN_BUFFER_COUNT];
-  uint8_t frames[CLI_AUDIO_IN_RING_FRAMES][ITERATE_KIT_VOICE_FRAME_BYTES];
+  AudioQueueBufferRef buffers[ITERATE_KIT_DARWIN_AUDIO_INPUT_BUFFER_COUNT];
+  uint8_t frames[ITERATE_KIT_DARWIN_AUDIO_INPUT_RING_FRAMES][ITERATE_KIT_VOICE_FRAME_BYTES];
   atomic_uint_least32_t write;
   atomic_int_least32_t platform_error;
   uint32_t read;
   /** Frames the consumer discarded because it had fallen a whole ring behind. */
   uint32_t dropped;
-  /** Callbacks that were not a whole frame; see cli_audio_in_push. */
+  /** Callbacks that were not a whole frame; see iterate_kit_darwin_audio_input_push. */
   atomic_uint_least32_t short_buffers;
   /** Frames accepted. Zero while talking means macOS refused the microphone. */
   atomic_uint_least32_t captured;
@@ -92,10 +92,10 @@ struct cli_audio_in {
 };
 
 /** Human-readable status name, for the one top-level log boundary. */
-const char *cli_audio_in_status_name(enum cli_audio_in_status status);
+const char *iterate_kit_darwin_audio_input_status_name(enum iterate_kit_darwin_audio_input_status status);
 
 /** Allocate and start the fixed CoreAudio input queue. Pairs with close. */
-enum cli_audio_in_status cli_audio_in_open(struct cli_audio_in *in);
+enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_open(struct iterate_kit_darwin_audio_input *in);
 
 /**
  * Accept one captured frame. Called from the CoreAudio capture thread, and
@@ -107,17 +107,17 @@ enum cli_audio_in_status cli_audio_in_open(struct cli_audio_in *in);
  * padded. CoreAudio delivers whole buffers except around start and stop, and
  * padding those with silence would put a click at the front of every turn.
  */
-enum cli_audio_in_status cli_audio_in_push(
-    struct cli_audio_in *in, const uint8_t *pcm, size_t length);
+enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_push(
+    struct iterate_kit_darwin_audio_input *in, const uint8_t *pcm, size_t length);
 
 /** Take the oldest frame, discarding any the consumer fell behind on. */
-enum cli_audio_in_status cli_audio_in_pop(
-    struct cli_audio_in *in, uint8_t *out, size_t length);
+enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_pop(
+    struct iterate_kit_darwin_audio_input *in, uint8_t *out, size_t length);
 
-uint32_t cli_audio_in_captured_frames(const struct cli_audio_in *in);
-int32_t cli_audio_in_platform_error(const struct cli_audio_in *in);
+uint32_t iterate_kit_darwin_audio_input_captured_frames(const struct iterate_kit_darwin_audio_input *in);
+int32_t iterate_kit_darwin_audio_input_platform_error(const struct iterate_kit_darwin_audio_input *in);
 
 /** Stop and release CoreAudio resources. Safe before or after a failed open. */
-void cli_audio_in_close(struct cli_audio_in *in);
+void iterate_kit_darwin_audio_input_close(struct iterate_kit_darwin_audio_input *in);
 
-#endif /* ITERATE_KIT_CLI_AUDIO_IN_H */
+#endif

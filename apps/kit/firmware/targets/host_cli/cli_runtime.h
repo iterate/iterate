@@ -15,8 +15,6 @@
 #include <stdint.h>
 
 #include "capnweb/capnweb.h"
-#include "cli_audio_in.h"
-#include "cli_audio_out.h"
 #include "cli_capabilities.h"
 #include "cli_conversation.h"
 #include "cli_device_controls.h"
@@ -31,9 +29,11 @@
 #include "cli_virtual_clock.h"
 #include "cli_wav.h"
 #include "iterate/kit/audio_playout.h"
+#include "iterate/kit/audio_processor.h"
 #include "iterate/kit/configuration.h"
 #include "iterate/kit/itx_connection.h"
 #include "iterate/kit/peer.h"
+#include "iterate/kit/platforms/darwin_audio_codec.h"
 #include "iterate/kit/platforms/posix_itx_transport.h"
 #include "iterate/kit/spsc_ring.h"
 #include "iterate/kit/voice_playback_clock.h"
@@ -83,8 +83,8 @@ struct cli_runtime {
   struct cli_wav_sink mic_sink;
   /* Where the pretend speaker's converter lands, when there is one. */
   struct cli_wav_sink pretend_sink;
-  struct cli_audio_out live_out;
-  struct cli_audio_in live_in;
+  struct iterate_kit_darwin_audio_codec audio_codec;
+  struct iterate_kit_audio_processor audio_processor;
   struct cli_keyboard keyboard;
   /* Models the converter's clock; unpaced by default. See cli_paced_sink.h. */
   struct cli_paced_sink paced_sink;

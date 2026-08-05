@@ -1,9 +1,4 @@
-find_library(ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK AudioToolbox REQUIRED)
-find_library(ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK CoreFoundation REQUIRED)
-
 add_executable(iterate-kit-cli
-  cli_audio_in.c
-  cli_audio_out.c
   cli_capabilities.c
   cli_conversation.c
   cli_device_controls.c
@@ -36,6 +31,4 @@ target_compile_options(iterate-kit-cli PRIVATE
   -Wshadow)
 target_link_libraries(iterate-kit-cli PRIVATE
   iterate-kit-capabilities
-  iterate-kit-darwin
-  ${ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK}
-  ${ITERATE_KIT_CORE_FOUNDATION_FRAMEWORK})
+  iterate-kit-darwin)

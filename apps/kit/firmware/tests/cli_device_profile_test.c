@@ -1,6 +1,7 @@
 #include "cli_device_profile.h"
 
 #include "iterate/kit/voice_device_profile.h"
+#include "iterate/kit/platforms/darwin_audio_output.h"
 
 #include <assert.h>
 #include <stdint.h>
@@ -63,6 +64,9 @@ static void the_board_profile_agrees_with_the_firmware_it_simulates(void)
   const struct cli_device_profile *profile = board();
 
   assert(profile->frame_bytes == (uint32_t)ITERATE_KIT_VOICE_FRAME_BYTES);
+  assert(profile->output_lead_frames ==
+         (uint32_t)(ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES /
+                    ITERATE_KIT_VOICE_FRAME_BYTES));
   assert(profile->speaker_ring_bytes ==
          (uint32_t)ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES);
   assert(profile->speaker_prefill_bytes ==

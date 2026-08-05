@@ -90,6 +90,14 @@ static bool cli_main_init_transport(struct cli_runtime *runtime);
 /* Opens the authoritative WAV and optional CoreAudio mirror. */
 static bool cli_main_init_audio(struct cli_runtime *runtime);
 
+/* Adapts the host WAV writer to the Darwin file-clock boundary. */
+static bool cli_main_write_pretend_speaker(
+    void *context, const uint8_t *pcm, size_t length);
+
+/* Takes one coherent snapshot of Darwin's completion and fault evidence. */
+static struct iterate_kit_darwin_audio_codec_metrics cli_main_audio_metrics(
+    const struct cli_runtime *runtime);
+
 /* Opens one source or discovers the unattended utterance set. */
 static bool cli_main_init_input(struct cli_runtime *runtime);
 
@@ -175,6 +183,10 @@ static void cli_main_capture_live_frame(struct cli_runtime *runtime);
 
 /* Takes one frame from the recording, latching its end. */
 static void cli_main_capture_recorded_frame(struct cli_runtime *runtime);
+
+/* Runs capture through the selected DSP and then admits its clean output. */
+static void cli_main_accept_capture_frame(
+    struct cli_runtime *runtime, const int16_t *capture);
 
 /* Configures the modelled converter from --speaker-pace. */
 static bool cli_main_init_converter(struct cli_runtime *runtime);
@@ -385,9 +397,11 @@ int main(int argc, char **argv)
   cli_main_run_loop(runtime);
   const bool audio_drained = cli_main_drain_audio(runtime);
   cli_main_close_runtime(runtime);
+  const struct iterate_kit_darwin_audio_codec_metrics audio =
+      cli_main_audio_metrics(runtime);
   const bool audio_healthy =
-      cli_audio_out_platform_error(&runtime->live_out) == 0 &&
-      cli_audio_in_platform_error(&runtime->live_in) == 0;
+      audio.playback_platform_error == 0 &&
+      audio.capture_platform_error == 0;
   if (runtime->options.converse_minutes > 0.0 &&
       cli_conversation_write_report(runtime) != CLI_CONVERSATION_OK) {
     cli_runtime_log(
@@ -604,11 +618,6 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
   if (!cli_main_init_profile(runtime)) return false;
   if (!cli_main_init_harness(runtime)) return false;
   if (!cli_main_init_converter(runtime)) return false;
-  if (runtime->options.live_audio &&
-      cli_audio_out_open(&runtime->live_out) != CLI_AUDIO_OUT_OK) {
-    cli_runtime_log("error", "CoreAudio output initialization failed");
-    return false;
-  }
   /*
    * The pretend speaker is the SAME converter, pulled by this loop instead of
    * by CoreAudio's thread. Everything downstream — the ring, the starvation
@@ -624,19 +633,49 @@ static bool cli_main_init_audio(struct cli_runtime *runtime)
           runtime->options.pretend_speaker);
       return false;
     }
-    if (cli_audio_out_open_file(&runtime->live_out, &runtime->pretend_sink) !=
-        CLI_AUDIO_OUT_OK) {
-      cli_runtime_log("error", "cannot start the pretend speaker");
-      return false;
-    }
     cli_runtime_log(
         "info", "pretend speaker: the live path, into %s",
         runtime->options.pretend_speaker);
   }
-  if (!runtime->options.live_mic) return true;
-  if (cli_audio_in_open(&runtime->live_in) == CLI_AUDIO_IN_OK) return true;
-  cli_runtime_log("error", "CoreAudio input initialization failed");
-  return false;
+  const struct iterate_kit_darwin_audio_file_sink pretend_speaker = {
+    .context = &runtime->pretend_sink,
+    .write = cli_main_write_pretend_speaker,
+  };
+  const struct iterate_kit_darwin_audio_codec_options codec_options = {
+    .capture_enabled = runtime->options.live_mic,
+    .playback_enabled = runtime->options.live_audio ||
+        runtime->options.pretend_speaker != NULL,
+    .file_playback = runtime->options.pretend_speaker == NULL
+        ? NULL
+        : &pretend_speaker,
+  };
+  if (iterate_kit_darwin_audio_codec_open(
+          &runtime->audio_codec, &codec_options) != ITERATE_KIT_OK) {
+    cli_runtime_log("error", "CoreAudio codec initialization failed");
+    return false;
+  }
+  runtime->audio_processor = iterate_kit_audio_processor_passthrough();
+  if (iterate_kit_audio_processor_validate(&runtime->audio_processor) !=
+      ITERATE_KIT_OK) {
+    cli_runtime_log("error", "audio processor initialization failed");
+    return false;
+  }
+  return true;
+}
+
+static bool cli_main_write_pretend_speaker(
+    void *context, const uint8_t *pcm, size_t length)
+{
+  return cli_wav_sink_write(context, pcm, length) == CLI_WAV_OK;
+}
+
+static struct iterate_kit_darwin_audio_codec_metrics cli_main_audio_metrics(
+    const struct cli_runtime *runtime)
+{
+  struct iterate_kit_darwin_audio_codec_metrics metrics;
+  assert(runtime != NULL);
+  iterate_kit_darwin_audio_codec_metrics(&runtime->audio_codec, &metrics);
+  return metrics;
 }
 
 /** Turn the command line's recipe knobs into a schedule recipe. */
@@ -923,8 +962,7 @@ static void cli_main_close_runtime(struct cli_runtime *runtime)
   cli_keyboard_close(&runtime->keyboard);
   (void)iterate_kit_posix_itx_transport_stop(&runtime->transport);
   (void)iterate_kit_peer_close(&runtime->peer);
-  cli_audio_out_close(&runtime->live_out);
-  cli_audio_in_close(&runtime->live_in);
+  iterate_kit_darwin_audio_codec_close(&runtime->audio_codec);
   cli_wav_source_close(&runtime->source);
   cli_wav_sink_close(&runtime->sink);
   cli_wav_sink_close(&runtime->mic_sink);
@@ -933,32 +971,36 @@ static void cli_main_close_runtime(struct cli_runtime *runtime)
 
 static bool cli_main_drain_audio(struct cli_runtime *runtime)
 {
-  enum cli_audio_out_status status;
+  enum iterate_kit_darwin_audio_output_status status;
   assert(runtime != NULL);
-  cli_audio_out_set_expected(&runtime->live_out, false);
-  status = cli_audio_out_drain(
-      &runtime->live_out, (uint32_t)CLI_MAIN_HANGUP_GRACE_MS);
+  iterate_kit_darwin_audio_codec_set_playback_expected(
+      &runtime->audio_codec, false);
+  status = iterate_kit_darwin_audio_codec_drain(
+      &runtime->audio_codec, (uint32_t)CLI_MAIN_HANGUP_GRACE_MS);
+  const struct iterate_kit_darwin_audio_codec_metrics audio =
+      cli_main_audio_metrics(runtime);
   cli_runtime_log(
-      status == CLI_AUDIO_OUT_OK ? "info" : "error",
+      status == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK ? "info" : "error",
       "room completion status=%s completedBytes=%u droppedBytes=%u "
       "starvedBuffers=%u outputError=%" PRId32 " inputError=%" PRId32,
-      cli_audio_out_status_name(status),
-      cli_audio_out_completed_bytes(&runtime->live_out),
-      runtime->live_out.dropped,
-      cli_audio_out_starved_buffers(&runtime->live_out),
-      cli_audio_out_platform_error(&runtime->live_out),
-      cli_audio_in_platform_error(&runtime->live_in));
-  return status == CLI_AUDIO_OUT_OK &&
-      cli_audio_out_platform_error(&runtime->live_out) == 0 &&
-      cli_audio_in_platform_error(&runtime->live_in) == 0;
+      iterate_kit_darwin_audio_output_status_name(status),
+      audio.playback_completed_bytes,
+      audio.playback_dropped_bytes,
+      audio.playback_starved_buffers,
+      audio.playback_platform_error,
+      audio.capture_platform_error);
+  return status == ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK &&
+      audio.playback_platform_error == 0 &&
+      audio.capture_platform_error == 0;
 }
 
 static void cli_main_supervise_audio(struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
-  const int32_t output_error =
-      cli_audio_out_platform_error(&runtime->live_out);
-  const int32_t input_error = cli_audio_in_platform_error(&runtime->live_in);
+  const struct iterate_kit_darwin_audio_codec_metrics audio =
+      cli_main_audio_metrics(runtime);
+  const int32_t output_error = audio.playback_platform_error;
+  const int32_t input_error = audio.capture_platform_error;
   if (output_error == 0 && input_error == 0) return;
   cli_runtime_log(
       "error", "audio platform failure output=%" PRId32 " input=%" PRId32,
@@ -1018,7 +1060,7 @@ static void cli_main_accept_speaker_frame(
       &runtime->playout, identity);
   if (action == ITERATE_KIT_PLAYOUT_IGNORE) return;
   if (action == ITERATE_KIT_PLAYOUT_REPLACE) {
-    cli_audio_out_set_expected(&runtime->live_out, false);
+    iterate_kit_darwin_audio_codec_set_playback_expected(&runtime->audio_codec, false);
     cli_speaker_clear(&runtime->speaker);
     iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
     /* A new answer is a new timeline: lag does not carry across answers. */
@@ -1083,7 +1125,7 @@ static void cli_main_on_control(
   struct cli_runtime *runtime = context;
   if (runtime == NULL) return;
   if (control == ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED) {
-    cli_audio_out_set_expected(&runtime->live_out, false);
+    iterate_kit_darwin_audio_codec_set_playback_expected(&runtime->audio_codec, false);
     cli_speaker_clear(&runtime->speaker);
     iterate_kit_playout_interrupt(&runtime->playout);
     iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
@@ -1145,20 +1187,27 @@ static bool cli_main_record_frame(
     runtime->stop_requested = true;
     return false;
   }
+  if (!runtime->options.live_audio &&
+      runtime->options.pretend_speaker == NULL) {
+    return true;
+  }
   /*
    * NOT discarded. This refusal used to be cast away, so a speaker that was
    * dropping most of a conversation reported nothing at all and the room went
    * quiet while every counter stayed clean.
    */
-  const enum cli_audio_out_status room = cli_audio_out_write(
-      &runtime->live_out, pcm, ITERATE_KIT_VOICE_FRAME_BYTES);
-  if (room == CLI_AUDIO_OUT_ERR_FULL) {
+  int16_t playback[ITERATE_KIT_VOICE_FRAME_SAMPLES];
+  memcpy(playback, pcm, sizeof(playback));
+  const enum iterate_kit_status room = iterate_kit_audio_codec_write(
+      &runtime->audio_codec.codec,
+      playback,
+      ITERATE_KIT_VOICE_FRAME_SAMPLES);
+  if (room == ITERATE_KIT_BACKPRESSURE) {
     ++runtime->speaker_room_drops;
     return false;
-  } else if (room != CLI_AUDIO_OUT_OK) {
+  } else if (room != ITERATE_KIT_OK) {
     cli_runtime_log(
-        "error", "speaker output failed: %s",
-        cli_audio_out_status_name(room));
+        "error", "speaker output failed status=%d", (int)room);
     runtime->stop_requested = true;
     return false;
   }
@@ -1231,7 +1280,8 @@ static void cli_main_finish_answer_if_ready(
   const bool software_drained =
       runtime->answer_done && runtime->speaker.used == 0U;
   if (software_drained) {
-    cli_audio_out_set_expected(&runtime->live_out, false);
+    iterate_kit_darwin_audio_codec_set_playback_expected(
+        &runtime->audio_codec, false);
   }
   struct cli_report_turn *turn = runtime->conversation.current_turn;
   if (turn == NULL) {
@@ -1241,7 +1291,7 @@ static void cli_main_finish_answer_if_ready(
   const bool room_drained =
       (!runtime->options.live_audio &&
        runtime->options.pretend_speaker == NULL) ||
-      cli_audio_out_completed_bytes(&runtime->live_out) -
+      cli_main_audio_metrics(runtime).playback_completed_bytes -
               runtime->turn_room_completed_start_bytes >=
           runtime->turn_room_submitted_bytes;
   const bool played_out =
@@ -1372,7 +1422,7 @@ static void cli_main_poll_playback(
      *
      * Polling is intentionally faster than the 20 ms pull period. It merely
      * replenishes bounded lead; it cannot run playback ahead because
-     * cli_audio_out_queued_bytes() measures only the refill reserve; payload
+     * Darwin's queued-byte metric measures only the refill reserve; payload
      * already owned by the hardware cannot satisfy the callback that asks to
      * reuse a completed buffer.
      */
@@ -1401,9 +1451,10 @@ static void cli_main_feed_playback(
   assert(runtime != NULL);
   const bool room_pulls = runtime->options.live_audio ||
       runtime->options.pretend_speaker != NULL;
+  const uint32_t room_queued_bytes =
+      cli_main_audio_metrics(runtime).playback_queued_bytes;
   if (room_pulls &&
-      cli_audio_out_queued_bytes(&runtime->live_out) >=
-          CLI_AUDIO_OUT_LEAD_BYTES) {
+      room_queued_bytes >= ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES) {
     return;
   }
   /*
@@ -1442,8 +1493,8 @@ static void cli_main_feed_playback(
   } while (fed < CLI_PACED_SINK_MAX_DEPTH_FRAMES &&
            (cli_paced_sink_ready(&runtime->paced_sink) ||
             (room_pulls &&
-             cli_audio_out_queued_bytes(&runtime->live_out) <
-                 CLI_AUDIO_OUT_LEAD_BYTES)));
+             cli_main_audio_metrics(runtime).playback_queued_bytes <
+                 ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES)));
 }
 
 static void cli_main_capture_frame(struct cli_runtime *runtime)
@@ -1466,27 +1517,56 @@ static void cli_main_capture_live_frame(struct cli_runtime *runtime)
    * end a second and a half after the key came up.
    */
   if (runtime->flushing_turn) return;
-  uint8_t frame[ITERATE_KIT_VOICE_FRAME_BYTES] = {0};
-  if (cli_audio_in_pop(&runtime->live_in, frame, sizeof(frame)) !=
-      CLI_AUDIO_IN_OK) return;
-  ++runtime->mic_frames_captured;
-  cli_main_record_mic_frame(runtime, frame);
-  (void)cli_microphone_push(&runtime->microphone, frame, sizeof(frame));
+  int16_t capture[ITERATE_KIT_VOICE_FRAME_SAMPLES] = {0};
+  size_t sample_count = 0U;
+  if (iterate_kit_audio_codec_read(
+          &runtime->audio_codec.codec,
+          capture,
+          NULL,
+          ITERATE_KIT_VOICE_FRAME_SAMPLES,
+          &sample_count) != ITERATE_KIT_OK) {
+    return;
+  }
+  assert(sample_count == ITERATE_KIT_VOICE_FRAME_SAMPLES);
+  cli_main_accept_capture_frame(runtime, capture);
 }
 
 static void cli_main_capture_recorded_frame(struct cli_runtime *runtime)
 {
   assert(runtime != NULL);
-  uint8_t frame[ITERATE_KIT_VOICE_FRAME_BYTES] = {0};
+  int16_t capture[ITERATE_KIT_VOICE_FRAME_SAMPLES] = {0};
   if (runtime->source_finished) return;
-  if (cli_wav_source_frame(&runtime->source, frame, sizeof(frame)) !=
+  if (cli_wav_source_frame(
+          &runtime->source, (uint8_t *)capture, sizeof(capture)) !=
       CLI_WAV_OK) {
     runtime->source_finished = true;
     return;
   }
+  cli_main_accept_capture_frame(runtime, capture);
+}
+
+static void cli_main_accept_capture_frame(
+    struct cli_runtime *runtime, const int16_t *capture)
+{
+  assert(runtime != NULL && capture != NULL);
+  int16_t clean[ITERATE_KIT_VOICE_FRAME_SAMPLES] = {0};
+  const struct iterate_kit_audio_processor_frame frame = {
+    .near = capture,
+    .reference = NULL,
+    .playout_activity = NULL,
+    .output = clean,
+    .sample_count = ITERATE_KIT_VOICE_FRAME_SAMPLES,
+  };
+  if (iterate_kit_audio_processor_process(
+          &runtime->audio_processor, &frame) != ITERATE_KIT_OK) {
+    cli_runtime_log("error", "audio processor failed");
+    runtime->stop_requested = true;
+    return;
+  }
   ++runtime->mic_frames_captured;
-  cli_main_record_mic_frame(runtime, frame);
-  (void)cli_microphone_push(&runtime->microphone, frame, sizeof(frame));
+  cli_main_record_mic_frame(runtime, (const uint8_t *)clean);
+  (void)cli_microphone_push(
+      &runtime->microphone, (const uint8_t *)clean, sizeof(clean));
 }
 
 static void cli_main_send_microphone(struct cli_runtime *runtime, uint64_t now_ms)
@@ -1831,6 +1911,8 @@ static void cli_main_pulse(
   if (runtime->options.pretend_speaker != NULL) {
     (void)cli_wav_sink_sync(&runtime->pretend_sink);
   }
+  const struct iterate_kit_darwin_audio_codec_metrics audio =
+      cli_main_audio_metrics(runtime);
   cli_runtime_log(
       "info",
       "pulse loops=%u outbox=%u/%u sent=%u frames=%u batches=%u rx=%u "
@@ -1851,20 +1933,20 @@ static void cli_main_pulse(
        * anybody watching a session will already be reading.
        */
       runtime->paced_sink.underrun_frames, runtime->paced_sink.refused_frames,
-      cli_audio_in_captured_frames(&runtime->live_in), runtime->live_in.dropped,
+      audio.capture_frames, audio.capture_frames_dropped,
       /*
        * The room, as distinct from the recording. roomDrop is audio the
        * speaker never got, roomStarve is silence somebody actually heard, and
        * both were invisible while a whole conversation failed to be audible.
        */
       runtime->speaker_room_drops,
-      cli_audio_out_starved_buffers(&runtime->live_out),
-      cli_audio_out_completed_bytes(&runtime->live_out) /
+      audio.playback_starved_buffers,
+      audio.playback_completed_bytes /
           ITERATE_KIT_VOICE_FRAME_BYTES,
-      cli_audio_out_queued_bytes(&runtime->live_out) /
+      audio.playback_queued_bytes /
           (ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS),
-      cli_audio_out_platform_error(&runtime->live_out),
-      cli_audio_in_platform_error(&runtime->live_in),
+      audio.playback_platform_error,
+      audio.capture_platform_error,
       /*
        * What the harness DID, beside what happened. Without these a run that
        * injected nothing and a run that injected everything read the same,
@@ -1943,8 +2025,7 @@ static void cli_main_reexec_if_ready(
   }
   /* execv keeps the file descriptors, so the terminal must be handed back. */
   cli_keyboard_close(&runtime->keyboard);
-  cli_audio_out_close(&runtime->live_out);
-  cli_audio_in_close(&runtime->live_in);
+  iterate_kit_darwin_audio_codec_close(&runtime->audio_codec);
   cli_wav_sink_close(&runtime->sink);
   cli_wav_sink_close(&runtime->mic_sink);
   cli_wav_sink_close(&runtime->pretend_sink);
@@ -2141,7 +2222,8 @@ static void cli_main_run_loop(struct cli_runtime *runtime)
      * CoreAudio's thread, so it only advances if somebody advances it. Placed
      * beside the playback poll because they model the same instant.
      */
-    cli_audio_out_pump(&runtime->live_out, cli_runtime_now_us());
+    iterate_kit_darwin_audio_codec_pump(
+        &runtime->audio_codec, cli_runtime_now_us());
     cli_main_supervise_audio(runtime);
     cli_main_poll_interactive(runtime, now_ms);
     cli_conversation_poll(runtime, now_ms);

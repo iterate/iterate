@@ -50,6 +50,17 @@ iterate_kit_add_core_test(iterate-kit-websocket-rx-test websocket_rx_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-text-test websocket_text_test.c)
 iterate_kit_add_core_test(iterate-kit-websocket-tx-test websocket_tx_test.c)
 
+add_executable(iterate-kit-audio-seams-test audio_seams_test.c)
+target_compile_features(iterate-kit-audio-seams-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-audio-seams-test PRIVATE
+  -UNDEBUG
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic)
+target_link_libraries(iterate-kit-audio-seams-test PRIVATE iterate-kit-audio)
+add_test(NAME iterate-kit-audio-seams-test COMMAND iterate-kit-audio-seams-test)
+
 add_executable(iterate-kit-push-to-talk-test push_to_talk_test.c)
 target_compile_features(iterate-kit-push-to-talk-test PRIVATE c_std_99)
 target_compile_options(iterate-kit-push-to-talk-test PRIVATE
@@ -89,6 +100,27 @@ if(APPLE)
     iterate-kit-cli-device-profile-test
     ../targets/host_cli/cli_device_profile.c
     cli_device_profile_test.c)
+  target_include_directories(
+    iterate-kit-cli-device-profile-test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../platforms/darwin/include")
+  add_executable(
+    iterate-kit-darwin-audio-codec-test
+    darwin_audio_codec_test.c)
+  target_compile_features(iterate-kit-darwin-audio-codec-test PRIVATE c_std_11)
+  target_compile_options(iterate-kit-darwin-audio-codec-test PRIVATE
+    -UNDEBUG
+    -Wall
+    -Wextra
+    -Werror
+    -Wpedantic
+    -Wconversion
+    -Wshadow)
+  target_link_libraries(
+    iterate-kit-darwin-audio-codec-test PRIVATE iterate-kit-darwin)
+  add_test(
+    NAME iterate-kit-darwin-audio-codec-test
+    COMMAND iterate-kit-darwin-audio-codec-test)
+
   add_executable(
     iterate-kit-cli-device-controls-test
     ../targets/host_cli/cli_device_controls.c
@@ -153,14 +185,13 @@ if(APPLE)
     cli_wav_test.c)
 
   add_executable(
-    iterate-kit-cli-audio-in-test
-    ../targets/host_cli/cli_audio_in.c
-    cli_audio_in_test.c)
+    iterate-kit-darwin-audio-input-test
+    darwin_audio_input_test.c)
   target_include_directories(
-    iterate-kit-cli-audio-in-test
+    iterate-kit-darwin-audio-input-test
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli")
-  target_compile_features(iterate-kit-cli-audio-in-test PRIVATE c_std_11)
-  target_compile_options(iterate-kit-cli-audio-in-test PRIVATE
+  target_compile_features(iterate-kit-darwin-audio-input-test PRIVATE c_std_11)
+  target_compile_options(iterate-kit-darwin-audio-input-test PRIVATE
     -UNDEBUG
     -Wall
     -Wextra
@@ -169,20 +200,21 @@ if(APPLE)
     -Wconversion
     -Wshadow)
   target_link_libraries(
-    iterate-kit-cli-audio-in-test
-    PRIVATE iterate-kit-core ${ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK})
-  add_test(NAME iterate-kit-cli-audio-in-test COMMAND iterate-kit-cli-audio-in-test)
+    iterate-kit-darwin-audio-input-test
+    PRIVATE iterate-kit-darwin)
+  add_test(
+    NAME iterate-kit-darwin-audio-input-test
+    COMMAND iterate-kit-darwin-audio-input-test)
 
   add_executable(
-    iterate-kit-cli-audio-out-test
-    ../targets/host_cli/cli_audio_out.c
+    iterate-kit-darwin-audio-output-test
     ../targets/host_cli/cli_wav.c
-    cli_audio_out_test.c)
+    darwin_audio_output_test.c)
   target_include_directories(
-    iterate-kit-cli-audio-out-test
+    iterate-kit-darwin-audio-output-test
     PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli")
-  target_compile_features(iterate-kit-cli-audio-out-test PRIVATE c_std_11)
-  target_compile_options(iterate-kit-cli-audio-out-test PRIVATE
+  target_compile_features(iterate-kit-darwin-audio-output-test PRIVATE c_std_11)
+  target_compile_options(iterate-kit-darwin-audio-output-test PRIVATE
     -UNDEBUG
     -Wall
     -Wextra
@@ -191,10 +223,11 @@ if(APPLE)
     -Wconversion
     -Wshadow)
   target_link_libraries(
-    iterate-kit-cli-audio-out-test
-    PRIVATE iterate-kit-core ${ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK})
+    iterate-kit-darwin-audio-output-test
+    PRIVATE iterate-kit-darwin)
   add_test(
-    NAME iterate-kit-cli-audio-out-test COMMAND iterate-kit-cli-audio-out-test)
+    NAME iterate-kit-darwin-audio-output-test
+    COMMAND iterate-kit-darwin-audio-output-test)
 
   add_executable(
     iterate-kit-posix-websocket-test

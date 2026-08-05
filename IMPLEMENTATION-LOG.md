@@ -395,3 +395,66 @@ plus retained local dynamic-worker proof meet its scripted-exit criterion.
 
 **Open:** Phase 1 is complete. Phase 2 introduces the codec and processor seams.
 The preservation archive's remote-upload confirmation remains pending.
+
+## 2026-08-05 — phase 2: portable audio seams and Darwin composition
+
+**Did:** Introduced the two portable audio interfaces as one small audio link
+unit. `audio_codec` exposes immutable post-conversion hardware facts plus
+nonblocking capture and playback admission; it rejects contradictory property
+tables and impossible adapter results. `audio_processor` owns a complete
+capture-clock-aligned near/reference/playout-activity frame and silences its
+entire output whenever a required input is absent or DSP fails, so a failed AEC
+cannot leak raw microphone audio. The Mac composes the codec with the stateless
+passthrough processor.
+
+Moved CoreAudio capture and playback out of the host target and into the Darwin
+platform. The Darwin codec owns those implementation details while its file
+clock accepts a copied callback seam instead of depending on the host WAV
+module. Hardware facts now live in codec properties; global queue, wire-frame,
+and supervision geometry remains in `voice_device_profile.h`. The one necessary
+host copy of the eight-frame CoreAudio lead has a drift test against the Darwin
+constant. The architecture test still rejects audio or platform includes from
+`components/core`.
+
+**Measured:** A fresh real-CoreAudio conversation against local `pnpm dev`
+used project `voice-audio-seams-local` and retained
+`/tmp/iterate-talk-020541.json` (SHA-256
+`822f1b7ef6ee99512799f53e8ff8a14c68202ca9bf2e1966e4cb4c94154cfdca`).
+Its input fixture was unchanged from Phase 1 (SHA-256
+`7af579a72e19144e1a8afe807604c6681a75c60fbc994c9dd7b4025084a56310`);
+captured microphone and rendered speaker WAVs have SHA-256
+`29e2f7ee31338cdaf150a231c38fd1ca9fabbb8f865c6ab3624c62a226c925e1`
+and `4675c7f9f6cd5bbda703d9b350c1955c3f7e7308c6b5366f1297b1fd795425a5`.
+The completed turn transcribed “Please repeat exactly these three words: Uplink
+diagnostic amber.” and answered exactly “Uplink diagnostic amber.” It sent 205
+frames, received and played 103, and the CoreAudio callback completed exactly
+65,920 bytes. Time to first audio was 851 ms and answer completion 2,983 ms,
+with zero failed turns, sequence gaps, concealment, underruns, room drops,
+starved buffers, platform errors, restarts, recycles, or lost calls. The run's
+single deadline cancellation belongs to the next turn that the configured
+0.25-minute test duration deliberately cut off, not the completed turn.
+
+ASan/UBSan CTest passed 37/37, including the codec properties/reference seam,
+processor fail-closed rule, disabled Darwin adapter, and the core boundary.
+Format, typecheck, zero-warning lint, and the exact full workspace test command
+passed. OS contributed 2,708 passes, 12 expected failures, and one skip; its
+isolated retained log is `/tmp/iterate-phase2-os-test.log` (SHA-256
+`69ddbc87b31e95b313c83970cfc576dbcf5753f03aa1a372d8aa2814612e3f75`),
+and the successful full-workspace retry is
+`/tmp/iterate-phase2-workspace-test.log` (SHA-256
+`81eaeb8b42b5596b1e6e64548381b8665fd340eb9b21d7fb254170356593632f`).
+
+**Surprised by:** The first full workspace test attempt completed every visible
+non-OS shard, then left the OS Vitest coordinator at zero CPU for four minutes
+after its child workers disappeared. It had no child process or network socket
+and produced no failure, so the run was stopped rather than silently called
+green. The OS suite then passed alone in 56.29 s, and the exact full command
+passed on its immediate retained retry with the OS suite in 57.15 s. This
+classifies the event as a transient local parallel-runner stall, not a test or
+product outcome; it is recorded because a repeat would need its own fix.
+
+**Reviewer said:** Pending the independent Phase 2 review of the frozen git
+range.
+
+**Open:** Run and resolve that review before beginning the firmware ports. The
+preservation archive's remote-upload confirmation remains pending.

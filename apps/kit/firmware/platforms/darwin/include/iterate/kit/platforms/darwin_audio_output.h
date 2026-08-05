@@ -1,8 +1,8 @@
-#ifndef ITERATE_KIT_CLI_AUDIO_OUT_H
-#define ITERATE_KIT_CLI_AUDIO_OUT_H
+#ifndef ITERATE_KIT_PLATFORMS_DARWIN_AUDIO_OUTPUT_H
+#define ITERATE_KIT_PLATFORMS_DARWIN_AUDIO_OUTPUT_H
 
 /*
- * cli_audio_out: the CoreAudio speaker, as a converter that PULLS.
+ * iterate_kit_darwin_audio_output: the CoreAudio speaker, as a converter that PULLS.
  *
  * ORIGINATING FAILURE. This module used to push: the loop handed each played
  * frame straight into one of eight preallocated AudioQueue buffers, and a
@@ -37,12 +37,12 @@
 
 #include <AudioToolbox/AudioToolbox.h>
 
-#include "cli_wav.h"
-
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stddef.h>
 #include <stdint.h>
+
+#include "iterate/kit/voice_device_profile.h"
 
 enum {
   /*
@@ -50,12 +50,13 @@ enum {
    * chain unbroken across a scheduler hiccup; more would only add latency,
    * because the elastic capacity that matters now lives in the ring.
    */
-  CLI_AUDIO_OUT_BUFFER_COUNT = 4,
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_COUNT = 4,
   /*
    * Bytes per buffer handed to CoreAudio: one 20 ms frame of 16 kHz mono
    * PCM16, matching the wire frame so no buffer ever holds part of one.
    */
-  CLI_AUDIO_OUT_BUFFER_BYTES = 640,
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES =
+      ITERATE_KIT_VOICE_FRAME_BYTES,
   /*
    * Producer-ring reserve kept ahead of the hardware pull clock.
    *
@@ -67,8 +68,8 @@ enum {
    * module's producer ring. That is eight frames of bounded payload in total,
    * not another elastic jitter buffer.
    */
-  CLI_AUDIO_OUT_LEAD_BYTES =
-      CLI_AUDIO_OUT_BUFFER_COUNT * CLI_AUDIO_OUT_BUFFER_BYTES,
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES =
+      ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_COUNT * ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES,
   /*
    * The elastic buffer, in bytes — two seconds.
    *
@@ -78,22 +79,23 @@ enum {
    * absorbs any burst this rig has produced while still bounding how far
    * behind the room may get.
    */
-  CLI_AUDIO_OUT_RING_BYTES = 64000,
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_RING_BYTES =
+      ITERATE_KIT_VOICE_FRAME_BYTES * 100,
 };
 
-enum cli_audio_out_status {
-  CLI_AUDIO_OUT_OK = 0,
-  CLI_AUDIO_OUT_ERR_ARG,
-  CLI_AUDIO_OUT_ERR_PLATFORM,
-  CLI_AUDIO_OUT_ERR_TIMEOUT,
+enum iterate_kit_darwin_audio_output_status {
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_OK = 0,
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_ERR_ARG,
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_ERR_PLATFORM,
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_ERR_TIMEOUT,
   /** The ring is full: the room is more than a ring behind the timeline. */
-  CLI_AUDIO_OUT_ERR_FULL,
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_ERR_FULL,
 };
 
 /** Who is pulling audio out of the ring. */
-enum cli_audio_out_mode {
+enum iterate_kit_darwin_audio_output_mode {
   /** This Mac's speaker, pulled by CoreAudio's own thread. */
-  CLI_AUDIO_OUT_COREAUDIO = 0,
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_COREAUDIO = 0,
   /**
    * A file, pulled by the caller's loop at exactly the converter's rate.
    *
@@ -108,7 +110,20 @@ enum cli_audio_out_mode {
    * back-pressure — can run with nobody at the machine and nothing audible,
    * and leave a recording of exactly what the speaker would have played.
    */
-  CLI_AUDIO_OUT_FILE,
+  ITERATE_KIT_DARWIN_AUDIO_OUTPUT_FILE,
+};
+
+/**
+ * Deterministic stand-in for CoreAudio's pull clock.
+ *
+ * The Darwin adapter knows only that a complete PCM frame was admitted. The
+ * host rig supplies a WAV-backed callback, while tests may supply memory. This
+ * keeps the platform module independent of the host target without creating a
+ * second playback ring or clock model.
+ */
+struct iterate_kit_darwin_audio_file_sink {
+  void *context;
+  bool (*write)(void *context, const uint8_t *pcm, size_t length);
 };
 
 /**
@@ -119,21 +134,21 @@ enum cli_audio_out_mode {
  * the postmortem: `dropped` is audio the room never got because the producer
  * outran it, and `starved` is silence the listener actually heard.
  */
-struct cli_audio_out {
-  enum cli_audio_out_mode mode;
+struct iterate_kit_darwin_audio_output {
+  enum iterate_kit_darwin_audio_output_mode mode;
   /** FILE mode only: where the pulled audio lands, and when the next pull is due. */
-  struct cli_wav_sink *file;
+  struct iterate_kit_darwin_audio_file_sink file;
   uint64_t next_pull_us;
   AudioQueueRef queue;
-  AudioQueueBufferRef buffers[CLI_AUDIO_OUT_BUFFER_COUNT];
-  uint8_t ring[CLI_AUDIO_OUT_RING_BYTES];
+  AudioQueueBufferRef buffers[ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_COUNT];
+  uint8_t ring[ITERATE_KIT_DARWIN_AUDIO_OUTPUT_RING_BYTES];
   atomic_uint_least32_t read;
   atomic_uint_least32_t write;
   atomic_bool enabled;
   atomic_bool expecting_audio;
   atomic_bool draining;
   /** Actual payload currently owned by each enqueued CoreAudio buffer. */
-  atomic_uint_least32_t buffer_payload_bytes[CLI_AUDIO_OUT_BUFFER_COUNT];
+  atomic_uint_least32_t buffer_payload_bytes[ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_COUNT];
   /** Payload whose completed CoreAudio callback proves hardware consumption. */
   atomic_uint_least32_t completed_bytes;
   /** First failing AudioQueue/WAV status, zero while the output is healthy. */
@@ -151,7 +166,7 @@ struct cli_audio_out {
 };
 
 /** Human-readable status name, for the one top-level log boundary. */
-const char *cli_audio_out_status_name(enum cli_audio_out_status status);
+const char *iterate_kit_darwin_audio_output_status_name(enum iterate_kit_darwin_audio_output_status status);
 
 /**
  * Allocate the queue, prime every buffer with silence, and start playing.
@@ -160,7 +175,7 @@ const char *cli_audio_out_status_name(enum cli_audio_out_status status);
  * callback in flight, so nothing would ever ask the ring for audio and the
  * speaker would stay silent however much the loop wrote.
  */
-enum cli_audio_out_status cli_audio_out_open(struct cli_audio_out *out);
+enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open(struct iterate_kit_darwin_audio_output *out);
 
 /**
  * Hand one PCM frame to the ring without blocking.
@@ -170,15 +185,16 @@ enum cli_audio_out_status cli_audio_out_open(struct cli_audio_out *out);
  * than discard, because it is the difference between a quiet room and a
  * broken one.
  */
-enum cli_audio_out_status cli_audio_out_write(
-    struct cli_audio_out *out, const uint8_t *pcm, size_t length);
+enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_write(
+    struct iterate_kit_darwin_audio_output *out, const uint8_t *pcm, size_t length);
 
 /**
- * Open in FILE mode: `sink` is pulled from by cli_audio_out_pump instead of
+ * Open in FILE mode: `sink` is pulled from by iterate_kit_darwin_audio_output_pump instead of
  * by CoreAudio. The caller owns the sink and must keep it open.
  */
-enum cli_audio_out_status cli_audio_out_open_file(
-    struct cli_audio_out *out, struct cli_wav_sink *sink);
+enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_open_file(
+    struct iterate_kit_darwin_audio_output *out,
+    const struct iterate_kit_darwin_audio_file_sink *sink);
 
 /**
  * FILE mode only: pull every frame now due, writing silence for any the ring
@@ -188,7 +204,7 @@ enum cli_audio_out_status cli_audio_out_open_file(
  * caller that forgets simply never plays anything, loudly — the ring fills
  * and `dropped` climbs — rather than quietly playing at the wrong rate.
  */
-void cli_audio_out_pump(struct cli_audio_out *out, uint64_t now_us);
+void iterate_kit_darwin_audio_output_pump(struct iterate_kit_darwin_audio_output *out, uint64_t now_us);
 
 /**
  * Open or close the answer-audio expectation window.
@@ -196,24 +212,24 @@ void cli_audio_out_pump(struct cli_audio_out *out, uint64_t now_us);
  * Closing discards unconfirmed trailing dry pulls. A dry pull becomes
  * starvation only if later payload proves there was a hole inside the answer.
  */
-void cli_audio_out_set_expected(struct cli_audio_out *out, bool expected);
+void iterate_kit_darwin_audio_output_set_expected(struct iterate_kit_darwin_audio_output *out, bool expected);
 
 /**
  * Wait until every accepted payload byte has completed at the hardware/file
  * boundary. The wait is bounded by timeout_ms and never counts trailing idle
  * silence as payload.
  */
-enum cli_audio_out_status cli_audio_out_drain(
-    struct cli_audio_out *out, uint32_t timeout_ms);
+enum iterate_kit_darwin_audio_output_status iterate_kit_darwin_audio_output_drain(
+    struct iterate_kit_darwin_audio_output *out, uint32_t timeout_ms);
 
 /** Bytes currently waiting in the producer ring, for the pulse line. */
-uint32_t cli_audio_out_queued_bytes(const struct cli_audio_out *out);
+uint32_t iterate_kit_darwin_audio_output_queued_bytes(const struct iterate_kit_darwin_audio_output *out);
 
-uint32_t cli_audio_out_completed_bytes(const struct cli_audio_out *out);
-uint32_t cli_audio_out_starved_buffers(const struct cli_audio_out *out);
-int32_t cli_audio_out_platform_error(const struct cli_audio_out *out);
+uint32_t iterate_kit_darwin_audio_output_completed_bytes(const struct iterate_kit_darwin_audio_output *out);
+uint32_t iterate_kit_darwin_audio_output_starved_buffers(const struct iterate_kit_darwin_audio_output *out);
+int32_t iterate_kit_darwin_audio_output_platform_error(const struct iterate_kit_darwin_audio_output *out);
 
 /** Stop and release CoreAudio resources. Safe before or after a failed open. */
-void cli_audio_out_close(struct cli_audio_out *out);
+void iterate_kit_darwin_audio_output_close(struct iterate_kit_darwin_audio_output *out);
 
-#endif /* ITERATE_KIT_CLI_AUDIO_OUT_H */
+#endif

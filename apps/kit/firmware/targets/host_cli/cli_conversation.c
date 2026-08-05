@@ -195,6 +195,8 @@ enum cli_conversation_status cli_conversation_write_report(
   if (runtime == NULL || runtime->options.report_json == NULL) {
     return CLI_CONVERSATION_ERR_ARG;
   }
+  struct iterate_kit_darwin_audio_codec_metrics audio;
+  iterate_kit_darwin_audio_codec_metrics(&runtime->audio_codec, &audio);
   const struct cli_report_summary summary = {
     .session_restarts = runtime->session_restarts,
     .transport_restarts = runtime->transport_restarts,
@@ -204,15 +206,11 @@ enum cli_conversation_status cli_conversation_write_report(
     .back_office_heard = runtime->conversation.back_office_heard,
     .deadline_cancelled_turns =
         runtime->conversation.deadline_cancelled_turns,
-    .room_completed_bytes =
-        cli_audio_out_completed_bytes(&runtime->live_out),
-    .room_dropped_bytes = runtime->live_out.dropped,
-    .room_starved_buffers =
-        cli_audio_out_starved_buffers(&runtime->live_out),
-    .speaker_platform_error =
-        cli_audio_out_platform_error(&runtime->live_out),
-    .microphone_platform_error =
-        cli_audio_in_platform_error(&runtime->live_in),
+    .room_completed_bytes = audio.playback_completed_bytes,
+    .room_dropped_bytes = audio.playback_dropped_bytes,
+    .room_starved_buffers = audio.playback_starved_buffers,
+    .speaker_platform_error = audio.playback_platform_error,
+    .microphone_platform_error = audio.capture_platform_error,
   };
   const enum cli_report_status status = cli_report_write(
       &runtime->conversation.report, &summary, runtime->options.report_json);
@@ -229,11 +227,11 @@ enum cli_conversation_status cli_conversation_write_report(
       runtime->calls_lost, runtime->conversation.deadline_cancelled_turns,
       runtime->conversation.back_office_heard,
       runtime->conversation.back_office_sent,
-      cli_audio_out_completed_bytes(&runtime->live_out),
-      runtime->live_out.dropped,
-      cli_audio_out_starved_buffers(&runtime->live_out),
-      cli_audio_out_platform_error(&runtime->live_out),
-      cli_audio_in_platform_error(&runtime->live_in),
+      summary.room_completed_bytes,
+      summary.room_dropped_bytes,
+      summary.room_starved_buffers,
+      summary.speaker_platform_error,
+      summary.microphone_platform_error,
       runtime->options.report_json, runtime->options.speaker_wav);
   return CLI_CONVERSATION_OK;
 }
@@ -394,8 +392,9 @@ static void cli_conversation_begin_report(
   }
   turn->frames_sent = runtime->voicelab.frames_sent;
   turn->sequence_gaps = runtime->playout.gaps;
-  runtime->turn_room_completed_start_bytes =
-      cli_audio_out_completed_bytes(&runtime->live_out);
+  struct iterate_kit_darwin_audio_codec_metrics audio;
+  iterate_kit_darwin_audio_codec_metrics(&runtime->audio_codec, &audio);
+  runtime->turn_room_completed_start_bytes = audio.playback_completed_bytes;
   runtime->turn_room_submitted_bytes = 0U;
   runtime->conversation.current_turn = turn;
   if (back_office) ++runtime->conversation.back_office_sent;
