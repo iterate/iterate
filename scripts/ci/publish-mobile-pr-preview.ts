@@ -38,7 +38,7 @@ async function publishMobilePrPreview() {
   }
 
   const appConfig = JSON.parse(readFileSync(path.join(mobileDir, "app.json"), "utf8"));
-  const { owner, slug } = appConfig.expo;
+  const { owner, slug, scheme } = appConfig.expo;
   const channel = channelForBranch(pullRequest.head.ref);
   const headSha = pullRequest.head.sha;
 
@@ -70,6 +70,7 @@ async function publishMobilePrPreview() {
 
   const plan = planPreview({
     baseUrl: prdBaseUrl,
+    scheme,
     channel,
     publishedRuntime,
     installedRuntime,
@@ -78,8 +79,8 @@ async function publishMobilePrPreview() {
 
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([
     uploadQrAsset(
-      `mobile-pr-${pullRequest.number}-${headSha.slice(0, 9)}-ota.png`,
-      plan.deepLinkUrl,
+      `mobile-pr-${pullRequest.number}-${headSha.slice(0, 9)}-ota-scheme.png`,
+      plan.otaQrContent,
     ),
     uploadQrAsset(
       `mobile-pr-${pullRequest.number}-${headSha.slice(0, 9)}-install-${installBuild.id.slice(0, 8)}.png`,

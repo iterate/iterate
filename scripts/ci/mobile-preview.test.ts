@@ -11,6 +11,7 @@ test("branch names become valid EAS channel names", () => {
 test("links go through the https interstitial, never a raw iterate:// href", () => {
   const plan = planPreview({
     baseUrl: "https://os.iterate.com",
+    scheme: "iterate",
     channel: "my-feature",
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
@@ -18,7 +19,10 @@ test("links go through the https interstitial, never a raw iterate:// href", () 
   });
   expect(plan).toMatchObject({
     runtimeMatchesInstalled: true,
+    // Tap path: https interstitial (GitHub strips custom-scheme hrefs).
     deepLinkUrl: "https://os.iterate.com/m/preview-channel/my-feature",
+    // Scan path: the camera opens the app scheme directly, no interstitial hop.
+    otaQrContent: "iterate://preview-channel/my-feature",
   });
 
   const section = renderPreviewSection({
@@ -43,6 +47,7 @@ test("links go through the https interstitial, never a raw iterate:// href", () 
 test("a runtime-matching PR renders with the OTA details open and install collapsed", () => {
   const plan = planPreview({
     baseUrl: "https://os.iterate.com",
+    scheme: "iterate",
     channel: "my-feature",
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
@@ -68,6 +73,7 @@ test("a runtime-matching PR renders with the OTA details open and install collap
 test("a native-change PR flips the expanded details to the install QR", () => {
   const plan = planPreview({
     baseUrl: "https://os.iterate.com",
+    scheme: "iterate",
     channel: "add-native-module",
     publishedRuntime: "aaaa000000000000000000000000000000000000",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
@@ -92,6 +98,7 @@ test("a native-change PR flips the expanded details to the install QR", () => {
 test("the main variant reads as a switch-back, not a PR switch", () => {
   const plan = planPreview({
     baseUrl: "https://os.iterate.com",
+    scheme: "iterate",
     channel: "preview",
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
@@ -116,6 +123,7 @@ test("the main variant reads as a switch-back, not a PR switch", () => {
 test("no finished preview build at all counts as a runtime mismatch", () => {
   const plan = planPreview({
     baseUrl: "https://os.iterate.com",
+    scheme: "iterate",
     channel: "first-ever",
     publishedRuntime: "aaaa000000000000000000000000000000000000",
     installedRuntime: undefined,
