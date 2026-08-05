@@ -1181,6 +1181,13 @@ static size_t health_json(char *out, size_t capacity) {
          &runtime.speaker_overflow_drops, memory_order_relaxed)},
     /* Audio arriving just after a software-dry tick. Same signal, one on. */
     {"spkSoftDryRefills", runtime.speaker_underruns},
+    /*
+     * The credit the starvation measure below is gated on. Zero here means
+     * the gate CANNOT fire whatever the speaker does, so publishing it is
+     * what makes the two numbers underneath falsifiable rather than
+     * reassuring — that gate was silently dark on this board.
+     */
+    {"dmaWrittenMs", stackchan_audio_written_ms()},
     /* The task-side starvation measure: ms the ring was empty, how often. */
     {"spkStarvedMs", stackchan_audio_starved_ms()},
     {"spkStarveEvents", stackchan_audio_starve_events()},
@@ -1194,6 +1201,7 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkDebtPaid", runtime.speaker_debt_paid},
     {"spkWriteFailures", runtime.speaker_write_failures},
     {"codecPlaybackFailures", stackchan_audio_playback_driver_failures()},
+    {"spkPartialChunks", stackchan_audio_playback_partial_chunks()},
     /*
      * The AEC's own health: engine rebuilds mean the capture timeline broke;
      * clip counters catch abnormal board levels that would otherwise vanish
@@ -1769,6 +1777,13 @@ void iterate_kit_stackchan_run(void) {
         .project_api_key = runtime.configuration.project_api_key,
         .stream_path = stream_path,
         .call_id = CALL_ID,
+        /*
+         * NO TURN MACHINE ON THIS BOARD (see the mic pump below): the
+         * provider's server VAD segments turns. Requesting the default
+         * manual turns here produced a provider that sat waiting for a
+         * commit no code sends — accepted call, deaf assistant.
+         */
+        .turns = "vad",
         .now_ms = now_ms,
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
@@ -2084,7 +2099,7 @@ void iterate_kit_stackchan_run(void) {
               " inCon=%" PRIu32 " sent=%" PRIu32 " frames=%" PRIu32
               " | batches=%" PRIu32 " rx=%" PRIu32 " gaps=%" PRIu32
               " played=%" PRIu32 " conceal=%" PRIu32 " under=%" PRIu32
-              " ringMs=%u",
+              " partial=%" PRIu32 " ringMs=%u",
               runtime.loop_count,
               (unsigned int)outbox_metrics.current_slots,
               (unsigned int)CONTROL_OUTBOX_SLOTS,
@@ -2098,6 +2113,7 @@ void iterate_kit_stackchan_run(void) {
               runtime.speaker_frames_played,
               runtime.speaker_conceal_frames,
               runtime.speaker_underruns,
+              stackchan_audio_playback_partial_chunks(),
               (unsigned int)(speaker_queued_bytes() / 32U));
         }
       }

@@ -151,6 +151,14 @@ struct iterate_kit_voicelab_options {
   const char *stream_path;
   /** Short call identity stamped into every frame payload. */
   const char *call_id;
+  /**
+   * Who segments turns, as the worker's voice-agent understands it:
+   * "manual" (NULL defaults here) for push-to-talk boards that commit
+   * turns themselves, "vad" for open-microphone boards whose provider
+   * server VAD does the segmenting. A board with no turn machine that
+   * requests manual turns gets a provider that never listens.
+   */
+  const char *turns;
   /** Monotonic clock in milliseconds; drives ping RTT measurement. */
   uint64_t (*now_ms)(void *clock_context);
   void *clock_context;

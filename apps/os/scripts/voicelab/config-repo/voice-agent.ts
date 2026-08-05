@@ -2035,9 +2035,27 @@ export class VoiceBridge extends IterateDurableObject {
              * open microphone next to a speaker hears the answer and
              * answers itself.
              */
+            /*
+             * The open-microphone numbers are MEASURED, not defaults. An
+             * echo-cancelled device microphone is quiet — captured speech
+             * peaks around -13 dBFS with room noise a decade below it — so
+             * at threshold 0.5 the VAD opens mid-word, and with no prefix
+             * padding everything before the trigger is discarded. Measured
+             * on StackChan: "Please repeat exactly these three words:
+             * Uplink diagnostic amber" reached the model as "Exactly these
+             * three words." The captured uplink was verified clean first
+             * (continuous, no dropped frames, donor-matching levels), which
+             * is what pointed here. These three values are the proven
+             * StackChan configuration.
+             */
             turn_detection: manualTurns
               ? { type: null }
-              : { type: "server_vad", threshold: 0.5, silence_duration_ms: 500 },
+              : {
+                  type: "server_vad",
+                  threshold: 0.1,
+                  silence_duration_ms: 400,
+                  prefix_padding_ms: 400,
+                },
             audio: {
               input: { format: { type: "audio/pcm", rate: 16000 }, transport: "binary" },
               output: { format: { type: "audio/pcm", rate: 16000 }, transport: "binary" },

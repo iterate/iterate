@@ -1320,8 +1320,9 @@ enum capnweb_status iterate_kit_voicelab_start_call(
        * no clock on it, and the voice says so and keeps talking meanwhile.
        */
       "[{\"type\":\"voice-agent/call-requested\",\"payload\":{"
-      "\"callId\":\"%s\",\"colleague\":true,\"turns\":\"manual\"%s%s%s}}]",
+      "\"callId\":\"%s\",\"colleague\":true,\"turns\":\"%s\"%s%s%s}}]",
       voicelab->options.call_id,
+      voicelab->options.turns != NULL ? voicelab->options.turns : "manual",
       greeting != NULL ? ",\"greet\":\"" : "",
       greeting != NULL ? greeting : "",
       greeting != NULL ? "\"" : "");

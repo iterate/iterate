@@ -85,6 +85,16 @@ void stackchan_audio_set_playout_observer(
 uint32_t stackchan_audio_capture_overruns(void);
 uint32_t stackchan_audio_capture_driver_failures(void);
 uint32_t stackchan_audio_playback_driver_failures(void);
+/**
+ * Codec edges that carried SOME answer audio and were padded with zeros.
+ *
+ * Every other counter calls such an edge healthy — the frame arrived, was
+ * played, and was never dropped — but the padding is silence spliced into
+ * the middle of speech. This is the instrument for the depth of the
+ * hardware handoff: a non-zero value during an answer means the producer
+ * could not keep every 8 ms edge fed.
+ */
+uint32_t stackchan_audio_playback_partial_chunks(void);
 uint32_t stackchan_audio_epoch_resets(void);
 
 /* The absolute-deadline starvation ledger; semantics identical to the other

@@ -76,7 +76,15 @@ enum {
   AUDIO_TASK_CORE = 1,
   /* 8 ms per DMA descriptor; five in the ring (the BSP patch's geometry). */
   DMA_RING_MS = 40,
+  CHUNK_MS =
+      STACKCHAN_AUDIO_CHUNK_SAMPLES * 1000 / STACKCHAN_AUDIO_SAMPLE_RATE_HZ,
 };
+
+_Static_assert(
+    CHUNK_MS * STACKCHAN_AUDIO_SAMPLE_RATE_HZ ==
+        STACKCHAN_AUDIO_CHUNK_SAMPLES * 1000,
+    "a DMA descriptor must be a whole number of milliseconds for the "
+    "starvation ledger to account it exactly");
 
 struct wire_frame {
   int16_t samples[WIRE_FRAME_SAMPLES];
@@ -111,6 +119,14 @@ static atomic_bool capture_tap_enabled;
 static atomic_bool playback_content_active;
 static volatile uint32_t capture_driver_failures;
 static volatile uint32_t playback_driver_failures;
+/*
+ * Codec edges that had SOME response audio and had to pad the rest with
+ * zeros. That padding is a splice into the middle of speech, not idle
+ * silence, and it is inaudible in every other counter: the frame was
+ * received, played and never dropped. Counted so the seam's buffer depth
+ * can be argued about with a number.
+ */
+static volatile uint32_t playback_partial_chunks;
 static uint32_t last_rx_queue_overflows;
 
 static stackchan_audio_playout_observer_fn playout_observer;
@@ -548,6 +564,9 @@ static void io_task_main(void *argument) {
       }
       const bool content = filled > 0U;
       if (filled < STACKCHAN_AUDIO_CHUNK_SAMPLES) {
+        if (content) {
+          ++playback_partial_chunks;
+        }
         memset(
             playback_dma + filled,
             0,
@@ -560,11 +579,28 @@ static void io_task_main(void *argument) {
        */
       atomic_store_explicit(
           &playback_content_active, content, memory_order_release);
+      /*
+       * CREDIT THE LEDGER FROM HERE, like every other board does from its
+       * hardware task — DMA completion runs from inside the write, so
+       * crediting afterwards would fabricate a starve. Only real answer
+       * audio counts: crediting the idle silence that keeps the divider
+       * reference clocking would make the ring look permanently fed and the
+       * gate permanently green. Without this call ledger_written_ms stayed
+       * zero, its `written_ms >= DMA_RING_MS` precondition could never hold,
+       * and spkStarvedMs/spkStarveEvents — the declared audible-failure
+       * gate — were structurally pinned at 0.
+       */
+      if (content) {
+        stackchan_audio_reserve_write(CHUNK_MS);
+      }
       if (esp_codec_dev_write(
               speaker, playback_dma, (int)sizeof(playback_dma)) ==
           ESP_CODEC_DEV_OK) {
         consecutive_write_errors = 0U;
       } else {
+        if (content) {
+          stackchan_audio_rollback_write(CHUNK_MS);
+        }
         ++playback_driver_failures;
         if (consecutive_write_errors != UINT32_MAX) {
           ++consecutive_write_errors;
@@ -713,6 +749,10 @@ uint32_t stackchan_audio_capture_driver_failures(void) {
 
 uint32_t stackchan_audio_playback_driver_failures(void) {
   return playback_driver_failures;
+}
+
+uint32_t stackchan_audio_playback_partial_chunks(void) {
+  return playback_partial_chunks;
 }
 
 uint32_t stackchan_audio_epoch_resets(void) {

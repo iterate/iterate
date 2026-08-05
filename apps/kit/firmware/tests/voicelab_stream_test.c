@@ -625,6 +625,24 @@ int main(void) {
     /* Durable: no ephemeral marker, or the bridge would still see it but
      * nothing would record that the call was hung up. */
     assert(strstr(end_message, "ephemeral") == NULL);
+
+    /* An open-microphone board (StackChan) asks the provider's server VAD
+     * to segment turns; the unset default above stays "manual". */
+    fixture.voicelab.options.turns = "vad";
+    before = fixture.captured_count;
+    start_message = NULL;
+    assert(
+        iterate_kit_voicelab_start_call(&fixture.voicelab, NULL) ==
+        CAPNWEB_OK);
+    for (index = before; index < fixture.captured_count; ++index) {
+      if (strstr(fixture.captured[index], "call-requested") != NULL) {
+        start_message = fixture.captured[index];
+      }
+    }
+    assert(start_message != NULL);
+    assert(strstr(start_message, "\"turns\":\"vad\"") != NULL);
+    receive(&fixture, "[\"resolve\",9,[{\"ok\":true}]]");
+    assert(!fixture.voicelab.call_pending);
   }
 
   /* Raw diagnostics appends share the one-way lane. */
