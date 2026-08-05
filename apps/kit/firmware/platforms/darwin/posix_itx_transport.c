@@ -644,8 +644,6 @@ const char *iterate_kit_posix_itx_transport_state_name(
   switch (state) {
     case ITERATE_KIT_POSIX_ITX_IDLE:
       return "idle";
-    case ITERATE_KIT_POSIX_ITX_WIFI_CONNECTING:
-      return "wifi_connecting";
     case ITERATE_KIT_POSIX_ITX_WEBSOCKET_CONNECTING:
       return "websocket_connecting";
     case ITERATE_KIT_POSIX_ITX_MOUNTING:

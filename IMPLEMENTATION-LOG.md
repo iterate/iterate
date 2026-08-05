@@ -344,3 +344,54 @@ correction and proof commit.
 archive remains present in iCloud Drive with its full 10,206,336,512-byte local
 payload but no explicit upload-state metadata, so remote-upload confirmation is
 still pending.
+
+## 2026-08-05 — phase 1: fourth independent review
+
+**Did:** Treated the review's PASS as permission to close its remaining cleanup,
+not permission to ignore it. The C stream now rejects greeting and hangup-reason
+bytes that would need JSON escaping instead of emitting malformed events, with
+regression coverage for quotes and backslashes. Removed the unused single-frame
+append API and moved its wire assertions onto the batched function the host
+actually calls. Removed Darwin's unreachable Wi-Fi state. Replaced the client
+wire casts with Zod validation and an explicit `invalidEvents` outcome, made the
+resilient connection disposable so accept-timeout and setup-refusal throws close
+it, derived the fake provider's expected byte count from its audio constants,
+and documented why the runtime-installed worker capability and the config-repo
+copy of the RPC ownership helpers cannot use their static/local types directly.
+Corrected the plan's stale `subscription.h` line; the earlier log's resolver
+regression-test attribution was also stale—the test is in
+`posix_websocket_test.c`, not `posix_itx_transport_test.c`.
+
+**Measured:** The reviewer independently hash-checked all retained Phase 1
+artifacts, traced callback completion and establishment deadlines through the
+code, and re-ran 35/35 sanitizer CTests, typecheck, zero-warning lint, and the
+full workspace test suite with 2,708 OS passes, 12 expected failures, and one
+skip. Its verdict was `PASS`. After cleanup, the focused TypeScript suite passed
+4/4, app TypeScript compilation and zero-warning repository lint passed, and
+the sanitizer host suite remained 35/35. A fresh provider-hermetic run completed
+with 255 microphone frames / 163,200 bytes, 50 speaker frames / 32,000 bytes,
+the two exact deterministic transcripts, and zero loss, append errors, invalid
+events, reconnects, recycles, or underrun milliseconds. Its artifact is
+`/tmp/iterate-voicelab-local-phase1-review-final.json` (SHA-256
+`f9c8c28dd76587563edaede8265ef69bf40fba991ff61918107035214f2335e3`),
+using installed voice-agent commit
+`5fdd9f00de0cf0a88c8c4ca316aa1d3d67413922`.
+
+**Surprised by:** A type cast that was defensible when the client was only an
+interactive lab became the wrong boundary once the same client was promoted to
+prove a provider-hermetic path. Validating the wire payload gives the proof a
+new exact failure counter and makes malformed downlink data terminal and
+observable instead of merely satisfying TypeScript.
+
+**Reviewer said:** Every Phase 1 exit criterion was genuinely met; the literal
+loopback provider, one establishment deadline, result-wrapper disposal, and
+CoreAudio callback accounting all held under source inspection and reproduced
+tests. It called out the unescaped C strings, unexplained casts, implicit early
+connection teardown, stale plan/test wording, one dead append API, and one dead
+Darwin state as cleanup beneath its passing threshold. → **did:** Closed every
+named code and documentation item. The suggested committed full e2e promotion
+remains a later product-client concern; Phase 1's committed fake-provider tests
+plus retained local dynamic-worker proof meet its scripted-exit criterion.
+
+**Open:** Phase 1 is complete. Phase 2 introduces the codec and processor seams.
+The preservation archive's remote-upload confirmation remains pending.

@@ -503,6 +503,7 @@ int main(void) {
   static struct fixture fixture;
   /* "ABCD" + 0x00 0x01: exercises multi-chunk + 2-byte-tail base64. */
   static const uint8_t pcm[6] = {0x41U, 0x42U, 0x43U, 0x44U, 0x00U, 0x01U};
+  static const uint8_t *const pcm_frames[] = {pcm};
   size_t before;
 
   fixture_init(&fixture);
@@ -512,15 +513,16 @@ int main(void) {
   before = fixture.captured_count;
   fixture.clock_ms = 1234U;
   assert(
-      iterate_kit_voicelab_append_frame(
-          &fixture.voicelab, pcm, sizeof(pcm), 7U, 1234U) == CAPNWEB_OK);
+      iterate_kit_voicelab_append_frames(
+          &fixture.voicelab,
+          pcm_frames,
+          1U,
+          sizeof(pcm),
+          7U,
+          1234U) == CAPNWEB_OK);
   assert(fixture.captured_count == before + 2U);
-  assert(strcmp(
-      fixture.captured[before],
-      "[\"push\",[\"pipeline\",-12,[\"append\"],"
-      "[{\"type\":\"voice-agent/mic-frame\",\"ephemeral\":true,"
-      "\"payload\":{\"callId\":\"wsdev\",\"seq\":7,\"t\":1234,"
-      "\"pcm\":\"QUJDRAAB\"}}]]]") == 0);
+  assert(strstr(fixture.captured[before], "\"seq\":7,\"t\":1234") != NULL);
+  assert(strstr(fixture.captured[before], "\"enc\":\"u\"") != NULL);
   assert(strstr(fixture.captured[before + 1U], "[\"release\",") != NULL);
   assert(fixture.voicelab.frames_sent == 1U);
   assert(fixture.voicelab.frame_send_failures == 0U);
@@ -546,15 +548,17 @@ int main(void) {
   /* A full 640-byte frame fits the args buffer and one outbox slot. */
   {
     static uint8_t full_frame[ITERATE_KIT_VOICELAB_FRAME_BYTES];
+    static const uint8_t *full_frames[] = {full_frame};
     size_t index;
     for (index = 0U; index < sizeof(full_frame); ++index) {
       full_frame[index] = (uint8_t)(index & 0xffU);
     }
     before = fixture.captured_count;
     assert(
-        iterate_kit_voicelab_append_frame(
+        iterate_kit_voicelab_append_frames(
             &fixture.voicelab,
-            full_frame,
+            full_frames,
+            1U,
             sizeof(full_frame),
             8U,
             1254U) == CAPNWEB_OK);
@@ -569,6 +573,13 @@ int main(void) {
     const char *start_message = NULL;
     const char *end_message = NULL;
     size_t index;
+    assert(
+        iterate_kit_voicelab_start_call(&fixture.voicelab, "not \"json") ==
+        CAPNWEB_E_INVALID_ARGUMENT);
+    assert(!fixture.voicelab.call_pending);
+    assert(
+        iterate_kit_voicelab_end_call(&fixture.voicelab, "not\\json") ==
+        CAPNWEB_E_INVALID_ARGUMENT);
     before = fixture.captured_count;
     assert(
         iterate_kit_voicelab_start_call(&fixture.voicelab, "Ready.") ==

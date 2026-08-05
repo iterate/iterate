@@ -162,8 +162,9 @@ Nothing else. Copy the file, read it, delete what the new structure does not nee
   `talk_button`, and `atomic.h`, with their host tests. These are the complete
   load-bearing control and transport graph for the A1 lane; do not copy any
   other core module.
-- `components/capabilities`: `push_to_talk`, `subscription.h`, and its private
-  `rpc_internal` support, with their host tests
+- `components/capabilities`: `push_to_talk` and its private `rpc_internal`
+  support, with their host tests. Inspect but omit `subscription.h`: it only
+  arbitrated the now-retired second `/pcm` socket generation.
 - `platforms/darwin/` — the Mac transport implementation
 - `targets/host_cli/` — the Mac conversation and fault-injection rig
 - `targets/waveshare_s3_amoled/main/` — the reference implementation

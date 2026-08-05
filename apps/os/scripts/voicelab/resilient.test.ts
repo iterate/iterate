@@ -42,7 +42,7 @@ describe("openResilientConnection ownership", () => {
     await vi.waitFor(() => expect(stream.openConnection).toHaveBeenCalledTimes(2));
     await vi.waitFor(() => expect(first.close).toHaveBeenCalledOnce());
     expect(first[Symbol.dispose]).toHaveBeenCalledOnce();
-    connection.close();
+    connection[Symbol.dispose]();
     expect(second.close).toHaveBeenCalledOnce();
     expect(second[Symbol.dispose]).toHaveBeenCalledOnce();
   });

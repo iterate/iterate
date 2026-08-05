@@ -1165,66 +1165,6 @@ enum capnweb_status iterate_kit_voicelab_start(
 
 /* --- appends -------------------------------------------------------------- */
 
-enum capnweb_status iterate_kit_voicelab_append_frame(
-    struct iterate_kit_voicelab *voicelab,
-    const uint8_t *pcm,
-    size_t pcm_length,
-    uint32_t sequence,
-    uint64_t captured_at_ms) {
-  int prefix_length;
-  size_t encoded_length;
-  size_t offset;
-  enum capnweb_status status;
-  if (voicelab == NULL ||
-      pcm == NULL ||
-      pcm_length == 0U ||
-      pcm_length > ITERATE_KIT_VOICELAB_FRAME_BYTES) {
-    return CAPNWEB_E_INVALID_ARGUMENT;
-  }
-  if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
-    return CAPNWEB_E_STATE;
-  }
-  prefix_length = snprintf(
-      voicelab->args_buffer,
-      sizeof(voicelab->args_buffer),
-      "[{\"type\":\"voice-agent/mic-frame\",\"ephemeral\":true,"
-      "\"payload\":{\"callId\":\"%s\",\"seq\":%" PRIu32
-      ",\"t\":%" PRIu64 ",\"pcm\":\"",
-      voicelab->options.call_id,
-      sequence,
-      captured_at_ms);
-  if (prefix_length < 0 ||
-      (size_t)prefix_length >= sizeof(voicelab->args_buffer)) {
-    return CAPNWEB_E_LIMIT;
-  }
-  offset = (size_t)prefix_length;
-  encoded_length = base64_encode(
-      pcm,
-      pcm_length,
-      voicelab->args_buffer + offset,
-      sizeof(voicelab->args_buffer) - offset - sizeof("\"}}]"));
-  if (encoded_length == 0U) {
-    return CAPNWEB_E_LIMIT;
-  }
-  offset += encoded_length;
-  memcpy(voicelab->args_buffer + offset, "\"}}]", sizeof("\"}}]"));
-  offset += sizeof("\"}}]") - 1U;
-
-  status = capnweb_session_call_oneway_path(
-      voicelab->options.session,
-      voicelab->stream_capability,
-      append_path,
-      1U,
-      voicelab->args_buffer,
-      offset);
-  if (status == CAPNWEB_OK) {
-    ++voicelab->frames_sent;
-  } else {
-    ++voicelab->frame_send_failures;
-  }
-  return status;
-}
-
 enum capnweb_status iterate_kit_voicelab_append_frames(
     struct iterate_kit_voicelab *voicelab,
     const uint8_t *const *frames,
@@ -1342,6 +1282,20 @@ static void start_call_completed(
   }
 }
 
+static bool json_literal_contents_are_safe(const char *value) {
+  const unsigned char *cursor = (const unsigned char *)value;
+  if (value == NULL) {
+    return true;
+  }
+  while (*cursor != '\0') {
+    if (*cursor < 0x20U || *cursor == '"' || *cursor == '\\') {
+      return false;
+    }
+    ++cursor;
+  }
+  return true;
+}
+
 enum capnweb_status iterate_kit_voicelab_start_call(
     struct iterate_kit_voicelab *voicelab, const char *greeting) {
   int length;
@@ -1352,6 +1306,9 @@ enum capnweb_status iterate_kit_voicelab_start_call(
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY ||
       voicelab->call_pending || !voicelab->has_stream_capability) {
     return CAPNWEB_E_STATE;
+  }
+  if (!json_literal_contents_are_safe(greeting)) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
   }
   length = snprintf(
       voicelab->args_buffer,
@@ -1404,6 +1361,9 @@ enum capnweb_status iterate_kit_voicelab_end_call(
   }
   if (voicelab->state != ITERATE_KIT_VOICELAB_READY) {
     return CAPNWEB_E_STATE;
+  }
+  if (!json_literal_contents_are_safe(reason)) {
+    return CAPNWEB_E_INVALID_ARGUMENT;
   }
   length = snprintf(
       voicelab->args_buffer,

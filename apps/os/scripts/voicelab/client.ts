@@ -13,12 +13,31 @@ import path_ from "node:path";
 import process from "node:process";
 import WebSocket from "ws";
 import type { DynamicWorkerCapability } from "iterate/sdk";
+import { z } from "zod";
 import { MicSource, PlayoutBuffer, percentiles, BYTES_PER_SEC, mulawToPcm16 } from "./audio.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { createImpairment, parseImpairSpec } from "./impair.ts";
 import { openResilientConnection } from "./resilient.ts";
 import { discardRpcResult, RpcResultObserver, withRpcResult } from "./rpc-ownership.ts";
 import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
+
+const CallAcceptedPayload = z.looseObject({ bridge: z.string(), model: z.string() });
+const SpeakerFramePayload = z.looseObject({
+  enc: z.literal("u").optional(),
+  pcm: z.string(),
+  seq: z.number().int().nonnegative(),
+  t: z.number(),
+  tGrok: z.number(),
+});
+const GrokEvent = z.looseObject({ type: z.string() });
+const GrokEventPayload = z.looseObject({ event: GrokEvent });
+const PongPayload = z.looseObject({ t0: z.number(), t1: z.number() });
+const ConversationItem = z.looseObject({
+  content: z
+    .array(z.looseObject({ transcript: z.string().optional(), type: z.string().optional() }))
+    .optional(),
+  role: z.string().optional(),
+});
 
 /** Options for `pnpm cli voicelab client`. */
 export interface ClientOptions extends VoicelabConnectOptions {
@@ -107,6 +126,8 @@ export async function client(options: ClientOptions) {
   let turnsDone = 0;
   let appendErrors = 0;
   let firstAppendError: string | undefined;
+  let invalidEvents = 0;
+  let firstInvalidEvent: string | undefined;
   let accepted = false;
   let userTranscript: string | null = null;
   let assistantTranscript = "";
@@ -121,6 +142,13 @@ export async function client(options: ClientOptions) {
     done = resolve;
   });
 
+  const rejectInvalidEvent = (type: string, detail: string) => {
+    invalidEvents++;
+    firstInvalidEvent ??= `${type}: ${detail}`;
+    console.error(`client: invalid ${type} event: ${detail}`);
+    done?.();
+  };
+
   const appendResults = new RpcResultObserver((error: unknown) => {
     appendErrors++;
     firstAppendError ??= error instanceof Error ? error.message : String(error);
@@ -129,7 +157,7 @@ export async function client(options: ClientOptions) {
     appendResults.observe(stream.append(...events));
   };
 
-  const connection = await openResilientConnection(stream, {
+  using connection = await openResilientConnection(stream, {
     connectionKey: `voicelab-client-${callId}`,
     eventTypes: [
       "voice-agent/spk-frame",
@@ -145,19 +173,31 @@ export async function client(options: ClientOptions) {
       impair.rx(() => {
         const now = Date.now();
         for (const event of events) {
-          const payload = event.payload as Record<string, unknown>;
           switch (event.type) {
-            case "voice-agent/call-accepted":
+            case "voice-agent/call-accepted": {
+              const payload = CallAcceptedPayload.safeParse(event.payload);
+              if (!payload.success) {
+                rejectInvalidEvent(event.type, payload.error.message);
+                continue;
+              }
               accepted = true;
-              console.error(`client: call accepted by ${payload.bridge} bridge (${payload.model})`);
+              console.error(
+                `client: call accepted by ${payload.data.bridge} bridge (${payload.data.model})`,
+              );
               break;
+            }
             case "voice-agent/spk-frame": {
+              const payload = SpeakerFramePayload.safeParse(event.payload);
+              if (!payload.success) {
+                rejectInvalidEvent(event.type, payload.error.message);
+                continue;
+              }
               spkFrames++;
-              const seq = payload.seq as number;
+              const { seq } = payload.data;
               if (lastSpkSeq >= 0 && seq > lastSpkSeq + 1) spkFramesLost += seq - lastSpkSeq - 1;
               lastSpkSeq = Math.max(lastSpkSeq, seq);
-              const encoded = Buffer.from(payload.pcm as string, "base64");
-              const pcm = payload.enc === "u" ? mulawToPcm16(encoded) : encoded;
+              const encoded = Buffer.from(payload.data.pcm, "base64");
+              const pcm = payload.data.enc === "u" ? mulawToPcm16(encoded) : encoded;
               spkBytes += pcm.length;
               if (marks.firstSpkFrame === undefined) {
                 marks.firstSpkFrame = now;
@@ -170,19 +210,27 @@ export async function client(options: ClientOptions) {
                   }, options.say2AfterMs ?? 1200);
                 }
               }
-              spkOneWay.push(now - (payload.t as number));
-              grokToClient.push(now - (payload.tGrok as number));
+              spkOneWay.push(now - payload.data.t);
+              grokToClient.push(now - payload.data.tGrok);
               playout.write(pcm);
               break;
             }
             case "voice-agent/grok-event": {
-              const grokEvent = payload.event as { type: string; [key: string]: unknown };
-              handleGrokEvent(grokEvent, now);
+              const payload = GrokEventPayload.safeParse(event.payload);
+              if (!payload.success) {
+                rejectInvalidEvent(event.type, payload.error.message);
+                continue;
+              }
+              handleGrokEvent(payload.data.event, now);
               break;
             }
             case "voice-agent/pong": {
-              const t0 = payload.t0 as number;
-              const t1 = payload.t1 as number;
+              const payload = PongPayload.safeParse(event.payload);
+              if (!payload.success) {
+                rejectInvalidEvent(event.type, payload.error.message);
+                continue;
+              }
+              const { t0, t1 } = payload.data;
               const rtt = now - t0;
               rtts.push(rtt);
               // NTP-style: assumes symmetric legs; good enough to de-skew one-way stats.
@@ -216,11 +264,13 @@ export async function client(options: ClientOptions) {
         if (typeof event.transcript === "string") userTranscript = event.transcript;
         break;
       case "conversation.item.added": {
-        const item = event.item as
-          | { role?: string; content?: { type?: string; transcript?: string }[] }
-          | undefined;
-        if (item?.role === "user") {
-          const transcript = item.content?.find((c) => c.type === "input_audio")?.transcript;
+        const item = ConversationItem.safeParse(event.item);
+        if (!item.success) {
+          rejectInvalidEvent(event.type, item.error.message);
+          break;
+        }
+        if (item.data.role === "user") {
+          const transcript = item.data.content?.find((c) => c.type === "input_audio")?.transcript;
           if (transcript) userTranscript = transcript;
         }
         break;
@@ -229,8 +279,12 @@ export async function client(options: ClientOptions) {
         turnTranscript = "";
         break;
       case "response.output_audio_transcript.delta":
-        turnTranscript += (event.delta as string) ?? "";
-        assistantTranscript += (event.delta as string) ?? "";
+        if (typeof event.delta !== "string") {
+          rejectInvalidEvent(event.type, "delta must be a string");
+          break;
+        }
+        turnTranscript += event.delta;
+        assistantTranscript += event.delta;
         break;
       case "response.done": {
         turnsDone++;
@@ -267,9 +321,9 @@ export async function client(options: ClientOptions) {
   // only thing this client does afterwards is push mic frames and play what
   // comes back — exactly what the ESP32 does.
   if (options.detached) {
-    // `itx.worker` is typed as the config-repo TEMPLATE's worker; this
-    // voice-agent guest (scripts/voicelab/config-repo/voice-agent.ts) adds
-    // startCall, so the call is declared at the call site.
+    // workers.get() is typed from the static config-repo template, which
+    // cannot describe the runtime-installed guest at this exact ref. That
+    // guest defines startCall, so this narrow capability is declared here.
     using worker = itx.workers.get(voiceAgentEntrypointRef) as unknown as DynamicWorkerCapability<{
       startCall(options: Record<string, unknown>): Promise<{
         ok?: boolean;
@@ -320,6 +374,9 @@ export async function client(options: ClientOptions) {
 
   const acceptDeadline = Date.now() + 20_000;
   while (!accepted) {
+    if (invalidEvents > 0) {
+      throw new Error(firstInvalidEvent ?? "invalid stream event before call acceptance");
+    }
     if (Date.now() > acceptDeadline) {
       throw new Error("No call-accepted within 20s — is a bridge running on this path?");
     }
@@ -407,12 +464,14 @@ export async function client(options: ClientOptions) {
       : { bargeIn: { reactionMs: bargeInReactionMs, droppedMs: bargeInDrops } }),
     connection: connection.stats(),
     appendErrors,
+    invalidEvents,
     ...(firstAppendError === undefined ? {} : { firstAppendError }),
+    ...(firstInvalidEvent === undefined ? {} : { firstInvalidEvent }),
     userTranscript,
     assistantTranscript: assistantTranscript.trim(),
   };
   console.log(JSON.stringify(summary, null, 2));
-  if (summary.appendErrors > 0) process.exitCode = 2;
+  if (summary.appendErrors > 0 || summary.invalidEvents > 0) process.exitCode = 2;
   return summary;
 }
 

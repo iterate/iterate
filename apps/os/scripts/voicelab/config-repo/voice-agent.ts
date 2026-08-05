@@ -17,6 +17,9 @@ import {
 import { z } from "zod";
 import { createVisemeTracker, type VisemeChangeEvent } from "./viseme.ts";
 
+// This file is copied into and built from a user's config repo, so it cannot
+// import the CLI-local rpc-ownership.ts module. Keep these three deployment-
+// boundary equivalents aligned with that module's explicit ownership rules.
 /** Release one Cap'n Web/Workers RPC capability without hiding a failed release. */
 function disposeRpcStub(value: unknown, label: string): void {
   try {

@@ -8,10 +8,11 @@
 import { Buffer } from "node:buffer";
 import { createServer } from "node:http";
 
-import WebSocket, { WebSocketServer } from "ws";
+import WebSocket, { WebSocketServer, type RawData } from "ws";
 
 const SAMPLE_RATE = 16_000;
 const ANSWER_SECONDS = 1;
+export const LOCAL_FAKE_SPEAKER_BYTES = SAMPLE_RATE * 2 * ANSWER_SECONDS;
 const ANSWER_TRANSCRIPT = "The local voice provider heard the microphone.";
 const SILENT_FRAMES_TO_END_SPEECH = 12;
 
@@ -50,6 +51,12 @@ function hasSpeech(pcm: Buffer): boolean {
     if (Math.abs(pcm.readInt16LE(offset)) >= 64) return true;
   }
   return false;
+}
+
+function rawDataToBuffer(data: RawData): Buffer {
+  if (Buffer.isBuffer(data)) return data;
+  if (Array.isArray(data)) return Buffer.concat(data);
+  return Buffer.from(data);
 }
 
 /** Start a provider that is reachable only from this machine. */
@@ -99,7 +106,7 @@ export async function startLocalFakeGrok(): Promise<LocalFakeGrok> {
       emit({ response: { id: responseId }, type: "response.created" });
       emit({ delta: ANSWER_TRANSCRIPT, type: "response.output_audio_transcript.delta" });
 
-      const pcm = tone(SAMPLE_RATE * 2 * ANSWER_SECONDS);
+      const pcm = tone(LOCAL_FAKE_SPEAKER_BYTES);
       for (let offset = 0; offset < pcm.length; offset += 6_400) {
         const chunk = pcm.subarray(offset, Math.min(offset + 6_400, pcm.length));
         socket.send(chunk, { binary: true });
@@ -116,7 +123,7 @@ export async function startLocalFakeGrok(): Promise<LocalFakeGrok> {
 
     socket.on("message", (data, isBinary) => {
       if (isBinary) {
-        const pcm = Buffer.isBuffer(data) ? data : Buffer.from(data as ArrayBuffer);
+        const pcm = rawDataToBuffer(data);
         session.micBytes += pcm.length;
         if (hasSpeech(pcm)) {
           silentFrames = 0;
@@ -144,13 +151,19 @@ export async function startLocalFakeGrok(): Promise<LocalFakeGrok> {
         return;
       }
 
-      let event: { type?: unknown };
+      let event: unknown;
       try {
-        event = JSON.parse(data.toString()) as { type?: unknown };
+        event = JSON.parse(data.toString());
       } catch {
         return;
       }
-      const type = typeof event.type === "string" ? event.type : "unknown";
+      const type =
+        typeof event === "object" &&
+        event !== null &&
+        "type" in event &&
+        typeof event.type === "string"
+          ? event.type
+          : "unknown";
       session.received.push(type);
       if (type === "session.update") {
         emit({ session: { id: `local_session_${session.id}` }, type: "session.updated" });

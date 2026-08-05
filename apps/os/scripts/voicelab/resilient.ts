@@ -45,6 +45,7 @@ export interface ResilientConnectionStats {
 }
 
 export interface ResilientConnection {
+  [Symbol.dispose](): void;
   close(): void;
   stats(): ResilientConnectionStats;
 }
@@ -144,17 +145,19 @@ export async function openResilientConnection(
     throw new Error("initial openConnection failed");
   }
 
+  const close = () => {
+    if (closed) return;
+    closed = true;
+    generation++;
+    clearInterval(watchdog);
+    if (current !== null) {
+      closeAndDisposeRpcHandle(current);
+      current = null;
+    }
+  };
   return {
-    close() {
-      if (closed) return;
-      closed = true;
-      generation++;
-      clearInterval(watchdog);
-      if (current !== null) {
-        closeAndDisposeRpcHandle(current);
-        current = null;
-      }
-    },
+    [Symbol.dispose]: close,
+    close,
     stats: () => stats,
   };
 }

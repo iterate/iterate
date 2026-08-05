@@ -306,19 +306,6 @@ enum capnweb_status iterate_kit_voicelab_start(
     const struct iterate_kit_voicelab_options *options);
 
 /**
- * One-way append of one ephemeral voice-agent/mic-frame event. `pcm` is raw
- * PCM16 bytes (at most ITERATE_KIT_VOICELAB_FRAME_BYTES). Returns
- * CAPNWEB_E_STATE while the module is not READY; transport-full statuses
- * are counted in frame_send_failures and returned for the caller's pacing.
- */
-enum capnweb_status iterate_kit_voicelab_append_frame(
-    struct iterate_kit_voicelab *voicelab,
-    const uint8_t *pcm,
-    size_t pcm_length,
-    uint32_t sequence,
-    uint64_t captured_at_ms);
-
-/**
  * One-way append of up to MAX_FRAMES_PER_APPEND consecutive mic frames as
  * one atomic multi-event append — divides the outbound message rate (each
  * push costs an outbox slot and a TLS write, and outbox exhaustion is
@@ -347,8 +334,8 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
  * involved. Nothing outside the platform holds the call open afterwards: no
  * laptop bridge, no second socket. One start in flight at a time;
  * `call_active` turns true when call-accepted arrives on the stream.
- * `greeting` may be NULL and must not contain characters needing JSON
- * escaping.
+ * `greeting` may be NULL. Strings containing JSON control, quote, or backslash
+ * characters are rejected rather than emitted as malformed events.
  */
 enum capnweb_status iterate_kit_voicelab_start_call(
     struct iterate_kit_voicelab *voicelab, const char *greeting);
@@ -356,7 +343,8 @@ enum capnweb_status iterate_kit_voicelab_start_call(
 /**
  * Hang up: a durable voice-agent/call-ended event carrying this call's id, which
  * is what the bridge watches for. One-way — the bridge's own call-ended echo
- * confirms it.
+ * confirms it. `reason` follows the same restricted JSON-string contract as
+ * `greeting`; NULL becomes `hangup`.
  */
 enum capnweb_status iterate_kit_voicelab_end_call(
     struct iterate_kit_voicelab *voicelab, const char *reason);
