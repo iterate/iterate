@@ -1,5 +1,6 @@
 set(ITERATE_KIT_CAPABILITIES_SOURCES
   src/push_to_talk.c
+  src/servos.c
   src/rpc_internal.c)
 
 if(COMMAND idf_component_register)

@@ -35,12 +35,15 @@ endfunction()
 iterate_kit_add_core_test(iterate-kit-atomic-test atomic_test.c)
 iterate_kit_add_core_test(iterate-kit-audio-playout-test audio_playout_test.c)
 iterate_kit_add_core_test(iterate-kit-configuration-test configuration_test.c)
+iterate_kit_add_core_test(
+  iterate-kit-conversation-lights-test conversation_lights_test.c)
 iterate_kit_add_core_test(iterate-kit-device-events-test device_events_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
 iterate_kit_add_core_test(iterate-kit-spsc-ring-test spsc_ring_test.c)
 iterate_kit_add_core_test(iterate-kit-talk-button-test talk_button_test.c)
+iterate_kit_add_core_test(iterate-kit-touch-tap-test touch_tap_test.c)
 iterate_kit_add_core_test(
   iterate-kit-voice-playback-clock-test voice_playback_clock_test.c)
 iterate_kit_add_core_test(iterate-kit-voicelab-stream-test voicelab_stream_test.c)
@@ -337,3 +340,49 @@ iterate_kit_add_havpe_pure_test(
   iterate-kit-havpe-pcm-format-test
   havpe_pcm_format_test.c
   ../devices/havpe/voice_pe_pcm_format.c)
+
+# StackChan's adopted pure DSP primitives (components/audio): the AEC cadence
+# bridge, reference scaler, uplink selector, and near high-pass, each with the
+# donor's host tests. They link the audio component, not core.
+function(iterate_kit_add_audio_test NAME SOURCE)
+  add_executable(${NAME} ${SOURCE})
+  target_compile_features(${NAME} PRIVATE c_std_99)
+  target_compile_options(${NAME} PRIVATE
+    -UNDEBUG
+    -Wall
+    -Wextra
+    -Werror
+    -Wpedantic)
+  target_link_libraries(${NAME} PRIVATE iterate-kit-audio)
+  add_test(NAME ${NAME} COMMAND ${NAME})
+endfunction()
+
+iterate_kit_add_audio_test(
+  iterate-kit-aec-capture-bridge-test aec_capture_bridge_test.c)
+iterate_kit_add_audio_test(
+  iterate-kit-aec-uplink-selector-test aec_uplink_selector_test.c)
+iterate_kit_add_audio_test(
+  iterate-kit-aec-reference-scaler-test aec_reference_scaler_test.c)
+iterate_kit_add_audio_test(
+  iterate-kit-pcm-high-pass-test pcm_high_pass_test.c)
+
+# The capture reserve is StackChan's ISR-side raw ring; pure C outside
+# ESP_PLATFORM, built from the device sources like the HAVPE modules.
+add_executable(
+  iterate-kit-core-s3-capture-reserve-test
+  core_s3_capture_reserve_test.c
+  ../devices/stackchan/core_s3_capture_reserve.c)
+target_include_directories(iterate-kit-core-s3-capture-reserve-test PRIVATE
+  ../devices/stackchan
+  ../components/core/include)
+target_compile_features(
+  iterate-kit-core-s3-capture-reserve-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-core-s3-capture-reserve-test PRIVATE
+  -UNDEBUG
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic)
+add_test(
+  NAME iterate-kit-core-s3-capture-reserve-test
+  COMMAND iterate-kit-core-s3-capture-reserve-test)

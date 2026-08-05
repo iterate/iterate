@@ -35,3 +35,30 @@ enum capnweb_status iterate_kit_reply_status(
   return capnweb_reply_set_error(
       reply, "Error", "hardware returned an unknown status");
 }
+
+bool iterate_kit_read_object_argument(
+    const struct capnweb_call *call, struct capnweb_value *object) {
+  return call != NULL &&
+      object != NULL &&
+      call->has_arguments &&
+      capnweb_value_array_at(&call->arguments, 0U, object) &&
+      capnweb_value_get_type(object) == CAPNWEB_JSON_OBJECT;
+}
+
+/*
+ * Cap'n Web integers are read at their widest signed representation. Each
+ * capability must validate its own domain before narrowing to a hardware
+ * type; accepting JSON coercions here would hide malformed callers and
+ * enable wrap.
+ */
+bool iterate_kit_read_int_field(
+    const struct capnweb_value *object,
+    const char *name,
+    int64_t *result) {
+  struct capnweb_value value = {0};
+  return object != NULL &&
+      name != NULL &&
+      result != NULL &&
+      capnweb_value_object_get(object, name, &value) &&
+      capnweb_value_get_int64(&value, result);
+}

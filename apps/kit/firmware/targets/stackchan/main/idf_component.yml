@@ -1,0 +1,14 @@
+dependencies:
+  capnweb:
+    git: https://github.com/iterate/capnweb.git
+    path: c
+    version: aee32b391063c4f5baf0aec852f38851eeeed1d9
+  # The audited local BSP override: TDM RX with the ES7210 reference slot,
+  # the 40 ms DMA geometry, and the power-button API. override_path keeps a
+  # clean/offline build independent of discovery order or developer caches.
+  espressif/m5stack_core_s3:
+    version: "==3.0.2"
+    override_path: "../../../platforms/iterate_esp_idf/idf_overrides/espressif__m5stack_core_s3"
+  # The tuned VOIP AEC engine (DiOS/athena-signal) the processor wraps.
+  espressif/esp-sr: "==2.4.7"
+  idf: ">=5.4"

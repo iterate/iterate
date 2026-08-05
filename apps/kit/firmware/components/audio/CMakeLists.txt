@@ -3,8 +3,12 @@
 # portable module contains only the two seams and the fail-closed passthrough
 # processor; concrete codec drivers remain in platform modules.
 set(ITERATE_KIT_AUDIO_SOURCES
+  src/aec_capture_bridge.c
+  src/aec_reference_scaler.c
+  src/aec_uplink_selector.c
   src/audio_codec.c
-  src/audio_processor.c)
+  src/audio_processor.c
+  src/pcm_high_pass.c)
 
 if(COMMAND idf_component_register)
   idf_component_register(

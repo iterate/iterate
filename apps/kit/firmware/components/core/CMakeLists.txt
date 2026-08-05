@@ -1,6 +1,7 @@
 set(ITERATE_KIT_CORE_SOURCES
   src/audio_playout.c
   src/configuration.c
+  src/conversation_lights.c
   src/device_events.c
   src/itx_connection.c
   src/itx_mount.c
@@ -9,6 +10,7 @@ set(ITERATE_KIT_CORE_SOURCES
   src/retry_gate.c
   src/spsc_ring.c
   src/talk_button.c
+  src/touch_tap.c
   src/voice_playback_clock.c
   src/voicelab_stream.c
   src/websocket_frame_reader.c
