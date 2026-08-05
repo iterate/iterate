@@ -59,6 +59,8 @@ export async function bridge(options: BridgeOptions) {
   let callId: string | null = null;
   let spkSeq = 0;
   let micFrames = 0;
+  /** Frames whose payload had no usable audio; dropped, and said so. */
+  let micMalformed = 0;
   let spkFrames = 0;
   let appendErrors = 0;
   let firstAppendError: string | undefined;
@@ -112,7 +114,10 @@ export async function bridge(options: BridgeOptions) {
       console.error("bridge: ignoring call-requested while a call is active");
       return;
     }
-    callId = (payload.callId as string) ?? crypto.randomUUID().slice(0, 8);
+    // Checked, not asserted: the payload crossed a stream, so a non-string
+    // callId is a thing that can actually arrive, and `??` would have let it
+    // through to be used as an identity.
+    callId = typeof payload.callId === "string" ? payload.callId : crypto.randomUUID().slice(0, 8);
     spkSeq = 0;
     const client = new GrokClient({
       apiKey,
@@ -203,20 +208,34 @@ export async function bridge(options: BridgeOptions) {
     onEvents: (events) => {
       let micInBatch = 0;
       for (const event of events) {
-        const payload = event.payload as Record<string, unknown>;
+        /*
+         * Everything below crosses a stream, so every field is checked rather
+         * than asserted. A malformed frame is a real arrival — the provider
+         * leg has been seen to send truncated JSON — and asserting would turn
+         * one bad frame into a NaN latency sample or a throw inside the
+         * delivery callback, which ends the call outright.
+         */
+        const payload: Record<string, unknown> =
+          typeof event.payload === "object" && event.payload !== null
+            ? (event.payload as Record<string, unknown>)
+            : {};
         switch (event.type) {
           case "voice-agent/mic-frame": {
+            if (typeof payload.pcm !== "string") {
+              micMalformed++;
+              break;
+            }
             micInBatch++;
             micFrames++;
-            micOneWay.push(Date.now() - (payload.t as number));
-            grok?.sendAudio(Buffer.from(payload.pcm as string, "base64"));
+            if (typeof payload.t === "number") micOneWay.push(Date.now() - payload.t);
+            grok?.sendAudio(Buffer.from(payload.pcm, "base64"));
             break;
           }
           case "voice-agent/call-requested":
             startCall(payload);
             break;
           case "voice-agent/call-ended":
-            if ((payload.callId as string) === callId) endCall("client requested end");
+            if (payload.callId === callId) endCall("client requested end");
             break;
           case "voice-agent/ping":
             fireAppend({
@@ -238,6 +257,7 @@ export async function bridge(options: BridgeOptions) {
           role: "bridge",
           path: options.path,
           micFrames,
+          micMalformed,
           spkFrames,
           micOneWayMs: percentiles(micOneWay),
           micEventsPerBatch: percentiles(micBatchSizes),

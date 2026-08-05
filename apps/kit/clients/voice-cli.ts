@@ -97,6 +97,19 @@ interface VoiceAgentWorker {
   startCall(options: Record<string, unknown>): Promise<{ ok?: boolean; reason?: string }>;
 }
 
+/**
+ * How this client proves who it is: as a device holding one project's key, or
+ * as an operator holding the admin secret.
+ *
+ * Spelled out here so the discriminants stay literal through an annotation
+ * instead of an assertion — the connect helper's own parameter type is not
+ * exported, and widening `type` to `string` would match no member of its
+ * union.
+ */
+type VoiceCliCredential =
+  | { type: "project-secret"; projectId: string; secret: string }
+  | { type: "admin-secret"; secret: string };
+
 export async function voiceCli(options: VoiceCliOptions) {
   const streamPath =
     options.path ?? `/agents/voice/${new Date().toISOString().replace(/[:.]/g, "").slice(0, 15)}`;
@@ -111,21 +124,14 @@ export async function voiceCli(options: VoiceCliOptions) {
     );
   }
 
-  /*
-   * `as const` on each arm, not a cast away from a real type: the auth
-   * parameter is a discriminated union keyed on `type`, and without it
-   * TypeScript widens each `type` to `string`, which matches no member. The
-   * alternative is annotating `auth` with the union, and that type is not
-   * exported from the client package.
-   */
-  const auth = options.projectApiKey
-    ? ({
+  const auth: VoiceCliCredential | undefined = options.projectApiKey
+    ? {
         type: "project-secret",
         projectId: options.project,
         secret: options.projectApiKey,
-      } as const)
+      }
     : options.adminSecret
-      ? ({ type: "admin-secret", secret: options.adminSecret } as const)
+      ? { type: "admin-secret", secret: options.adminSecret }
       : undefined;
   if (!auth) {
     throw new Error(
