@@ -240,11 +240,34 @@ export async function openRelayedStreamConnection(input: {
     void (async () => {
       // While the RPC leg is live the socket was only a future optimization:
       // degrade to pinned mode (the DO's channel scan already sees the socket
-      // gone). A dead socket while dormant means wakes can no longer arrive —
-      // break, and the owner's watchdog re-subscribes.
+      // gone). If the leg died with the socket, recover from the relay's exact
+      // cursor immediately. That replacement has no wake socket, so it stays
+      // pinned for the rest of this logical subscription instead of silently
+      // losing events until the owner's next watchdog round.
       const handle = currentHandle;
       const live = handle === undefined ? false : await probeLeg(handle);
-      if (live !== true) teardown({ reason: "wake socket closed while dormant", socketCode: 1000 });
+      if (live === true || currentHandle !== handle || dialing) return;
+      currentHandle = undefined;
+      disposeStub(handle);
+      dialing = true;
+      try {
+        const fresh = await dial(deliveredThroughOffset, true);
+        if (!active) {
+          void Promise.resolve()
+            .then(() => fresh.close())
+            .catch(() => undefined)
+            .finally(() => disposeStub(fresh));
+          return;
+        }
+        currentHandle = fresh;
+        console.warn("stream wake socket closed; session connection resumed in pinned mode", {
+          connectionKey,
+        });
+      } catch (error) {
+        teardown({ reason: "wake socket recovery failed", socketCode: 1011, warn: error });
+      } finally {
+        dialing = false;
+      }
     })();
   });
 

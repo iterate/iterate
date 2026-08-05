@@ -2255,6 +2255,48 @@ test("an idle-torn session connection resumes on the next matching append withou
   }
 });
 
+test("a session connection resumes after its stream incarnation is interrupted", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/subscriptions/session/interrupted/${marker}`;
+  const connectionKey = `interrupted-${marker.slice(0, 8)}`;
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using stream = project.streams.get(streamPath);
+
+  const received: StreamEvent[] = [];
+  const handle = await stream.openConnection({
+    connectionKey,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    processEventBatch: ({ events }) => {
+      received.push(...events);
+    },
+  });
+  try {
+    const [first] = await stream.append({
+      type: MATCHING_EVENT_TYPE,
+      payload: { round: "before-interruption" },
+    });
+    await waitForCondition(async () => received.some((event) => event.offset === first!.offset), {
+      description: "the live session connection to deliver before interruption",
+    });
+
+    await stream.kill();
+    const [second] = await stream.append({
+      type: MATCHING_EVENT_TYPE,
+      payload: { round: "after-interruption" },
+    });
+    await waitForCondition(async () => received.some((event) => event.offset === second!.offset), {
+      description: "the original callback to resume after stream interruption",
+      timeoutMs: 30_000,
+    });
+    expect(received.map((event) => event.offset)).toEqual([first!.offset, second!.offset]);
+  } finally {
+    await handle.close();
+    disposeRpc(handle);
+  }
+});
+
 // The resurrection-loop regression (Bugbot 9d27eb22): a subscriber whose
 // filter explicitly names connection-closed must NOT be woken by its own idle
 // close fact — the teardown's nested reconcile runs before the dormancy stamp
