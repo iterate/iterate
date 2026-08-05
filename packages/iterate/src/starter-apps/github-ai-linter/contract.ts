@@ -149,12 +149,21 @@ const GithubAiLinterAnalysisSettledPayload = z.object({
   result: GithubAiLinterAnalysisResult,
 });
 
+const PublishedCheckRun = z.object({
+  id: PositiveSafeInteger,
+  url: z.string().url(),
+});
+
 export const GithubAiLinterPublicationResult = z.discriminatedUnion("status", [
   z.object({
+    checkRun: PublishedCheckRun,
     reason: z.string().min(1).max(8_000),
     status: z.literal("skipped"),
   }),
   z.object({
+    // Optional only for replay compatibility with successful publication
+    // events written before the linter began publishing Check Runs.
+    checkRun: PublishedCheckRun.optional(),
     reviewId: PositiveSafeInteger,
     reviewUrl: z.string().url(),
     status: z.literal("succeeded"),
@@ -237,9 +246,9 @@ export const GithubAiLinterState = z.object({
 
 export const GithubAiLinterProcessorContract = defineProcessorContract({
   slug: "github-ai-linter",
-  version: "0.3.0",
+  version: "0.4.0",
   description:
-    "Reduces one pull request's AI diagnostics and mechanically publishes or skips its GitHub review.",
+    "Reduces one pull request's AI diagnostics and mechanically publishes its GitHub Check Run and optional advisory review.",
   stateSchema: GithubAiLinterState,
   events: {
     [githubAiLinterEventTypes.analysisRequested]: {
@@ -260,11 +269,11 @@ export const GithubAiLinterProcessorContract = defineProcessorContract({
     },
     [githubAiLinterEventTypes.reviewPublicationRequested]: {
       description:
-        "Opens the durable obligation to publish one immutable, non-blocking GitHub review or explicitly skip a clean result.",
+        "Opens the durable obligation to publish one GitHub Check Run and, for findings, one immutable non-blocking review.",
       payloadSchema: z.object({ analysisRequestOffset: StreamOffset }),
     },
     [githubAiLinterEventTypes.reviewPublicationSettled]: {
-      description: "Records the terminal GitHub publication or intentional skip result.",
+      description: "Records the terminal GitHub Check Run and review publication result.",
       payloadSchema: z.object({
         analysisRequestOffset: StreamOffset,
         result: GithubAiLinterPublicationResult,

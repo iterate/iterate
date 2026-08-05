@@ -214,12 +214,13 @@ A diagnostic may also carry one exact contiguous replacement:
 ```
 
 The publisher translates that value mechanically into GitHub's fenced
-suggested-change format. A clean analysis (`approve` assessment and no visible
-diagnostics) settles publication as `skipped` without reading or writing
-GitHub. Otherwise it rechecks that the pull request is still open, non-draft,
-and on the pinned base/head before creating a non-blocking `COMMENT` review.
-Errors, warnings, and qualitative concerns never approve or request changes.
-Suppressed diagnostics do not cause publication or produce inline comments.
+suggested-change format. It first rechecks that the pull request is still open,
+non-draft, and on the pinned base/head. A clean analysis (`approve` assessment
+and no visible diagnostics) publishes a successful `Iterate GitHub AI linter`
+Check Run and no review. Findings publish a neutral Check Run plus a
+non-blocking `COMMENT` review. Errors, warnings, and qualitative concerns never
+approve or request changes. Suppressed diagnostics do not cause a review or
+produce inline comments.
 
 Suppressions are source comments:
 
@@ -240,8 +241,9 @@ The analysis idempotency key includes connection, App slug, stable repository
 ID, current owner/name coordinates, pull-request number, policy and prompt
 versions, rules commit, base SHA, and head SHA. Repeated webhooks for the same
 immutable inputs therefore return the same analysis offset and task identity.
-A hidden marker on the immutable GitHub review provides a second publication
-guard if the review landed but the settlement append was interrupted:
+A hidden marker on the immutable GitHub review and the same value as the Check
+Run's `external_id` provide publication guards if either write landed but the
+settlement append was interrupted:
 
 ```html
 <!-- iterate-github-ai-linter:<repository-id>:analysis:<offset>:head:<sha> -->
@@ -282,9 +284,9 @@ instruction precedence.
 - The latest successful analysis compares semantic diagnostic keys with the
   previous result. It does not yet ingest GitHub thread resolution or other
   human dispositions when deciding whether an issue is persistent.
-- There is no Check Run, commit status, PostHog feed, rule fan-out, automatic
-  fix application, or typed analysis-expiry event yet. Failures and cancelled
-  publications are nevertheless explicit terminal stream facts.
+- There is no PostHog feed, rule fan-out, automatic fix application, or typed
+  analysis-expiry event yet. Failures and cancelled publications are
+  nevertheless explicit terminal stream facts.
 - The review marker does not yet include an Iterate project identity. Separate
   projects with identical repository, head, and stream-offset coordinates can
   therefore converge on one existing review instead of publishing duplicates.

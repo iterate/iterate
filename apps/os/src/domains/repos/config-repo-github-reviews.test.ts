@@ -285,7 +285,7 @@ describe("userspace GitHub pull-request routing", () => {
 
     expect(parentAgentEvents).toMatchObject([
       {
-        idempotencyKey: "github-pr/agent-policy:v4",
+        idempotencyKey: "github-pr/agent-policy:v5",
         payload: {
           key: "github/pull-request-policy",
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -303,7 +303,7 @@ describe("userspace GitHub pull-request routing", () => {
       },
     ]);
     expect(JSON.stringify(parentAgentEvents[0])).toContain(
-      "The sibling /ai-linter stream is the sole author of non-blocking COMMENT reviews",
+      "The sibling /ai-linter stream is the sole author of linter Check Runs and non-blocking COMMENT reviews",
     );
     expect(JSON.stringify(parentAgentEvents[0])).toContain(
       "Never create, submit, or dismiss a pull-request review",
@@ -334,7 +334,7 @@ describe("userspace GitHub pull-request routing", () => {
         type: "events.iterate.com/agent/configured",
       },
       {
-        idempotencyKey: "github-ai-linter/agent-policy:v2",
+        idempotencyKey: "github-ai-linter/agent-policy:v3",
         payload: {
           key: "github-ai-linter/policy",
           llmRequestPolicy: { behaviour: "dont-trigger-request" },
@@ -397,14 +397,14 @@ describe("userspace GitHub pull-request routing", () => {
       {
         type: "events.iterate.com/github-ai-linter/analysis-requested",
         idempotencyKey:
-          "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:2:rules-abc:base-abc:head-abc",
+          "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:3:rules-abc:base-abc:head-abc",
         payload: {
           appSlug: "iterate",
           baseSha: "base-abc",
           connection: "install-789",
           headSha: "head-abc",
           policyVersion: "2",
-          promptVersion: "2",
+          promptVersion: "3",
           pullRequestNumber: 7,
           repository: { id: 101, owner: "acme", repo: "widgets" },
           rules,
@@ -417,7 +417,7 @@ describe("userspace GitHub pull-request routing", () => {
       /"durableWorkerKey":"app-gh-linter-[0-9a-f]{32}"/,
     );
     expect(JSON.stringify(linterAgentEvents[1])).toContain(
-      "The stream processor mechanically publishes findings as a non-blocking COMMENT review",
+      "The stream processor mechanically publishes a green Check Run for clean analyses",
     );
 
     const task = JSON.stringify(linterAgentEvents[3]);
@@ -528,9 +528,9 @@ describe("userspace GitHub pull-request routing", () => {
       ({ type }) => type === "events.iterate.com/github-ai-linter/analysis-requested",
     );
     expect(analyses.map(({ idempotencyKey }) => idempotencyKey)).toEqual([
-      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:2:rules-abc:base-abc:head-one",
-      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:2:rules-abc:base-abc:head-two",
-      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:2:rules-abc:base-abc:head-two",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:3:rules-abc:base-abc:head-one",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:3:rules-abc:base-abc:head-two",
+      "github-ai-linter/analysis:install-789:iterate:101:acme/widgets:7:2:3:rules-abc:base-abc:head-two",
     ]);
     const tasks = eventsFor(test.agentAppendBatches, linterPath).filter(({ idempotencyKey }) =>
       idempotencyKey?.startsWith("github-ai-linter/task:"),
@@ -599,7 +599,7 @@ describe("userspace GitHub pull-request routing", () => {
       ),
     ).toMatchObject({
       idempotencyKey:
-        "github-ai-linter/analysis:install-789:iterate:101:renamed/widgets-next:7:2:2:rules-abc:base-abc:head-abc",
+        "github-ai-linter/analysis:install-789:iterate:101:renamed/widgets-next:7:2:3:rules-abc:base-abc:head-abc",
       payload: { repository: { id: 101, owner: "renamed", repo: "widgets-next" } },
     });
     expect(JSON.stringify(linterAgentEvents)).toContain(

@@ -486,9 +486,7 @@ export async function publishGithubAiLinterReview(
   const hasVisibleDiagnostics = analysis.diagnostics.some(
     ({ suppression }) => suppression === null,
   );
-  if (!hasVisibleDiagnostics && analysis.assessment.verdict === "approve") {
-    return { reason: "No visible findings to publish.", status: "skipped" };
-  }
+  const publishesReview = hasVisibleDiagnostics || analysis.assessment.verdict !== "approve";
 
   const { request } = analysis;
   const params = {
@@ -518,45 +516,101 @@ export async function publishGithubAiLinterReview(
   // If one GitHub PR must receive distinct reviews from several Iterate
   // projects with identical stream coordinates, add a stable project/config
   // identity to the request and marker before enabling that topology.
-  const marker = `<!-- iterate-github-ai-linter:${analysis.request.repository.id}:analysis:${analysis.analysisRequestOffset}:head:${analysis.request.headSha} -->`;
-  const reviews = await octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
-    ...params,
-    per_page: 100,
-  });
-  // The marker is predictable, so body text alone is not authority: a human
-  // reviewer could otherwise paste it and suppress the App's real review.
-  const existing = reviews.find(
-    (review) =>
-      review.user?.login === `${request.appSlug}[bot]` && review.body?.includes(marker) === true,
-  );
-  if (existing !== undefined) {
-    return {
-      reviewId: existing.id,
-      reviewUrl: existing.html_url,
-      status: "succeeded",
-    };
+  const publicationId = `iterate-github-ai-linter:${analysis.request.repository.id}:analysis:${analysis.analysisRequestOffset}:head:${analysis.request.headSha}`;
+  const marker = `<!-- ${publicationId} -->`;
+  let review:
+    | { status: "not-published" }
+    | { reviewId: number; reviewUrl: string; status: "published" } = {
+    status: "not-published",
+  };
+  if (publishesReview) {
+    const reviews = await octokit.paginate(
+      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
+      {
+        ...params,
+        per_page: 100,
+      },
+    );
+    // The marker is predictable, so body text alone is not authority: a human
+    // reviewer could otherwise paste it and suppress the App's real review.
+    const existing = reviews.find(
+      (candidate) =>
+        candidate.user?.login === `${request.appSlug}[bot]` &&
+        candidate.body?.includes(marker) === true,
+    );
+    if (existing !== undefined) {
+      review = {
+        reviewId: existing.id,
+        reviewUrl: existing.html_url,
+        status: "published",
+      };
+    } else {
+      // GitHub validates every inline location atomically with createReview.
+      // This intentionally records an explicit failed publication if the LLM
+      // supplied a stale/non-diff span. Silently dropping one would hide
+      // malformed agent output.
+      const response = await octokit.rest.pulls.createReview({
+        ...params,
+        body: githubAiLinterReviewBody(analysis, marker),
+        comments: githubAiLinterReviewComments(analysis),
+        commit_id: request.headSha,
+        event: "COMMENT",
+      });
+      review = {
+        reviewId: response.data.id,
+        reviewUrl: response.data.html_url,
+        status: "published",
+      };
+    }
   }
 
-  // The marker repairs the common "GitHub succeeded, settlement append
-  // failed" retry. It cannot provide cross-process compare-and-swap: if this
-  // proof-of-concept ever permits concurrent publisher incarnations, move the
-  // external write to a GitHub primitive with a stable vendor-side key (for
-  // example a Check Run) before claiming strict exactly-once publication.
-  // GitHub validates every inline location atomically with createReview. This
-  // intentionally records an explicit failed publication if the LLM supplied
-  // a stale/non-diff span. A more elaborate version can deterministically
-  // pre-validate positions and degrade only invalid diagnostics to the review
-  // body, but silently dropping them here would hide malformed agent output.
-  const response = await octokit.rest.pulls.createReview({
-    ...params,
-    body: githubAiLinterReviewBody(analysis, marker),
-    comments: githubAiLinterReviewComments(analysis),
-    commit_id: request.headSha,
-    event: "COMMENT",
+  const checkName = "Iterate GitHub AI linter";
+  const existingChecks = await octokit.rest.checks.listForRef({
+    check_name: checkName,
+    filter: "all",
+    owner: params.owner,
+    per_page: 100,
+    ref: request.headSha,
+    repo: params.repo,
   });
+  const existingCheck = existingChecks.data.check_runs.find(
+    (checkRun) => checkRun.external_id === publicationId,
+  );
+  const checkResponse =
+    existingCheck === undefined
+      ? await octokit.rest.checks.create({
+          conclusion: review.status === "published" ? "neutral" : "success",
+          external_id: publicationId,
+          head_sha: request.headSha,
+          name: checkName,
+          output: {
+            summary:
+              review.status === "published"
+                ? `The linter completed and left a non-blocking COMMENT review.\n\n${analysis.assessment.summary}`
+                : analysis.assessment.summary,
+            title:
+              review.status === "published" ? "Advisory findings published" : "No issues found",
+          },
+          owner: params.owner,
+          repo: params.repo,
+          status: "completed",
+        })
+      : { data: existingCheck };
+  if (checkResponse.data.html_url === null) {
+    throw new Error(`GitHub Check Run ${checkResponse.data.id} did not provide an HTML URL.`);
+  }
+  const checkRun = { id: checkResponse.data.id, url: checkResponse.data.html_url };
+  if (review.status === "not-published") {
+    return {
+      checkRun,
+      reason: "No visible findings to publish.",
+      status: "skipped",
+    };
+  }
   return {
-    reviewId: response.data.id,
-    reviewUrl: response.data.html_url,
+    checkRun,
+    reviewId: review.reviewId,
+    reviewUrl: review.reviewUrl,
     status: "succeeded",
   };
 }

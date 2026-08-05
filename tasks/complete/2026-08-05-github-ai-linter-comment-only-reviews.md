@@ -5,7 +5,7 @@ size: small
 
 # Make clean AI lint runs silent and findings comment-only
 
-> **Status summary:** Done. Clean analyses settle as skipped without a GitHub call; findings publish comment-only reviews. Targeted tests, monorepo checks, and PR CI are green.
+> **Status summary:** Done, including review follow-up. Clean analyses publish a green Check Run and no review; findings publish a neutral Check Run plus a comment-only review. Tests and PR CI are green.
 
 Before this task, the Iterate GitHub AI linter approved pull requests when it
 found no issues and requested changes when it left findings. Both actions
@@ -20,6 +20,8 @@ clean run, and AI findings can be false positives.
 - [x] Publication state and events still settle coherently when a clean analysis intentionally skips GitHub review creation. _The contract models `skipped` as a terminal publication result._
 - [x] Tests cover both comment-only findings and a clean/suppressed-only run. _Covered together in `ai-linter.test.ts` through the public processor and publisher path._
 - [x] Linter documentation and prompt text no longer claim that it authors approvals or change requests. _Updated the GitHub agents guide plus both linter and conversational agent policies._
+- [x] Every successful analysis publishes an explicit status check. _Clean analyses conclude `success`; findings conclude `neutral` so advisory comments remain non-blocking._
+- [x] Changed agent-policy payloads use new idempotency versions. _The linter prompt is v3 and conversational PR policy is v5, preventing conflicts with existing stream events._
 
 ## Implementation notes
 
@@ -36,3 +38,5 @@ clean run, and AI findings can be false positives.
   parallel test run hit host-wide ephemeral-port exhaustion (15,659 of 16,384
   ports in `TIME_WAIT`); the PR's complete Depot test job passed on a clean
   runner, along with every other check.
+- 2026-08-05: Review follow-up added idempotent GitHub Check Runs and bumped
+  both changed agent-policy versions after human and Bugbot comments.
