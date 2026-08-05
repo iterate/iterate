@@ -1,12 +1,13 @@
 import { DurableObject } from "cloudflare:workers";
 import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
 import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
-import { workerVersion, type Env } from "../../env.ts";
-import type { CapabilityDescription } from "../itx/describe.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { workerVersion, type Env } from "../../env.ts";
 import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
+import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
+import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import type { HibernatableRpcLeaseBinding } from "../hibernatable-rpc-lease.ts";
+import type { CapabilityDescription } from "../itx/describe.ts";
 import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/virtual-project.ts";
 import {
   CapabilityHostProcessor,
@@ -14,7 +15,18 @@ import {
 } from "./capability-host-processor-implementation.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import type { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
-import type { ProvideCapabilityInput } from "./types.ts";
+import {
+  LiveCapabilityLegRpcTarget,
+  LiveCapabilityLeaseServer,
+  type LiveCapabilityLeaseActivation,
+} from "./live-capability-lease.ts";
+import type {
+  CapabilityProvidedPayload,
+  CapabilityRecord,
+  RevokeCapabilityInput,
+} from "./types.ts";
+
+type LiveCapabilityRecord = Extract<CapabilityRecord, { type: "live" }>;
 
 type ScriptExecutionEntrypoint = {
   run(
@@ -57,6 +69,15 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
   });
+  readonly #liveCapabilityLeases = new LiveCapabilityLeaseServer({
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+  });
+  readonly #capabilityMutationTails = new Map<string, Promise<void>>();
+  readonly #liveChannelMutationTails = new Map<string, Promise<void>>();
+  #liveLeaseReconciliation: Promise<void> | undefined;
+  #liveLeasesReconciled = false;
+  #liveLeaseRevision = 0;
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
   // Registered WITH recovery: script executions are consequential
@@ -78,6 +99,8 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         projectId: this.#name.projectId,
       }),
       reads: this.#processorReads(),
+      invokeLiveCapability: (record, path, args) =>
+        this.#liveCapabilityLeases.invoke(record, path, args),
       scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(),
       validateCapabilityTypes: (types) =>
         checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
@@ -140,21 +163,376 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
 
   // Return types are pinned shallow so `DurableObjectStub<CapabilityHostDurableObject>`
   // doesn't deep-instantiate the processor's inferred signatures (TS2589).
-  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
-    return this.#capabilityHostProcessor.invokeCapability(input);
+  async invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
+    await this.#reconcileLiveCapabilityLeases();
+    return await this.#capabilityHostProcessor.invokeCapability(input);
   }
 
-  provideCapability(
-    input: ProvideCapabilityInput,
+  async provideCapability(
+    input: CapabilityProvidedPayload,
+    liveLease?: HibernatableRpcLeaseBinding,
   ): Promise<{ path: string[]; providedAtOffset: number }> {
-    return this.#capabilityHostProcessor.provideCapability(input);
+    await this.#reconcileLiveCapabilityLeases();
+    if (input.type === "live" && liveLease === undefined) {
+      throw new Error("live capability provision requires a hibernatable provider lease");
+    }
+    const provide = () =>
+      this.#serializeCapabilityMutation(input.path, async () => {
+        const { state } = await this.#reads.snapshot();
+        const replaced = state.capabilities.find(
+          (record) =>
+            record.path.length === input.path.length &&
+            record.path.every((segment, index) => segment === input.path[index]),
+        );
+        return await this.#capabilityHostProcessor.provideCapability(input, {
+          afterCommit: ({ record }) => {
+            if (replaced?.type === "live") this.#liveCapabilityLeases.remove(replaced);
+            if (input.type !== "live") {
+              return;
+            }
+            if (liveLease === undefined) {
+              throw new Error("live capability provision lost its validated provider lease");
+            }
+            if (record.type !== "live") {
+              throw new Error("live capability provision committed a non-live record");
+            }
+            if (!this.#liveCapabilityLeases.bindProvision(record, liveLease)) {
+              throw new Error(`live capability "${input.path.join(".")}" lease socket disappeared`);
+            }
+          },
+        });
+      });
+    return input.type === "live" && liveLease !== undefined
+      ? await this.#serializeLiveChannelMutation(liveLease.leaseKey, provide)
+      : await provide();
   }
 
-  revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
-    return this.#capabilityHostProcessor.revokeCapability(input);
+  /**
+   * Mount one relay-channel burst in one stream append while retaining a
+   * distinct durable offset and ownership handle for every logical provider.
+   */
+  async provideCapabilities(
+    inputs: CapabilityProvidedPayload[],
+    liveLease: HibernatableRpcLeaseBinding,
+  ): Promise<{ path: string[]; providedAtOffset: number }[]> {
+    if (inputs.length === 0) return [];
+    await this.#reconcileLiveCapabilityLeases();
+    for (const input of inputs) {
+      if (input.type !== "live") {
+        throw new Error("live provider batch contains a non-live capability");
+      }
+      if (
+        input.providerBinding?.channelKey !== liveLease.leaseKey ||
+        input.providerBinding.socketId !== liveLease.socketId
+      ) {
+        throw new Error("live provider batch does not belong to its hibernatable channel");
+      }
+    }
+    return await this.#serializeLiveChannelMutation(liveLease.leaseKey, () =>
+      this.#serializeCapabilityMutations(
+        inputs.map(({ path }) => path),
+        async () => {
+          const { state } = await this.#reads.snapshot();
+          const winnerByPath = new Map(
+            state.capabilities.map((record) => [JSON.stringify(record.path), record] as const),
+          );
+          return await this.#capabilityHostProcessor.provideCapabilities(inputs, {
+            afterCommit: ({ mounts }) => {
+              // Validate every physical binding before retiring anything. A
+              // channel that disappeared halfway through the commit rolls the
+              // whole batch back without making sibling replacement cleanup
+              // depend on iteration order.
+              for (const { record } of mounts) {
+                if (record.type !== "live") {
+                  throw new Error("live capability batch committed a non-live record");
+                }
+                if (!this.#liveCapabilityLeases.bindProvision(record, liveLease)) {
+                  throw new Error(
+                    `live capability "${record.path.join(".")}" lease socket disappeared`,
+                  );
+                }
+              }
+              for (const { record } of mounts) {
+                const key = JSON.stringify(record.path);
+                const replaced = winnerByPath.get(key);
+                if (replaced?.type === "live") this.#liveCapabilityLeases.remove(replaced);
+                winnerByPath.set(key, record);
+              }
+            },
+          });
+        },
+      ),
+    );
   }
 
-  describeCapabilities(): Promise<CapabilityDescription[]> {
-    return this.#capabilityHostProcessor.describeCapabilities();
+  async revokeCapability(input: RevokeCapabilityInput): Promise<void> {
+    await this.#reconcileLiveCapabilityLeases();
+    await this.#serializeCapabilityMutation(input.path, async () => {
+      const { state } = await this.#reads.snapshot();
+      const record = state.capabilities.find(
+        (candidate) =>
+          candidate.path.length === input.path.length &&
+          candidate.path.every((segment, index) => segment === input.path[index]),
+      );
+      await this.#capabilityHostProcessor.revokeCapability(input);
+      if (
+        record?.type === "live" &&
+        (input.providedAtOffset === undefined || input.providedAtOffset === record.providedAtOffset)
+      ) {
+        this.#liveCapabilityLeases.remove(record);
+      }
+    });
   }
+
+  /** Revoke a burst of exact mounts with one durable table-reduction event. */
+  async revokeCapabilities(inputs: RevokeCapabilityInput[]): Promise<void> {
+    if (inputs.length === 0) return;
+    await this.#reconcileLiveCapabilityLeases();
+    const exact = new Set<string>();
+    for (const input of inputs) {
+      if (input.providedAtOffset === undefined) {
+        throw new Error("batched capability revocation requires exact providedAtOffset values");
+      }
+      exact.add(exactMountKey(input.path, input.providedAtOffset));
+    }
+
+    const { state } = await this.#reads.snapshot();
+    const current = state.capabilities.filter((record) =>
+      exact.has(exactMountKey(record.path, record.providedAtOffset)),
+    );
+    if (current.length === 0) return;
+    await this.#capabilityHostProcessor.revokeCapabilities(
+      current.map((record) => ({
+        path: record.path,
+        providedAtOffset: record.providedAtOffset,
+      })),
+    );
+    for (const record of current) {
+      if (record.type === "live") this.#liveCapabilityLeases.remove(record);
+    }
+  }
+
+  async activateLiveCapability(
+    input: LiveCapabilityLeaseActivation,
+  ): Promise<LiveCapabilityLegRpcTarget | undefined> {
+    await this.#reconcileLiveCapabilityLeases();
+    const { state } = await this.#reads.snapshot();
+    const record = state.capabilities.find(
+      (candidate): candidate is LiveCapabilityRecord =>
+        candidate.type === "live" &&
+        candidate.providedAtOffset === input.providedAtOffset &&
+        candidate.path.length === input.path.length &&
+        candidate.path.every((segment, index) => segment === input.path[index]),
+    );
+    if (record === undefined) return undefined;
+    try {
+      return this.#liveCapabilityLeases.activate(input, record);
+    } catch (error) {
+      // The DO owns activation admission, so it also owns making a rejected
+      // provider durably disappear. The relay repeats this exact revocation
+      // for transport-ambiguous failures; providedAtOffset makes it idempotent.
+      this.#liveCapabilityLeases.remove(record);
+      try {
+        await this.#serializeCapabilityMutation(record.path, async () => {
+          await this.#capabilityHostProcessor.revokeCapability({
+            path: record.path,
+            providedAtOffset: record.providedAtOffset,
+          });
+        });
+      } catch (rollbackError) {
+        this.#invalidateLiveLeaseReconciliation();
+        throw new AggregateError(
+          [error, rollbackError],
+          `live capability "${record.path.join(".")}" activation and rollback failed`,
+        );
+      }
+      throw error;
+    }
+  }
+
+  async describeCapabilities(): Promise<CapabilityDescription[]> {
+    await this.#reconcileLiveCapabilityLeases();
+    return await this.#capabilityHostProcessor.describeCapabilities();
+  }
+
+  /** Internal hibernatable provider-lease upgrade; no ingress route addresses this DO. */
+  fetch(request: Request): Response {
+    return this.#liveCapabilityLeases.acceptUpgrade(request);
+  }
+
+  webSocketMessage(_ws: WebSocket, _message: string | ArrayBuffer): void {
+    // Lifecycle frames are DO -> relay only.
+  }
+
+  async webSocketClose(
+    ws: WebSocket,
+    _code: number,
+    _reason: string,
+    _wasClean: boolean,
+  ): Promise<void> {
+    const departed = this.#liveCapabilityLeases.departedOnClose(ws);
+    if (departed === undefined) {
+      // Every accepted socket on this DO belongs to this lane. If its
+      // attachment cannot be decoded, exact ownership is unknowable; a full
+      // reconciliation is the bounded safe response, not a silent orphan.
+      this.#invalidateLiveLeaseReconciliation();
+      await this.#reconcileLiveCapabilityLeases();
+      return;
+    }
+    this.#invalidateLiveLeaseReconciliation();
+    // A provide commits its event before binding the channel and waiting for
+    // processor ingestion. If close snapshots during that interval it would
+    // miss the just-committed mount and leave an offline durable row behind.
+    // Drain every provide already admitted for this channel, then catch up to
+    // include any direct stream facts before deciding what departure owns.
+    try {
+      await (this.#liveChannelMutationTails.get(departed.channelKey) ?? Promise.resolve());
+      await this.#registry.catchUp(CapabilityHostProcessorContract.slug);
+      const { state } = await this.#reads.snapshot();
+      const records = state.capabilities.filter(
+        (record): record is LiveCapabilityRecord =>
+          record.type === "live" &&
+          record.providerBinding?.channelKey === departed.channelKey &&
+          record.providerBinding.socketId === departed.socketId,
+      );
+      for (const record of records) {
+        this.#liveCapabilityLeases.remove(record, { notifyRelay: false });
+      }
+      await this.#capabilityHostProcessor.revokeCapabilities(
+        records.map((record) => ({
+          path: record.path,
+          providedAtOffset: record.providedAtOffset,
+        })),
+      );
+    } catch (error) {
+      // A failed close callback must not become the warm incarnation's final
+      // answer. Invalidate again in case a concurrent sweep completed after
+      // the first invalidation; the next visible operation retries from the
+      // durable table and exact runtime socket epochs.
+      this.#invalidateLiveLeaseReconciliation();
+      throw error;
+    }
+  }
+
+  webSocketError(ws: WebSocket, error: unknown): void {
+    this.#liveCapabilityLeases.handleError(ws, error);
+  }
+
+  /**
+   * Sweep records whose owner socket did not survive a deployment/restart.
+   * Cloudflare terminates WebSockets during shutdown but does not promise the
+   * dying incarnation enough time to journal every close callback. A fresh
+   * incarnation can decide from durable bindings plus runtime-owned sockets,
+   * so its first capability operation repairs that state in one exact event.
+   * Pre-channel live records are swept by the same migration boundary.
+   */
+  async #reconcileLiveCapabilityLeases(): Promise<void> {
+    while (!this.#liveLeasesReconciled) {
+      const active = this.#liveLeaseReconciliation;
+      if (active !== undefined) {
+        await active;
+        continue;
+      }
+      const revision = this.#liveLeaseRevision;
+      const reconciliation = (async () => {
+        await this.#registry.catchUp(CapabilityHostProcessorContract.slug);
+        const { state } = await this.#reads.snapshot();
+        const stale = state.capabilities.filter(
+          (record): record is LiveCapabilityRecord =>
+            record.type === "live" && !this.#liveCapabilityLeases.hasLease(record),
+        );
+        if (stale.length > 0) {
+          await this.#capabilityHostProcessor.revokeCapabilities(
+            stale.map((record) => ({
+              path: record.path,
+              providedAtOffset: record.providedAtOffset,
+            })),
+          );
+          for (const record of stale) {
+            this.#liveCapabilityLeases.remove(record, { notifyRelay: false });
+          }
+        }
+        if (this.#liveLeaseRevision === revision) this.#liveLeasesReconciled = true;
+      })();
+      this.#liveLeaseReconciliation = reconciliation;
+      try {
+        await reconciliation;
+      } finally {
+        if (this.#liveLeaseReconciliation === reconciliation) {
+          this.#liveLeaseReconciliation = undefined;
+        }
+      }
+    }
+  }
+
+  /** Invalidate any in-flight sweep whose socket view predates a close event. */
+  #invalidateLiveLeaseReconciliation(): void {
+    this.#liveLeaseRevision += 1;
+    this.#liveLeasesReconciled = false;
+  }
+
+  /**
+   * Serialize mutations of one mount path through commit, transport binding,
+   * and read-your-writes. Without this gate, two racing provides can commit in
+   * one order but bind their session sockets in the opposite order, allowing
+   * the older call to revoke or supersede the durable winner.
+   */
+  async #serializeCapabilityMutation<T>(path: string[], mutation: () => Promise<T>): Promise<T> {
+    return await this.#serializeCapabilityMutations([path], mutation);
+  }
+
+  /** Lock an overlapping set of mount paths without serializing unrelated batches. */
+  async #serializeCapabilityMutations<T>(
+    paths: string[][],
+    mutation: () => Promise<T>,
+  ): Promise<T> {
+    const keys = [...new Set(paths.map((path) => JSON.stringify(path)))].sort();
+    const predecessors = keys.map(
+      (key) => this.#capabilityMutationTails.get(key) ?? Promise.resolve(),
+    );
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = Promise.all(predecessors).then(() => gate);
+    for (const key of keys) this.#capabilityMutationTails.set(key, tail);
+    await Promise.all(predecessors);
+    try {
+      return await mutation();
+    } finally {
+      release();
+      for (const key of keys) {
+        if (this.#capabilityMutationTails.get(key) === tail) {
+          this.#capabilityMutationTails.delete(key);
+        }
+      }
+    }
+  }
+
+  /** Keep close cleanup behind every provide admitted on one physical channel. */
+  async #serializeLiveChannelMutation<T>(
+    channelKey: string,
+    mutation: () => Promise<T>,
+  ): Promise<T> {
+    const predecessor = this.#liveChannelMutationTails.get(channelKey) ?? Promise.resolve();
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const tail = predecessor.then(() => gate);
+    this.#liveChannelMutationTails.set(channelKey, tail);
+    await predecessor;
+    try {
+      return await mutation();
+    } finally {
+      release();
+      if (this.#liveChannelMutationTails.get(channelKey) === tail) {
+        this.#liveChannelMutationTails.delete(channelKey);
+      }
+    }
+  }
+}
+
+function exactMountKey(path: string[], providedAtOffset: number): string {
+  return JSON.stringify([path, providedAtOffset]);
 }

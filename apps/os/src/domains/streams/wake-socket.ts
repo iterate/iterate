@@ -23,12 +23,14 @@
 // correctness never depends on a frame arriving: the re-dial replays from the
 // relay's delivered cursor.
 //
-// Delete this module (and stream-connection-relay.ts) when hibernatable RPC
-// ships: the retained callback then survives hibernation on its own and the
-// wake socket is redundant.
+// The transport mechanics are shared with capability-host provider leases in
+// hibernatable-rpc-lease.ts. Delete the stream adapter and relay when native
+// hibernatable RPC ships: the retained callback then survives hibernation on
+// its own and the wake socket is redundant.
 
 import { z } from "zod";
 import type { StreamEvent } from "iterate/processors";
+import { HibernatableRpcLeaseSockets } from "../hibernatable-rpc-lease.ts";
 import { compileEventFilter, EventFilter } from "./event-filter.ts";
 
 /** Internal upgrade header carrying the wake-socket binding; never routed from external requests. */
@@ -38,18 +40,20 @@ export const STREAM_WAKE_SOCKET_HEADER = "x-iterate-stream-wake";
 const WAKE_SOCKET_TAG = "wake";
 
 /** The JSON body of {@link STREAM_WAKE_SOCKET_HEADER} on the upgrade request. */
-const WakeSocketUpgradeHeader = z.object({
-  connectionKey: z.string().trim().min(1),
-  /**
-   * Relay-generated unique id for this exact socket. `bind` keeps the socket
-   * whose id its relay dialed with and closes every other socket under the
-   * same connectionKey: a same-key replacement must leave the losing relay's
-   * socket closed (its relay then breaks, matching today's last-writer-wins
-   * handle death) instead of dormant — a dormant loser would wake on every
-   * append and fight the winner with alternating re-dials forever.
-   */
-  socketId: z.string().trim().min(1),
-});
+const WakeSocketUpgradeHeader = z
+  .object({
+    connectionKey: z.string().trim().min(1),
+    /**
+     * Relay-generated unique id for this exact socket. `bind` keeps the socket
+     * whose id its relay dialed with and closes every other socket under the
+     * same connectionKey: a same-key replacement must leave the losing relay's
+     * socket closed (its relay then breaks, matching today's last-writer-wins
+     * handle death) instead of dormant — a dormant loser would wake on every
+     * append and fight the winner with alternating re-dials forever.
+     */
+    socketId: z.string().trim().min(1),
+  })
+  .transform(({ connectionKey, socketId }) => ({ leaseKey: connectionKey, socketId }));
 
 /**
  * The durable per-socket state, stored via `serializeAttachment` so it
@@ -71,31 +75,6 @@ const WakeSocketAttachment = z.object({
 });
 
 type WakeSocketAttachment = z.infer<typeof WakeSocketAttachment>;
-
-/**
- * A frame sent DO → relay on the wake socket. Loose objects on purpose: a
- * newer DO may add fields the relay's deploy does not know yet, and the relay
- * must keep honoring the `type` it does understand. A frame whose `type` is
- * unknown fails the whole union and is dropped whole — that is the intended
- * posture for future frame kinds too.
- */
-const WakeSocketFrame = z.union([
-  z.object({ type: z.literal("wake") }),
-  z.object({ type: z.literal("idle") }),
-]);
-
-type WakeSocketFrame = z.infer<typeof WakeSocketFrame>;
-
-/** Decode one inbound wake-socket frame; anything unparseable is dropped whole. */
-export function parseWakeSocketFrame(data: unknown): WakeSocketFrame | undefined {
-  if (typeof data !== "string") return undefined;
-  try {
-    const parsed = WakeSocketFrame.safeParse(JSON.parse(data));
-    return parsed.success ? parsed.data : undefined;
-  } catch {
-    return undefined;
-  }
-}
 
 /**
  * Stream lifecycle bookkeeping never wakes a dormant subscriber. The idle
@@ -135,9 +114,27 @@ type WakeSocketRegistryHooks = {
  */
 export class WakeSocketRegistry {
   readonly #hooks: WakeSocketRegistryHooks;
+  readonly #leases: HibernatableRpcLeaseSockets<WakeSocketAttachment>;
 
   constructor(hooks: WakeSocketRegistryHooks) {
     this.#hooks = hooks;
+    this.#leases = new HibernatableRpcLeaseSockets({
+      attachmentSchema: WakeSocketAttachment,
+      bindingOf: (attachment) => ({
+        leaseKey: attachment.connectionKey,
+        socketId: attachment.socketId,
+      }),
+      createAttachment: ({ leaseKey, socketId }) => ({
+        v: 1,
+        connectionKey: leaseKey,
+        socketId,
+      }),
+      headerName: STREAM_WAKE_SOCKET_HEADER,
+      hooks,
+      lane: "stream wake",
+      socketTag: WAKE_SOCKET_TAG,
+      upgradeSchema: WakeSocketUpgradeHeader,
+    });
   }
 
   /**
@@ -147,40 +144,7 @@ export class WakeSocketRegistry {
    * fetches to Stream DOs — and additionally gated on the internal header.
    */
   acceptUpgrade(request: Request): Response {
-    const wakeHeader = request.headers.get(STREAM_WAKE_SOCKET_HEADER);
-    if (request.headers.get("Upgrade")?.toLowerCase() !== "websocket" || wakeHeader === null) {
-      return Response.json(
-        { error: "stream durable objects accept only wake-socket upgrades" },
-        { status: 400 },
-      );
-    }
-    let parsedHeader: unknown;
-    try {
-      parsedHeader = JSON.parse(wakeHeader);
-    } catch (error) {
-      return Response.json(
-        {
-          error: `invalid ${STREAM_WAKE_SOCKET_HEADER} header: ${error instanceof Error ? error.message : String(error)}`,
-        },
-        { status: 400 },
-      );
-    }
-
-    const binding = WakeSocketUpgradeHeader.safeParse(parsedHeader);
-    if (!binding.success) {
-      return Response.json(
-        { error: `invalid ${STREAM_WAKE_SOCKET_HEADER} header: ${binding.error.message}` },
-        { status: 400 },
-      );
-    }
-    const pair = new WebSocketPair();
-    this.#hooks.acceptWebSocket(pair[1], [WAKE_SOCKET_TAG]);
-    pair[1].serializeAttachment({
-      v: 1,
-      connectionKey: binding.data.connectionKey,
-      socketId: binding.data.socketId,
-    } satisfies WakeSocketAttachment);
-    return new Response(null, { status: 101, webSocket: pair[0] });
+    return this.#leases.acceptUpgrade(request);
   }
 
   /**
@@ -216,17 +180,12 @@ export class WakeSocketRegistry {
    * undefined when no fact is owed.
    */
   departedOnClose(ws: WebSocket): { connectionKey: string; socketId: string } | undefined {
-    let raw: unknown;
-    try {
-      raw = ws.deserializeAttachment();
-    } catch {
+    const attachment = this.#leases.attachment(ws);
+    if (attachment === undefined || attachment.idleDeliveredThrough === undefined) {
       return undefined;
     }
-    const parsed = WakeSocketAttachment.safeParse(raw);
-    if (!parsed.success) return undefined;
-    if (parsed.data.idleDeliveredThrough === undefined) return undefined;
-    if (this.#hooks.hasConnection(parsed.data.connectionKey)) return undefined;
-    return { connectionKey: parsed.data.connectionKey, socketId: parsed.data.socketId };
+    if (this.#hooks.hasConnection(attachment.connectionKey)) return undefined;
+    return { connectionKey: attachment.connectionKey, socketId: attachment.socketId };
   }
 
   /** connectionKeys that currently have a live wake socket — one scan per call. */
@@ -249,19 +208,15 @@ export class WakeSocketRegistry {
     events?: boolean;
   }): void {
     const hasFilter = Object.values(args.filter).some((value) => value !== undefined);
-    for (const { ws, attachment } of this.#sockets(args.connectionKey)) {
-      if (attachment.socketId !== args.wakeSocketId) {
-        try {
-          ws.close(1000, "superseded");
-        } catch {
-          // Already closing.
-        }
-        continue;
-      }
-      this.#stamp(ws, {
+    const claimed = this.#leases.claim({
+      leaseKey: args.connectionKey,
+      socketId: args.wakeSocketId ?? "missing-wake-socket-id",
+    });
+    if (claimed !== undefined) {
+      this.#leases.stamp(claimed.ws, {
         v: 1,
         connectionKey: args.connectionKey,
-        socketId: attachment.socketId,
+        socketId: claimed.attachment.socketId,
         ...(hasFilter ? { filter: args.filter } : {}),
         ...(args.events === false ? { events: false as const } : {}),
       });
@@ -280,20 +235,13 @@ export class WakeSocketRegistry {
     for (const { ws, attachment } of this.#sockets()) {
       if (!idled.has(attachment.connectionKey)) continue;
       const { wakeSentAtOffset: _cleared, ...rest } = attachment;
-      this.#stamp(ws, { ...rest, idleDeliveredThrough: maxOffset });
+      this.#leases.stamp(ws, { ...rest, idleDeliveredThrough: maxOffset });
       // Closing the RPC leg released the retained callback, but the relay
       // still holds its StreamConnectionHandle stub — a live reference into
       // this isolate that blocks hibernation on its own. The idle frame tells
       // the relay to dispose it; best-effort, since a broken socket already
       // means the relay's execution context (and with it the stub) is gone.
-      try {
-        ws.send(JSON.stringify({ type: "idle" } satisfies WakeSocketFrame));
-      } catch (error) {
-        console.warn("stream idle frame send failed", {
-          connectionKey: attachment.connectionKey,
-          error,
-        });
-      }
+      this.#leases.send(ws, { type: "idle" });
     }
   }
 
@@ -339,11 +287,7 @@ export class WakeSocketRegistry {
           connectionKey: attachment.connectionKey,
           error,
         });
-        try {
-          ws.close(1011, "filter compile failed");
-        } catch {
-          // Already closing.
-        }
+        this.#leases.close(ws, 1011, "filter compile failed");
         continue;
       }
       const matched = news.some((event) => {
@@ -368,61 +312,19 @@ export class WakeSocketRegistry {
         }
       });
       if (!matched) continue;
-      try {
-        ws.send(JSON.stringify({ type: "wake" } satisfies WakeSocketFrame));
-      } catch (error) {
-        console.warn("stream wake frame send failed", {
-          connectionKey: attachment.connectionKey,
-          error,
-        });
-        continue;
-      }
-      this.#stamp(ws, { ...attachment, wakeSentAtOffset: this.#hooks.maxOffset() });
+      if (!this.#leases.send(ws, { type: "wake" })) continue;
+      this.#leases.stamp(ws, {
+        ...attachment,
+        wakeSentAtOffset: this.#hooks.maxOffset(),
+      });
     }
   }
 
   /** Live wake sockets with a valid attachment, optionally for one connectionKey. */
   #sockets(connectionKey?: string): { ws: WebSocket; attachment: WakeSocketAttachment }[] {
-    const sockets: { ws: WebSocket; attachment: WakeSocketAttachment }[] = [];
-    for (const ws of this.#hooks.getWebSockets(WAKE_SOCKET_TAG)) {
-      let raw: unknown;
-      try {
-        raw = ws.deserializeAttachment();
-      } catch {
-        continue;
-      }
-      const parsed = WakeSocketAttachment.safeParse(raw);
-      if (!parsed.success) continue;
-      if (connectionKey !== undefined && parsed.data.connectionKey !== connectionKey) continue;
-      sockets.push({ ws, attachment: parsed.data });
-    }
-    return sockets;
-  }
-
-  /**
-   * The one attachment writer. `serializeAttachment` has a hard size cap
-   * (16 KiB serialized) and the filter spec is caller-controlled, so a stamp
-   * can fail on a pathologically large filter. Never let that break the
-   * caller (an openConnection or a post-commit turn): close the socket
-   * instead — the connection then simply keeps today's pinned session
-   * semantics, and the relay degrades exactly as if the upgrade had failed.
-   */
-  #stamp(ws: WebSocket, attachment: WakeSocketAttachment): void {
-    try {
-      ws.serializeAttachment(attachment);
-    } catch (error) {
-      console.warn(
-        "wake socket attachment stamp failed; closing socket (connection stays pinned)",
-        {
-          connectionKey: attachment.connectionKey,
-          error,
-        },
-      );
-      try {
-        ws.close(1011, "attachment stamp failed");
-      } catch {
-        // Already closing.
-      }
-    }
+    return this.#leases.entries(connectionKey).map(({ attachment, ws }) => ({
+      attachment,
+      ws,
+    }));
   }
 }

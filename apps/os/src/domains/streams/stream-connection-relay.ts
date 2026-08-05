@@ -34,13 +34,17 @@ import type {
   StreamPingInput,
 } from "iterate/processors";
 import type { Stream } from "../../itx-api.generated.ts";
-import type { StreamDurableObject } from "./stream-durable-object.ts";
+import {
+  openHibernatableRpcLeaseSocket,
+  parseHibernatableRpcLeaseFrame,
+} from "../hibernatable-rpc-lease.ts";
 import {
   retainConnectionPing,
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
 } from "./retained-event-callbacks.ts";
-import { parseWakeSocketFrame, STREAM_WAKE_SOCKET_HEADER } from "./wake-socket.ts";
+import type { StreamDurableObject } from "./stream-durable-object.ts";
+import { STREAM_WAKE_SOCKET_HEADER } from "./wake-socket.ts";
 
 /** What StreamConnectionRpcTarget's constructor needs; built here so rpc-targets.ts keeps owning the published target class. */
 type RelayedStreamConnection = {
@@ -170,14 +174,12 @@ export async function openRelayedStreamConnection(input: {
   // Best-effort: without a wake socket the connection simply keeps today's
   // semantics — never idle-closed, pinned for the session's life.
   try {
-    const upgrade = await input.stub().fetch("https://stream-wake.internal/", {
-      headers: {
-        Upgrade: "websocket",
-        [STREAM_WAKE_SOCKET_HEADER]: JSON.stringify({ connectionKey, socketId: wakeSocketId }),
-      },
+    wakeSocket = await openHibernatableRpcLeaseSocket({
+      headerName: STREAM_WAKE_SOCKET_HEADER,
+      headerValue: { connectionKey, socketId: wakeSocketId },
+      stub: input.stub(),
+      url: "https://stream-wake.internal/",
     });
-    wakeSocket = upgrade.webSocket ?? undefined;
-    wakeSocket?.accept();
   } catch (error) {
     console.warn("stream wake socket unavailable; session connection will stay pinned", {
       connectionKey,
@@ -187,7 +189,7 @@ export async function openRelayedStreamConnection(input: {
 
   wakeSocket?.addEventListener("message", (event) => {
     if (!active) return;
-    const frame = parseWakeSocketFrame(event.data);
+    const frame = parseHibernatableRpcLeaseFrame(event.data);
     if (frame === undefined) return;
     if (frame.type === "idle") {
       // The DO idle-closed the RPC leg. Dropping this handle stub releases

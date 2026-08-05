@@ -12,7 +12,7 @@ import type {
   ProvideCapabilityInput,
   RevokeCapabilityInput,
 } from "./types.ts";
-import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
+import { assertCapabilityPath } from "./capability-path.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import {
@@ -90,11 +90,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
   CapabilityHostProcessorDeps
 > {
   readonly contract = CapabilityHostProcessorContract;
-
-  /** Live (session-bound) capability providers by mount-path key — ephemeral
-   * by design: only the mount RECORD is durable; the provider's value lives on
-   * the providing connection and dies with it. */
-  readonly #liveCapabilities = new Map<string, LiveCapability>();
 
   /** Script executions alive in THIS incarnation — the "actually running" half
    * the at-head pass compares the reduced obligations against. */
@@ -275,6 +270,20 @@ export class CapabilityHostProcessor extends StreamProcessor<
           }),
         };
       }
+      case "events.iterate.com/capability-host/capabilities-revoked": {
+        const revoked = new Set(
+          event.payload.revocations.map(({ path, providedAtOffset }) =>
+            exactMountKey(path, providedAtOffset),
+          ),
+        );
+        return {
+          ...state,
+          capabilities: state.capabilities.filter(
+            (capability) =>
+              !revoked.has(exactMountKey(capability.path, capability.providedAtOffset)),
+          ),
+        };
+      }
       case "events.iterate.com/capability-host/script-run-requested":
         return {
           ...state,
@@ -315,98 +324,133 @@ export class CapabilityHostProcessor extends StreamProcessor<
   // The scope's public capability surface, called via the hosting durable
   // object (never by the delivery loop).
 
-  async provideCapability(input: ProvideCapabilityInput) {
+  async provideCapability(
+    input: CapabilityProvidedPayload,
+    options: {
+      afterCommit?(input: {
+        provision: { path: string[]; providedAtOffset: number };
+        record: CapabilityRecord;
+      }): void | Promise<void>;
+    } = {},
+  ) {
     await this.#assertCreated();
-    const { path } = input;
-    assertCapabilityPath(path);
-    const key = liveKey(path);
-    const previousLive = this.#liveCapabilities.get(key);
-    let record: CapabilityProvidedPayload;
-    let nextLiveInput: { flattenNestedPath: boolean; target: unknown } | undefined;
-    if (input.type === "live") {
-      if (!Object.hasOwn(input, "capability")) {
-        throw new Error('live capabilities require "capability"');
-      }
-      const flattenNestedPath = input.flattenNestedPaths === true;
-      record = {
-        flattenNestedPaths: flattenNestedPath ? true : undefined,
-        instructions: input.instructions,
-        path,
-        type: "live",
-        types: input.types,
-      };
-      nextLiveInput = {
-        flattenNestedPath,
-        target: input.capability,
-      };
-    } else if (input.type === "itx-call") {
-      if (!Array.isArray(input.expression)) {
-        throw new Error(
-          '"expression" must be an ARRAY of steps — property names and [method, ...args] calls ' +
-            'walked over itx, e.g. ["streams", ["get", "/"]] — not JavaScript source. ' +
-            'Copy the recipe from itx.docs.get({ name: "typed-capability-mount" }).',
-        );
-      }
-      assertExpressionDoesNotReferenceOwnMount(input);
-      record = {
-        expression: input.expression,
-        flattenNestedPaths: input.flattenNestedPaths === true ? true : undefined,
-        instructions: input.instructions,
-        path,
-        type: "itx-call",
-        types: input.types ?? (await this.#selfDescribedTypes(input.expression)),
-      };
-    } else {
-      input satisfies never;
-      throw new Error(`unsupported capability input ${(input as { type?: unknown }).type}`);
-    }
-    // Authored types must compile before they enter the stream — a typo'd
-    // declaration rejected here is a fixable error; one recorded durably is
-    // silent rot every docs read and typecheck inherits. This runs AFTER the
-    // cheap structural checks above so a malformed payload never costs a
-    // network-bound compile before its real error surfaces.
-    if (input.types !== undefined) {
-      const problems = (await this.deps.validateCapabilityTypes?.(input.types)) ?? [];
-      if (problems.length > 0) {
-        throw new Error(
-          `capability "types" for "${path.join(".")}" does not compile:\n${problems.join("\n")}`,
-        );
-      }
-    }
-    const nextLive =
-      nextLiveInput !== undefined
-        ? retainLiveCapabilityProvider(nextLiveInput.target, {
-            flattenNestedPath: nextLiveInput.flattenNestedPath,
-          })
-        : undefined;
+    const record = await this.#prepareCapabilityRecord(input);
+    const { path } = record;
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/capability-provided",
+      payload: record,
+    });
+    const committedOffset = committed.offset;
+    const provision = { path, providedAtOffset: committedOffset };
 
-    let committedOffset: number;
+    // The append is the mount's commit point. Bind any incarnation-local
+    // transport to that exact identity before waiting for the processor to
+    // ingest its own fact; doing it after the wait leaves a committed mount
+    // briefly visible without the provider channel that makes it callable.
     try {
-      const [committed] = await this.append({
-        type: "events.iterate.com/capability-host/capability-provided",
-        payload: record,
+      await options.afterCommit?.({
+        provision,
+        record: { ...record, providedAtOffset: committedOffset },
       });
-      committedOffset = committed.offset;
     } catch (error) {
-      nextLive?.dispose();
+      try {
+        const [revoked] = await this.append({
+          type: "events.iterate.com/capability-host/capability-revoked",
+          payload: provision,
+        });
+        await this.deps.reads.waitUntilEvent({
+          offset: revoked.offset,
+          timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+        });
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `capability "${path.join(".")}" transport binding and durable rollback both failed`,
+        );
+      }
       throw error;
     }
-
-    // The append is the durable commit point. From here on, keep the ephemeral
-    // live-provider map aligned with the record that will reduce from the
-    // stream.
-    if (nextLive === undefined) {
-      this.#liveCapabilities.delete(key);
-    } else {
-      this.#liveCapabilities.set(key, nextLive);
-    }
-    previousLive?.dispose();
 
     await this.deps.reads.waitUntilEvent({
       offset: committedOffset,
       timeoutMs: INGEST_WAIT_TIMEOUT_MS,
     });
-    return { path, providedAtOffset: committedOffset };
+    return provision;
+  }
+
+  /**
+   * Commit a burst of already-independent mounts in one stream append.
+   *
+   * A stateless provider channel commonly receives tens or hundreds of
+   * simultaneous Cap'n Web exports. Each project stream also feeds the
+   * project worker, so one append per export would manufacture the same
+   * number of delivery turns and short-lived dynamic-worker runners. The
+   * stream is already a batch log; preserve each mount's distinct offset and
+   * ownership while sharing the commit and delivery boundary.
+   */
+  async provideCapabilities(
+    inputs: CapabilityProvidedPayload[],
+    options: {
+      afterCommit?(input: {
+        mounts: {
+          provision: { path: string[]; providedAtOffset: number };
+          record: CapabilityRecord;
+        }[];
+      }): void | Promise<void>;
+    } = {},
+  ): Promise<{ path: string[]; providedAtOffset: number }[]> {
+    if (inputs.length === 0) return [];
+    await this.#assertCreated();
+    const records = await Promise.all(inputs.map((input) => this.#prepareCapabilityRecord(input)));
+    const committed = await this.append(
+      ...records.map((record) => ({
+        type: "events.iterate.com/capability-host/capability-provided" as const,
+        payload: record,
+      })),
+    );
+    if (committed.length !== records.length) {
+      throw new Error(
+        `capability batch committed ${committed.length} events for ${records.length} mounts`,
+      );
+    }
+    const mounts = records.map((record, index) => {
+      const event = committed[index];
+      if (event === undefined) throw new Error(`capability batch lost committed event ${index}`);
+      return {
+        provision: { path: record.path, providedAtOffset: event.offset },
+        record: { ...record, providedAtOffset: event.offset } satisfies CapabilityRecord,
+      };
+    });
+
+    try {
+      await options.afterCommit?.({ mounts });
+    } catch (error) {
+      try {
+        const [revoked] = await this.append({
+          type: "events.iterate.com/capability-host/capabilities-revoked",
+          payload: { revocations: mounts.map(({ provision }) => provision) },
+        });
+        if (revoked === undefined) throw new Error("capability batch rollback committed no event");
+        await this.deps.reads.waitUntilEvent({
+          offset: revoked.offset,
+          timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+        });
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `capability batch transport binding and durable rollback both failed`,
+        );
+      }
+      throw error;
+    }
+
+    const last = committed.at(-1);
+    if (last === undefined) throw new Error("capability batch committed no events");
+    await this.deps.reads.waitUntilEvent({
+      offset: last.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
+    return mounts.map(({ provision }) => provision);
   }
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
@@ -417,8 +461,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
     if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
       return;
     }
-    const key = liveKey(path);
-    const previousLive = this.#liveCapabilities.get(key);
     const [committed] = await this.append({
       type: "events.iterate.com/capability-host/capability-revoked",
       payload: {
@@ -426,8 +468,32 @@ export class CapabilityHostProcessor extends StreamProcessor<
         ...(providedAtOffset === undefined ? {} : { providedAtOffset }),
       },
     });
-    this.#liveCapabilities.delete(key);
-    previousLive?.dispose();
+    await this.deps.reads.waitUntilEvent({
+      offset: committed.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
+  }
+
+  /**
+   * Remove many exact mounts in one stream append. A multiplexed provider
+   * channel can own thousands of records, so its departure must be one
+   * bounded mutation rather than a thousand sequential DO/RPC turns.
+   */
+  async revokeCapabilities(inputs: RevokeCapabilityInput[]): Promise<void> {
+    if (inputs.length === 0) return;
+    await this.#assertCreated();
+    const revocations: { path: string[]; providedAtOffset: number }[] = [];
+    for (const input of inputs) {
+      assertCapabilityPath(input.path);
+      if (input.providedAtOffset === undefined) {
+        throw new Error("batched capability revocation requires exact providedAtOffset values");
+      }
+      revocations.push({ path: input.path, providedAtOffset: input.providedAtOffset });
+    }
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/capabilities-revoked",
+      payload: { revocations },
+    });
     await this.deps.reads.waitUntilEvent({
       offset: committed.offset,
       timeoutMs: INGEST_WAIT_TIMEOUT_MS,
@@ -471,11 +537,10 @@ export class CapabilityHostProcessor extends StreamProcessor<
       const provider = await normalizeCapabilityProvider(evaluated, hit.record);
       return await invokeNormalizedCapability(provider, hit.rest, args);
     }
-    const live = this.#liveCapabilities.get(liveKey(hit.record.path));
-    if (!live) {
+    if (this.deps.invokeLiveCapability === undefined) {
       throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
     }
-    return await live.invoke(hit.rest, args);
+    return await this.deps.invokeLiveCapability(hit.record, hit.rest, args);
   }
 
   // Reports everything reachable at this scope: this scope's own mounts plus
@@ -501,6 +566,59 @@ export class CapabilityHostProcessor extends StreamProcessor<
     if (state.birthCertificate === null) {
       throw new Error(`capability host at ${this.#scopePath} has not been created`);
     }
+  }
+
+  async #prepareCapabilityRecord(
+    input: CapabilityProvidedPayload,
+  ): Promise<CapabilityProvidedPayload> {
+    const { path } = input;
+    assertCapabilityPath(path);
+    let record: CapabilityProvidedPayload;
+    if (input.type === "live") {
+      const flattenNestedPath = input.flattenNestedPaths === true;
+      record = {
+        flattenNestedPaths: flattenNestedPath ? true : undefined,
+        instructions: input.instructions,
+        path,
+        providerBinding: input.providerBinding,
+        type: "live",
+        types: input.types,
+      };
+    } else if (input.type === "itx-call") {
+      if (!Array.isArray(input.expression)) {
+        throw new Error(
+          '"expression" must be an ARRAY of steps — property names and [method, ...args] calls ' +
+            'walked over itx, e.g. ["streams", ["get", "/"]] — not JavaScript source. ' +
+            'Copy the recipe from itx.docs.get({ name: "typed-capability-mount" }).',
+        );
+      }
+      assertExpressionDoesNotReferenceOwnMount(input);
+      record = {
+        expression: input.expression,
+        flattenNestedPaths: input.flattenNestedPaths === true ? true : undefined,
+        instructions: input.instructions,
+        path,
+        type: "itx-call",
+        types: input.types ?? (await this.#selfDescribedTypes(input.expression)),
+      };
+    } else {
+      input satisfies never;
+      throw new Error(`unsupported capability input ${(input as { type?: unknown }).type}`);
+    }
+    // Authored types must compile before they enter the stream — a typo'd
+    // declaration rejected here is a fixable error; one recorded durably is
+    // silent rot every docs read and typecheck inherits. This runs AFTER the
+    // cheap structural checks above so a malformed payload never costs a
+    // network-bound compile before its real error surfaces.
+    if (input.types !== undefined) {
+      const problems = (await this.deps.validateCapabilityTypes?.(input.types)) ?? [];
+      if (problems.length > 0) {
+        throw new Error(
+          `capability "types" for "${path.join(".")}" does not compile:\n${problems.join("\n")}`,
+        );
+      }
+    }
+    return record;
   }
 
   /**
@@ -978,6 +1096,16 @@ export type CapabilityHostProcessorDeps = {
   itx: Project;
   /** Runner-backed committed-state reads — see {@link CapabilityHostProcessorReads}. */
   reads: CapabilityHostProcessorReads;
+  /**
+   * Ephemeral live-provider acquisition owned by the hosting Durable Object.
+   * The processor owns only durable mount facts; production wires this to the
+   * hibernatable provider lease, while pure reduction tests omit it.
+   */
+  invokeLiveCapability?: (
+    record: Extract<CapabilityRecord, { type: "live" }>,
+    path: string[],
+    args: unknown[],
+  ) => Promise<unknown>;
   /** Runs run-script workers in this scope. */
   scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
   /** Injected clock (expiry decisions); production defaults to Date.now. */
@@ -1024,21 +1152,6 @@ function isFallbackCapabilityHost(value: unknown): value is FallbackCapabilityHo
   return typeof host?.invokeCapability === "function" && typeof host.__describe === "function";
 }
 
-const INVALID_PATH_SEGMENTS = new Set([
-  // Mount names only — INVOCATION paths may end in __describe (intercepted in
-  // invokeCapability above); a MOUNT named __describe would be unreachable.
-  "__describe",
-  "__proto__",
-  "constructor",
-  "prototype",
-  "then",
-  "apply",
-  "call",
-  "bind",
-  "dup",
-  "onRpcBroken",
-]);
-
 /** ~4k tokens: how much of a mount's types `__describe` shows before
  * deferring to docs.get's budgeted reader. */
 const MAX_DESCRIBED_TYPES_CHARS = 16_000;
@@ -1062,25 +1175,8 @@ function truncatedTypes(types: string, mountPoint: string): string {
 const samePath = (a: string[], b: string[]) =>
   a.length === b.length && a.every((segment, index) => segment === b[index]);
 
-const liveKey = (path: string[]) => JSON.stringify(path);
-
-function assertCapabilityPath(path: string[]) {
-  if (!Array.isArray(path)) {
-    throw new Error('capability path must be an ARRAY of segments (e.g. ["tools", "weather"])');
-  }
-  if (path.length === 0) {
-    throw new Error("capability path must contain at least one segment");
-  }
-  for (const segment of path) {
-    if (
-      typeof segment !== "string" ||
-      !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment) ||
-      INVALID_PATH_SEGMENTS.has(segment)
-    ) {
-      throw new Error(`invalid capability path segment "${String(segment)}"`);
-    }
-  }
-}
+const exactMountKey = (path: string[], providedAtOffset: number) =>
+  JSON.stringify([path, providedAtOffset]);
 
 function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
   let best: { record: CapabilityRecord; rest: string[] } | null = null;

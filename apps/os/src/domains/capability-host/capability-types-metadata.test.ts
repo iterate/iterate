@@ -11,7 +11,7 @@ import { StreamProcessorRunner } from "iterate/processors";
 import { MemoryStream } from "iterate/processors/testing";
 import type { ItxExpression } from "../../itx/expression.ts";
 import type { Project } from "../../itx-api.generated.ts";
-import type { ProvideCapabilityInput } from "./types.ts";
+import type { CapabilityProvidedPayload, ProvideCapabilityInput } from "./types.ts";
 import type { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { CapabilityHostProcessor } from "./capability-host-processor-implementation.ts";
 
@@ -44,6 +44,21 @@ type Harness = {
  */
 async function provideDelivered(harness: Harness, input: ProvideCapabilityInput) {
   const pending = harness.processor.provideCapability(input);
+  let settled = false;
+  pending.finally(() => (settled = true)).catch(() => {});
+  await vi.waitFor(async () => {
+    await harness.runner.catchUp();
+    expect(settled).toBe(true);
+  });
+  return await pending;
+}
+
+async function provideBatchDelivered(
+  harness: Harness,
+  inputs: CapabilityProvidedPayload[],
+  options?: Parameters<CapabilityHostProcessor["provideCapabilities"]>[1],
+) {
+  const pending = harness.processor.provideCapabilities(inputs, options);
   let settled = false;
   pending.finally(() => (settled = true)).catch(() => {});
   await vi.waitFor(async () => {
@@ -132,6 +147,113 @@ describe("CapabilityHostProcessor birth", () => {
     await expect(
       harness.processor.invokeCapability({ path: ["projectTool", "ping"], args: [] }),
     ).rejects.toThrow('no capability "projectTool.ping"');
+  });
+});
+
+describe("CapabilityHostProcessor transport binding", () => {
+  it("commits one thousand independent live mounts in one append", async () => {
+    const stream = capabilityHostStream();
+    const append = vi.spyOn(stream, "append");
+    const harness = await makeProcessor({ stream });
+    const afterCommit = vi.fn();
+    const inputs = Array.from(
+      { length: 1_000 },
+      (_, index): CapabilityProvidedPayload => ({
+        path: ["provider", `provider${index}`],
+        providerBinding: { channelKey: "channel", leaseKey: `lease-${index}` },
+        type: "live",
+      }),
+    );
+
+    const provisions = await provideBatchDelivered(harness, inputs, { afterCommit });
+
+    expect(append).toHaveBeenCalledOnce();
+    expect(append.mock.calls[0]).toHaveLength(1_000);
+    expect(afterCommit).toHaveBeenCalledOnce();
+    expect(provisions).toHaveLength(1_000);
+    expect(new Set(provisions.map(({ providedAtOffset }) => providedAtOffset)).size).toBe(1_000);
+    expect(harness.runner.currentState.capabilities).toHaveLength(1_000);
+  });
+
+  it("rolls a failed physical binding batch back with one exact revocation event", async () => {
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({ stream });
+    const bindingError = new Error("shared channel disappeared");
+    const pending = harness.processor.provideCapabilities(
+      [
+        { path: ["one"], type: "live" },
+        { path: ["two"], type: "live" },
+      ],
+      {
+        afterCommit: () => {
+          throw bindingError;
+        },
+      },
+    );
+    const rejected = expect(pending).rejects.toBe(bindingError);
+    let settled = false;
+    pending.finally(() => (settled = true)).catch(() => {});
+    await vi.waitFor(async () => {
+      await harness.runner.catchUp();
+      expect(settled).toBe(true);
+    });
+    await rejected;
+
+    const provided = stream.events.filter((event) => event.type.endsWith("/capability-provided"));
+    const revoked = stream.events.filter((event) => event.type.endsWith("/capabilities-revoked"));
+    expect(provided).toHaveLength(2);
+    expect(revoked).toHaveLength(1);
+    expect(revoked[0]?.payload).toEqual({
+      revocations: provided.map((event) => {
+        if (event.payload === undefined) throw new Error("provided event has no payload");
+        return {
+          path: event.payload.path,
+          providedAtOffset: event.offset,
+        };
+      }),
+    });
+    expect(harness.runner.currentState.capabilities).toEqual([]);
+  });
+
+  it("rolls back the exact durable mount when its after-commit binding fails", async () => {
+    const stream = capabilityHostStream();
+    const harness = await makeProcessor({ stream });
+    const bindingError = new Error("provider socket disappeared");
+    const pending = harness.processor.provideCapability(
+      { path: ["tools"], type: "live" },
+      {
+        afterCommit: ({ provision, record }) => {
+          expect(record).toMatchObject({
+            path: ["tools"],
+            providedAtOffset: provision.providedAtOffset,
+            type: "live",
+          });
+          throw bindingError;
+        },
+      },
+    );
+    const rejected = expect(pending).rejects.toBe(bindingError);
+    let settled = false;
+    pending.finally(() => (settled = true)).catch(() => {});
+    await vi.waitFor(async () => {
+      await harness.runner.catchUp();
+      expect(settled).toBe(true);
+    });
+    await rejected;
+
+    const events = stream.events.filter(
+      (event) =>
+        event.type.endsWith("/capability-provided") || event.type.endsWith("/capability-revoked"),
+    );
+    expect(events.map((event) => event.type)).toEqual([
+      "events.iterate.com/capability-host/capability-provided",
+      "events.iterate.com/capability-host/capability-revoked",
+    ]);
+    expect(events[1]?.payload).toEqual({
+      path: ["tools"],
+      providedAtOffset: events[0]?.offset,
+    });
+    expect(harness.runner.currentState.capabilities).toEqual([]);
   });
 });
 

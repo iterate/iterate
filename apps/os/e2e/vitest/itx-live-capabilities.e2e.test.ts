@@ -296,7 +296,7 @@ test("Successful live capability replacement uses the new target", async () => {
   });
   using project = await itx.projects.get(`replace-live-${marker}`).create({});
 
-  using _oldProvision = await project.provideCapability({
+  using oldProvision = await project.provideCapability({
     path: ["replaceProbe"],
     type: "live",
     capability: {
@@ -309,7 +309,7 @@ test("Successful live capability replacement uses the new target", async () => {
   // @ts-expect-error - dynamic capability root
   expect(await project.replaceProbe.value()).toBe(`old:${marker}`);
 
-  using _newProvision = await project.provideCapability({
+  using newProvision = await project.provideCapability({
     path: ["replaceProbe"],
     type: "live",
     capability: {
@@ -320,6 +320,39 @@ test("Successful live capability replacement uses the new target", async () => {
   });
   // @ts-expect-error - dynamic capability root
   expect(await project.replaceProbe.value()).toBe(`new:${marker}`);
+  await expect.poll(() => oldProvision.ping()).toBe(false);
+  expect(await newProvision.ping()).toBe(true);
+});
+
+test("Racing same-path live provisions leave one coherent durable and socket winner", async () => {
+  const marker = crypto.randomUUID();
+
+  using session = withItxSession();
+  using itx = session.authenticate({
+    type: "admin-secret",
+    secret: adminSecret(),
+  });
+  using project = await itx.projects.get(`race-live-${marker}`).create({});
+
+  const firstMount = project.provideCapability({
+    path: ["raceProbe"],
+    type: "live",
+    capability: { value: () => `first:${marker}` },
+  });
+  const secondMount = project.provideCapability({
+    path: ["raceProbe"],
+    type: "live",
+    capability: { value: () => `second:${marker}` },
+  });
+  using firstProvision = await firstMount;
+  using secondProvision = await secondMount;
+
+  await expect
+    .poll(async () => Number(await firstProvision.ping()) + Number(await secondProvision.ping()))
+    .toBe(1);
+  const expected = (await firstProvision.ping()) ? `first:${marker}` : `second:${marker}`;
+  // @ts-expect-error - dynamic capability root
+  expect(await project.raceProbe.value()).toBe(expected);
 });
 
 test("itx expression replacement records the recipe without evaluating it", async () => {

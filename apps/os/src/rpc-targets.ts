@@ -244,6 +244,10 @@ import type {
   Description,
   ProjectDescription,
 } from "./domains/itx/describe.ts";
+import {
+  LiveCapabilityProviderChannel,
+  type LiveProvideInput,
+} from "./domains/capability-host/live-capability-relay.ts";
 import type { CfExecutionContext } from "./domains/itx/utils.ts";
 import type { SandboxCreateInput } from "./domains/sandboxes/utils.ts";
 import type {
@@ -341,6 +345,7 @@ import type {
   ProvideCapabilityInput,
   RevokeCapabilityInput,
 } from "./domains/capability-host/types.ts";
+import { assertCapabilityPath } from "./domains/capability-host/capability-path.ts";
 import type {
   CollectSecretInput,
   CollectSecretLink,
@@ -5265,6 +5270,69 @@ type CapabilityHostRpcTargetProps = {
   projectId: string;
 };
 
+// A capability-tree getter is free to mint a fresh host wrapper on every
+// traversal (`capabilityHosts.get(path)`, `agents.get(path)`, and friends).
+// Channel identity belongs to the stateless execution context and durable
+// host address, not to one ephemeral RpcTarget wrapper; target-local caching
+// would silently regress repeated getter traversal to one socket per provider.
+const liveCapabilityProviderChannels = new WeakMap<
+  object,
+  Map<string, LiveCapabilityProviderChannel>
+>();
+type LiveCapabilityRelay = {
+  provide(input: LiveProvideInput): Promise<CapabilityProvisionRpcTarget>;
+};
+const liveCapabilityRelayEntrypoints = new WeakMap<object, Map<string, LiveCapabilityRelay>>();
+
+function liveCapabilityScopeKey(scope: { path: string; projectId: string }): string {
+  return JSON.stringify([scope.projectId, normalizePath(scope.path)]);
+}
+
+function liveCapabilityProviderChannelFor(
+  ctx: CfExecutionContext,
+  scope: { path: string; projectId: string },
+): LiveCapabilityProviderChannel {
+  let channels = liveCapabilityProviderChannels.get(ctx);
+  if (channels === undefined) {
+    channels = new Map();
+    liveCapabilityProviderChannels.set(ctx, channels);
+  }
+  const key = liveCapabilityScopeKey(scope);
+  let channel = channels.get(key);
+  if (channel === undefined || !channel.acceptsProviders) {
+    channel = new LiveCapabilityProviderChannel({
+      env,
+      scope,
+      waitUntil: (promise) => ctx.waitUntil(promise),
+    });
+    channels.set(key, channel);
+  }
+  return channel;
+}
+
+function liveCapabilityRelayFor(
+  ctx: Extract<CfExecutionContext, { acceptWebSocket: unknown }>,
+  scope: { path: string; projectId: string },
+): LiveCapabilityRelay {
+  let relays = liveCapabilityRelayEntrypoints.get(ctx);
+  if (relays === undefined) {
+    relays = new Map();
+    liveCapabilityRelayEntrypoints.set(ctx, relays);
+  }
+  const key = liveCapabilityScopeKey(scope);
+  let relay = relays.get(key);
+  if (relay === undefined) {
+    const exports = ctx.exports as unknown as {
+      LiveCapabilityRelayEntrypoint(input: {
+        props: { path: string; projectId: string };
+      }): LiveCapabilityRelay;
+    };
+    relay = exports.LiveCapabilityRelayEntrypoint({ props: scope });
+    relays.set(key, relay);
+  }
+  return relay;
+}
+
 /**
  * The host surface for ONE capability scope: mount, revoke, invoke, describe,
  * and run scripts against the durable capability table at `path` (backed by
@@ -5349,7 +5417,55 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
 
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
   async provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvisionRpcTarget> {
+    assertCapabilityPath(input.path);
     rejectBuiltinCollision(ITX_SURFACE_MEMBER_NAMES, input.path);
+    if (input.type === "live") {
+      if (!Object.hasOwn(input, "capability")) {
+        throw new Error('live capabilities require "capability"');
+      }
+      if ("acceptWebSocket" in this.#props.ctx) {
+        // An itx can be constructed inside a Durable Object for scripts and
+        // delivery. Only that wall-clock-billed lane needs a ctx.exports hop
+        // into the stateless relay. Kenton's capnweb#36 proposal has Cap'n Web
+        // terminate in that ordinary Worker, then reconstruct a short
+        // demand-driven Workers RPC leg into the DO:
+        // https://github.com/cloudflare/capnweb/issues/36#issuecomment-3334955335
+        // This branch retains a stub for a provider object created in the
+        // origin DO's isolate, which currently prevents that origin DO from
+        // hibernating; merely caching an ordinary DO stub would not. See
+        // https://github.com/cloudflare/capnweb/issues/36#issuecomment-3572361727
+        // What we can and must avoid is multiplying the stateless
+        // entrypoint and hibernatable socket per mount, so one cached relay
+        // multiplexes every provider for this origin-context/host pair.
+        const relay = await liveCapabilityRelayFor(this.#props.ctx, {
+          path: this.#props.path,
+          projectId: this.#props.projectId,
+        }).provide(input);
+        // `ctx.exports` correctly types a returned RpcTarget as its remote
+        // `RpcStub` projection (async properties, no private fields). This
+        // method immediately relays that object capability across Cap'n Web,
+        // whose public contract is the same target; it never treats the stub
+        // as a locally constructed class instance.
+        return relay as unknown as CapabilityProvisionRpcTarget;
+      }
+
+      // `/api` and env.ITX already run in the desired stateless execution
+      // context. Keep all of their providers in that one session instead of
+      // allocating one loopback WorkerEntrypoint context per provider; the
+      // latter exhausts a workerd isolate at hundreds of idle leases.
+      const channel = liveCapabilityProviderChannelFor(this.#props.ctx, {
+        path: this.#props.path,
+        projectId: this.#props.projectId,
+      });
+      const provision = await channel.provide(input);
+      return new CapabilityProvisionRpcTarget({
+        ctx: this.#props.ctx,
+        isActive: provision.isActive,
+        path: provision.path,
+        providedAtOffset: provision.providedAtOffset,
+        revoke: provision.revoke,
+      });
+    }
     const provision = await this.#durableObject.provideCapability(input);
     // The Durable Object returns the durable mount coordinates. The public RPC
     // surface returns an ownership handle that can revoke that exact mount on
@@ -6834,16 +6950,20 @@ class StreamEventPagerRpcTarget extends IterateRpcTarget<"StreamEventPager"> {
  * by the stream offset that mounted the capability, so disposing an older
  * provision after a replacement cannot revoke the newer mount at the same path.
  */
-class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision"> {
+export class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions: `The ownership handle for the mount at "${this.path.join(".")}" (providedAtOffset ${this.providedAtOffset}): revoke() removes exactly this mount; disposal (\`using\`) revokes too.`,
-      children: { revoke: "Remove this mount." },
+      children: {
+        ping: "Check whether this provision's ownership lease is still active.",
+        revoke: "Remove this mount.",
+      },
       parent: "returned by provideCapability",
     });
   }
 
   readonly #ctx: Pick<CfExecutionContext, "waitUntil"> | undefined;
+  readonly #isActive: () => boolean;
   readonly #path: string[];
   readonly #providedAtOffset: number;
   readonly #revoke: RevokeCapability;
@@ -6851,12 +6971,14 @@ class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision
 
   constructor(args: {
     ctx?: Pick<CfExecutionContext, "waitUntil">;
+    isActive?: () => boolean;
     path: string[];
     providedAtOffset: number;
     revoke: RevokeCapability;
   }) {
     super();
     this.#ctx = args.ctx;
+    this.#isActive = args.isActive ?? (() => true);
     this.#path = [...args.path];
     this.#providedAtOffset = args.providedAtOffset;
     this.#revoke = args.revoke;
@@ -6870,6 +6992,17 @@ class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision
   /** The stream offset of the `capability-provided` event this handle owns. */
   get providedAtOffset(): number {
     return this.#providedAtOffset;
+  }
+
+  /**
+   * Probe this ownership lease without touching the CapabilityHost Durable
+   * Object. Live provisions answer from their stateless relay, so clients can
+   * detect a replaced or broken provider lane without defeating hibernation.
+   * This is relay-local and advisory: `true` does not prove that a later DO
+   * wake and provider attach will succeed.
+   */
+  ping(): boolean | Promise<boolean> {
+    return this.#revokePromise === undefined && this.#isActive();
   }
 
   /** Remove exactly this mount (never a newer mount at the same path). */
