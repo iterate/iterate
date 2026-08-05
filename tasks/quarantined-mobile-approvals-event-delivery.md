@@ -9,13 +9,11 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-Implementation is about 75% complete. Both skips are removed, failures now
-name the first missing durable transition, and both confirmed dynamic-worker
-ownership leaks have red/green regression coverage. The first canonical
-preview passed both restored flows without retry, but its Cloudflare trace
-audit exposed ten project-worker probes hitting the four-invocation limit;
-that second leak is fixed locally and awaits a fresh preview plus the 25-run
-restoration gate.
+Implementation is about 80% complete. Both skips are removed, failures now
+name the first missing durable transition, and the two dynamic-worker
+ownership leaks plus the foreground-approval ordering race have red/green
+regression coverage. Fresh preview validation and the 25-run restoration gate
+remain.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -82,6 +80,14 @@ notification journal.
   `withWorkerCommit` had replaced the dynamic worker's disposable `Response`
   with a plain stamped `Response`, so every bounded readiness probe dropped
   its invocation ownership instead of releasing it.
+- Restoration attempt `2hpdtl6rqz` exposed a different deterministic device
+  race. On project `prj_b6b560b9895c4c01b2612df3ea8b6c47`, the ordered copy
+  lane put `approval-presented` root offset 48 at device offset 8, then the
+  matching notification root offset 49 at device offset 9. The reducer dropped
+  the early claim, sent the fake token, revoked the device on Expo rejection,
+  removed the subscription at root offset 56, and therefore could not copy the
+  second notification at root offset 59. The failure diagnostic correctly
+  named `notification/requested copied to device` as the first missing link.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -114,10 +120,10 @@ Test these in order; do not treat the first plausible one as the conclusion.
    Prediction: the root stream contains the complete batch and decision while
    only the browser view is absent; reconnecting from a durable cursor repairs
    the view without creating new facts.
-4. Notification intent delivery or device journaling strands a durable
-   obligation. Prediction: the Approval Batch and root
-   `notification/requested` fact exist, but the device stream lacks the
-   correlated terminal notification event after its bounded deadline.
+4. **Confirmed:** notification intent delivery can disappear after an earlier
+   foreground claim loses its ordering race. The dropped claim permits an
+   unwanted Expo send; token rejection revokes the device and removes its
+   subscription before the next intent.
 
 ## Work
 
@@ -144,7 +150,10 @@ Test these in order; do not treat the first plausible one as the conclusion.
   compatibility shims, or another retry layer.
   _`run_script` now uses one-off Worker Loader `load()`; reusable apps remain
   content-addressed through `get()`. Completed RPC calls, entrypoint targets,
-  and copied result disposal groups are released on every outcome._
+  and copied result disposal groups are released on every outcome. The device
+  reducer retains claims that precede their matching intent, consumes them on
+  arrival, and uses an approval-offset high-water mark to reject late claims
+  without retaining unbounded history._
 - [ ] Re-run the original browser flows serially, under the focused concurrent
   stress loop, and in the canonical fully parallel preview lane.
 - [ ] Update this task with the confirmed cause, diagnostic contract, fix,
@@ -182,3 +191,10 @@ Test these in order; do not treat the first plausible one as the conclusion.
   stamped response. The focused worker/capability-host suite passes 71 tests.
   The initial marathon counted one retry-free workflow before this trace
   finding; its streak was deliberately discarded and run two was cancelled.
+- 2026-08-05: The strict gate rejected two more workflows: one for a Cloudflare
+  internal Durable Object storage reset in Semaphore, then one for a separate
+  Cloudflare reset plus an approvals retry. The new diagnostic led to the live
+  root/device journals and proved the early-claim ordering race above. Added a
+  red state-machine spec, durable pending-claim/high-water state, and a contract
+  version bump; all 24 device processor tests, OS typecheck, lint, and format
+  checks pass.

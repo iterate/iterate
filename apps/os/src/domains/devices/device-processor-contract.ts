@@ -24,11 +24,11 @@ import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const DeviceProcessorContract = defineProcessorContract({
   slug: "device",
-  // 0.5.0: approval-push suppression — obligations carry requestedAt /
-  // approvalRequestEventOffset / presentedAt, config gains approvalGraceMs,
-  // and the settlement union gains `suppressed`; the bump refolds persisted
-  // reduction caches into the new shape.
-  version: "0.5.0",
+  // 0.6.0: foreground claims may reach the device before the notification
+  // intent they suppress. Pending claims plus the approval-offset high-water
+  // mark preserve that ordered-lane race without retaining late claims. The
+  // bump refolds persisted reduction caches into the new shape.
+  version: "0.6.0",
   description: "One enrolled installation and its durable push-notification obligations.",
   // ApprovalPresentedEvents is a standalone catalog, not a contract: the
   // project contract owns the claim event but already imports THIS module, so
@@ -140,6 +140,27 @@ export const DeviceProcessorContract = defineProcessorContract({
           "ISO timestamp of the newest notification-opened fact — the engagement signal the " +
           "dashboard shows.",
       }),
+    latestApprovalRequestEventOffset: z
+      .number()
+      .int()
+      .min(0)
+      .default(0)
+      .meta({
+        description:
+          "Highest project-root human-approval-requested offset observed on a copied " +
+          "notification intent. Claims at or below this frontier cannot be waiting for a " +
+          "future intent, so a claim matching no open obligation is safely a late no-op.",
+      }),
+    pendingApprovalPresentations: z
+      .record(z.string(), z.number().int().positive())
+      .default({})
+      .meta({
+        description:
+          "Foreground claims that crossed the ordered root-to-device copy lane before their " +
+          "matching notification intent. Keyed by project-root approval-request offset and " +
+          "deleted when that intent arrives; unresolved entries remain durable evidence of a " +
+          "missing later intent instead of silently allowing a push.",
+      }),
     notifications: z
       .record(
         z.string(),
@@ -161,10 +182,11 @@ export const DeviceProcessorContract = defineProcessorContract({
               .optional()
               .meta({
                 description:
-                  "Epoch ms a matching project/approval-presented claim reduced while the " +
-                  "obligation was still `requested` — the user is already looking at the " +
-                  "batch, so the send pass settles it `suppressed` instead of attempting. " +
-                  "Never set after an attempt starts: a late claim is a no-op.",
+                  "Epoch ms a matching project/approval-presented claim committed. The claim " +
+                  "may reduce before the intent and wait in pendingApprovalPresentations, or " +
+                  "while the obligation is still `requested`; either way, the user is already " +
+                  "looking at the batch, so the send pass settles it `suppressed` instead of " +
+                  "attempting. Never set after an attempt starts: a late claim is a no-op.",
               }),
             status: z.enum(["requested", "started", "ticketed"]).meta({
               description:
@@ -413,8 +435,9 @@ export const DeviceProcessorContract = defineProcessorContract({
     "events.iterate.com/notification/requested",
     // The suppression claim (owned by the project contract, defined in the
     // shared ApprovalPresentedEvents catalog), copied by the same
-    // subscription: it marks matching still-`requested` obligations so the
-    // send pass settles them `suppressed` instead of attempting.
+    // subscription: it marks a matching still-`requested` obligation, or
+    // waits durably for a later matching intent, so the send pass settles it
+    // `suppressed` instead of attempting.
     "events.iterate.com/project/approval-presented",
     "events.iterate.com/device/push-token-updated",
     "events.iterate.com/device/revoked",
