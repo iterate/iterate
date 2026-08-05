@@ -98,17 +98,6 @@ notification journal.
   exited without its promised JSON document, which the matrix previously
   surfaced as the generic parser error `Unexpected end of JSON input`. The
   adapter now names that missing result and interrupted lifecycle directly.
-- Target-aware gate run `7pcgwh9llt` stopped an 8-workflow clean streak when
-  approvals retried. Its first attempt had spent its test-body budget on real
-  OAuth/project provisioning and entered the first approval wait with 1 ms
-  left. The diagnostic snapshot therefore named `script-run-started` absent at
-  request offset 18, but the durable journal later proved start offset 21 at
-  23:17:32.565Z, 2.37 seconds after the request and after the test had already
-  failed. Provisioning now has a separate 60-second Playwright fixture budget;
-  the approval behavior keeps its original test/action timeouts. A local exact
-  run against preview completed the behavior in 24.1 seconds. That run also
-  exposed RN-web briefly retaining the prior pasted command after React cleared
-  the composer, so the command helper now select-alls before each `insertText`.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -230,11 +219,3 @@ Test these in order; do not treat the first plausible one as the conclusion.
   empty-result diagnostic so a repeat names the lifecycle boundary instead of
   failing later in `JSON.parse`; the next canonical preview is the
   production-shaped regression check.
-- 2026-08-05: Four initial canonical workflows plus four target-aware gate
-  workflows produced 16/16 clean target results before run `7pcgwh9llt`
-  retried approvals. The journal disproved event loss: the script began 2.37s
-  after its request, while cold real-signup/project setup had left the test
-  body only 1 ms. Moved that setup into a separately budgeted disposable
-  fixture without changing the behavior timeout or assertions, and made each
-  RN-web command replace stale composer text before sending. Workspace
-  typecheck and the exact preview-backed approvals spec pass.
