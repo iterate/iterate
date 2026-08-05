@@ -708,7 +708,10 @@ int main(void)
 {
     assert(sizeof(face_render_key_t) == FACE_RENDER_KEY_BYTES);
     assert(FACE_RENDER_KEY_BYTES == 40);
-    assert(TEST_MOUTH_SLOT_COUNT > FACE_VISEME_COUNT);
+    /* Cast to int: GCC's -Werror=enum-compare rejects comparing constants
+     * from two different anonymous enums, and clang does not — so this line
+     * built on a Mac and broke CI. */
+    assert((int)TEST_MOUTH_SLOT_COUNT > (int)FACE_VISEME_COUNT);
 
     test_validation();
     test_vocabularies_and_fallback();
