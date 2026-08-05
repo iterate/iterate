@@ -2,6 +2,7 @@ import { expect, test } from "vitest";
 import type { StreamEvent } from "iterate/sdk/itx/react";
 import {
   ASSISTANT_MESSAGE_TYPE,
+  awaitingAgentActivity,
   mergeEventsByOffset,
   newMobileAgentPath,
   reduceChatEvents,
@@ -10,6 +11,30 @@ import {
   threadContextForScriptRun,
   USER_MESSAGE_TYPE,
 } from "./chat.ts";
+
+test("a sent message stays pending until the live feed acknowledges agent activity", () => {
+  const sent = userMessage(17, "/script do the work");
+
+  expect(awaitingAgentActivity([sent], sent.offset)).toBe(true);
+  expect(
+    awaitingAgentActivity(
+      [sent, activity(18, "events.iterate.com/agents/context-added")],
+      sent.offset,
+    ),
+  ).toBe(true);
+  expect(
+    awaitingAgentActivity(
+      [sent, activity(18, "events.iterate.com/capability-host/script-run-requested")],
+      sent.offset,
+    ),
+  ).toBe(false);
+  expect(
+    awaitingAgentActivity(
+      [sent, activity(18, "events.iterate.com/agent/llm-request-requested")],
+      sent.offset,
+    ),
+  ).toBe(false);
+});
 
 test("reduces user and assistant messages into ordered bubbles", () => {
   const thread = reduceChatEvents([
