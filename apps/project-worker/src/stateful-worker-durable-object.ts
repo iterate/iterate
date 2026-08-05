@@ -63,9 +63,11 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
    *  across restarts. The user source is loaded DIRECTLY (no host wrapper) — the class it exports IS the facet. */
   #facet(source: string, className: string): Fetcher {
     const version = hashSource(source);
-    // Deploy version FIRST in the key: loader isolates persist across deployments but this DO does
-    // not, so without it a redeploy leaves the runner pointing at a stale (prior-deployment) isolate
-    // whose facet stubs "cannot be transferred between Workers". Mirrors apps/os's loader cacheKey.
+    // ⚠️  LEARNING: the deploy version MUST be in the loader cacheKey. Worker-Loader isolates are cached
+    // ACROSS deployments, but this DO is durable and survives redeploys — so without a per-deploy key
+    // component a rollout leaves the runner reusing a PRIOR deployment's isolate, whose facet is
+    // cross-Worker to the new parent and thus un-transferable (same DataCloneError family). Mirrors
+    // apps/os's cacheKey (WORKER_SELF + workerVersion(env)). CF_VERSION_METADATA.id changes every deploy.
     const deployVersion = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
     const worker = this.env.LOADER.get(
       `stateful:${deployVersion}:${this.ctx.id.name}:${version}`,
@@ -86,10 +88,20 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   }
 
   /** RPC lane: resolve/restart the facet and call the method NATIVELY on it (apps/os `replayPath`). The awaited
-   *  result is plain data, so the facet stub never crosses back to the host. See the file header for why this
-   *  must be `Reflect.apply` and not `facet[method].apply(...)`. */
+   *  result is plain data, so the facet stub never crosses back to the host. */
   async invokeCapability(input: StatefulInvoke): Promise<unknown> {
     const facet = this.#facet(await this.#source(input.module), input.className);
+    // ═══════════════════════════════════════════════════════════════════════════════════════════════════
+    // ⚠️  GOTCHA — INVOKE FACET/RPC-STUB METHODS WITH Reflect.apply, *NEVER* `stub[m].apply(stub, args)`.
+    // Reading `.apply` (or ANY property) off an RPC stub's method proxy is a capnweb PIPELINED REMOTE PATH;
+    // calling it passes the facet stub as an argument, so workerd SERIALIZES the stub — and a Worker-Loader
+    // (dynamic-entrypoint) facet stub may NEVER be serialized (`requireAllowsTransfer()` throws
+    // unconditionally, workerd server.c++) → `DataCloneError: Durable Object Facet stubs cannot be
+    // transferred between Workers`. `Reflect.apply` invokes the function's [[Call]] directly (no property
+    // read, thisArg not serialized); a plain `await facet.increment(2)` is equally safe. This one idiom cost
+    // a full investigation (we wrongly blamed account entitlement) — see FACET-RPC-INVESTIGATION.md. DO NOT
+    // "simplify" this to `facet[input.method](...input.args)` captured into a variable and `.apply`-d.
+    // ═══════════════════════════════════════════════════════════════════════════════════════════════════
     const handler = Reflect.get(facet as object, input.method);
     if (typeof handler !== "function")
       throw new Error(`stateful worker: "${input.className}" has no method "${input.method}"`);
