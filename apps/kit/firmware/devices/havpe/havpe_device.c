@@ -45,6 +45,9 @@
 
 #include "capnweb/capnweb.h"
 #include "iterate/kit/audio_codec.h"
+#include "iterate/kit/capabilities/conversation.h"
+#include "iterate/kit/capabilities/push_to_talk.h"
+#include "iterate/kit/device_events.h"
 #include "iterate/kit/audio_playout.h"
 #include "iterate/kit/audio_processor.h"
 #include "iterate/kit/configuration.h"
@@ -189,6 +192,13 @@ static struct {
   size_t outbox_lengths[CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_esp_idf_itx_transport transport;
   struct iterate_kit_peer peer;
+  /* Physical and remote edges share one bounded owner queue. */
+  struct iterate_kit_device_event device_event_storage
+      [ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY];
+  struct iterate_kit_device_event_queue device_events;
+  struct iterate_kit_push_to_talk push_to_talk;
+  struct iterate_kit_conversation_control conversation_control;
+  bool remote_talk;
   struct iterate_kit_voicelab voicelab;
   struct iterate_kit_playout playout;
   uint32_t voicelab_generation;
@@ -832,17 +842,61 @@ static bool initialise_rings(void) {
              runtime.outbox_lengths) == ITERATE_KIT_OK;
 }
 
+static enum iterate_kit_status handle_device_event(
+    void *context, const struct iterate_kit_device_event *event) {
+  (void)context;
+  switch ((enum iterate_kit_device_event_type)event->type) {
+    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
+      runtime.remote_talk = true;
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
+      runtime.remote_talk = false;
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
+      havpe_ui_request_call(true);
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
+      havpe_ui_request_call(false);
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
+      break;
+  }
+  return ITERATE_KIT_INVALID_ARGUMENT;
+}
+
 static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "homeAssistantVoicePreviewEdition"};
+  static struct iterate_kit_module modules[2];
   struct iterate_kit_itx_connection_options options;
   struct iterate_kit_esp_idf_itx_transport_options transport_options;
   struct iterate_kit_peer_options peer_options;
 
+  {
+    const struct iterate_kit_device_event_queue_options event_options = {
+      .storage = runtime.device_event_storage,
+      .capacity = ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY,
+      .handler = {.context = NULL, .handle = handle_device_event},
+      .observer = {.context = NULL, .observe = NULL},
+    };
+    if (iterate_kit_device_event_queue_init(
+            &runtime.device_events, &event_options) != ITERATE_KIT_OK ||
+        iterate_kit_push_to_talk_init(
+            &runtime.push_to_talk, &runtime.device_events) !=
+            ITERATE_KIT_OK ||
+        iterate_kit_conversation_control_init(
+            &runtime.conversation_control, &runtime.device_events) !=
+            ITERATE_KIT_OK) {
+      return false;
+    }
+    modules[0] = iterate_kit_push_to_talk_module(&runtime.push_to_talk);
+    modules[1] =
+        iterate_kit_conversation_control_module(&runtime.conversation_control);
+  }
   peer_options = (struct iterate_kit_peer_options){
     peer_description,
     sizeof(peer_description) - 1U,
-    NULL,
-    0U,
+    modules,
+    2U,
   };
   if (iterate_kit_peer_init(&runtime.peer, &peer_options) != CAPNWEB_OK) {
     return false;
@@ -1263,6 +1317,8 @@ void iterate_kit_havpe_run(void) {
      * that something will come back to it; this is the something.
      */
     (void)iterate_kit_peer_poll(&runtime.peer, now_ms(NULL));
+    (void)iterate_kit_device_event_poll(
+        &runtime.device_events, ITERATE_KIT_VOICE_DEVICE_EVENT_POLL_BUDGET);
     /*
      * WHETHER THIS DEVICE CAN DO ANYTHING, published every time it changes:
      * the same gate every producer sits behind.
@@ -1525,6 +1581,7 @@ void iterate_kit_havpe_run(void) {
       ESP_LOGW(tag, "turn abandoned: session or call went away");
       runtime.talking = false;
       runtime.flushing_turn = false;
+      runtime.remote_talk = false;
       havpe_ui_set_state(HAVPE_UI_IDLE);
       havpe_ui_set_status("connection lost — press side to call");
     }
@@ -1547,7 +1604,8 @@ void iterate_kit_havpe_run(void) {
       static bool call_active_shown;
 
       const bool wants_call = havpe_ui_call_requested();
-      const bool wants_talk = wants_call && havpe_button_talk_held();
+      const bool wants_talk =
+          wants_call && (havpe_button_talk_held() || runtime.remote_talk);
 
       /*
        * The bridge holds the call in a Durable Object this device cannot
@@ -1567,6 +1625,7 @@ void iterate_kit_havpe_run(void) {
         iterate_kit_voicelab_forget_call(&runtime.voicelab);
         runtime.talking = false;
         runtime.flushing_turn = false;
+        runtime.remote_talk = false;
         havpe_ui_set_state(HAVPE_UI_CONNECTING);
         havpe_ui_set_status(
             wants_call ? "call dropped — reconnecting" : "call dropped");

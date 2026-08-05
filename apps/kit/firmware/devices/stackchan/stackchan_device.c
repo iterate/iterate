@@ -53,7 +53,9 @@
 #include "iterate/kit/voice_device_profile.h"
 #include "iterate/kit/voice_playback_clock.h"
 #include "iterate/kit/aec_capture_bridge.h"
+#include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/servos.h"
+#include "iterate/kit/device_events.h"
 #include "iterate/kit/conversation_lights.h"
 #include "stackchan_audio.h"
 #include "stackchan_avatar.h"
@@ -187,6 +189,11 @@ static struct {
   size_t outbox_lengths[CONTROL_OUTBOX_SLOTS];
   struct iterate_kit_esp_idf_itx_transport transport;
   struct iterate_kit_peer peer;
+  /* Physical (touch) and remote call edges share one bounded owner queue. */
+  struct iterate_kit_device_event device_event_storage
+      [ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY];
+  struct iterate_kit_device_event_queue device_events;
+  struct iterate_kit_conversation_control conversation_control;
   struct iterate_kit_voicelab voicelab;
   struct iterate_kit_playout playout;
   uint32_t voicelab_generation;
@@ -986,10 +993,34 @@ static enum iterate_kit_status servo_move(
       body, (int16_t)yaw_degrees, (int16_t)pitch_degrees, speed);
 }
 
+static enum iterate_kit_status handle_device_event(
+    void *context, const struct iterate_kit_device_event *event) {
+  (void)context;
+  switch ((enum iterate_kit_device_event_type)event->type) {
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_STARTED:
+      stackchan_ui_request_call(true);
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_CONVERSATION_ENDED:
+      stackchan_ui_request_call(false);
+      return ITERATE_KIT_OK;
+    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STARTED:
+    case ITERATE_KIT_DEVICE_EVENT_PUSH_TO_TALK_STOPPED:
+      /*
+       * Deliberately refused, as the donor did: this board's microphone
+       * rides the open call behind its own AEC, and a remote gate would
+       * silently mute live audio.
+       */
+      return ITERATE_KIT_STATE_ERROR;
+    case ITERATE_KIT_DEVICE_EVENT_TYPE_COUNT:
+      break;
+  }
+  return ITERATE_KIT_INVALID_ARGUMENT;
+}
+
 static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "stackchan"};
   static struct iterate_kit_servos servos;
-  static struct iterate_kit_module modules[1];
+  static struct iterate_kit_module modules[2];
   size_t module_count = 0U;
   struct iterate_kit_itx_connection_options options;
   struct iterate_kit_esp_idf_itx_transport_options transport_options;
@@ -1016,10 +1047,27 @@ static bool initialise_connection(void) {
       modules[module_count++] = iterate_kit_servos_module(&servos);
     }
   }
+  {
+    const struct iterate_kit_device_event_queue_options event_options = {
+      .storage = runtime.device_event_storage,
+      .capacity = ITERATE_KIT_VOICE_DEVICE_EVENT_CAPACITY,
+      .handler = {.context = NULL, .handle = handle_device_event},
+      .observer = {.context = NULL, .observe = NULL},
+    };
+    if (iterate_kit_device_event_queue_init(
+            &runtime.device_events, &event_options) != ITERATE_KIT_OK ||
+        iterate_kit_conversation_control_init(
+            &runtime.conversation_control, &runtime.device_events) !=
+            ITERATE_KIT_OK) {
+      return false;
+    }
+    modules[module_count++] =
+        iterate_kit_conversation_control_module(&runtime.conversation_control);
+  }
   peer_options = (struct iterate_kit_peer_options){
     peer_description,
     sizeof(peer_description) - 1U,
-    module_count > 0U ? modules : NULL,
+    modules,
     module_count,
   };
   if (iterate_kit_peer_init(&runtime.peer, &peer_options) != CAPNWEB_OK) {
@@ -1506,6 +1554,8 @@ void iterate_kit_stackchan_run(void) {
      * that something will come back to it; this is the something.
      */
     (void)iterate_kit_peer_poll(&runtime.peer, now_ms(NULL));
+    (void)iterate_kit_device_event_poll(
+        &runtime.device_events, ITERATE_KIT_VOICE_DEVICE_EVENT_POLL_BUDGET);
     /*
      * WHETHER THIS DEVICE CAN DO ANYTHING, published every time it changes:
      * the same gate every producer sits behind.

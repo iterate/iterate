@@ -235,8 +235,14 @@ const struct iterate_kit_audio_codec_properties codec_properties = {
   /* capture_is_echo_cancelled = */ false,
   /* capture_clock_is_hardware_owned = */ true,
   /* playback_clock_is_hardware_owned = */ true,
+  /*
+   * No runtime control: the -18 dB brownout ceiling is FIXED in the codec
+   * table (0x32 = 0x9B) above, and the seam's contract makes the ceiling
+   * field meaningful only when a control exists. Declaring the fixed
+   * attenuation here tripped the validator on first hardware boot.
+   */
   /* has_output_gain_control = */ false,
-  /* output_gain_ceiling_centi_db = */ -1800,
+  /* output_gain_ceiling_centi_db = */ 0,
 };
 
 /* --- playback hardware ---------------------------------------------------- */
