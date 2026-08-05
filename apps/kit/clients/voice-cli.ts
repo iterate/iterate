@@ -200,7 +200,12 @@ export async function voiceCli(options: VoiceCliOptions) {
 
   using connection = await openResilientConnection(stream, {
     connectionKey: `kit-voice-${callId}`,
-    eventTypes: ["voice-agent/spk-frame", "voice-agent/grok-event", "voice-agent/call-accepted"],
+    eventTypes: [
+      "voice-agent/spk-frame",
+      "voice-agent/grok-event",
+      "voice-agent/pong",
+      "voice-agent/call-accepted",
+    ],
     quietMs: 4000,
     trafficExpected: () => accepted,
     onEvents: (events) => {
@@ -292,8 +297,13 @@ export async function voiceCli(options: VoiceCliOptions) {
    * commit closes it. Scripted mode holds one turn for the whole utterance;
    * interactive mode maps the spacebar to the talk button.
    */
-  const markTurn = (turn: "start" | "commit") => {
-    fireAppend({ type: "voice-agent/turn", ephemeral: true, payload: { callId, turn } });
+  const markTurn = (action: "start" | "commit") => {
+    /* The exact firmware payload shape: {callId, action, t}. */
+    fireAppend({
+      type: "voice-agent/turn",
+      ephemeral: true,
+      payload: { callId, action, t: Date.now() },
+    });
   };
   let micSeq = 0;
   let pending: { seq: number; t: number; enc: "u"; pcm: string }[] = [];
@@ -317,6 +327,20 @@ export async function voiceCli(options: VoiceCliOptions) {
     }
   });
   mic.start();
+
+  /*
+   * The ping is the only pulled traffic on this lane once a call is quiet:
+   * without it the resilient connection's quiet watchdog reopens every few
+   * seconds and each overlap gap can eat ephemeral answer frames forever —
+   * exactly like the firmware, the client keeps a pong flowing.
+   */
+  const pingTimer = setInterval(() => {
+    fireAppend({
+      type: "voice-agent/ping",
+      ephemeral: true,
+      payload: { id: crypto.randomUUID().slice(0, 8), t0: Date.now() },
+    });
+  }, 2000);
 
   const startTalking = () => {
     if (talking) return;
@@ -370,6 +394,7 @@ export async function voiceCli(options: VoiceCliOptions) {
   process.on("SIGINT", () => done?.());
 
   await finished;
+  clearInterval(pingTimer);
   if (talking) stopTalking();
   mic.stop();
   playout.stop();
