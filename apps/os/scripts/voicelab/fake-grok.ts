@@ -27,6 +27,18 @@ import {
   WebSocketPair,
   type CaptunTunnel,
 } from "captun";
+import { z } from "zod";
+
+/**
+ * What this fake requires of anything the bridge sends it.
+ *
+ * Loose beyond `type` on purpose: the fake must accept every field a real
+ * bridge sends without being taught each one, while still refusing a frame it
+ * could not dispatch. Refusing loudly matters more here than anywhere — a
+ * fake that silently accepts a malformed frame would make a bridge bug look
+ * like a passing test.
+ */
+const BridgeMessage = z.looseObject({ type: z.string() });
 
 /** 16kHz mono PCM16, so 20ms is 320 samples / 640 bytes. */
 const SAMPLE_RATE = 16_000;
@@ -452,14 +464,20 @@ export async function startFakeGrok(options?: {
         micSinceCommit += bytes;
         return;
       }
-      let message: Record<string, unknown>;
+      let decoded: unknown;
       try {
-        message = JSON.parse(event.data) as Record<string, unknown>;
+        decoded = JSON.parse(event.data);
       } catch {
         say(`session ${session.id} got unparseable text from the bridge`);
         return;
       }
-      const type = String(message.type);
+      const parsed = BridgeMessage.safeParse(decoded);
+      if (!parsed.success) {
+        say(`session ${session.id} got a text frame with no usable type`);
+        return;
+      }
+      const message = parsed.data;
+      const type = message.type;
       session.received.push(type);
       switch (type) {
         case "session.update": {

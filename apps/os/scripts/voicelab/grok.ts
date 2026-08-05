@@ -4,7 +4,28 @@
 // response.output_audio.delta events. Everything else is JSON events either way.
 import { EventEmitter } from "node:events";
 import WebSocket from "ws";
+import { z } from "zod";
 import { SAMPLE_RATE } from "./audio.ts";
+
+/**
+ * The only thing every provider frame is guaranteed to have.
+ *
+ * Deliberately loose beyond `type`: this is somebody else's realtime API and
+ * new event kinds appear without notice, so the parse must ADMIT unknown
+ * fields while still refusing a frame that cannot be dispatched at all. A
+ * frame with no string `type` is unusable — measured: one truncated JSON
+ * frame from this provider used to end a call outright.
+ */
+const ProviderFrame = z.looseObject({ type: z.string() });
+
+/** JSON.parse without the throw; an unparseable frame is data, not an error. */
+function safeJsonParse(text: string): unknown {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+}
 
 export const DEFAULT_GROK_MODEL = "grok-voice-think-fast-2.0";
 
@@ -35,6 +56,8 @@ export class GrokClient extends EventEmitter {
     url?: string;
   };
   ready = false;
+  /** Provider frames that could not be parsed or had no dispatchable type. */
+  malformedFrames = 0;
   private ws: WebSocket | undefined;
 
   constructor(options: GrokClientOptions) {
@@ -85,7 +108,12 @@ export class GrokClient extends EventEmitter {
         this.emit("audio", Buffer.from(data));
         return;
       }
-      const event = JSON.parse(data.toString()) as Record<string, unknown> & { type: string };
+      const parsed = ProviderFrame.safeParse(safeJsonParse(data.toString()));
+      if (!parsed.success) {
+        this.malformedFrames++;
+        return;
+      }
+      const event = parsed.data;
       if (event.type === "session.updated" && !this.ready) {
         this.ready = true;
         this.emit("ready");

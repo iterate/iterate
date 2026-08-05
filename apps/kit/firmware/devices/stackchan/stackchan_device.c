@@ -1152,6 +1152,13 @@ static size_t health_json(char *out, size_t capacity) {
   iterate_kit_esp_idf_itx_transport_metrics(&transport, &metrics);
   iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
   iterate_kit_stackchan_avatar_metrics_snapshot(&face_metrics);
+  /*
+   * The AEC seam's own account of itself. Nothing read this before, so every
+   * way the processor can fail — a refused frame, a discontinuity, a clock
+   * that went backwards — was invisible on the one board that has an AEC.
+   */
+  const struct iterate_kit_aec_capture_bridge_metrics *bridge_metrics =
+      iterate_kit_aec_capture_bridge_metrics(&runtime.capture_bridge);
 
   /*
    * The gate every producer sits behind. Closed, the device answers RPCs and
@@ -1202,6 +1209,21 @@ static size_t health_json(char *out, size_t capacity) {
     {"spkWriteFailures", runtime.speaker_write_failures},
     {"codecPlaybackFailures", stackchan_audio_playback_driver_failures()},
     {"spkPartialChunks", stackchan_audio_playback_partial_chunks()},
+    /*
+     * WHETHER A DIRECTION IS DEAD. After three consecutive I/O failures the
+     * audio task gates that direction off permanently — and the failure
+     * counters above are incremented behind the same gate, so they FREEZE at
+     * the threshold. A dead microphone therefore read exactly like a healthy
+     * quiet one. These two say it outright.
+     */
+    {"capFailed", stackchan_audio_capture_failed() ? 1U : 0U},
+    {"spkFailed", stackchan_audio_playback_failed() ? 1U : 0U},
+    /* The AEC seam: refused frames, and the two ways its input can lie. */
+    {"aecBridgeFailures", bridge_metrics->processor_failures},
+    {"aecBridgeResetFailures", bridge_metrics->processor_reset_failures},
+    {"aecSeqDiscontinuities", bridge_metrics->sequence_discontinuities},
+    {"aecClockRegressions", bridge_metrics->timestamp_regressions},
+    {"aecEgressCopyFailures", bridge_metrics->egress_copy_failures},
     /*
      * The AEC's own health: engine rebuilds mean the capture timeline broke;
      * clip counters catch abnormal board levels that would otherwise vanish

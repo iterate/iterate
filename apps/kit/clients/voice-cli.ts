@@ -273,7 +273,16 @@ export async function voiceCli(options: VoiceCliOptions) {
     },
   });
 
-  /* One RPC starts a call that outlives this process — the device's shape. */
+  /*
+   * One RPC starts a call that outlives this process — the device's shape.
+   *
+   * A dynamic worker's methods cannot be known statically: `workers.get`
+   * returns a stub whose surface is whatever the guest exports at run time, so
+   * the local interface IS the contract, asserted here and nowhere else. It is
+   * checked the only way it can be — the guest is `voice-agent.ts` in this
+   * repo, `VoiceAgentWorker` names exactly the one method used, and a mismatch
+   * surfaces as a rejected call on the line below rather than as bad data.
+   */
   using worker = itx.workers.get(
     voiceAgentRef,
   ) as unknown as DynamicWorkerCapability<VoiceAgentWorker>;

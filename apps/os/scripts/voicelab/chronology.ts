@@ -84,7 +84,18 @@ const clip = (value: unknown, width: number): string => {
  * which is the one column that answers "so why didn't it say that".
  */
 function describe(event: StreamEventLike, width: number): Row | null {
-  const payload = (event.payload ?? {}) as Record<string, unknown>;
+  /*
+   * Checked, not asserted. This reads a durable stream written by many
+   * versions of the worker and the firmware, so a payload that is a string, a
+   * number or null is a thing that can genuinely be on the tape — and this is
+   * a diagnostic tool, whose whole job is to stay readable when the data is
+   * strange. An unexpected shape renders as a row with empty fields instead of
+   * throwing halfway down someone's investigation.
+   */
+  const payload: Record<string, unknown> =
+    typeof event.payload === "object" && event.payload !== null && !Array.isArray(event.payload)
+      ? (event.payload as Record<string, unknown>)
+      : {};
   const atMs = Date.parse(event.createdAt);
   const short = event.type.replace("events.iterate.com/", "");
   const row = (lane: Lane, line: string): Row => ({ atMs, lane, line });
