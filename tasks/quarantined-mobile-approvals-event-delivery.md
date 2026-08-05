@@ -9,11 +9,13 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-Implementation is about 70% complete. Both skips are removed, failures now
-name the first missing durable transition, and the confirmed dynamic-worker
-capacity leak has red/green regression coverage. Focused unit/type checks and
-both browser flows pass independently; fully parallel preview and the 25-run
-restoration gate remain.
+Implementation is about 75% complete. Both skips are removed, failures now
+name the first missing durable transition, and both confirmed dynamic-worker
+ownership leaks have red/green regression coverage. The first canonical
+preview passed both restored flows without retry, but its Cloudflare trace
+audit exposed ten project-worker probes hitting the four-invocation limit;
+that second leak is fixed locally and awaits a fresh preview plus the 25-run
+restoration gate.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -66,6 +68,20 @@ notification journal.
   the next browser flow then lost its OS/auth connection. Cloudflare's current
   Worker Loader contract reserves `get()` for reusable workers and `load()`
   for one-off code execution.
+- The first fixed canonical preview, Depot run `s3xmd7x093` on `preview-14`,
+  passed approvals in 57.5 seconds and notifications in 71.5 seconds with no
+  retry. PostHog independently recorded both exact Playwright results as
+  passed with `retry_count = 0` and `error_count = 0`.
+- The same run was not accepted as a restoration-gate run because Cloudflare
+  still recorded 27 error rows across ten traces from 21:34:31.649Z through
+  21:34:39.859Z: `Dynamic worker concurrency limit exceeded: each request may
+  have up to 4 concurrent dynamic worker invocations`. Exact trace
+  `4bab3d906a7603a15e78c8910fc0f55e` roots at a `StreamDurableObject` alarm,
+  enters `ProjectDurableObject.wakeStreamProcessor`, and fails in
+  `#waitForDefaultProjectWorker` while probing the project-config worker.
+  `withWorkerCommit` had replaced the dynamic worker's disposable `Response`
+  with a plain stamped `Response`, so every bounded readiness probe dropped
+  its invocation ownership instead of releasing it.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -159,3 +175,10 @@ Test these in order; do not treat the first plausible one as the conclusion.
   `run_script` to one-off loading, released completed RPC ownership, removed
   both skips, and added correlated failure diagnostics. Focused 45 unit tests,
   repo typecheck, approvals browser flow, and notifications browser flow pass.
+- 2026-08-05: The first canonical preview passed both restored cases, but the
+  required Cloudflare audit rejected the apparently green run. A new red test
+  proved trusted response stamping discarded the dynamic worker response's
+  disposal group; `withWorkerCommit` now transfers that ownership to the
+  stamped response. The focused worker/capability-host suite passes 71 tests.
+  The initial marathon counted one retry-free workflow before this trace
+  finding; its streak was deliberately discarded and run two was cancelled.
