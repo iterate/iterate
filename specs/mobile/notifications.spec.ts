@@ -32,16 +32,14 @@ import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
+import { withApprovalDeliveryDiagnostic } from "./approval-delivery-diagnostics.ts";
 
 // The browser's device identity, fixed BEFORE the app boots (the web build's
 // secure store is localStorage), so the server-side enrollment below and the
 // app's Notifications view read the same device stream.
 const DEVICE_ID = "spec-web-phone";
 
-// KNOWN GAP (2026-08-03): the same silent approval/notification event loss as
-// approvals.spec.ts fails at both root-intent and device-journal boundaries.
-// Evidence and restoration criteria: tasks/quarantined-mobile-approvals-event-delivery.md.
-test.skip("the approval push is suppressed in the watched thread and sent when you're elsewhere", async ({
+test("the approval push is suppressed in the watched thread and sent when you're elsewhere", async ({
   page,
 }, testInfo) => {
   const osBaseUrl = await resolveOsBaseUrl();
@@ -66,7 +64,7 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
     await page.getByRole("button", { name: "Sign in" }).click();
     const popup = await popupPromise;
-    await popup.getByTestId("email-login-button").click();
+    await popup.getByTestId("email-login-button").click({ timeout: 15_000 });
     await signUpWithEmailOtp(popup, {
       email: uniqueSignupEmail("mobile-notifs"),
       projectSlug,
@@ -151,7 +149,13 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
     const watchedPath = decodeURIComponent(new URL(page.url()).searchParams.get("path")!);
     const watchedAgent = await itx.agents.get(watchedPath).create();
     void watchedAgent.capabilityHost.runScript(parkOneRequest("watched")).catch(() => {});
-    await waitForBatchCardButton(page, "Approve (Face ID)");
+    await waitForBatchCardButton({
+      agentPaths: [watchedPath],
+      deviceId: DEVICE_ID,
+      itx,
+      name: "Approve (Face ID)",
+      page,
+    });
 
     // Off to the Notifications view (project screen → drawer). The claim has
     // fired; by the time we arrive the device processor has settled the push
@@ -273,8 +277,20 @@ test.skip("the approval push is suppressed in the watched thread and sent when y
  * same as specs/mobile/approvals.spec.ts's helper of the same name: the
  * parked script run's activity spinner covers the wait the whole way.
  */
-function waitForBatchCardButton(page: Page, name: string) {
-  return page.getByRole("button", { name }).waitFor();
+function waitForBatchCardButton(input: {
+  agentPaths: string[];
+  deviceId: string;
+  itx: Parameters<typeof withApprovalDeliveryDiagnostic>[0]["itx"];
+  name: string;
+  page: Page;
+}) {
+  return withApprovalDeliveryDiagnostic({
+    description: `The approval button "${input.name}" did not render in the thread.`,
+    deviceId: input.deviceId,
+    itx: input.itx,
+    streamPaths: input.agentPaths,
+    wait: () => input.page.getByRole("button", { name: input.name }).waitFor(),
+  });
 }
 
 /**

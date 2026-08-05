@@ -191,6 +191,46 @@ it("reuses a loaded worker within one runner but not across runner lifetimes", a
   expect(loaderNonces[2]).not.toBe(loaderNonces[0]);
 });
 
+it("loads runScript workers as one-off isolates", async () => {
+  h.resolveWorkerSource.mockResolvedValue({
+    ok: true,
+    source: {
+      assetConfig: undefined,
+      assetManifest: {},
+      assets: {},
+      cacheKey: "script-build-key",
+      mainModule: "worker.js",
+      modules: {},
+      wranglerConfig: undefined,
+    },
+  });
+  const dispose = vi.fn();
+  h.loadResolvedWorker.mockReturnValue({
+    getEntrypoint: () => ({
+      [Symbol.dispose]: dispose,
+      run: () => Promise.resolve("done"),
+    }),
+  });
+  const runner = new DynamicWorkerRunner({
+    streamContext: {
+      kind: "script-execution",
+      executionId: "agent-output:1",
+      scriptRunRequestedEventOffset: 2,
+      streamPath: "/agents/refund-agent",
+    },
+    exports: {} as ExecutionContext["exports"],
+    projectId: "prj_private",
+    scopePath: "/agents/refund-agent",
+  });
+
+  await expect(
+    runner.invokeCapability({ path: ["run"], ref: inlineRef, traceRole: "run_script" }),
+  ).resolves.toBe("done");
+
+  expect(h.loadResolvedWorker).toHaveBeenCalledWith(expect.objectContaining({ mode: "one-off" }));
+  expect(dispose).toHaveBeenCalledOnce();
+});
+
 describe("dynamic worker spans", () => {
   it.each<{
     expectedKind: string;

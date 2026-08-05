@@ -1,4 +1,5 @@
 import { tracing } from "cloudflare:workers";
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import { itxEnv as env } from "../../env.ts";
 import { itxEntrypointBinding, itxEntrypointProps } from "../itx/utils.ts";
 import type { StreamContext } from "../projects/stream-context.ts";
@@ -98,10 +99,11 @@ export class DynamicWorkerRunner {
    */
   async #getStatelessEntrypoint<T = unknown>(
     ref: StatelessDynamicWorkerRef,
+    mode: "cached" | "one-off",
     buildBudgetMs?: number,
     freshInstanceNonce?: string,
   ): Promise<{ ok: true; target: T } | { failure: WorkerBuildFailure; ok: false }> {
-    const loaded = await this.#load(ref, buildBudgetMs, freshInstanceNonce);
+    const loaded = await this.#load(ref, mode, buildBudgetMs, freshInstanceNonce);
     if (!loaded.ok) return loaded;
     return {
       ok: true,
@@ -121,7 +123,7 @@ export class DynamicWorkerRunner {
     | { klass: T; ok: true; resolved: ResolvedWorkerSource }
     | { failure: WorkerBuildFailure; ok: false }
   > {
-    const loaded = await this.#load(ref, buildBudgetMs);
+    const loaded = await this.#load(ref, "cached", buildBudgetMs);
     if (!loaded.ok) return loaded;
     return {
       klass: this.#durableObjectClass<T>(ref, loaded.worker),
@@ -213,7 +215,7 @@ export class DynamicWorkerRunner {
         }
         // The serve header is trusted platform output on the fetch lane —
         // stamped (and any user-set value dropped) at this authority boundary.
-        const entrypoint = this.#loadResolved(resolved, freshInstanceNonce).getEntrypoint(
+        const entrypoint = this.#loadResolved(resolved, "cached", freshInstanceNonce).getEntrypoint(
           ref.entrypoint,
           {
             props: ref.props ?? {},
@@ -334,11 +336,21 @@ export class DynamicWorkerRunner {
       }
 
       const dispatch = async (freshInstanceNonce?: string) => {
-        const loaded = await this.#getStatelessEntrypoint(ref, buildBudgetMs, freshInstanceNonce);
+        const mode = traceRole === "run_script" ? "one-off" : "cached";
+        const loaded = await this.#getStatelessEntrypoint(
+          ref,
+          mode,
+          buildBudgetMs,
+          freshInstanceNonce,
+        );
         if (!loaded.ok) throw new WorkerBuildFailedError(loaded.failure);
-        return flattenNestedPath
-          ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
-          : await replayPath({ args, path, target: loaded.target });
+        try {
+          return flattenNestedPath
+            ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
+            : await replayPath({ args, path, target: loaded.target });
+        } finally {
+          if (mode === "one-off") disposeIgnoredRpcResult(loaded.target);
+        }
       };
       try {
         return await dispatch();
@@ -378,6 +390,7 @@ export class DynamicWorkerRunner {
 
   async #load(
     ref: DynamicWorkerRef,
+    mode: "cached" | "one-off",
     buildBudgetMs?: number,
     freshInstanceNonce?: string,
   ): Promise<
@@ -393,11 +406,15 @@ export class DynamicWorkerRunner {
     return {
       ok: true,
       resolved: result.source,
-      worker: this.#loadResolved(result.source, freshInstanceNonce),
+      worker: this.#loadResolved(result.source, mode, freshInstanceNonce),
     };
   }
 
-  #loadResolved(resolved: ResolvedWorkerSource, freshInstanceNonce?: string): WorkerStub {
+  #loadResolved(
+    resolved: ResolvedWorkerSource,
+    mode: "cached" | "one-off",
+    freshInstanceNonce?: string,
+  ): WorkerStub {
     if (freshInstanceNonce !== undefined) {
       this.#loaderInstanceNonce = freshInstanceNonce;
     }
@@ -405,6 +422,7 @@ export class DynamicWorkerRunner {
       bindings: this.#bindings,
       globalOutbound: this.#globalOutbound,
       loaderInstanceNonce: this.#loaderInstanceNonce,
+      mode,
       projectId: this.#projectId,
       resolved,
       scopePath: this.#scopePath,

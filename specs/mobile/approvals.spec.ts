@@ -30,18 +30,14 @@ import { withTunnel } from "../../apps/os/e2e/test-support/tunnel.ts";
 import { signUpWithEmailOtp, uniqueSignupEmail } from "../test-support/email-otp-signup.ts";
 import { resolveAdminSecret } from "../test-support/forged-session.ts";
 import { test } from "../test-support/test.ts";
+import { withApprovalDeliveryDiagnostic } from "./approval-delivery-diagnostics.ts";
 
 // The browser's device identity, fixed BEFORE the app boots (the web build's
 // secure store is localStorage), so the server-side enrollment below and the
 // Notifications view read the same device stream.
 const DEVICE_ID = "spec-web-approver";
 
-// KNOWN GAP (2026-08-03): repeated preview and isolated runs intermittently
-// lose the approval batch before it reaches the thread or notification journal.
-// Evidence and restoration criteria: tasks/quarantined-mobile-approvals-event-delivery.md.
-test.skip("approve and reject script bursts from inside the chat thread", async ({
-  page,
-}, testInfo) => {
+test("approve and reject script bursts from inside the chat thread", async ({ page }, testInfo) => {
   const osBaseUrl = await resolveOsBaseUrl();
   const echo = await startEgressEcho();
   try {
@@ -63,7 +59,7 @@ test.skip("approve and reject script bursts from inside the chat thread", async 
     const popupPromise = page.waitForEvent("popup", { timeout: 15_000 });
     await page.getByRole("button", { name: "Sign in" }).click();
     const popup = await popupPromise;
-    await popup.getByTestId("email-login-button").click();
+    await popup.getByTestId("email-login-button").click({ timeout: 15_000 });
     await signUpWithEmailOtp(popup, {
       email: uniqueSignupEmail("mobile-approvals"),
       projectSlug,
@@ -166,7 +162,13 @@ test.skip("approve and reject script bursts from inside the chat thread", async 
         { title: "Refund sweep", activity: "Emailing 3 customers about order refunds" },
       ]),
     );
-    await waitForBatchCardButton(page, "Approve all 3 (Face ID)");
+    await waitForBatchCardButton({
+      agentPaths: [agentPath],
+      deviceId: DEVICE_ID,
+      itx,
+      name: "Approve all 3 (Face ID)",
+      page,
+    });
     await decideBatch(page, "Approve all 3 (Face ID)", (dialog) => dialog.accept());
 
     // Run 1 must SETTLE before lane 2's command goes in: the settle event
@@ -196,7 +198,13 @@ test.skip("approve and reject script bursts from inside the chat thread", async 
         { activity: "Requesting payment for 3 overdue invoices" },
       ]),
     );
-    await waitForBatchCardButton(page, "Reject all");
+    await waitForBatchCardButton({
+      agentPaths: [agentPath],
+      deviceId: DEVICE_ID,
+      itx,
+      name: "Reject all",
+      page,
+    });
     await decideBatch(page, "Reject all", (dialog) => dialog.accept(reason));
 
     // ── Asserted from the protocol: each script narrated its outcomes into
@@ -257,7 +265,13 @@ test.skip("approve and reject script bursts from inside the chat thread", async 
     await page.getByRole("button", { name: "Notifications" }).click();
     // Newest first: the reject burst's row sits above the approve burst's.
     const batchRows = page.getByTestId(/^notification-row-/);
-    await batchRows.nth(1).waitFor();
+    await withApprovalDeliveryDiagnostic({
+      description: "The second approval notification row did not render.",
+      deviceId: DEVICE_ID,
+      itx,
+      streamPaths: [agentPath],
+      wait: () => batchRows.nth(1).waitFor(),
+    });
     await batchRows.first().click();
     await batchRows.nth(1).click();
     const threadName = agentPath.replace(/^\/agents\//, "");
@@ -302,8 +316,20 @@ async function sendChatMessage(page: Page, message: string) {
  * wait with real spinners the whole way — the card mounts while the parked
  * script run still spins.
  */
-function waitForBatchCardButton(page: Page, name: string) {
-  return page.getByRole("button", { name }).waitFor();
+function waitForBatchCardButton(input: {
+  agentPaths: string[];
+  deviceId: string;
+  itx: Parameters<typeof withApprovalDeliveryDiagnostic>[0]["itx"];
+  name: string;
+  page: Page;
+}) {
+  return withApprovalDeliveryDiagnostic({
+    description: `The approval button "${input.name}" did not render in the thread.`,
+    deviceId: input.deviceId,
+    itx: input.itx,
+    streamPaths: input.agentPaths,
+    wait: () => input.page.getByRole("button", { name: input.name }).waitFor(),
+  });
 }
 
 /**

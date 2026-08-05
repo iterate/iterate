@@ -9,10 +9,11 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-Investigation started 2026-08-05. The quarantine is still active and no fix is
-claimed. PostHog shows a pre-existing flake which spiked during broad preview
-load on 2026-08-03; the next step is to reproduce it with first-missing-
-transition diagnostics and separate capacity rejection from processor loss.
+Implementation is about 70% complete. Both skips are removed, failures now
+name the first missing durable transition, and the confirmed dynamic-worker
+capacity leak has red/green regression coverage. Focused unit/type checks and
+both browser flows pass independently; fully parallel preview and the 25-run
+restoration gate remain.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -57,8 +58,14 @@ notification journal.
   day's e2e telemetry recorded 37 dynamic-worker saturation errors and 16
   `stream-wait-timeout` errors, up from 11 and 3 on 2026-08-02. The decisive
   PR #2388 workflows also retried tests after `Too many dynamic workers`,
-  script-concurrency failure, and stream-wait timeouts. This is correlation,
-  not yet proof that capacity pressure is the trigger.
+  script-concurrency failure, and stream-wait timeouts.
+- Local reproduction confirmed the causal capacity path. `runScript` used
+  Worker Loader `get()` with a fresh identity for every unique execution, so
+  one-off code-mode isolates entered the reusable-worker cache and could not
+  be reused. One approvals run grew local workerd RSS from 164 MB to 4.6 GB;
+  the next browser flow then lost its OS/auth connection. Cloudflare's current
+  Worker Loader contract reserves `get()` for reusable workers and `load()`
+  for one-off code execution.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -79,11 +86,10 @@ notification journal.
 
 Test these in order; do not treat the first plausible one as the conclusion.
 
-1. Shared dynamic-worker capacity pressure rejects or delays a Script
-   Execution, and the failure is not durably classified or propagated to the
-   thread. Prediction: a controlled concurrency limit reproduces a missing
-   approval batch while a serial run passes, and correlated execution facts
-   end before approval creation.
+1. **Confirmed:** shared dynamic-worker capacity pressure rejects or delays a
+   Script Execution. One-off `runScript` workers were loaded through the
+   reusable `get()` cache under per-execution identities, retaining every
+   unique isolate until eviction and exhausting capacity under preview load.
 2. The egress batching processor loses or strands a held-request obligation
    during concurrent delivery or Durable Object eviction. Prediction: the
    Script Execution starts and the fetch parks, but no matching Approval Batch
@@ -99,23 +105,30 @@ Test these in order; do not treat the first plausible one as the conclusion.
 
 ## Work
 
-- [ ] Remove both skips on the investigation branch so failures are observable
-  without weakening assertions, waits, or retries.
-- [ ] Add one correlated diagnostic surface covering Script Execution request,
+- [x] Remove both skips on the investigation branch so failures are observable
+  without weakening assertions, waits, or retries. _Both original tests are
+  active; approval/notification assertions and retry policy are unchanged._
+- [x] Add one correlated diagnostic surface covering Script Execution request,
   start and settlement; held request and Approval Batch creation; approval
   decision; root notification intent; and device notification settlement. A
   failure must identify the first absent transition, project, stream path,
   execution/batch/device identity, and source offset where applicable.
+  _`specs/mobile/approval-delivery-diagnostics.ts` reports each execution ID,
+  durable offsets, settlement, and first missing transition on UI failure._
 - [ ] Establish a serial baseline, then raise the reproduction rate with the
   existing four-worker stress shape and a production-shaped fully parallel
   preview. Capture the exact first absent transition for each failure.
-- [ ] Minimize the first confirmed failure at the public itx or stream-
+- [x] Minimize the first confirmed failure at the public itx or stream-
   processor harness seam. Preserve it as a readable red regression test before
-  changing product behavior.
-- [ ] Fix the owning state machine. Capacity exhaustion must become bounded
+  changing product behavior. _Red tests proved one-off scripts still called
+  cached Worker Loader `get()` and completed entrypoint calls were not released._
+- [x] Fix the owning state machine. Capacity exhaustion must become bounded
   durable recovery or an explicit terminal outcome; processor obligations
   must survive eviction. Do not add polling, broader waits, fallback values,
   compatibility shims, or another retry layer.
+  _`run_script` now uses one-off Worker Loader `load()`; reusable apps remain
+  content-addressed through `get()`. Completed RPC calls, entrypoint targets,
+  and copied result disposal groups are released on every outcome._
 - [ ] Re-run the original browser flows serially, under the focused concurrent
   stress loop, and in the canonical fully parallel preview lane.
 - [ ] Update this task with the confirmed cause, diagnostic contract, fix,
@@ -140,3 +153,9 @@ Test these in order; do not treat the first plausible one as the conclusion.
   notifications attempts while finding earlier passing PR runs and correlated
   capacity/stream failures in the same workflows. Created the isolated
   `fix/mobile-approval-event-delivery` branch from current `origin/main`.
+- 2026-08-05: Reproduced local workerd growth and separated several unrelated
+  auth/project-bootstrap failures from the quarantined delivery boundary.
+  Added red/green Worker Loader and RPC ownership tests, switched only
+  `run_script` to one-off loading, released completed RPC ownership, removed
+  both skips, and added correlated failure diagnostics. Focused 45 unit tests,
+  repo typecheck, approvals browser flow, and notifications browser flow pass.

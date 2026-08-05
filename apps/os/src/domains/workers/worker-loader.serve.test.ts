@@ -30,6 +30,7 @@ const h = vi.hoisted(() => {
     head: { branch: "main", commitOid: "c1", contentHash: "h1" },
     headDisposals: 0,
     loaderCalls: [] as Array<{ config: Record<string, unknown>; key: string }>,
+    oneOffLoaderCalls: [] as Array<Record<string, unknown>>,
     repoDisposals: 0,
     snapshotDisposals: 0,
     snapshotCalls: [] as Array<Record<string, unknown>>,
@@ -63,6 +64,10 @@ const h = vi.hoisted(() => {
     LOADER: {
       get: (key: string, callback: () => Record<string, unknown>) => {
         state.loaderCalls.push({ config: callback(), key });
+        return {};
+      },
+      load: (config: Record<string, unknown>) => {
+        state.oneOffLoaderCalls.push(config);
         return {};
       },
     },
@@ -168,6 +173,7 @@ beforeEach(async () => {
   h.state.failRuntime = false;
   h.state.headDisposals = 0;
   h.state.loaderCalls.splice(0);
+  h.state.oneOffLoaderCalls.splice(0);
   h.state.repoDisposals = 0;
   h.state.snapshotDisposals = 0;
   h.state.snapshotCalls.splice(0);
@@ -344,6 +350,7 @@ describe("resolveWorkerSource", () => {
       bindings: {},
       globalOutbound: {} as Fetcher,
       loaderInstanceNonce: "runner-1",
+      mode: "cached",
       projectId: "prj_wrangler",
       resolved,
       scopePath: "/",
@@ -355,6 +362,38 @@ describe("resolveWorkerSource", () => {
       compatibilityFlags: ["nodejs_compat_v2"],
     });
     expect(h.state.loaderCalls[0]?.key).toContain("worker-loader:os-test:version-1:");
+  });
+
+  test("loads a one-off script without retaining a cache identity", async () => {
+    const resolved = sourceFrom(
+      await resolveWorkerSource({
+        projectId: "prj_script",
+        source: {
+          createWorker: {
+            files: { files: { "main.js": "export default {};" }, type: "inline" },
+          },
+        },
+      }),
+    );
+
+    loadResolvedWorker({
+      bindings: {},
+      globalOutbound: {} as Fetcher,
+      loaderInstanceNonce: "run-script-1",
+      mode: "one-off",
+      projectId: "prj_script",
+      resolved,
+      scopePath: "/agents/refund-agent",
+      streamContext: {
+        kind: "script-execution",
+        executionId: "agent-output:1",
+        scriptRunRequestedEventOffset: 2,
+        streamPath: "/agents/refund-agent",
+      },
+    });
+
+    expect(h.state.oneOffLoaderCalls).toHaveLength(1);
+    expect(h.state.loaderCalls).toEqual([]);
   });
 
   test("does not reuse a loaded isolate across parent deployments", async () => {
@@ -373,6 +412,7 @@ describe("resolveWorkerSource", () => {
         bindings: {},
         globalOutbound: {} as Fetcher,
         loaderInstanceNonce: "runner-1",
+        mode: "cached",
         projectId: "prj_rollout",
         resolved,
         scopePath: "/",
@@ -405,6 +445,7 @@ describe("resolveWorkerSource", () => {
         bindings: {},
         globalOutbound: {} as Fetcher,
         loaderInstanceNonce,
+        mode: "cached",
         projectId: "prj_replacement",
         resolved,
         scopePath: "/",
@@ -440,6 +481,7 @@ describe("resolveWorkerSource", () => {
         bindings: {},
         globalOutbound: {} as Fetcher,
         loaderInstanceNonce: "runner-1",
+        mode: "cached",
         projectId: "prj_context",
         resolved,
         scopePath: "/agents/refund-agent",

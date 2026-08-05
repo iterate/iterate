@@ -1,4 +1,5 @@
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 import type { Env } from "../../env.ts";
 import { normalizePath } from "../durable-object-names.ts";
 import type { StreamContext } from "../projects/stream-context.ts";
@@ -122,8 +123,14 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
     // This is an RPC/event JSON boundary, not a deep-clone operation. Preserve
     // JSON's deliberate normalization and rejection semantics (Dates become
     // strings; unsupported/cyclic values fail) instead of structuredClone's
-    // broader value model.
-    const serializedResult = result === undefined ? undefined : JSON.stringify(result);
+    // broader value model. The serialized copy is all the caller keeps, so
+    // release any RPC disposal group the dynamic worker attached to its value.
+    let serializedResult: string | undefined;
+    try {
+      serializedResult = result === undefined ? undefined : JSON.stringify(result);
+    } finally {
+      disposeIgnoredRpcResult(result);
+    }
     return {
       status: "succeeded",
       ...(serializedResult === undefined
