@@ -1,4 +1,4 @@
-type ConfigRepoTemplateReference = {
+export type ConfigRepoTemplateReference = {
   owner: string;
   path?: string;
   ref?: string;
@@ -8,8 +8,8 @@ type ConfigRepoTemplateReference = {
 const GITHUB_OWNER_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$/;
 const GITHUB_REPO_PATTERN = /^[A-Za-z0-9._-]{1,100}$/;
 
-/** The path invariant shared by the string parser, RPC schema, and clone
- * adapter. It prevents a selected subtree from escaping into clone metadata. */
+/** The path invariant shared by the string parser, RPC schema, and public
+ * GitHub downloader. */
 export function isSafeConfigRepoTemplatePath(path: string): boolean {
   const segments = path.split("/");
   return (
@@ -17,7 +17,6 @@ export function isSafeConfigRepoTemplatePath(path: string): boolean {
     !path.startsWith("/") &&
     !path.endsWith("/") &&
     !path.includes("\\") &&
-    !path.includes("&") &&
     !Array.from(path).some((character) => {
       const codePoint = character.charCodeAt(0);
       return codePoint <= 31 || codePoint === 127;
@@ -31,7 +30,7 @@ export function isSafeConfigRepoTemplatePath(path: string): boolean {
 
 /**
  * Parse the public-GitHub subset of pnpm's Git dependency syntax. The result
- * is provider-neutral data safe to place in durable project/repo requests;
+ * is plain structured data safe to place in durable project/repo requests;
  * callers serialize it canonically before persisting the original string.
  */
 export function parseConfigRepoTemplateReference(input: string): ConfigRepoTemplateReference {

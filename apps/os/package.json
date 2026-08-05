@@ -78,7 +78,6 @@
     "codemirror-json5": "^1.0.3",
     "comlink": "^4.4.2",
     "croner": "^10.0.1",
-    "isomorphic-git": "1.37.6",
     "iterate": "workspace:*",
     "json5": "^2.2.3",
     "lucide-react": "^0.553.0",

@@ -54,7 +54,6 @@ export {
   SandboxStandard4DurableObject,
 } from "./domains/sandboxes/cloudflare/cloudflare-sandbox-durable-object.ts";
 export { ProjectDurableObject } from "./domains/projects/project-durable-object.ts";
-export { RepoCreationCoordinatorDurableObject } from "./domains/repos/repo-creation-coordinator-durable-object.ts";
 export { RepoDurableObject } from "./domains/repos/repo-durable-object.ts";
 export { SchedulerDurableObject } from "./domains/scheduler/scheduler-durable-object.ts";
 export { SecretDurableObject } from "./domains/secrets/secret-durable-object.ts";

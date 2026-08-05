@@ -22,10 +22,7 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { connectIterateSession, reconnectIterateSession } from "iterate/sdk/itx/react";
-import {
-  normalizeConfigRepoTemplateReference,
-  parseConfigRepoTemplateReference,
-} from "~/lib/config-repo-template-reference.ts";
+import { parseConfigRepoTemplateReference } from "~/lib/config-repo-template-reference.ts";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -132,11 +129,7 @@ export function CreateProjectForm({
     onSubmit: async ({ value }) => {
       const parsed = CreateProjectInput.parse(value);
       await createProject.mutateAsync({
-        ...(parsed.configRepoTemplate.length === 0
-          ? {}
-          : {
-              configRepoTemplate: normalizeConfigRepoTemplateReference(parsed.configRepoTemplate),
-            }),
+        ...(parsed.configRepoTemplate ? { configRepoTemplate: parsed.configRepoTemplate } : {}),
         slug: parsed.slug,
         organizationSlug: parsed.organizationSlug,
       });

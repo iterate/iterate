@@ -74,6 +74,7 @@ import { githubFastForwardTransferDepth, githubSyncBaseCommitOid } from "./githu
 import { importGithubArtifactWithInitialPushCapture } from "./artifact-import.ts";
 import { getOrCreateArtifact, type GetOrCreateArtifactResult } from "./artifact-creation.ts";
 import { artifactWriteToken, seedArtifactRepo } from "./artifact-seeding.ts";
+import { downloadPublicGithubTemplate } from "./public-github-template.ts";
 
 const ARTIFACT_HEAD_VISIBILITY_RETRIES = 5;
 const REPO_DIR = "/repo";
@@ -94,10 +95,6 @@ const REPO_HEAD_TREE_KEY = "repo-head-tree:v1";
 // another mutation, so an already-landed Git commit cannot become a silent
 // no-op with no repo/commit-completed fact.
 const PENDING_COMMIT_COMPLETED_KV_KEY = "pending-commit-completed:v1";
-// The coordinator's repos/created fact may replay after later writes have
-// invalidated the branch head record. Remember that its seed floor was
-// already adopted so replay can never move local authority backwards.
-const TEMPLATE_SEED_HEAD_RECORDED_KV_KEY = "template-seed-head-recorded:v1";
 // The lazy head-record publication computes the whole-snapshot contentHash
 // (worker builds want it hot) only when the manifest is small enough for
 // that to be a cheap in-store read; bigger repos leave the record to the
@@ -144,10 +141,9 @@ export class RepoDurableObject extends DurableObject<Env> {
   });
   // The DO constructs the processor — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive.
-  // Registered WITH recovery because non-template GitHub creation and imports
-  // are consequential `runInBackground` work (stream-committed obligations
-  // whose OUTCOME matters). Public-template creation uses a separate
-  // coordinator DO.
+  // Registered WITH recovery because GitHub-backed creation and imports are
+  // consequential `runInBackground` work (stream-committed obligations whose
+  // OUTCOME matters).
   // The keepalive alarm appends the `stream/processor-revived` fact, whose wake
   // produces the eventless at-head pass that re-drives the obligations (see the
   // registry module doc's recovery rule).
@@ -156,15 +152,16 @@ export class RepoDurableObject extends DurableObject<Env> {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
-      enqueueTemplateCreation: (input) =>
-        this.env.REPO_CREATION_COORDINATOR.getByName(this.ctx.id.name!).enqueue(input),
       // Creation and public mutations all move the same branch. A recovered
       // creation attempt is retry-safe, but it must not move the ref between a
       // mutation's checked clone and push.
       createEmptyArtifact: () => this.#serializeWrite(() => this.createEmptyArtifactRepo()),
+      createPublicGithubTemplateArtifact: (input) =>
+        this.#serializeWrite(() =>
+          this.createSeededArtifactRepo(() => downloadPublicGithubTemplate(input)),
+        ),
       importPublicGithubArtifact: (input) =>
         this.#serializeWrite(() => this.importPublicGithubArtifact(input)),
-      recordSeededHead: (input) => this.#recordTemplateSeededHead(input),
       linkGithub: async (input) => {
         if (this.#name.projectId === null) {
           throw new Error("GitHub-backed repos require a project-scoped repo.");
@@ -214,9 +211,9 @@ export class RepoDurableObject extends DurableObject<Env> {
     return this.#registry.wakeStreamProcessor(args);
   }
 
-  /** The registry's shared DO alarm owns only runner keepalives. */
-  async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    await this.#registry.handleAlarm(alarmInfo);
+  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
+  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
+    return this.#registry.handleAlarm(alarmInfo);
   }
 
   /** Abort the current Durable Object incarnation; the next request boots it again. */
@@ -1054,26 +1051,6 @@ export class RepoDurableObject extends DurableObject<Env> {
     );
   }
 
-  #recordTemplateSeededHead(input: {
-    branch: string;
-    commitOid: string;
-    contentHash: string;
-  }): void {
-    const recorded = this.ctx.storage.kv.get<unknown>(TEMPLATE_SEED_HEAD_RECORDED_KV_KEY);
-    if (recorded !== undefined) {
-      if (recorded !== input.commitOid) {
-        throw new Error("The template creation fact changed its seeded head after adoption.");
-      }
-      return;
-    }
-    this.#recordPushedHead({ branch: input.branch, commitOid: input.commitOid });
-    this.ctx.storage.kv.put(repoHeadStorageKey(input.branch), {
-      commitOid: input.commitOid,
-      contentHash: input.contentHash,
-    });
-    this.ctx.storage.kv.put(TEMPLATE_SEED_HEAD_RECORDED_KV_KEY, input.commitOid);
-  }
-
   #stageCommitCompleted(input: {
     beforeCommitOid: string | null;
     branch: string;
@@ -1874,24 +1851,19 @@ export class RepoDurableObject extends DurableObject<Env> {
   }
 
   private async createEmptyArtifactRepo() {
-    return await this.createSeededArtifactRepo(projectRepoSeedFiles(parseConfig(this.env)));
+    return await this.createSeededArtifactRepo(() => projectRepoSeedFiles(parseConfig(this.env)));
   }
 
   private async createSeededArtifactRepo(
-    files: Array<{
-      content: string | Uint8Array;
-      mode?: Parameters<typeof seedArtifactRepo>[0]["files"][number]["mode"];
-      path: string;
-    }>,
-    knownArtifact?: GetOrCreateArtifactResult,
+    loadFiles: () =>
+      | Array<{ content: string; path: string }>
+      | Promise<Array<{ content: string; path: string }>>,
   ) {
     const artifactName = this.artifactName();
     const timing = { projectId: this.#name.projectId, path: this.#name.path };
-    const artifact =
-      knownArtifact ??
-      (await timedStep("create-timing", timing, "artifact-get-or-create", () =>
-        this.getOrCreateArtifact(artifactName),
-      ));
+    const artifact = await timedStep("create-timing", timing, "artifact-get-or-create", () =>
+      this.getOrCreateArtifact(artifactName),
+    );
     const defaultBranch = REPO_DEFAULT_BRANCH;
     const remote = this.artifactRemote(artifactName);
 
@@ -1899,6 +1871,8 @@ export class RepoDurableObject extends DurableObject<Env> {
     // already seeded. Recovery only needs to journal repos/created; cloning the
     // whole repo to rediscover that fact can exceed a Repo DO's memory limit.
     if (artifact.lastPushAt !== null) return { artifactName, defaultBranch, remote };
+
+    const files = await loadFiles();
 
     // create() already minted the initial write token. Using it avoids an
     // immediate get()+createToken() against a repository whose create result

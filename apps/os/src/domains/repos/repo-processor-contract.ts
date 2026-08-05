@@ -121,14 +121,6 @@ export const RepoProcessorContract = defineProcessorContract({
     remote: z.string().nullable().default(null).meta({
       description: "The backing artifact's Git remote URL, recorded by repos/created.",
     }),
-    templateSource: resolvedGithubTemplateSourceSchema()
-      .nullable()
-      .default(null)
-      .meta({
-        description:
-          "The immutable source commit selected for a GitHub config-template request. " +
-          "Journaled before any file body is fetched so recovery never follows a moved ref.",
-      }),
   }),
   events: {
     "events.iterate.com/repos/create-requested": {
@@ -138,12 +130,6 @@ export const RepoProcessorContract = defineProcessorContract({
         "through Cloudflare Artifacts (full history unless depth is set). Terminates in " +
         "repos/created or repos/create-failed.",
       payloadSchema: repoCreateRequestSchema(),
-    },
-    "events.iterate.com/repos/template-source-resolved": {
-      description:
-        "Locks a public GitHub template request to one immutable source commit before file " +
-        "materialization begins. This is provenance for a one-time copy, not a GitHub link.",
-      payloadSchema: resolvedGithubTemplateSourceSchema(),
     },
     "events.iterate.com/repos/created": {
       description:
@@ -339,7 +325,6 @@ export const RepoProcessorContract = defineProcessorContract({
   processorDeps: [CoreProcessorContract],
   consumes: [
     "events.iterate.com/repos/create-requested",
-    "events.iterate.com/repos/template-source-resolved",
     "events.iterate.com/repos/created",
     "events.iterate.com/repos/create-failed",
     "events.iterate.com/repo/cloudflare-artifact-event-received",
@@ -360,7 +345,6 @@ export const RepoProcessorContract = defineProcessorContract({
     // import obligations without consuming the platform revival fact.
   ],
   emits: [
-    "events.iterate.com/repos/template-source-resolved",
     "events.iterate.com/repos/created",
     "events.iterate.com/repos/create-failed",
     "events.iterate.com/repo/commit-completed",
@@ -419,14 +403,13 @@ function repoCreateRequestSchema() {
           .optional()
           .meta({ description: "Repository-relative directory copied as the new repo root." }),
         ref: z.string().trim().min(1).optional().meta({
-          description: "Branch, tag, or commit to resolve once; default branch if omitted.",
+          description: "Branch, tag, or commit to copy; the default branch when omitted.",
         }),
         repo: z.string().trim().min(1).meta({ description: "GitHub repository name." }),
       })
       .meta({
         description:
-          "Copy one public GitHub repository subtree at a commit resolved during the durable " +
-          "creation saga into a fresh Artifact root commit.",
+          "Copy the text files in one public GitHub repository folder into a fresh Artifact.",
       }),
     z
       .strictObject({
@@ -473,27 +456,6 @@ function repoCreateRequestSchema() {
   ]);
 }
 
-function resolvedGithubTemplateSourceSchema() {
-  return z.strictObject({
-    branch: z.string().trim().min(1).optional().meta({
-      description:
-        "Advertised source branch eligible for a server-side shallow import; omitted for tags and commits.",
-    }),
-    commitSha: z
-      .string()
-      .regex(/^[0-9a-f]{40}$/)
-      .meta({ description: "Immutable source commit selected from the requested ref." }),
-    owner: z.string().trim().min(1).meta({ description: "GitHub owner from the request." }),
-    path: z.string().trim().min(1).optional().meta({
-      description: "Repository-relative source directory, or omitted for the repository root.",
-    }),
-    ref: z.string().trim().min(1).optional().meta({
-      description: "Requested branch, tag, or commit; omitted when the default branch was used.",
-    }),
-    repo: z.string().trim().min(1).meta({ description: "GitHub repository from the request." }),
-  });
-}
-
 /**
  * The terminal birth certificate — used twice (the repos/created payload and
  * the reduced state's birthCertificate slot): the creation request plus the
@@ -515,18 +477,6 @@ function repoBirthCertificateSchema() {
       .min(1)
       .meta({ description: "The branch commit and task facts derive from." }),
     remote: z.string().url().meta({ description: "The artifact's Git remote URL." }),
-    seededHead: z
-      .strictObject({
-        branch: z.string().trim().min(1),
-        commitOid: z.string().trim().min(1),
-        contentHash: z.string().trim().min(1),
-      })
-      .optional()
-      .meta({
-        description:
-          "The deterministic creation push, when seeding happened outside the Repo actor. " +
-          "Its consumed fact establishes the actor's read-your-write floor before birth.",
-      }),
   });
 }
 

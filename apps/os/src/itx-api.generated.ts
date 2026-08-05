@@ -3365,7 +3365,6 @@ export type RepoProcessorState = {
     artifactName: string;
     defaultBranch: string;
     remote: string;
-    seededHead?: { branch: string; commitOid: string; contentHash: string } | undefined;
   } | null;
   artifactName: string | null;
   defaultBranch: string | null;
@@ -3391,14 +3390,6 @@ export type RepoProcessorState = {
     ok: boolean;
   } | null;
   remote: string | null;
-  templateSource: {
-    branch?: string | undefined;
-    commitSha: string;
-    owner: string;
-    path?: string | undefined;
-    ref?: string | undefined;
-    repo: string;
-  } | null;
 };
 
 /** Worker reference accepted by `workers.get` and worker-backed capabilities. */

@@ -30,8 +30,10 @@ function makeHarness() {
       new RepoProcessor({
         ...deps,
         projectId: "prj_1",
-        enqueueTemplateCreation: async () => {},
         createEmptyArtifact: () => createEmpty.impl(),
+        createPublicGithubTemplateArtifact: async () => {
+          throw new Error("must not create from a template in this scenario");
+        },
         importPublicGithubArtifact: async () => {
           throw new Error("must not import in this scenario");
         },
@@ -45,7 +47,6 @@ function makeHarness() {
           throw new Error("must not sync a push in this scenario");
         },
         observeArtifactPush: () => {},
-        recordSeededHead: () => {},
       }),
   });
   return { ...harness, createEmpty };

@@ -17,8 +17,9 @@ import {
   makeProcessorHarness,
   type HarnessSubstrate,
 } from "iterate/processors/testing";
-import { RepoProcessorContract, type RepoCreateRequest } from "./repo-processor-contract.ts";
+import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { RepoProcessor } from "./repo-processor-implementation.ts";
+import { RetryableRepoCreationError } from "./utils.ts";
 
 type RepoEventInput = ConsumedInput<RepoProcessorContract>;
 
@@ -123,15 +124,18 @@ function artifactPush(branch: string, oids?: { after?: string; before?: string }
 /** The generic harness plus the repo's scriptable vendor fakes. Pass another
  * harness's substrate for a replay incarnation over the SAME stream. */
 function makeRepoHarness(substrate?: HarnessSubstrate) {
-  const creationQueue = {
-    calls: [] as Array<{
-      request: Extract<RepoCreateRequest, { type: "github-public-template" }>;
-      streamId: string;
-    }>,
-    queued: false,
-  };
   const createEmpty = {
     calls: 0,
+    impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
+  };
+  const createTemplate = {
+    calls: [] as Array<{
+      owner: string;
+      path?: string;
+      ref?: string;
+      repo: string;
+      type: "github-public-template";
+    }>,
     impl: async (): Promise<typeof SEEDED_ARTIFACT> => SEEDED_ARTIFACT,
   };
   const importPublic = {
@@ -156,7 +160,6 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
       beforeCommitOid: string | null;
       branch: string;
     }[],
-    seeded: [] as { branch: string; commitOid: string; contentHash: string }[],
   };
   const harness = makeProcessorHarness<RepoProcessorContract, RepoProcessor>({
     createProcessor: (deps) =>
@@ -164,14 +167,13 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
         stream: deps.stream,
         path: deps.path,
         projectId: deps.projectId,
-        enqueueTemplateCreation: async (input) => {
-          if (creationQueue.queued) return;
-          creationQueue.queued = true;
-          creationQueue.calls.push(input);
-        },
         createEmptyArtifact: () => {
           createEmpty.calls += 1;
           return createEmpty.impl();
+        },
+        createPublicGithubTemplateArtifact: (input) => {
+          createTemplate.calls.push(input);
+          return createTemplate.impl();
         },
         importPublicGithubArtifact: (input) => {
           importPublic.calls.push(input);
@@ -190,15 +192,14 @@ function makeRepoHarness(substrate?: HarnessSubstrate) {
           return githubSync.impl();
         },
         observeArtifactPush: (input) => void headCache.observed.push(input),
-        recordSeededHead: (input) => void headCache.seeded.push(input),
       }),
     path: REPO_PATH,
     substrate,
   });
   return {
     ...harness,
-    creationQueue,
     createEmpty,
+    createTemplate,
     importPublic,
     link,
     syncPrivate,
@@ -263,7 +264,7 @@ describe("RepoProcessor creation saga", () => {
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
   });
 
-  it("hands an exact public-template obligation to the independent coordinator", async () => {
+  it("copies a public GitHub template and uses it to create the Artifact", async () => {
     const h = makeRepoHarness();
     const request = {
       type: "github-public-template" as const,
@@ -277,99 +278,44 @@ describe("RepoProcessor creation saga", () => {
       { type: "events.iterate.com/repos/create-requested", payload: request },
     ]);
 
-    expect(h.creationQueue).toEqual({
-      calls: [{ request, streamId: h.stream.streamId }],
-      queued: true,
-    });
-    expect(h.events("events.iterate.com/repos/template-source-resolved")).toEqual([]);
-    expect(h.events("events.iterate.com/repos/created")).toEqual([]);
+    expect(h.createTemplate.calls).toEqual([request]);
+    expect(h.createEmpty.calls).toBe(0);
+    expect(h.events("events.iterate.com/repos/created")).toMatchObject([
+      { payload: { ...SEEDED_ARTIFACT, request } },
+    ]);
   });
 
-  it("adopts a coordinator-seeded head before acknowledging template birth", async () => {
+  it("re-drives a public template after a temporary source failure", async () => {
     const h = makeRepoHarness();
+    let calls = 0;
+    h.createTemplate.impl = async () => {
+      calls += 1;
+      if (calls === 1) throw new RetryableRepoCreationError("GitHub could not be reached.");
+      return SEEDED_ARTIFACT;
+    };
     const request = {
       type: "github-public-template" as const,
       owner: "iterate",
       path: "configs/with-voice",
-      ref: "main",
-      repo: "iterate",
-    };
-    const seededHead = {
-      branch: "main",
-      commitOid: "template-seed-oid",
-      contentHash: "template-content-hash",
-    };
-
-    await h.play(
-      ["append", { type: "events.iterate.com/repos/create-requested", payload: request }],
-      [
-        "append",
-        {
-          type: "events.iterate.com/repos/created",
-          payload: { ...SEEDED_ARTIFACT, request, seededHead },
-        },
-      ],
-    );
-
-    expect(h.headCache.seeded).toEqual([seededHead]);
-    expect(h.state().birthCertificate).toMatchObject({ request, seededHead });
-  });
-
-  it("arms template creation before a hosted delivery reaches the raw stream head", async () => {
-    const h = makeRepoHarness();
-    const requestPayload = {
-      type: "github-public-template" as const,
-      owner: "iterate",
-      path: "configs/with-voice",
-      ref: "main",
       repo: "iterate",
     };
     await h.stream.append({
       type: "events.iterate.com/repos/create-requested",
-      payload: requestPayload,
-    });
-    await h.stream.append({ type: "stream/connection-opened", payload: {} });
-    const request = h.stream.events[0]!;
-    const opened = await h.runner().openEventBatchCallback(h.stream.streamId, {
-      sourceScansAllEvents: true,
+      payload: request,
     });
 
-    await opened.processEventBatch({
-      events: [request],
-      scannedAfterOffset: 0,
-      scannedThroughOffset: request.offset,
-      streamId: h.stream.streamId,
-      streamMaxOffset: 2,
-    });
+    await h.settle();
+    expect(calls).toBe(1);
+    expect(h.events("events.iterate.com/repos/create-failed")).toHaveLength(0);
 
-    await expect(h.runner().snapshot()).resolves.toMatchObject({ offset: request.offset });
-    expect(h.creationQueue).toEqual({
-      calls: [{ request: requestPayload, streamId: h.stream.streamId }],
-      queued: true,
-    });
-    expect(h.events("events.iterate.com/repos/template-source-resolved")).toEqual([]);
-  });
+    h.crash();
+    await h.settle();
+    await h.advanceTime(KEEPALIVE_ALARM_LEAD_MS + 1);
 
-  it("does not pull an already-queued template retry forward", async () => {
-    const request = {
-      type: "github-public-template" as const,
-      owner: "iterate",
-      path: "configs/missing",
-      repo: "iterate",
-    };
-    const h = makeRepoHarness();
-    await h.play([
-      "append",
-      { type: "events.iterate.com/repos/create-requested", payload: request },
+    expect(calls).toBe(2);
+    expect(h.events("events.iterate.com/repos/created")).toMatchObject([
+      { payload: { ...SEEDED_ARTIFACT, request } },
     ]);
-    await h.play([
-      "append",
-      { type: "events.iterate.com/repos/create-requested", payload: request },
-    ]);
-    expect(h.creationQueue).toEqual({
-      calls: [{ request, streamId: h.stream.streamId }],
-      queued: true,
-    });
   });
 
   it("seeds an Artifact, links a private GitHub repo, then performs its depth-one sync", async () => {

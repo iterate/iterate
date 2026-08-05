@@ -3,8 +3,11 @@ import { createGit } from "@cloudflare/shell/git";
 import { ITERATE_GITHUB_BOT_COMMIT_AUTHOR } from "../integrations/utils.ts";
 import { readCheckoutFiles, repoContentHash } from "./checkout-files.ts";
 import { stripArtifactTokenExpiry } from "./artifact-creation.ts";
-import type { GithubTemplateFile } from "./github-template-source.ts";
-import { classifyRepoAccessError, isRepoNotSeededError, RepoNotSeededError } from "./utils.ts";
+import {
+  classifyRepoAccessError,
+  isRepoNotSeededError,
+  RetryableRepoCreationError,
+} from "./utils.ts";
 
 const REPO_WRITE_TOKEN_TTL_SECONDS = 365 * 24 * 60 * 60;
 // Artifact creation is an at-least-once obligation. Concurrent first drives
@@ -21,26 +24,13 @@ export async function artifactWriteToken(artifacts: Artifacts, name: string): Pr
 /**
  * Seed an Artifact with one deterministic root commit.
  *
- * This is shared by the Repo actor's empty-repo lane and the independent
- * template coordinator. It is create-if-absent: a retry that discovers an
- * existing branch returns that branch unchanged, while simultaneous first
- * drives produce the same commit oid and never force-push over real history.
+ * This is create-if-absent: a retry that discovers an existing branch returns
+ * that branch unchanged, while simultaneous first drives produce the same
+ * commit oid and never force-push over real history.
  */
 export async function seedArtifactRepo(input: {
   branch: string;
-  /** The control plane already observed a prior push. A failed clone is then
-   * eventual consistency or infrastructure failure, never permission to
-   * initialize and push a replacement root commit. */
-  expectExisting?: boolean;
-  files: Array<{
-    content: string | Uint8Array;
-    mode?: GithubTemplateFile["mode"];
-    path: string;
-  }>;
-  /** Called once the deterministic head and content hash are known, before
-   * the first push. Durable coordinators use this to checkpoint the exact
-   * read-your-write floor even if the actor is reset after the push commits. */
-  onSeedHeadPrepared?: (head: { commitOid: string; contentHash: string }) => void;
+  files: Array<{ content: string; path: string }>;
   remote: string;
   token: string;
 }): Promise<{ commitOid: string; contentHash: string }> {
@@ -58,13 +48,7 @@ export async function seedArtifactRepo(input: {
       ...credentials,
     });
     cloned = true;
-  } catch (error) {
-    if (input.expectExisting === true) {
-      throw new RepoNotSeededError(
-        `Previously pushed repo branch ${input.branch} is not readable yet.`,
-        { cause: error },
-      );
-    }
+  } catch {
     await git.init({ defaultBranch: input.branch });
     await git.remote({ add: { name: "origin", url: input.remote } });
   }
@@ -75,12 +59,10 @@ export async function seedArtifactRepo(input: {
       throw error;
     });
     if (head) {
-      const seeded = {
+      return {
         commitOid: head.oid,
         contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
       };
-      input.onSeedHeadPrepared?.(seeded);
-      return seeded;
     }
   }
 
@@ -89,20 +71,7 @@ export async function seedArtifactRepo(input: {
     if (dir !== REPO_DIR && !(await filesystem.exists(dir))) {
       await filesystem.mkdir(dir, { recursive: true });
     }
-    const absolutePath = `${REPO_DIR}/${file.path}`;
-    if (file.mode === "120000") {
-      const target =
-        typeof file.content === "string"
-          ? file.content
-          : new TextDecoder("utf-8", { fatal: true }).decode(file.content);
-      await filesystem.symlink(target, absolutePath);
-    } else if (typeof file.content === "string") {
-      await filesystem.writeFile(absolutePath, file.content);
-    } else {
-      await filesystem.writeFileBytes(absolutePath, file.content);
-    }
-    // InMemoryFs does not retain executable bits. A source 100755 entry is
-    // intentionally normalized to 100644; file bytes and symlinks are exact.
+    await filesystem.writeFile(`${REPO_DIR}/${file.path}`, file.content);
     await git.add({ filepath: file.path });
   }
 
@@ -125,11 +94,11 @@ export async function seedArtifactRepo(input: {
     commitOid: head.oid,
     contentHash: await repoContentHash(await readCheckoutFiles(filesystem, REPO_DIR)),
   };
-  input.onSeedHeadPrepared?.(seeded);
-
   const pushed = await git.push({ ref: input.branch, remote: "origin", ...credentials });
   if (!pushed.ok) {
-    throw new Error(`Failed to push ${input.branch}: ${JSON.stringify(pushed.refs)}`);
+    throw new RetryableRepoCreationError(
+      `Failed to push ${input.branch}: ${JSON.stringify(pushed.refs)}`,
+    );
   }
   return seeded;
 }
