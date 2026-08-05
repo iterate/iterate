@@ -1017,3 +1017,63 @@ where they land.
 **Open:** Merge is Jonas's call. StackChan double-talk remains unmeasured, and
 `codecCaptureOverruns=1` / `captureEpochResets=1` at its boot are still
 unexplained.
+
+## 2026-08-05 — review round: seven threads, and a dead-code sweep
+
+**Did:** Answered and resolved every review thread on #2376, and ran the
+dead-code sweep the batched reviews were supposed to include (the first three
+attempts died on upstream 529s, so this ran as a narrower, better-targeted
+question: what is provably dead or dark).
+
+**Measured:** Three of the seven review findings were real bugs, all mine.
+(1) An open Wi-Fi network was unprovisionable: the encoder skipped empty
+values, but the password is the one field the firmware decodes with
+`allow_empty` while still requiring its tag — so an open SSID failed closed
+as "missing field", and my own comment claimed the opposite, which is how it
+survived being written. (2) `endOfResponse`'s "expected drain" permission
+outlived the audio it was granted for, because a barge-in or a superseding
+answer discards the queue before the drain can spend it — so the next
+answer's first real underrun was excused, and the one counter meaning
+"audible gap" under-reported for the rest of the run. (3) An interrupt one
+frame into an answer left the abandoned frame at zero, and `frame >= 0` then
+refused the reused-number restart that branch exists to admit. Both existing
+interrupt tests hid it by accepting two frames before interrupting; the new
+firmware test fails without the fix, verified by reverting it.
+
+The other four were cast findings, fixed by deleting the assertion rather
+than explaining it: a named credential union, checked payload fields on the
+bridge (a non-string callId would have been used as a call identity and a
+missing `t` pushed NaN into the latency percentiles), and loose schemas on
+both providers' text frames.
+
+The sweep then found two more instruments of the class already fixed twice
+here. `capFailed`/`spkFailed`: after three consecutive I/O failures the audio
+task gates that direction off forever, and the failure counters increment
+behind the same gate, so they freeze at the threshold — a permanently dead
+microphone read exactly like a healthy quiet one. And the AEC capture
+bridge's metrics had no reader at all, on the only board with an AEC, so
+refused frames, sequence discontinuities and a backwards clock were invisible.
+Both published now.
+
+**Surprised by:** How reliably this defect class keeps appearing — four
+instances now, each one a counter that could not move or a getter nobody
+called, and each one found by a different method (measurement, a targeted
+review, a sweep). Also that CI caught two failures a Mac structurally cannot
+see: `-Werror=enum-compare` is GCC-only, and GitHub's 300-file compare cap
+silently truncated app selection so nothing deployed and the e2e lane failed
+with no deployment to test.
+
+**Reviewer said:** Adopted above. Recorded and NOT acted on, because acting
+blind on proven boards is worse than a written-down gap: `inject_starvation`
+setters have no caller on any of the four boards, which makes each board's
+`#ifdef ITERATE_KIT_DIAGNOSTIC_STARVATION` block unreachable; Waveshare's
+avatar-selection family (`request_slug`/`request_next`/`count`/`slug_at`) and
+three audio utility accessors have no callers; `components/avatar`'s
+`face_driver` module appears wholly superseded by `face_animator`;
+StackChan's `avatar_request_sprite_set` is bypassed by the private face-button
+path. Each is a candidate deletion for a follow-up with its own proof.
+
+**Open:** The two new StackChan health fields are compile-proven only — the
+CoreS3 left the USB tree mid-flash, so unlike every other StackChan change
+here they have not been seen on hardware. Double-talk still unmeasured. Merge
+is Jonas's call.
