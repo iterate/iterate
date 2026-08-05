@@ -238,15 +238,14 @@ export async function openRelayedStreamConnection(input: {
     wakeSocket = undefined;
     if (!active || closedByOwner) return;
     void (async () => {
-      // While the RPC leg is live the socket was only a future optimization:
-      // degrade to pinned mode (the DO's channel scan already sees the socket
-      // gone). If the leg died with the socket, recover from the relay's exact
-      // cursor immediately. That replacement has no wake socket, so it stays
-      // pinned for the rest of this logical subscription instead of silently
-      // losing events until the owner's next watchdog round.
+      // A Stream DO abort closes the wake socket but can leave its exported RPC
+      // target answering ping() in the relay's isolate after the callback it
+      // represented has disappeared. Replace the leg on every socket close;
+      // opening the same key is atomic, and the exact relay cursor prevents
+      // both loss and duplicate delivery. The replacement has no wake socket,
+      // so it stays pinned for the rest of this logical subscription.
       const handle = currentHandle;
-      const live = handle === undefined ? false : await probeLeg(handle);
-      if (live === true || currentHandle !== handle || dialing) return;
+      if (currentHandle !== handle || dialing) return;
       currentHandle = undefined;
       disposeStub(handle);
       dialing = true;
