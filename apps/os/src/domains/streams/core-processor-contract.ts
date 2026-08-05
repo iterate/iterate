@@ -48,10 +48,17 @@ import { EventFilter } from "./event-filter.ts";
 // capped at MAX_INBOUND_SOURCE_RECORDS, and exist only to fence stale source
 // lifetimes/config generations and feed the debug card. The same version also
 // removed the version-26 `endWhen` automatic-removal conditions and the
-// copy-to-stream transform option, returned the webhook-post receiver as the
-// lane for remotely-hosted processors, and gave the JSONata fields
-// language-naming names.
-// Version 29 implements the subscription-model redesign
+// copy-to-stream transform option. Still within version 28 (one undeployed
+// flag day), the webhook-post receiver returned as the lane for
+// remotely-hosted processors driven by webhooks, the JSONata fields took
+// language-naming names (`jsonataCondition`, `jsonataTransform`), and the
+// optional `jsonataTransform` became available on every push receiver (copy,
+// ITX call, webhook) — never on processor-wake, whose delivery must feed the
+// processor its committed log verbatim.
+// Version 29 makes ephemeral events advance only `maxOffset`. Their bodies and
+// all other reduced effects are memory-only, so rebuilding from the durable log
+// produces the same durable core state after the Durable Object restarts.
+// Version 30 implements the subscription-model redesign
 // (docs/stream-subscription-model-redesign.md): the identity field is `name`
 // (opaque, caller-chosen; auto-generated names keep the reserved
 // `subscription:<offset>` form and are first-class — the old
@@ -64,7 +71,7 @@ import { EventFilter } from "./event-filter.ts";
 // `halted` as a durable delivery state (`subscription-delivery-parked`:
 // the receiver is legitimately absent — no retry ladder, cursor intact,
 // `subscription-delivery-resumed` reactivates it).
-export const CORE_STATE_VERSION = 29;
+export const CORE_STATE_VERSION = 30;
 
 // Restored from the old built-in circuit-breaker processor. These defaults are
 // intentionally high for normal browser/load tests; the breaker exists to stop
@@ -403,13 +410,7 @@ export const CoreProcessorContract = defineProcessorContract({
     streamId: z.uuid().optional(),
     createdAt: z.string().optional(),
     incarnationId: z.string().trim().min(1).optional(),
-    /**
-     * Events folded so far — durable AND ephemeral (both reduce). A rebuild
-     * after ephemeral-row eviction counts only survivors, so this may
-     * DECREASE across a rebuild; never compare it to `maxOffset`. Its one
-     * load-bearing read is the constructor's `=== 0` birth check, which is
-     * eviction-proof (`stream/created` can never be ephemeral).
-     */
+    /** Durable events folded so far. `maxOffset` also includes ephemeral offset gaps. */
     eventCount: z.number().int().min(0).default(0),
     maxOffset: z.number().int().min(0).default(0),
     childPaths: z.array(z.string().trim().min(1)).default([]),

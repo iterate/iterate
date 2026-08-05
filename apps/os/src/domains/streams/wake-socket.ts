@@ -10,7 +10,7 @@
 // with `ctx.acceptWebSocket`, which costs nothing while the DO hibernates.
 // Once a session connection has a wake socket, the stream's idle teardown may
 // sever the RPC leg; the socket's attachment remembers the delivered-through
-// cursor and filter, and the next matching non-ephemeral append sends one
+// cursor and filter, and the next matching append sends one
 // `{"type":"wake"}` frame so the relay re-dials
 // `openConnection({ replayAfterOffset })`. The client's Cap'n Web session
 // never observes any of this.
@@ -302,13 +302,15 @@ export class WakeSocketRegistry {
    * sender's post-commit send check) is necessarily running inside an awake
    * DO, so no alarm is needed. At most one wake frame per dormancy period
    * (`wakeSentAtOffset`; cleared when the relay's re-dial re-binds the key),
-   * and never for ephemeral rows or the stream's own lifecycle facts — a
-   * re-dialed connection cannot replay ephemeral history, and waking on
-   * lifecycle facts is the resurrection loop documented on
-   * {@link WAKE_EXCLUDED_EVENT_TYPES}.
+   * while the stream's own lifecycle facts remain excluded — waking on those
+   * is the resurrection loop documented on {@link WAKE_EXCLUDED_EVENT_TYPES}.
+   * Ephemeral events do wake a matching subscriber as a best-effort latency
+   * hint: the append itself places the event in this incarnation's memory and
+   * a prompt re-dial can replay it from the subscriber's exact cursor. If the
+   * incarnation ends first, the event is intentionally gone.
    */
   wakeDormant(justCommitted: readonly StreamEvent[]): void {
-    const news = justCommitted.filter((event) => event.ephemeral !== true);
+    const news = justCommitted;
     if (news.length === 0) return;
     const sockets = this.#sockets();
     if (sockets.length === 0) return;

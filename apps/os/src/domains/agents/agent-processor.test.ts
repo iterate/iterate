@@ -1271,7 +1271,7 @@ describe("AgentProcessor script execution", () => {
       'JSON.parse(await itx.workspace.readFile("/workspaces/agents/main/script-results/',
     );
     expect(rendered!.payload.content).toContain(
-      `Your script returned ${spilled.length.toLocaleString("en-US")} chars of JSON — too big to show in full.`,
+      `Your script returned ${spilled.length.toLocaleString("en-US")} chars of JSON — over the ~100-char inline limit.`,
     );
     // The inferred type block tells the model the shape it cannot see.
     expect(rendered!.payload.content).toContain("Inferred type:");

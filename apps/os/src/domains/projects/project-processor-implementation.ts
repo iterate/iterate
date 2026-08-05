@@ -7,6 +7,7 @@ import type {
   StreamListItem,
 } from "iterate/processors";
 import { timedStep } from "../../lib/step-timing.ts";
+import { parseConfigRepoTemplateReference } from "../../lib/config-repo-template-reference.ts";
 import { CONFIG_REPO_PATH } from "../repos/paths.ts";
 import { repoCreationEvents } from "../repos/repo-defaults.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
@@ -462,6 +463,14 @@ export class ProjectProcessor extends StreamProcessor<
           ...repoCreationEvents({
             path: CONFIG_REPO_PATH,
             projectId: this.deps.itx.projectId,
+            ...(config.configRepoTemplate === undefined
+              ? {}
+              : {
+                  payload: {
+                    type: "github-public-template",
+                    ...parseConfigRepoTemplateReference(config.configRepoTemplate),
+                  },
+                }),
           }),
           {
             type: "events.iterate.com/stream/subscription-configured",

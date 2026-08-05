@@ -1326,7 +1326,7 @@ function stringifyScriptResult(result: unknown): string {
 
 function truncateScriptResult(text: string, historyLimit: number): string {
   if (text.length <= historyLimit) return text;
-  return `${text.slice(0, historyLimit)}\n… truncated (${text.length} chars total — return less: slice arrays, pick fields)`;
+  return `${text.slice(0, historyLimit)}\n… truncated (${text.length} chars total; up to ${historyLimit} render inline — return less: slice arrays, pick fields)`;
 }
 
 /**
@@ -1393,7 +1393,7 @@ function renderOversizedJsonResult(input: {
     previewText = `${input.text.slice(0, Math.min(OVERSIZED_JSON_PREVIEW_MAX_BYTES, input.historyLimit))}\n… (cut mid-document)`;
   }
   return [
-    `Your script returned ${input.text.length.toLocaleString("en-US")} chars of JSON — too big to show in full.${typeText === null ? "" : " Inferred type:"}`,
+    `Your script returned ${input.text.length.toLocaleString("en-US")} chars of JSON — over the ~${input.historyLimit.toLocaleString("en-US")}-char inline limit.${typeText === null ? "" : " Inferred type:"}`,
     ...(typeText === null ? [] : ["```ts", `type Result = ${typeText}`, "```"]),
     "Preview (long arrays/strings elided):",
     "```json",

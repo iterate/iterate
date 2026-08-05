@@ -881,6 +881,8 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
         path,
         projectId,
         createEmptyArtifact: () => repoStub().processorCreateEmptyArtifact(),
+        createPublicGithubTemplateArtifact: (input) =>
+          repoStub().processorCreatePublicGithubTemplateArtifact(input),
         importPublicGithubArtifact: (input) =>
           repoStub().processorImportPublicGithubArtifact(input),
         linkGithub: async (input) => {

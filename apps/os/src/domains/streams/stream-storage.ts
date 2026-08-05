@@ -1,14 +1,15 @@
 // The stream's append log — and its delivery cursors — in Durable Object SQLite.
 //
-// Storage is normalized into two tables: `events` is the offset-ordered
-// metadata/index, and `event_chunks` holds the full event JSON as bounded
-// UTF-8 byte rows. Durable Object SQLite caps each string/blob/row cell at
-// ~2 MB; BLOB columns do not raise that ceiling, and SQL-side substr(?)
-// chunking would still require binding the oversized value first, so event
-// JSON is chunked in JS.
+// Storage is normalized into four tables. `events` is the offset-ordered
+// durable metadata/index; `event_chunks` holds the full durable event JSON as
+// bounded UTF-8 byte rows. Durable Object SQLite caps each string/blob/row
+// cell at ~2 MB; BLOB columns do not raise that ceiling, and SQL-side substr(?)
+// chunking would still require binding the oversized value first, so event JSON
+// is chunked in JS. `stream_metadata` durably preserves the shared durable +
+// ephemeral offset allocator's high-water mark without storing ephemeral event
+// bodies. `subscription_cursors` holds delivery cursors.
 //
-// A third table, `subscription_cursors`, holds delivery cursors. It lives in
-// the same SQLite as the log on purpose:
+// The delivery cursors live in the same SQLite as the log on purpose:
 // a cursor advance and the events it acknowledges commit under the same
 // output gate, so the cursor can never disagree with the log it points into.
 // Cursor rows are mutable STORAGE — per-batch acknowledgements must not double
@@ -26,9 +27,9 @@ const EVENT_CHUNK_SIZE = 512 * 1024;
 const textEncoder = new TextEncoder();
 
 /**
- * A committed event paired with its serialized byte length (the exact bytes
- * stored in `event_chunks`). Delivery batching sizes batches against the byte
- * cap with these instead of re-stringifying every event on every read.
+ * A committed event paired with its exact serialized byte length. Durable
+ * event bytes are stored in `event_chunks`; ephemeral event bytes are held in
+ * memory. Delivery batching uses this instead of repeatedly serializing.
  */
 export type SizedStreamEvent = { event: StreamEvent; byteLength: number };
 
@@ -40,16 +41,11 @@ export class StreamEventLog {
     this.sql.exec(`
       -- Stream-owned append log metadata. Full event JSON is stored in event_chunks.
       -- offset is the replay cursor; idempotency_key's unique constraint is its lookup index.
-      -- ephemeral marks second-class rows: range reads exclude them unless asked, and
-      -- the stream may evict them in the future. Eviction keeps offsets consumed
-      -- (highestAssignedOffset reads AUTOINCREMENT's sqlite_sequence, which survives
-      -- row deletion) but forgets their idempotency keys.
       create table if not exists events (
         offset integer primary key autoincrement,
         type text not null,
         created_at text not null,
-        idempotency_key text unique,
-        ephemeral integer not null default 0
+        idempotency_key text unique
       )
     `);
     this.sql.exec(`
@@ -63,6 +59,27 @@ export class StreamEventLog {
         foreign key (offset) references events(offset) on delete cascade
       ) without rowid
     `);
+    this.sql.exec(`
+      -- The offset sequence includes memory-only ephemeral events, so it cannot
+      -- be derived from the durable event rows. This singleton is the durable
+      -- allocator floor; event bodies remain memory-only.
+      create table if not exists stream_metadata (
+        singleton integer primary key check (singleton = 1),
+        highest_assigned_offset integer not null
+      )
+    `);
+
+    const highestStoredOffset = this.highestOffset();
+    const sqliteSequence =
+      this.sql
+        .exec<{ seq: number | null }>("select seq from sqlite_sequence where name = 'events'")
+        .toArray()[0]?.seq ?? 0;
+    const initialAssignedOffset = Math.max(highestStoredOffset, sqliteSequence);
+    this.sql.exec(
+      "insert or ignore into stream_metadata (singleton, highest_assigned_offset) values (1, ?)",
+      initialAssignedOffset,
+    );
+    this.advanceHighestAssignedOffset(initialAssignedOffset);
   }
 
   highestOffset(): number {
@@ -73,51 +90,61 @@ export class StreamEventLog {
     );
   }
 
-  /** The highest DURABLE offset — the last row a default (ephemeral-excluding)
-   * catch-up read can actually reach, and therefore the only maximum offset a fold barrier
-   * may wait for. Robust against a future ephemeral-row eviction sweep. */
+  /** The highest durable offset — the last row a durable catch-up read can reach. */
   highestDurableOffset(): number {
     return (
       this.sql
         .exec<{
           offset: number | null;
-        }>("select max(offset) as offset from events where ephemeral = 0")
+        }>("select max(offset) as offset from events")
         .toArray()[0]?.offset ?? 0
     );
   }
 
   /**
-   * The highest offset ever INSERTED, even if its row was since deleted —
-   * AUTOINCREMENT's sqlite_sequence row is updated by every insert (explicit
-   * offsets included) and survives row deletion. This is the offset
-   * allocator's recovery floor: a future ephemeral-row eviction sweep may
-   * delete the highest row, and reseeding the allocator from max(offset)
-   * would then reissue offsets that open callback connections already saw.
+   * The highest offset assigned to either a durable or ephemeral event.
+   * Ephemeral bodies are absent from SQLite, so this explicit durable floor is
+   * what prevents their offsets from being reissued after an incarnation ends.
    */
   highestAssignedOffset(): number {
-    const sequence =
+    return (
       this.sql
-        .exec<{ seq: number | null }>("select seq from sqlite_sequence where name = 'events'")
-        .toArray()[0]?.seq ?? 0;
-    return Math.max(this.highestOffset(), sequence);
+        .exec<{ offset: number }>(
+          "select highest_assigned_offset as offset from stream_metadata where singleton = 1",
+        )
+        .toArray()[0]?.offset ?? 0
+    );
+  }
+
+  /** Persist the allocator floor without storing an ephemeral event body. */
+  advanceHighestAssignedOffset(offset: number): void {
+    this.sql.exec(
+      `update stream_metadata
+       set highest_assigned_offset = max(highest_assigned_offset, ?)
+       where singleton = 1`,
+      offset,
+    );
   }
 
   /**
    * Returns each event's serialized byte length (the exact bytes written to
    * `event_chunks`), so the commit path can hand the send loops a sized
-   * just-committed events without serializing them again.
+   * just-committed event without serializing it again. The insert also
+   * advances the shared offset allocator floor through the last durable event.
    */
   insert(events: readonly StreamEvent[]): number[] {
     const byteLengths: number[] = [];
     for (const event of events) {
+      if (event.ephemeral === true) {
+        throw new Error("ephemeral events must not be written to the durable event log");
+      }
       this.sql.exec(
-        `insert into events (offset, type, created_at, idempotency_key, ephemeral)
-         values (?, ?, ?, ?, ?)`,
+        `insert into events (offset, type, created_at, idempotency_key)
+         values (?, ?, ?, ?)`,
         event.offset,
         event.type,
         event.createdAt,
         event.idempotencyKey ?? null,
-        event.ephemeral === true ? 1 : 0,
       );
       const rawJsonBytes = textEncoder.encode(JSON.stringify(event));
       byteLengths.push(rawJsonBytes.byteLength);
@@ -129,6 +156,13 @@ export class StreamEventLog {
           chunk,
         );
       }
+    }
+    const highestInsertedOffset = events.reduce(
+      (highest, event) => Math.max(highest, event.offset),
+      0,
+    );
+    if (highestInsertedOffset > 0) {
+      this.advanceHighestAssignedOffset(highestInsertedOffset);
     }
     return byteLengths;
   }
@@ -155,8 +189,6 @@ export class StreamEventLog {
     beforeOffset: number;
     eventTypes?: readonly string[];
     limit: number;
-    /** Include ephemeral rows. Default false — ephemeral is opt-in on every range read. */
-    includeEphemeral?: boolean;
   }): StreamEvent[] {
     return this.getRangeSized(args).map((sized) => sized.event);
   }
@@ -171,14 +203,12 @@ export class StreamEventLog {
     beforeOffset: number;
     eventTypes?: readonly string[];
     limit: number;
-    includeEphemeral?: boolean;
   }): SizedStreamEvent[] {
     if (args.eventTypes?.length === 0) return [];
     const eventTypes =
       args.eventTypes === undefined || args.eventTypes.includes("*") ? undefined : args.eventTypes;
     const eventTypeClause =
       eventTypes === undefined ? "" : `and type in (${eventTypes.map(() => "?").join(", ")})`;
-    const ephemeralClause = args.includeEphemeral === true ? "" : "and ephemeral = 0";
     // One indexed metadata subquery picks the replay window; the join then streams each
     // event's chunks in primary-key order (offset, chunk_index).
     const chunks = this.sql
@@ -193,7 +223,6 @@ export class StreamEventLog {
             from events
             where offset > ?
               and offset < ?
-              ${ephemeralClause}
               ${eventTypeClause}
             order by offset asc
             limit ?
@@ -418,7 +447,7 @@ export type SubscriptionCursorStore = {
 export class SqliteSubscriptionCursorStore implements SubscriptionCursorStore {
   static db = defineConfig({
     // The desired schema now (`sqlfu draft` diffs new migrations against it).
-    // v2 (subscription-model redesign, CORE_STATE_VERSION 29): `name` primary
+    // v2 (subscription-model redesign, CORE_STATE_VERSION 30): `name` primary
     // key, the delivered/confirmed cursor split, and the mirrored delivery
     // state. FRESH schema — the redesign ships as a clean break with no data
     // migration (deploy-time storage reset).

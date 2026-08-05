@@ -49,7 +49,7 @@ export function RawEventInspectorContent({
     `SELECT offset, created_at FROM events WHERE offset > ? ORDER BY offset ASC LIMIT 1`,
     [offset],
   );
-  // The mirror deliberately omits historical ephemeral events, so stream
+  // The durable mirror deliberately omits ephemeral events, so stream
   // offsets can contain permanent gaps and are not row positions. Show the
   // trigger-maintained durable-row total without a COUNT(*) range scan.
   const totalResult = useStreamQuery(

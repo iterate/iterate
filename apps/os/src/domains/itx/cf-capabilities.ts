@@ -12,11 +12,16 @@ export type CfMarkdownDocument = {
   blob: Blob;
 };
 
-/** Per-format tuning for `ai.toMarkdown`: HTML scoping (CSS selector,
+/** Per-format tuning for `ai.toMarkdown`: output format (markdown, or plain
+ * text with link targets and image URLs stripped — the compact choice for
+ * emails and newsletters full of tracking links), HTML scoping (CSS selector,
  * hostname for relative links), image description language, PDF metadata
  * exclusion. */
 export type CfMarkdownConversionOptions = {
   conversionOptions?: {
+    output?: {
+      format?: "markdown" | "text";
+    };
     html?: {
       cssSelector?: string;
       hostname?: string;
@@ -30,12 +35,13 @@ export type CfMarkdownConversionOptions = {
   };
 };
 
-/** One converted document from `ai.toMarkdown`: `format` is "markdown" with
- * the markdown text in `data` (plus a token estimate), or "error" with the
- * failure message in `error`. */
+/** One converted document from `ai.toMarkdown`: `format` is "markdown" — or
+ * "text" when `output.format: "text"` was requested — with the converted
+ * text in `data` (plus a token estimate), or "error" with the failure
+ * message in `error`. */
 export type CfMarkdownConversionResult = {
   name: string;
-  format: "markdown" | "error";
+  format: "markdown" | "text" | "error";
   mimeType?: string;
   tokens?: number;
   data?: string;

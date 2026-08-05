@@ -300,6 +300,34 @@ describe("ProjectProcessor bootstrap", () => {
     });
   });
 
+  it("births the config repo from the requested public GitHub template", async () => {
+    const h = makeProjectHarness();
+    const configRepoTemplate = "github:iterate/iterate#main&path:configs/with-voice";
+    await h.stream.append(
+      ...projectCreationEvents({
+        projectId: "prj_test",
+        payload: {
+          config: {
+            ...PROJECT_CREATE_REQUESTED.payload.config,
+            configRepoTemplate,
+          },
+        },
+      }),
+    );
+    await h.settle();
+
+    expect(h.network.eventsAt("/repos/config")[0]).toMatchObject({
+      type: "events.iterate.com/repos/create-requested",
+      payload: {
+        type: "github-public-template",
+        owner: "iterate",
+        path: "configs/with-voice",
+        ref: "main",
+        repo: "iterate",
+      },
+    });
+  });
+
   it("does not finish the birth frame until every sibling processor has reduced its batch", async () => {
     let releaseEmail = () => {};
     const emailBarrier = new Promise<void>((resolve) => {

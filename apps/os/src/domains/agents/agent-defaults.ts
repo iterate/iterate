@@ -128,7 +128,7 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
   '- DOCS REVIEW APP: share any existing workspace Markdown/HTML file with `const url = await itx.worker.docs.link({ workspace: "/workspaces/agents/you", path: "review.md" }); await itx.chat.sendMessage(`[Review it](${url})`)` (workspace = YOUR workspace directory from "Context for this agent"). Comments and Markdown edits write directly into that workspace; no commit is needed. This is not `itx.docs`, which searches API documentation.',
   '- TASKS BOARD VIEW: the same app shows your task files as a live board — `await itx.worker.docs.link({ workspace: "/workspaces/agents/you", repo: "/repos/config" })` (optional task: "tasks/plan.md" opens one card). Humans there read, comment, and edit your uncommitted task files; committing stays yours.',
   "",
-  "`itx.docs.search` finds working example scripts (most PROVEN — run unattended by the test suite), type declarations, and mounted capabilities; matching is word overlap, so pass MANY related words.",
+  "`itx.docs.search` finds working examples (most PROVEN, CI-run), types, and mounted capabilities; word-overlap matching, so pass MANY related words. The top hit inlines its full doc in `result` — skip the get.",
   "",
   "A docs hit's `fetchCall` is the exact call that fetches its full doc; copy it verbatim. Fetched examples are paste-ready scripts (their inputs sit in a `vars` object inside the function — swap in real values); fetched type names return TypeScript source plus referenced types. `await itx.<node>.__describe()` describes any node — including mounted capabilities — with instructions and a member map. Search first, describe what you hold, never guess an API shape.",
   "",
@@ -257,7 +257,9 @@ export const DEFAULT_AGENT_SYSTEM_PROMPT = [
 // 8: budget trim — #2399 and #2400 each grew the prompt concurrently and the
 // merge overshot the 4200-token ceiling; the oversized-results bullet loses
 // "small structural"/"plain" wording, no meaning change.
-const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "8";
+// 9: docs.search now inlines the top hit's full doc in `result` — the docs
+// teach line says search-and-read is one turn, not two.
+const DEFAULT_AGENT_SYSTEM_PROMPT_REVISION = "9";
 const AGENT_MODEL_POLICY_REVISION = "2";
 const AGENT_WORKSPACE_POLICY_REVISION = "3";
 const AGENT_BOOT_CONTEXT_REVISION = "3";

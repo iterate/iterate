@@ -46,6 +46,21 @@ function coreState(path = RECEIVER_PATH): CoreProcessorState {
   return CoreProcessorContract.stateSchema.parse({ projectId: PROJECT_ID, path });
 }
 
+test("ephemeral events advance the stream head without changing durable core aggregates", () => {
+  const processor = new StreamCoreProcessor({ projectId: PROJECT_ID });
+  const before = coreState();
+
+  const after = processor.reduce({
+    state: before,
+    event: {
+      ...committed(1, "events.iterate.test/streaming-chunk", { text: "hello" }),
+      ephemeral: true,
+    },
+  });
+
+  expect(after).toEqual({ ...before, maxOffset: 1 });
+});
+
 function committed(
   offset: number,
   type: string,

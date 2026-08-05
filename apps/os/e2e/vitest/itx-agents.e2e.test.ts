@@ -63,27 +63,23 @@ test("agent create installs only generic machinery; later events configure it", 
     'Processor "agent" does not consume event "events.iterate.com/stream/subscription-configured".',
   );
 
-  const ephemeralIdempotencyKey = `agent-append-ephemeral-${crypto.randomUUID()}`;
   await expect(
     (
       agent as unknown as {
         append(event: {
           type: string;
           payload: Record<string, unknown>;
-          idempotencyKey: string;
           ephemeral: true;
         }): Promise<unknown>;
       }
     ).append({
       type: AGENT_CONTEXT_ADDED_TYPE,
-      idempotencyKey: ephemeralIdempotencyKey,
       ephemeral: true,
       payload: { role: "user", content: "hosted processors cannot consume this" },
     }),
   ).rejects.toThrow(
     `Processor "agent" cannot consume ephemeral event "${AGENT_CONTEXT_ADDED_TYPE}".`,
   );
-  expect(await agent.stream.getEvent({ idempotencyKey: ephemeralIdempotencyKey })).toBeUndefined();
 
   const [configured] = await agent.append({
     type: AGENT_CONTEXT_ADDED_TYPE,

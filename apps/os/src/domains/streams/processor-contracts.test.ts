@@ -180,4 +180,24 @@ describe("contract event helpers", () => {
     expectTypeOf(built.ephemeral).toEqualTypeOf<true>();
     expect(built.ephemeral).toBe(true);
   });
+
+  test("rejects idempotency keys on ephemeral contract events", () => {
+    const input = {
+      type: "events.iterate.com/test/transient" as const,
+      payload: { value: "temporary" },
+      idempotencyKey: "temporary-1",
+    };
+
+    expect(() => ParserInferenceContract.parseEventInput(input)).toThrow(
+      "ephemeral events cannot have an idempotencyKey",
+    );
+    expect(() =>
+      ParserInferenceContract.parseEvent({
+        ...input,
+        offset: 1,
+        createdAt: new Date(0).toISOString(),
+        path: "/tests/parser-inference",
+      }),
+    ).toThrow("ephemeral events cannot have an idempotencyKey");
+  });
 });

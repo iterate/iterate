@@ -78,15 +78,14 @@ export async function catchUpToLiveReplayBoundary(args: {
 }
 
 /**
- * Pull the durable history that existed when a browser connection began.
+ * Pull every event still available when a browser connection began.
  *
- * Range reads omit ephemeral rows by default. Once every durable survivor at
- * or below `throughOffset` has been applied, the caller opens its live
- * connection AFTER that captured maximum offset. That boundary is load-bearing: old
- * streaming chunks are never replayed, while anything appended after the
- * connection began (ephemeral or durable) still arrives through the callback.
+ * The caller supplies an ephemeral-including read, so currently buffered
+ * streaming events reach the browser's in-memory projection alongside durable
+ * history. Missing offsets are expected: an older ephemeral event may already
+ * have been evicted or belong to a previous Durable Object incarnation.
  */
-export async function catchUpDurableHistory<T extends { offset: number }>(args: {
+export async function catchUpAvailableHistory<T extends { offset: number }>(args: {
   afterOffset: number;
   throughOffset: number;
   pageLimit: number;
@@ -138,8 +137,8 @@ export async function catchUpDurableHistory<T extends { offset: number }>(args: 
         `historical catch-up returned invalid final offset ${nextCursor}; expected (${cursor}, ${args.throughOffset}]`,
       );
     }
-    // A short page proves there are no more durable survivors in the bounded
-    // range, so its scan also covers any trailing ephemeral-only suffix.
+    // A short page proves there are no more available events in the bounded
+    // range, so its scan also covers any trailing forgotten offset suffix.
     const scannedThroughOffset =
       result.page.length < result.limit ? args.throughOffset : nextCursor;
     await args.ingest({

@@ -48,6 +48,7 @@ import {
   StreamCoreProcessor,
 } from "./core-processor.ts";
 import { compileEventFilter, type EventFilter } from "./event-filter.ts";
+import { EphemeralEventBuffer } from "./ephemeral-event-buffer.ts";
 import { WakeSocketRegistry } from "./wake-socket.ts";
 import {
   internalStreamId,
@@ -59,6 +60,7 @@ import {
   clearSubscriptionCursorFailuresAfterStateRebuild,
   SqliteSubscriptionCursorStore,
   StreamEventLog,
+  type SizedStreamEvent,
 } from "./stream-storage.ts";
 import {
   computeBackoffMs,
@@ -668,6 +670,8 @@ export class StreamDurableObject extends DurableObject<Env> {
   #liveStateRefreshScheduled = false;
   readonly name = parseStreamDurableObjectName(this.ctx.id.name);
   readonly #log = new StreamEventLog(this.ctx.storage.sql, this.name.path);
+  /** Ephemeral event bodies scoped to this one Durable Object incarnation. */
+  readonly #ephemeralEvents = new EphemeralEventBuffer();
   /**
    * Waiters parked on `waitUntilConfirmed`, checked from every cursor-store
    * mutation. One-shot and in-memory on purpose: the barrier dies with the RPC
@@ -696,17 +700,14 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly #eventSender: StreamEventSender = new StreamEventSender({
     idleTeardownMs: idleTeardownMs(this.env),
     hooks: {
-      // Straight to the sized log read: delivery needs byte lengths for its
-      // batch cap (getEvents would re-stringify to size a batch), and its
-      // limits are already bounded well under the public read clamp.
+      // Delivery needs byte lengths for its batch cap. This merges durable
+      // SQLite rows with the current incarnation's memory-only ephemeral
+      // events before subscription-specific visibility is applied.
       readEvents: (args) =>
-        this.#log.getRangeSized({
+        this.#readEventsSized({
           afterOffset: args.afterOffset,
           beforeOffset: args.beforeOffset,
           limit: args.limit,
-          // RAW, ephemeral included: durable cursors advance over every
-          // offset (skip-not-defer, like filter-excluded events); durable
-          // subscriptions never deliver them.
           includeEphemeral: true,
         }),
       coreState: () => this.#coreProcessorState,
@@ -1251,8 +1252,10 @@ export class StreamDurableObject extends DurableObject<Env> {
    *    and is folded through `reduce`. An event whose `idempotencyKey` already
    *    exists is skipped and the existing event is returned in its place (so
    *    the returned array stays input-aligned).
-   * 2. Event rows + the new core state are written in one await-free turn.
-   *    After this line the append has succeeded.
+   * 2. Durable event rows, the shared offset allocator high-water mark, and
+   *    the new core state are written in one await-free turn. Ephemeral event
+   *    bodies enter only the bounded in-memory buffer. After this line the
+   *    append has succeeded.
    * 3. Post-commit work reconciles runtime delivery from the new reduced state.
    *    Failures are reported and get an immediate durable repair alarm; they
    *    cannot change the already-committed append result.
@@ -1531,7 +1534,8 @@ export class StreamDurableObject extends DurableObject<Env> {
     // atomic and Output Gates hold responses until writes are durable:
     // https://developers.cloudflare.com/durable-objects/api/sql-storage/
     // https://blog.cloudflare.com/sqlite-in-durable-objects/
-    // Keep this section await-free: the event rows are the append boundary.
+    // Keep this section await-free: durable rows plus the allocator high-water
+    // mark are the append boundary.
     // The KV state checkpoint is DEBOUNCED (see
     // #checkpointCoreProcessorState) — event rows are the durable truth, and
     // boot catch-up folds past a lagging checkpoint by design.
@@ -1540,13 +1544,27 @@ export class StreamDurableObject extends DurableObject<Env> {
       events: newEvents,
       next: workingState,
     });
-    const byteLengths = this.#log.insert(newEvents);
+    const durableEvents = newEvents.filter((event) => event.ephemeral !== true);
+    const ephemeralEvents = this.#ephemeralEvents.prepare(
+      newEvents.filter((event) => event.ephemeral === true),
+    );
+    const durableByteLengths = this.#log.insert(durableEvents);
+    this.#log.advanceHighestAssignedOffset(workingState.maxOffset);
+    this.#ephemeralEvents.commit(ephemeralEvents);
+
+    const sizedByOffset = new Map<number, SizedStreamEvent>();
+    for (const [index, event] of durableEvents.entries()) {
+      sizedByOffset.set(event.offset, { event, byteLength: durableByteLengths[index]! });
+    }
+    for (const event of ephemeralEvents) sizedByOffset.set(event.event.offset, event);
+    const justCommittedEvents = newEvents.map((event) => sizedByOffset.get(event.offset)!);
+
     this.#coreProcessorState = workingState;
     this.#checkpointCoreProcessorState(newEvents.length);
     this.#metrics.ingress.bump(
       Date.now(),
       newEvents.length,
-      byteLengths.reduce((sum, bytes) => sum + bytes, 0),
+      justCommittedEvents.reduce((sum, entry) => sum + entry.byteLength, 0),
     );
     this.#refreshLiveState();
 
@@ -1555,10 +1573,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // failure gets an immediate native alarm in this same output-gated turn;
     // the alarm and a fresh incarnation both run the same level checks.
     this.#reconcileCommittedState({
-      justCommittedEvents: newEvents.map((event, index) => ({
-        event,
-        byteLength: byteLengths[index]!,
-      })),
+      justCommittedEvents,
     });
 
     return events;
@@ -1574,14 +1589,39 @@ export class StreamDurableObject extends DurableObject<Env> {
   ): StreamEvent | undefined {
     if (args.idempotencyKey !== undefined)
       return this.#log.getByIdempotencyKey(args.idempotencyKey);
-    return this.#log.getByOffset(args.offset);
+    return this.#ephemeralEvents.getByOffset(args.offset) ?? this.#log.getByOffset(args.offset);
+  }
+
+  #readEventsSized(args: {
+    afterOffset: number;
+    beforeOffset: number;
+    eventTypes?: readonly string[];
+    limit: number;
+    includeEphemeral: boolean;
+  }): SizedStreamEvent[] {
+    const durableEvents = this.#log.getRangeSized({
+      afterOffset: args.afterOffset,
+      beforeOffset: args.beforeOffset,
+      eventTypes: args.eventTypes,
+      limit: args.limit,
+    });
+    if (!args.includeEphemeral) return durableEvents;
+
+    const ephemeralEvents = this.#ephemeralEvents.getRangeSized({
+      afterOffset: args.afterOffset,
+      beforeOffset: args.beforeOffset,
+      eventTypes: args.eventTypes,
+      limit: args.limit,
+    });
+    return [...durableEvents, ...ephemeralEvents]
+      .sort((left, right) => left.event.offset - right.event.offset)
+      .slice(0, args.limit);
   }
 
   /**
    * Synchronous committed-event range read. Keep await-free (see getEvent).
-   * Ephemeral rows are excluded unless `includeEphemeral` — the second-class
-   * contract: nothing reads them by accident, so the stream stays free to
-   * evict them later.
+   * Ephemeral events from the current Durable Object incarnation are excluded
+   * unless `includeEphemeral` is explicitly requested.
    */
   getEvents(
     args: {
@@ -1599,13 +1639,13 @@ export class StreamDurableObject extends DurableObject<Env> {
     if (limit !== undefined && limit > MAX_GET_EVENTS_LIMIT) {
       throw new Error(`getEvents limit must be at most ${MAX_GET_EVENTS_LIMIT}.`);
     }
-    return this.#log.getRange({
+    return this.#readEventsSized({
       afterOffset: args.afterOffset ?? 0,
       beforeOffset: args.beforeOffset ?? Number.MAX_SAFE_INTEGER,
       eventTypes: args.eventTypes,
       limit: limit ?? DEFAULT_GET_EVENTS_LIMIT,
-      includeEphemeral: args.includeEphemeral,
-    });
+      includeEphemeral: args.includeEphemeral === true,
+    }).map((entry) => entry.event);
   }
 
   /**
@@ -1640,7 +1680,7 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /**
    * Both maximum offsets in one read, for exact-offset CAS appends that also need a
-   * fold barrier: `maxOffset` is the highest assigned offset (ephemeral rows hold
+   * fold barrier: `maxOffset` is the highest assigned offset (ephemeral events hold
    * offsets too — the CAS target), while `maxDurableOffset` is the latest offset a
    * default catch-up can actually fold through — the only maximum offset a
    * `waitUntilEvent` barrier can be pinned to without wedging on a trailing
@@ -1889,12 +1929,6 @@ export class StreamDurableObject extends DurableObject<Env> {
       afterOffset: state.maxOffset,
       beforeOffset: highestOffset + 1,
       limit: 500,
-      // Ephemeral rows folded on append (counters + circuit breaker), so the
-      // rebuild re-folds them. Exactly identical only while their rows
-      // survive: a post-eviction rebuild counts fewer events and re-burns
-      // fewer breaker tokens — bookkeeping drift, not correctness (see
-      // eventCount's doc in core-processor-contract.ts).
-      includeEphemeral: true,
     });
     if (page.length === 0) return undefined;
 
@@ -1914,11 +1948,11 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   #applyHighestAssignedOffset(state: CoreProcessorState): CoreProcessorState {
-    // The fold recovers maxOffset from surviving rows; the assigned floor
-    // covers rows a future ephemeral eviction sweep deleted. Without it a
-    // rebuild after the latest row was evicted would reissue offsets that live
-    // open callbacks already received (the browser event table hard-ABORTs on a reused
-    // offset carrying different JSON).
+    // The fold recovers maxOffset from durable rows. The assigned floor also
+    // covers memory-only ephemeral offsets whose bodies disappeared on
+    // restart or FIFO eviction. Without it, rebuild could reissue an offset a
+    // session callback already received (the browser event table hard-ABORTs
+    // on one offset carrying different JSON).
     const assignedFloor = this.#log.highestAssignedOffset();
     return assignedFloor > state.maxOffset ? { ...state, maxOffset: assignedFloor } : state;
   }
@@ -2050,9 +2084,8 @@ export class StreamDurableObject extends DurableObject<Env> {
    * callers still observe an async call through their stub.
    *
    * `openConnection({ connectionKey: "s", processEventBatch })` receives new events by
-   * default. `replayAfterOffset: 0` replays durable events from the first row;
-   * `3` starts durable replay at offset 4. Ephemeral rows are delivered only
-   * if appended after this exact connection opens and are never replayed.
+   * default. `replayAfterOffset: 0` replays durable events plus any ephemeral
+   * events still buffered in this incarnation; `3` starts replay at offset 4.
    * Opening the same key again replaces the old connection. Omit
    * `connectionKey` to let the stream assign a random key. Call `close()` on
    * the returned handle to stop delivery.
@@ -2175,12 +2208,12 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * One-shot convenience over `openConnection()`: replay durable events from the
-   * requested cursor, then receive newly appended events until a caller predicate accepts one.
+   * One-shot convenience over `openConnection()`: replay durable and currently
+   * buffered ephemeral events from the requested cursor, then receive new
+   * events until a caller predicate accepts one.
    *
-   * Rides a session connection, so it CAN match a transient event
-   * appended after this wait opens. It never matches a historical ephemeral
-   * row, regardless of `afterOffset`.
+   * Rides a session connection, so it can match an ephemeral event already in
+   * this incarnation's memory or one appended after the wait opens.
    *
    * Intentionally not a durable waiter. If the RPC caller or this DO
    * incarnation dies, the wait dies too; callers that need retry semantics
@@ -2400,6 +2433,7 @@ export class StreamDurableObject extends DurableObject<Env> {
         dormantSubscribers: this.#wakeSockets.dormantRuntimeState(),
         subscriptions: this.#eventSender.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
+        ephemeralEvents: this.#ephemeralEvents.runtimeState(),
         storageSizeBytes: this.ctx.storage.sql.databaseSize,
       },
     };
@@ -2502,7 +2536,7 @@ export class StreamDurableObject extends DurableObject<Env> {
  */
 // Built ONCE: constructing a zod schema per appended event cost ~20µs/event
 // inside the synchronous commit turn (~50x the hoisted parse).
-const StreamAppendInput = StreamEventInputSchema.extend({
+const StreamAppendInput = StreamEventInputSchema.safeExtend({
   offset: z.number().int().nonnegative().optional(),
 }).strict();
 

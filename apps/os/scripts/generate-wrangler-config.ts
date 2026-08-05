@@ -237,6 +237,11 @@ const DO_EXPORTS = {
   AgentDurableObject: { type: "durable-object", state: "deleted" },
   AgentCollectionDurableObject: { type: "durable-object", state: "deleted" },
   CapabilityHostDurableObject: { type: "durable-object", state: "deleted" },
+  // An earlier revision of the public-template branch provisioned a
+  // coordinator before that path was simplified back onto the existing repo
+  // saga. Retire that preview namespace while keeping the coordinator code
+  // deleted.
+  RepoCreationCoordinatorDurableObject: { type: "durable-object", state: "deleted" },
 };
 
 /**

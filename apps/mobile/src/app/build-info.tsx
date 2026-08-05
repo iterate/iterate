@@ -8,18 +8,33 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import * as Application from "expo-application";
 import Constants from "expo-constants";
-import { Stack } from "expo-router";
+import { Stack, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { buildInfo } from "../lib/build-info.ts";
+import { getPreviewChannelOverride, switchChannelAndReload } from "../lib/preview-channel.ts";
 import { colors, radius, spacing } from "../lib/theme.ts";
 
 export default function BuildInfoScreen() {
+  const router = useRouter();
   const installedAt = useQuery({
     queryKey: ["app-install-time"],
     // Unavailable on web; the row shows "—" there.
     queryFn: () => Application.getInstallationTimeAsync().catch(() => null),
     staleTime: Infinity,
+  });
+  const channelOverride = useQuery({
+    queryKey: ["preview-channel-override"],
+    queryFn: getPreviewChannelOverride,
+  });
+  const resetChannel = useMutation({
+    mutationFn: async () => {
+      const result = await switchChannelAndReload(null);
+      await channelOverride.refetch();
+      return result === "no-update"
+        ? "Override cleared — no newer update on the default channel"
+        : "Restarting…";
+    },
   });
   const check = useMutation({
     mutationFn: async () => {
@@ -44,7 +59,8 @@ export default function BuildInfoScreen() {
       <Stack.Screen options={{ title: "Build info" }} />
       <Section title="Bundle">
         <Row label="Branch" value={buildInfo.branch} />
-        <Row label="Commit" value={buildInfo.commit.slice(0, 12)} />
+        <Row label="Commit" value={buildInfo.commit.slice(0, 7)} />
+        <Row label="Message" value={buildInfo.message} />
         <Row
           label="Built by"
           value={buildInfo.builtBy && `${buildInfo.builtBy}@${buildInfo.machine}`}
@@ -54,10 +70,27 @@ export default function BuildInfoScreen() {
       </Section>
       <Section title="Updates">
         <Row label="Channel" value={Updates.channel} />
+        <Row label="Channel override" value={channelOverride.data} />
         <Row label="Runtime version" value={Updates.runtimeVersion} />
         <Row label="Update id" value={Updates.updateId} />
         <Row label="Update published" value={formatTime(Updates.createdAt?.toISOString())} />
       </Section>
+      {channelOverride.data ? (
+        <Pressable
+          accessibilityRole="button"
+          disabled={resetChannel.isPending}
+          onPress={() => resetChannel.mutate()}
+          style={[styles.button, resetChannel.isPending && styles.buttonDisabled]}
+        >
+          <Text style={styles.buttonLabel}>
+            {resetChannel.isPending ? "Resetting…" : "Reset to default channel"}
+          </Text>
+        </Pressable>
+      ) : null}
+      {resetChannel.data ? <Text style={styles.note}>{resetChannel.data}</Text> : null}
+      {resetChannel.error ? (
+        <Text style={styles.errorNote}>{String(resetChannel.error)}</Text>
+      ) : null}
       <Section title="App">
         <Row label="Version" value={Constants.expoConfig?.version} />
         <Row label="Native build" value={Application.nativeBuildVersion} />
@@ -81,6 +114,17 @@ export default function BuildInfoScreen() {
       )}
       {check.data ? <Text style={styles.note}>{check.data}</Text> : null}
       {check.error ? <Text style={styles.errorNote}>{String(check.error)}</Text> : null}
+      {!router.canGoBack() ? (
+        // Deep-link flows (preview-channel switch) replace into this screen
+        // with no back stack, so the header has no back button.
+        <Pressable
+          accessibilityRole="button"
+          onPress={() => router.replace("/")}
+          style={styles.linkButton}
+        >
+          <Text style={styles.linkLabel}>Go home</Text>
+        </Pressable>
+      ) : null}
     </ScrollView>
   );
 }
@@ -153,6 +197,8 @@ const styles = StyleSheet.create({
   },
   buttonDisabled: { opacity: 0.6 },
   buttonLabel: { color: colors.text, fontSize: 16, fontWeight: "600" },
+  linkButton: { alignItems: "center", paddingVertical: 8 },
+  linkLabel: { color: colors.textMuted, fontSize: 14 },
   note: { color: colors.textMuted, fontSize: 13, textAlign: "center" },
   errorNote: { color: colors.danger, fontSize: 13, textAlign: "center" },
 });

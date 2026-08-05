@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { StreamEvent } from "iterate/processors";
 import {
-  catchUpDurableHistory,
+  catchUpAvailableHistory,
   catchUpToLiveReplayBoundary,
   readCatchUpPage,
 } from "./catch-up-page.ts";
@@ -50,8 +50,8 @@ describe("readCatchUpPage", () => {
   });
 });
 
-describe("catchUpDurableHistory", () => {
-  it("skips pre-existing ephemeral rows and opens after the captured maximum offset", async () => {
+describe("catchUpAvailableHistory", () => {
+  it("ingests buffered ephemeral events before opening after the captured maximum offset", async () => {
     const event = (offset: number, ephemeral = false): StreamEvent => ({
       type: ephemeral ? "events.iterate.com/test/chunk" : "events.iterate.com/test/durable",
       offset,
@@ -64,7 +64,7 @@ describe("catchUpDurableHistory", () => {
     const ingested: StreamEvent[] = [];
     const scans: Array<[number, number]> = [];
 
-    const result = await catchUpDurableHistory({
+    const result = await catchUpAvailableHistory({
       afterOffset: 0,
       throughOffset: 4,
       pageLimit: 2,
@@ -74,12 +74,7 @@ describe("catchUpDurableHistory", () => {
         return {
           streamId: TEST_STREAM_ID,
           events: serverEvents
-            .filter(
-              (item) =>
-                item.ephemeral !== true &&
-                item.offset > input.afterOffset &&
-                item.offset < input.beforeOffset,
-            )
+            .filter((item) => item.offset > input.afterOffset && item.offset < input.beforeOffset)
             .slice(0, input.limit),
         };
       },
@@ -89,23 +84,21 @@ describe("catchUpDurableHistory", () => {
       },
     });
 
-    expect(ingested.map((item) => item.offset)).toEqual([1, 3]);
+    expect(ingested.map((item) => item.offset)).toEqual([1, 2, 3, 4]);
     expect(reads).toEqual([
       { afterOffset: 0, beforeOffset: 5, limit: 2 },
-      { afterOffset: 3, beforeOffset: 5, limit: 2 },
+      { afterOffset: 2, beforeOffset: 5, limit: 2 },
     ]);
     expect(scans).toEqual([
-      [0, 3],
-      [3, 4],
+      [0, 2],
+      [2, 4],
     ]);
-    // Offsets 2 and 4 were scanned historical ephemerals. Starting the live
-    // opening after the captured maximum offset prevents either from replaying.
     expect(result).toEqual({ pageLimit: 2, replayAfterOffset: 4 });
   });
 
-  it("advances across an all-ephemeral bounded range with an empty scan", async () => {
+  it("advances across a bounded range whose events are no longer available", async () => {
     const scans: Array<{ events: readonly StreamEvent[]; through: number }> = [];
-    const result = await catchUpDurableHistory<StreamEvent>({
+    const result = await catchUpAvailableHistory<StreamEvent>({
       afterOffset: 5,
       throughOffset: 9,
       pageLimit: 500,
@@ -125,7 +118,7 @@ describe("catchUpDurableHistory", () => {
     let reads = 0;
 
     await expect(
-      catchUpDurableHistory({
+      catchUpAvailableHistory({
         afterOffset: 0,
         throughOffset: 2,
         pageLimit: 1,
