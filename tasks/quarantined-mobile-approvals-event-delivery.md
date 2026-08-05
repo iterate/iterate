@@ -137,13 +137,17 @@ Test these in order; do not treat the first plausible one as the conclusion.
   execution/batch/device identity, and source offset where applicable.
   _`specs/mobile/approval-delivery-diagnostics.ts` reports each execution ID,
   durable offsets, settlement, and first missing transition on UI failure._
-- [ ] Establish a serial baseline, then raise the reproduction rate with the
+- [x] Establish a serial baseline, then raise the reproduction rate with the
   existing four-worker stress shape and a production-shaped fully parallel
   preview. Capture the exact first absent transition for each failure.
+  _Serial and fully parallel runs crossed different boundaries; strict run
+  `2hpdtl6rqz` preserved the exact root/device offsets and first missing copy._
 - [x] Minimize the first confirmed failure at the public itx or stream-
   processor harness seam. Preserve it as a readable red regression test before
   changing product behavior. _Red tests proved one-off scripts still called
-  cached Worker Loader `get()` and completed entrypoint calls were not released._
+  cached Worker Loader `get()`, completed entrypoint calls were not released,
+  stamped responses lost disposal ownership, and pre-intent presentation
+  claims were discarded on an otherwise healthy ordered copy lane._
 - [x] Fix the owning state machine. Capacity exhaustion must become bounded
   durable recovery or an explicit terminal outcome; processor obligations
   must survive eviction. Do not add polling, broader waits, fallback values,
