@@ -1,4 +1,4 @@
-add_library(iterate-kit-core STATIC
+set(ITERATE_KIT_CORE_SOURCES
   src/audio_playout.c
   src/configuration.c
   src/device_events.c
@@ -17,11 +17,22 @@ add_library(iterate-kit-core STATIC
   src/websocket_text.c
   src/websocket_tx.c)
 
-target_include_directories(iterate-kit-core PUBLIC include)
-target_compile_features(iterate-kit-core PUBLIC c_std_99)
-target_compile_options(iterate-kit-core PRIVATE
+if(COMMAND idf_component_register)
+  idf_component_register(
+    SRCS ${ITERATE_KIT_CORE_SOURCES}
+    INCLUDE_DIRS include
+    REQUIRES capnweb)
+  set(ITERATE_KIT_CORE_TARGET ${COMPONENT_LIB})
+else()
+  add_library(iterate-kit-core STATIC ${ITERATE_KIT_CORE_SOURCES})
+  target_include_directories(iterate-kit-core PUBLIC include)
+  target_link_libraries(iterate-kit-core PUBLIC capnweb)
+  set(ITERATE_KIT_CORE_TARGET iterate-kit-core)
+endif()
+
+target_compile_features(${ITERATE_KIT_CORE_TARGET} PUBLIC c_std_99)
+target_compile_options(${ITERATE_KIT_CORE_TARGET} PRIVATE
   -Wall
   -Wextra
   -Werror
   -Wpedantic)
-target_link_libraries(iterate-kit-core PUBLIC capnweb)

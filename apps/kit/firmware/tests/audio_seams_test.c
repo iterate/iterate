@@ -24,7 +24,11 @@ static enum iterate_kit_status fake_codec_read(
     size_t *sample_count)
 {
   struct fake_codec *fake = context;
-  if (fake->read_status != ITERATE_KIT_OK) return fake->read_status;
+  if (fake->read_status != ITERATE_KIT_OK) {
+    /* Prove the public wrapper removes residue from a failing adapter. */
+    *sample_count = SIZE_MAX;
+    return fake->read_status;
+  }
   assert(capacity_samples >= ITERATE_KIT_VOICE_FRAME_SAMPLES);
   for (size_t index = 0U; index < ITERATE_KIT_VOICE_FRAME_SAMPLES; ++index) {
     capture[index] = (int16_t)index;

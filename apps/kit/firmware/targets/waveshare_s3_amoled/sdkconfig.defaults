@@ -1,0 +1,166 @@
+CONFIG_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_MAIN_TASK_AFFINITY_CPU0=y
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESP_CONSOLE_UART_DEFAULT=n
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_BOOT_INIT=y
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_LOG_DEFAULT_LEVEL=3
+CONFIG_MBEDTLS_CERTIFICATE_BUNDLE=y
+CONFIG_FREERTOS_WATCHPOINT_END_OF_STACK=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+CONFIG_FREERTOS_RUN_TIME_COUNTER_TYPE_U64=y
+CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y
+CONFIG_SPIRAM_ALLOW_BSS_SEG_EXTERNAL_MEMORY=y
+
+# LVGL: fonts the Iterate UI uses, plus RGB565 to match the panel.
+CONFIG_LV_FONT_MONTSERRAT_14=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_22=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_USE_PERF_MONITOR=n
+
+# LVGL's own pool is internal RAM the Wi-Fi driver needs; this UI is a handful
+# of labels and one button, so 24 KiB is ample.
+CONFIG_LV_MEM_SIZE_KILOBYTES=24
+
+# Screenshots: the takeScreenshot capability renders the active screen into a
+# PSRAM draw buffer of our own (LVGL's pool is far too small for a frame).
+CONFIG_LV_USE_SNAPSHOT=y
+
+# Unused: the display is brought up directly (see waveshare_display.c), not
+# through bsp_display_start(), so the BSP's own buffer sizing does not apply.
+# Kept only to document that queue depth is a MEMORY ceiling, not a
+# throughput floor — Espressif recommends 2-4 for a non-concurrent refresh,
+# and each flush drains before the next command, so only one chunk is ever
+# outstanding. The freeze was never about flush count; it was a per-flush
+# internal DMA bounce allocation failing once Wi-Fi had fragmented that heap.
+
+# The app task is the SOLE consumer of the control inbox and therefore the
+# speaker's producer. It belongs on the NETWORK core, next to Wi-Fi and lwIP,
+# so inbound bytes are decoded where they land; the audio tasks own core 1.
+# Its priority cannot be set here (there is no ESP_MAIN_TASK_PRIORITY symbol
+# — believing otherwise left it at 1 for a long time); app_main raises its
+# own priority instead.
+
+# The I2S EOF ISR must not be deferred by a flash/cache stall; the M5StickS3
+# sets this for the same reason.
+
+# 1ms ticks: pdMS_TO_TICKS(5) rounds to 0 at 100Hz, so the app loop's delay
+# silently became a 10ms tick and halved the inbox drain rate.
+
+# Every console write is duplicated to the USB-Serial-JTAG secondary console,
+# which spins for up to 50ms when a host is attached but not draining.
+
+# Pin lwIP to core 0 so core 1 is genuinely the audio core; unpinned it
+# round-robins against the playback task at the same priority.
+
+# Match what every reference design for this board runs. The defaults left
+# this SoC at half speed on every axis at once: 160MHz CPU, 40MHz PSRAM, DIO
+# flash, a 16KB instruction cache with 32-byte lines — while also executing
+# code out of that same 40MHz PSRAM bus that the audio buffers ride.
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+# PSRAM stays at the board's original 40MHz and flash at DIO. Pushing PSRAM to
+# 80MHz "to match the reference" produced consistent TLS signature-verification
+# failures ("PK verify failed", "Certificate matched but signature verification
+# failed") — the device could not open a connection at all. Marginal memory
+# timing corrupts crypto long before it corrupts anything you can see.
+
+# Keep internal DMA memory available for Wi-Fi and the SPI drivers. The LCD
+# path allocates a full-size internal bounce buffer per flush when its draw
+# buffer is in PSRAM, and exhausting this heap is what fails a flush.
+CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=98304
+
+# 1ms ticks. At the 100Hz default, pdMS_TO_TICKS() of anything under 10ms
+# rounds to ZERO — and vTaskDelay(0) does not block, so a millisecond-scale
+# wait becomes a busy spin. That is not theoretical: the playback task span
+# at priority 9 and starved the idle task until the watchdog fired.
+CONFIG_FREERTOS_HZ=1000
+
+# Both of these had their rationale written into this file and the symbol
+# never added, which read as though the change had been made.
+# The I2S EOF ISR must not be deferred by a flash/cache stall:
+CONFIG_I2S_ISR_IRAM_SAFE=y
+CONFIG_GDMA_ISR_IRAM_SAFE=y
+# lwIP is priority 18 and UNPINNED by default, so it preempts the audio tasks
+# on core 1 at will. Pin it to the network core.
+CONFIG_LWIP_TCPIP_TASK_AFFINITY_CPU0=y
+
+# Hardware watchdog on the app task. Every software self-heal in this firmware
+# runs ON that task, so none of them can fire when it is the thing that is
+# stuck — and a stuck app task means no RPCs are answered at all, which looks
+# exactly like a dead device. FatFs alone can block for 10s (FF_FS_TIMEOUT).
+# The TWDT is the only recovery that does not depend on the fault not having
+# happened.
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=20
+CONFIG_ESP_TASK_WDT_PANIC=y
+
+#
+# The microphone does not fit in a 5760-byte socket.
+#
+# One mic append is ~5.2 KiB of base64, so at the lwIP default a single write
+# very nearly fills the whole TCP send buffer and the NEXT one blocks with
+# EAGAIN ("No more processes" in newlib's wording) until the previous segment
+# is acknowledged — a full round trip per message. The outbox then backs up,
+# discards (measured: 48 messages), and discarding is SESSION-FATAL in this
+# peer: capnweb sees the gap, the session ends, and the turn is lost.
+#
+# That is precisely "I hold the button, speak, and nothing happens": every
+# push-to-talk turn killed the session it was speaking into. Room for six
+# messages in flight instead of one.
+#
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=32768
+CONFIG_LWIP_TCP_WND_DEFAULT=32768
+
+#
+# ...and the receive mailbox has to be sized for that window.
+#
+# The window above was raised for the uplink stall and its counterpart was
+# left at the minimum, 6. IDF's own Kconfig states the rule: the mailbox
+# should be LWIP_TCP_WND_DEFAULT/TCP_MSS + 2, "if the mail box is full, the
+# LWIP drops the packets". For 32768 over a 1440-byte MSS that is 24, so a
+# burst of speaker frames was being dropped BELOW the socket API — invisible
+# to every counter this device has, because a mailbox drop presents only as a
+# retransmission and latency, never as a sequence gap or a receive failure.
+#
+# Espressif's own S3 network preset uses 64; esp-adf's VoIP and RTC examples
+# use 64. 24 is the documented minimum for this window.
+#
+CONFIG_LWIP_TCP_RECVMBOX_SIZE=24
+
+#
+# Recover from a single loss without discarding the burst behind it.
+#
+# At a 32 KiB window and MSS 1440 there can be ~22 segments in flight, so one
+# loss leaves up to 21 out of order. lwIP queued four of them and dropped the
+# rest, and without SACK the far end could not tell which had arrived — so a
+# single lost packet cost a retransmission of everything after it, which on
+# an audio downlink is heard as a hole. Espressif enables SACK in its own
+# low-latency audio configuration; 12 is the Kconfig maximum for the queue.
+#
+CONFIG_LWIP_TCP_SACK_OUT=y
+CONFIG_LWIP_TCP_OOSEQ_MAX_PBUFS=12
+
+# TLS record buffers come from PSRAM, not the internal heap.
+#
+# MBEDTLS_SSL_IN_CONTENT_LEN is 16384, and by the time this device has a
+# WebSocket session up, the largest free INTERNAL block is about 10 KB — so a
+# second TLS connection (fetching an image) failed in mbedtls_ssl_setup with
+# MBEDTLS_ERR_SSL_ALLOC_FAILED (-0x7F00), which surfaces as "unreachable" and
+# looks exactly like a network fault. Measured, not guessed: dmaLargest 10240
+# against a 16384-byte request.
+#
+# These buffers are memcpy'd into by lwip and never touched by DMA, so PSRAM is
+# a safe home for them. This affects the audio WebSocket's TLS as well, which is
+# why the long conversation soak is the check on it.
+CONFIG_MBEDTLS_EXTERNAL_MEM_ALLOC=y

@@ -24,7 +24,7 @@ set(CAPNWEB_SANITIZE ${ITERATE_KIT_SANITIZE} CACHE BOOL "" FORCE)
 FetchContent_Declare(
   capnweb_c
   GIT_REPOSITORY https://github.com/iterate/capnweb.git
-  GIT_TAG 275830e6593ca8212432b108efdaee4a1b50541d
+  GIT_TAG aee32b391063c4f5baf0aec852f38851eeeed1d9
   GIT_SHALLOW FALSE
   SOURCE_SUBDIR c)
 FetchContent_MakeAvailable(capnweb_c)
@@ -32,6 +32,7 @@ FetchContent_MakeAvailable(capnweb_c)
 add_subdirectory(components/core)
 add_subdirectory(components/audio)
 add_subdirectory(components/capabilities)
+add_subdirectory(components/avatar)
 
 if(APPLE)
   add_subdirectory(platforms/darwin)

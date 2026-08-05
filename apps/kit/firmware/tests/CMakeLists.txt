@@ -73,6 +73,47 @@ target_link_libraries(
   iterate-kit-push-to-talk-test PRIVATE iterate-kit-capabilities)
 add_test(NAME iterate-kit-push-to-talk-test COMMAND iterate-kit-push-to-talk-test)
 
+function(iterate_kit_add_avatar_test NAME SOURCE)
+  add_executable(${NAME} ${SOURCE})
+  target_compile_features(${NAME} PRIVATE c_std_99)
+  target_compile_options(${NAME} PRIVATE
+    -UNDEBUG
+    -Wall
+    -Wextra
+    -Werror
+    -Wpedantic)
+  target_link_libraries(${NAME} PRIVATE iterate-kit-avatar)
+  add_test(NAME ${NAME} COMMAND ${NAME})
+endfunction()
+
+iterate_kit_add_avatar_test(
+  iterate-kit-face-animator-test
+  ../components/avatar/tests/face_animator_test.c)
+iterate_kit_add_avatar_test(
+  iterate-kit-face-avatar-registry-test
+  ../components/avatar/tests/face_avatar_registry_test.c)
+iterate_kit_add_avatar_test(
+  iterate-kit-face-doze-test
+  ../components/avatar/tests/face_doze_test.c)
+iterate_kit_add_avatar_test(
+  iterate-kit-face-keyframe-test
+  ../components/avatar/tests/face_keyframe_test.c)
+iterate_kit_add_avatar_test(
+  iterate-kit-face-performance-test
+  ../components/avatar/tests/face_performance_test.c)
+iterate_kit_add_avatar_test(
+  iterate-kit-face-scale-test
+  ../components/avatar/tests/face_scale_test.c)
+iterate_kit_add_avatar_test(
+  iterate-kit-face-sprite-sheet-test
+  ../components/avatar/tests/face_sprite_sheet_test.c)
+iterate_kit_add_avatar_test(
+  iterate-kit-face-stage-test
+  ../components/avatar/tests/face_stage_test.c)
+iterate_kit_add_avatar_test(
+  iterate-kit-face-viseme-queue-test
+  ../components/avatar/tests/face_viseme_queue_test.c)
+
 if(APPLE)
   function(iterate_kit_add_cli_test NAME)
     add_executable(${NAME} ${ARGN})

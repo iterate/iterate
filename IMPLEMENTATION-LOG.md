@@ -604,3 +604,45 @@ the remaining wording-only cleanup deferred.
 access remains blocked by the explicit Waveshare denylist; do not open or flash
 that serial device without new authorization. The preservation archive's
 remote-upload confirmation remains pending.
+
+## 2026-08-05 — phase 3: Waveshare structural port
+
+**Did:** Advanced the firmware's exact Cap'n Web pin to the upstream
+ESP-IDF-component commit `aee32b391063c4f5baf0aec852f38851eeeed1d9`, imported
+the shared avatar unchanged, and added the ESP-IDF configuration and one-socket
+`/api` transport platform. Ported the Waveshare reference target into a thin
+`main`, a board composition root, and five hardware/UI adapters. Deleted its
+menu, touch, image, screenshot, recorder, SD-card, remote-style, and tool RPC
+paths. The remaining device uses the same ephemeral stream events as the Mac.
+
+Made the two Phase 2 seams real on hardware. Dedicated priority audio tasks are
+the only callers of blocking `esp_codec_dev_read`/`write`; the public codec seam
+copies complete 20 ms frames through depth-one mailboxes without waiting. The
+composition root validates its 16 kHz/320-sample passthrough processor and fails
+closed on processing errors. Capture overwrite, codec-driver failure, and
+playback-admission failure paths are explicit telemetry. Preserved the
+load-bearing abandon order and absolute DMA-empty deadline. Documented, without
+changing, the known-wrong ES8311 gain and PA-voltage settings.
+
+**Measured:** The host ASan/UBSan suite passed 46/46 in 1.95 s. A native ESP-IDF
+5.4.2 ESP32-S3 build passed with `-Wall -Wextra -Werror`; its application binary
+is `0x154e30` bytes and leaves `0x2ab1d0` bytes (67%) of the smallest app
+partition free. The I2S geometry is derived from Espressif's documented formula:
+six 240-frame descriptors at 16 kHz are 480 bytes each, interrupt every 15 ms,
+and hold 90 ms total. No device was opened or flashed.
+
+**Surprised by:** Importing every source named by the old target first produced
+9,735 lines of board code. The voice endpoint actually needs five adapters; the
+rest was product archaeology. The second structural surprise was that putting
+blocking codec calls directly behind a function-shaped seam still violated its
+contract. Making ownership literal required two small hardware tasks rather
+than a comment around the old calls.
+
+**Reviewer said:** Pending the mandatory fresh Phase 3 review of the frozen git
+range. → **did:** Pending.
+
+**Open:** Hardware exit evidence cannot be collected: the connected-device
+inventory explicitly marks the Waveshare unit inventory-only and says never to
+flash it. Keep that safety constraint visible rather than claiming the target's
+compile proof is acoustic proof. The preservation archive's remote-upload
+confirmation also remains pending.
