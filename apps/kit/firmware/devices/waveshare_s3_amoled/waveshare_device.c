@@ -715,9 +715,9 @@ static void on_viseme(
  * FreeRTOS; a frame already copied into the consumer is rejected by generation.
  */
 static uint32_t abandon_speaker_audio(void) {
-  const uint32_t bytes = speaker_queued_bytes();
   waveshare_audio_dma_watch(false);
   waveshare_audio_note_flush();
+  const uint32_t bytes = speaker_queued_bytes();
   (void)atomic_fetch_add_explicit(
       &runtime.speaker_generation, 1U, memory_order_acq_rel);
   (void)xQueueReset(runtime.speaker_queue);
@@ -741,9 +741,7 @@ static void on_control(
   if (control == ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED) {
     /* With manual turns this only fires if something re-enables VAD, but
      * flushing playback on it is still the right response. */
-    /* Barge-in: tell the playback task to skip everything queued so far.
-     * The buffer itself is only reset by its reader; a racing writer would
-     * corrupt it. */
+    /* Barge-in: atomically invalidate and reset every queued frame. */
     /* Ordering-safe: the watch comes off before the audio does. */
     (void)abandon_speaker_audio();
     /*
