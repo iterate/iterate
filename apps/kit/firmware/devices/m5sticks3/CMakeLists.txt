@@ -7,6 +7,7 @@ idf_component_register(
   PRIV_INCLUDE_DIRS .
   REQUIRES
     audio
+    avatar
     capnweb
     capabilities
     core

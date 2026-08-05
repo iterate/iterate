@@ -51,6 +51,17 @@ void m5sticks3_ui_request_call(bool wanted);
 bool m5sticks3_ui_call_requested(void);
 
 /** Throttled repaint of whatever changed; call from the app loop only. */
+/**
+ * Frames of the avatar actually pushed to the panel, and renders refused.
+ *
+ * A face is the one part of this device a person judges by eye, which makes it
+ * the easiest thing to believe is working when it is not — so it gets a number
+ * like everything else. Zero while the device is up means no face is being
+ * drawn, whatever the screen appears to show.
+ */
+uint32_t m5sticks3_board_face_frames(void);
+uint32_t m5sticks3_board_face_failures(void);
+
 void m5sticks3_ui_tick(void);
 
 #ifdef __cplusplus

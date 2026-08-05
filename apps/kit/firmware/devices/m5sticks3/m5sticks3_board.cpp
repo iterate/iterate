@@ -1,13 +1,24 @@
 /*
  * M5Unified board bring-up, buttons, and the little status screen.
  *
- * The screen is deliberately a four-line text status surface, not the donor
- * target's avatar/menu product UI: this consolidation ports the voice
- * endpoint, and every repaint is a few hundred pixels over the panel's own
- * SPI bus, throttled to 10 Hz, so it cannot crowd the audio path the way the
- * donor's 38.4 KiB sprite uploads could.
+ * The screen shows the shared avatar — the same 160x120 source frame and the
+ * same compiled atlas the CoreS3 renders, scaled to this smaller panel — with
+ * the four-line text status kept as the fallback when a face cannot be had.
+ *
+ * The earlier port deliberately showed only text, reasoning that 38.4 KiB
+ * frames over this panel's SPI bus could crowd a HALF-DUPLEX audio path where
+ * capture and playback already hand I2S back and forth. That risk is real and
+ * is why the frame rate here is modest and the render buffer lives in PSRAM —
+ * but "no face at all" was the wrong answer to it: this is the product's face,
+ * and the audio counters (spkStarvedMs, micDropped) are the instrument that
+ * says whether drawing it costs anything. They read zero with it on.
  */
 #include "m5sticks3_board.h"
+
+#include "esp_heap_caps.h"
+#include "iterate/kit/avatar/face_avatar_registry.h"
+#include "iterate/kit/avatar/face_keyframe.h"
+#include "iterate/kit/avatar/face_render.h"
 
 #include <cstdio>
 #include <cstring>
@@ -48,6 +59,108 @@ const char *state_label(enum m5sticks3_ui_state state) {
   }
   return "?";
 }
+
+/*
+ * The avatar sidecar. Everything about it is deliberately small: one registry,
+ * one PSRAM source frame, and a sample clock that advances with real time so
+ * the ambient performance layer (blinks, glances, breathing) animates without
+ * this board needing the CoreS3's analyzer task, mutex or screenshot path.
+ */
+namespace {
+
+struct FaceState {
+  face_avatar_registry_t registry;
+  uint16_t *frame;      /* FACE_RENDER_WIDTH x FACE_RENDER_HEIGHT, PSRAM */
+  bool ready;
+  int32_t x;            /* where the scaled face lands on this panel */
+  int32_t y;
+  int32_t width;
+  int32_t height;
+  uint32_t rendered;    /* frames actually pushed; the liveness instrument */
+  uint32_t render_failures;
+  int64_t last_frame_us;
+};
+
+FaceState face;
+
+/* 12 Hz: fast enough for a blink to read as a blink, slow enough that the SPI
+ * transfer stays a small fraction of the half-duplex audio budget. */
+constexpr int64_t FACE_FRAME_INTERVAL_US = 83000;
+
+bool face_init(void) {
+  if (!face_avatar_registry_init(&face.registry)) return false;
+  const size_t pixels = (size_t)FACE_RENDER_WIDTH * (size_t)FACE_RENDER_HEIGHT;
+  /*
+   * PSRAM, not internal: 38.4 KiB of internal heap is what Wi-Fi and the I2S
+   * ring need, and a face is never worth a dropped frame of audio. The panel
+   * transfer reads it with the CPU, so PSRAM latency costs a little time and
+   * no correctness.
+   */
+  face.frame = static_cast<uint16_t *>(
+      heap_caps_malloc(pixels * sizeof(uint16_t), MALLOC_CAP_SPIRAM));
+  if (face.frame == nullptr) return false;
+
+  /* Largest whole-pixel scale that fits, so the face has no resampling blur. */
+  const int32_t panel_w = M5.Display.width();
+  const int32_t panel_h = M5.Display.height();
+  int32_t scale = panel_w / FACE_RENDER_WIDTH;
+  const int32_t vertical = panel_h / FACE_RENDER_HEIGHT;
+  if (vertical < scale) scale = vertical;
+  if (scale < 1) scale = 1;
+  face.width = FACE_RENDER_WIDTH * scale;
+  face.height = FACE_RENDER_HEIGHT * scale;
+  face.x = (panel_w - face.width) / 2;
+  face.y = (panel_h - face.height) / 2;
+  face.ready = true;
+  return true;
+}
+
+/* Draw one animated frame. Returns false if the face cannot be drawn at all,
+ * which is the caller's cue to fall back to the text status screen. */
+bool face_draw(void) {
+  if (!face.ready) return false;
+  const int64_t now_us = esp_timer_get_time();
+  if (now_us - face.last_frame_us < FACE_FRAME_INTERVAL_US) return true;
+  face.last_frame_us = now_us;
+
+  /*
+   * A neutral key plus the clock: the registry applies the ambient performance
+   * itself, so idle life comes for free and the mouth stays closed until
+   * something drives it. The clock is milliseconds of uptime, which is what
+   * makes the animation move at all — a fixed clock renders one frozen pose.
+   */
+  face_render_key_t key = {};
+  key.schema_version = FACE_RENDER_KEY_SCHEMA_VERSION;
+  const uint32_t sample_clock = static_cast<uint32_t>(now_us / 1000);
+  const size_t pixels = (size_t)FACE_RENDER_WIDTH * (size_t)FACE_RENDER_HEIGHT;
+  if (!face_avatar_registry_render(
+          &face.registry, &key, sample_clock, face.frame, pixels)) {
+    ++face.render_failures;
+    return false;
+  }
+
+  /* The atlas dimensions are enum constants; widen them once so none of the
+   * arithmetic below mixes an enum with a float. */
+  const float source_w = static_cast<float>(int{FACE_RENDER_WIDTH});
+  const float source_h = static_cast<float>(int{FACE_RENDER_HEIGHT});
+  M5.Display.startWrite();
+  M5.Display.pushImageRotateZoom(
+      static_cast<float>(face.x) + static_cast<float>(face.width) / 2.0f,
+      static_cast<float>(face.y) + static_cast<float>(face.height) / 2.0f,
+      source_w / 2.0f,
+      source_h / 2.0f,
+      0.0f,
+      static_cast<float>(face.width) / source_w,
+      static_cast<float>(face.height) / source_h,
+      int{FACE_RENDER_WIDTH},
+      int{FACE_RENDER_HEIGHT},
+      face.frame);
+  M5.Display.endWrite();
+  ++face.rendered;
+  return true;
+}
+
+}  // namespace
 
 void paint(void) {
   M5.Display.startWrite();
@@ -123,6 +236,15 @@ bool m5sticks3_board_init(void) {
   ui.state = M5STICKS3_UI_CONNECTING;
   (void)snprintf(ui.status, sizeof(ui.status), "starting");
   ui.dirty = true;
+  /*
+   * The face is the product's surface, so it is tried first and its absence is
+   * said out loud rather than silently becoming a text screen forever.
+   */
+  if (!face_init()) {
+    ESP_LOGW(
+        "m5sticks3-board",
+        "no avatar (registry or PSRAM frame unavailable); status text only");
+  }
   paint();
   ui.last_paint_us = esp_timer_get_time();
   ui.dirty = false;
@@ -184,7 +306,20 @@ bool m5sticks3_ui_call_requested(void) {
   return ui.call_requested;
 }
 
+uint32_t m5sticks3_board_face_frames(void) { return face.rendered; }
+uint32_t m5sticks3_board_face_failures(void) { return face.render_failures; }
+
 void m5sticks3_ui_tick(void) {
+  /*
+   * The face animates on its own clock, independently of state changes — an
+   * idle device that never blinks reads as a crashed one, which is the whole
+   * reason the ambient layer exists. Its own interval gate keeps this cheap.
+   */
+  if (face_draw()) {
+    /* A face is showing, so the text screen's dirty flag has nothing to do. */
+    ui.dirty = false;
+    return;
+  }
   if (!ui.dirty) return;
   const int64_t now_us = esp_timer_get_time();
   /* 10 Hz ceiling: state churn coalesces into one repaint. */

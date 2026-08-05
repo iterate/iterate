@@ -1036,6 +1036,9 @@ static size_t health_json(char *out, size_t capacity) {
     {"frameFailures", runtime.voicelab.frame_send_failures},
     {"micCaptured", runtime.mic_frames_captured},
     {"micDropped", runtime.mic_frames_dropped},
+    /* The face, counted rather than eyeballed. */
+    {"faceFrames", m5sticks3_board_face_frames()},
+    {"faceFailures", m5sticks3_board_face_failures()},
     {"micProcessFailures", runtime.mic_process_failures},
     {"codecCaptureOverruns", m5sticks3_audio_capture_overruns()},
     {"codecCaptureFailures", m5sticks3_audio_capture_driver_failures()},
