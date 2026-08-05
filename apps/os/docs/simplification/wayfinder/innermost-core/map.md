@@ -441,25 +441,27 @@ substrate: 4 spikes in `spikes/` (pipelining, fallthrough, wake, fused-1000-devi
   modules directly — the "write code the same way inner and outer" ideal (D26) achieved WITHOUT a package
   boundary. (Implemented as `apps/project-worker` across increments 1–11.) Resolves target-core §8 open Q #1.
 - **D35 — Stateful dynamic workers = a DEDICATED runner DO (apps/os `StatefulWorkerDurableObject`), NOT a facet
-  of the host; facet RPC is tunneled over `fetch`. (proven, increment 14, 2026-08-04.)** The clean room mirrors
-  apps/os's stateless/stateful `DynamicWorkerRef` split: **stateless** = a repo fn loaded per call (the `code`
-  mount, content-addressed, no identity); **stateful** = a repo `DurableObject` class run by a **dedicated
-  runner DO** (one instance per stateful capability, named `{projectId}::{path}::{callPath}`, hosting the class
-  as a facet `"target"` with its own isolated SQLite, abort+recreate on source change). The capability host just
-  forwards by name — a stateful worker is its own durable actor (identity/storage/lifecycle), so it gets its own
-  DO, not a facet crammed into the per-context host. **(First cut wrongly made it a facet of the host DO — Jonas
-  corrected this.)** **Facet-method RPC — VERIFIED against apps/os prod, NOT a fundamental limit.** apps/os calls
-  facet methods natively (`replayPath`), and that **works on prod** (verified via `itx run` against a stateful
-  worker on os.iterate.com: `ping(2)→{pong:20}`) — **no apps/os bug.** But the same native call throws _"facet
-  stubs cannot be transferred between Workers"_ on OUR POC deployment, reproduced at every DO depth after
-  matching apps/os on architecture, compat date+flags (loaded+supervisor), env (loopback ITX), globalOutbound
-  (loopback), native+await, default WorkerEntrypoint, transport (HTTP+capnweb), caller topology, and bundling.
-  Facets work here (the fetch lane does), so it's specifically facet-**method**-stub transfer — **leading
-  hypothesis: an account-level Worker-Loader entitlement (POC account vs iterate prod), unconfirmed.** So for now
-  the runner reaches its facet over `/__itx_rpc` fetch (`__HostedActor` wrapper), materialises the JSON, and
-  returns plain data (host↔runner hop carries no facet stub). WS/streaming lane = `/facet` → runner → the user
-  class's own `fetch`. Retry native once the delta is understood. (Deferred: a facet reaching BACK into its host
-  via `itx`; facet alarms — workerd#6810.)
+  of the host; facet method RPC is NATIVE (`replayPath`), like apps/os — no fetch tunnel. (proven, increment 14,
+  native 2026-08-05.)** The clean room mirrors apps/os's stateless/stateful `DynamicWorkerRef` split:
+  **stateless** = a repo fn loaded per call (the `code` mount, content-addressed, no identity); **stateful** = a
+  repo `DurableObject` class run by a **dedicated runner DO** (one instance per stateful capability, named
+  `{projectId}::{path}::{callPath}`, hosting the user's class DIRECTLY as a facet `"target"` with its own
+  isolated SQLite, abort+recreate on source change). The host forwards by name — a stateful worker is its own
+  durable actor, so it gets its own DO, not a facet crammed into the per-context host. **(First cut wrongly made
+  it a facet of the host DO — Jonas corrected this.)** **Facet-method RPC works natively; the earlier _"facet
+  stubs cannot be transferred between Workers"_ (`DataCloneError`) was OUR bug, not an account/entitlement issue
+  (same account `04b3` = apps/os prod).** Cause: we invoked via `facet[method].apply(facet, args)` — reading
+  `.apply` off an RPC stub's method proxy is a capnweb pipelined remote path that serializes the facet stub,
+  which a dynamically-loaded facet stub may never do (workerd `requireAllowsTransfer()` throws unconditionally
+  for dynamic entrypoints). Fix = apps/os's `replayPath` exactly: `Reflect.apply(Reflect.get(facet, m), facet,
+args)` — invokes `[[Call]]` directly, runs inside the owning DO, returns plain data, never serializes the
+  stub. Binary-verified on one deployment: `fn.apply`→`NATIVE_FAIL`, `Reflect.apply`→`NATIVE_OK`. The
+  `__HostedActor`/`/__itx_rpc` wrapper is deleted; WS/streaming lane = `/facet` → runner → the user class's own
+  `fetch` (a Response passes by value). Loader cacheKey now folds in `CF_VERSION_METADATA.id` (`version_metadata`
+  binding), mirroring apps/os so a redeploy mints a fresh loaded isolate (prevents a stale-isolate transfer
+  error across rollouts — a real latent bug, not the native cause). Writeup:
+  `apps/project-worker/FACET-RPC-INVESTIGATION.md`. (Deferred: a facet reaching BACK into its host via `itx`;
+  facet alarms — workerd#6810.)
 - **D14 — Cost/billing is USERSPACE, not a control-plane primitive.** Budgets/spend limits are a key PRODUCT
   concern but implemented in userspace: a **stream processor that consumes cost-bearing events** across
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core

@@ -127,7 +127,7 @@ function resolveFallback(ctx: unknown, env: Env, cfg: AppConfig): Fetcher {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "stateful-runner-2";
+const CODE_VERSION = "native-clean-2";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {

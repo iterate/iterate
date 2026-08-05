@@ -9,6 +9,13 @@
   // The Worker Loader that runs each project's confined config worker / agents.
   "worker_loaders": [{ "binding": "LOADER" }],
 
+  // Deploy identity. Loader isolates are cached ACROSS deployments, but a DO is durable and
+  // survives redeploys — so a facet built from an isolate minted by a PRIOR deployment can't be
+  // called from the new parent ("Durable Object Facet stubs cannot be transferred between Workers").
+  // apps/os folds workerVersion(env)=CF_VERSION_METADATA.id into its loader cacheKey to prevent
+  // exactly this; the clean room mirrors that (see stateful-worker-durable-object.ts #facet).
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+
   // The capability-host DO (target-core §4.1). One instance per {projectId, path}, addressed by name.
   "durable_objects": {
     "bindings": [

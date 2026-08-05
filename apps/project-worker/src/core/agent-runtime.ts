@@ -40,36 +40,6 @@ export default {
 };
 `;
 
-// The STATEFUL dynamic-worker wrapper, loaded BY the StatefulWorkerDurableObject runner. The repo file `cap.js`
-// exports a `DurableObject` subclass named `className`; this wraps it in `__HostedActor extends <className>` and
-// runs THAT as the facet, so the runner can reach it.
-//
-// Why a fetch wrapper and not native RPC: a stub to a Worker-Loader facet is NON-TRANSFERABLE across the Worker
-// boundary (workerd: "Entrypoints to dynamically-loaded workers cannot be transferred to other Workers … have
-// the parent Worker … forward to it") — a custom facet-METHOD result gets pipelined and hands the caller a
-// facet-stub reference → throws (verified on deployed workerd 1.20260701.1, at ANY DO depth). `facet.fetch()`
-// works (a Response passes BY VALUE). So the runner reaches its facet's methods over `/__itx_rpc`, materialises
-// the JSON, and returns plain data to the host. Any other path falls through to the user class's own `fetch`.
-export function statefulDoRunner(className: string): string {
-  const c = JSON.stringify(className);
-  return /* js */ `
-import * as __user from "./cap.js";
-const __Base = __user[${c}];
-if (typeof __Base !== "function") throw new Error("stateful worker does not export class " + ${c});
-const __userOwnsFetch = Object.prototype.hasOwnProperty.call(__Base.prototype, "fetch");
-export class __HostedActor extends __Base {
-  async fetch(request) {
-    if (new URL(request.url).pathname === "/__itx_rpc") {
-      const { method, args } = await request.json();
-      const fn = this[method];
-      if (typeof fn !== "function")
-        return Response.json({ __itx_err: 'no method "' + method + '"' }, { status: 404 });
-      const result = await fn.apply(this, args || []);
-      return Response.json({ __itx_ok: true, result: result === undefined ? null : result });
-    }
-    if (__userOwnsFetch) return super.fetch(request); // the user class's own fetch (WS/streaming lane)
-    return new Response("stateful worker: no fetch handler\\n", { status: 404 });
-  }
-}
-`;
-}
+// (The STATEFUL dynamic-worker wrapper `statefulDoRunner` was removed: with native facet RPC
+// (Reflect.apply in StatefulWorkerDurableObject.invokeCapability), the runner loads the user's
+// `DurableObject` class DIRECTLY and calls its methods — no `__HostedActor` fetch-tunnel wrapper.)

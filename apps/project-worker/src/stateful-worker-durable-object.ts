@@ -1,21 +1,22 @@
 // The StatefulWorkerDurableObject — a dedicated "durable object runner" for stateful dynamic workers (mirrors
 // apps/os's StatefulWorkerDurableObject + DynamicWorkerRunner). ONE instance per stateful capability, named
-// `{projectId}::{path}::{callPath}`, each hosting the user's `DurableObject` class as a single facet "target"
-// with its OWN isolated SQLite. The capability host reaches it by NAME (a namespace binding) and forwards.
+// `{projectId}::{path}::{callPath}`, each hosting the user's `DurableObject` class DIRECTLY as a single facet
+// "target" with its OWN isolated SQLite. The capability host reaches it by NAME (a namespace binding).
 //
-// Facet RPC is TUNNELED over fetch here, not native. apps/os calls the facet's methods NATIVELY (replayPath =
-// `await facet.method()`) and that WORKS on apps/os PROD (verified: a plain-DO stateful worker's method returned
-// a value on os.iterate.com). But the SAME native call throws "Durable Object Facet stubs cannot be transferred
-// between Workers" on THIS deployment — reproduced at every DO depth (host→facet AND host→runner→facet) after
-// matching apps/os on architecture, compat date+flags, env (incl. a loopback ITX), globalOutbound (loopback),
-// native+await, a default WorkerEntrypoint, transport (HTTP AND capnweb), and bundling. Facets themselves work
-// here (this fetch lane does), so it is specifically facet-METHOD-stub transfer that differs — most likely an
-// account-level Worker-Loader entitlement on the POC account vs iterate prod (unconfirmed). `facet.fetch()`
-// passes a Response BY VALUE and works everywhere, so the runner reaches its facet's methods over `/__itx_rpc`,
-// materialises the JSON, and returns PLAIN DATA to the host. TODO: retry native once the delta is understood.
+// Facet method calls are NATIVE (`replayPath` = `await facet.method(args)`), exactly like apps/os — no fetch
+// tunnel. Two things make native work; both are apps/os patterns we now mirror:
+//   1. Invoke with `Reflect.apply(handler, facet, args)`, NOT `facet[method].apply(facet, args)`. The latter
+//      reads `.apply` off the RPC stub's method proxy (capnweb treats it as a pipelined remote path) and passes
+//      the facet stub as an argument, so workerd serializes the stub → DataCloneError "Durable Object Facet
+//      stubs cannot be transferred between Workers". A dynamically-loaded facet stub may NEVER be serialized as
+//      an RPC value (workerd `requireAllowsTransfer()` throws unconditionally for dynamic entrypoints); a method
+//      call executed HERE, in the owning DO, returns plain data and never serializes the stub.
+//   2. Deploy-scoped loader cacheKey (see #facet): loader isolates are cached across deployments but this DO is
+//      durable, so a facet built from a prior deployment's isolate is cross-Worker to the new parent — and thus
+//      un-transferable. Folding CF_VERSION_METADATA.id into the key mints a fresh isolate each rollout.
+// The `fetch` lane (WS/streaming, where a 101 can't ride RPC) forwards to the facet's own `fetch`.
 
 import { DurableObject } from "cloudflare:workers";
-import { statefulDoRunner } from "./core/agent-runtime.ts";
 
 const FACET_NAME = "target";
 const VERSION_KEY = "stateful:version";
@@ -23,6 +24,10 @@ const VERSION_KEY = "stateful:version";
 interface Env {
   LOADER: WorkerLoader;
   ITX_KV?: KVNamespace; // the repo store (project-prefixed) this runner reads its source from
+  // Deploy identity (wrangler `version_metadata`). Folded into the loader cacheKey so a redeploy
+  // mints a FRESH loaded isolate — a facet built from a prior deployment's isolate cannot be
+  // called from the new parent. Mirrors apps/os workerVersion(env). Absent locally → "unversioned".
+  CF_VERSION_METADATA?: { id: string; tag?: string };
 }
 
 /** djb2 — a stable content hash so the loader cache key + facet version change when the source changes. */
@@ -54,17 +59,24 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     return source;
   }
 
-  /** Construct (or restart on a source change) the facet hosting the user's `className` (wrapped in the
-   *  `__HostedActor` fetch-dispatcher), keeping its storage across restarts. */
+  /** Construct (or restart on a source change) the facet hosting the user's `className`, keeping its storage
+   *  across restarts. The user source is loaded DIRECTLY (no host wrapper) — the class it exports IS the facet. */
   #facet(source: string, className: string): Fetcher {
     const version = hashSource(source);
-    const worker = this.env.LOADER.get(`stateful:${this.ctx.id.name}:${version}`, () => ({
-      compatibilityDate: "2026-07-01",
-      mainModule: "run.js",
-      modules: { "run.js": statefulDoRunner(className), "cap.js": source },
-      env: {},
-    }));
-    const klass = worker.getDurableObjectClass("__HostedActor");
+    // Deploy version FIRST in the key: loader isolates persist across deployments but this DO does
+    // not, so without it a redeploy leaves the runner pointing at a stale (prior-deployment) isolate
+    // whose facet stubs "cannot be transferred between Workers". Mirrors apps/os's loader cacheKey.
+    const deployVersion = this.env.CF_VERSION_METADATA?.id ?? "unversioned";
+    const worker = this.env.LOADER.get(
+      `stateful:${deployVersion}:${this.ctx.id.name}:${version}`,
+      () => ({
+        compatibilityDate: "2026-07-01",
+        mainModule: "cap.js",
+        modules: { "cap.js": source },
+        env: {},
+      }),
+    );
+    const klass = worker.getDurableObjectClass(className);
     if (!klass) throw new Error(`stateful worker does not export class "${className}"`);
     // Abort + recreate the facet on a source change (same storage) — apps/os's version-marker pattern.
     const prev = this.ctx.storage.kv.get<string>(VERSION_KEY);
@@ -73,24 +85,15 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
     return this.ctx.facets.get(FACET_NAME, () => ({ class: klass })) as unknown as Fetcher;
   }
 
-  /** RPC lane: construct/restart the facet, tunnel the method call over its `/__itx_rpc` fetch, and return the
-   *  materialised result BY VALUE to the host. */
+  /** RPC lane: resolve/restart the facet and call the method NATIVELY on it (apps/os `replayPath`). The awaited
+   *  result is plain data, so the facet stub never crosses back to the host. See the file header for why this
+   *  must be `Reflect.apply` and not `facet[method].apply(...)`. */
   async invokeCapability(input: StatefulInvoke): Promise<unknown> {
     const facet = this.#facet(await this.#source(input.module), input.className);
-    const resp = await facet.fetch(
-      new Request("https://facet.local/__itx_rpc", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ method: input.method, args: input.args }),
-      }),
-    );
-    const body = (await resp.json()) as {
-      __itx_ok?: boolean;
-      result?: unknown;
-      __itx_err?: string;
-    };
-    if (body.__itx_err) throw new Error(`stateful worker: ${body.__itx_err}`);
-    return body.result;
+    const handler = Reflect.get(facet as object, input.method);
+    if (typeof handler !== "function")
+      throw new Error(`stateful worker: "${input.className}" has no method "${input.method}"`);
+    return await Reflect.apply(handler, facet, input.args ?? []);
   }
 
   /** WS/streaming lane: forward the request to the facet's own `fetch`. The module + class ride in headers set

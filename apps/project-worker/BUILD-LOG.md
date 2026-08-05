@@ -234,28 +234,29 @@ half and proves both.
     it a facet of `ItxDurableObject`): a stateful worker is its own durable actor (identity, storage,
     lifecycle), so it deserves its own DO; the host shouldn't accumulate N facets; and it's workerd's prescribed
     "parent … constructs the dynamic worker and forwards to it" shape.
-- **The facet-method-RPC transport (VERIFIED against apps/os prod).** apps/os calls the facet's methods
-  **natively** (`replayPath` = `await facet.method()`). I initially concluded that was fundamentally broken on
-  deployed workerd — **that was wrong.** I verified against **prod apps/os** (`itx run --context` a stateful
-  worker on os.iterate.com): a plain-`DurableObject` method returned a value (`ping(2) → {pong:20}`,
-  `bump(5)→5`). **So native facet-method RPC works on apps/os prod — no apps/os bug.** But the SAME native call
-  throws _"Durable Object Facet stubs cannot be transferred between Workers"_ on THIS deployment, reproduced at
-  every DO depth (host→facet AND host→runner→facet) after matching apps/os on: architecture, compat date+flags
-  (loaded + supervisor), env (incl. a loopback `ITX`), `globalOutbound` (loopback), native+`await`, a default
-  `WorkerEntrypoint`, transport (HTTP AND capnweb), caller topology (via host AND direct entry→runner), and
-  bundling (esbuild). Facets themselves work here (the fetch lane does), so it is specifically facet-**method**-
-  stub transfer that differs — **leading hypothesis: an account-level Worker-Loader entitlement on the POC
-  account `04b3…` vs the iterate prod account** (unconfirmed). **So for now the runner reaches its facet over
-  `fetch`:** a `__HostedActor` wrapper adds a `/__itx_rpc` dispatch; the runner POSTs `{method,args}`,
-  materialises the JSON, and returns plain data to the host (host↔runner hop carries no facet stub). WS/streaming
-  lane = `/facet` → runner → the user class's own `fetch`. The user writes normal methods. Retry native once the
-  delta is understood.
-- **Proven** (deployed `project-worker`, fresh `prj_facet_o`): a `Counter extends DurableObject` (SQLite) →
-  `itx.counter.increment(2/3/5)` → **2, 5, 10** (RPC lane through the runner DO); `GET /facet` →
+- **The facet-method-RPC transport is NATIVE (`replayPath`, like apps/os) — no fetch tunnel.** The runner
+  loads the user's `DurableObject` class DIRECTLY (`getDurableObjectClass(className)` → `ctx.facets.get`) and
+  calls its methods with `Reflect.apply(Reflect.get(facet, method), facet, args)`. **Root cause of the earlier
+  _"Durable Object Facet stubs cannot be transferred between Workers"_ failure (`DataCloneError`): the clean
+  room invoked via `facet[method].apply(facet, args)`.** Reading `.apply` off an RPC stub's method proxy is a
+  capnweb _pipelined remote path_, and passing the facet stub as an arg makes workerd serialize it — which a
+  dynamically-loaded facet stub may never do (`requireAllowsTransfer()` throws unconditionally for dynamic
+  entrypoints; workerd `server.c++` `throwDynamicEntrypointTransferError`). `Reflect.apply` invokes `[[Call]]`
+  directly and never serializes the stub; the call runs INSIDE the owning DO and returns plain data. The prior
+  "account-level entitlement" hypothesis was **WRONG** — same account (`04b3` = apps/os prod), the bug was the
+  `.apply`-on-stub idiom in our own code. Binary-verified on the SAME deployment: `fn.apply` → `NATIVE_FAIL
+DataCloneError`; `Reflect.apply` → `NATIVE_OK`. (The `__HostedActor`/`statefulDoRunner` fetch-tunnel wrapper
+  is deleted.) WS/streaming lane unchanged = `/facet` → runner → the user class's own `fetch` (a `Response`
+  passes by value). **Also:** loader cacheKey now folds in `CF_VERSION_METADATA.id` (`version_metadata`
+  binding), mirroring apps/os so a redeploy mints a fresh loaded isolate — prevents a stale-isolate transfer
+  error across rollouts (a real latent bug, not the native cause).
+- **Proven** (deployed `project-worker`, native-only): a `Counter extends DurableObject` (SQLite) →
+  `itx.counter.increment(2/3/5)` → **2, 5, 10** (NATIVE RPC lane through the runner DO); `GET /facet` →
   `{value:10, via:"facet-fetch-lane"}` (fetch lane, same storage); put a **v2** source → `itx.counter.value`
   **STILL 10** (facet aborted+recreated, SQLite survived) and the new `itx.counter.hello()` →
-  `"hello from counter v2, value=10"`; and the stateless pair `itx.greet("world")` still returns its repo-fn
-  result.
+  `"hello from counter v2, value=10"`; native **survives a parent redeploy** on the same ctx (value 10 →
+  `increment(5)` → 15); and the stateless pair `itx.greet("world")` still returns its repo-fn result.
+  Full writeup: `apps/project-worker/FACET-RPC-INVESTIGATION.md`.
 - **Deferred:** a facet reaching BACK into its host via `itx`; alarms for facets (workerd#6810 — apps/os keeps
   them on the outer DO); the runner reads its source from the repo KV, so `list`-style eventual consistency
   doesn't bite (get is immediate). Added a `/version` smoke marker (workers.dev propagation lags ~1-2min;
