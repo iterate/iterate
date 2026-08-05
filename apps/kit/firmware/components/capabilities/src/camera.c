@@ -24,6 +24,14 @@ static void release_frame(struct iterate_kit_camera *camera) {
   camera->has_frame = false;
 }
 
+bool iterate_kit_camera_chunk_index_is_valid(size_t length, int64_t index) {
+  if (index < 0 || length == 0U) return false;
+  /* Widened on both sides so the comparison itself cannot wrap. */
+  return (uint64_t)index <
+      ((uint64_t)length + (uint64_t)ITERATE_KIT_CAMERA_CHUNK_BYTES - 1U) /
+          (uint64_t)ITERATE_KIT_CAMERA_CHUNK_BYTES;
+}
+
 static size_t chunk_count(size_t length) {
   return (length + (size_t)ITERATE_KIT_CAMERA_CHUNK_BYTES - 1U) /
       (size_t)ITERATE_KIT_CAMERA_CHUNK_BYTES;
@@ -121,12 +129,17 @@ static enum capnweb_status read_chunk(
     return capnweb_reply_set_error(
         reply, "TypeError", "camera.readChunk needs {index}");
   }
-  offset = (size_t)index * (size_t)ITERATE_KIT_CAMERA_CHUNK_BYTES;
-  if (offset >= camera->held.length) {
+  /*
+   * BOUND BEFORE MULTIPLYING — see the predicate's own comment for the wrap it
+   * exists to prevent. Same order the servo capability validates degrees in,
+   * and for the same reason.
+   */
+  if (!iterate_kit_camera_chunk_index_is_valid(camera->held.length, index)) {
     ++camera->stale_chunk_requests;
     return capnweb_reply_set_error(
         reply, "RangeError", "chunk index is past the end of the frame");
   }
+  offset = (size_t)index * (size_t)ITERATE_KIT_CAMERA_CHUNK_BYTES;
   remaining = camera->held.length - offset;
   length = remaining < (size_t)ITERATE_KIT_CAMERA_CHUNK_BYTES
       ? remaining
@@ -134,10 +147,8 @@ static enum capnweb_status read_chunk(
   ++camera->chunks_read;
   {
     /*
-     * Borrowed with no release callback: the frame stays held until the caller
-     * finishes, takes another, or the session ends. Passing the driver's
-     * release here instead would free the buffer after the FIRST chunk and
-     * every later read would serve freed memory.
+     * Borrowed with no release callback — see the note after this block for why
+     * nothing is released on the way out, including on the final chunk.
      */
     const enum capnweb_status status = capnweb_reply_set_bytes(
         reply, camera->held.bytes + offset, length, NULL, NULL);
@@ -146,13 +157,19 @@ static enum capnweb_status read_chunk(
     }
   }
   /*
-   * The last chunk ends the loan. Waiting for a session to end instead would
-   * keep the sensor's only buffer occupied for as long as the conversation
-   * lasts, so the next photograph would fail for a reason nothing explains.
+   * THE FRAME IS NOT RELEASED HERE, and the last chunk is no exception.
+   *
+   * The bytes above are BORROWED by the reply with no release callback, so they
+   * must stay valid until the reply has been serialised — which has not
+   * happened yet when this dispatch returns. Releasing on the final chunk gave
+   * the driver its buffer back while the reply still pointed into it: harmless
+   * on a driver whose release only clears a flag, and a use-after-free on one
+   * that recycles the sensor buffer, which is exactly what this module's own
+   * header invites drivers to do.
+   *
+   * So the loan ends at the next take(), or when the session ends. Both are
+   * points where nothing is mid-serialisation.
    */
-  if (offset + length >= camera->held.length) {
-    release_frame(camera);
-  }
   return CAPNWEB_OK;
 }
 

@@ -1,6 +1,7 @@
 #include "iterate/kit/capabilities/camera.h"
 
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -98,27 +99,41 @@ static void a_capture_reports_how_many_chunks_it_will_take(void) {
   assert(fixture.sensor.buffers_available == 0);
 }
 
-static void reading_the_last_chunk_returns_the_buffer(void) {
-  struct fixture fixture;
-  struct capnweb_reply reply;
-  fixture_init(&fixture);
-  assert(call_take(&fixture, &reply) == CAPNWEB_OK);
-  assert(fixture.sensor.buffers_available == 0);
-
-  /*
-   * Reading every chunk must give the sensor its buffer back, or the next
-   * photograph fails for a reason no counter explains. Driving the dispatch
-   * without an argument object exercises the refusal path; the release itself
-   * is what this test is about, so it is driven through session_ended below
-   * for the abandoned case and here by the successful final read.
-   */
-  memset(&reply, 0, sizeof(reply));
-  assert(
-      fixture.module.methods[1].dispatch(
-          fixture.module.context, NULL, &reply) == CAPNWEB_OK);
-  /* No argument object: a refusal, and the frame is still held. */
-  assert(reply.kind == CAPNWEB_REPLY_ERROR);
-  assert(fixture.sensor.buffers_available == 0);
+/*
+ * The chunk-index arithmetic, tested directly.
+ *
+ * The bug was computing `index * chunkSize` BEFORE any bound check: `size_t` is
+ * 32 bits on the ESP32 targets, so a large wire index wraps to a small offset
+ * that then passes a naive `offset >= length` test and serves the wrong slice
+ * of the frame.
+ *
+ * THIS TEST CANNOT CATCH THAT WRAP. `size_t` is 64 bits on the host, so the
+ * broken and fixed arithmetic agree here — verified by putting the wrapping
+ * expression back and watching this pass. What it does check is the boundary
+ * behaviour the predicate owns, at any width; the wrap itself is excluded by
+ * construction rather than by measurement, because every term below is widened
+ * to uint64_t before it is multiplied or divided. Falsifying the wrap directly
+ * needs a 32-bit host or an on-target test.
+ */
+static void a_huge_chunk_index_can_never_name_a_valid_offset(void) {
+  const size_t length = (size_t)ITERATE_KIT_CAMERA_CHUNK_BYTES + 1000U;
+  /* The real chunks, and only those. */
+  assert(iterate_kit_camera_chunk_index_is_valid(length, 0));
+  assert(iterate_kit_camera_chunk_index_is_valid(length, 1));
+  assert(!iterate_kit_camera_chunk_index_is_valid(length, 2));
+  /* Exactly the multiple that wraps a 32-bit size_t, and the extremes. */
+  assert(!iterate_kit_camera_chunk_index_is_valid(
+      length, ((int64_t)1 << 32) / ITERATE_KIT_CAMERA_CHUNK_BYTES + 1));
+  assert(!iterate_kit_camera_chunk_index_is_valid(length, (int64_t)1 << 32));
+  assert(!iterate_kit_camera_chunk_index_is_valid(length, INT64_MAX));
+  assert(!iterate_kit_camera_chunk_index_is_valid(length, -1));
+  /* No frame is no chunks, however small the index. */
+  assert(!iterate_kit_camera_chunk_index_is_valid(0U, 0));
+  /* An exact multiple of the chunk size has no extra chunk after it. */
+  assert(iterate_kit_camera_chunk_index_is_valid(
+      (size_t)ITERATE_KIT_CAMERA_CHUNK_BYTES, 0));
+  assert(!iterate_kit_camera_chunk_index_is_valid(
+      (size_t)ITERATE_KIT_CAMERA_CHUNK_BYTES, 1));
 }
 
 static void a_new_capture_never_leaks_the_previous_frame(void) {
@@ -206,7 +221,7 @@ static void init_refuses_a_driver_that_cannot_capture(void) {
 int main(void) {
   the_module_advertises_the_two_paths_a_caller_needs();
   a_capture_reports_how_many_chunks_it_will_take();
-  reading_the_last_chunk_returns_the_buffer();
+  a_huge_chunk_index_can_never_name_a_valid_offset();
   a_new_capture_never_leaks_the_previous_frame();
   an_ended_session_releases_an_abandoned_frame();
   a_failed_capture_reports_and_holds_nothing();

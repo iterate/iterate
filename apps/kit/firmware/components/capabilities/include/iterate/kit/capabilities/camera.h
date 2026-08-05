@@ -71,10 +71,12 @@ struct iterate_kit_camera_driver {
  * it cannot work — a frame is tens of kilobytes and one control message is a
  * few, so the reply would be rejected after the photograph had been taken.
  *
- * The held frame is released when the last chunk is read, when a new capture
- * replaces it, or when the session ends — whichever comes first. A frame is
- * never held across a session boundary, because the only thing that would
- * reach it is a caller who no longer exists.
+ * The held frame is released by the NEXT capture, or when the session ends —
+ * never inside readChunk, not even on the last one. The bytes a read returns
+ * are borrowed by the reply and must outlive the dispatch that produced it, so
+ * handing a sensor its buffer back on the final chunk would invalidate memory
+ * the reply still points at. A frame is never held across a session boundary,
+ * because the only thing that could still read it is a caller who is gone.
  */
 struct iterate_kit_camera {
   struct iterate_kit_camera_driver driver;
@@ -86,6 +88,19 @@ struct iterate_kit_camera {
   uint32_t chunks_read;
   uint32_t stale_chunk_requests;
 };
+
+/**
+ * Whether `index` names a real chunk of a frame `length` bytes long.
+ *
+ * Exposed because the arithmetic behind it is where the bug was: `size_t` is 32
+ * bits on these targets, so `index * chunk_size` computed BEFORE a bound check
+ * wraps to a small offset that then passes a naive `offset >= length` test and
+ * serves the wrong slice of the frame. Comparing against the chunk count keeps
+ * every multiplication inside the range it was checked in. A host test can
+ * falsify this directly; the dispatch path around it cannot be driven without a
+ * live session.
+ */
+bool iterate_kit_camera_chunk_index_is_valid(size_t length, int64_t index);
 
 enum iterate_kit_status iterate_kit_camera_init(
     struct iterate_kit_camera *camera,

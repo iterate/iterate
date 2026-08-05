@@ -1322,6 +1322,15 @@ static size_t health_json(char *out, size_t capacity) {
     {"aecClockRegressions", atomic_load_explicit(&runtime.aec_clock_regressions, memory_order_relaxed)},
     {"aecEgressCopyFailures", atomic_load_explicit(&runtime.aec_egress_copy_failures, memory_order_relaxed)},
     /*
+     * The camera's own account of itself. Exported and unread is the same
+     * dark-instrument bug this board has now had four times: a sensor that
+     * stops working, or a JPEG ceiling that is too tight, must be answerable
+     * from off the device.
+     */
+    {"camSensorFailures", iterate_kit_stackchan_camera_sensor_failures()},
+    {"camEncodeFailures", iterate_kit_stackchan_camera_encode_failures()},
+    {"camLargestJpegBytes", iterate_kit_stackchan_camera_largest_jpeg_bytes()},
+    /*
      * The AEC's own health: engine rebuilds mean the capture timeline broke;
      * clip counters catch abnormal board levels that would otherwise vanish
      * after the next metrics interval. The face's one liveness number is
