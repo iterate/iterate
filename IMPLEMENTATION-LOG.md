@@ -646,3 +646,53 @@ inventory explicitly marks the Waveshare unit inventory-only and says never to
 flash it. Keep that safety constraint visible rather than claiming the target's
 compile proof is acoustic proof. The preservation archive's remote-upload
 confirmation also remains pending.
+
+## 2026-08-05 — phase 3: review corrections
+
+**Did:** Corrected all three release-blocking findings from the mandatory Phase
+3 review. Protected the imported generated avatar catalog from prose formatting
+and restored its exact donor bytes. Rewrote WebSocket query bounds validation in
+terms of remaining destination capacity so an oversized query cannot underflow
+`size_t` and authorize an out-of-bounds copy. Replaced the concurrently reset
+speaker stream with a queue of complete 20 ms frames tagged by an atomic answer
+generation. Replacement now disarms and records the hardware flush, advances
+the generation, resets the synchronized queue, and publishes reprime; a frame
+already held by the playback task is rejected by its stale tag.
+
+Closed the review's associated dead or misleading paths too. Cross-task
+playback clocks and flags are C11 atomics, turn-marker publication failures are
+counted and force a fresh transport instead of silently sending ambiguous
+audio, and the task watchdog is not armed until provisioning succeeds. Removed
+unused idle-remount and device metric fields, screenshot configuration, the
+unreachable Gameboy atlas, and the unimplemented procedural-renderer API. The
+capture adapter no longer classifies normal startup overwrites as overruns; it
+starts that telemetry only after the portable consumer has attempted a read.
+
+**Measured:** The corrected host firmware suite passed 46/46 under ASan/UBSan
+in 2.69 s. A native ESP-IDF 5.4.2 ESP32-S3 build passed with
+`-Wall -Wextra -Werror`; its application binary is `0x1545b0` bytes and leaves
+`0x2aba50` bytes (67%) of the smallest app partition free. `pnpm format` passed,
+the generated catalog still compared byte-for-byte equal to the read-only
+donor afterward, and `git diff --check` passed. No serial device was opened or
+flashed.
+
+**Surprised by:** The Phase 3 build evidence predated the commit hook, which
+rewrapped a generated C initializer into invalid source. The frozen commit was
+therefore broken despite both pre-commit builds being green. The old speaker
+snapshot also counted bytes that a concurrent reader might already own; that
+could both resurrect stale audio and discard replacement audio. A whole-frame
+queue plus epoch tags expresses the actual ownership boundary directly.
+
+**Reviewer said:** Block on the formatter-corrupted generated source, the URL
+query bounds underflow, and the playback replacement race. It also called out
+dead telemetry and avatar APIs, torn 64-bit cross-core state, swallowed turn
+markers, stale screenshot configuration, and provisioning's watchdog reboot
+loop. → **did:** Corrected each item and rebuilt both supported verification
+lanes. Kept host CLI fixture fields that intentionally exercise the stable
+telemetry contract; removed only device fields that falsely claimed a live
+measurement.
+
+**Open:** Freeze these corrections, rebuild the exact commit, and run the
+mandatory fresh independent review. Waveshare hardware proof remains forbidden
+by the connected-device inventory. The preservation archive's remote-upload
+confirmation remains pending.

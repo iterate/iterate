@@ -11,7 +11,6 @@ set(ITERATE_KIT_AVATAR_SOURCES
   src/face_viseme_queue.c
   src/fspp_dot_matrix_oracle_cores3_fine_atlas.c
   src/fspp_furnace_imp_cores3_fine_atlas.c
-  src/fspp_gameboy_bot_cores3_fine_atlas.c
   src/fspp_karakuri_brass_cores3_fine_atlas.c
   src/fspp_moonscope_cores3_fine_atlas.c
   src/fspp_starbyte_cores3_fine_atlas.c)

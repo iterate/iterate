@@ -147,9 +147,14 @@ static bool parse_url(
     path_size = 1U;
   }
   if ((parsed.field_set & (1U << UF_QUERY)) != 0U) {
+    const size_t remaining = sizeof(connection->path) - path_size;
     query_size = parsed.field_data[UF_QUERY].len;
-    if (query_size == 0U ||
-        path_size > sizeof(connection->path) - query_size - 2U) {
+    /*
+     * Account for '?' and the trailing NUL before subtracting query_size.
+     * Subtracting an attacker-controlled query length first wrapped size_t
+     * for long queries and turned this bounds check into an overflow permit.
+     */
+    if (query_size == 0U || remaining < 2U || query_size > remaining - 2U) {
       return false;
     }
     connection->path[path_size++] = '?';

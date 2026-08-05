@@ -128,8 +128,8 @@ static void selects_sprite_sets_by_exact_public_slug(void)
         face_avatar_registry_current_slug(&registry), "moonscope") == 0);
     assert(!face_avatar_registry_select_slug(
         &registry,
-        "gameboy-fine-black",
-        strlen("gameboy-fine-black")));
+        "missing-avatar",
+        strlen("missing-avatar")));
     assert(strcmp(
         face_avatar_registry_current_slug(&registry), "moonscope") == 0);
 }

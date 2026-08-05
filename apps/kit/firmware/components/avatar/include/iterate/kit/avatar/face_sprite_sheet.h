@@ -334,9 +334,9 @@ bool face_sprite_render_to(
  * Pure comparison-grid path. `validated_player` must have been initialised
  * once with face_sprite_player_init; it is not mutated. The immediate target
  * mouth is drawn without temporal debounce, while clock-derived idle motion
- * remains deterministic. This lets the existing pure face_render_frame ABI
- * display one atlas in many interleaved matrix scenarios without sharing
- * playback history. Firmware should normally retain a player and use
+ * remains deterministic. This lets comparison tools display one atlas in many
+ * interleaved matrix scenarios without sharing playback history. Firmware
+ * should normally retain a player and use
  * face_sprite_render for smoother coarticulation.
  */
 bool face_sprite_render_snapshot(

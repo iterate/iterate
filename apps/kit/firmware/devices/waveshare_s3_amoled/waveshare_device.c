@@ -32,6 +32,7 @@
  * measurement that decision asked for.
  */
 #include <inttypes.h>
+#include <stdatomic.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
@@ -48,7 +49,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/idf_additions.h"
 #include "freertos/queue.h"
-#include "freertos/stream_buffer.h"
 #include "freertos/task.h"
 
 #include "capnweb/capnweb.h"
@@ -216,6 +216,8 @@ enum {
    * a 600 ms lead with 500 ms of headroom still spare.
    */
   SPEAKER_BUFFER_BYTES = ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES,
+  /* Whole-frame queueing makes replacement atomic at frame boundaries. */
+  SPEAKER_QUEUE_DEPTH = SPEAKER_BUFFER_BYTES / FRAME_BYTES,
   /*
    * How long the playback task waits for a frame before treating the source
    * as dry. Two thirds of the 90 ms I2S DMA ring (6 descriptors x 240
@@ -303,7 +305,6 @@ enum {
    * in-process recovery has worked and the chip restarts.
    */
   NO_LIVENESS_RESTART_MS = ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS,
-  IDLE_REMOUNT_MS = ITERATE_KIT_VOICE_IDLE_REMOUNT_MS,
 };
 
 /* PSRAM-resident: 256 KiB would crowd internal RAM out of TLS headroom. */
@@ -385,6 +386,21 @@ struct mic_frame {
   int16_t samples[FRAME_SAMPLES];
 };
 
+/*
+ * A generation is the answer epoch. The consumer can hold a frame while the
+ * producer replaces the answer; tagging the copied frame makes that race an
+ * exact comparison instead of a byte-count guess over a concurrently-read
+ * stream buffer.
+ */
+struct speaker_frame {
+  uint32_t generation;
+  int16_t samples[FRAME_SAMPLES];
+};
+
+_Static_assert(
+    SPEAKER_BUFFER_BYTES % FRAME_BYTES == 0U,
+    "speaker capacity must contain whole PCM frames");
+
 static struct {
   struct iterate_kit_audio_codec codec;
   struct iterate_kit_audio_processor processor;
@@ -403,9 +419,6 @@ static struct {
   struct iterate_kit_peer peer;
   struct iterate_kit_voicelab voicelab;
   struct iterate_kit_playout playout;
-  /* How many idle remounts this boot has ASKED for, so a device stuck in the
-   * loop says so in its own telemetry instead of looking idle. */
-  uint32_t idle_remounts;
   uint32_t voicelab_generation;
   uint32_t frame_sequence;
   /*
@@ -426,15 +439,14 @@ static struct {
   enum iterate_kit_voicelab_state last_voicelab_state;
   /* Cross-task audio plumbing. */
   QueueHandle_t mic_queue;
-  StreamBufferHandle_t speaker_buffer;
-  volatile uint32_t speaker_discard_bytes; /* barge-in: playback task skips */
-  volatile uint64_t speaker_last_write_ms;
+  QueueHandle_t speaker_queue;
+  atomic_uint speaker_generation;
+  atomic_uint_fast64_t speaker_last_write_ms;
   uint32_t mic_frames_captured;
   uint32_t mic_frames_dropped;
   uint32_t mic_process_failures;
   /** Captured with no turn open: room noise, never sent, never queued. */
   uint32_t mic_frames_idle;
-  uint32_t mic_frames_gated;
   uint32_t speaker_frames_played;
   uint32_t speaker_overflow_drops;
   /*
@@ -473,16 +485,14 @@ static struct {
   uint32_t speaker_debt_paid;
   uint32_t speaker_write_failures;
   uint32_t speaker_margin_max_ms;
-  volatile uint64_t starve_at_ms;
+  atomic_uint_fast64_t starve_at_ms;
   /*
-   * Proving "no underruns" needs more than a count of holes: it needs the
-   * MARGIN distribution. Every write records how much audio was still queued
-   * behind it, so the minimum over a call says how close the pipe ever came
-   * to running dry. A run with a healthy floor is evidence; a zero count on
-   * its own only says none happened to fire this time.
+   * Proving "no underruns" needs more than a count of holes: every write
+   * records how much audio was still queued behind it, so the minimum over a
+   * call says how close the pipe ever came to running dry. A run with a
+   * healthy floor is evidence; a zero count alone proves nothing.
    */
   uint32_t speaker_margin_min_ms;
-  uint32_t speaker_margin_p10_ms;
   uint32_t speaker_writes;
   uint32_t speaker_bad_frames;
   uint32_t barge_in_flushes;
@@ -500,7 +510,7 @@ static struct {
   bool talking;
   /* Release pressed, but the capture queue is not yet on the wire. */
   bool flushing_turn;
-  volatile bool speaker_reprime;
+  atomic_bool speaker_reprime;
   /**
    * When the current answer's playout began, and how much of it has played.
    *
@@ -514,11 +524,11 @@ static struct {
    * Needs no clock agreement with the server: both terms are local, and the
    * answer's own first frame is the origin.
    */
-  volatile uint64_t answer_started_ms;
-  volatile uint32_t answer_emitted_ms;
+  atomic_uint_fast64_t answer_started_ms;
+  atomic_uint answer_emitted_ms;
   /** When an RPC was last answered: the mount's own liveness, not the socket's. */
   uint32_t speaker_lag_max_ms;
-  volatile bool speaker_answer_done;
+  atomic_bool speaker_answer_done;
   /*
    * The SENDER said this answer is complete, latched until the speaker actually
    * drains it. `speaker_answer_done` is consumed by the playback clock the
@@ -526,11 +536,17 @@ static struct {
    * "has this answer finished being heard?" — and that question is the whole
    * difference between an answer that ended and an answer that was cut off.
    */
-  volatile bool answer_declared_done;
+  atomic_bool answer_declared_done;
+  uint32_t turn_marker_failures;
   uint32_t flush_frames_left;
   uint64_t flush_deadline_ms;
   uint64_t turn_started_ms;
 } runtime;
+
+static uint32_t speaker_queued_bytes(void) {
+  if (runtime.speaker_queue == NULL) return 0U;
+  return (uint32_t)uxQueueMessagesWaiting(runtime.speaker_queue) * FRAME_BYTES;
+}
 
 /* What `itx.kit.waveshare` looks like to whoever holds the capability. */
 /*
@@ -562,6 +578,28 @@ static uint64_t now_ms(void *context) {
   return (uint64_t)(esp_timer_get_time() / 1000);
 }
 
+static bool publish_turn_marker(enum iterate_kit_voicelab_turn turn) {
+  const enum capnweb_status status =
+      iterate_kit_voicelab_mark_turn(&runtime.voicelab, turn);
+  if (status == CAPNWEB_OK) return true;
+
+  ++runtime.turn_marker_failures;
+  ESP_LOGE(
+      tag,
+      "turn %s publication failed: capnweb=%d; replacing transport",
+      turn == ITERATE_KIT_VOICELAB_TURN_START ? "start" : "commit",
+      (int)status);
+  /*
+   * The bridge cannot infer a missing edge. Invalidate the producer gate now,
+   * then remount on a fresh session rather than sending audio whose turn state
+   * is ambiguous or pretending a commit succeeded.
+   */
+  runtime.voicelab_generation = 0U;
+  iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
+  waveshare_display_set_status("reconnecting");
+  return false;
+}
+
 /* --- speaker path (voicelab callbacks run on the app task) ---------------- */
 
 static void on_speaker_pcm(
@@ -569,6 +607,7 @@ static void on_speaker_pcm(
     const uint8_t *pcm,
     size_t pcm_length,
     const struct iterate_kit_playout_frame *identity) {
+  static struct speaker_frame frame;
   enum iterate_kit_playout_action action;
   (void)context;
   /*
@@ -577,18 +616,13 @@ static void on_speaker_pcm(
    * a full buffer that happens to EVERY frame. An odd length would shift the
    * 16-bit sample grid permanently, so it is refused outright.
    */
-  if ((pcm_length & 1U) != 0U || identity == NULL) {
+  if (pcm_length != FRAME_BYTES || identity == NULL) {
     ++runtime.speaker_bad_frames;
     return;
   }
   action = iterate_kit_playout_classify(&runtime.playout, identity);
   if (action == ITERATE_KIT_PLAYOUT_IGNORE) return;
   if (action == ITERATE_KIT_PLAYOUT_REPLACE) {
-    /*
-     * StreamBuffer has one reader, so the callback cannot reset it safely.
-     * Snapshot exactly the stale prefix and have playback skip that many
-     * bytes; the replacement frame appended below is therefore retained.
-     */
     /* Ordering-safe: the watch comes off before the audio does. */
     (void)abandon_speaker_audio();
     /*
@@ -605,10 +639,12 @@ static void on_speaker_pcm(
      * entirely intended, which is the whole difference from starvation.
      */
     /* A new answer is a new timeline: lag does not carry across answers. */
-    runtime.answer_started_ms = 0U;
-    runtime.answer_emitted_ms = 0U;
+    atomic_store_explicit(
+        &runtime.answer_started_ms, 0U, memory_order_release);
+    atomic_store_explicit(
+        &runtime.answer_emitted_ms, 0U, memory_order_release);
   }
-  if (xStreamBufferSpacesAvailable(runtime.speaker_buffer) < pcm_length) {
+  if (uxQueueSpacesAvailable(runtime.speaker_queue) == 0U) {
     ++runtime.speaker_overflow_drops;
     return;
   }
@@ -621,19 +657,29 @@ static void on_speaker_pcm(
    * prefill (160 ms) as settle time, which costs nothing.
    */
   waveshare_audio_amplifier(true);
-  runtime.speaker_answer_done = false;
+  atomic_store_explicit(
+      &runtime.speaker_answer_done, false, memory_order_release);
   /*
    * Audio arriving within a second of a starve means the answer was still
    * going: the pipe genuinely ran dry mid-speech, and that is audible.
    */
-  if (runtime.starve_at_ms != 0U) {
+  {
+    const uint64_t starved_at = atomic_exchange_explicit(
+        &runtime.starve_at_ms, 0U, memory_order_acq_rel);
     const uint64_t now = now_ms(NULL);
-    if (iterate_kit_voice_elapsed_ms(now, runtime.starve_at_ms) < 1000U) {
+    if (starved_at != 0U &&
+        iterate_kit_voice_elapsed_ms(now, starved_at) < 1000U) {
       ++runtime.speaker_underruns;
     }
-    runtime.starve_at_ms = 0U;
   }
-  (void)xStreamBufferSend(runtime.speaker_buffer, pcm, pcm_length, 0);
+  frame.generation = atomic_load_explicit(
+      &runtime.speaker_generation, memory_order_acquire);
+  memcpy(frame.samples, pcm, sizeof(frame.samples));
+  if (xQueueSend(runtime.speaker_queue, &frame, 0) != pdTRUE) {
+    /* Only this task writes, but retain an exact signal if that invariant drifts. */
+    ++runtime.speaker_overflow_drops;
+    return;
+  }
   /* Counted only for frames actually admitted: the viseme ledger must see
    * exactly the samples the analyzer will eventually be fed. */
   waveshare_avatar_note_accepted(identity->answer, pcm_length / 2U);
@@ -659,17 +705,21 @@ static void on_viseme(
  * never-tier gate — recorded a starvation the device had caused on purpose.
  *
  * Keep these five effects together. The ordering is the correctness proof:
- * disarm -> note flush -> read -> discard -> reprime. In particular, reading
- * and discarding before disarming creates a window in which an intentional cut
- * is counted as listener-visible starvation.
+ * disarm -> note flush -> invalidate -> discard -> reprime. In particular,
+ * invalidating before disarming creates a window in which an intentional cut
+ * is counted as listener-visible starvation. Queue reset is synchronized by
+ * FreeRTOS; a frame already copied into the consumer is rejected by generation.
  */
 static uint32_t abandon_speaker_audio(void) {
-  uint32_t bytes;
+  const uint32_t bytes = speaker_queued_bytes();
   waveshare_audio_dma_watch(false);
   waveshare_audio_note_flush();
-  bytes = (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer);
-  runtime.speaker_discard_bytes = bytes;
-  runtime.speaker_reprime = true;
+  (void)atomic_fetch_add_explicit(
+      &runtime.speaker_generation, 1U, memory_order_acq_rel);
+  (void)xQueueReset(runtime.speaker_queue);
+  runtime.speaker_discarded_frames += bytes / FRAME_BYTES;
+  atomic_store_explicit(
+      &runtime.speaker_reprime, true, memory_order_release);
   /* The face was animating this audio; it must forget what nobody will hear. */
   waveshare_avatar_note_abandoned();
   /* And the mouth track scheduled against it dies with it. All abandon
@@ -713,8 +763,10 @@ static void on_control(
      * having: without it every answer contributed a settle window's worth of
      * concealed frames and the metric could never reach zero.
      */
-    runtime.speaker_answer_done = true;
-    runtime.answer_declared_done = true;
+    atomic_store_explicit(
+        &runtime.speaker_answer_done, true, memory_order_release);
+    atomic_store_explicit(
+        &runtime.answer_declared_done, true, memory_order_release);
     /*
      * It must NOT interrupt the playout, however tempting "the answer is
      * over, reset for the next one" looks. `response.done` is one small text
@@ -752,8 +804,10 @@ static void on_control(
      */
     iterate_kit_playout_reset(&runtime.playout, 1U);
     (void)abandon_speaker_audio();
-    runtime.speaker_answer_done = false;
-    runtime.answer_declared_done = false;
+    atomic_store_explicit(
+        &runtime.speaker_answer_done, false, memory_order_release);
+    atomic_store_explicit(
+        &runtime.answer_declared_done, false, memory_order_release);
     ESP_LOGI(tag, "new call accepted: playout reset for a fresh sender");
     waveshare_display_set_call_active(true);
     /* The viseme lane owns the mouth for the duration of the call. */
@@ -814,8 +868,27 @@ static void on_transcript(
   }
 }
 
+static bool playback_apply_reprime(
+    struct iterate_kit_voice_playback_clock *playout_clock) {
+  if (!atomic_exchange_explicit(
+          &runtime.speaker_reprime, false, memory_order_acq_rel)) {
+    return false;
+  }
+  atomic_store_explicit(
+      &runtime.speaker_answer_done, false, memory_order_release);
+  atomic_store_explicit(
+      &runtime.answer_declared_done, false, memory_order_release);
+  /*
+   * abandon_speaker_audio() already disarmed and accounted for the hardware
+   * flush before publishing speaker_reprime. This task owns only the portable
+   * playout clock, so it resets that clock exactly once for the new epoch.
+   */
+  iterate_kit_voice_playback_clock_reprime(playout_clock);
+  return true;
+}
+
 static void playback_task(void *argument) {
-  static int16_t chunk[FRAME_SAMPLES];
+  static struct speaker_frame frame;
   /*
    * The writer NEVER stops. That is the whole design.
    *
@@ -839,30 +912,13 @@ static void playback_task(void *argument) {
   for (;;) {
     size_t received;
 
-    if (runtime.speaker_reprime) {
-      runtime.speaker_reprime = false;
-      runtime.speaker_answer_done = false;
-      runtime.answer_declared_done = false;
-      /*
-       * A REPRIME EMPTIES THE RING ON PURPOSE.
-       *
-       * A barge-in throws away what was queued and refills from the new
-       * answer's first frame, so the descriptors the hardware sends in between
-       * are cleared because WE cleared them. Disarming (rather than only
-       * labelling the drain) also resets the opening window, so the refill that
-       * follows is measured as an answer starting — which is what it is.
-       */
-      waveshare_audio_dma_watch(false);
-      waveshare_audio_note_flush();
-      iterate_kit_voice_playback_clock_reprime(&playout_clock);
-    }
-    if (runtime.speaker_answer_done) {
-      runtime.speaker_answer_done = false;
+    (void)playback_apply_reprime(&playout_clock);
+    if (atomic_exchange_explicit(
+            &runtime.speaker_answer_done, false, memory_order_acq_rel)) {
       iterate_kit_voice_playback_clock_answer_done(&playout_clock);
     }
     if (!iterate_kit_voice_playback_clock_ready(
-            &playout_clock,
-            (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer))) {
+            &playout_clock, speaker_queued_bytes())) {
       /*
        * NOT FEEDING, SO NOT WATCHING.
        *
@@ -925,13 +981,17 @@ static void playback_task(void *argument) {
      * on; past a declared end it is off; during priming, a reprime flush or a
      * fully skipped frame it is off because we are deliberately not feeding.
      */
-    if (runtime.answer_declared_done) {
+    if (atomic_load_explicit(
+            &runtime.answer_declared_done, memory_order_acquire)) {
       waveshare_audio_dma_draining();
       waveshare_audio_dma_watch(false);
     }
-    received = xStreamBufferReceive(
-        runtime.speaker_buffer, chunk, sizeof(chunk),
-        pdMS_TO_TICKS(SPEAKER_DRY_WAIT_MS));
+    received = xQueueReceive(
+                   runtime.speaker_queue,
+                   &frame,
+                   pdMS_TO_TICKS(SPEAKER_DRY_WAIT_MS)) == pdTRUE
+        ? FRAME_BYTES
+        : 0U;
 
     /*
      * A REPRIME REQUESTED WHILE WE WERE BLOCKED STILL COUNTS.
@@ -944,24 +1004,22 @@ static void playback_task(void *argument) {
      * honoured on the NEXT iteration, and the rest of the answer waited out a
      * full prefill behind it. That is the clipped first word.
      */
-    if (received > 0U && runtime.speaker_reprime) {
-      runtime.speaker_reprime = false;
-      runtime.speaker_answer_done = false;
-      runtime.answer_declared_done = false;
+    if (received > 0U && playback_apply_reprime(&playout_clock)) {
       /*
-       * A REPRIME EMPTIES THE RING ON PURPOSE.
-       *
-       * A barge-in throws away what was queued and refills from the new
-       * answer's first frame, so the descriptors the hardware sends in between
-       * are cleared because WE cleared them. Disarming (rather than only
-       * labelling the drain) also resets the opening window, so the refill that
-       * follows is measured as an answer starting — which is what it is.
+       * A replacement can wake the blocked receive with its first frame. Put
+       * that whole tagged frame back at the head so opening prefill includes
+       * it. If another replacement raced this one, its generation is already
+       * stale and it must not be reintroduced after the newer queue reset.
        */
-      waveshare_audio_dma_watch(false);
-      waveshare_audio_note_flush();
-      iterate_kit_voice_playback_clock_reprime(&playout_clock);
-      /* Put it back: it belongs to the answer we are about to prime for. */
-      (void)xStreamBufferSend(runtime.speaker_buffer, chunk, received, 0);
+      if (frame.generation == atomic_load_explicit(
+                                  &runtime.speaker_generation,
+                                  memory_order_acquire)) {
+        if (xQueueSendToFront(runtime.speaker_queue, &frame, 0) != pdTRUE) {
+          ++runtime.speaker_overflow_drops;
+        }
+      } else {
+        ++runtime.speaker_discarded_frames;
+      }
       continue;
     }
 
@@ -999,7 +1057,8 @@ static void playback_task(void *argument) {
        * off. Both facts are required: `response.done` arrived (latched in
        * answer_declared_done) AND there is nothing left to play.
        */
-      if (runtime.answer_declared_done) {
+      if (atomic_load_explicit(
+              &runtime.answer_declared_done, memory_order_acquire)) {
         iterate_kit_playout_mark_drained(&runtime.playout);
       }
       ++runtime.speaker_waits_dry;
@@ -1009,24 +1068,19 @@ static void playback_task(void *argument) {
         /* Kept as telemetry: how often the source could not keep up. It no
          * longer costs the listener anything. */
         ++runtime.speaker_conceal_frames;
-        runtime.starve_at_ms = now_ms(NULL);
+        atomic_store_explicit(
+            &runtime.starve_at_ms, now_ms(NULL), memory_order_release);
       }
       continue;
     }
 
-    if (runtime.speaker_discard_bytes > 0U) {
-      const uint32_t discard = runtime.speaker_discard_bytes;
-      const size_t skipped = discard < received ? (size_t)discard : received;
-      runtime.speaker_discard_bytes = (uint32_t)(discard - skipped);
-      runtime.speaker_discarded_frames +=
-          (uint32_t)(skipped / (FRAME_SAMPLES * sizeof(int16_t)));
-      if (skipped == received) {
-        /* The whole frame was dropped to catch up: nothing was fed this pass. */
-        waveshare_audio_dma_watch(false);
-        continue;
-      }
-      memmove(chunk, (const uint8_t *)chunk + skipped, received - skipped);
-      received -= skipped;
+    if (frame.generation != atomic_load_explicit(
+                                &runtime.speaker_generation,
+                                memory_order_acquire)) {
+      /* A replacement raced this frame after it left the synchronized queue. */
+      ++runtime.speaker_discarded_frames;
+      waveshare_audio_dma_watch(false);
+      continue;
     }
 
     /*
@@ -1047,11 +1101,13 @@ static void playback_task(void *argument) {
       const enum iterate_kit_voice_playback_action action =
           iterate_kit_voice_playback_clock_frame(
               &playout_clock,
-              (uint32_t)xStreamBufferBytesAvailable(runtime.speaker_buffer),
+              speaker_queued_bytes(),
               runtime.speaker_frames_played,
               iterate_kit_voice_playout_lag_ms(
-                  runtime.answer_started_ms,
-                  runtime.answer_emitted_ms,
+                  atomic_load_explicit(
+                      &runtime.answer_started_ms, memory_order_acquire),
+                  atomic_load_explicit(
+                      &runtime.answer_emitted_ms, memory_order_acquire),
                   now_ms(NULL)),
               now_ms(NULL));
       if (action == ITERATE_KIT_VOICE_PLAYBACK_DROP_CATCHUP) {
@@ -1068,8 +1124,10 @@ static void playback_task(void *argument) {
          * point it is level, which is the entire safety of the mechanism.
          */
         ++runtime.speaker_catchup_frames;
-        runtime.answer_emitted_ms +=
-            (uint32_t)(received / (FRAME_BYTES / FRAME_MS));
+        (void)atomic_fetch_add_explicit(
+            &runtime.answer_emitted_ms,
+            (uint32_t)(received / (FRAME_BYTES / FRAME_MS)),
+            memory_order_acq_rel);
         continue;
       }
 
@@ -1114,13 +1172,17 @@ static void playback_task(void *argument) {
     enum iterate_kit_status write_status;
     const uint64_t write_deadline_ms = now_ms(NULL) + 100U;
     do {
-      if (runtime.speaker_reprime) {
+      if (atomic_load_explicit(
+              &runtime.speaker_reprime, memory_order_acquire) ||
+          frame.generation != atomic_load_explicit(
+                                  &runtime.speaker_generation,
+                                  memory_order_acquire)) {
         /* A replacement answer arrived while this stale frame waited. */
         write_status = ITERATE_KIT_UNAVAILABLE;
         break;
       }
       write_status = iterate_kit_audio_codec_write(
-          &runtime.codec, chunk, received / 2U);
+          &runtime.codec, frame.samples, received / 2U);
       if (write_status == ITERATE_KIT_BACKPRESSURE) {
         DELAY_MS(1);
       }
@@ -1135,7 +1197,7 @@ static void playback_task(void *argument) {
        * same thing, which is why the tap is here and not on the receive path:
        * see waveshare_avatar.h for what the delay line does with it.
        */
-      waveshare_avatar_observe_playout(chunk, received / 2U);
+      waveshare_avatar_observe_playout(frame.samples, received / 2U);
       /*
        * HOW FAR BEHIND REALTIME THIS ANSWER HAS FALLEN.
        *
@@ -1162,13 +1224,20 @@ static void playback_task(void *argument) {
          * consumer that is keeping up.
          */
         const uint64_t played_at = write_started_ms;
-        if (runtime.answer_started_ms == 0U) {
-          runtime.answer_started_ms = played_at;
-          runtime.answer_emitted_ms = 0U;
+        uint64_t answer_started = atomic_load_explicit(
+            &runtime.answer_started_ms, memory_order_acquire);
+        if (answer_started == 0U) {
+          atomic_store_explicit(
+              &runtime.answer_started_ms, played_at, memory_order_release);
+          atomic_store_explicit(
+              &runtime.answer_emitted_ms, 0U, memory_order_release);
+          answer_started = played_at;
         }
         {
           const uint32_t lag = iterate_kit_voice_playout_lag_ms(
-              runtime.answer_started_ms, runtime.answer_emitted_ms,
+              answer_started,
+              atomic_load_explicit(
+                  &runtime.answer_emitted_ms, memory_order_acquire),
               played_at);
           if (lag > runtime.speaker_lag_max_ms) {
             runtime.speaker_lag_max_ms = lag;
@@ -1176,11 +1245,14 @@ static void playback_task(void *argument) {
         }
         /* Milliseconds actually emitted, so a short read advances the
          * timeline by what it played and not by a whole frame. */
-        runtime.answer_emitted_ms +=
-            (uint32_t)(received / (FRAME_BYTES / FRAME_MS));
+        (void)atomic_fetch_add_explicit(
+            &runtime.answer_emitted_ms,
+            (uint32_t)(received / (FRAME_BYTES / FRAME_MS)),
+            memory_order_acq_rel);
       }
     } else if (write_status == ITERATE_KIT_UNAVAILABLE &&
-               runtime.speaker_reprime) {
+               atomic_load_explicit(
+                   &runtime.speaker_reprime, memory_order_acquire)) {
       /* Intentional replacement, not a codec failure. */
       runtime.speaker_discarded_frames +=
           (uint32_t)(received / (FRAME_SAMPLES * sizeof(int16_t)));
@@ -1190,8 +1262,7 @@ static void playback_task(void *argument) {
     }
 
     {
-      const uint32_t margin_ms =
-          (uint32_t)(xStreamBufferBytesAvailable(runtime.speaker_buffer) / 32U);
+      const uint32_t margin_ms = speaker_queued_bytes() / 32U;
       ++runtime.speaker_writes;
       if (runtime.speaker_writes == 1U ||
           margin_ms < runtime.speaker_margin_min_ms) {
@@ -1202,7 +1273,8 @@ static void playback_task(void *argument) {
       }
     }
     last_write_ms = now_ms(NULL);
-    runtime.speaker_last_write_ms = last_write_ms;
+    atomic_store_explicit(
+        &runtime.speaker_last_write_ms, last_write_ms, memory_order_release);
   }
 }
 
@@ -1430,7 +1502,6 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"codecCaptureOverruns", waveshare_audio_capture_overruns()},
     {"codecCaptureFailures", waveshare_audio_capture_driver_failures()},
     {"micIdle", runtime.mic_frames_idle},
-    {"micGated", runtime.mic_frames_gated},
     {"spkFrames", runtime.voicelab.spk_frames_received},
     {"spkPlayed", runtime.speaker_frames_played},
     {"spkOverflow", runtime.speaker_overflow_drops},
@@ -1489,7 +1560,6 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkMarginMaxMs", runtime.speaker_margin_max_ms},
     {"spkLagMaxMs", runtime.speaker_lag_max_ms},
     {"spkMarginMinMs", runtime.speaker_margin_min_ms},
-    {"spkMarginP10Ms", runtime.speaker_margin_p10_ms},
     {"spkWrites", runtime.speaker_writes},
     {"spkBadFrames", runtime.speaker_bad_frames},
     {"spkSeqGaps", runtime.playout.gaps},
@@ -1514,6 +1584,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkWaitPriming", runtime.speaker_waits_priming},
     {"spkAnswerDrains", runtime.speaker_waits_dry},
     {"bargeIns", runtime.barge_in_flushes},
+    {"turnMarkerFailures", runtime.turn_marker_failures},
     /*
      * THE FACE, AND THE ONE NUMBER THAT SAYS IT IS ALIVE.
      *
@@ -1532,9 +1603,6 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"pings", runtime.voicelab.ping_count},
     {"pingFailures", runtime.voicelab.ping_failures},
     {"livenessRestarts", runtime.liveness_restarts},
-    /* Idle remounts this boot: the recovery this device asked for because
-     * nothing inbound had reached it. Non-zero means it healed itself. */
-    {"idleRemounts", runtime.idle_remounts},
     /* Inbound capability dispatches served. This is the liveness proof the idle
      * watchdog keys on — telemetry publishing does not move it. */
     {"servedDispatches", iterate_kit_peer_served_dispatches(&runtime.peer)},
@@ -1776,13 +1844,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
    * Equal priority is the only setting where both make progress.
    */
   vTaskPrioritySet(NULL, 5);
-  /*
-   * Subscribe to the hardware watchdog. If this loop ever stops feeding it —
-   * blocked on I2C, on FatFs, on anything — the chip reboots itself. Every
-   * other recovery path in this firmware runs on this task and therefore
-   * cannot rescue it.
-   */
-  (void)esp_task_wdt_add(NULL);
   const struct iterate_kit_esp_configuration_result configuration_result =
       iterate_kit_esp_read_configuration(&runtime.configuration);
   if (configuration_result.status != ITERATE_KIT_ESP_CONFIGURATION_OK) {
@@ -1793,6 +1854,13 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
             configuration_result.status));
     return;
   }
+  /*
+   * Subscribe only after provisioning succeeds. An intentionally unprovisioned
+   * board returns to its setup path; subscribing before that return created a
+   * watchdog reboot loop. From here onward this task owns every recovery path,
+   * so a stall must still reboot loudly.
+   */
+  (void)esp_task_wdt_add(NULL);
   /*
    * Display first: its bring-up pulses the board's shared reset lines (the
    * panel, the touch controller and their neighbours hang off one TCA9554),
@@ -1839,28 +1907,14 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
   runtime.mic_queue =
       xQueueCreate(MIC_QUEUE_DEPTH, sizeof(struct mic_frame));
   /*
-   * PSRAM, not internal. Growing this ring in internal RAM took 19 KiB out
-   * of the headroom the TLS handshake needs and the device could not connect
-   * at all: mbedtls_ssl_setup returned MBEDTLS_ERR_SSL_ALLOC_FAILED on every
-   * attempt. Internal RAM here is TLS's working set, and this buffer has no
-   * claim on it — it is read by a task, never by an ISR, and the I2S driver
-   * copies into its own DMA ring on the way out.
+   * PSRAM, not internal. Each queue item is one indivisible 20 ms frame plus
+   * its answer generation. FreeRTOS synchronizes reset with receive, while the
+   * generation rejects a frame a consumer had already copied when reset ran.
+   * That is the replacement guarantee a byte stream cannot provide.
    */
-  /*
-   * TRIGGER ON A WHOLE FRAME, NOT ON A SINGLE BYTE.
-   *
-   * At a trigger level of 1 the receive returns the moment any byte is
-   * available — commonly 160 or 320 bytes when the source is behind. The loop
-   * then counted that partial read as one whole 20 ms frame in both
-   * speaker_frames_played and the playout timeline, so `due` ran ahead of the
-   * audio actually emitted: lag read LOW exactly when playback was starving,
-   * which is when it most needed to read high. A whole-frame trigger makes
-   * every read either a frame or a timeout, and the timeout path is already
-   * the one that waits.
-   */
-  runtime.speaker_buffer = xStreamBufferCreateWithCaps(
-      SPEAKER_BUFFER_BYTES, (size_t)FRAME_BYTES, MALLOC_CAP_SPIRAM);
-  if (runtime.mic_queue == NULL || runtime.speaker_buffer == NULL) {
+  runtime.speaker_queue = xQueueCreateWithCaps(
+      SPEAKER_QUEUE_DEPTH, sizeof(struct speaker_frame), MALLOC_CAP_SPIRAM);
+  if (runtime.mic_queue == NULL || runtime.speaker_queue == NULL) {
     ESP_LOGE(tag, "audio buffer allocation failed");
     return;
   }
@@ -2490,10 +2544,6 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       }
       if (wants_talk && !runtime.talking && runtime.voicelab.call_active &&
           outbox_free >= 3U) {
-        runtime.talking = true;
-        runtime.turn_started_ms = now;
-        runtime.flushing_turn = false;
-        ESP_LOGI(tag, "turn start");
         /*
          * Pressing to talk abandons whatever is still playing, which is an
          * intentional flush like any other — and this site never disarmed the
@@ -2506,17 +2556,21 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         iterate_kit_playout_interrupt(&runtime.playout);
         (void)xQueueReset(runtime.mic_queue); /* drop pre-press room noise */
         runtime.frame_sequence = 0U;
-        (void)iterate_kit_voicelab_mark_turn(
-            &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_START);
-        /*
-         * The face attends and shuts its mouth. Told rather than inferred from
-         * silence: the audio it was animating has just been discarded, and
-         * without this the last shape of the interrupted word would sit on the
-         * face for the whole time the person is speaking.
-         */
-        waveshare_avatar_set_listening(true);
-        waveshare_display_set_state(WAVESHARE_UI_LISTENING);
-        waveshare_display_set_status("listening — release to send");
+        if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_START)) {
+          runtime.talking = true;
+          runtime.turn_started_ms = now;
+          runtime.flushing_turn = false;
+          ESP_LOGI(tag, "turn start");
+          /*
+           * The face attends and shuts its mouth. Told rather than inferred from
+           * silence: the audio it was animating has just been discarded, and
+           * without this the last shape of the interrupted word would sit on the
+           * face for the whole time the person is speaking.
+           */
+          waveshare_avatar_set_listening(true);
+          waveshare_display_set_state(WAVESHARE_UI_LISTENING);
+          waveshare_display_set_status("listening — release to send");
+        }
       }
       /*
        * Releasing does NOT commit immediately. The capture queue holds up to
@@ -2548,12 +2602,12 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         runtime.talking = false;
         runtime.flushing_turn = false;
         ESP_LOGI(tag, "turn commit%s", timed_out ? " (tail dropped)" : "");
-        (void)iterate_kit_voicelab_mark_turn(
-            &runtime.voicelab, ITERATE_KIT_VOICELAB_TURN_COMMIT);
         /* Done listening: the face waits for the answer rather than for us. */
         waveshare_avatar_set_listening(false);
-        waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
-        waveshare_display_set_status("thinking");
+        if (publish_turn_marker(ITERATE_KIT_VOICELAB_TURN_COMMIT)) {
+          waveshare_display_set_state(WAVESHARE_UI_SPEAKING);
+          waveshare_display_set_status("thinking");
+        }
       }
 
       /* The microphone is only on the wire while the talk button is down. */
@@ -2620,8 +2674,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
        */
       if (outbox_free >= 4U &&
           iterate_kit_voicelab_needs_recycle(&runtime.voicelab)) {
-        const bool speaker_idle =
-            xStreamBufferBytesAvailable(runtime.speaker_buffer) == 0U;
+        const bool speaker_idle = speaker_queued_bytes() == 0U;
         if ((speaker_idle && !runtime.talking) ||
             runtime.voicelab.batches_on_connection >
                 ITERATE_KIT_VOICELAB_RECYCLE_AFTER_BATCHES + 250U) {
@@ -2678,8 +2731,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
               runtime.speaker_frames_played,
               runtime.speaker_conceal_frames,
               runtime.speaker_underruns,
-              (unsigned int)(xStreamBufferBytesAvailable(runtime.speaker_buffer) /
-                             32U));
+              (unsigned int)(speaker_queued_bytes() / 32U));
         }
       }
       if (now >= next_stats_at && outbox_free >= 3U) {

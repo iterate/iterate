@@ -29,6 +29,7 @@
  */
 #include "waveshare_audio.h"
 
+#include <stdatomic.h>
 #include <string.h>
 
 #include "driver/gpio.h"
@@ -43,10 +44,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
-
-#ifndef WAVESHARE_AUDIO_MIC_ONLY_DIAGNOSTIC
-#define WAVESHARE_AUDIO_MIC_ONLY_DIAGNOSTIC 0
-#endif
 
 /* Bring-up probe: treat the board's microphone as PDM rather than analog. */
 #ifndef WAVESHARE_AUDIO_DIGITAL_MIC
@@ -91,6 +88,8 @@ struct audio_frame {
 
 static QueueHandle_t capture_queue;
 static QueueHandle_t playback_queue;
+/* Startup capture is not loss until the portable consumer has started. */
+static atomic_bool capture_consumer_started;
 static volatile uint32_t capture_overruns;
 static volatile uint32_t capture_driver_failures;
 static volatile uint32_t playback_driver_failures;
@@ -107,6 +106,8 @@ static enum iterate_kit_status codec_read(
   if (capture_queue == NULL || capacity_samples < WAVESHARE_AUDIO_FRAME_SAMPLES) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
+  atomic_store_explicit(
+      &capture_consumer_started, true, memory_order_release);
   if (xQueueReceive(capture_queue, &frame, 0) != pdTRUE) {
     return ITERATE_KIT_UNAVAILABLE;
   }
@@ -169,7 +170,9 @@ static void capture_hardware_task(void *argument) {
       vTaskDelay(1U);
       continue;
     }
-    if (uxQueueMessagesWaiting(capture_queue) > 0U) {
+    if (atomic_load_explicit(
+            &capture_consumer_started, memory_order_acquire) &&
+        uxQueueMessagesWaiting(capture_queue) > 0U) {
       ++capture_overruns;
     }
     (void)xQueueOverwrite(capture_queue, &frame);
