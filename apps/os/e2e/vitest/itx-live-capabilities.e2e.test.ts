@@ -320,7 +320,16 @@ test("Successful live capability replacement uses the new target", async () => {
   });
   // @ts-expect-error - dynamic capability root
   expect(await project.replaceProbe.value()).toBe(`new:${marker}`);
-  await expect.poll(() => oldProvision.ping()).toBe(false);
+  // Same settle-loop posture as the race test: expect.poll has been losing
+  // vitest test context on this file under preview retries.
+  const deadline = Date.now() + 15_000;
+  let oldActive = true;
+  while (Date.now() < deadline) {
+    oldActive = await oldProvision.ping();
+    if (!oldActive) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  expect(oldActive).toBe(false);
   expect(await newProvision.ping()).toBe(true);
 });
 
