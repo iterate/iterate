@@ -172,7 +172,7 @@ _Static_assert(
     SPEAKER_BUFFER_BYTES % FRAME_BYTES == 0U,
     "speaker capacity must contain whole PCM frames");
 
-static struct {
+EXT_RAM_BSS_ATTR static struct {
   struct iterate_kit_audio_codec codec;
   struct iterate_kit_audio_processor processor;
   struct iterate_kit_aec_capture_bridge capture_bridge;
@@ -187,7 +187,6 @@ static struct {
   struct iterate_kit_spsc_ring control_outbox;
   size_t inbox_lengths[CONTROL_INBOX_SLOTS];
   size_t outbox_lengths[CONTROL_OUTBOX_SLOTS];
-  struct iterate_kit_esp_idf_itx_transport transport;
   struct iterate_kit_peer peer;
   /* Physical (touch) and remote call edges share one bounded owner queue. */
   struct iterate_kit_device_event device_event_storage
@@ -271,6 +270,14 @@ static struct {
    */
   atomic_bool answer_declared_done;
 } runtime;
+
+/*
+ * Deliberately NOT inside the PSRAM-resident runtime struct: the transport
+ * embeds its network task's TCB and stack, and FreeRTOS requires static task
+ * memory to live in internal RAM (xPortCheckValidTCBMem asserts on a PSRAM
+ * address, which reboot-loops the board about two seconds after boot).
+ */
+static struct iterate_kit_esp_idf_itx_transport transport;
 
 static uint32_t speaker_queued_bytes(void) {
   if (runtime.speaker_queue == NULL) return 0U;
@@ -368,6 +375,8 @@ static bool stackchan_ui_call_requested(void) {
 }
 
 static void stackchan_ui_tick(void) {
+  static struct iterate_kit_conversation_visual_state shown;
+  static bool shown_valid;
   const uint64_t now = now_ms(NULL);
   const bool body_due = ui.body != NULL &&
       iterate_kit_voice_elapsed_ms(now, ui.last_body_write_ms) >= 1000U;
@@ -386,21 +395,31 @@ static void stackchan_ui_tick(void) {
     .speaker_peak = iterate_kit_stackchan_avatar_speaker_status_peak(),
     .restart_armed = false,
   };
-  (void)iterate_kit_stackchan_avatar_request_status(&visual);
-  if (body_due) {
-    struct iterate_kit_rgb8 pixels[ITERATE_KIT_STACKCHAN_LED_COUNT];
-    uint16_t rgb565[ITERATE_KIT_STACKCHAN_LED_COUNT];
-    iterate_kit_conversation_lights_render(&visual, pixels);
-    for (size_t index = 0U; index < ITERATE_KIT_STACKCHAN_LED_COUNT;
-         ++index) {
-      rgb565[index] = (uint16_t)(((pixels[index].red >> 3) << 11) |
-                                 ((pixels[index].green >> 2) << 5) |
-                                 (pixels[index].blue >> 3));
+  /*
+   * PUBLISH ONLY ON CHANGE — the equality helper exists for exactly this.
+   * Republishing an equal snapshot every second forced the display path to
+   * repaint at 1 Hz, which a person sees as the face cutting to black.
+   */
+  if (!shown_valid ||
+      !iterate_kit_conversation_lights_equal(&visual, &shown)) {
+    (void)iterate_kit_stackchan_avatar_request_status(&visual);
+    if (ui.body != NULL) {
+      struct iterate_kit_rgb8 pixels[ITERATE_KIT_STACKCHAN_LED_COUNT];
+      uint16_t rgb565[ITERATE_KIT_STACKCHAN_LED_COUNT];
+      iterate_kit_conversation_lights_render(&visual, pixels);
+      for (size_t index = 0U; index < ITERATE_KIT_STACKCHAN_LED_COUNT;
+           ++index) {
+        rgb565[index] = (uint16_t)(((pixels[index].red >> 3) << 11) |
+                                   ((pixels[index].green >> 2) << 5) |
+                                   (pixels[index].blue >> 3));
+      }
+      (void)iterate_kit_stackchan_body_write_leds(
+          ui.body, rgb565, ITERATE_KIT_STACKCHAN_LED_COUNT);
     }
-    (void)iterate_kit_stackchan_body_write_leds(
-        ui.body, rgb565, ITERATE_KIT_STACKCHAN_LED_COUNT);
-    ui.last_body_write_ms = now;
+    shown = visual;
+    shown_valid = true;
   }
+  ui.last_body_write_ms = now;
   ui.dirty = false;
 }
 
@@ -1086,7 +1105,7 @@ static bool initialise_connection(void) {
   options.outbound_buffer = runtime.output_buffer;
   options.outbound_buffer_size = OUTPUT_CAPACITY;
   options.send_text = iterate_kit_esp_idf_itx_transport_send_text;
-  options.send_text_context = &runtime.transport;
+  options.send_text_context = &transport;
   options.project_id = runtime.configuration.project_id;
   options.project_api_key = runtime.configuration.project_api_key;
   options.mount_path = mount_path;
@@ -1106,7 +1125,7 @@ static bool initialise_connection(void) {
   transport_options.control_inbox = &runtime.control_inbox;
   transport_options.control_outbox = &runtime.control_outbox;
   return iterate_kit_esp_idf_itx_transport_prepare(
-             &runtime.transport, &transport_options) == ITERATE_KIT_OK;
+             &transport, &transport_options) == ITERATE_KIT_OK;
 }
 
 /*
@@ -1130,7 +1149,7 @@ static size_t health_json(char *out, size_t capacity) {
   size_t index;
   int written;
 
-  iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &metrics);
+  iterate_kit_esp_idf_itx_transport_metrics(&transport, &metrics);
   iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
   iterate_kit_stackchan_avatar_metrics_snapshot(&face_metrics);
 
@@ -1141,7 +1160,7 @@ static size_t health_json(char *out, size_t capacity) {
    */
   const bool gate_open =
       (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY) &&
-      runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+      transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
       runtime.voicelab_generation == runtime.connection.generation;
 
   const struct field fields[] = {
@@ -1269,7 +1288,7 @@ static size_t health_json(char *out, size_t capacity) {
       "\"clock\":\"%s\","
       "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,\"talking\":%s,"
       "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
-      iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
+      iterate_kit_esp_idf_itx_transport_state_name(transport.state),
       iterate_kit_voicelab_state_name(runtime.voicelab.state),
       iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
       clock,
@@ -1497,7 +1516,8 @@ void iterate_kit_stackchan_run(void) {
   }
   stackchan_ui_set_state(STACKCHAN_UI_CONNECTING);
   stackchan_ui_set_status("connecting to iterate");
-  runtime.mic_queue = xQueueCreate(MIC_QUEUE_DEPTH, sizeof(struct mic_frame));
+  runtime.mic_queue = xQueueCreateWithCaps(
+      MIC_QUEUE_DEPTH, sizeof(struct mic_frame), MALLOC_CAP_SPIRAM);
   /*
    * PSRAM, not internal. Each queue item is one indivisible 20 ms frame plus
    * its answer generation; FreeRTOS synchronizes reset with receive, and the
@@ -1514,18 +1534,25 @@ void iterate_kit_stackchan_run(void) {
     return;
   }
   iterate_kit_playout_reset(&runtime.playout, 1U);
-  if (iterate_kit_esp_idf_itx_transport_start(&runtime.transport) !=
+  if (iterate_kit_esp_idf_itx_transport_start(&transport) !=
       ITERATE_KIT_OK) {
     ESP_LOGE(
         tag,
         "transport start failed: platform=%ld",
-        (long)runtime.transport.last_platform_error);
+        (long)transport.last_platform_error);
     return;
   }
+  /*
+   * The capture task runs the esp-sr AEC inline (bridge_process ->
+   * aec_process), which is far deeper than the other boards' capture paths:
+   * the proven donor gave aec_process a dedicated 6144-byte stack ON TOP of
+   * a 4096-byte I/O task. 4096 here trips the stack canary the moment the
+   * first frame is processed.
+   */
   if (xTaskCreatePinnedToCore(
           capture_task,
           "vl-capture",
-          4096,
+          8192,
           NULL,
           16,
           &capture_task_handle,
@@ -1548,7 +1575,7 @@ void iterate_kit_stackchan_run(void) {
 
   for (;;) {
     (void)esp_task_wdt_reset();
-    (void)iterate_kit_esp_idf_itx_transport_poll(&runtime.transport, 16U);
+    (void)iterate_kit_esp_idf_itx_transport_poll(&transport, 16U);
     /*
      * Give the capability modules a turn: a deferred reply is only a promise
      * that something will come back to it; this is the something.
@@ -1564,7 +1591,7 @@ void iterate_kit_stackchan_run(void) {
       static bool published_link_ready = true;
       const bool ready =
           runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
-          runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+          transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
           runtime.voicelab_generation == runtime.connection.generation;
       if (ready != published_link_ready) {
         published_link_ready = ready;
@@ -1579,16 +1606,16 @@ void iterate_kit_stackchan_run(void) {
       ESP_LOGI(tag, "touch: %s call", wanted ? "starting" : "ending");
     }
 
-    if (runtime.transport.state != runtime.last_transport_state) {
+    if (transport.state != runtime.last_transport_state) {
       ESP_LOGI(
           tag,
           "transport state=%s",
           iterate_kit_esp_idf_itx_transport_state_name(
-              runtime.transport.state));
+              transport.state));
       if (runtime.last_transport_state == ITERATE_KIT_ESP_IDF_ITX_READY) {
         struct iterate_kit_esp_idf_itx_transport_metrics metrics;
         iterate_kit_esp_idf_itx_transport_metrics(
-            &runtime.transport, &metrics);
+            &transport, &metrics);
         ESP_LOGE(
             tag,
             "left ready: recvStatus=%" PRId32 " wsClose=%" PRId32
@@ -1608,16 +1635,16 @@ void iterate_kit_stackchan_run(void) {
             metrics.control_outbox_discarded,
             metrics.last_application_capnweb_status);
       }
-      if (runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
+      if (transport.state == ITERATE_KIT_ESP_IDF_ITX_READY) {
         /* The socket is up, so DNS and UDP work: ask what time it is. */
         start_clock_once();
       }
-      if (runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_FAILED) {
+      if (transport.state == ITERATE_KIT_ESP_IDF_ITX_FAILED) {
         struct iterate_kit_esp_idf_itx_transport_metrics metrics;
         stackchan_ui_set_status(
             iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
         iterate_kit_esp_idf_itx_transport_metrics(
-            &runtime.transport, &metrics);
+            &transport, &metrics);
         ESP_LOGE(
             tag,
             "mount diagnosis: connection=%d mount=%s failure=%s "
@@ -1636,7 +1663,7 @@ void iterate_kit_stackchan_run(void) {
             metrics.control_receive_failures,
             metrics.control_send_failures);
       }
-      runtime.last_transport_state = runtime.transport.state;
+      runtime.last_transport_state = transport.state;
     }
 
     const uint64_t now = now_ms(NULL);
@@ -1649,7 +1676,7 @@ void iterate_kit_stackchan_run(void) {
     {
       static uint64_t unhealthy_since;
       const bool healthy =
-          runtime.transport.state != ITERATE_KIT_ESP_IDF_ITX_FAILED;
+          transport.state != ITERATE_KIT_ESP_IDF_ITX_FAILED;
       if (healthy) {
         unhealthy_since = 0U;
       } else if (unhealthy_since == 0U) {
@@ -1681,7 +1708,7 @@ void iterate_kit_stackchan_run(void) {
         last_ping_count = runtime.voicelab.ping_count;
         last_liveness_ms = now;
       }
-      if (runtime.transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
+      if (transport.state != ITERATE_KIT_ESP_IDF_ITX_READY) {
         last_liveness_ms = now;
       }
       if (runtime.voicelab.ping_pending &&
@@ -1695,7 +1722,7 @@ void iterate_kit_stackchan_run(void) {
             "no answer to a ping in %us — replacing the transport",
             (unsigned int)(PING_TIMEOUT_MS / 1000U));
         stackchan_ui_set_status("reconnecting");
-        iterate_kit_esp_idf_itx_transport_request_restart(&runtime.transport);
+        iterate_kit_esp_idf_itx_transport_request_restart(&transport);
       }
       /*
        * A prepared conversation is adopted only once the server says it is
@@ -1732,7 +1759,7 @@ void iterate_kit_stackchan_run(void) {
       }
     }
 
-    if (runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+    if (transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
         runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY &&
         runtime.voicelab_generation != runtime.connection.generation) {
       /* Designated on purpose: the voicelab options struct grows fields. */
@@ -1814,7 +1841,7 @@ void iterate_kit_stackchan_run(void) {
     }
 
     if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_READY &&
-        runtime.transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
+        transport.state == ITERATE_KIT_ESP_IDF_ITX_READY &&
         runtime.voicelab_generation == runtime.connection.generation) {
       /*
        * EVERY producer gates on outbox headroom: exhaustion is SESSION-FATAL
@@ -1875,7 +1902,7 @@ void iterate_kit_stackchan_run(void) {
               "downlink still dead after 3 recycles — replacing the session");
           runtime.downlink_recycles_running = 0U;
           iterate_kit_esp_idf_itx_transport_request_restart(
-              &runtime.transport);
+              &transport);
         } else {
           ++runtime.downlink_recycles_running;
           ESP_LOGW(
@@ -2049,7 +2076,7 @@ void iterate_kit_stackchan_run(void) {
             1000U) {
           struct iterate_kit_esp_idf_itx_transport_metrics pulse;
           iterate_kit_esp_idf_itx_transport_metrics(
-              &runtime.transport, &pulse);
+              &transport, &pulse);
           runtime.last_pulse_ms = now;
           ESP_LOGI(
               tag,
