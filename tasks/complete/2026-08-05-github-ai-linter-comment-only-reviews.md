@@ -1,16 +1,16 @@
 ---
-status: in-progress
+status: complete
 size: small
 ---
 
 # Make clean AI lint runs silent and findings comment-only
 
-> **Status summary:** Implementation is complete and targeted tests are green. Clean analyses now settle as skipped without a GitHub call; findings publish comment-only reviews. Full repository checks and PR review remain.
+> **Status summary:** Done. Clean analyses settle as skipped without a GitHub call; findings publish comment-only reviews. Targeted tests, monorepo checks, and PR CI are green.
 
-The Iterate GitHub AI linter currently approves pull requests when it finds no
-issues and requests changes when it leaves findings. Both actions overstate the
-linter's authority: the status check already communicates a clean run, and AI
-findings can be false positives.
+Before this task, the Iterate GitHub AI linter approved pull requests when it
+found no issues and requested changes when it left findings. Both actions
+overstated the linter's authority: the status check already communicates a
+clean run, and AI findings can be false positives.
 
 ## Acceptance criteria
 
@@ -32,3 +32,7 @@ findings can be false positives.
 - 2026-08-05: Added the terminal `skipped` publication result, fixed all
   created reviews to `COMMENT`, and updated policies/docs. Targeted linter
   processor tests pass.
+- 2026-08-05: Full monorepo typecheck, lint, and Knip pass locally. The local
+  parallel test run hit host-wide ephemeral-port exhaustion (15,659 of 16,384
+  ports in `TIME_WAIT`); the PR's complete Depot test job passed on a clean
+  runner, along with every other check.
