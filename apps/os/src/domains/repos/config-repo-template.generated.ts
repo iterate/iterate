@@ -1,6 +1,6 @@
 // The seeded project repo file map, generated from the REAL template folder at
-// apps/os/config-repo-template (which typechecks as a worker project under
-// apps/os). Edit the folder, then `pnpm lint --fix` regenerates this file;
+// configs/default (which typechecks as a worker project against apps/os's
+// workspace dependencies). Edit the folder, then `pnpm lint:fix` regenerates this file;
 // drift is a lint error. This file is oxfmt-ignored: the codegen preset owns
 // its formatting.
 // codegen:start {preset: custom, source: ./config-repo-template.codegen.cjs, export: projectRepoTemplateFiles}

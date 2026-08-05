@@ -409,6 +409,7 @@ import {
 import { EmailAgentProcessorContract } from "./domains/email/email-agent-processor-contract.ts";
 import { agentCreationForPath, type AgentCreateInput } from "./domains/agents/agent-defaults.ts";
 import { repoCreationEvents, type RepoCreateInput } from "./domains/repos/repo-defaults.ts";
+import { normalizeConfigRepoTemplateReference } from "./lib/config-repo-template-reference.ts";
 
 /**
  * The root of every itx-facing RpcTarget. Extending it (directly, or through
@@ -1430,9 +1431,9 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
   /**
    * Request creation and wait for the repo creation saga's terminal fact.
    * The request chooses an empty starter seed (the default), a private
-   * GitHub pull at depth one, or a public import performed by Cloudflare
-   * Artifacts outside the Worker isolate (full history unless `depth` is
-   * provided). Appends the atomic request batch (`repos/create-requested` +
+   * GitHub pull at depth one, a full public import performed by Cloudflare
+   * Artifacts, or a one-time copy of a public GitHub template subtree.
+   * Appends the atomic request batch (`repos/create-requested` +
    * the repo processor subscription, plus the catalog subscription that copies the
    * terminal certificate onto `/`), then waits for
    * `repos/created` and resolves with this same handle, so create chains —
@@ -5669,9 +5670,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * Register (for a prospective slug) and append the complete root creation
    * request batch. By default this resolves once the bootstrap saga has
    * committed terminal `project/created` — the right shape for scripts that
-   * use the project immediately. `waitUntilCreated: false` resolves as soon
-   * as the identity is registered, directory primed, and request events
-   * appended:
+   * use the project immediately. `configRepoTemplate`, when present, is a
+   * pnpm-style public GitHub reference copied into the config repo before
+   * that terminal fact. `waitUntilCreated: false` resolves as soon as the
+   * identity is registered, directory primed, and request events appended:
    * the caller renders bootstrap progress itself, so nobody is left waiting.
    * The durable-delivery subscriptions committed in the birth batch are what
    * guarantee the saga runs; create also nudges both root processors AFTER
@@ -5680,10 +5682,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
    * same handle, and addressing an unknown slug is side-effect free.
    */
   async create(
-    args: { organizationSlug?: string; projectId?: string } = {},
+    args: { configRepoTemplate?: string; organizationSlug?: string; projectId?: string } = {},
     options?: { waitUntilCreated?: boolean },
   ): Promise<ProjectRpcTarget> {
     const projectCreateDeadline = Date.now() + PROJECT_CREATE_TIMEOUT_MS;
+    const configRepoTemplate =
+      args.configRepoTemplate === undefined
+        ? undefined
+        : normalizeConfigRepoTemplateReference(args.configRepoTemplate);
     if ("projectId" in this.#props && this.#capabilityHost.path !== "/") {
       throw new Error("project create() is only available on the project-root handle");
     }
@@ -5697,7 +5703,10 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         "auth-register",
         () =>
           this.#registerProject({
-            ...args,
+            ...(args.organizationSlug === undefined
+              ? {}
+              : { organizationSlug: args.organizationSlug }),
+            ...(args.projectId === undefined ? {} : { projectId: args.projectId }),
             slug: prospective.prospectiveSlug,
           }),
       );
@@ -5752,6 +5761,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
               onboardingActive: true,
               slug: registered.slug,
               ...(creatorEmail === undefined ? {} : { creatorEmail }),
+              ...(configRepoTemplate === undefined ? {} : { configRepoTemplate }),
             },
           },
         }),

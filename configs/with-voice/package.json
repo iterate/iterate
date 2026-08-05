@@ -1,0 +1,14 @@
+{
+  "name": "iterate-voice-project-worker",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "A minimal Iterate project with a browser voice demo.",
+  "dependencies": {
+    "iterate": "https://pkg.pr.new/iterate/iterate/iterate@main"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250620.0",
+    "typescript": "^5.9.3"
+  }
+}

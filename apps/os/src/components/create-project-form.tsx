@@ -22,6 +22,7 @@ import {
 import { toast } from "@iterate-com/ui/components/sonner";
 import { z } from "zod";
 import { connectIterateSession, reconnectIterateSession } from "iterate/sdk/itx/react";
+import { parseConfigRepoTemplateReference } from "~/lib/config-repo-template-reference.ts";
 import { projectsListQueryKey } from "~/lib/projects-query.ts";
 
 const PROJECT_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
@@ -33,6 +34,20 @@ const CreateProjectInput = z.object({
     .min(1, "Slug is required")
     .regex(PROJECT_SLUG_PATTERN, "Slug must be lowercase kebab-case"),
   organizationSlug: z.string(),
+  configRepoTemplate: z
+    .string()
+    .trim()
+    .superRefine((value, context) => {
+      if (value.length === 0) return;
+      try {
+        parseConfigRepoTemplateReference(value);
+      } catch (error) {
+        context.addIssue({
+          code: "custom",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }),
 });
 
 export function CreateProjectForm({
@@ -50,7 +65,11 @@ export function CreateProjectForm({
   // briefly re-enable sheet dismiss and race the welcome redirect.
   const [navigatingAway, setNavigatingAway] = useState(false);
   const createProject = useMutation({
-    mutationFn: async (input: { slug: string; organizationSlug: string }) => {
+    mutationFn: async (input: {
+      configRepoTemplate?: string;
+      slug: string;
+      organizationSlug: string;
+    }) => {
       const session = await connectIterateSession();
       // ONE pipelined round trip: identity() rides the create call. Create
       // resolves once the project EXISTS (identity registered, directory
@@ -60,6 +79,9 @@ export function CreateProjectForm({
       const project = session.projects.get(input.slug).create(
         {
           ...(input.organizationSlug ? { organizationSlug: input.organizationSlug } : {}),
+          ...(input.configRepoTemplate === undefined
+            ? {}
+            : { configRepoTemplate: input.configRepoTemplate }),
         },
         { waitUntilCreated: false },
       );
@@ -95,7 +117,11 @@ export function CreateProjectForm({
   });
 
   const form = useForm({
-    defaultValues: { slug: "", organizationSlug: organizations[0]?.slug ?? "" },
+    defaultValues: {
+      configRepoTemplate: "",
+      slug: "",
+      organizationSlug: organizations[0]?.slug ?? "",
+    },
     validators: {
       onChange: CreateProjectInput,
       onSubmit: CreateProjectInput,
@@ -103,6 +129,7 @@ export function CreateProjectForm({
     onSubmit: async ({ value }) => {
       const parsed = CreateProjectInput.parse(value);
       await createProject.mutateAsync({
+        ...(parsed.configRepoTemplate ? { configRepoTemplate: parsed.configRepoTemplate } : {}),
         slug: parsed.slug,
         organizationSlug: parsed.organizationSlug,
       });
@@ -171,6 +198,31 @@ export function CreateProjectForm({
                   aria-invalid={isInvalid}
                 />
                 <FieldDescription>Lowercase letters, numbers, and hyphens.</FieldDescription>
+                {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
+              </Field>
+            );
+          }}
+        </form.Field>
+        <form.Field name="configRepoTemplate">
+          {(field) => {
+            const isInvalid = field.state.meta.isTouched && !field.state.meta.isValid;
+
+            return (
+              <Field data-invalid={isInvalid}>
+                <FieldLabel htmlFor={field.name}>Config template (optional)</FieldLabel>
+                <Input
+                  id={field.name}
+                  name={field.name}
+                  placeholder="github:iterate/iterate#main&path:configs/with-voice"
+                  value={field.state.value}
+                  onBlur={field.handleBlur}
+                  onChange={(event) => field.handleChange(event.target.value)}
+                  aria-invalid={isInvalid}
+                />
+                <FieldDescription>
+                  Public GitHub reference. Iterate copies one pinned snapshot; it does not stay
+                  linked.
+                </FieldDescription>
                 {isInvalid ? <FieldError errors={field.state.meta.errors} /> : null}
               </Field>
             );
