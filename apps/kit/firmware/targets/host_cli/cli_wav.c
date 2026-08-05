@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "cli_wav.h"
+#include "iterate/kit/voice_device_profile.h"
 
 enum {
   /* RIFF chunk headers are a four-character id and a little-endian length. */
@@ -15,7 +16,7 @@ enum {
   CLI_WAV_FORMAT_MAX_BYTES = 40,
   CLI_WAV_FORMAT_PCM = 1,
   CLI_WAV_CHANNELS_MONO = 1,
-  CLI_WAV_SAMPLE_RATE_HZ = 16000,
+  CLI_WAV_SAMPLE_RATE_HZ = ITERATE_KIT_VOICE_SAMPLE_RATE_HZ,
   CLI_WAV_BITS_PER_SAMPLE = 16,
   CLI_WAV_BYTES_PER_SAMPLE = 2,
   CLI_WAV_BYTE_RATE = CLI_WAV_SAMPLE_RATE_HZ * CLI_WAV_BYTES_PER_SAMPLE,

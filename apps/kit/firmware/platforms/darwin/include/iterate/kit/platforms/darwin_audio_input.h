@@ -31,6 +31,9 @@
  *
  * FORMAT. 16 kHz mono PCM16, converted by CoreAudio from whatever the default
  * input device runs at. Anything else would be a different device under test.
+ * Apple documents Audio Queue Services as automatically supplying the
+ * appropriate converter for its requested PCM format:
+ * https://developer.apple.com/library/archive/documentation/MusicAudio/Conceptual/CoreAudioOverview/CoreAudioEssentials/CoreAudioEssentials.html
  * macOS gates microphone access: a process without permission is started
  * successfully and simply never receives a callback, so `captured` is the only
  * way to tell a denied prompt from a quiet room.
@@ -44,6 +47,10 @@
 #include <stdint.h>
 
 #include "iterate/kit/voice_device_profile.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 enum {
   /*
@@ -91,9 +98,6 @@ struct iterate_kit_darwin_audio_input {
   atomic_bool enabled;
 };
 
-/** Human-readable status name, for the one top-level log boundary. */
-const char *iterate_kit_darwin_audio_input_status_name(enum iterate_kit_darwin_audio_input_status status);
-
 /** Allocate and start the fixed CoreAudio input queue. Pairs with close. */
 enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_open(struct iterate_kit_darwin_audio_input *in);
 
@@ -119,5 +123,9 @@ int32_t iterate_kit_darwin_audio_input_platform_error(const struct iterate_kit_d
 
 /** Stop and release CoreAudio resources. Safe before or after a failed open. */
 void iterate_kit_darwin_audio_input_close(struct iterate_kit_darwin_audio_input *in);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

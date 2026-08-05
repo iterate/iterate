@@ -24,18 +24,16 @@ enum {
  * quietly stop being true; deriving them makes it a description of it.
  */
 enum {
-  CLI_DEVICE_PROFILE_HOST_SAMPLE_RATE_HZ =
-      ITERATE_KIT_VOICE_FRAME_SAMPLES * CLI_DEVICE_PROFILE_MS_PER_SECOND /
-      ITERATE_KIT_VOICE_FRAME_MS,
+  CLI_DEVICE_PROFILE_HOST_SAMPLE_RATE_HZ = ITERATE_KIT_VOICE_SAMPLE_RATE_HZ,
   CLI_DEVICE_PROFILE_HOST_CAPTURE_FPS =
       CLI_DEVICE_PROFILE_MS_PER_SECOND / ITERATE_KIT_VOICE_FRAME_MS,
   /*
    * The host's output peripheral is the CoreAudio queue, which holds
-   * four buffers of one wire frame each plus the same reserve in its producer
-   * ring — twice the
-   * board's lead, which is the whole reason a stall that is audible on the
-   * board is silent here. This typed copy is checked against the Darwin codec
-   * constant by cli_device_profile_test.c; keeping CoreAudio types out of this
+   * four buffers of one wire frame each plus a four-frame reserve in its
+   * producer ring — twice the board's lead, which is the whole reason a stall
+   * that is audible on the board is silent here. This typed copy is checked
+   * against the sum of those two Darwin constants by
+   * cli_device_profile_test.c; keeping CoreAudio types out of this
    * platform-independent table is deliberate.
    */
   CLI_DEVICE_PROFILE_HOST_LEAD_FRAMES = 8,

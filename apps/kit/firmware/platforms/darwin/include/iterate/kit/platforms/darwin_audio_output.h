@@ -27,6 +27,9 @@
  * DMA descriptor chain on the codec's clock; the host now models the same
  * relationship rather than an unrelated push protocol, which is the whole
  * premise of running the device's code here.
+ * Apple documents Audio Queue Services as automatically supplying the
+ * appropriate converter for its requested PCM format:
+ * https://developer.apple.com/library/archive/documentation/MusicAudio/Conceptual/CoreAudioOverview/CoreAudioEssentials/CoreAudioEssentials.html
  *
  * OWNERSHIP AND THREADS. Exactly two threads touch this: the cooperative loop
  * calls write, and CoreAudio's internal thread calls the callback. They meet
@@ -43,6 +46,10 @@
 #include <stdint.h>
 
 #include "iterate/kit/voice_device_profile.h"
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 enum {
   /*
@@ -71,13 +78,14 @@ enum {
   ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES =
       ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_COUNT * ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_BYTES,
   /*
-   * The elastic buffer, in bytes — two seconds.
+   * The elastic buffer, in bytes — one hundred global wire frames.
    *
    * Sized for the producer's burstiness, not the speaker's latency: the loop
    * delivers frames in bursts as batches arrive, and the previous 160 ms of
-   * total capacity is what turned those bursts into silence. Two seconds
-   * absorbs any burst this rig has produced while still bounding how far
-   * behind the room may get.
+   * total capacity is what turned those bursts into silence. The measured
+   * hundred-frame extent absorbs any burst this rig has produced while still
+   * bounding how far behind the room may get. Its time extent follows the
+   * global frame cadence.
    */
   ITERATE_KIT_DARWIN_AUDIO_OUTPUT_RING_BYTES =
       ITERATE_KIT_VOICE_FRAME_BYTES * 100,
@@ -231,5 +239,9 @@ int32_t iterate_kit_darwin_audio_output_platform_error(const struct iterate_kit_
 
 /** Stop and release CoreAudio resources. Safe before or after a failed open. */
 void iterate_kit_darwin_audio_output_close(struct iterate_kit_darwin_audio_output *out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

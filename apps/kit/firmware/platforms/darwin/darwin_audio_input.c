@@ -7,11 +7,8 @@
 #include "iterate/kit/platforms/darwin_audio_input.h"
 
 enum {
-  ITERATE_KIT_DARWIN_AUDIO_INPUT_MS_PER_SECOND = 1000,
   ITERATE_KIT_DARWIN_AUDIO_INPUT_SAMPLE_RATE_HZ =
-      ITERATE_KIT_VOICE_FRAME_SAMPLES *
-      ITERATE_KIT_DARWIN_AUDIO_INPUT_MS_PER_SECOND /
-      ITERATE_KIT_VOICE_FRAME_MS,
+      ITERATE_KIT_VOICE_SAMPLE_RATE_HZ,
   ITERATE_KIT_DARWIN_AUDIO_INPUT_BYTES_PER_SAMPLE = 2,
   ITERATE_KIT_DARWIN_AUDIO_INPUT_CHANNELS = 1,
   ITERATE_KIT_DARWIN_AUDIO_INPUT_FRAMES_PER_PACKET = 1,
@@ -40,17 +37,6 @@ static void iterate_kit_darwin_audio_input_abandon_open(struct iterate_kit_darwi
 
 static void iterate_kit_darwin_audio_input_remember_error(
     struct iterate_kit_darwin_audio_input *in, int32_t error);
-
-const char *iterate_kit_darwin_audio_input_status_name(enum iterate_kit_darwin_audio_input_status status)
-{
-  switch (status) {
-    case ITERATE_KIT_DARWIN_AUDIO_INPUT_OK: return "ok";
-    case ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_ARG: return "bad-argument";
-    case ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_PLATFORM: return "coreaudio";
-    case ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_EMPTY: return "empty";
-    default: return "unknown";
-  }
-}
 
 enum iterate_kit_darwin_audio_input_status iterate_kit_darwin_audio_input_open(struct iterate_kit_darwin_audio_input *in)
 {

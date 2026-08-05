@@ -1211,9 +1211,7 @@ static bool cli_main_record_frame(
     runtime->stop_requested = true;
     return false;
   }
-  if (runtime->conversation.current_turn != NULL &&
-      (runtime->options.live_audio ||
-       runtime->options.pretend_speaker != NULL)) {
+  if (runtime->conversation.current_turn != NULL) {
     runtime->turn_room_submitted_bytes += ITERATE_KIT_VOICE_FRAME_BYTES;
   }
   return true;

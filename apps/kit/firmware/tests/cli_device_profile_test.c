@@ -64,9 +64,6 @@ static void the_board_profile_agrees_with_the_firmware_it_simulates(void)
   const struct cli_device_profile *profile = board();
 
   assert(profile->frame_bytes == (uint32_t)ITERATE_KIT_VOICE_FRAME_BYTES);
-  assert(profile->output_lead_frames ==
-         (uint32_t)(ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES /
-                    ITERATE_KIT_VOICE_FRAME_BYTES));
   assert(profile->speaker_ring_bytes ==
          (uint32_t)ITERATE_KIT_VOICE_SPEAKER_BUFFER_BYTES);
   assert(profile->speaker_prefill_bytes ==
@@ -114,6 +111,10 @@ static void the_default_profile_is_the_rig_as_it_already_runs(void)
   assert(profile->speaker_prefill_bytes ==
          (uint32_t)ITERATE_KIT_VOICE_SPEAKER_PREFILL_BYTES);
   assert(profile->frame_bytes == (uint32_t)ITERATE_KIT_VOICE_FRAME_BYTES);
+  assert(profile->output_lead_frames ==
+         (uint32_t)(ITERATE_KIT_DARWIN_AUDIO_OUTPUT_BUFFER_COUNT +
+                    ITERATE_KIT_DARWIN_AUDIO_OUTPUT_LEAD_BYTES /
+                        ITERATE_KIT_VOICE_FRAME_BYTES));
   /*
    * The two axes on which the host is not the board, and the reason a stall
    * that is audible there is silent here: a deeper output queue and a loop

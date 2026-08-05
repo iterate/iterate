@@ -146,6 +146,33 @@ static void a_codec_refuses_reference_and_property_drift(void)
              ITERATE_KIT_VOICE_FRAME_SAMPLES,
              &sample_count) == ITERATE_KIT_IO_ERROR);
   assert(sample_count == 0U);
+
+  fake.read_samples = 0U;
+  assert(iterate_kit_audio_codec_read(
+             &codec,
+             capture,
+             reference,
+             ITERATE_KIT_VOICE_FRAME_SAMPLES,
+             &sample_count) == ITERATE_KIT_IO_ERROR);
+  assert(sample_count == 0U);
+
+  broken = fake_codec_properties;
+  broken.has_reference_channel = false;
+  codec.properties = &broken;
+  sample_count = 73U;
+  assert(iterate_kit_audio_codec_read(
+             &codec,
+             capture,
+             reference,
+             ITERATE_KIT_VOICE_FRAME_SAMPLES,
+             &sample_count) == ITERATE_KIT_INVALID_ARGUMENT);
+  assert(sample_count == 73U);
+
+  broken = fake_codec_properties;
+  broken.output_gain_ceiling_centi_db = 1;
+  codec.properties = &broken;
+  assert(iterate_kit_audio_codec_validate(&codec) ==
+         ITERATE_KIT_INVALID_ARGUMENT);
 }
 
 static enum iterate_kit_status failing_process(
@@ -163,8 +190,19 @@ static enum iterate_kit_status successful_reset(void *context)
   return ITERATE_KIT_OK;
 }
 
+static enum iterate_kit_status failing_reset(void *context)
+{
+  (void)context;
+  return ITERATE_KIT_STATE_ERROR;
+}
+
 static const struct iterate_kit_audio_processor_ops failing_processor_ops = {
   .reset = successful_reset,
+  .process = failing_process,
+};
+
+static const struct iterate_kit_audio_processor_ops reset_failing_ops = {
+  .reset = failing_reset,
   .process = failing_process,
 };
 
@@ -181,17 +219,24 @@ static void passthrough_is_an_exact_in_place_safe_processor(void)
   struct iterate_kit_audio_processor processor =
       iterate_kit_audio_processor_passthrough();
   int16_t near[ITERATE_KIT_VOICE_FRAME_SAMPLES];
+  int16_t output[ITERATE_KIT_VOICE_FRAME_SAMPLES];
   for (size_t index = 0U; index < ITERATE_KIT_VOICE_FRAME_SAMPLES; ++index) {
     near[index] = (int16_t)((int16_t)index - 160);
   }
-  const struct iterate_kit_audio_processor_frame frame = {
+  memset(output, 0x5A, sizeof(output));
+  struct iterate_kit_audio_processor_frame frame = {
     .near = near,
-    .output = near,
+    .output = output,
     .sample_count = ITERATE_KIT_VOICE_FRAME_SAMPLES,
   };
 
   assert(iterate_kit_audio_processor_validate(&processor) == ITERATE_KIT_OK);
   assert(iterate_kit_audio_processor_reset(&processor) == ITERATE_KIT_OK);
+  assert(iterate_kit_audio_processor_process(&processor, &frame) ==
+         ITERATE_KIT_OK);
+  assert(memcmp(output, near, sizeof(near)) == 0);
+
+  frame.output = near;
   assert(iterate_kit_audio_processor_process(&processor, &frame) ==
          ITERATE_KIT_OK);
   assert(near[0] == -160);
@@ -242,6 +287,19 @@ static void a_failed_echo_processor_cannot_leak_raw_microphone_audio(void)
   for (size_t index = 0U; index < ITERATE_KIT_VOICE_FRAME_SAMPLES; ++index) {
     assert(output[index] == 0);
   }
+
+  int16_t unchanged[ITERATE_KIT_VOICE_FRAME_SAMPLES];
+  memset(output, 0x77, sizeof(output));
+  memcpy(unchanged, output, sizeof(unchanged));
+  struct iterate_kit_audio_processor_frame wrong_extent = frame;
+  wrong_extent.sample_count = ITERATE_KIT_VOICE_FRAME_SAMPLES - 1U;
+  assert(iterate_kit_audio_processor_process(&processor, &wrong_extent) ==
+         ITERATE_KIT_INVALID_ARGUMENT);
+  assert(memcmp(output, unchanged, sizeof(output)) == 0);
+
+  processor.ops = &reset_failing_ops;
+  assert(iterate_kit_audio_processor_reset(&processor) ==
+         ITERATE_KIT_STATE_ERROR);
 }
 
 int main(void)

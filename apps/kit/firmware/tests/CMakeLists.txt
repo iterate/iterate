@@ -187,9 +187,6 @@ if(APPLE)
   add_executable(
     iterate-kit-darwin-audio-input-test
     darwin_audio_input_test.c)
-  target_include_directories(
-    iterate-kit-darwin-audio-input-test
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli")
   target_compile_features(iterate-kit-darwin-audio-input-test PRIVATE c_std_11)
   target_compile_options(iterate-kit-darwin-audio-input-test PRIVATE
     -UNDEBUG
@@ -208,11 +205,7 @@ if(APPLE)
 
   add_executable(
     iterate-kit-darwin-audio-output-test
-    ../targets/host_cli/cli_wav.c
     darwin_audio_output_test.c)
-  target_include_directories(
-    iterate-kit-darwin-audio-output-test
-    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli")
   target_compile_features(iterate-kit-darwin-audio-output-test PRIVATE c_std_11)
   target_compile_options(iterate-kit-darwin-audio-output-test PRIVATE
     -UNDEBUG

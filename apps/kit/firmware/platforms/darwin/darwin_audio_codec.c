@@ -4,10 +4,7 @@
 
 #include "iterate/kit/voice_device_profile.h"
 
-enum {
-  DARWIN_AUDIO_MS_PER_SECOND = 1000,
-  DARWIN_AUDIO_BYTES_PER_SAMPLE = 2,
-};
+enum { DARWIN_AUDIO_BYTES_PER_SAMPLE = 2 };
 
 /*
  * Geometry is derived from the global wire contract rather than copied into a
@@ -16,10 +13,8 @@ enum {
  * about the native USB/Bluetooth device behind the default route.
  */
 static const struct iterate_kit_audio_codec_properties darwin_properties = {
-    .capture_sample_rate_hz = ITERATE_KIT_VOICE_FRAME_SAMPLES *
-        DARWIN_AUDIO_MS_PER_SECOND / ITERATE_KIT_VOICE_FRAME_MS,
-    .playback_sample_rate_hz = ITERATE_KIT_VOICE_FRAME_SAMPLES *
-        DARWIN_AUDIO_MS_PER_SECOND / ITERATE_KIT_VOICE_FRAME_MS,
+    .capture_sample_rate_hz = ITERATE_KIT_VOICE_SAMPLE_RATE_HZ,
+    .playback_sample_rate_hz = ITERATE_KIT_VOICE_SAMPLE_RATE_HZ,
     .capture_channels = 1U,
     .playback_channels = 1U,
     .full_duplex = true,
@@ -101,7 +96,8 @@ enum iterate_kit_status iterate_kit_darwin_audio_codec_open(
     struct iterate_kit_darwin_audio_codec *darwin,
     const struct iterate_kit_darwin_audio_codec_options *options) {
   if (darwin == NULL || options == NULL ||
-      (options->file_playback != NULL && !options->playback_enabled)) {
+      (options->file_playback != NULL &&
+       (!options->playback_enabled || options->file_playback->write == NULL))) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   memset(darwin, 0, sizeof(*darwin));

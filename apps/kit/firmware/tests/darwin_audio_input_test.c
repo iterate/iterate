@@ -106,8 +106,6 @@ static void unusable_arguments_are_refused(void)
          ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_ARG);
   assert(iterate_kit_darwin_audio_input_pop(NULL, frame, sizeof(frame)) == ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_ARG);
   assert(iterate_kit_darwin_audio_input_pop(&capture, frame, 1U) == ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_ARG);
-  assert(strcmp(iterate_kit_darwin_audio_input_status_name(ITERATE_KIT_DARWIN_AUDIO_INPUT_ERR_EMPTY), "empty") ==
-         0);
   /* Closing a capture that never opened must not talk to CoreAudio at all. */
   iterate_kit_darwin_audio_input_close(NULL);
   memset(&capture, 0, sizeof(capture));

@@ -4,8 +4,6 @@
 
 #include "iterate/kit/voice_device_profile.h"
 
-enum { ITERATE_KIT_AUDIO_MS_PER_SECOND = 1000 };
-
 /*
  * Passthrough uses the one global wire geometry instead of accepting another
  * copy from each board. A DSP with a genuinely different native cadence, such
@@ -14,8 +12,7 @@ enum { ITERATE_KIT_AUDIO_MS_PER_SECOND = 1000 };
  */
 static const struct iterate_kit_audio_processor_properties
     passthrough_properties = {
-        .sample_rate_hz = ITERATE_KIT_VOICE_FRAME_SAMPLES *
-            ITERATE_KIT_AUDIO_MS_PER_SECOND / ITERATE_KIT_VOICE_FRAME_MS,
+        .sample_rate_hz = ITERATE_KIT_VOICE_SAMPLE_RATE_HZ,
         .frame_samples = ITERATE_KIT_VOICE_FRAME_SAMPLES,
         .requires_reference_channel = false,
         .uses_playout_activity = false,

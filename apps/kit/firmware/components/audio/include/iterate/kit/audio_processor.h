@@ -22,12 +22,13 @@ struct iterate_kit_audio_processor_properties {
 /**
  * One capture-clock-aligned DSP frame.
  *
- * `near` is the microphone plane. `reference` is the physical loudspeaker
- * feedback returned by the codec when required. `playout_activity` is a
- * separate per-sample policy plane: zero means no intended far-end content and
- * nonzero means content was rendered. Keeping it separate prevents analogue
- * reference noise from selecting an uplink branch. All input planes and
- * `output` contain exactly properties.frame_samples PCM16 samples.
+ * `near` is the microphone plane. `reference` is the capture-clock-aligned
+ * loudspeaker reference returned by the codec when required.
+ * `playout_activity` is a separate per-sample policy plane: zero means no
+ * intended far-end content and nonzero means content was rendered. Keeping it
+ * separate prevents reference noise from selecting an uplink branch. All
+ * input planes and `output` contain exactly properties.frame_samples PCM16
+ * samples.
  */
 struct iterate_kit_audio_processor_frame {
   const int16_t *near;
@@ -57,7 +58,13 @@ struct iterate_kit_audio_processor {
  *
  * Once output and its exact configured extent are valid, any adapter failure
  * overwrites the complete output with silence before returning the error. Raw
- * microphone audio must never leak around a failed echo canceller.
+ * microphone audio must never leak around a failed echo canceller. If the
+ * extent itself is invalid the wrapper cannot safely overwrite it; callers
+ * must treat every non-OK result as silence and must not transmit `output`.
+ *
+ * The composition root must match sample rate and frame cadence to its codec
+ * and must reject a reference-requiring processor when the codec does not
+ * advertise `has_reference_channel`.
  */
 enum iterate_kit_status iterate_kit_audio_processor_process(
     struct iterate_kit_audio_processor *processor,

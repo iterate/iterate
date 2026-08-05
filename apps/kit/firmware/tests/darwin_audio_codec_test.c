@@ -66,12 +66,49 @@ static void a_file_clock_requires_enabled_playback(void)
          ITERATE_KIT_INVALID_ARGUMENT);
   assert(iterate_kit_darwin_audio_codec_open(NULL, &options) ==
          ITERATE_KIT_INVALID_ARGUMENT);
+
+  const struct iterate_kit_darwin_audio_file_sink unusable_sink = {0};
+  const struct iterate_kit_darwin_audio_codec_options unusable_options = {
+    .playback_enabled = true,
+    .file_playback = &unusable_sink,
+  };
+  assert(iterate_kit_darwin_audio_codec_open(&darwin, &unusable_options) ==
+         ITERATE_KIT_INVALID_ARGUMENT);
   iterate_kit_darwin_audio_codec_close(NULL);
+}
+
+static void file_playback_maps_a_full_ring_to_backpressure(void)
+{
+  struct iterate_kit_darwin_audio_codec darwin;
+  const struct iterate_kit_darwin_audio_file_sink sink = {
+    .write = discard_file_frame,
+  };
+  const struct iterate_kit_darwin_audio_codec_options options = {
+    .playback_enabled = true,
+    .file_playback = &sink,
+  };
+  int16_t frame[ITERATE_KIT_VOICE_FRAME_SAMPLES] = {0};
+
+  assert(iterate_kit_darwin_audio_codec_open(&darwin, &options) ==
+         ITERATE_KIT_OK);
+  for (size_t index = 0U;
+       index < ITERATE_KIT_DARWIN_AUDIO_OUTPUT_RING_BYTES /
+           ITERATE_KIT_VOICE_FRAME_BYTES;
+       ++index) {
+    assert(iterate_kit_audio_codec_write(
+               &darwin.codec, frame, ITERATE_KIT_VOICE_FRAME_SAMPLES) ==
+           ITERATE_KIT_OK);
+  }
+  assert(iterate_kit_audio_codec_write(
+             &darwin.codec, frame, ITERATE_KIT_VOICE_FRAME_SAMPLES) ==
+         ITERATE_KIT_BACKPRESSURE);
+  iterate_kit_darwin_audio_codec_close(&darwin);
 }
 
 int main(void)
 {
   a_disabled_adapter_is_explicitly_unavailable();
   a_file_clock_requires_enabled_playback();
+  file_playback_maps_a_full_ring_to_backpressure();
   return 0;
 }

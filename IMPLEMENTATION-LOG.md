@@ -458,3 +458,82 @@ range.
 
 **Open:** Run and resolve that review before beginning the firmware ports. The
 preservation archive's remote-upload confirmation remains pending.
+
+## 2026-08-05 — phase 2: independent-review corrections
+
+**Did:** The independent Phase 2 review blocked the phase on two test defects.
+Moved the CoreAudio lead drift assertion from the Waveshare row to the host row
+and made it compare the typed eight-frame host lead with its true composition:
+four AudioQueue buffers plus the four-frame Darwin producer-ring reserve. Made
+the passthrough-processor proof copy a sentinel-filled distinct input/output
+pair across all 320 samples, then separately retained the in-place case.
+
+Closed the review's worthwhile seam cleanup before a physical adapter can
+depend on it. The contracts now define sample units, partial reads, disabled
+playback, gain reference, composition obligations, deterministic clock
+emulation, and the caller's fail-closed duty when an invalid extent cannot be
+overwritten safely. The global profile now names the one 16 kHz wire sample
+rate used by core, Darwin, the host profile, and WAV I/O. The core-boundary
+scanner derives a bare-header deny-list from every platform header instead of
+recognising only path-qualified includes. Added coverage for zero-length
+successful reads, both reference-property mismatch directions, invalid positive
+gain ceilings, invalid processor extents, reset error forwarding, a malformed
+file sink, and Darwin ring-full to portable BACKPRESSURE mapping. Removed the
+test-only Darwin input status-name API, a dead host include path, a tautological
+live-output condition, and the output test's WAV/host-target dependency; the
+output test now uses a hermetic memory sink. Added C++ linkage guards and an
+Apple first-party source for Audio Queue format conversion.
+
+**Measured:** The reviewer reproduced the ASan/UBSan suite, independently
+negative-probed the core boundary, verified all six retained hashes and every
+conversation-report counter, and converged with four parallel reviewers. Its
+verdict was `BLOCK` only on the two tests above. After correction, the host
+suite passed 37/37 under ASan/UBSan in 5.31 s. The total is 35 Iterate tests and
+two Cap'n Web dependency tests; earlier Phase 2 entries used the combined total.
+
+**Surprised by:** The incorrect drift assertion compared two unrelated values
+that both happened to equal four: the Waveshare ES8311 DMA lead and Darwin's
+producer-ring reserve. It would have failed on a legitimate Phase 3 Waveshare
+retune while allowing the actual typed host value of eight to drift freely.
+Likewise, an aliased passthrough test asserted values the test itself had
+written, so deleting the production copy would still have left the suite green.
+
+**Reviewer said:** Correct both tests before the phase can pass. It also listed
+contract holes, untested error branches, a basename escape in the second-line
+boundary scanner, cross-target test coupling, and small dead paths as cleanup.
+→ **did:** Corrected both blockers and every cleanup item that changes present
+correctness or keeps the seams narrow. Retained separate capture/playback clock
+ownership properties because the upcoming half-duplex and external-DSP boards
+can own those clocks differently; documented that the deterministic Darwin
+file clock emulates the hardware-owned cadence. `reset` and
+`playout_activity` remain intentionally unwired on the passthrough Mac and will
+gain their first production consumer in the amended StackChan AEC phase.
+
+**Open:** Re-run the mandatory independent Phase 2 review on this correction,
+then begin Phase 3 only on PASS. The preservation archive's remote-upload
+confirmation remains pending.
+
+## 2026-08-05 — phase 2: correction verification
+
+**Did:** Ran the complete repository gate after the review corrections and
+retained its output independently of the terminal session.
+
+**Measured:** Format, full workspace typecheck, and zero-warning lint passed.
+The exact full `pnpm test` command passed; the OS shard reported 262 files,
+2,708 passes, 12 expected failures, and one skip in 57.63 s, and the kit shard
+included the 37/37 sanitizer CTest result. The retained log is
+`/tmp/iterate-phase2-review-correction-workspace-test.log` (SHA-256
+`8da23a002cadac4fb0972382745208a961c4f659a3c492a6aa84a51ff7003c9f`).
+
+**Surprised by:** The first terminal capture detached after its output budget
+was exhausted and did not preserve the parent process's exit status, despite
+the suite visibly continuing. Rather than infer success from process exit, the
+exact command was rerun through a retained pipe with `pipefail`; that second
+run produced the explicit zero exit above.
+
+**Reviewer said:** Re-run the review after the corrections. → **did:** Frozen
+the verified correction as its own commit for an exact independent-review
+range.
+
+**Open:** Mandatory correction review, then Phase 3. The preservation archive's
+remote-upload confirmation remains pending.
