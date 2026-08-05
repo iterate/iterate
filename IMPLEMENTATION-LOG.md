@@ -877,3 +877,77 @@ and the PR, and the batched reviews. The prd worker's first setupVoiceAgent
 on a cold config-repo build still exceeds the device's setup deadline (one
 loud retriable failure — the known warm-up cost); the enforced warm-up
 handshake from the donor evidence remains a candidate follow-up.
+
+## 2026-08-05 — phase 4c: StackChan on hardware
+
+**Did:** Deployed the StackChan port to the real CoreS3 and drove real
+conversations against production (project voice-test) entirely over RPC.
+Fixed five defects that only hardware could show, and built the missing
+instrument for a sixth.
+
+**Measured:** Boot fixes first — the PSRAM move of the runtime struct had
+dragged the itx transport with it, and FreeRTOS asserts on a PSRAM TCB
+(`xPortCheckValidTCBMem`), so the board reboot-looped every ~2 s; the
+capture task then tripped its stack canary on the first processed frame
+because 4096 bytes cannot hold esp-sr's AEC (the proven donor gave
+`aec_process` a dedicated 6144 on top of a 4096-byte I/O task). With the
+transport in internal RAM and 8192 bytes of capture stack: 120 s soak,
+zero panics, clean boot to `voicelab state=ready`. The 1 Hz face flicker
+the user reported was a second bug in the same area — the UI tick
+republished an unchanged status snapshot every second — now gated on the
+conversation-lights equality helper.
+
+Then the conversation itself. `turns` was the whole story: every device
+asked the worker for manual turns, which tells the provider to wait for a
+commit this board never sends. With `vad` requested and the worker's VAD
+still at its untuned 0.5 threshold with no prefix padding, "Please repeat
+exactly these three words: Uplink diagnostic amber" arrived at the model
+as "Exactly these three words." At the proven StackChan values
+(threshold 0.1, silence 400 ms, prefix padding 400 ms) the sentence
+arrives whole and "count slowly from one to fifteen" comes back complete
+(`/agents/voice/2026-08-05-113941`, `-114321`).
+
+The device was exonerated by measurement BEFORE the worker was touched. A
+new stream-side oracle pulled 50 s of uplink off the wire and decoded it:
+2500 frames — exactly 50.0 s — no dropped, duplicated or zero frames,
+seam discontinuities statistically identical to interior ones
+(p50 64 / p99 ~1.3k both), at levels matching the donor's own recorded
+corpus on this same hardware (speech RMS 1150-1865 vs the donor's
+800-2280). Downlink arrives in bursts, not starved: 6.7 s of answer audio
+delivered in 1.28 s of wall time.
+
+**Surprised by:** Three things. (1) Opening the console port RESETS this
+board — the passive reader resets it too, which is how a four-minute
+conversation the user was having "crashed in the end": that was my reader
+attaching. The rig is now stream-side for anything observed during use.
+(2) The reviewer's confident prediction that the depth-one playback
+mailbox splices silence into roughly two of every five tail edges is
+false, and the instrument says so: `spkPartialChunks` reads 1 for a
+14-second answer and 2 for two answers — the final edge of each. The
+mailbox depth was left alone. (3) The same review found something real
+that no measurement had shown, because the number could not move:
+StackChan was the only board that never credited its starvation ledger
+from the hardware task, so `ledger_written_ms` never left zero, its
+`>= DMA_RING_MS` precondition could never hold, and
+`spkStarvedMs`/`spkStarveEvents` — the board's own declared
+audible-failure gate — were structurally pinned at 0. The io_task now
+credits real answer edges only, and `dmaWrittenMs` is published so the
+arming is visible: 56 ms on hardware, past the 40 ms precondition, which
+turns `spkStarvedMs=0` from a reassurance into a measurement.
+
+**Reviewer said:** Two independent code reviews ran (the batched phase
+reviews are still deferred): a StackChan-vs-Waveshare playback diff and a
+donor-policy extraction. Both are answered above — one prediction refuted
+by instrument, one dark-gate finding adopted. Their remaining unadopted
+findings, all measured absent in this run and recorded for the batched
+review rather than acted on blind: mic-queue drop-oldest (`micDropped=0`
+across every run), the 40-of-64 outbox reserve gate, no uplink freshness
+policy, capture priority 16 under playback's 17, and conceal counted
+after `answer_declared_done` (a shared gap across all four boards, so not
+changed here for one).
+
+**Open:** The AEC's own quality under double-talk is unmeasured — this
+run only proves single-talk turns. `codecCaptureOverruns=1` and
+`captureEpochResets=1` at boot want explaining. Phase 6 flasher fixes and
+the PR. Commits: c409b3d74 (boot + flicker), 79809f030 (VAD ownership +
+tuning, ledger unblinded).
