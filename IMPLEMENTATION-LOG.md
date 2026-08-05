@@ -830,3 +830,50 @@ field). The TS client's live conversation proof against local dev. StackChan's
 continuous-mic socket budget on the single lane is compile-proven only and is
 the first thing to measure when its hardware returns. Phase 6 flasher fixes
 and the PR.
+
+## 2026-08-05 — phase 4a+4b: hardware conversation proofs
+
+**Did:** Proved both new boards in real conversations against production
+(project voice-test), driven end-to-end by RPC with no hands on hardware.
+The drive surface is new product code, not a harness: a `conversation`
+capability module in push_to_talk's exact shape, mounted alongside
+push_to_talk on both boards (remote talk joins the physical level as a
+wired-OR through the shared device-event queue). Both units were re-pointed
+at voice-test by rewriting their ITERKIT1 blobs in the firmware's TLV format
+with the admin-revealable born project key, because their donor-era e2e
+projects lack the write-only /secrets/xai material.
+
+**Measured:** M5StickS3 (/agents/voice/2026-08-05-084641): Mac-spoken
+"Please repeat exactly these three words: Uplink diagnostic amber." captured
+by the real ES8311 microphone as 454 mu-law frames during a remote-held
+turn; the durable stream records the exact transcription and the exact
+answer "Uplink diagnostic amber."; the device played rx=99/played=99 with
+gaps=0, conceal=0, underruns=0. HAVPE (/agents/voice/2026-08-05-085451):
+XMOS verified 1.3.1 fail-closed with stage read-back at boot; the same
+utterance transcribed exactly and answered exactly; 460 frames up, rx=103/
+played=103, gaps=0, conceal=0, underruns=0. Retained logs:
+/tmp/iterate-m5sticks3-phase4a-proof.log (sha256 440510ed…c9d0335d) and
+/tmp/iterate-havpe-phase4b-proof.log (sha256 97d9a28f…a517b080).
+
+**Surprised by:** Three real findings. (1) The Stick's codec properties
+declared its fixed −18 dB ceiling with has_output_gain_control=false — the
+seam validator rejects exactly that contradiction, caught on first physical
+boot. (2) HAVPE's first physical turn captured 404 clean frames that the
+provider's VAD never heard: the donor's validated ×16 make-up gain for the
+quiet XMOS NS tap lived in the old worker, and on the companded mu-law wire
+it belongs on-device before encoding — with it, transcription was exact on
+the next turn. (3) The JTAG rig was actively harmful: OpenOCD halts wedged
+the frozen-main diagnosis twice (console back-pressure blocking every
+ESP_LOG when the USB device looks host-attached with nobody draining CDC,
+and halt-time scheduler corruption), which is what forced the honest
+remote-control surface instead.
+
+**Reviewer said:** Deferred per the user's directive; the proof commits are
+842b4d872 (remote control + validator fix) and 91652be0c (HAVPE gain).
+A correction to this entry: the earlier draft cited a wrong hash.
+
+**Open:** Phase 5's live CLI proof against local dev, Phase 6 flasher fixes
+and the PR, and the batched reviews. The prd worker's first setupVoiceAgent
+on a cold config-repo build still exceeds the device's setup deadline (one
+loud retriable failure — the known warm-up cost); the enforced warm-up
+handshake from the donor evidence remains a candidate follow-up.
