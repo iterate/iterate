@@ -347,9 +347,17 @@ test("Racing same-path live provisions leave one coherent durable and socket win
   using firstProvision = await firstMount;
   using secondProvision = await secondMount;
 
-  await expect
-    .poll(async () => Number(await firstProvision.ping()) + Number(await secondProvision.ping()))
-    .toBe(1);
+  // Manual settle loop instead of expect.poll: after a race, one lease must
+  // become inactive before we assert the durable winner, and vitest's poll
+  // helper has been flaky about test context on this path under preview retry.
+  const deadline = Date.now() + 15_000;
+  let activeCount = -1;
+  while (Date.now() < deadline) {
+    activeCount = Number(await firstProvision.ping()) + Number(await secondProvision.ping());
+    if (activeCount === 1) break;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  expect(activeCount).toBe(1);
   const expected = (await firstProvision.ping()) ? `first:${marker}` : `second:${marker}`;
   // @ts-expect-error - dynamic capability root
   expect(await project.raceProbe.value()).toBe(expected);
