@@ -204,10 +204,12 @@ it("loads runScript workers as one-off isolates", async () => {
       wranglerConfig: undefined,
     },
   });
-  const dispose = vi.fn();
+  const disposeEntrypoint = vi.fn();
+  const disposeWorker = vi.fn();
   h.loadResolvedWorker.mockReturnValue({
+    [Symbol.dispose]: disposeWorker,
     getEntrypoint: () => ({
-      [Symbol.dispose]: dispose,
+      [Symbol.dispose]: disposeEntrypoint,
       run: () => Promise.resolve("done"),
     }),
   });
@@ -228,7 +230,8 @@ it("loads runScript workers as one-off isolates", async () => {
   ).resolves.toBe("done");
 
   expect(h.loadResolvedWorker).toHaveBeenCalledWith(expect.objectContaining({ mode: "one-off" }));
-  expect(dispose).toHaveBeenCalledOnce();
+  expect(disposeEntrypoint).toHaveBeenCalledOnce();
+  expect(disposeWorker).toHaveBeenCalledOnce();
 });
 
 describe("dynamic worker spans", () => {

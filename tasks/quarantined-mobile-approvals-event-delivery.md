@@ -9,13 +9,14 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-Implementation is about 85% complete. Both skips are removed, failures now
-name the first missing durable transition, and the two dynamic-worker
+Implementation is about 90% complete. Both skips are removed, failures now
+name the first missing durable transition, and the three dynamic-worker
 ownership leaks plus the foreground-approval ordering race have red/green
-regression coverage. A fresh preview passed both restored flows, then exposed
-an interrupted CLI lifecycle while correctly rejecting the run for unrelated
-Cloudflare storage resets. Its empty-output diagnostic is now explicit. Another
-clean preview and the 25-run restoration gate remain.
+regression coverage. A fresh preview passed approvals and exposed one final
+Worker Loader ownership leak while notifications ran beside the 20-script
+concurrency proof: the entrypoint stub was released, but its one-off Worker
+handle was not. Both native handles are now released. Another clean preview
+and the 25-run restoration gate remain.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -98,6 +99,15 @@ notification journal.
   exited without its promised JSON document, which the matrix previously
   surfaced as the generic parser error `Unexpected end of JSON input`. The
   adapter now names that missing result and interrupted lifecycle directly.
+- Canonical preview workflow `xn1rbdkrdx` passed approvals on its first attempt
+  but retried notifications after the first approval request missed its 15s
+  behavior budget. Durable events and trace `c1cec4015eb11c878a7d04e39078e162`
+  show the script was accepted at 23:30:46Z but its first egress request did
+  not start until 23:31:16Z. The same window began with the 20-script
+  concurrency proof and then a steady run-script catalogue stream. Later
+  scripts completed ahead of this one. The one-off path released the derived
+  entrypoint stub but dropped the `WorkerStub` returned by `LOADER.load()`;
+  current Cloudflare Code Mode explicitly disposes both native handles.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -219,3 +229,10 @@ Test these in order; do not treat the first plausible one as the conclusion.
   empty-result diagnostic so a repeat names the lifecycle boundary instead of
   failing later in `JSON.parse`; the next canonical preview is the
   production-shaped regression check.
+- 2026-08-06: The next canonical preview's initial notification attempt
+  exposed a 30-second fresh-worker queue after the concurrency burst. Added a
+  red ownership test proving `run_script` disposed only the entrypoint stub,
+  then retained and disposed the parent one-off `WorkerStub` as well. Focused
+  worker-runner tests, formatting, lint, and OS typecheck pass; the next preview
+  will test whether fresh loads now drain promptly under the same full-suite
+  pressure.

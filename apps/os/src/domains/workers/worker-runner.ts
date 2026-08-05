@@ -102,12 +102,15 @@ export class DynamicWorkerRunner {
     mode: "cached" | "one-off",
     buildBudgetMs?: number,
     freshInstanceNonce?: string,
-  ): Promise<{ ok: true; target: T } | { failure: WorkerBuildFailure; ok: false }> {
+  ): Promise<
+    { ok: true; target: T; worker: WorkerStub } | { failure: WorkerBuildFailure; ok: false }
+  > {
     const loaded = await this.#load(ref, mode, buildBudgetMs, freshInstanceNonce);
     if (!loaded.ok) return loaded;
     return {
       ok: true,
       target: loaded.worker.getEntrypoint(ref.entrypoint, { props: ref.props ?? {} }) as T,
+      worker: loaded.worker,
     };
   }
 
@@ -349,7 +352,18 @@ export class DynamicWorkerRunner {
             ? await invokePreferringFlattenedPath({ args, path, target: loaded.target })
             : await replayPath({ args, path, target: loaded.target });
         } finally {
-          if (mode === "one-off") disposeIgnoredRpcResult(loaded.target);
+          if (mode === "one-off") {
+            // Worker Loader owns two native handles: the loaded Worker and
+            // the entrypoint stub derived from it. Releasing only the stub
+            // leaves every one-off script's Worker alive until GC, so a burst
+            // can keep later fresh loads queued even after its calls settle.
+            // Dispose inside-out, while this invocation still owns both.
+            try {
+              disposeIgnoredRpcResult(loaded.target);
+            } finally {
+              disposeIgnoredRpcResult(loaded.worker);
+            }
+          }
         }
       };
       try {
