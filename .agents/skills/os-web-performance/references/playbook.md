@@ -21,7 +21,7 @@ Capture:
 - console/page errors, failed requests, long tasks, and layout shifts;
 - WebSocket handshake, first itx query result, and first live snapshot.
 
-`agent-browser vitals <url> --json` is useful for lab timing. Use a headed,
+Lab timing in an isolated headed or headless browser (Playwriter or Playwright) is useful for comparing cold vs warm loads. Use a headed,
 worktree-scoped session and compare identical URLs. Playwright is the durable
 product assertion; PostHog is the field distribution; Cloudflare telemetry is
 the server-side explanation.

@@ -44,7 +44,7 @@ type CreatedOperatorSession = {
  * `doppler run --config prd -- pnpm cli session create --project <slug> --open`
  *
  * Omit `--open` to print the one-shot redemption URL for Playwright,
- * agent-browser, or a browser on another machine. Use `pnpm --silent cli ...`
+ * Playwriter, or a browser on another machine. Use `pnpm --silent cli ...`
  * when automation needs stdout to contain only that URL.
  *
  * `--admin` is a separate, explicit mode for the platform administration UI.
