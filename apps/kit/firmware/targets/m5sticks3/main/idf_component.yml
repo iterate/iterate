@@ -1,0 +1,9 @@
+dependencies:
+  capnweb:
+    git: https://github.com/iterate/capnweb.git
+    path: c
+    version: aee32b391063c4f5baf0aec852f38851eeeed1d9
+  # Board bring-up, buttons, display, and the ES8311 ADC microphone path.
+  # Playback deliberately bypasses M5Unified's mixer for a direct I2S channel.
+  m5stack/m5unified: "0.2.19"
+  idf: ">=5.4"

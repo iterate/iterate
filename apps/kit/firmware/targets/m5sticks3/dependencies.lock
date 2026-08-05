@@ -1,0 +1,40 @@
+dependencies:
+  capnweb:
+    component_hash: dbff099730db7a0e270611f2cb222b10659d2a1e78e9e8f4803f6de7786a6659
+    dependencies:
+    - name: idf
+      version: '>=5.4'
+    source:
+      git: https://github.com/iterate/capnweb.git
+      path: c
+      type: git
+    version: aee32b391063c4f5baf0aec852f38851eeeed1d9
+  idf:
+    source:
+      type: idf
+    version: 5.4.2
+  m5stack/m5gfx:
+    component_hash: c61634865a4e4a04fc122c658d1b484892d5b25871e95fcfb39960a9d6652a15
+    dependencies: []
+    source:
+      registry_url: https://components.espressif.com
+      type: service
+    version: 0.2.26
+  m5stack/m5unified:
+    component_hash: 85ab29e360fde0623ce30c8b8323d9f2c00acfffade19b104d6b7741b592e9ef
+    dependencies:
+    - name: m5stack/m5gfx
+      registry_url: https://components.espressif.com
+      require: private
+      version: '>=0.2.26'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    version: 0.2.19
+direct_dependencies:
+- capnweb
+- idf
+- m5stack/m5unified
+manifest_hash: e51da431c0dee040b0fe07d5a1a619eaf976a851594d352513c49268c3d01f49
+target: esp32s3
+version: 2.0.0
