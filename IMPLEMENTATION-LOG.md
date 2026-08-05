@@ -783,3 +783,50 @@ session against local dev over LAN ws://. StackChan (4c) port next, compile
 and host-test only. User amendment 2026-08-05: StackChan explicitly wanted
 even while offline — servos, camera, speaker, AEC, touchscreen — with the
 donor's final tuned AEC and levels preserved exactly.
+
+## 2026-08-05 — phase 4c + phase 5 code: StackChan port and the TS client
+
+**Did:** Ported StackChan per the §0 amendment and the user's explicit
+mid-session request, preserving the donor's final tuned AEC state exactly:
+ESP-SR 2.4.7 VOIP_HIGH_PERF with filter length 4, the 100 Hz near high-pass,
+saturating ×8 on the slot-1 amplifier-divider reference, constant processed
+×10 uplink, volume 80, +18 dB acoustic PGA with the divider at unity. The AEC
+is the first real implementation behind the shared audio-processor seam; the
+adopted aec_capture_bridge owns the 8/16/20 ms cadence conversion and its
+process callback is the seam itself, so the fail-closed silence rule applies
+twice. The composition rides the single-socket lane with the microphone open
+for the whole call (server VAD, touch toggles the call) — a recorded
+divergence from decision A2, whose PTT rationale is the echo story on boards
+without echo cancellation. The body's servos are the first capability module
+on the new peer. Deliberately not ported: camera (the donor never wired one),
+/pcm, PNG screen capture, and the AEC evidence harnesses. Separately, phase
+5's code landed: apps/kit/clients/voice-cli.ts is a project-secret stream
+participant with mu-law both directions (including the firmware's measured
+INT16_MIN encode fix) and a TypeScript mirror of the playout identity rules,
+with resilient.ts/rpc-ownership.ts reused verbatim and unit tests pinning the
+codec sweep and every measured identity scenario.
+
+**Measured:** Host suite 56/56 under ASan/UBSan (donor tests adopted for the
+bridge, selector, scaler, high-pass, capture reserve, touch tap, and
+conversation lights). All four ESP-IDF targets build with -Wall -Wextra
+-Werror: stackchan 0x135f70 (76% of 5 MiB free), waveshare byte-identical at
+0x1545c0, m5sticks3 0x117ae0, havpe 0xf0d90. Kit vitest 18/18; repository
+typecheck, zero-warning lint, and knip green.
+
+**Surprised by:** The donor's "idle gate" from the 2026-08-03 review memory
+ended up at PUBLICATION, not around aec_process — the shipped profile runs
+the filter on every frame including far silence, and the switched raw/×6
+policy survives only as the A/B control. Also the StackChan target built
+clean on the first configure: the audited hash-pinned BSP override transfers
+wholesale, which is exactly what its design promised.
+
+**Reviewer said:** Deferred per the user's straight-line directive; 4c commit
+boundary for the batched review is 347f66691 (phase 5 code: 4570cbc4a).
+
+**Open:** Hardware conversation proofs for M5StickS3 and HAVPE (both on the
+hub and flashable; the Stick's ITERKIT1 blob at 0x210000 already points at
+production with a live project and the new decoder ignores its extra donor
+field). The TS client's live conversation proof against local dev. StackChan's
+continuous-mic socket budget on the single lane is compile-proven only and is
+the first thing to measure when its hardware returns. Phase 6 flasher fixes
+and the PR.
