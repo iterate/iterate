@@ -328,15 +328,19 @@ export async function openRelayedStreamConnection(input: {
       if (handle === undefined) return true;
       return probeLeg(handle).then((live) => {
         if (live === true || currentHandle !== handle) return active;
-        // A gone leg with the wake socket still open is dormancy, not death —
-        // the next matching append re-dials (the DO wakes any socket whose
-        // connection is absent, stamped or not).
+        // An idle frame clears currentHandle before the ordinary dormant state
+        // reaches this branch. A handle that was present and now fails its
+        // probe is therefore dead even when the local wake-socket endpoint
+        // still LOOKS open: ctx.abort() can orphan that endpoint without a
+        // close event or a socket in the next DO incarnation. Report false so
+        // the owner reopens from its durable cursor instead of waiting forever
+        // for a wake frame that can no longer exist.
         currentHandle = undefined;
         disposeStub(handle);
         if (wakeSocket === undefined) {
           teardown({ reason: "rpc leg gone with no wake socket", socketCode: 1000 });
         }
-        return active;
+        return false;
       });
     },
     close: () => {

@@ -9,14 +9,14 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-Implementation is about 90% complete. Both skips are removed, failures now
-name the first missing durable transition, and the three dynamic-worker
-ownership leaks plus the foreground-approval ordering race have red/green
-regression coverage. A fresh preview passed approvals and exposed one final
-Worker Loader ownership leak while notifications ran beside the 20-script
-concurrency proof: the entrypoint stub was released, but its one-off Worker
-handle was not. Both native handles are now released. Another clean preview
-and the 25-run restoration gate remain.
+Implementation is about 95% complete. Both skips are removed, failures name
+the first missing durable transition, and the dynamic-worker ownership leaks,
+foreground-approval ordering race, accepted-message UI gap, and orphaned live
+stream callback now have regression coverage. Exact-head preview
+`4fbdd93` passed both restored mobile cases first try under the canonical
+16-worker load, then the new forced-stream-reset regression caught one final
+liveness defect before the restoration gate began. The corrected head still
+needs a clean preview and 25-run gate.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -108,6 +108,14 @@ notification journal.
   scripts completed ahead of this one. The one-off path released the derived
   entrypoint stub but dropped the `WorkerStub` returned by `LOADER.load()`;
   current Cloudflare Code Mode explicitly disposes both native handles.
+- Exact-head preview on `4fbdd93` passed approvals in 52.5 seconds and
+  notifications in 49.6 seconds, both first try under 16-worker Playwright.
+  The run was still rejected because the new forced-stream-reset Vitest case
+  failed twice. A Stream DO `ctx.abort()` can leave the relay's local wake
+  socket looking open even though the next DO incarnation no longer owns it;
+  the dead RPC leg was detected, but `ping()` incorrectly returned `true`, so
+  the owner never reopened from its cursor. A focused run preserved the exact
+  red assertion: expected the stale handle to report `false`, received `true`.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -136,10 +144,13 @@ Test these in order; do not treat the first plausible one as the conclusion.
    during concurrent delivery or Durable Object eviction. Prediction: the
    Script Execution starts and the fetch parks, but no matching Approval Batch
    fact appears; replay or eviction reproduces the same source-offset gap.
-3. Approval facts exist durably but a live thread subscription misses them.
-   Prediction: the root stream contains the complete batch and decision while
-   only the browser view is absent; reconnecting from a durable cursor repairs
-   the view without creating new facts.
+3. **Confirmed:** approval facts can exist durably while the live thread misses
+   them. A forced Stream DO reset can orphan both callback channels without a
+   close event; the relay then treated its stale local wake socket as proof of
+   life. The callback owner must see `ping() === false` and reopen from its
+   durable cursor. An accepted mobile message is also projected as pending
+   agent activity until the first durable script/LLM/assistant/error outcome,
+   closing the transient no-spinner gap without inventing durable state.
 4. **Confirmed:** notification intent delivery can disappear after an earlier
    foreground claim loses its ordering race. The dropped claim permits an
    unwanted Expo send; token rejection revokes the device and removes its
@@ -177,9 +188,14 @@ Test these in order; do not treat the first plausible one as the conclusion.
   and copied result disposal groups are released on every outcome. The device
   reducer retains claims that precede their matching intent, consumes them on
   arrival, and uses an approval-offset high-water mark to reject late claims
-  without retaining unbounded history._
-- [ ] Re-run the original browser flows serially, under the focused concurrent
-  stress loop, and in the canonical fully parallel preview lane.
+  without retaining unbounded history. The stream relay reports a probed-dead
+  RPC leg as dead even when its local wake socket is stale, allowing the
+  existing bounded owner watchdog to reopen from the durable cursor._
+- [x] Re-run the original browser flows serially, under the focused concurrent
+  stress loop, and in the canonical fully parallel preview lane. _Both cases
+  pass independently and passed first try together in the exact-head
+  16-worker preview on `4fbdd93`; the run was rejected only by the deliberately
+  added stream-reset regression._
 - [ ] Update this task with the confirmed cause, diagnostic contract, fix,
   traces, and validation evidence.
 
@@ -236,3 +252,11 @@ Test these in order; do not treat the first plausible one as the conclusion.
   worker-runner tests, formatting, lint, and OS typecheck pass; the next preview
   will test whether fresh loads now drain promptly under the same full-suite
   pressure.
+- 2026-08-06: Exact-head preview `4fbdd93` passed approvals and notifications
+  first try, but the new stream-incarnation regression failed both attempts.
+  A focused red run proved the relay returned `true` after its RPC leg died
+  because an orphaned local wake socket still looked open. The relay now
+  reports `false`; the existing 15-second owner watchdog reopens the logical
+  subscription, and the regression will prove cursor replay through the
+  replacement connection on the next deployment. OS typecheck, the 36
+  React/session tests, and focused formatting checks pass.

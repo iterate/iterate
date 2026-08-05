@@ -2255,7 +2255,7 @@ test("an idle-torn session connection resumes on the next matching append withou
   }
 });
 
-test("a session connection resumes after its stream incarnation is interrupted", async () => {
+test("a session connection detects an interrupted stream incarnation and resumes from its cursor", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/subscriptions/session/interrupted/${marker}`;
   const connectionKey = `interrupted-${marker.slice(0, 8)}`;
@@ -2286,10 +2286,33 @@ test("a session connection resumes after its stream incarnation is interrupted",
       type: MATCHING_EVENT_TYPE,
       payload: { round: "after-interruption" },
     });
-    await waitForCondition(async () => received.some((event) => event.offset === second!.offset), {
-      description: "the original callback to resume after stream interruption",
-      timeoutMs: 30_000,
+
+    // The wake socket can remain locally open after the Stream DO has lost it,
+    // so the relay must trust the dead RPC leg rather than that stale socket.
+    // useStreamConnection responds to this false result by reopening with the
+    // same key and its last delivered cursor; do that owner step explicitly.
+    await expect(Promise.resolve(handle.ping())).resolves.toBe(false);
+    await handle.close();
+    const resumed = await stream.openConnection({
+      connectionKey,
+      eventTypes: [MATCHING_EVENT_TYPE],
+      replayAfterOffset: first!.offset,
+      processEventBatch: ({ events }) => {
+        received.push(...events);
+      },
     });
+    try {
+      await waitForCondition(
+        async () => received.some((event) => event.offset === second!.offset),
+        {
+          description: "the replacement callback to replay after stream interruption",
+          timeoutMs: 30_000,
+        },
+      );
+    } finally {
+      await resumed.close();
+      disposeRpc(resumed);
+    }
     expect(received.map((event) => event.offset)).toEqual([first!.offset, second!.offset]);
   } finally {
     await handle.close();
