@@ -47,6 +47,8 @@ static struct {
   bool link_ready;
   bool call_requested;
   bool dirty;
+  /* False until the ring has actually been written once; see the tick. */
+  bool painted;
   int64_t last_refresh_us;
   struct rgb shown;
 } ui;
@@ -116,24 +118,38 @@ bool havpe_ui_init(void) {
   return true;
 }
 
+/*
+ * THIS RING IS THE ONLY THING THIS BOARD CAN SAY. It has no screen, so every
+ * one of these colours has to be legible across a room in daylight — and the
+ * first version was not: idle was {0,0,2}, two parts in 255 of blue, which
+ * reads as a dead device to anyone looking at it. "Barely on" was the intent
+ * and invisible was the result, reported as "the LEDs aren't on when it's on".
+ *
+ * So these are floors, not tastes. Nothing that means "alive" goes below ~12
+ * of 255, which is the level at which a WS2812 is unambiguously lit rather
+ * than arguably lit; the states that mean something is HAPPENING sit near 72
+ * so they are distinguishable from the resting glow at a glance rather than by
+ * comparison. Twelve LEDs at these levels is a few tens of milliamps, which is
+ * nothing next to the XMOS and the speaker this board already runs.
+ */
 static struct rgb state_colour(void) {
   if (!ui.link_ready) {
-    return (struct rgb){24, 8, 0}; /* amber: offline or reconnecting */
+    return (struct rgb){72, 24, 0}; /* amber: offline or reconnecting */
   }
   switch (ui.state) {
     case HAVPE_UI_LISTENING:
-      return (struct rgb){0, 24, 4}; /* green: microphone is live */
+      return (struct rgb){0, 72, 12}; /* green: microphone is live */
     case HAVPE_UI_SPEAKING:
-      return (struct rgb){0, 8, 24}; /* blue: the agent is talking */
+      return (struct rgb){0, 24, 72}; /* blue: the agent is talking */
     case HAVPE_UI_CONNECTING:
-      return (struct rgb){24, 8, 0};
+      return (struct rgb){72, 24, 0};
     case HAVPE_UI_IDLE:
       break;
   }
   if (ui.call_active) {
-    return (struct rgb){4, 4, 8}; /* dim slate: call open, idle */
+    return (struct rgb){24, 24, 40}; /* slate: call open, nobody talking */
   }
-  return (struct rgb){0, 0, 2}; /* barely-on: powered, no call */
+  return (struct rgb){12, 12, 16}; /* resting: powered and connected */
 }
 
 void havpe_ui_set_state(enum havpe_ui_state state) {
@@ -179,7 +195,13 @@ void havpe_ui_tick(void) {
   const int64_t now_us = esp_timer_get_time();
   if (now_us - ui.last_refresh_us < RING_REFRESH_MIN_US) return;
   const struct rgb colour = state_colour();
-  if (memcmp(&colour, &ui.shown, sizeof(colour)) == 0) {
+  /*
+   * `shown` starts black, so "equal to what is shown" is a lie until the first
+   * successful refresh — and any state whose colour happened to be black would
+   * clear `dirty` and never light the ring at all, which is unfalsifiable from
+   * the outside on a board with no screen. Paint once, then compare.
+   */
+  if (ui.painted && memcmp(&colour, &ui.shown, sizeof(colour)) == 0) {
     ui.dirty = false;
     return;
   }
@@ -188,6 +210,7 @@ void havpe_ui_tick(void) {
         ui.strip, index, colour.red, colour.green, colour.blue);
   }
   if (led_strip_refresh(ui.strip) == ESP_OK) {
+    ui.painted = true;
     ui.shown = colour;
     ui.last_refresh_us = now_us;
     ui.dirty = false;
