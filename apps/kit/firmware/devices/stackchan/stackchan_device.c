@@ -217,6 +217,16 @@ EXT_RAM_BSS_ATTR static struct {
   uint32_t mic_frames_captured;
   uint32_t mic_frames_dropped;
   uint32_t mic_process_failures;
+  /*
+   * The AEC bridge's counters, mirrored out of the capture task. Read by the
+   * app loop for health; never read from the bridge there, because its
+   * accessor is single-task by contract and writes as it reads.
+   */
+  atomic_uint aec_bridge_failures;
+  atomic_uint aec_bridge_reset_failures;
+  atomic_uint aec_sequence_discontinuities;
+  atomic_uint aec_clock_regressions;
+  atomic_uint aec_egress_copy_failures;
   /** Captured with no turn open: room noise, never sent, never queued. */
   uint32_t mic_frames_idle;
   uint32_t speaker_frames_played;
@@ -1003,6 +1013,41 @@ static void capture_task(void *argument) {
             STACKCHAN_AUDIO_CHUNK_SAMPLES) != ITERATE_KIT_OK) {
       ++runtime.mic_process_failures;
     }
+    /*
+     * PUBLISHED BY THE TASK THAT OWNS THE BRIDGE, and that is the whole point.
+     * The bridge's own header states its accessors belong to one task and that
+     * it holds no atomics — and its metrics() call WRITES the two partial-fill
+     * fields as it reads. Calling it from the app loop to fill a health
+     * document therefore both raced this task and mutated state this task
+     * owns. Mirroring into atomics here is the same shape the uplink selector
+     * already uses for its clip counter.
+     */
+    {
+      const struct iterate_kit_aec_capture_bridge_metrics *bridge =
+          iterate_kit_aec_capture_bridge_metrics(&runtime.capture_bridge);
+      if (bridge != NULL) {
+        atomic_store_explicit(
+            &runtime.aec_bridge_failures,
+            bridge->processor_failures,
+            memory_order_relaxed);
+        atomic_store_explicit(
+            &runtime.aec_bridge_reset_failures,
+            bridge->processor_reset_failures,
+            memory_order_relaxed);
+        atomic_store_explicit(
+            &runtime.aec_sequence_discontinuities,
+            bridge->sequence_discontinuities,
+            memory_order_relaxed);
+        atomic_store_explicit(
+            &runtime.aec_clock_regressions,
+            bridge->timestamp_regressions,
+            memory_order_relaxed);
+        atomic_store_explicit(
+            &runtime.aec_egress_copy_failures,
+            bridge->egress_copy_failures,
+            memory_order_relaxed);
+      }
+    }
   }
 }
 
@@ -1211,13 +1256,6 @@ static size_t health_json(char *out, size_t capacity) {
   iterate_kit_esp_idf_itx_transport_metrics(&transport, &metrics);
   iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
   iterate_kit_stackchan_avatar_metrics_snapshot(&face_metrics);
-  /*
-   * The AEC seam's own account of itself. Nothing read this before, so every
-   * way the processor can fail — a refused frame, a discontinuity, a clock
-   * that went backwards — was invisible on the one board that has an AEC.
-   */
-  const struct iterate_kit_aec_capture_bridge_metrics *bridge_metrics =
-      iterate_kit_aec_capture_bridge_metrics(&runtime.capture_bridge);
 
   /*
    * The gate every producer sits behind. Closed, the device answers RPCs and
@@ -1278,11 +1316,11 @@ static size_t health_json(char *out, size_t capacity) {
     {"capFailed", stackchan_audio_capture_failed() ? 1U : 0U},
     {"spkFailed", stackchan_audio_playback_failed() ? 1U : 0U},
     /* The AEC seam: refused frames, and the two ways its input can lie. */
-    {"aecBridgeFailures", bridge_metrics->processor_failures},
-    {"aecBridgeResetFailures", bridge_metrics->processor_reset_failures},
-    {"aecSeqDiscontinuities", bridge_metrics->sequence_discontinuities},
-    {"aecClockRegressions", bridge_metrics->timestamp_regressions},
-    {"aecEgressCopyFailures", bridge_metrics->egress_copy_failures},
+    {"aecBridgeFailures", atomic_load_explicit(&runtime.aec_bridge_failures, memory_order_relaxed)},
+    {"aecBridgeResetFailures", atomic_load_explicit(&runtime.aec_bridge_reset_failures, memory_order_relaxed)},
+    {"aecSeqDiscontinuities", atomic_load_explicit(&runtime.aec_sequence_discontinuities, memory_order_relaxed)},
+    {"aecClockRegressions", atomic_load_explicit(&runtime.aec_clock_regressions, memory_order_relaxed)},
+    {"aecEgressCopyFailures", atomic_load_explicit(&runtime.aec_egress_copy_failures, memory_order_relaxed)},
     /*
      * The AEC's own health: engine rebuilds mean the capture timeline broke;
      * clip counters catch abnormal board levels that would otherwise vanish
