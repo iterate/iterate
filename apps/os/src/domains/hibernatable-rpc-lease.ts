@@ -40,9 +40,9 @@ const HibernatableRpcLeaseFrame = z.union([
   z.object({ type: z.literal("wake") }),
 ]);
 
-export type HibernatableRpcLeaseFrame = z.infer<typeof HibernatableRpcLeaseFrame>;
+type HibernatableRpcLeaseFrame = z.infer<typeof HibernatableRpcLeaseFrame>;
 
-export type HibernatableRpcLeaseSocketEntry<Attachment> = {
+type HibernatableRpcLeaseSocketEntry<Attachment> = {
   attachment: Attachment;
   binding: HibernatableRpcLeaseBinding;
   ws: WebSocket;

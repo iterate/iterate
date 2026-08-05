@@ -36,7 +36,7 @@ const LiveCapabilityLeaseFrame = z.discriminatedUnion("type", [
   z.object({ type: z.literal("wake"), leaseKey: z.string().min(1) }),
 ]);
 
-export type LiveCapabilityLeaseFrame = z.infer<typeof LiveCapabilityLeaseFrame>;
+type LiveCapabilityLeaseFrame = z.infer<typeof LiveCapabilityLeaseFrame>;
 
 /** Decode one addressed channel frame; malformed frames are dropped whole. */
 export function parseLiveCapabilityLeaseFrame(data: unknown): LiveCapabilityLeaseFrame | undefined {
