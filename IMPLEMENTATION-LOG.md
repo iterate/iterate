@@ -951,3 +951,69 @@ run only proves single-talk turns. `codecCaptureOverruns=1` and
 `captureEpochResets=1` at boot want explaining. Phase 6 flasher fixes and
 the PR. Commits: c409b3d74 (boot + flicker), 79809f030 (VAD ownership +
 tuning, ledger unblinded).
+
+## 2026-08-05 — phase 6: the PR, and two bugs CI found that a Mac could not
+
+**Did:** Opened the PR (#2376, retitled from the old voicelab experiment that
+shared this branch), pruned to goal 2, fixed the flasher, and drove CI to
+green.
+
+**Measured:** The goal-2 audit found nothing to prune: 386 changed files, no
+build artefacts, no evidence binaries, `build/`, `.cache/`, `sdkconfig` and
+`managed_components/` all ignored and untracked. The only binary in the diff
+is a 14 KB viseme model that a codegen step embeds, and the only vendored
+upstream is the 16-file hash-audited CoreS3 BSP override that carries the TDM
+patch — both justifiable in one sentence, which was the test. Gates: 262 test
+files / 2708 tests, 56 firmware host tests, knip, lint, typecheck, format all
+clean locally.
+
+The flasher was worse than the plan thought. §5.2 asked for two cheap
+additions; the actual state was that `config-image.ts` wrote UTF-8 JSON inside
+the `ITERKIT1` envelope while the firmware has only ever had a
+tag-length-value decoder. Every partition it produced was rejected before a
+single credential was read, so browser provisioning could not have worked at
+all — the boards proven in phase 4 were provisioned with a hand-built image,
+which is exactly why nobody noticed. Fixed, plus the requested device-id and
+kit-path forward tags, and proven by flashing a partition the shipping encoder
+produced: the CoreS3 boots to `voicelab state=ready`, authenticated with the
+flashed key. The first attempt failed closed with "decode failed" because the
+generator dropped two required fields — the firmware refusing an incomplete
+partition is the design working, and it is why this was worth flashing rather
+than unit-testing alone.
+
+The plan's other two flasher items do not apply to this branch: there is no
+first-party browser flasher here to add `readFlash()`/`calculateMD5Hash`
+verification to, and no `hard_reset` call to give a `watchdog_reset` fallback.
+ESP Web Tools owns that path. Recorded rather than invented.
+
+**Surprised by:** Both CI failures were invisible on a Mac. The firmware host
+suite failed only under GCC — comparing constants from two different anonymous
+enums is `-Werror=enum-compare` there and silent under Apple clang — so a test
+file built locally and broke CI. A sweep found no other first-party instance.
+
+The preview lane was the better bug. GitHub's compare response caps its file
+list at 300 and the list is ORDERED, so on a large diff the tail is simply
+absent — and absence reads as "that app did not change". This branch's 386
+files put `apps/kit/**` ahead of `apps/os/**` alphabetically: the firmware
+consumed the whole cap, OS was never selected, nothing deployed, and the e2e
+lane then had no recorded deployment to test and failed the PR. The
+container-rollout decision in the same file already refuses to trust a capped
+comparison, with a comment stating the principle; app selection had never
+applied it. Now it does, and the only safe refusal is the whole fleet.
+Measured against the real function: 300 files select all six apps, 299 select
+none.
+
+**Correction to commit 9664d4f7e's message:** it claims
+`scripts/preview/preview.test.ts` "does not appear to be included by any test
+lane". That is wrong. `scripts` is a pnpm workspace with its own test script,
+so `pnpm test` runs it — 19 files, 284 tests, including the two new cap cases.
+I had been invoking vitest from the wrong directory and concluded too much
+from it. The assertions run in CI.
+
+**Reviewer said:** The batched independent reviews were re-run after the first
+pair died on a server overload; findings and their resolutions are recorded
+where they land.
+
+**Open:** Merge is Jonas's call. StackChan double-talk remains unmeasured, and
+`codecCaptureOverruns=1` / `captureEpochResets=1` at its boot are still
+unexplained.
