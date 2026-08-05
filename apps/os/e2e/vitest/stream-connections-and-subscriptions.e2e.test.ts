@@ -2281,7 +2281,7 @@ test("a session connection resumes after its stream incarnation is interrupted",
       description: "the live session connection to deliver before interruption",
     });
 
-    await stream.kill();
+    await expect(stream.kill()).rejects.toThrow("kill requested");
     const [second] = await stream.append({
       type: MATCHING_EVENT_TYPE,
       payload: { round: "after-interruption" },
