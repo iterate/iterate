@@ -16,7 +16,8 @@
     "firmware:configure": "cmake -S firmware -B firmware/.build/host -DCMAKE_BUILD_TYPE=Debug -DITERATE_KIT_SANITIZE=ON",
     "firmware:build:host": "pnpm firmware:configure && cmake --build firmware/.build/host --parallel",
     "firmware:test:host": "pnpm firmware:build:host && ctest --test-dir firmware/.build/host --output-on-failure",
-    "typecheck": "pnpm gen:wrangler && tsc --noEmit"
+    "typecheck": "pnpm gen:wrangler && tsc --noEmit",
+    "voice": "tsx ./clients/voice-cli.ts"
   },
   "dependencies": {
     "@iterate-com/ui": "workspace:*",
@@ -26,7 +27,8 @@
     "lucide-react": "^0.553.0",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "zod": "4.3.6"
+    "zod": "4.3.6",
+    "iterate": "workspace:*"
   },
   "devDependencies": {
     "@cloudflare/vite-plugin": "catalog:cloudflare",
@@ -41,6 +43,7 @@
     "typescript": "^5.9.3",
     "vite": "^8.0.16",
     "vitest": "^4.1.7",
-    "wrangler": "catalog:cloudflare"
+    "wrangler": "catalog:cloudflare",
+    "@cloudflare/workers-types": "catalog:cloudflare"
   }
 }
