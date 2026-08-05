@@ -113,6 +113,11 @@ static void one_bad_turn_survives_into_the_summary(void)
     .back_office_sent = 13U,
     .back_office_heard = 12U,
     .deadline_cancelled_turns = 1U,
+    .room_completed_bytes = 1280U,
+    .room_dropped_bytes = 640U,
+    .room_starved_buffers = 2U,
+    .speaker_platform_error = -50,
+    .microphone_platform_error = 0,
   };
   const char *path = "/tmp/iterate-kit-cli-report-test.json";
   assert(cli_report_write(&report, &summary, path) == CLI_REPORT_OK);
@@ -127,6 +132,11 @@ static void one_bad_turn_survives_into_the_summary(void)
   assert(strstr(body, "\"deadlineCancelledTurns\":1") != NULL);
   assert(strstr(body, "\"colleague\":") != NULL);
   assert(strstr(body, "\"colleagueQuestionsAsked\":13") != NULL);
+  assert(strstr(body, "\"roomCompletedBytes\":1280") != NULL);
+  assert(strstr(body, "\"roomDroppedBytes\":640") != NULL);
+  assert(strstr(body, "\"roomStarvedBuffers\":2") != NULL);
+  assert(strstr(body, "\"speakerPlatformError\":-50") != NULL);
+  assert(strstr(body, "\"microphonePlatformError\":0") != NULL);
   assert(strstr(body, "\"framesPlayed\":") != NULL);
   assert(strstr(body, "\"ringOccupancyP10Ms\":") != NULL);
   /* The minimum across turns is the failed one: a spread cannot hide it. */

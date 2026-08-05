@@ -57,6 +57,19 @@ enum {
    */
   CLI_AUDIO_OUT_BUFFER_BYTES = 640,
   /*
+   * Producer-ring reserve kept ahead of the hardware pull clock.
+   *
+   * CoreAudio owns the playback clock. Feeding this boundary one frame from a
+   * separate 20 ms software timer made two nominally identical clocks race;
+   * the faster one inevitably found the ring empty. All four AudioQueue
+   * buffers can already be in flight when a callback must refill one, so they
+   * cannot count as refill lead: one further descriptor chain waits in this
+   * module's producer ring. That is eight frames of bounded payload in total,
+   * not another elastic jitter buffer.
+   */
+  CLI_AUDIO_OUT_LEAD_BYTES =
+      CLI_AUDIO_OUT_BUFFER_COUNT * CLI_AUDIO_OUT_BUFFER_BYTES,
+  /*
    * The elastic buffer, in bytes — two seconds.
    *
    * Sized for the producer's burstiness, not the speaker's latency: the loop
@@ -72,6 +85,7 @@ enum cli_audio_out_status {
   CLI_AUDIO_OUT_OK = 0,
   CLI_AUDIO_OUT_ERR_ARG,
   CLI_AUDIO_OUT_ERR_PLATFORM,
+  CLI_AUDIO_OUT_ERR_TIMEOUT,
   /** The ring is full: the room is more than a ring behind the timeline. */
   CLI_AUDIO_OUT_ERR_FULL,
 };
@@ -115,11 +129,25 @@ struct cli_audio_out {
   uint8_t ring[CLI_AUDIO_OUT_RING_BYTES];
   atomic_uint_least32_t read;
   atomic_uint_least32_t write;
-  bool enabled;
+  atomic_bool enabled;
+  atomic_bool expecting_audio;
+  atomic_bool draining;
+  /** Actual payload currently owned by each enqueued CoreAudio buffer. */
+  atomic_uint_least32_t buffer_payload_bytes[CLI_AUDIO_OUT_BUFFER_COUNT];
+  /** Payload whose completed CoreAudio callback proves hardware consumption. */
+  atomic_uint_least32_t completed_bytes;
+  /** First failing AudioQueue/WAV status, zero while the output is healthy. */
+  atomic_int_least32_t platform_error;
   /** Bytes refused because the ring was full. */
   uint32_t dropped;
-  /** Buffers CoreAudio asked for that the ring could not fill. */
-  uint32_t starved;
+  /**
+   * Dry pulls followed by more payload in the same answer: audible holes.
+   * Trailing silence before response completion is classified separately and
+   * discarded when the caller closes the expectation window.
+   */
+  atomic_uint_least32_t starved;
+  /** Dry pulls not yet proven to be internal rather than trailing silence. */
+  atomic_uint_least32_t pending_starved;
 };
 
 /** Human-readable status name, for the one top-level log boundary. */
@@ -162,8 +190,28 @@ enum cli_audio_out_status cli_audio_out_open_file(
  */
 void cli_audio_out_pump(struct cli_audio_out *out, uint64_t now_us);
 
-/** Bytes currently waiting in the ring, for the pulse line. */
+/**
+ * Open or close the answer-audio expectation window.
+ *
+ * Closing discards unconfirmed trailing dry pulls. A dry pull becomes
+ * starvation only if later payload proves there was a hole inside the answer.
+ */
+void cli_audio_out_set_expected(struct cli_audio_out *out, bool expected);
+
+/**
+ * Wait until every accepted payload byte has completed at the hardware/file
+ * boundary. The wait is bounded by timeout_ms and never counts trailing idle
+ * silence as payload.
+ */
+enum cli_audio_out_status cli_audio_out_drain(
+    struct cli_audio_out *out, uint32_t timeout_ms);
+
+/** Bytes currently waiting in the producer ring, for the pulse line. */
 uint32_t cli_audio_out_queued_bytes(const struct cli_audio_out *out);
+
+uint32_t cli_audio_out_completed_bytes(const struct cli_audio_out *out);
+uint32_t cli_audio_out_starved_buffers(const struct cli_audio_out *out);
+int32_t cli_audio_out_platform_error(const struct cli_audio_out *out);
 
 /** Stop and release CoreAudio resources. Safe before or after a failed open. */
 void cli_audio_out_close(struct cli_audio_out *out);

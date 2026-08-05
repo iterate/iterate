@@ -4,6 +4,7 @@
 #include "iterate/kit/voice_device_profile.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <string.h>
 
 enum {
@@ -30,11 +31,18 @@ struct fixture {
   uint8_t outbox_storage[SLOT_COUNT][ITERATE_KIT_POSIX_CONTROL_MESSAGE_CAPACITY];
   size_t outbox_lengths[SLOT_COUNT];
   int64_t now_us;
+  int64_t advanced_now_us;
+  unsigned int advance_on_clock_read;
+  unsigned int clock_reads;
 };
 
 static int64_t fixture_now_us(void *context) {
-  const struct fixture *fixture = context;
+  struct fixture *fixture = context;
   assert(fixture != NULL);
+  ++fixture->clock_reads;
+  if (fixture->advance_on_clock_read == fixture->clock_reads) {
+    fixture->now_us = fixture->advanced_now_us;
+  }
   return fixture->now_us;
 }
 
@@ -151,6 +159,36 @@ static void stalled_open_times_out_and_recovers(void) {
 }
 
 /*
+ * A resolver or TLS step can start before the deadline and finish after it.
+ * READY is not allowed to erase that elapsed time: the crossed attempt is a
+ * timeout, its partially opened generation is closed, and no socket generation
+ * becomes visible to Cap'n Web.
+ */
+static void ready_step_that_crosses_deadline_times_out(void) {
+  struct fixture fixture;
+  struct iterate_kit_posix_itx_transport_metrics metrics;
+  fixture_init(&fixture);
+  fixture.advance_on_clock_read = 3U;
+  fixture.advanced_now_us =
+      (int64_t)ITERATE_KIT_VOICE_CONNECTION_OPEN_TIMEOUT_MS * 1000;
+  iterate_kit_fake_posix_websocket_set_open_result(
+      ITERATE_KIT_POSIX_WEBSOCKET_OPEN_READY);
+
+  assert(iterate_kit_posix_itx_transport_poll(
+             &fixture.transport, SLOT_COUNT) == ITERATE_KIT_OK);
+  assert(!fixture.transport.socket_connected);
+  assert(fixture.transport.socket_generation == 0U);
+  assert(!fixture.transport.websocket_open_attempt_active);
+  iterate_kit_posix_itx_transport_metrics(&fixture.transport, &metrics);
+  assert(metrics.websocket_open_timeouts == 1U);
+  assert(metrics.websocket_connections == 0U);
+  assert(metrics.websocket_errors == 0U);
+  assert(metrics.last_platform_error == ETIMEDOUT);
+  assert(iterate_kit_posix_itx_transport_stop(&fixture.transport) ==
+         ITERATE_KIT_OK);
+}
+
+/*
  * A peer FIN/CLOSE used to strand the hardware session until a physical reset.
  * The POSIX owner must discard generation-scoped state, respect the same retry
  * gate, and then create a strictly newer socket generation. Forcing the gate's
@@ -177,6 +215,7 @@ static void peer_close_reconnects_with_new_generation(void) {
 
 int main(void) {
   stalled_open_times_out_and_recovers();
+  ready_step_that_crosses_deadline_times_out();
   peer_close_reconnects_with_new_generation();
   return 0;
 }

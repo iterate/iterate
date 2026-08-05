@@ -7,15 +7,14 @@
  * A WebSocket frame is one immutable wire object once any byte has reached
  * TLS. Short writes must resume the same header, mask key, masked payload, and
  * offset; regenerating a frame after EAGAIN would corrupt the ordered stream
- * and could replay PCM with a different mask. This writer materializes that
+ * and could replay application data with a different mask. This writer materializes that
  * whole object in caller-owned fixed storage, then exposes only a monotonic
  * pending/advance cursor.
  *
- * Copying/masking one 640-byte audio frame costs a bounded pass and one 648-byte
- * workspace, but avoids retaining a platform callback's borrowed microphone
- * pointer across arbitrary network stalls. Scatter/gather masking in the raw
- * transport was rejected for the MVP because ESP-IDF's TLS API still permits
- * partial writes and would spread cursor ownership across several layers.
+ * Copying and masking costs one bounded pass, but avoids retaining a borrowed
+ * application pointer across arbitrary network stalls. Scatter/gather masking
+ * in the raw transport would spread partial-write cursor ownership across
+ * several layers.
  *
  * The writer performs no I/O, allocation, waiting, random generation, or
  * retry. One connection owner serializes access. Reset abandons only local

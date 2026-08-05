@@ -80,14 +80,15 @@ struct cli_audio_in {
   AudioQueueBufferRef buffers[CLI_AUDIO_IN_BUFFER_COUNT];
   uint8_t frames[CLI_AUDIO_IN_RING_FRAMES][ITERATE_KIT_VOICE_FRAME_BYTES];
   atomic_uint_least32_t write;
+  atomic_int_least32_t platform_error;
   uint32_t read;
   /** Frames the consumer discarded because it had fallen a whole ring behind. */
   uint32_t dropped;
   /** Callbacks that were not a whole frame; see cli_audio_in_push. */
-  uint32_t short_buffers;
+  atomic_uint_least32_t short_buffers;
   /** Frames accepted. Zero while talking means macOS refused the microphone. */
-  uint32_t captured;
-  bool enabled;
+  atomic_uint_least32_t captured;
+  atomic_bool enabled;
 };
 
 /** Human-readable status name, for the one top-level log boundary. */
@@ -112,6 +113,9 @@ enum cli_audio_in_status cli_audio_in_push(
 /** Take the oldest frame, discarding any the consumer fell behind on. */
 enum cli_audio_in_status cli_audio_in_pop(
     struct cli_audio_in *in, uint8_t *out, size_t length);
+
+uint32_t cli_audio_in_captured_frames(const struct cli_audio_in *in);
+int32_t cli_audio_in_platform_error(const struct cli_audio_in *in);
 
 /** Stop and release CoreAudio resources. Safe before or after a failed open. */
 void cli_audio_in_close(struct cli_audio_in *in);

@@ -122,6 +122,10 @@ struct cli_runtime {
    * off because it is lengthy truncates exactly the answers worth asking for.
    */
   uint64_t turn_progress_ms;
+  /** CoreAudio/file completion position when the current scripted turn began. */
+  uint32_t turn_room_completed_start_bytes;
+  /** Bytes this scripted turn successfully submitted to the room boundary. */
+  uint32_t turn_room_submitted_bytes;
   /**
    * The current answer's playout timeline: when its first frame reached the
    * speaker, and how many MILLISECONDS have been emitted since. See iterate_kit_voice_playout_lag_ms —

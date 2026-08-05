@@ -26,6 +26,18 @@ function disposeRpcStub(value: unknown, label: string): void {
   }
 }
 
+/** Close a live stream lane before releasing its RPC wrapper. */
+function closeAndDisposeRpcStub(value: { close(): void } | null, label: string): void {
+  if (value === null) return;
+  try {
+    value.close();
+  } catch (error) {
+    console.error("voice-agent RPC handle close failed", { error, label });
+  } finally {
+    disposeRpcStub(value, label);
+  }
+}
+
 /** Await an RPC result whose payload is intentionally ignored, then release its wrapper. */
 async function discardRpcResult(result: Promise<unknown>, label: string): Promise<void> {
   disposeRpcStub(await result, label);
@@ -1660,7 +1672,7 @@ export class VoiceBridge extends IterateDurableObject {
           },
         });
         if (closedDown) {
-          disposeRpcStub(connection, "late back-office connection");
+          closeAndDisposeRpcStub(connection, "late back-office connection");
           return;
         }
         backOfficeConnection = connection;
@@ -2666,12 +2678,12 @@ export class VoiceBridge extends IterateDurableObject {
           ...(lastSeenOffset >= 0 ? { replayAfterOffset: lastSeenOffset } : {}),
         });
         if (closedDown) {
-          disposeRpcStub(next, "late voice stream connection");
+          closeAndDisposeRpcStub(next, "late voice stream connection");
           return;
         }
         currentConnection = next;
         currentBatches = 0;
-        disposeRpcStub(previous, "superseded voice stream connection");
+        closeAndDisposeRpcStub(previous, "superseded voice stream connection");
       } catch (error) {
         if (!closedDown) teardown(`stream connection open failed: ${String(error)}`);
       } finally {
@@ -2758,9 +2770,9 @@ export class VoiceBridge extends IterateDurableObject {
           },
         });
       }
-      disposeRpcStub(currentConnection, "voice stream connection");
+      closeAndDisposeRpcStub(currentConnection, "voice stream connection");
       currentConnection = null;
-      disposeRpcStub(backOfficeConnection, "back-office stream connection");
+      closeAndDisposeRpcStub(backOfficeConnection, "back-office stream connection");
       backOfficeConnection = null;
       try {
         upstream.close();
@@ -3590,28 +3602,34 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
        */
       const setupId = crypto.randomUUID();
       const startedAt = Date.now();
-      [voiceEvents, agentEvents] = await Promise.all([
-        stream.append(
-          {
-            type: "events.iterate.com/voice-agent/created",
-            idempotencyKey: birthKey,
-            payload: birthPayload,
-          },
-          {
-            type: "events.iterate.com/stream/subscription-configured",
-            idempotencyKey: subscriptionKey,
-            payload: subscriptionPayload,
-          },
-        ),
-        /* Born and briefed — the same helper the call path uses, so a call that
-         * never went through setup gets the same colleague. The brief text comes
-         * from the project's live __describe every time, which is the whole point:
-         * a device that gained or lost a method must not be described by a prompt
-         * written before it did. */
-        describeProvidedCapabilities(project).then((brief) =>
-          ensureVoiceAgent(backOffice, brief, setupId),
-        ),
-      ]);
+      /*
+       * Keep RPC ownership sequential: if the agent branch rejects after the
+       * stream branch fulfills, the outer finally still owns and releases the
+       * first wrapper. Promise.all cannot expose that fulfilled sibling on its
+       * rejection path.
+       */
+      voiceEvents = await stream.append(
+        {
+          type: "events.iterate.com/voice-agent/created",
+          idempotencyKey: birthKey,
+          payload: birthPayload,
+        },
+        {
+          type: "events.iterate.com/stream/subscription-configured",
+          idempotencyKey: subscriptionKey,
+          payload: subscriptionPayload,
+        },
+      );
+      /* Born and briefed — the same helper the call path uses, so a call that
+       * never went through setup gets the same colleague. The brief text comes
+       * from the project's live __describe every time, which is the whole point:
+       * a device that gained or lost a method must not be described by a prompt
+       * written before it did. */
+      agentEvents = await ensureVoiceAgent(
+        backOffice,
+        await describeProvidedCapabilities(project),
+        setupId,
+      );
 
       /*
        * THE MARKER, appended after the brief it names.
@@ -3628,11 +3646,14 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
             `nothing to mark current`,
         );
       }
+      const installedBriefContent = z
+        .object({ content: z.string() })
+        .parse(installedBrief.payload).content;
       const briefMarker = {
         setupId,
         briefKey: installedBrief.idempotencyKey,
         contentHash: contentHash({
-          content: (installedBrief.payload as { content?: string }).content,
+          content: installedBriefContent,
         }),
       } satisfies BriefMarker;
       await discardRpcResult(

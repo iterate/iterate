@@ -56,8 +56,8 @@ static void a_ping_split_across_reads_is_delivered_once(void) {
 }
 
 /*
- * PCM deliberately avoids a second whole-frame receive buffer: the audio lane
- * can consume borrowed chunks directly and thereby saves RAM and a copy. That
+ * Data deliberately avoids a second whole-frame receive buffer: the consumer
+ * can use borrowed chunks directly and thereby saves RAM and a copy. That
  * only works if every short read carries its offset in the original frame, so
  * this test protects the reassembly contract at the zero-copy boundary.
  */
@@ -129,14 +129,11 @@ static void oversized_control_is_dropped_without_poisoning_the_peer(void) {
 }
 
 /*
- * The PCM protocol uses one final empty binary frame as its ordered
- * end-of-stream marker. It must travel through the same receive ordering as
- * content: a side-channel "stop" message could overtake buffered PCM and clip
- * the tail. `has_frame` is what distinguishes this real wire frame from an
- * idle nonblocking read, so collapsing the two here would make finite playback
- * impossible to complete cleanly on hardware.
+ * Empty application frames have no meaning at this generic RFC 6455 boundary.
+ * They remain distinguishable from an idle transport read through `has_frame`,
+ * and are consumed as an observable drop without poisoning later traffic.
  */
-static void a_final_empty_binary_frame_is_delivered_as_data(void) {
+static void an_empty_binary_frame_is_dropped_without_a_restart(void) {
   static const uint8_t valid[] = {0x11U};
   struct iterate_kit_websocket_rx rx;
   struct iterate_kit_websocket_rx_chunk chunk;
@@ -151,16 +148,10 @@ static void a_final_empty_binary_frame_is_delivered_as_data(void) {
 
   CHECK(iterate_kit_websocket_rx_init(&rx) == ITERATE_KIT_OK);
   CHECK(iterate_kit_websocket_rx_feed(&rx, &read, &chunk) ==
-      ITERATE_KIT_WEBSOCKET_RX_DATA);
-  CHECK(chunk.bytes == NULL);
-  CHECK(chunk.byte_count == 0U);
-  CHECK(chunk.payload_size == 0U);
-  CHECK(chunk.payload_offset == 0U);
-  CHECK(chunk.opcode == ITERATE_KIT_WEBSOCKET_BINARY);
-  CHECK(chunk.final);
+      ITERATE_KIT_WEBSOCKET_RX_DROPPED);
 
   /*
-   * Delivering a zero-length marker must also retire its frame state. Otherwise
+   * Dropping a zero-length frame must also retire its state. Otherwise
    * the first content frame of a later response is mistaken for a metadata
    * change in the still-active marker and forces a reconnect.
    */
@@ -175,9 +166,8 @@ static void a_final_empty_binary_frame_is_delivered_as_data(void) {
 }
 
 /*
- * Only binary owns the PCM EOS meaning. Empty text is not a hidden control
- * channel and accepting it would let unrelated Cap'n Web traffic masquerade
- * as audio lifecycle. Keep dropping it observably while preserving the socket.
+ * Empty text follows the same generic rule: no hidden control meaning, an
+ * observable drop, and a healthy socket for the next real frame.
  */
 static void an_empty_text_frame_is_dropped_without_a_restart(void) {
   struct iterate_kit_websocket_rx rx;
@@ -244,7 +234,7 @@ static void fragmented_control_is_dropped_without_poisoning_the_peer(void) {
 /*
  * A nonblocking TLS read can report that a frame is in progress while yielding
  * zero new payload bytes. Treating that as a data chunk sends an empty fragment
- * into the binary lane and causes a reconnect; resetting the offset makes the
+ * into the message consumer and causes a reconnect; resetting the offset makes the
  * next bytes look like a new frame. Preserve the in-progress frame across the
  * idle observation so ordinary packet loss or record splitting cannot corrupt
  * the audio stream.
@@ -286,7 +276,7 @@ int main(void) {
   a_ping_split_across_reads_is_delivered_once();
   data_chunks_preserve_their_frame_offsets();
   oversized_control_is_dropped_without_poisoning_the_peer();
-  a_final_empty_binary_frame_is_delivered_as_data();
+  an_empty_binary_frame_is_dropped_without_a_restart();
   an_empty_text_frame_is_dropped_without_a_restart();
   fragmented_control_is_dropped_without_poisoning_the_peer();
   a_zero_byte_payload_stall_preserves_data_offset();

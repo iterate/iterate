@@ -204,6 +204,15 @@ enum cli_conversation_status cli_conversation_write_report(
     .back_office_heard = runtime->conversation.back_office_heard,
     .deadline_cancelled_turns =
         runtime->conversation.deadline_cancelled_turns,
+    .room_completed_bytes =
+        cli_audio_out_completed_bytes(&runtime->live_out),
+    .room_dropped_bytes = runtime->live_out.dropped,
+    .room_starved_buffers =
+        cli_audio_out_starved_buffers(&runtime->live_out),
+    .speaker_platform_error =
+        cli_audio_out_platform_error(&runtime->live_out),
+    .microphone_platform_error =
+        cli_audio_in_platform_error(&runtime->live_in),
   };
   const enum cli_report_status status = cli_report_write(
       &runtime->conversation.report, &summary, runtime->options.report_json);
@@ -213,13 +222,19 @@ enum cli_conversation_status cli_conversation_write_report(
       stderr,
       "conversation summary: turns=%zu failures=%zu sessions=%u transports=%u "
       "recycles=%u callsLost=%u cancelled=%u colleague=%u/%u "
-      "report=%s playback=%s\n",
+      "roomCompleted=%u roomDropped=%u roomStarved=%u roomError=%" PRId32
+      " micError=%" PRId32 " report=%s playback=%s\n",
       runtime->conversation.report.count, failures, runtime->session_restarts,
       runtime->transport_restarts, runtime->downlink_recycles,
       runtime->calls_lost, runtime->conversation.deadline_cancelled_turns,
       runtime->conversation.back_office_heard,
-      runtime->conversation.back_office_sent, runtime->options.report_json,
-      runtime->options.speaker_wav);
+      runtime->conversation.back_office_sent,
+      cli_audio_out_completed_bytes(&runtime->live_out),
+      runtime->live_out.dropped,
+      cli_audio_out_starved_buffers(&runtime->live_out),
+      cli_audio_out_platform_error(&runtime->live_out),
+      cli_audio_in_platform_error(&runtime->live_in),
+      runtime->options.report_json, runtime->options.speaker_wav);
   return CLI_CONVERSATION_OK;
 }
 
@@ -379,6 +394,9 @@ static void cli_conversation_begin_report(
   }
   turn->frames_sent = runtime->voicelab.frames_sent;
   turn->sequence_gaps = runtime->playout.gaps;
+  runtime->turn_room_completed_start_bytes =
+      cli_audio_out_completed_bytes(&runtime->live_out);
+  runtime->turn_room_submitted_bytes = 0U;
   runtime->conversation.current_turn = turn;
   if (back_office) ++runtime->conversation.back_office_sent;
 }

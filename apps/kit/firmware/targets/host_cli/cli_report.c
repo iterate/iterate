@@ -241,12 +241,18 @@ static enum cli_report_status cli_report_write_body(
       "\"sessionRestarts\":%u,\"transportRestarts\":%u,"
       "\"connectionRecycles\":%u,\"callsLost\":%u,"
       "\"deadlineCancelledTurns\":%u,"
+      "\"roomCompletedBytes\":%u,\"roomDroppedBytes\":%u,"
+      "\"roomStarvedBuffers\":%u,\"speakerPlatformError\":%" PRId32 ","
+      "\"microphonePlatformError\":%" PRId32 ","
       "\"colleagueQuestionsAsked\":%u,"
       "\"colleagueQuestionsAnswered\":%u}\n}\n",
       report->count, cli_report_failure_count(report),
       summary->session_restarts, summary->transport_restarts,
       summary->connection_recycles, summary->calls_lost,
       summary->deadline_cancelled_turns,
+      summary->room_completed_bytes, summary->room_dropped_bytes,
+      summary->room_starved_buffers, summary->speaker_platform_error,
+      summary->microphone_platform_error,
       summary->back_office_sent, summary->back_office_heard);
   return CLI_REPORT_OK;
 }

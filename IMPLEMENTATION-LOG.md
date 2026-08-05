@@ -237,3 +237,110 @@ speaker path with retained audio and exact transcripts.
 **Open:** Run a fresh independent Phase 1 review against this correction. Phase
 2 owns the formal codec/processor seams and systematic concealment/underrun
 quality work. The preservation archive's iCloud upload remains pending.
+
+## 2026-08-05 — phase 1: third re-review corrections
+
+**Did:** Made name resolution asynchronous across the complete resolver result
+set, including separately delivered IPv6 and IPv4 callbacks, and made the one
+open-attempt deadline cover DNS through the completed WebSocket upgrade using a
+fresh clock sample at every boundary. Made successful and failed Cap'n Web
+result-wrapper ownership explicit in the Phase 1 scripts, including sibling
+setup failures and late resilient-connection generations. Moved Mac speaker
+completion to the CoreAudio render callback (or the file sink write), surfaced
+input/output platform errors, and added exact submitted/completed/dropped/starved
+telemetry. Removed every remaining special zero-length-binary/EOS and separate
+PCM-lane semantic from the generic WebSocket stack.
+
+The Tier 1 adoption ledger deliberately excludes the donor's `subscription.h`.
+It contained only a 32-byte callback-owner key whose comment and sole purpose
+were to arbitrate independent `/api` and retired `/pcm` socket generations. The
+consolidated design has one Cap'n Web stream generation, and the retained
+`push_to_talk` capability owns its callback through `rpc_internal`; copying that
+header would preserve a second-generation concept with no caller. The file was
+read from preserved donor commit `2a96f4a2b` and replaced by deletion, as §5.1's
+“copy, read, delete what the new structure does not need” rule requires.
+
+Added a loopback-only deterministic realtime provider and a `voicelab local`
+command. This is the literal provider-hermetic proof missing from the earlier
+entry: no captun tunnel, xAI request, or xAI secret. The dynamic worker dials a
+Node WebSocket bound to `127.0.0.1`, and the command asserts microphone bytes,
+speaker bytes, transcript identity, stream sequence continuity, and append
+outcomes before returning success.
+
+**Measured:** Pending a retained final artifact after the TypeScript client's
+mu-law duration correction. Focused provider/resilient tests, TypeScript
+typecheck, and 35/35 ASan/UBSan host tests are green.
+
+**Surprised by:** The first hermetic proof delivered the exact 32,000 provider
+PCM bytes as 50 lossless downlink frames, but the Node lab client reported 0.5 s
+of sound. It was feeding the current mu-law wire payload directly to its PCM
+sink and dividing encoded bytes by the PCM byte rate. The C listener already
+expanded the payload correctly; the TypeScript proof client now mirrors it.
+
+**Reviewer said:** The third independent review blocked on the stale deadline
+and resolver snapshot, result-wrapper leaks, software rather than hardware
+audio completion, old dual-lane semantics, a non-hermetic interpretation of
+“no cloud,” the missing `subscription.h` decision, and an unchecked payload
+cast. → **did:** Closed each item above and replaced the payload assertion with
+schema validation. Run the independent review again against this correction.
+
+**Open:** Retain and hash the corrected hermetic and CoreAudio artifacts, run
+the fourth independent Phase 1 review, and continue monitoring the preservation
+archive's iCloud upload.
+
+## 2026-08-05 — phase 1: third re-review proof and gate
+
+**Did:** Re-ran both proof paths after the third-review corrections. The
+provider-hermetic path used a fresh local project whose config repo pinned the
+voice agent at `6db0f5a432a29fcd0887540f3372c61a34d6c3fd`; its realtime provider
+was the loopback-only Node fixture at `127.0.0.1`, with no tunnel, xAI secret,
+or xAI request. The live Mac path used CoreAudio capture and playback against
+the local dev server and waited for the output callback's completed-byte count
+before declaring its turn complete. CoreAudio now owns the playback clock: the
+producer replenishes a four-frame reserve, while only a dry pull later followed
+by payload is classified as an audible internal starvation. A dry trailing pull
+when the response closes is discarded rather than reported as an error.
+
+**Measured:** The hermetic artifact is
+`/tmp/iterate-voicelab-local-phase1-final.json` (SHA-256
+`53f6671aa668c8330c66b0afdaef8b6be659c59f5e5d75fb73bb3aa11aa48028`).
+It sent 255 microphone frames / 163,200 bytes, received 50 lossless speaker
+frames / 32,000 decoded PCM bytes / 1.000 s, completed one answer with the exact
+deterministic user and assistant transcripts, and recorded zero sequence loss,
+underrun milliseconds, append errors, reconnects, or recycles. Its single
+playout clear is the expected barge-in action produced by the fixture's
+`speech_started` event, not packet loss or an error outcome.
+
+The live CoreAudio report is `/tmp/iterate-talk-011306.json` (SHA-256
+`0cd01956f1fec4b736d273b079f28adcab473ec2f864f7ef83f1b90ed691f6cf`),
+with input `/tmp/iterate-phase1-direct/utterance.wav`
+(`7af579a72e19144e1a8afe807604c6681a75c60fbc994c9dd7b4025084a56310`),
+captured microphone output `/tmp/iterate-talk-011306-mic.wav`
+(`42c1d4c898c97d35247991c88a2380756156c5ac043ea3d35e00baf1dad3df9e`),
+and rendered speaker output `/tmp/iterate-talk-011306-speaker.wav`
+(`a94f74ec52da456c64c9168ce1a469021cefc23e4d73f31f342d26894294dd49`).
+It transcribed “Please repeat exactly these three words: Uplink diagnostic
+amber.” and answered exactly “Uplink diagnostic amber.” It sent 205 frames,
+received and submitted 103, and the hardware callback completed exactly 65,920
+bytes (103 frames), with zero failed turns, sequence gaps, concealment,
+underruns, dropped bytes, starved buffers, deadline cancellations, restarts,
+recycles, lost calls, platform errors, or colleague events. Time to first audio
+was 972 ms and answer completion was 3,115 ms. ASan/UBSan CTest passed 35/35;
+repository format, typecheck, zero-warning lint, and the full workspace test
+gate passed. OS contributed 2,708 passes, 12 expected failures, and one skip.
+
+**Surprised by:** Counting the four in-flight AudioQueue buffers as the
+producer's desired lead left the source ring empty at the synchronous callback
+boundary; the reserve must be additional to those buffers. Also, treating every
+dry callback as an immediate starvation falsely classified the ordinary quiet
+tail between the last payload and `response.done`. Delayed promotion preserves
+evidence for an internal hole without turning a normal response tail into error
+telemetry.
+
+**Reviewer said:** Pending the fourth independent Phase 1 review against this
+correction and proof commit.
+
+**Open:** Run and resolve the fourth review before Phase 2. The preservation
+archive remains present in iCloud Drive with its full 10,206,336,512-byte local
+payload but no explicit upload-state metadata, so remote-upload confirmation is
+still pending.

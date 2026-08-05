@@ -174,6 +174,29 @@ if(APPLE)
   add_test(NAME iterate-kit-cli-audio-in-test COMMAND iterate-kit-cli-audio-in-test)
 
   add_executable(
+    iterate-kit-cli-audio-out-test
+    ../targets/host_cli/cli_audio_out.c
+    ../targets/host_cli/cli_wav.c
+    cli_audio_out_test.c)
+  target_include_directories(
+    iterate-kit-cli-audio-out-test
+    PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../targets/host_cli")
+  target_compile_features(iterate-kit-cli-audio-out-test PRIVATE c_std_11)
+  target_compile_options(iterate-kit-cli-audio-out-test PRIVATE
+    -UNDEBUG
+    -Wall
+    -Wextra
+    -Werror
+    -Wpedantic
+    -Wconversion
+    -Wshadow)
+  target_link_libraries(
+    iterate-kit-cli-audio-out-test
+    PRIVATE iterate-kit-core ${ITERATE_KIT_AUDIO_TOOLBOX_FRAMEWORK})
+  add_test(
+    NAME iterate-kit-cli-audio-out-test COMMAND iterate-kit-cli-audio-out-test)
+
+  add_executable(
     iterate-kit-posix-websocket-test
     posix_websocket_test.c)
   target_compile_features(iterate-kit-posix-websocket-test PRIVATE c_std_99)

@@ -50,13 +50,11 @@ struct iterate_kit_posix_itx_transport_options {
   /**
    * Monotonic microseconds, or NULL for this platform's own clock.
    *
-   * The transport samples time ONCE per poll and passes it down, so this one
-   * pointer is the whole of its dependence on a clock. It exists so a sealed
-   * run — one whose every stamp comes from a counter, and which therefore
-   * replays a seed bit for bit — is genuinely sealed: until this was here,
-   * the loop's stamps were virtual while the transport's reconnect and
-   * handshake deadlines quietly ran on the wall clock, and a replay drifted
-   * from the run it claimed to reproduce.
+   * The transport takes one phase snapshot per poll, plus fresh samples
+   * immediately before and after a potentially expensive establishment step.
+   * This one pointer remains the whole clock dependency, so sealed runs replay
+   * deadlines bit for bit while a DNS or TLS call cannot cross a deadline
+   * behind a stale sample.
    *
    * `context` is handed back unexamined.
    */

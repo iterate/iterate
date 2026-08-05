@@ -15,6 +15,7 @@ import { percentiles } from "./audio.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { GrokClient } from "./grok.ts";
 import { openResilientConnection } from "./resilient.ts";
+import { RpcResultObserver } from "./rpc-ownership.ts";
 
 /** Options for `pnpm cli voicelab bridge`. */
 export interface BridgeOptions extends VoicelabConnectOptions {
@@ -68,11 +69,12 @@ export async function bridge(options: BridgeOptions) {
     done = resolve;
   });
 
+  const appendResults = new RpcResultObserver((error: unknown) => {
+    appendErrors++;
+    firstAppendError ??= error instanceof Error ? error.message : String(error);
+  });
   const fireAppend = (...events: Parameters<typeof stream.append>) => {
-    stream.append(...events).catch((error: unknown) => {
-      appendErrors++;
-      firstAppendError ??= error instanceof Error ? error.message : String(error);
-    });
+    appendResults.observe(stream.append(...events));
   };
 
   // --pace-device: drip queued speaker events in 5-event appends every 50ms
@@ -252,12 +254,12 @@ export async function bridge(options: BridgeOptions) {
   console.error(
     `bridge: listening on ${options.path} (connection open, waiting for call-requested)`,
   );
-  process.on("SIGINT", () => {
+  process.once("SIGINT", () => {
     endCall("bridge interrupted");
-    printSummary();
-    process.exit(0);
+    done?.();
   });
   await finished;
+  await appendResults.drain();
   connection.close();
   process.exit(0);
 }

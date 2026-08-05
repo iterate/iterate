@@ -12,7 +12,7 @@
  * Remote malformed input is either rejected as a protocol failure when it
  * contradicts an in-progress frame, or drained as DROPPED when its length is
  * known and bounded progress remains possible. The latter avoids converting an
- * irrelevant bad control/empty data frame into delayed audio on a new socket,
+ * irrelevant bad control or empty data frame into delayed work on a new socket,
  * while still forcing the caller to count the loss visibly.
  */
 static bool control_opcode(
@@ -111,32 +111,14 @@ iterate_kit_websocket_rx_feed(
   }
   if (data_opcode(rx->opcode)) {
     if (rx->payload_size == 0U) {
-      /*
-       * PCM EOS is deliberately an ordinary final empty BINARY frame. Keeping
-       * it in this ordered data path means it cannot overtake the content it
-       * terminates, while `has_frame` keeps it distinct from a transport read
-       * that merely made no progress. TEXT has no such meaning, and a
-       * non-final empty BINARY frame would require continuation state this
-       * bounded classifier intentionally does not retain.
-       */
-      if (rx->opcode == ITERATE_KIT_WEBSOCKET_BINARY &&
-          rx->final) {
-        chunk->bytes = NULL;
-        chunk->byte_count = 0U;
-        chunk->payload_size = 0U;
-        chunk->payload_offset = 0U;
-        chunk->opcode = rx->opcode;
-        chunk->final = true;
-        clear_active(rx);
-        return ITERATE_KIT_WEBSOCKET_RX_DATA;
-      }
+      /* Empty application messages carry no protocol meaning in this layer. */
       clear_active(rx);
       return ITERATE_KIT_WEBSOCKET_RX_DROPPED;
     }
     /*
      * Frame metadata may remain visible after a nonblocking lower read makes
-     * no progress. Emitting DATA here would feed an empty fragment to the PCM
-     * lane; clearing state would reinterpret the remaining payload as a new
+     * no progress. Emitting DATA here would feed an empty fragment to the
+     * message consumer; clearing state would reinterpret the remaining payload as a new
      * message. Retaining only counters—not a borrowed pointer—makes the wait
      * both safe and allocation-free.
      */

@@ -14,6 +14,7 @@
 // NO connection was live are gone forever — that loss window is what the
 // watchdog minimizes and what `stats().gaps` reports.
 import type { Stream, StreamConnectionHandle, StreamEventBatch } from "iterate/sdk";
+import { closeAndDisposeRpcHandle } from "./rpc-ownership.ts";
 
 /** Options for {@link openResilientConnection}. */
 export interface ResilientConnectionOptions {
@@ -99,22 +100,26 @@ export async function openResilientConnection(
     if (opening || closed) return;
     opening = true;
     const previous = current;
+    const openingGeneration = ++generation;
     try {
-      generation++;
       // Replaying after the last seen offset re-delivers durable control-plane
       // events missed during a gap; ephemeral rows are never replayed (stale
       // audio is the right thing to lose).
       const next = await stream.openConnection({
-        connectionKey: `${options.connectionKey}-g${generation}`,
+        connectionKey: `${options.connectionKey}-g${openingGeneration}`,
         eventTypes: options.eventTypes,
         processEventBatch: handleBatch,
         ...(lastSeenOffset >= 0 ? { replayAfterOffset: lastSeenOffset } : {}),
       });
+      if (closed || openingGeneration !== generation) {
+        closeAndDisposeRpcHandle(next);
+        return;
+      }
       stats.opens++;
       current = next;
       currentBatches = 0;
       lastBatchAt = Date.now();
-      previous?.close();
+      if (previous !== null) closeAndDisposeRpcHandle(previous);
     } catch (error) {
       note(`reopen failed: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
@@ -141,9 +146,14 @@ export async function openResilientConnection(
 
   return {
     close() {
+      if (closed) return;
       closed = true;
+      generation++;
       clearInterval(watchdog);
-      current?.close();
+      if (current !== null) {
+        closeAndDisposeRpcHandle(current);
+        current = null;
+      }
     },
     stats: () => stats,
   };

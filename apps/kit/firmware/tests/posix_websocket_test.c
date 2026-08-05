@@ -3,12 +3,90 @@
 #include "iterate/kit/websocket_frame_reader.h"
 
 #include <assert.h>
+#include <errno.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+enum fake_resolver_mode {
+  FAKE_RESOLVER_DUAL_STACK,
+  FAKE_RESOLVER_PENDING,
+  FAKE_RESOLVER_ERROR,
+};
+
+struct fake_resolver {
+  iterate_kit_posix_tls_resolved_address_fn resolved;
+  void *resolved_context;
+  enum fake_resolver_mode mode;
+  unsigned int polls;
+  unsigned int cancellations;
+};
+
+static int fake_resolver_start(
+    void *operations_context,
+    const char *host,
+    iterate_kit_posix_tls_resolved_address_fn resolved,
+    void *resolved_context,
+    void **handle) {
+  struct fake_resolver *resolver = operations_context;
+  assert(strcmp(host, "resolver.test") == 0);
+  resolver->resolved = resolved;
+  resolver->resolved_context = resolved_context;
+  *handle = resolver;
+  return 0;
+}
+
+static int fake_resolver_poll(void *operations_context, void *handle) {
+  struct fake_resolver *resolver = operations_context;
+  assert(handle == resolver);
+  ++resolver->polls;
+  if (resolver->mode == FAKE_RESOLVER_PENDING) {
+    return EAGAIN;
+  }
+  if (resolver->mode == FAKE_RESOLVER_ERROR) {
+    return EHOSTUNREACH;
+  }
+  if (resolver->polls == 1U) {
+    struct sockaddr_in6 ipv6;
+    memset(&ipv6, 0, sizeof(ipv6));
+    ipv6.sin6_family = AF_INET6;
+    ipv6.sin6_addr = in6addr_loopback;
+    resolver->resolved(
+        resolver->resolved_context,
+        0,
+        true,
+        (const struct sockaddr *)&ipv6);
+    return 0;
+  }
+  if (resolver->polls == 2U) {
+    struct sockaddr_in ipv4;
+    memset(&ipv4, 0, sizeof(ipv4));
+    ipv4.sin_family = AF_INET;
+    ipv4.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    resolver->resolved(
+        resolver->resolved_context,
+        0,
+        true,
+        (const struct sockaddr *)&ipv4);
+  }
+  return EAGAIN;
+}
+
+static void fake_resolver_cancel(
+    void *operations_context, void *handle) {
+  struct fake_resolver *resolver = operations_context;
+  assert(handle == resolver);
+  ++resolver->cancellations;
+}
+
+static const struct iterate_kit_posix_tls_resolver_ops fake_resolver_ops = {
+  .start = fake_resolver_start,
+  .poll = fake_resolver_poll,
+  .cancel = fake_resolver_cancel,
+};
 
 struct raw_reader {
   const uint8_t *wire;
@@ -192,10 +270,14 @@ static void plain_stream_transfers_bytes_over_loopback(void) {
   struct sockaddr_in address;
   socklen_t address_length = sizeof(address);
   struct iterate_kit_posix_tls_stream stream;
+  struct fake_resolver resolver = {
+    .mode = FAKE_RESOLVER_DUAL_STACK,
+  };
   struct iterate_kit_posix_tls_stream_options options = {
-    /* macOS resolves ::1 first; the listener is deliberately IPv4-only. */
-    .host = "localhost",
+    .host = "resolver.test",
     .use_tls = false,
+    .resolver_ops = &fake_resolver_ops,
+    .resolver_context = &resolver,
   };
   uint8_t bytes[sizeof(response)];
   size_t byte_count = 0U;
@@ -228,6 +310,8 @@ static void plain_stream_transfers_bytes_over_loopback(void) {
     assert(result == ITERATE_KIT_POSIX_TLS_CONNECT_WOULD_BLOCK);
   }
   assert(stream.ready);
+  assert(resolver.polls >= 2U);
+  assert(resolver.cancellations == 1U);
   peer = accept(listener, NULL, NULL);
   assert(peer >= 0);
   assert(iterate_kit_posix_tls_stream_write(
@@ -255,6 +339,49 @@ static void plain_stream_transfers_bytes_over_loopback(void) {
   assert(close(listener) == 0);
 }
 
+/* Closing a stalled attempt must cancel the exact resolver generation. */
+static void pending_resolution_is_cancelled_on_close(void) {
+  struct iterate_kit_posix_tls_stream stream;
+  struct fake_resolver resolver = {
+    .mode = FAKE_RESOLVER_PENDING,
+  };
+  const struct iterate_kit_posix_tls_stream_options options = {
+    .host = "resolver.test",
+    .port = 443U,
+    .use_tls = true,
+    .resolver_ops = &fake_resolver_ops,
+    .resolver_context = &resolver,
+  };
+  assert(iterate_kit_posix_tls_stream_prepare(&stream, &options) ==
+         ITERATE_KIT_OK);
+  assert(iterate_kit_posix_tls_stream_connect(&stream) ==
+         ITERATE_KIT_POSIX_TLS_CONNECT_WOULD_BLOCK);
+  assert(resolver.cancellations == 0U);
+  iterate_kit_posix_tls_stream_cleanup(&stream);
+  assert(resolver.cancellations == 1U);
+}
+
+static void resolution_error_is_terminal_and_cancelled(void) {
+  struct iterate_kit_posix_tls_stream stream;
+  struct fake_resolver resolver = {
+    .mode = FAKE_RESOLVER_ERROR,
+  };
+  const struct iterate_kit_posix_tls_stream_options options = {
+    .host = "resolver.test",
+    .port = 443U,
+    .use_tls = true,
+    .resolver_ops = &fake_resolver_ops,
+    .resolver_context = &resolver,
+  };
+  assert(iterate_kit_posix_tls_stream_prepare(&stream, &options) ==
+         ITERATE_KIT_OK);
+  assert(iterate_kit_posix_tls_stream_connect(&stream) ==
+         ITERATE_KIT_POSIX_TLS_CONNECT_FAILED);
+  assert(stream.last_errno == EHOSTUNREACH);
+  assert(resolver.cancellations == 1U);
+  iterate_kit_posix_tls_stream_cleanup(&stream);
+}
+
 /*
  * Resolution used to run synchronously in prepare(), before the transport
  * armed its open-attempt deadline. A deliberately unresolvable name must be
@@ -279,6 +406,8 @@ int main(void) {
   handshake_accept_key_matches_rfc_vector();
   websocket_url_selects_plain_or_secure_transport();
   plain_stream_transfers_bytes_over_loopback();
+  pending_resolution_is_cancelled_on_close();
+  resolution_error_is_terminal_and_cancelled();
   endpoint_resolution_starts_inside_connect();
   would_block_read_loop_retains_frame_boundary();
   short_write_resumes_one_outbox_slot();

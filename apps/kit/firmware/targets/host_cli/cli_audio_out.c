@@ -1,7 +1,9 @@
 /* cli_audio_out.c: owns the CoreAudio speaker and the ring it pulls from. */
 
 #include <assert.h>
+#include <errno.h>
 #include <string.h>
+#include <time.h>
 
 #include "cli_audio_out.h"
 
@@ -33,12 +35,22 @@ static uint32_t cli_audio_out_take(struct cli_audio_out *out,
 /* Releases resources acquired before an open failure. */
 static void cli_audio_out_abandon_open(struct cli_audio_out *out);
 
+static void cli_audio_out_remember_error(
+    struct cli_audio_out *out, int32_t error);
+
+static void cli_audio_out_classify_pull(
+    struct cli_audio_out *out, uint32_t taken, bool expected);
+
+static uint32_t cli_audio_out_pending_payload_bytes(
+    const struct cli_audio_out *out);
+
 const char *cli_audio_out_status_name(enum cli_audio_out_status status)
 {
   switch (status) {
     case CLI_AUDIO_OUT_OK: return "ok";
     case CLI_AUDIO_OUT_ERR_ARG: return "bad-argument";
     case CLI_AUDIO_OUT_ERR_PLATFORM: return "coreaudio";
+    case CLI_AUDIO_OUT_ERR_TIMEOUT: return "timeout";
     case CLI_AUDIO_OUT_ERR_FULL: return "full";
     default: return "unknown";
   }
@@ -48,10 +60,22 @@ const char *cli_audio_out_status_name(enum cli_audio_out_status status)
 static OSStatus cli_audio_out_prime_one(
     struct cli_audio_out *out, AudioQueueBufferRef buffer)
 {
+  bool expected;
   uint32_t taken;
+  size_t index;
+  OSStatus result;
   assert(out != NULL && buffer != NULL);
+  /*
+   * Classify the pull at the instant hardware asked for it. Loading this
+   * after take() races the producer's first write: a callback that asked
+   * before an answer existed can take silence, then observe the write's new
+   * expectation and falsely report that pre-answer silence as starvation.
+   */
+  expected = atomic_load_explicit(
+      &out->expecting_audio, memory_order_acquire);
   taken = cli_audio_out_take(
       out, (uint8_t *)buffer->mAudioData, (uint32_t)CLI_AUDIO_OUT_BUFFER_BYTES);
+  cli_audio_out_classify_pull(out, taken, expected);
   if (taken < (uint32_t)CLI_AUDIO_OUT_BUFFER_BYTES) {
     /*
      * Silence rather than a short buffer. A short buffer would make the queue
@@ -60,10 +84,24 @@ static OSStatus cli_audio_out_prime_one(
      */
     memset((uint8_t *)buffer->mAudioData + taken, 0,
            (size_t)CLI_AUDIO_OUT_BUFFER_BYTES - taken);
-    ++out->starved;
   }
+  if (taken == 0U &&
+      atomic_load_explicit(&out->draining, memory_order_relaxed)) {
+    return noErr;
+  }
+  for (index = 0U; index < CLI_AUDIO_OUT_BUFFER_COUNT; ++index) {
+    if (out->buffers[index] == buffer) break;
+  }
+  assert(index < CLI_AUDIO_OUT_BUFFER_COUNT);
   buffer->mAudioDataByteSize = (UInt32)CLI_AUDIO_OUT_BUFFER_BYTES;
-  return AudioQueueEnqueueBuffer(out->queue, buffer, 0U, NULL);
+  atomic_store_explicit(
+      &out->buffer_payload_bytes[index], taken, memory_order_release);
+  result = AudioQueueEnqueueBuffer(out->queue, buffer, 0U, NULL);
+  if (result != noErr) {
+    atomic_store_explicit(
+        &out->buffer_payload_bytes[index], 0U, memory_order_release);
+  }
+  return result;
 }
 
 enum cli_audio_out_status cli_audio_out_open(struct cli_audio_out *out)
@@ -86,11 +124,15 @@ enum cli_audio_out_status cli_audio_out_open(struct cli_audio_out *out)
   };
   OSStatus result = AudioQueueNewOutput(
       &format, cli_audio_out_refill, out, NULL, NULL, 0U, &out->queue);
-  if (result != noErr) return CLI_AUDIO_OUT_ERR_PLATFORM;
+  if (result != noErr) {
+    cli_audio_out_remember_error(out, (int32_t)result);
+    return CLI_AUDIO_OUT_ERR_PLATFORM;
+  }
   for (size_t index = 0U; index < CLI_AUDIO_OUT_BUFFER_COUNT; ++index) {
     result = AudioQueueAllocateBuffer(
         out->queue, CLI_AUDIO_OUT_BUFFER_BYTES, &out->buffers[index]);
     if (result != noErr) {
+      cli_audio_out_remember_error(out, (int32_t)result);
       cli_audio_out_abandon_open(out);
       return CLI_AUDIO_OUT_ERR_PLATFORM;
     }
@@ -100,17 +142,20 @@ enum cli_audio_out_status cli_audio_out_open(struct cli_audio_out *out)
    * flight, so nothing would ever come back to ask the ring for audio and the
    * speaker would stay silent however much the loop wrote.
    */
-  out->enabled = true;
+  atomic_store_explicit(&out->enabled, true, memory_order_release);
   for (size_t index = 0U; index < CLI_AUDIO_OUT_BUFFER_COUNT; ++index) {
-    if (cli_audio_out_prime_one(out, out->buffers[index]) != noErr) {
+    result = cli_audio_out_prime_one(out, out->buffers[index]);
+    if (result != noErr) {
+      cli_audio_out_remember_error(out, (int32_t)result);
       cli_audio_out_abandon_open(out);
       return CLI_AUDIO_OUT_ERR_PLATFORM;
     }
   }
   /* Priming with silence is not starvation; it is how playback begins. */
-  out->starved = 0U;
+  atomic_store_explicit(&out->starved, 0U, memory_order_relaxed);
   result = AudioQueueStart(out->queue, NULL);
   if (result != noErr) {
+    cli_audio_out_remember_error(out, (int32_t)result);
     cli_audio_out_abandon_open(out);
     return CLI_AUDIO_OUT_ERR_PLATFORM;
   }
@@ -128,7 +173,7 @@ enum cli_audio_out_status cli_audio_out_open_file(
   out->file = sink;
   /* Zero means "not started"; the first pump anchors it to the loop's clock. */
   out->next_pull_us = 0U;
-  out->enabled = true;
+  atomic_store_explicit(&out->enabled, true, memory_order_release);
   return CLI_AUDIO_OUT_OK;
 }
 
@@ -136,7 +181,8 @@ void cli_audio_out_pump(struct cli_audio_out *out, uint64_t now_us)
 {
   uint8_t frame[CLI_AUDIO_OUT_BUFFER_BYTES];
   uint32_t served = 0U;
-  if (out == NULL || out->mode != CLI_AUDIO_OUT_FILE || !out->enabled) return;
+  if (out == NULL || out->mode != CLI_AUDIO_OUT_FILE ||
+      !atomic_load_explicit(&out->enabled, memory_order_acquire)) return;
   if (out->next_pull_us == 0U) out->next_pull_us = now_us;
   /*
    * A stamp behind one already served is ignored rather than subtracted. The
@@ -149,9 +195,11 @@ void cli_audio_out_pump(struct cli_audio_out *out, uint64_t now_us)
          served < (uint32_t)CLI_AUDIO_OUT_MAX_PULL_FRAMES) {
     const uint32_t taken =
         cli_audio_out_take(out, frame, (uint32_t)CLI_AUDIO_OUT_BUFFER_BYTES);
+    const bool expected = atomic_load_explicit(
+        &out->expecting_audio, memory_order_acquire);
+    cli_audio_out_classify_pull(out, taken, expected);
     if (taken < (uint32_t)CLI_AUDIO_OUT_BUFFER_BYTES) {
       memset(frame + taken, 0, (size_t)CLI_AUDIO_OUT_BUFFER_BYTES - taken);
-      ++out->starved;
     }
     /*
      * Silence is written, not skipped. A recording that omits the frames the
@@ -159,8 +207,14 @@ void cli_audio_out_pump(struct cli_audio_out *out, uint64_t now_us)
      * is exactly how a run that dropped a fifth of a second of a call went
      * unnoticed.
      */
-    (void)cli_wav_sink_write(
-        out->file, frame, (size_t)CLI_AUDIO_OUT_BUFFER_BYTES);
+    if (cli_wav_sink_write(
+            out->file, frame, (size_t)CLI_AUDIO_OUT_BUFFER_BYTES) != CLI_WAV_OK) {
+      cli_audio_out_remember_error(out, EIO);
+      atomic_store_explicit(&out->enabled, false, memory_order_release);
+      return;
+    }
+    (void)atomic_fetch_add_explicit(
+        &out->completed_bytes, taken, memory_order_relaxed);
     out->next_pull_us += (uint64_t)CLI_AUDIO_OUT_PERIOD_US;
     served++;
   }
@@ -177,7 +231,11 @@ enum cli_audio_out_status cli_audio_out_write(
   if (out == NULL || pcm == NULL || length > UINT32_MAX) {
     return CLI_AUDIO_OUT_ERR_ARG;
   }
-  if (!out->enabled) return CLI_AUDIO_OUT_OK;
+  if (!atomic_load_explicit(&out->enabled, memory_order_acquire)) {
+    return cli_audio_out_platform_error(out) == 0
+        ? CLI_AUDIO_OUT_OK
+        : CLI_AUDIO_OUT_ERR_PLATFORM;
+  }
 
   write_index = (uint32_t)atomic_load_explicit(&out->write, memory_order_relaxed);
   used = write_index -
@@ -195,6 +253,90 @@ enum cli_audio_out_status cli_audio_out_write(
   memcpy(&out->ring[0], pcm + first, (size_t)length - first);
   atomic_store_explicit(
       &out->write, write_index + (uint32_t)length, memory_order_release);
+  if (length > 0U) {
+    atomic_store_explicit(&out->expecting_audio, true, memory_order_release);
+  }
+  return CLI_AUDIO_OUT_OK;
+}
+
+void cli_audio_out_set_expected(struct cli_audio_out *out, bool expected)
+{
+  if (out == NULL) return;
+  atomic_store_explicit(&out->expecting_audio, expected, memory_order_release);
+  if (!expected) {
+    (void)atomic_exchange_explicit(
+        &out->pending_starved, 0U, memory_order_acq_rel);
+  }
+}
+
+enum cli_audio_out_status cli_audio_out_drain(
+    struct cli_audio_out *out, uint32_t timeout_ms)
+{
+  if (out == NULL || timeout_ms == 0U) return CLI_AUDIO_OUT_ERR_ARG;
+  if (!atomic_load_explicit(&out->enabled, memory_order_acquire)) {
+    return cli_audio_out_platform_error(out) == 0
+        ? CLI_AUDIO_OUT_OK
+        : CLI_AUDIO_OUT_ERR_PLATFORM;
+  }
+  atomic_store_explicit(&out->expecting_audio, false, memory_order_release);
+  atomic_store_explicit(&out->draining, true, memory_order_release);
+  if (out->mode == CLI_AUDIO_OUT_FILE) {
+    uint8_t frame[CLI_AUDIO_OUT_BUFFER_BYTES];
+    while (cli_audio_out_queued_bytes(out) > 0U) {
+      const uint32_t taken = cli_audio_out_take(
+          out, frame, (uint32_t)CLI_AUDIO_OUT_BUFFER_BYTES);
+      if (taken < (uint32_t)CLI_AUDIO_OUT_BUFFER_BYTES) {
+        memset(frame + taken, 0,
+               (size_t)CLI_AUDIO_OUT_BUFFER_BYTES - taken);
+      }
+      if (cli_wav_sink_write(
+              out->file, frame, (size_t)CLI_AUDIO_OUT_BUFFER_BYTES) != CLI_WAV_OK) {
+        cli_audio_out_remember_error(out, EIO);
+        return CLI_AUDIO_OUT_ERR_PLATFORM;
+      }
+      (void)atomic_fetch_add_explicit(
+          &out->completed_bytes, taken, memory_order_relaxed);
+    }
+    return CLI_AUDIO_OUT_OK;
+  }
+  {
+    struct timespec started;
+    const struct timespec delay = {.tv_sec = 0, .tv_nsec = 5000000L};
+    if (clock_gettime(CLOCK_MONOTONIC, &started) != 0) {
+      cli_audio_out_remember_error(out, errno != 0 ? errno : EIO);
+      return CLI_AUDIO_OUT_ERR_PLATFORM;
+    }
+    while (cli_audio_out_queued_bytes(out) > 0U ||
+           cli_audio_out_pending_payload_bytes(out) > 0U) {
+      struct timespec now;
+      uint64_t elapsed_ms;
+      if (cli_audio_out_platform_error(out) != 0) {
+        return CLI_AUDIO_OUT_ERR_PLATFORM;
+      }
+      if (clock_gettime(CLOCK_MONOTONIC, &now) != 0) {
+        cli_audio_out_remember_error(out, errno != 0 ? errno : EIO);
+        return CLI_AUDIO_OUT_ERR_PLATFORM;
+      }
+      elapsed_ms = (uint64_t)(now.tv_sec - started.tv_sec) * 1000U;
+      if (now.tv_nsec >= started.tv_nsec) {
+        elapsed_ms += (uint64_t)(now.tv_nsec - started.tv_nsec) / 1000000U;
+      } else {
+        elapsed_ms -= 1000U;
+        elapsed_ms +=
+            (uint64_t)(1000000000L + now.tv_nsec - started.tv_nsec) / 1000000U;
+      }
+      if (elapsed_ms >= timeout_ms) return CLI_AUDIO_OUT_ERR_TIMEOUT;
+      (void)nanosleep(&delay, NULL);
+    }
+  }
+  atomic_store_explicit(&out->enabled, false, memory_order_release);
+  {
+    const OSStatus result = AudioQueueStop(out->queue, false);
+    if (result != noErr) {
+      cli_audio_out_remember_error(out, (int32_t)result);
+      return CLI_AUDIO_OUT_ERR_PLATFORM;
+    }
+  }
   return CLI_AUDIO_OUT_OK;
 }
 
@@ -205,12 +347,30 @@ uint32_t cli_audio_out_queued_bytes(const struct cli_audio_out *out)
          (uint32_t)atomic_load_explicit(&out->read, memory_order_relaxed);
 }
 
+uint32_t cli_audio_out_completed_bytes(const struct cli_audio_out *out)
+{
+  return out == NULL ? 0U : (uint32_t)atomic_load_explicit(
+      &out->completed_bytes, memory_order_acquire);
+}
+
+uint32_t cli_audio_out_starved_buffers(const struct cli_audio_out *out)
+{
+  return out == NULL ? 0U : (uint32_t)atomic_load_explicit(
+      &out->starved, memory_order_acquire);
+}
+
+int32_t cli_audio_out_platform_error(const struct cli_audio_out *out)
+{
+  return out == NULL ? 0 : (int32_t)atomic_load_explicit(
+      &out->platform_error, memory_order_acquire);
+}
+
 void cli_audio_out_close(struct cli_audio_out *out)
 {
   if (out == NULL) return;
   if (out->mode == CLI_AUDIO_OUT_FILE) {
     /* The sink belongs to the caller; only stop pulling from it. */
-    out->enabled = false;
+    atomic_store_explicit(&out->enabled, false, memory_order_release);
     out->file = NULL;
     return;
   }
@@ -219,9 +379,15 @@ void cli_audio_out_close(struct cli_audio_out *out)
    * Cleared before stopping so the callback, which may run once more on
    * CoreAudio's thread while the queue winds down, stops re-enqueueing.
    */
-  out->enabled = false;
-  (void)AudioQueueStop(out->queue, true);
-  (void)AudioQueueDispose(out->queue, true);
+  atomic_store_explicit(&out->enabled, false, memory_order_release);
+  {
+    const OSStatus stop = AudioQueueStop(out->queue, true);
+    if (stop != noErr) cli_audio_out_remember_error(out, (int32_t)stop);
+  }
+  {
+    const OSStatus dispose = AudioQueueDispose(out->queue, true);
+    if (dispose != noErr) cli_audio_out_remember_error(out, (int32_t)dispose);
+  }
   out->queue = NULL;
 }
 
@@ -254,21 +420,90 @@ static void cli_audio_out_refill(
     void *context, AudioQueueRef queue, AudioQueueBufferRef buffer)
 {
   struct cli_audio_out *out = context;
+  size_t index;
+  OSStatus result;
   (void)queue;
   assert(out != NULL && buffer != NULL);
+  for (index = 0U; index < CLI_AUDIO_OUT_BUFFER_COUNT; ++index) {
+    if (out->buffers[index] == buffer) break;
+  }
+  assert(index < CLI_AUDIO_OUT_BUFFER_COUNT);
+  (void)atomic_fetch_add_explicit(
+      &out->completed_bytes,
+      atomic_exchange_explicit(
+          &out->buffer_payload_bytes[index], 0U, memory_order_acq_rel),
+      memory_order_relaxed);
   /*
    * The chain must not be broken. Returning without re-enqueueing would end
    * playback permanently, which is precisely the failure this module was
    * rewritten to remove — so a shutting-down queue is the only reason to stop.
    */
-  if (!out->enabled) return;
-  (void)cli_audio_out_prime_one(out, buffer);
+  if (!atomic_load_explicit(&out->enabled, memory_order_acquire)) return;
+  result = cli_audio_out_prime_one(out, buffer);
+  if (result != noErr) {
+    cli_audio_out_remember_error(out, (int32_t)result);
+    atomic_store_explicit(&out->enabled, false, memory_order_release);
+  }
 }
 
 static void cli_audio_out_abandon_open(struct cli_audio_out *out)
 {
   assert(out != NULL && out->queue != NULL);
-  out->enabled = false;
-  (void)AudioQueueDispose(out->queue, true);
+  atomic_store_explicit(&out->enabled, false, memory_order_release);
+  {
+    const OSStatus result = AudioQueueDispose(out->queue, true);
+    if (result != noErr) cli_audio_out_remember_error(out, (int32_t)result);
+  }
   out->queue = NULL;
+}
+
+static void cli_audio_out_remember_error(
+    struct cli_audio_out *out, int32_t error)
+{
+  int_least32_t expected = 0;
+  if (out == NULL || error == 0) return;
+  (void)atomic_compare_exchange_strong_explicit(
+      &out->platform_error, &expected, (int_least32_t)error,
+      memory_order_release, memory_order_relaxed);
+}
+
+static void cli_audio_out_classify_pull(
+    struct cli_audio_out *out, uint32_t taken, bool expected)
+{
+  uint_least32_t pending;
+  assert(out != NULL);
+  /*
+   * Silence after the last word is ordinary response tail, not missing
+   * speech. It becomes a hole only when a later payload proves that the
+   * answer continued after it — the same classification used by the core
+   * playback clock. Promote previous candidates before recording a partial
+   * current buffer, so a payload+silence buffer proves earlier gaps while its
+   * own tail remains unconfirmed.
+   */
+  if (taken > 0U) {
+    pending = atomic_exchange_explicit(
+        &out->pending_starved, 0U, memory_order_acq_rel);
+    if (pending > 0U) {
+      (void)atomic_fetch_add_explicit(
+          &out->starved, pending, memory_order_relaxed);
+    }
+  }
+  if (taken < (uint32_t)CLI_AUDIO_OUT_BUFFER_BYTES && expected &&
+      !atomic_load_explicit(&out->draining, memory_order_relaxed)) {
+    (void)atomic_fetch_add_explicit(
+        &out->pending_starved, 1U, memory_order_relaxed);
+  }
+}
+
+static uint32_t cli_audio_out_pending_payload_bytes(
+    const struct cli_audio_out *out)
+{
+  uint32_t pending = 0U;
+  size_t index;
+  assert(out != NULL);
+  for (index = 0U; index < CLI_AUDIO_OUT_BUFFER_COUNT; ++index) {
+    pending += (uint32_t)atomic_load_explicit(
+        &out->buffer_payload_bytes[index], memory_order_acquire);
+  }
+  return pending;
 }

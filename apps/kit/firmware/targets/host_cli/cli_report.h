@@ -82,6 +82,15 @@ struct cli_report_summary {
   uint32_t back_office_heard;
   /** In-progress turns intentionally stopped by the configured run deadline. */
   uint32_t deadline_cancelled_turns;
+  /** Payload that completed at the CoreAudio callback/file boundary. */
+  uint32_t room_completed_bytes;
+  /** Payload refused because the hardware-facing ring was full. */
+  uint32_t room_dropped_bytes;
+  /** Hardware dry pulls followed by later answer payload: audible holes. */
+  uint32_t room_starved_buffers;
+  /** First output/input platform status; zero means the boundary stayed healthy. */
+  int32_t speaker_platform_error;
+  int32_t microphone_platform_error;
 };
 
 /** Every turn of one run, bounded, with an honest count of what did not fit. */

@@ -13,6 +13,21 @@ export const BYTES_PER_SEC = SAMPLE_RATE * 2;
 export const FRAME_MS = 20;
 export const FRAME_BYTES = (BYTES_PER_SEC * FRAME_MS) / 1000; // 640
 
+/** Expand G.711 mu-law to little-endian PCM16 for playout and duration accounting. */
+export function mulawToPcm16(input: Buffer): Buffer {
+  const output = Buffer.alloc(input.length * 2);
+  for (let index = 0; index < input.length; index++) {
+    const value = ~input[index]!;
+    const sign = value & 0x80;
+    const exponent = (value >> 4) & 0x07;
+    const mantissa = value & 0x0f;
+    let sample = ((mantissa << 3) + 0x84) << exponent;
+    sample -= 0x84;
+    output.writeInt16LE(sign === 0 ? sample : -sample, index * 2);
+  }
+  return output;
+}
+
 const SOX_RAW_ARGS = [
   "-q",
   "-t",

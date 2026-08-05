@@ -100,6 +100,12 @@ static bool cli_main_init_device_controls(struct cli_runtime *runtime);
 /* Releases every opened platform resource. Safe after partial initialization. */
 static void cli_main_close_runtime(struct cli_runtime *runtime);
 
+/* Drains accepted room audio through the hardware/file completion boundary. */
+static bool cli_main_drain_audio(struct cli_runtime *runtime);
+
+/* Turns asynchronous CoreAudio failures into one terminal runtime outcome. */
+static void cli_main_supervise_audio(struct cli_runtime *runtime);
+
 /* Starts a voicelab mount for each fresh ready connection generation. */
 static void cli_main_start_voicelab(struct cli_runtime *runtime);
 
@@ -126,7 +132,7 @@ static void cli_main_on_transcript(
     void *context, bool from_user, const char *text, bool final);
 
 /* Records one frame on the true timeline: the WAV, then the room. */
-static void cli_main_record_frame(
+static bool cli_main_record_frame(
     struct cli_runtime *runtime, const uint8_t *pcm);
 
 /* Records one captured microphone frame to the uplink WAV. */
@@ -138,7 +144,7 @@ static void cli_main_record_converter_silence(
     struct cli_runtime *runtime, uint32_t frames);
 
 /* Records one frame and hands it to the modelled converter. */
-static void cli_main_write_playback(
+static bool cli_main_write_playback(
     struct cli_runtime *runtime, const uint8_t *pcm);
 
 /* Feeds the converter until it stops asking; unpaced, exactly one frame. */
@@ -377,14 +383,20 @@ int main(int argc, char **argv)
     return CLI_MAIN_EXIT_RUNTIME;
   }
   cli_main_run_loop(runtime);
+  const bool audio_drained = cli_main_drain_audio(runtime);
   cli_main_close_runtime(runtime);
+  const bool audio_healthy =
+      cli_audio_out_platform_error(&runtime->live_out) == 0 &&
+      cli_audio_in_platform_error(&runtime->live_in) == 0;
   if (runtime->options.converse_minutes > 0.0 &&
       cli_conversation_write_report(runtime) != CLI_CONVERSATION_OK) {
     cli_runtime_log(
         "error", "failed to write report: %s", runtime->options.report_json);
     return CLI_MAIN_EXIT_RUNTIME;
   }
-  return CLI_MAIN_EXIT_OK;
+  return audio_drained && audio_healthy
+      ? CLI_MAIN_EXIT_OK
+      : CLI_MAIN_EXIT_RUNTIME;
 }
 
 static void cli_main_signal_handler(int signal_number)
@@ -911,12 +923,47 @@ static void cli_main_close_runtime(struct cli_runtime *runtime)
   cli_keyboard_close(&runtime->keyboard);
   (void)iterate_kit_posix_itx_transport_stop(&runtime->transport);
   (void)iterate_kit_peer_close(&runtime->peer);
+  cli_audio_out_close(&runtime->live_out);
+  cli_audio_in_close(&runtime->live_in);
   cli_wav_source_close(&runtime->source);
   cli_wav_sink_close(&runtime->sink);
   cli_wav_sink_close(&runtime->mic_sink);
   cli_wav_sink_close(&runtime->pretend_sink);
-  cli_audio_out_close(&runtime->live_out);
-  cli_audio_in_close(&runtime->live_in);
+}
+
+static bool cli_main_drain_audio(struct cli_runtime *runtime)
+{
+  enum cli_audio_out_status status;
+  assert(runtime != NULL);
+  cli_audio_out_set_expected(&runtime->live_out, false);
+  status = cli_audio_out_drain(
+      &runtime->live_out, (uint32_t)CLI_MAIN_HANGUP_GRACE_MS);
+  cli_runtime_log(
+      status == CLI_AUDIO_OUT_OK ? "info" : "error",
+      "room completion status=%s completedBytes=%u droppedBytes=%u "
+      "starvedBuffers=%u outputError=%" PRId32 " inputError=%" PRId32,
+      cli_audio_out_status_name(status),
+      cli_audio_out_completed_bytes(&runtime->live_out),
+      runtime->live_out.dropped,
+      cli_audio_out_starved_buffers(&runtime->live_out),
+      cli_audio_out_platform_error(&runtime->live_out),
+      cli_audio_in_platform_error(&runtime->live_in));
+  return status == CLI_AUDIO_OUT_OK &&
+      cli_audio_out_platform_error(&runtime->live_out) == 0 &&
+      cli_audio_in_platform_error(&runtime->live_in) == 0;
+}
+
+static void cli_main_supervise_audio(struct cli_runtime *runtime)
+{
+  assert(runtime != NULL);
+  const int32_t output_error =
+      cli_audio_out_platform_error(&runtime->live_out);
+  const int32_t input_error = cli_audio_in_platform_error(&runtime->live_in);
+  if (output_error == 0 && input_error == 0) return;
+  cli_runtime_log(
+      "error", "audio platform failure output=%" PRId32 " input=%" PRId32,
+      output_error, input_error);
+  runtime->stop_requested = true;
 }
 
 static void cli_main_start_voicelab(struct cli_runtime *runtime)
@@ -971,6 +1018,7 @@ static void cli_main_accept_speaker_frame(
       &runtime->playout, identity);
   if (action == ITERATE_KIT_PLAYOUT_IGNORE) return;
   if (action == ITERATE_KIT_PLAYOUT_REPLACE) {
+    cli_audio_out_set_expected(&runtime->live_out, false);
     cli_speaker_clear(&runtime->speaker);
     iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
     /* A new answer is a new timeline: lag does not carry across answers. */
@@ -1035,6 +1083,7 @@ static void cli_main_on_control(
   struct cli_runtime *runtime = context;
   if (runtime == NULL) return;
   if (control == ITERATE_KIT_VOICELAB_CONTROL_SPEECH_STARTED) {
+    cli_audio_out_set_expected(&runtime->live_out, false);
     cli_speaker_clear(&runtime->speaker);
     iterate_kit_playout_interrupt(&runtime->playout);
     iterate_kit_voice_playback_clock_reprime(&runtime->playback_clock);
@@ -1064,6 +1113,7 @@ static void cli_main_on_control(
           &tail.frames[slot].identity);
     }
     cli_runtime_log("warn", "call ended by the bridge");
+    runtime->answer_done = true;
     ++runtime->calls_lost;
     runtime->talking = false;
     runtime->flushing_turn = false;
@@ -1085,7 +1135,7 @@ static void cli_main_on_transcript(
       from_user ? "user" : "assistant", text);
 }
 
-static void cli_main_record_frame(
+static bool cli_main_record_frame(
     struct cli_runtime *runtime, const uint8_t *pcm)
 {
   assert(runtime != NULL && pcm != NULL);
@@ -1093,18 +1143,31 @@ static void cli_main_record_frame(
           &runtime->sink, pcm, ITERATE_KIT_VOICE_FRAME_BYTES) != CLI_WAV_OK) {
     ++runtime->speaker_write_failures;
     runtime->stop_requested = true;
-    return;
+    return false;
   }
   /*
    * NOT discarded. This refusal used to be cast away, so a speaker that was
    * dropping most of a conversation reported nothing at all and the room went
    * quiet while every counter stayed clean.
    */
-  if (cli_audio_out_write(
-          &runtime->live_out, pcm, ITERATE_KIT_VOICE_FRAME_BYTES) !=
-      CLI_AUDIO_OUT_OK) {
+  const enum cli_audio_out_status room = cli_audio_out_write(
+      &runtime->live_out, pcm, ITERATE_KIT_VOICE_FRAME_BYTES);
+  if (room == CLI_AUDIO_OUT_ERR_FULL) {
     ++runtime->speaker_room_drops;
+    return false;
+  } else if (room != CLI_AUDIO_OUT_OK) {
+    cli_runtime_log(
+        "error", "speaker output failed: %s",
+        cli_audio_out_status_name(room));
+    runtime->stop_requested = true;
+    return false;
   }
+  if (runtime->conversation.current_turn != NULL &&
+      (runtime->options.live_audio ||
+       runtime->options.pretend_speaker != NULL)) {
+    runtime->turn_room_submitted_bytes += ITERATE_KIT_VOICE_FRAME_BYTES;
+  }
+  return true;
 }
 
 /**
@@ -1148,26 +1211,41 @@ static void cli_main_record_converter_silence(
    */
   static const uint8_t silence[ITERATE_KIT_VOICE_FRAME_BYTES] = {0};
   for (uint32_t index = 0U; index < frames; ++index) {
-    cli_main_record_frame(runtime, silence);
+    (void)cli_main_record_frame(runtime, silence);
   }
 }
 
-static void cli_main_write_playback(
+static bool cli_main_write_playback(
     struct cli_runtime *runtime, const uint8_t *pcm)
 {
   assert(runtime != NULL && pcm != NULL);
-  cli_main_record_frame(runtime, pcm);
+  if (!cli_main_record_frame(runtime, pcm)) return false;
   (void)cli_paced_sink_offer(&runtime->paced_sink);
+  return true;
 }
 
 static void cli_main_finish_answer_if_ready(
     struct cli_runtime *runtime, uint64_t now_ms)
 {
   assert(runtime != NULL);
+  const bool software_drained =
+      runtime->answer_done && runtime->speaker.used == 0U;
+  if (software_drained) {
+    cli_audio_out_set_expected(&runtime->live_out, false);
+  }
   struct cli_report_turn *turn = runtime->conversation.current_turn;
-  if (turn == NULL) return;
-  const bool played_out = runtime->answer_done && runtime->speaker.used == 0U &&
-      turn->frames_played > 0U;
+  if (turn == NULL) {
+    if (software_drained) runtime->answer_done = false;
+    return;
+  }
+  const bool room_drained =
+      (!runtime->options.live_audio &&
+       runtime->options.pretend_speaker == NULL) ||
+      cli_audio_out_completed_bytes(&runtime->live_out) -
+              runtime->turn_room_completed_start_bytes >=
+          runtime->turn_room_submitted_bytes;
+  const bool played_out =
+      software_drained && room_drained && turn->frames_played > 0U;
   /*
    * STALLED, NOT MERELY LONG.
    *
@@ -1206,7 +1284,7 @@ static void cli_main_conceal_if_needed(
       iterate_kit_voice_playback_clock_empty(&runtime->playback_clock, now_ms);
   if (action != ITERATE_KIT_VOICE_PLAYBACK_CONCEAL) return;
   static const uint8_t silence[ITERATE_KIT_VOICE_FRAME_BYTES] = {0};
-  cli_main_write_playback(runtime, silence);
+  if (!cli_main_write_playback(runtime, silence)) return;
   ++runtime->speaker_conceal_frames;
   if (runtime->conversation.current_turn != NULL) {
     ++runtime->conversation.current_turn->frames_concealed;
@@ -1238,7 +1316,7 @@ static void cli_main_play_frame(
     return;
   }
   if (action != ITERATE_KIT_VOICE_PLAYBACK_PLAY) return;
-  cli_main_write_playback(runtime, frame);
+  if (!cli_main_write_playback(runtime, frame)) return;
   ++runtime->speaker_frames_played;
   ++runtime->speaker_writes;
   {
@@ -1283,6 +1361,25 @@ static void cli_main_poll_playback(
   cli_main_record_converter_silence(
       runtime,
       cli_paced_sink_advance(&runtime->paced_sink, cli_runtime_now_us()));
+  if (runtime->options.live_audio ||
+      runtime->options.pretend_speaker != NULL) {
+    /*
+     * There is already a clock here: CoreAudio, or the FILE-mode puller used
+     * as its deterministic stand-in. Let that boundary request payload by
+     * draining its real descriptor lead. A second 20 ms deadline in this
+     * loop ran at a slightly different rate and eventually made one healthy
+     * clock report the other as starvation.
+     *
+     * Polling is intentionally faster than the 20 ms pull period. It merely
+     * replenishes bounded lead; it cannot run playback ahead because
+     * cli_audio_out_queued_bytes() measures only the refill reserve; payload
+     * already owned by the hardware cannot satisfy the callback that asks to
+     * reuse a completed buffer.
+     */
+    cli_main_finish_answer_if_ready(runtime, now_ms);
+    cli_main_feed_playback(runtime, now_ms);
+    return;
+  }
   if (runtime->next_playback_at_ms == 0U) {
     runtime->next_playback_at_ms = now_ms;
   }
@@ -1302,11 +1399,20 @@ static void cli_main_feed_playback(
     struct cli_runtime *runtime, uint64_t now_ms)
 {
   assert(runtime != NULL);
+  const bool room_pulls = runtime->options.live_audio ||
+      runtime->options.pretend_speaker != NULL;
+  if (room_pulls &&
+      cli_audio_out_queued_bytes(&runtime->live_out) >=
+          CLI_AUDIO_OUT_LEAD_BYTES) {
+    return;
+  }
   /*
    * The first frame is unconditional, which is what this loop did before a
-   * converter was modelled. The continuation is the converter still asking:
-   * an unpaced sink never asks, so the default path takes exactly one frame
-   * per due tick and is unchanged.
+   * converter was modelled. The continuation is a converter still asking:
+   * either the deterministic paced sink has a free slot, or the real
+   * hardware-facing output has less than its descriptor lead buffered. An
+   * unpaced output asks neither, so the default path remains exactly one
+   * frame per due tick.
    *
    * The explicit bound is not belt and braces. A frame the playback clock
    * DISCARDS never reaches the converter and so never fills a slot, and
@@ -1320,13 +1426,24 @@ static void cli_main_feed_playback(
     uint8_t frame[ITERATE_KIT_VOICE_FRAME_BYTES] = {0};
     if (cli_speaker_read(&runtime->speaker, frame, sizeof(frame)) !=
         CLI_SPEAKER_OK) {
+      /*
+       * The hardware puller is the exact authority for missing room audio.
+       * Feeding software-generated concealment on this loop's 5 ms poll
+       * would fill a 20 ms hardware queue four times too fast and hide the
+       * callback's own starvation evidence. The unpaced/file-only model has
+       * no such authority, so it retains the core concealment decision.
+       */
+      if (room_pulls) return;
       cli_main_conceal_if_needed(runtime, now_ms);
       return;
     }
     cli_main_play_frame(runtime, frame, now_ms);
     ++fed;
   } while (fed < CLI_PACED_SINK_MAX_DEPTH_FRAMES &&
-           cli_paced_sink_ready(&runtime->paced_sink));
+           (cli_paced_sink_ready(&runtime->paced_sink) ||
+            (room_pulls &&
+             cli_audio_out_queued_bytes(&runtime->live_out) <
+                 CLI_AUDIO_OUT_LEAD_BYTES)));
 }
 
 static void cli_main_capture_frame(struct cli_runtime *runtime)
@@ -1717,9 +1834,10 @@ static void cli_main_pulse(
   cli_runtime_log(
       "info",
       "pulse loops=%u outbox=%u/%u sent=%u frames=%u batches=%u rx=%u "
-      "gaps=%u played=%u conceal=%u under=%u ringMs=%u convUnder=%u "
+      "gaps=%u submitted=%u conceal=%u under=%u ringMs=%u convUnder=%u "
       "convRefused=%u micIn=%u micLost=%u roomDrop=%u roomStarve=%u "
-      "roomMs=%u injLost=%u injDup=%u injLate=%u",
+      "roomPlayed=%u roomMs=%u roomErr=%" PRId32 " micErr=%" PRId32
+      " injLost=%u injDup=%u injLate=%u",
       runtime->loop_count, outbox->current_slots,
       ITERATE_KIT_VOICE_CONTROL_OUTBOX_SLOTS,
       runtime->transport.control_sender.messages_sent,
@@ -1733,15 +1851,20 @@ static void cli_main_pulse(
        * anybody watching a session will already be reading.
        */
       runtime->paced_sink.underrun_frames, runtime->paced_sink.refused_frames,
-      runtime->live_in.captured, runtime->live_in.dropped,
+      cli_audio_in_captured_frames(&runtime->live_in), runtime->live_in.dropped,
       /*
        * The room, as distinct from the recording. roomDrop is audio the
        * speaker never got, roomStarve is silence somebody actually heard, and
        * both were invisible while a whole conversation failed to be audible.
        */
-      runtime->speaker_room_drops, runtime->live_out.starved,
+      runtime->speaker_room_drops,
+      cli_audio_out_starved_buffers(&runtime->live_out),
+      cli_audio_out_completed_bytes(&runtime->live_out) /
+          ITERATE_KIT_VOICE_FRAME_BYTES,
       cli_audio_out_queued_bytes(&runtime->live_out) /
           (ITERATE_KIT_VOICE_FRAME_BYTES / ITERATE_KIT_VOICE_FRAME_MS),
+      cli_audio_out_platform_error(&runtime->live_out),
+      cli_audio_in_platform_error(&runtime->live_in),
       /*
        * What the harness DID, beside what happened. Without these a run that
        * injected nothing and a run that injected everything read the same,
@@ -1813,13 +1936,18 @@ static void cli_main_reexec_if_ready(
           CLI_MAIN_RESTART_REPLY_MS) return;
   /* The one-way transport gets a full interval to put its reply on the wire. */
   cli_runtime_log("warn", "re-executing iterate-kit-cli");
+  if (!cli_main_drain_audio(runtime)) {
+    cli_runtime_log("error", "refusing re-exec before room audio drains");
+    runtime->stop_requested = true;
+    return;
+  }
   /* execv keeps the file descriptors, so the terminal must be handed back. */
   cli_keyboard_close(&runtime->keyboard);
+  cli_audio_out_close(&runtime->live_out);
+  cli_audio_in_close(&runtime->live_in);
   cli_wav_sink_close(&runtime->sink);
   cli_wav_sink_close(&runtime->mic_sink);
   cli_wav_sink_close(&runtime->pretend_sink);
-  cli_audio_out_close(&runtime->live_out);
-  cli_audio_in_close(&runtime->live_in);
   (void)iterate_kit_posix_itx_transport_stop(&runtime->transport);
   (void)execv(runtime->argv[0], runtime->argv);
   cli_runtime_log("error", "execv failed errno=%d", errno);
@@ -2014,6 +2142,7 @@ static void cli_main_run_loop(struct cli_runtime *runtime)
      * beside the playback poll because they model the same instant.
      */
     cli_audio_out_pump(&runtime->live_out, cli_runtime_now_us());
+    cli_main_supervise_audio(runtime);
     cli_main_poll_interactive(runtime, now_ms);
     cli_conversation_poll(runtime, now_ms);
     cli_main_enforce_talk_deadline(runtime, now_ms);

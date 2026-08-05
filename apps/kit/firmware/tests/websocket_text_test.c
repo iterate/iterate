@@ -321,11 +321,9 @@ static void ingress_limit_and_protocol_errors_are_terminal(void) {
 }
 
 /*
- * The device deliberately uses a separate binary WebSocket for PCM; the Cap'n
- * Web connection has only text protocol authority. Ignoring binary data here
- * was rejected because a wiring error would become silent data loss and later
- * text could appear healthy. The mismatch is classified as unsupported and
- * remains terminal for this ingress session.
+ * This ingress has only Cap'n Web text protocol authority. Ignoring binary
+ * data here would turn a wiring error into silent data loss while later text
+ * appeared healthy, so the mismatch is terminal for this ingress session.
  */
 static void ingress_rejects_binary_as_a_control_protocol_error(void) {
   char buffer[MESSAGE_CAPACITY];
@@ -346,7 +344,7 @@ static void ingress_rejects_binary_as_a_control_protocol_error(void) {
           true,
           3U,
           0U,
-          "pcm",
+          "raw",
           3U) == CAPNWEB_E_UNSUPPORTED);
   assert(fixture.count == 0U);
   assert(

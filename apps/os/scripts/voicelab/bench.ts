@@ -10,6 +10,7 @@ import crypto from "node:crypto";
 import { percentiles } from "./audio.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { openResilientConnection } from "./resilient.ts";
+import { RpcResultObserver } from "./rpc-ownership.ts";
 
 /** Options for `pnpm cli voicelab bench`. */
 export interface BenchOptions extends VoicelabConnectOptions {
@@ -77,6 +78,10 @@ export async function bench(options: BenchOptions) {
   let appendErrors = 0;
   let firstAppendError: string | undefined;
   const ackLatency: number[] = [];
+  const appendResults = new RpcResultObserver((error: unknown) => {
+    appendErrors++;
+    firstAppendError ??= error instanceof Error ? error.message : String(error);
+  });
 
   const startedAt = Date.now();
   let seq = 0;
@@ -104,12 +109,10 @@ export async function bench(options: BenchOptions) {
     const promise = pubStream.append(...events);
     if (isSampled) {
       const sentAt = Date.now();
-      promise.then(() => ackLatency.push(Date.now() - sentAt)).catch(() => {});
+      appendResults.observe(promise, () => ackLatency.push(Date.now() - sentAt));
+    } else {
+      appendResults.observe(promise);
     }
-    promise.catch((error: unknown) => {
-      appendErrors++;
-      firstAppendError ??= error instanceof Error ? error.message : String(error);
-    });
     if (seq % (rate * 10) < framesPerAppend) {
       console.error(
         `  sent=${seq} recv=${recvCount} inflightLoss=${seq - recvCount} lastOneWayMs=${oneWay.at(-1)?.ms ?? "-"}`,
@@ -119,6 +122,7 @@ export async function bench(options: BenchOptions) {
 
   // Grace period for stragglers.
   sending = false;
+  await appendResults.drain();
   await new Promise((resolve) => setTimeout(resolve, 5000));
   connection.close();
 

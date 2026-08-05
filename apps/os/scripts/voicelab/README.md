@@ -57,6 +57,9 @@ pnpm cli voicelab client --project prj_… --path /voicelab/call-1
 # live: real mic + speaker, space = push-to-talk mute toggle, q quits
 pnpm cli voicelab client --project prj_… --path /voicelab/call-1 --mic --device
 
+# Literal no-cloud proof: loopback fake provider, synthetic mic, accounted speaker
+pnpm cli voicelab local --project voice-test --say "Prove the local audio path."
+
 # transport-only bench: floods PCM-sized ephemeral events at voice cadence,
 # measures one-way latency / loss / dupes / stalls / per-connection ceilings
 pnpm cli voicelab bench --project prj_… --seconds 120 --rate 50

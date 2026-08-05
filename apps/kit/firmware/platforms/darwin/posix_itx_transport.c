@@ -213,10 +213,25 @@ static void service_control_messages(
   }
 }
 
+static int64_t transport_now_us(
+    const struct iterate_kit_posix_itx_transport *transport);
+
+static void timeout_open_attempt(
+    struct iterate_kit_posix_itx_transport *transport,
+    int64_t now_us) {
+  increment(&transport->websocket_open_timeouts);
+  transport->last_platform_error = ETIMEDOUT;
+  transport->websocket_open_attempt_active = false;
+  transport->websocket_open_deadline_us = 0;
+  iterate_kit_posix_websocket_client_close(&transport->websocket);
+  iterate_kit_retry_gate_defer(&transport->websocket_retry, now_us);
+}
+
 static void drive_socket(
     struct iterate_kit_posix_itx_transport *transport,
     int64_t now_us) {
   enum iterate_kit_posix_websocket_open_result result;
+  int64_t step_now_us;
   if (!transport->socket_connected &&
       transport->state == ITERATE_KIT_POSIX_ITX_FAILED) {
     /* FAILED describes the preceding poll; a later poll begins recovery. */
@@ -238,19 +253,19 @@ static void drive_socket(
       transport->websocket_open_deadline_us = now_us +
           (int64_t)ITERATE_KIT_VOICE_CONNECTION_OPEN_TIMEOUT_MS * 1000;
     }
+    step_now_us = transport_now_us(transport);
+    if (step_now_us >= transport->websocket_open_deadline_us) {
+      timeout_open_attempt(transport, step_now_us);
+      return;
+    }
     result = iterate_kit_posix_websocket_client_open(
         &transport->websocket);
+    step_now_us = transport_now_us(transport);
+    if (step_now_us >= transport->websocket_open_deadline_us) {
+      timeout_open_attempt(transport, step_now_us);
+      return;
+    }
     if (result == ITERATE_KIT_POSIX_WEBSOCKET_OPEN_WOULD_BLOCK) {
-      if (now_us >= transport->websocket_open_deadline_us) {
-        increment(&transport->websocket_open_timeouts);
-        transport->last_platform_error = ETIMEDOUT;
-        transport->websocket_open_attempt_active = false;
-        transport->websocket_open_deadline_us = 0;
-        iterate_kit_posix_websocket_client_close(
-            &transport->websocket);
-        iterate_kit_retry_gate_defer(
-            &transport->websocket_retry, now_us);
-      }
       return;
     }
     if (result == ITERATE_KIT_POSIX_WEBSOCKET_OPEN_FAILED) {
@@ -262,7 +277,7 @@ static void drive_socket(
       iterate_kit_posix_websocket_client_close(
           &transport->websocket);
       iterate_kit_retry_gate_defer(
-          &transport->websocket_retry, now_us);
+          &transport->websocket_retry, step_now_us);
       return;
     }
     if (transport->socket_generation == UINT32_MAX) {
@@ -481,7 +496,7 @@ enum capnweb_status iterate_kit_posix_itx_transport_send_text(
       &transport->control_outbox, kind, data, length);
 }
 
-/** This transport's only clock read: the injected one, or the platform's. */
+/** This transport's only clock source: the injected one, or the platform's. */
 static int64_t transport_now_us(
     const struct iterate_kit_posix_itx_transport *transport) {
   if (transport == NULL || transport->options.now_us == NULL) {
@@ -494,11 +509,12 @@ enum iterate_kit_status iterate_kit_posix_itx_transport_poll(
     struct iterate_kit_posix_itx_transport *transport,
     size_t max_control_messages) {
   enum iterate_kit_status status;
-  const int64_t now_us = transport_now_us(transport);
+  int64_t now_us;
   if (transport == NULL || !transport->initialized ||
       !transport->started || max_control_messages == 0U) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
+  now_us = transport_now_us(transport);
   if (transport->fatal_failure_latched) {
     transport->state = ITERATE_KIT_POSIX_ITX_FAILED;
     return ITERATE_KIT_STATE_ERROR;

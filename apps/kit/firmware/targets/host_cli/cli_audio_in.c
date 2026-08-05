@@ -1,6 +1,7 @@
 /* cli_audio_in.c: owns the CoreAudio capture queue and its handoff ring. */
 
 #include <assert.h>
+#include <errno.h>
 #include <string.h>
 
 #include "cli_audio_in.h"
@@ -33,6 +34,9 @@ static uint32_t cli_audio_in_catch_up(struct cli_audio_in *in);
 /* Releases resources acquired before an open failure. */
 static void cli_audio_in_abandon_open(struct cli_audio_in *in);
 
+static void cli_audio_in_remember_error(
+    struct cli_audio_in *in, int32_t error);
+
 const char *cli_audio_in_status_name(enum cli_audio_in_status status)
 {
   switch (status) {
@@ -62,7 +66,10 @@ enum cli_audio_in_status cli_audio_in_open(struct cli_audio_in *in)
   };
   OSStatus result = AudioQueueNewInput(
       &format, cli_audio_in_captured, in, NULL, NULL, 0U, &in->queue);
-  if (result != noErr) return CLI_AUDIO_IN_ERR_PLATFORM;
+  if (result != noErr) {
+    cli_audio_in_remember_error(in, (int32_t)result);
+    return CLI_AUDIO_IN_ERR_PLATFORM;
+  }
   for (size_t index = 0U; index < CLI_AUDIO_IN_BUFFER_COUNT; ++index) {
     result = AudioQueueAllocateBuffer(
         in->queue, ITERATE_KIT_VOICE_FRAME_BYTES, &in->buffers[index]);
@@ -70,16 +77,18 @@ enum cli_audio_in_status cli_audio_in_open(struct cli_audio_in *in)
       result = AudioQueueEnqueueBuffer(in->queue, in->buffers[index], 0U, NULL);
     }
     if (result != noErr) {
+      cli_audio_in_remember_error(in, (int32_t)result);
       cli_audio_in_abandon_open(in);
       return CLI_AUDIO_IN_ERR_PLATFORM;
     }
   }
+  atomic_store_explicit(&in->enabled, true, memory_order_release);
   result = AudioQueueStart(in->queue, NULL);
   if (result != noErr) {
+    cli_audio_in_remember_error(in, (int32_t)result);
     cli_audio_in_abandon_open(in);
     return CLI_AUDIO_IN_ERR_PLATFORM;
   }
-  in->enabled = true;
   return CLI_AUDIO_IN_OK;
 }
 
@@ -88,7 +97,8 @@ enum cli_audio_in_status cli_audio_in_push(
 {
   if (in == NULL || pcm == NULL) return CLI_AUDIO_IN_ERR_ARG;
   if (length != ITERATE_KIT_VOICE_FRAME_BYTES) {
-    ++in->short_buffers;
+    (void)atomic_fetch_add_explicit(
+        &in->short_buffers, 1U, memory_order_relaxed);
     return CLI_AUDIO_IN_ERR_ARG;
   }
   const uint32_t write =
@@ -96,8 +106,21 @@ enum cli_audio_in_status cli_audio_in_push(
   memcpy(in->frames[write % CLI_AUDIO_IN_RING_FRAMES], pcm, length);
   /* Release publishes the frame before the index that makes it visible. */
   atomic_store_explicit(&in->write, write + 1U, memory_order_release);
-  ++in->captured;
+  (void)atomic_fetch_add_explicit(
+      &in->captured, 1U, memory_order_relaxed);
   return CLI_AUDIO_IN_OK;
+}
+
+uint32_t cli_audio_in_captured_frames(const struct cli_audio_in *in)
+{
+  return in == NULL ? 0U : (uint32_t)atomic_load_explicit(
+      &in->captured, memory_order_acquire);
+}
+
+int32_t cli_audio_in_platform_error(const struct cli_audio_in *in)
+{
+  return in == NULL ? 0 : (int32_t)atomic_load_explicit(
+      &in->platform_error, memory_order_acquire);
 }
 
 enum cli_audio_in_status cli_audio_in_pop(
@@ -115,10 +138,16 @@ enum cli_audio_in_status cli_audio_in_pop(
 void cli_audio_in_close(struct cli_audio_in *in)
 {
   if (in == NULL || in->queue == NULL) return;
-  (void)AudioQueueStop(in->queue, true);
-  (void)AudioQueueDispose(in->queue, true);
+  atomic_store_explicit(&in->enabled, false, memory_order_release);
+  {
+    const OSStatus stop = AudioQueueStop(in->queue, true);
+    if (stop != noErr) cli_audio_in_remember_error(in, (int32_t)stop);
+  }
+  {
+    const OSStatus dispose = AudioQueueDispose(in->queue, true);
+    if (dispose != noErr) cli_audio_in_remember_error(in, (int32_t)dispose);
+  }
   in->queue = NULL;
-  in->enabled = false;
 }
 
 static uint32_t cli_audio_in_catch_up(struct cli_audio_in *in)
@@ -152,16 +181,41 @@ static void cli_audio_in_captured(
   (void)packet_count;
   (void)packets;
   struct cli_audio_in *in = context;
+  enum cli_audio_in_status push;
+  OSStatus enqueue;
   assert(in != NULL && buffer != NULL);
-  (void)cli_audio_in_push(in, buffer->mAudioData, buffer->mAudioDataByteSize);
+  if (!atomic_load_explicit(&in->enabled, memory_order_acquire)) return;
+  push = cli_audio_in_push(in, buffer->mAudioData, buffer->mAudioDataByteSize);
+  if (push != CLI_AUDIO_IN_OK && push != CLI_AUDIO_IN_ERR_ARG) {
+    cli_audio_in_remember_error(in, EIO);
+    atomic_store_explicit(&in->enabled, false, memory_order_release);
+    return;
+  }
   /* Requeue unconditionally: a buffer not returned is capture stopping dead. */
-  (void)AudioQueueEnqueueBuffer(queue, buffer, 0U, NULL);
+  enqueue = AudioQueueEnqueueBuffer(queue, buffer, 0U, NULL);
+  if (enqueue != noErr) {
+    cli_audio_in_remember_error(in, (int32_t)enqueue);
+    atomic_store_explicit(&in->enabled, false, memory_order_release);
+  }
 }
 
 static void cli_audio_in_abandon_open(struct cli_audio_in *in)
 {
   assert(in != NULL && in->queue != NULL);
-  (void)AudioQueueDispose(in->queue, true);
+  atomic_store_explicit(&in->enabled, false, memory_order_release);
+  {
+    const OSStatus result = AudioQueueDispose(in->queue, true);
+    if (result != noErr) cli_audio_in_remember_error(in, (int32_t)result);
+  }
   in->queue = NULL;
-  in->enabled = false;
+}
+
+static void cli_audio_in_remember_error(
+    struct cli_audio_in *in, int32_t error)
+{
+  int_least32_t expected = 0;
+  if (in == NULL || error == 0) return;
+  (void)atomic_compare_exchange_strong_explicit(
+      &in->platform_error, &expected, (int_least32_t)error,
+      memory_order_release, memory_order_relaxed);
 }

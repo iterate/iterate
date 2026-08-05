@@ -8,7 +8,7 @@
       ITERATE_KIT_WEBSOCKET_CONTROL_PAYLOAD_MAX_BYTES)
 
 /*
- * All PCM and control bytes for one socket pass through this single-owner
+ * All application and control bytes for one socket pass through this single-owner
  * state machine. That is what makes RFC 6455 ordering testable: a partially
  * written data frame cannot be interleaved with PONG/CLOSE, but the next
  * frame chosen at a boundary must respect protocol urgency.
@@ -31,7 +31,7 @@
  * Transmission state has one owner, but diagnostics may read these two scalar
  * publications from another core. Relaxed ordering is enough: the snapshot is
  * descriptive and never authorizes a write. Making the whole transmitter
- * cross-task synchronized would add fences to every PCM chunk for no stronger
+ * cross-task synchronized would add fences to every data chunk for no stronger
  * guarantee.
  */
 static uint32_t atomic_load_u32(const uint32_t *value) {

@@ -99,8 +99,8 @@ enum iterate_kit_websocket_tx_data_cancel_result {
  * - one mandatory PONG replying to the peer's latest PING.
  *
  * Client-originated PING is intentionally not admitted here. A PONG proves
- * only ordered parsing on this WebSocket hop, so using it as PCM delivery
- * credit caused long push-to-talk to stall behind a false acknowledgement
+ * only ordered parsing on this WebSocket hop, so using it as application
+ * delivery credit would create a false acknowledgement
  * boundary. A general queue would turn network stalls into memory growth.
  *
  * The pending-byte fields are atomic publications for diagnostics only. They
@@ -147,7 +147,7 @@ iterate_kit_websocket_tx_send(
  * replaces the older pending reply because RFC 6455 permits replying to the
  * latest processed PING. CLOSE replaces pending PONG because no later traffic
  * is useful once shutdown begins. Client PING returns INVALID_ARGUMENT: hop
- * liveness must never become PCM admission credit.
+ * liveness must never become application admission credit.
  */
 enum iterate_kit_status iterate_kit_websocket_tx_queue_control(
     struct iterate_kit_websocket_tx *tx,

@@ -12,10 +12,13 @@ import os from "node:os";
 import path_ from "node:path";
 import process from "node:process";
 import WebSocket from "ws";
-import { MicSource, PlayoutBuffer, percentiles, BYTES_PER_SEC } from "./audio.ts";
+import type { DynamicWorkerCapability } from "iterate/sdk";
+import { MicSource, PlayoutBuffer, percentiles, BYTES_PER_SEC, mulawToPcm16 } from "./audio.ts";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
 import { createImpairment, parseImpairSpec } from "./impair.ts";
 import { openResilientConnection } from "./resilient.ts";
+import { discardRpcResult, RpcResultObserver, withRpcResult } from "./rpc-ownership.ts";
+import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
 
 /** Options for `pnpm cli voicelab client`. */
 export interface ClientOptions extends VoicelabConnectOptions {
@@ -60,6 +63,8 @@ export interface ClientOptions extends VoicelabConnectOptions {
   detached?: boolean;
   /** Line the assistant speaks as soon as the call is live (detached mode). */
   greet?: string;
+  /** Alternate HTTP(S) realtime-provider base URL for a detached proof. */
+  grokBaseUrl?: string;
   /** Soak mode: re-speak the same utterance after each answer until --turns is reached. */
   repeatSay?: boolean;
 }
@@ -116,11 +121,12 @@ export async function client(options: ClientOptions) {
     done = resolve;
   });
 
+  const appendResults = new RpcResultObserver((error: unknown) => {
+    appendErrors++;
+    firstAppendError ??= error instanceof Error ? error.message : String(error);
+  });
   const fireAppend = (...events: Parameters<typeof stream.append>) => {
-    stream.append(...events).catch((error: unknown) => {
-      appendErrors++;
-      firstAppendError ??= error instanceof Error ? error.message : String(error);
-    });
+    appendResults.observe(stream.append(...events));
   };
 
   const connection = await openResilientConnection(stream, {
@@ -150,7 +156,8 @@ export async function client(options: ClientOptions) {
               const seq = payload.seq as number;
               if (lastSpkSeq >= 0 && seq > lastSpkSeq + 1) spkFramesLost += seq - lastSpkSeq - 1;
               lastSpkSeq = Math.max(lastSpkSeq, seq);
-              const pcm = Buffer.from(payload.pcm as string, "base64");
+              const encoded = Buffer.from(payload.pcm as string, "base64");
+              const pcm = payload.enc === "u" ? mulawToPcm16(encoded) : encoded;
               spkBytes += pcm.length;
               if (marks.firstSpkFrame === undefined) {
                 marks.firstSpkFrame = now;
@@ -241,16 +248,19 @@ export async function client(options: ClientOptions) {
   };
 
   // Durable control-plane event opens the call; the bridge answers call-accepted.
-  await stream.append({
-    type: "voice-agent/call-requested",
-    payload: {
-      callId,
-      ...(options.model ? { model: options.model } : {}),
-      ...(options.voice ? { voice: options.voice } : {}),
-      effort: options.effort === "high" ? "high" : "none",
-      bridge: options.detached ? "worker-detached" : options.workerUrl ? "worker" : "node",
-    },
-  });
+  await discardRpcResult(
+    stream.append({
+      type: "voice-agent/call-requested",
+      payload: {
+        callId,
+        ...(options.model ? { model: options.model } : {}),
+        ...(options.voice ? { voice: options.voice } : {}),
+        ...(options.grokBaseUrl ? { grokBaseUrl: options.grokBaseUrl } : {}),
+        effort: options.effort === "high" ? "high" : "none",
+        bridge: options.detached ? "worker-detached" : options.workerUrl ? "worker" : "node",
+      },
+    }),
+  );
   console.error(`client: call-requested on ${streamPath} (callId=${callId})`);
 
   // Detached mode: one RPC starts a call that outlives this process. The
@@ -260,21 +270,25 @@ export async function client(options: ClientOptions) {
     // `itx.worker` is typed as the config-repo TEMPLATE's worker; this
     // voice-agent guest (scripts/voicelab/config-repo/voice-agent.ts) adds
     // startCall, so the call is declared at the call site.
-    const worker = itx.worker as unknown as {
+    using worker = itx.workers.get(voiceAgentEntrypointRef) as unknown as DynamicWorkerCapability<{
       startCall(options: Record<string, unknown>): Promise<{
         ok?: boolean;
         reason?: string;
         startMs?: number;
       }>;
-    };
-    const started = await worker.startCall({
-      callId,
-      effort: options.effort === "high" ? "high" : "none",
-      path: streamPath,
-      ...(options.greet ? { greet: options.greet } : {}),
-      ...(options.model ? { model: options.model } : {}),
-      ...(options.voice ? { voice: options.voice } : {}),
-    });
+    }>;
+    const started = await withRpcResult(
+      worker.startCall({
+        callId,
+        effort: options.effort === "high" ? "high" : "none",
+        path: streamPath,
+        ...(options.greet ? { greet: options.greet } : {}),
+        ...(options.model ? { model: options.model } : {}),
+        ...(options.voice ? { voice: options.voice } : {}),
+        ...(options.grokBaseUrl ? { grokBaseUrl: options.grokBaseUrl } : {}),
+      }),
+      ({ ok, reason, startMs }) => ({ ok, reason, startMs }),
+    );
     if (started.ok !== true) {
       throw new Error(`worker.startCall refused: ${started.reason ?? JSON.stringify(started)}`);
     }
@@ -357,7 +371,7 @@ export async function client(options: ClientOptions) {
   mic.stop();
   playout.stop();
   fireAppend({ type: "voice-agent/call-ended", payload: { callId, reason: "client done" } });
-  await new Promise((resolve) => setTimeout(resolve, 300));
+  await appendResults.drain();
   anchor?.close();
   connection.close();
 
@@ -398,7 +412,8 @@ export async function client(options: ClientOptions) {
     assistantTranscript: assistantTranscript.trim(),
   };
   console.log(JSON.stringify(summary, null, 2));
-  process.exit(summary.appendErrors > 0 ? 2 : 0);
+  if (summary.appendErrors > 0) process.exitCode = 2;
+  return summary;
 }
 
 /** Convert a performance.now() mark to wall-clock ms. */

@@ -69,7 +69,7 @@ static void partial_writes_resume_one_rfc6455_frame(void) {
 }
 
 /*
- * A server PING may demand a PONG while a PCM frame is partially written, but
+ * A server PING may demand a PONG while a data frame is partially written, but
  * a WebSocket control header cannot be spliced into the middle of that frame.
  * Refuse the second begin until the existing boundary is complete. An internal
  * control queue was deliberately left to the higher transmitter layer, which
@@ -127,13 +127,11 @@ static void control_frames_wait_for_the_current_frame_boundary(
 }
 
 /*
- * One 20 ms, 16 kHz mono PCM frame is 640 bytes. The realtime path budgets one
- * encoded copy—not a convenience-sized maximum—because every extra buffer
- * consumes permanent internal RAM and adds another place stale speech could
- * wait. Pin the eight bytes of RFC 6455 overhead as well as the extended-length
- * header so a framing change cannot silently increase the device memory model.
+ * A 640-byte application message crosses the RFC 6455 extended-length boundary.
+ * Pin its eight bytes of framing overhead so a framing change cannot silently
+ * increase the caller-owned memory model.
  */
-static void pcm_frames_use_the_exact_bounded_storage(void) {
+static void extended_data_uses_the_exact_bounded_storage(void) {
   uint8_t payload[640];
   uint8_t storage[
       ITERATE_KIT_WEBSOCKET_CLIENT_FRAME_BYTES(sizeof(payload))];
@@ -165,6 +163,6 @@ static void pcm_frames_use_the_exact_bounded_storage(void) {
 int main(void) {
   partial_writes_resume_one_rfc6455_frame();
   control_frames_wait_for_the_current_frame_boundary();
-  pcm_frames_use_the_exact_bounded_storage();
+  extended_data_uses_the_exact_bounded_storage();
   return 0;
 }

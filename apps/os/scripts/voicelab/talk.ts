@@ -22,9 +22,11 @@ import { createInterface } from "node:readline/promises";
 import { fileURLToPath } from "node:url";
 
 import type { DynamicWorkerCapability } from "iterate/sdk";
+import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
 
 import { connectProject, resolveVoicelabBaseUrl, type VoicelabConnectOptions } from "./connect.ts";
 import { installVoiceAgent } from "./deploy.ts";
+import { discardRpcResult, withRpcResult } from "./rpc-ownership.ts";
 import { voiceAgentEntrypointRef } from "./voice-agent-ref.ts";
 
 /*
@@ -183,7 +185,15 @@ export async function talk(options: TalkOptions = {}) {
   if (!streamPath.startsWith("/")) {
     throw new Error(`stream path must be absolute; received ${JSON.stringify(streamPath)}`);
   }
-  const setup = await voiceAgent.setupVoiceAgent({ streamPath });
+  const setup = await withRpcResult(
+    voiceAgent.setupVoiceAgent({ streamPath }),
+    ({ streamPath: resultPath, created, alreadyThere, warm }) => ({
+      streamPath: resultPath,
+      created: [...created],
+      alreadyThere: [...alreadyThere],
+      warm: { ok: warm.ok, ms: warm.ms },
+    }),
+  );
 
   console.log(`stream ${setup.streamPath}`);
   for (const item of setup.created) console.log(`  created       ${item}`);
@@ -191,7 +201,8 @@ export async function talk(options: TalkOptions = {}) {
   console.log(`  warm          processor acknowledged in ${setup.warm.ms}ms`);
   if (kitDir === null) return;
 
-  const ingressKey = await itx.secrets.get("/secrets/project-api-key").reveal();
+  using ingressSecret = itx.secrets.get("/secrets/project-api-key");
+  const ingressKey = await withRpcResult(ingressSecret.reveal(), (material) => material);
   if (typeof ingressKey !== "string" || ingressKey.length === 0) {
     throw new Error(
       `the ingress key at /secrets/project-api-key is not readable for ${project}. ` +
@@ -276,7 +287,11 @@ async function waitForVoiceAgent(
   for (;;) {
     attempts++;
     try {
-      return await voiceAgent.health();
+      return await withRpcResult(voiceAgent.health(), ({ ok, projectId, xaiSecretReady }) => ({
+        ok,
+        projectId,
+        xaiSecretReady,
+      }));
     } catch (error) {
       lastError = error;
       if (Date.now() >= deadline) break;
@@ -316,25 +331,32 @@ interface XaiSecret {
  */
 async function ensureXaiSecret(itx: unknown): Promise<string> {
   const secret = (itx as { secrets: { get(path: string): XaiSecret } }).secrets.get(XAI_SECRET);
-  const described = await secret.__describe();
-  if (described.created === true && described.hasMaterial === true) return "already set";
+  try {
+    const described = await withRpcResult(secret.__describe(), ({ created, hasMaterial }) => ({
+      created,
+      hasMaterial,
+    }));
+    if (described.created === true && described.hasMaterial === true) return "already set";
 
-  const material = process.env[XAI_ENV]?.trim();
-  if (!material) {
-    throw new Error(
-      `${XAI_SECRET} has no material and ${XAI_ENV} is not in this environment. ` +
-        `Either run inside a Doppler config that has it, or create the secret once by hand:\n` +
-        `  await itx.secrets.get("${XAI_SECRET}").create({ egress: { urls: ${JSON.stringify(XAI_EGRESS)} }, material: "<xAI API key>" })`,
-    );
+    const material = process.env[XAI_ENV]?.trim();
+    if (!material) {
+      throw new Error(
+        `${XAI_SECRET} has no material and ${XAI_ENV} is not in this environment. ` +
+          `Either run inside a Doppler config that has it, or create the secret once by hand:\n` +
+          `  await itx.secrets.get("${XAI_SECRET}").create({ egress: { urls: ${JSON.stringify(XAI_EGRESS)} }, material: "<xAI API key>" })`,
+      );
+    }
+    // A secret born without material takes it through update; create would
+    // keep the empty material it already has rather than replace it.
+    if (described.created === true) {
+      await discardRpcResult(secret.update({ material }));
+      return `material set from ${XAI_ENV}`;
+    }
+    await discardRpcResult(secret.create({ egress: { urls: XAI_EGRESS }, material }));
+    return `created from ${XAI_ENV}, pinned to ${XAI_EGRESS.join(", ")}`;
+  } finally {
+    disposeIgnoredRpcResult(secret);
   }
-  // A secret born without material takes it through update; create would
-  // keep the empty material it already has rather than replace it.
-  if (described.created === true) {
-    await secret.update({ material });
-    return `material set from ${XAI_ENV}`;
-  }
-  await secret.create({ egress: { urls: XAI_EGRESS }, material });
-  return `created from ${XAI_ENV}, pinned to ${XAI_EGRESS.join(", ")}`;
 }
 
 /**
@@ -390,7 +412,13 @@ function driverArgs(options: TalkOptions, minutes: number): string[] {
         "open and says nothing, which reads in the report as a device that never answered.",
     );
   }
-  const args = ["--converse", String(options.converse), "--utterance-dir", options.utteranceDir];
+  const args = [
+    ...(options.pretendSpeaker === undefined ? ["--live-audio"] : []),
+    "--converse",
+    String(options.converse),
+    "--utterance-dir",
+    options.utteranceDir,
+  ];
   if (options.colleagueEvery !== undefined) {
     args.push("--colleague-every", String(options.colleagueEvery));
   }

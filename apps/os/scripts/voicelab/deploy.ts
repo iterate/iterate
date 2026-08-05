@@ -9,6 +9,7 @@
 //   doppler run --config preview_3 -- pnpm cli voicelab deploy --project prj_…
 import fs from "node:fs";
 import { connectProject, type VoicelabConnectOptions } from "./connect.ts";
+import { withRpcResult } from "./rpc-ownership.ts";
 
 /** Options for `pnpm cli voicelab deploy`. */
 export interface DeployOptions extends VoicelabConnectOptions {
@@ -71,10 +72,13 @@ export async function installVoiceAgent(
     })),
   ];
   const repo = (itx as { repo: ConfigRepo }).repo;
-  const result = await repo.commitFiles({
-    changes,
-    message: options.message ?? "voicelab: deploy voice-agent.ts",
-  });
+  const result = await withRpcResult(
+    repo.commitFiles({
+      changes,
+      message: options.message ?? "voicelab: deploy voice-agent.ts",
+    }),
+    ({ commitOid, changedPaths, noChanges }) => ({ commitOid, changedPaths, noChanges }),
+  );
   return {
     bytes: changes.reduce((total, change) => total + change.content.length, 0),
     changed: !result.noChanges,

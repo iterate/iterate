@@ -8,7 +8,6 @@
 #include <stdint.h>
 #include <sys/socket.h>
 
-#include <dns_sd.h>
 #include <openssl/ssl.h>
 
 #ifdef __cplusplus
@@ -32,6 +31,37 @@ enum iterate_kit_posix_tls_io_result {
   ITERATE_KIT_POSIX_TLS_IO_FAILED,
 };
 
+typedef void (*iterate_kit_posix_tls_resolved_address_fn)(
+    void *context,
+    int error,
+    bool add,
+    const struct sockaddr *address);
+
+/**
+ * Injectable nonblocking hostname resolver used by the macOS adapter tests.
+ *
+ * start() and poll() return zero for progress, EAGAIN while idle, or a stable
+ * platform error. poll() performs at most one bounded resolver step. The
+ * stream owns the returned handle until cancel(), including on every timeout,
+ * close, and failed connection generation.
+ */
+struct iterate_kit_posix_tls_resolver_ops {
+  int (*start)(
+      void *operations_context,
+      const char *host,
+      iterate_kit_posix_tls_resolved_address_fn resolved,
+      void *resolved_context,
+      void **handle);
+  int (*poll)(void *operations_context, void *handle);
+  void (*cancel)(void *operations_context, void *handle);
+};
+
+struct iterate_kit_posix_tls_default_resolver {
+  void *native_ref;
+  iterate_kit_posix_tls_resolved_address_fn resolved;
+  void *resolved_context;
+};
+
 struct iterate_kit_posix_tls_stream_options {
   const char *host;
   uint16_t port;
@@ -43,6 +73,9 @@ struct iterate_kit_posix_tls_stream_options {
    * intended to make an insecure configuration conspicuous at every callsite.
    */
   bool DANGEROUS_disable_certificate_verification;
+  /** Optional deterministic resolver seam; NULL selects DNS-SD on macOS. */
+  const struct iterate_kit_posix_tls_resolver_ops *resolver_ops;
+  void *resolver_context;
 };
 
 struct iterate_kit_posix_tls_address {
@@ -67,7 +100,10 @@ struct iterate_kit_posix_tls_address {
  */
 struct iterate_kit_posix_tls_stream {
   char host[ITERATE_KIT_POSIX_TLS_HOST_CAPACITY];
-  DNSServiceRef resolver;
+  void *resolver;
+  const struct iterate_kit_posix_tls_resolver_ops *resolver_ops;
+  void *resolver_context;
+  struct iterate_kit_posix_tls_default_resolver default_resolver;
   SSL_CTX *context;
   SSL *ssl;
   struct iterate_kit_posix_tls_address
@@ -81,7 +117,7 @@ struct iterate_kit_posix_tls_stream {
   bool tcp_connecting;
   bool tls_handshaking;
   bool ready;
-  bool resolver_reply_complete;
+  bool resolver_snapshot_complete;
   bool resolver_failed;
   bool use_tls;
   bool dangerous_disable_certificate_verification;

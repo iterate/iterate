@@ -26,10 +26,9 @@ enum iterate_kit_websocket_rx_result {
  *
  * `payload_size`, `opcode`, and `final` describe the whole WebSocket frame
  * and must remain stable across short reads. `has_frame` distinguishes an
- * idle read from a zero-length frame. A final zero-length BINARY frame is a
- * real data event because the PCM protocol uses it as ordered end-of-stream;
- * adapters must therefore set `has_frame` even though no payload pointer
- * exists. Once a non-empty frame has started,
+ * idle read from a zero-length frame, which is consumed and reported as
+ * DROPPED. Adapters must set `has_frame` for such a frame even though no
+ * payload pointer exists. Once a non-empty frame has started,
  * `byte_count == 0` means that this nonblocking attempt made no payload
  * progress; it does not terminate or restart the frame.
  *
@@ -62,9 +61,9 @@ struct iterate_kit_websocket_rx_chunk {
  * Data chunks are borrowed from the lower read buffer. Control frames are
  * accumulated in fixed storage so split pings, pongs, and closes are emitted
  * exactly once with their complete payload. We deliberately do not accumulate
- * data frames: a 640-byte PCM copy would spend scarce internal RAM merely to
- * hide normal short reads from the audio lane, which already supports chunked
- * reassembly.
+ * data frames: a whole-message copy would spend scarce internal RAM merely to
+ * hide normal short reads from the message consumer, which already supports
+ * chunked reassembly.
  *
  * The classifier never blocks, allocates, logs, or retains a borrowed data
  * pointer after `feed` returns. `reset` is required when a socket generation is
