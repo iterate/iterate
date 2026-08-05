@@ -46,6 +46,7 @@
 #include "capnweb/capnweb.h"
 #include "iterate/kit/audio_codec.h"
 #include "iterate/kit/capabilities/conversation.h"
+#include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/push_to_talk.h"
 #include "iterate/kit/device_events.h"
 #include "iterate/kit/audio_playout.h"
@@ -297,9 +298,21 @@ static const char instructions[] =
     "Home Assistant Voice Preview Edition voice endpoint. Hold the physical "
     "center button for push-to-talk; a short tap starts and ends the call; "
     "audio and lifecycle events share this stream connection.";
+/*
+ * WHAT THE MODEL IS TOLD IT CAN DO — and it matters more on this board than on
+ * any other, because it has NO SCREEN. There is no glanceable state here at
+ * all: if the methods are not named, the only way to find out what this device
+ * can do is to read its firmware.
+ */
 static const char peer_description[] =
-    "{\"instructions\":\"Home Assistant Voice PE voice endpoint\","
-    "\"children\":{}}";
+    "{\"instructions\":\"Home Assistant Voice PE voice endpoint. It has no "
+    "screen: its LED ring is the only local feedback. Hold the centre button "
+    "to talk; a short tap starts and ends the call. "
+    "conversation.start() / conversation.end() begin and end a call. "
+    "pushToTalk.start() / pushToTalk.stop() hold the microphone open, "
+    "joining the physical button as a wired-OR. "
+    "health() returns the same diagnostics document the device pushes "
+    "as dev-stats.\",\"children\":{}}";
 
 static void on_session_ended(void *context) {
   (void)context;
@@ -864,9 +877,14 @@ static enum iterate_kit_status handle_device_event(
   return ITERATE_KIT_INVALID_ARGUMENT;
 }
 
+/* Defined beside health_json, which it adapts; declared here for the mount. */
+static size_t render_health(void *context, char *out, size_t capacity);
+
 static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "homeAssistantVoicePreviewEdition"};
-  static struct iterate_kit_module modules[2];
+  static struct iterate_kit_module modules[3];
+  static struct iterate_kit_health health;
+  size_t module_count = 0U;
   struct iterate_kit_itx_connection_options options;
   struct iterate_kit_esp_idf_itx_transport_options transport_options;
   struct iterate_kit_peer_options peer_options;
@@ -888,15 +906,35 @@ static bool initialise_connection(void) {
             ITERATE_KIT_OK) {
       return false;
     }
-    modules[0] = iterate_kit_push_to_talk_module(&runtime.push_to_talk);
-    modules[1] =
+    modules[module_count++] =
+        iterate_kit_push_to_talk_module(&runtime.push_to_talk);
+    modules[module_count++] =
         iterate_kit_conversation_control_module(&runtime.conversation_control);
+  }
+  /*
+   * ASKABLE. The same document this device pushes as dev-stats, on demand,
+   * because the pushed copy only reaches whoever was already listening — and
+   * the other way to interrogate a quiet board is its console, which on this
+   * hardware REBOOTS it.
+   */
+  {
+    const struct iterate_kit_health_driver driver = {
+      .context = NULL,
+      .render = render_health,
+    };
+    if (iterate_kit_health_init(
+            &health,
+            &driver,
+            runtime.stats_buffer,
+            sizeof(runtime.stats_buffer)) == ITERATE_KIT_OK) {
+      modules[module_count++] = iterate_kit_health_module(&health);
+    }
   }
   peer_options = (struct iterate_kit_peer_options){
     peer_description,
     sizeof(peer_description) - 1U,
     modules,
-    2U,
+    module_count,
   };
   if (iterate_kit_peer_init(&runtime.peer, &peer_options) != CAPNWEB_OK) {
     return false;
@@ -1116,6 +1154,21 @@ static size_t health_json(char *out, size_t capacity) {
   out[used] = '\0';
   return used;
 }
+
+/*
+ * The health capability's driver, and nothing more than a shape adapter. The
+ * document comes from the same function the pushed telemetry uses, so the pull
+ * and the push cannot describe different devices.
+ *
+ * PURE, as its header demands: a renderer that also stamped liveness made a
+ * device renew its own lease twelve times a minute on the reference port, so a
+ * board that had stopped answering still looked reachable.
+ */
+static size_t render_health(void *context, char *out, size_t capacity) {
+  (void)context;
+  return health_json(out, capacity);
+}
+
 
 static void append_stats(uint64_t now) {
   static const char prefix[] =

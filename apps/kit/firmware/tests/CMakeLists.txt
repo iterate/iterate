@@ -64,6 +64,28 @@ target_compile_options(iterate-kit-audio-seams-test PRIVATE
 target_link_libraries(iterate-kit-audio-seams-test PRIVATE iterate-kit-audio)
 add_test(NAME iterate-kit-audio-seams-test COMMAND iterate-kit-audio-seams-test)
 
+add_executable(iterate-kit-camera-test camera_test.c)
+target_compile_features(iterate-kit-camera-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-camera-test PRIVATE
+  -UNDEBUG
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic)
+target_link_libraries(iterate-kit-camera-test PRIVATE iterate-kit-capabilities)
+add_test(NAME iterate-kit-camera-test COMMAND iterate-kit-camera-test)
+
+add_executable(iterate-kit-health-test health_test.c)
+target_compile_features(iterate-kit-health-test PRIVATE c_std_99)
+target_compile_options(iterate-kit-health-test PRIVATE
+  -UNDEBUG
+  -Wall
+  -Wextra
+  -Werror
+  -Wpedantic)
+target_link_libraries(iterate-kit-health-test PRIVATE iterate-kit-capabilities)
+add_test(NAME iterate-kit-health-test COMMAND iterate-kit-health-test)
+
 add_executable(iterate-kit-push-to-talk-test push_to_talk_test.c)
 target_compile_features(iterate-kit-push-to-talk-test PRIVATE c_std_99)
 target_compile_options(iterate-kit-push-to-talk-test PRIVATE

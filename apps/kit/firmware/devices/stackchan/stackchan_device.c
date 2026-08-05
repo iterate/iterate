@@ -53,11 +53,14 @@
 #include "iterate/kit/voice_device_profile.h"
 #include "iterate/kit/voice_playback_clock.h"
 #include "iterate/kit/aec_capture_bridge.h"
+#include "iterate/kit/capabilities/camera.h"
 #include "iterate/kit/capabilities/conversation.h"
+#include "iterate/kit/capabilities/health.h"
 #include "iterate/kit/capabilities/servos.h"
 #include "iterate/kit/device_events.h"
 #include "iterate/kit/conversation_lights.h"
 #include "stackchan_audio.h"
+#include "stackchan_camera.h"
 #include "stackchan_avatar.h"
 #include "stackchan_body.h"
 #include "stackchan_processor.h"
@@ -294,8 +297,27 @@ static const char instructions[] =
     "the microphone stays open during a call (it cancels its own speaker). "
     "servos.move({yawDegrees,pitchDegrees,speed}) turns its head; audio and "
     "lifecycle events share this stream connection.";
+/*
+ * WHAT THE MODEL IS TOLD IT CAN DO. `children` stays empty because this is a
+ * flattened dispatch target — sub-paths are routes the device interprets, not
+ * members the host can enumerate — so the method list has to be in the prose
+ * or it is nowhere. A capability nothing advertises is one nothing calls: a
+ * back-office agent asked for this device's metrics once went hunting through
+ * telemetry streams because nothing told it health() existed.
+ */
 static const char peer_description[] =
-    "{\"instructions\":\"StackChan voice robot\",\"children\":{}}";
+    "{\"instructions\":\"StackChan voice robot. "
+    "conversation.start() / conversation.end() begin and end a call. "
+    "servos.move({yawDegrees,pitchDegrees,speed}) turns its head; yaw "
+    "-128..128, pitch 0..90, speed up to 1000. "
+    "health() returns the same diagnostics document the device pushes as "
+    "dev-stats, including whether its audio directions are alive. "
+    "camera.take() photographs what it can see and returns "
+    "{width,height,contentType,bytes,chunkSize,chunks}; then "
+    "camera.readChunk({index}) returns each piece in order — the image is "
+    "delivered in pieces because one is larger than a single message, and it "
+    "is released when the last chunk is read. camera.take() is absent if "
+    "this unit's sensor did not start.\",\"children\":{}}";
 
 static void on_session_ended(void *context) {
   (void)context;
@@ -1036,10 +1058,16 @@ static enum iterate_kit_status handle_device_event(
   return ITERATE_KIT_INVALID_ARGUMENT;
 }
 
+/* Defined beside health_json, which it adapts; declared here for the mount. */
+static size_t render_health(void *context, char *out, size_t capacity);
+
 static bool initialise_connection(void) {
   static const char *const mount_path[] = {"kit", "stackchan"};
   static struct iterate_kit_servos servos;
-  static struct iterate_kit_module modules[2];
+  static struct iterate_kit_health health;
+  static struct iterate_kit_camera camera;
+  /* servos, conversation, health, camera — the camera only if it comes up. */
+  static struct iterate_kit_module modules[4];
   size_t module_count = 0U;
   struct iterate_kit_itx_connection_options options;
   struct iterate_kit_esp_idf_itx_transport_options transport_options;
@@ -1082,6 +1110,37 @@ static bool initialise_connection(void) {
     }
     modules[module_count++] =
         iterate_kit_conversation_control_module(&runtime.conversation_control);
+  }
+  /*
+   * ASKABLE. The same document the device pushes as dev-stats, on demand —
+   * which matters because the pushed copy only reaches whoever was already
+   * listening, and the alternative way to interrogate a quiet board is its
+   * console, which on this hardware REBOOTS it.
+   */
+  {
+    const struct iterate_kit_health_driver driver = {
+      .context = NULL,
+      .render = render_health,
+    };
+    if (iterate_kit_health_init(
+            &health,
+            &driver,
+            runtime.stats_buffer,
+            sizeof(runtime.stats_buffer)) == ITERATE_KIT_OK) {
+      modules[module_count++] = iterate_kit_health_module(&health);
+    }
+  }
+  /*
+   * The camera is mounted only if the sensor actually came up. A method that
+   * exists and always fails is worse than one that is absent: the caller
+   * cannot tell "this device has no camera" from "this camera is broken".
+   */
+  if (iterate_kit_stackchan_camera_init()) {
+    const struct iterate_kit_camera_driver driver =
+        iterate_kit_stackchan_camera_driver();
+    if (iterate_kit_camera_init(&camera, &driver) == ITERATE_KIT_OK) {
+      modules[module_count++] = iterate_kit_camera_module(&camera);
+    }
   }
   peer_options = (struct iterate_kit_peer_options){
     peer_description,
@@ -1352,6 +1411,23 @@ static size_t health_json(char *out, size_t capacity) {
   out[used++] = '}';
   out[used] = '\0';
   return used;
+}
+
+/*
+ * The health capability's driver, and deliberately nothing more than a shape
+ * adapter. The document is produced by the same function the pushed telemetry
+ * uses, so the pull and the push cannot describe different devices — the state
+ * worth diagnosing is the one where the push has stopped.
+ *
+ * PURE, like its header demands. An earlier design on the reference port
+ * stamped a liveness timestamp while rendering, and because the push renders
+ * every five seconds the device renewed its own lease twelve times a minute:
+ * a board that had stopped answering still looked reachable, measured as seven
+ * minutes of unreachability with a watchdog armed.
+ */
+static size_t render_health(void *context, char *out, size_t capacity) {
+  (void)context;
+  return health_json(out, capacity);
 }
 
 static void append_stats(uint64_t now) {

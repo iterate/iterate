@@ -5,6 +5,7 @@ idf_component_register(
     stackchan_processor.c
     stackchan_avatar.c
     stackchan_body.c
+    stackchan_camera.c
     core_s3_capture_reserve.c
   INCLUDE_DIRS include
   PRIV_INCLUDE_DIRS .
@@ -26,6 +27,7 @@ idf_component_register(
     mbedtls
     nvs_flash
     espressif__esp-sr
-    espressif__m5stack_core_s3)
+    espressif__m5stack_core_s3
+    espressif__esp32-camera)
 
 target_compile_options(${COMPONENT_LIB} PRIVATE -Wall -Wextra -Werror)
