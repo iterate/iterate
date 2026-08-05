@@ -36,6 +36,11 @@ import {
   normalizeCapabilityProvider,
 } from "./itx-expression.ts";
 
+type CapabilityCommitSettlement = {
+  /** Keep a transport-side retirement guarded until commit or rollback is readable. */
+  retain(resource: Disposable): void;
+};
+
 /**
  * The capability-host processor: one scope's dynamic capability table plus its
  * script-run obligations, both reduced from the scope's stream.
@@ -333,16 +338,19 @@ export class CapabilityHostProcessor extends StreamProcessor<
   async provideCapability(
     input: CapabilityProvidedPayload,
     options: {
-      afterCommit?(input: {
-        provision: { path: string[]; providedAtOffset: number };
-        record: CapabilityRecord;
-      }): Disposable | void | Promise<Disposable | void>;
+      afterCommit?(
+        input: {
+          provision: { path: string[]; providedAtOffset: number };
+          record: CapabilityRecord;
+        },
+        settlement: CapabilityCommitSettlement,
+      ): void | Promise<void>;
     } = {},
   ) {
-    const [mount] = await this.#commitCapabilities([input], (mounts) => {
+    const [mount] = await this.#commitCapabilities([input], (mounts, settlement) => {
       const committed = mounts[0];
       if (committed === undefined) throw new Error("capability commit returned no mount");
-      return options.afterCommit?.(committed);
+      return options.afterCommit?.(committed, settlement);
     });
     if (mount === undefined) throw new Error("capability commit returned no mount");
     return mount.provision;
@@ -361,16 +369,19 @@ export class CapabilityHostProcessor extends StreamProcessor<
   async provideCapabilities(
     inputs: CapabilityProvidedPayload[],
     options: {
-      afterCommit?(input: {
-        mounts: {
-          provision: { path: string[]; providedAtOffset: number };
-          record: CapabilityRecord;
-        }[];
-      }): Disposable | void | Promise<Disposable | void>;
+      afterCommit?(
+        input: {
+          mounts: {
+            provision: { path: string[]; providedAtOffset: number };
+            record: CapabilityRecord;
+          }[];
+        },
+        settlement: CapabilityCommitSettlement,
+      ): void | Promise<void>;
     } = {},
   ): Promise<{ path: string[]; providedAtOffset: number }[]> {
-    const mounts = await this.#commitCapabilities(inputs, (committed) =>
-      options.afterCommit?.({ mounts: committed }),
+    const mounts = await this.#commitCapabilities(inputs, (committed, settlement) =>
+      options.afterCommit?.({ mounts: committed }, settlement),
     );
     return mounts.map(({ provision }) => provision);
   }
@@ -387,7 +398,8 @@ export class CapabilityHostProcessor extends StreamProcessor<
         provision: { path: string[]; providedAtOffset: number };
         record: CapabilityRecord;
       }[],
-    ) => Disposable | void | Promise<Disposable | void>,
+      settlement: CapabilityCommitSettlement,
+    ) => void | Promise<void>,
   ) {
     if (inputs.length === 0) return [];
     await this.#assertCreated();
@@ -419,9 +431,15 @@ export class CapabilityHostProcessor extends StreamProcessor<
     // The append is the mount's commit point. Bind incarnation-local transport
     // before ingestion makes the mount visible, then prove the complete mount
     // is readable. A failed proof is just as unsafe as a failed binding.
-    let transportSettlement: Disposable | undefined;
+    const transportSettlements: Disposable[] = [];
+    const settlement: CapabilityCommitSettlement = {
+      retain: (resource) => transportSettlements.push(resource),
+    };
+    const settleTransport = () => {
+      for (const resource of transportSettlements.reverse()) resource[Symbol.dispose]();
+    };
     try {
-      transportSettlement = (await afterCommit(mounts)) ?? undefined;
+      await afterCommit(mounts, settlement);
       await this.deps.reads.waitUntilEvent({
         offset: last.offset,
         timeoutMs: INGEST_WAIT_TIMEOUT_MS,
@@ -443,10 +461,10 @@ export class CapabilityHostProcessor extends StreamProcessor<
           "capability commit and durable rollback both failed",
         );
       }
-      transportSettlement?.[Symbol.dispose]();
+      settleTransport();
       throw error;
     }
-    transportSettlement?.[Symbol.dispose]();
+    settleTransport();
     return mounts;
   }
 

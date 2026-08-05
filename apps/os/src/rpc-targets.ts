@@ -5322,6 +5322,10 @@ function liveCapabilityRelayFor(
   const key = liveCapabilityScopeKey(scope);
   let relay = relays.get(key);
   if (relay === undefined) {
+    // This file is compiled transitively by workspaces that do not load OS's
+    // worker-env.d.ts augmentation, so their Cloudflare.Exports cannot name
+    // this loopback entrypoint. At runtime, OS's WorkerMainModule registers it;
+    // this shallow signature is the remote surface consumed immediately here.
     const exports = ctx.exports as unknown as {
       LiveCapabilityRelayEntrypoint(input: {
         props: { path: string; projectId: string };

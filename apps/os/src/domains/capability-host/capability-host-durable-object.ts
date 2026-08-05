@@ -188,7 +188,15 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
               record.path.every((segment, index) => segment === input.path[index]),
           );
           return await this.#capabilityHostProcessor.provideCapability(input, {
-            afterCommit: ({ record }) => {
+            afterCommit: ({ record }, settlement) => {
+              // The append has already replaced this row. Retire its relay
+              // owner even if binding the new row fails and rollback leaves
+              // the path empty; otherwise the old handle stays active with no
+              // durable record. Keep the local retirement guard until either
+              // the replacement or its rollback is readable.
+              if (replaced?.type === "live") {
+                settlement.retain(this.#liveCapabilityLeases.remove(replaced));
+              }
               if (input.type === "live") {
                 if (liveLease === undefined) {
                   throw new Error("live capability provision lost its validated provider lease");
@@ -202,9 +210,6 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
                   );
                 }
               }
-              return replaced?.type === "live"
-                ? this.#liveCapabilityLeases.remove(replaced)
-                : undefined;
             },
           });
         },
@@ -253,12 +258,21 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
               winnerByPath.set(JSON.stringify(record.path), record);
             }
             return await this.#capabilityHostProcessor.provideCapabilities(inputs, {
-              afterCommit: ({ mounts }) => {
-                // Validate every physical binding before retiring anything. A
-                // channel that disappeared halfway through the commit rolls the
-                // whole batch back without making sibling replacement cleanup
-                // depend on iteration order.
+              afterCommit: ({ mounts }, settlement) => {
+                // The append has already replaced every prior row and only the
+                // last duplicate path in this batch can win. Retire all of
+                // those displaced relay owners before binding winners, and
+                // retain their local guards through either readable outcome.
                 for (const { record } of mounts) {
+                  const key = JSON.stringify(record.path);
+                  const replaced = winnerByPath.get(key);
+                  if (replaced?.type === "live") {
+                    settlement.retain(this.#liveCapabilityLeases.remove(replaced));
+                  }
+                  winnerByPath.set(key, record);
+                }
+                for (const { record } of mounts) {
+                  if (winnerByPath.get(JSON.stringify(record.path)) !== record) continue;
                   if (record.type !== "live") {
                     throw new Error("live capability batch committed a non-live record");
                   }
@@ -268,22 +282,6 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
                     );
                   }
                 }
-                const retirements: Disposable[] = [];
-                for (const { record } of mounts) {
-                  const key = JSON.stringify(record.path);
-                  const replaced = winnerByPath.get(key);
-                  if (replaced?.type === "live") {
-                    retirements.push(this.#liveCapabilityLeases.remove(replaced));
-                  }
-                  winnerByPath.set(key, record);
-                }
-                return retirements.length === 0
-                  ? undefined
-                  : {
-                      [Symbol.dispose]: () => {
-                        for (const retirement of retirements) retirement[Symbol.dispose]();
-                      },
-                    };
               },
             });
           },

@@ -223,19 +223,21 @@ describe("CapabilityHostProcessor transport binding", () => {
     expect(harness.runner.currentState.capabilities).toEqual([]);
   });
 
-  it("rolls back the exact durable mount when its after-commit binding fails", async () => {
+  it("settles displaced transport after an after-commit binding failure rolls back", async () => {
     const stream = capabilityHostStream();
     const harness = await makeProcessor({ stream });
     const bindingError = new Error("provider socket disappeared");
+    const settleDisplacedTransport = vi.fn();
     const pending = harness.processor.provideCapability(
       { path: ["tools"], type: "live" },
       {
-        afterCommit: ({ provision, record }) => {
+        afterCommit: ({ provision, record }, settlement) => {
           expect(record).toMatchObject({
             path: ["tools"],
             providedAtOffset: provision.providedAtOffset,
             type: "live",
           });
+          settlement.retain({ [Symbol.dispose]: settleDisplacedTransport });
           throw bindingError;
         },
       },
@@ -266,6 +268,7 @@ describe("CapabilityHostProcessor transport binding", () => {
       ],
     });
     expect(harness.runner.currentState.capabilities).toEqual([]);
+    expect(settleDisplacedTransport).toHaveBeenCalledOnce();
   });
 
   it("rolls a committed mount back when its readiness proof fails", async () => {
@@ -276,7 +279,9 @@ describe("CapabilityHostProcessor transport binding", () => {
     const pending = harness.processor.provideCapability(
       { path: ["tools"], type: "live" },
       {
-        afterCommit: () => ({ [Symbol.dispose]: settleTransport }),
+        afterCommit: (_mount, settlement) => {
+          settlement.retain({ [Symbol.dispose]: settleTransport });
+        },
       },
     );
     const rejected = expect(pending).rejects.toBe(readinessError);
