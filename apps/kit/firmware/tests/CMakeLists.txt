@@ -300,3 +300,40 @@ if(APPLE)
     NAME iterate-kit-posix-itx-transport-test
     COMMAND iterate-kit-posix-itx-transport-test)
 endif()
+
+# HAVPE's adopted pure hardware policy: byte-exact register/wire vectors and
+# the deliberately compiler-visible XMOS uplink-stage selector. These build
+# the device sources directly because devices/ are ESP-IDF components, not
+# host libraries; the two files under test are pure C99 by construction.
+function(iterate_kit_add_havpe_pure_test NAME)
+  add_executable(${NAME} ${ARGN})
+  target_include_directories(${NAME} PRIVATE
+    ../devices/havpe
+    ../components/core/include)
+  target_compile_features(${NAME} PRIVATE c_std_99)
+  target_compile_options(${NAME} PRIVATE
+    -UNDEBUG
+    -Wall
+    -Wextra
+    -Werror
+    -Wpedantic)
+  add_test(NAME ${NAME} COMMAND ${NAME})
+endfunction()
+
+iterate_kit_add_havpe_pure_test(
+  iterate-kit-havpe-hardware-config-test
+  havpe_hardware_config_test.c
+  ../devices/havpe/voice_pe_hardware_config.c)
+
+iterate_kit_add_havpe_pure_test(
+  iterate-kit-havpe-hardware-config-aec-override-test
+  havpe_hardware_config_aec_override_test.c
+  ../devices/havpe/voice_pe_hardware_config.c)
+target_compile_definitions(
+  iterate-kit-havpe-hardware-config-aec-override-test PRIVATE
+  ITERATE_KIT_VOICE_PE_XMOS_UPLINK_STAGE=1)
+
+iterate_kit_add_havpe_pure_test(
+  iterate-kit-havpe-pcm-format-test
+  havpe_pcm_format_test.c
+  ../devices/havpe/voice_pe_pcm_format.c)
