@@ -81,7 +81,7 @@ export async function seedArtifactRepo(input: {
     timestamp: REPO_SEED_COMMIT_TIMESTAMP_SECONDS,
     timezoneOffset: 0,
   };
-  await git.commit({ author: identity, message: "Seed minimal itx project worker" });
+  await git.commit({ author: identity, message: "Seed project config" });
   try {
     await git.branch({ name: input.branch });
   } catch (error) {

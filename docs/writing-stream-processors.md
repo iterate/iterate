@@ -26,8 +26,8 @@ package (`packages/iterate/src/processors`, imported as `iterate/processors`).
 apps/os hosts its domain processors on it, and a project's own worker can
 host processors on exactly the same code through the ordinary published
 dependency. The config-repo template's guestbook app
-(`configs/default/apps/guestbook` — `server.tsx` plus the
-`GuestbookApp` server in `server.tsx`, bundled with its browser client by
+(`configs/default/apps/guestbook` — the `GuestbookApp` server in `server.tsx`,
+bundled with `client.tsx` by
 `createApp` and rendered via Cap'n Web + `useLiveState`) is the reference for
 that userspace hosting shape. Reduced state lives on the project stream at
 `/guestbook`.
