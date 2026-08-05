@@ -214,11 +214,12 @@ A diagnostic may also carry one exact contiguous replacement:
 ```
 
 The publisher translates that value mechanically into GitHub's fenced
-suggested-change format. It rechecks that the pull request is still open,
-non-draft, and on the pinned base/head before writing. Visible errors force
-`REQUEST_CHANGES`; warnings force at least `COMMENT`; the Agent's qualitative
-assessment can strengthen but never weaken that verdict. Suppressed
-diagnostics do not affect the verdict or produce inline comments.
+suggested-change format. A clean analysis (`approve` assessment and no visible
+diagnostics) settles publication as `skipped` without reading or writing
+GitHub. Otherwise it rechecks that the pull request is still open, non-draft,
+and on the pinned base/head before creating a non-blocking `COMMENT` review.
+Errors, warnings, and qualitative concerns never approve or request changes.
+Suppressed diagnostics do not cause publication or produce inline comments.
 
 Suppressions are source comments:
 
@@ -250,7 +251,8 @@ The parent PR agent remains a normal conversational agent throughout. Mentions
 go to the parent and can discuss qualitative or borderline issues without
 being forced through the rule-diagnostic protocol. It may publish PR
 conversation comments and replies, but it cannot create, submit, or dismiss a
-GitHub review; the `/ai-linter` processor alone owns review verdict state.
+GitHub review; the `/ai-linter` processor alone owns linter review publication
+state.
 
 ## Mentions
 

@@ -29,7 +29,7 @@ const analysisRequest = (headSha: string): GithubAiLinterAnalysisRequested => ({
 });
 
 describe("GithubAiLinterProcessor", () => {
-  it("reduces diagnostics and mechanically publishes one review with a suggestion", async () => {
+  it("publishes visible diagnostics as one comment review and skips a suppressed-only result", async () => {
     const createReview = vi.fn(async (_input: { body: string }) => ({
       data: {
         html_url: "https://github.com/acme/widgets/pull/7#pullrequestreview-42",
@@ -166,7 +166,7 @@ describe("GithubAiLinterProcessor", () => {
     expect(createReview).toHaveBeenCalledWith(
       expect.objectContaining({
         commit_id: "head-abc",
-        event: "REQUEST_CHANGES",
+        event: "COMMENT",
         comments: [
           {
             body: [
@@ -233,9 +233,15 @@ describe("GithubAiLinterProcessor", () => {
     });
 
     expect(h.state().latestSuccessfulAnalysis?.resolvedDiagnostics).toEqual([]);
-    const secondReviewBody = createReview.mock.calls[1]![0].body;
-    expect(secondReviewBody).toContain("0 errors, 0 warnings, 1 suppressed, 0 resolved.");
-    expect(secondReviewBody).not.toContain("### Resolved");
+    expect(h.state().analyses[1]?.publication).toEqual({
+      reason: "No visible findings to publish.",
+      status: "skipped",
+    });
+    expect(h.events(githubAiLinterEventTypes.reviewPublicationRequested)).toHaveLength(2);
+    expect(h.events(githubAiLinterEventTypes.reviewPublicationSettled)).toHaveLength(2);
+    expect(createReview).toHaveBeenCalledOnce();
+    expect(octokit.rest.pulls.get).toHaveBeenCalledOnce();
+    expect(octokit.paginate).toHaveBeenCalledOnce();
   });
 
   it("settles an unfinished analysis as cancelled when a new head arrives", async () => {

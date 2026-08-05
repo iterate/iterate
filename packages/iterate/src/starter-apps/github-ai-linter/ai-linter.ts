@@ -474,7 +474,8 @@ export class GithubAiLinterProcessor extends StreamProcessor<
 }
 
 /**
- * Convert one materialized analysis into the single GitHub review. All
+ * Convert one materialized analysis into a non-blocking GitHub review, or an
+ * explicit skipped result when there are no findings to publish. All
  * qualitative freedom ended when the agent appended its diagnostic and
  * assessment events; this function is intentionally mechanical.
  */
@@ -482,6 +483,13 @@ export async function publishGithubAiLinterReview(
   itx: Project,
   analysis: GithubAiLinterPublicationAnalysis,
 ): Promise<GithubAiLinterPublicationResult> {
+  const hasVisibleDiagnostics = analysis.diagnostics.some(
+    ({ suppression }) => suppression === null,
+  );
+  if (!hasVisibleDiagnostics && analysis.assessment.verdict === "approve") {
+    return { reason: "No visible findings to publish.", status: "skipped" };
+  }
+
   const { request } = analysis;
   const params = {
     owner: request.repository.owner,
@@ -544,33 +552,13 @@ export async function publishGithubAiLinterReview(
     body: githubAiLinterReviewBody(analysis, marker),
     comments: githubAiLinterReviewComments(analysis),
     commit_id: request.headSha,
-    event: githubAiLinterReviewEvent(analysis),
+    event: "COMMENT",
   });
   return {
     reviewId: response.data.id,
     reviewUrl: response.data.html_url,
     status: "succeeded",
   };
-}
-
-function githubAiLinterReviewEvent(
-  analysis: GithubAiLinterPublicationAnalysis,
-): "APPROVE" | "COMMENT" | "REQUEST_CHANGES" {
-  const diagnostics = analysis.diagnostics.filter(({ suppression }) => suppression === null);
-  const mechanicalVerdict = diagnostics.some(({ diagnostic }) => diagnostic.severity === "error")
-    ? 2
-    : diagnostics.length > 0
-      ? 1
-      : 0;
-  const assessmentVerdict = {
-    approve: 0,
-    comment: 1,
-    "request-changes": 2,
-  }[analysis.assessment.verdict];
-  const verdict = Math.max(mechanicalVerdict, assessmentVerdict);
-  if (verdict === 2) return "REQUEST_CHANGES";
-  if (verdict === 1) return "COMMENT";
-  return "APPROVE";
 }
 
 function githubAiLinterReviewBody(analysis: GithubAiLinterPublicationAnalysis, marker: string) {

@@ -303,7 +303,7 @@ describe("userspace GitHub pull-request routing", () => {
       },
     ]);
     expect(JSON.stringify(parentAgentEvents[0])).toContain(
-      "The sibling /ai-linter stream is the sole author of APPROVE, COMMENT, and REQUEST_CHANGES",
+      "The sibling /ai-linter stream is the sole author of non-blocking COMMENT reviews",
     );
     expect(JSON.stringify(parentAgentEvents[0])).toContain(
       "Never create, submit, or dismiss a pull-request review",
@@ -417,7 +417,7 @@ describe("userspace GitHub pull-request routing", () => {
       /"durableWorkerKey":"app-gh-linter-[0-9a-f]{32}"/,
     );
     expect(JSON.stringify(linterAgentEvents[1])).toContain(
-      "The stream processor mechanically publishes the review from your events",
+      "The stream processor mechanically publishes findings as a non-blocking COMMENT review",
     );
 
     const task = JSON.stringify(linterAgentEvents[3]);

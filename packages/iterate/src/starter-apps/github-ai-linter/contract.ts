@@ -151,6 +151,10 @@ const GithubAiLinterAnalysisSettledPayload = z.object({
 
 export const GithubAiLinterPublicationResult = z.discriminatedUnion("status", [
   z.object({
+    reason: z.string().min(1).max(8_000),
+    status: z.literal("skipped"),
+  }),
+  z.object({
     reviewId: PositiveSafeInteger,
     reviewUrl: z.string().url(),
     status: z.literal("succeeded"),
@@ -233,9 +237,9 @@ export const GithubAiLinterState = z.object({
 
 export const GithubAiLinterProcessorContract = defineProcessorContract({
   slug: "github-ai-linter",
-  version: "0.2.0",
+  version: "0.3.0",
   description:
-    "Reduces one pull request's AI diagnostics and mechanically publishes its GitHub review.",
+    "Reduces one pull request's AI diagnostics and mechanically publishes or skips its GitHub review.",
   stateSchema: GithubAiLinterState,
   events: {
     [githubAiLinterEventTypes.analysisRequested]: {
@@ -255,11 +259,12 @@ export const GithubAiLinterProcessorContract = defineProcessorContract({
       payloadSchema: GithubAiLinterAnalysisSettledPayload,
     },
     [githubAiLinterEventTypes.reviewPublicationRequested]: {
-      description: "Opens the durable obligation to publish one immutable GitHub review.",
+      description:
+        "Opens the durable obligation to publish one immutable, non-blocking GitHub review or explicitly skip a clean result.",
       payloadSchema: z.object({ analysisRequestOffset: StreamOffset }),
     },
     [githubAiLinterEventTypes.reviewPublicationSettled]: {
-      description: "Records the terminal GitHub publication result.",
+      description: "Records the terminal GitHub publication or intentional skip result.",
       payloadSchema: z.object({
         analysisRequestOffset: StreamOffset,
         result: GithubAiLinterPublicationResult,
