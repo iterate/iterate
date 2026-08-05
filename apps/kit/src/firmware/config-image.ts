@@ -83,13 +83,29 @@ export function encodeDeviceConfiguration(
   const magic = textEncoder.encode(CONFIG_MAGIC);
   const payload = encodeFields(
     [
-      [FIELD_WIFI_SSID, configuration.wifi.ssid],
-      [FIELD_WIFI_PASSWORD, configuration.wifi.password],
-      [FIELD_OS_BASE_URL, configuration.iterate.baseUrl],
-      [FIELD_PROJECT_ID, configuration.iterate.projectSlug],
-      [FIELD_PROJECT_API_KEY, configuration.iterate.projectApiKey],
-      [FIELD_DEVICE_ID, configuration.iterate.deviceId],
-      [FIELD_KIT_PATH, configuration.iterate.kitPath],
+      { tag: FIELD_WIFI_SSID, name: "Wi-Fi SSID", value: configuration.wifi.ssid },
+      /*
+       * ALWAYS WRITTEN, EVEN EMPTY. An open network has no password, and the
+       * firmware is built for exactly that: the password is the one field it
+       * decodes with `allow_empty`, while still requiring the tag to be
+       * present. Omitting it — as skipping empty values would — makes an open
+       * SSID unprovisionable with a "missing field" fault.
+       */
+      {
+        tag: FIELD_WIFI_PASSWORD,
+        name: "Wi-Fi password",
+        value: configuration.wifi.password,
+        mayBeEmpty: true,
+      },
+      { tag: FIELD_OS_BASE_URL, name: "OS base URL", value: configuration.iterate.baseUrl },
+      { tag: FIELD_PROJECT_ID, name: "project id", value: configuration.iterate.projectSlug },
+      {
+        tag: FIELD_PROJECT_API_KEY,
+        name: "project API key",
+        value: configuration.iterate.projectApiKey,
+      },
+      { tag: FIELD_DEVICE_ID, name: "device id", value: configuration.iterate.deviceId },
+      { tag: FIELD_KIT_PATH, name: "kit path", value: configuration.iterate.kitPath },
     ],
     textEncoder,
   );
@@ -109,21 +125,39 @@ export function encodeDeviceConfiguration(
   return image;
 }
 
+/** One field on its way into the partition. */
+interface ConfigurationField {
+  tag: number;
+  /** Human name, so a rejected value names itself in the error. */
+  name: string;
+  /** `undefined` means the caller did not provide it at all. */
+  value: string | undefined;
+  /** True only for the Wi-Fi password; see the call site. */
+  mayBeEmpty?: boolean;
+}
+
 /**
- * Lay out the tag-length-value payload, skipping fields with no value.
+ * Lay out the tag-length-value payload.
  *
- * A field is omitted rather than written empty because the firmware treats an
- * empty required field as a fault, and an omitted optional one as absent —
- * those are different answers and only one of them is true.
+ * Absent optional fields are skipped — the firmware skips tags it does not
+ * know, which is what makes them forward-compatible. A required field that is
+ * empty is a different thing entirely and throws here rather than being
+ * dropped: the device would otherwise reject the finished partition at boot
+ * with a generic "missing field", turning a fixable typo in a flashing form
+ * into a mystery on hardware.
  */
-function encodeFields(fields: readonly [number, string | undefined][], textEncoder: TextEncoder) {
-  const encoded = fields.flatMap(([tag, value]) => {
-    if (value === undefined || value.length === 0) return [];
-    const bytes = textEncoder.encode(value);
-    if (bytes.byteLength > 0xffff) {
-      throw new Error(`Configuration field ${tag} is longer than the format allows.`);
+function encodeFields(fields: readonly ConfigurationField[], textEncoder: TextEncoder) {
+  const encoded = fields.flatMap((field) => {
+    const optional = field.mayBeEmpty !== true && field.tag > FIELD_PROJECT_API_KEY;
+    if (field.value === undefined || (field.value.length === 0 && optional)) return [];
+    if (field.value.length === 0 && field.mayBeEmpty !== true) {
+      throw new Error(`Device configuration is missing its ${field.name}.`);
     }
-    return [{ tag, bytes }];
+    const bytes = textEncoder.encode(field.value);
+    if (bytes.byteLength > 0xffff) {
+      throw new Error(`Configuration field ${field.tag} is longer than the format allows.`);
+    }
+    return [{ tag: field.tag, bytes }];
   });
 
   const payload = new Uint8Array(

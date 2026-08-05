@@ -169,7 +169,14 @@ enum iterate_kit_playout_action iterate_kit_playout_classify(
    * a reused number starts again from its first frames.
    */
   if (playout->has_abandoned && frame->answer == playout->abandoned) {
-    if (frame->frame >= playout->abandoned_frame) {
+    /*
+     * Frame ZERO is the restart, named explicitly: an interrupt one frame into
+     * an answer leaves abandoned_frame at 0, and then `frame >= 0` rejects
+     * everything — including the reused-number restart this branch exists to
+     * admit. The lower-answer path above calls that latch out by name; this is
+     * the same latch.
+     */
+    if (frame->frame != 0U && frame->frame >= playout->abandoned_frame) {
       ++playout->ignored_stale_answer;
       return ITERATE_KIT_PLAYOUT_IGNORE;
     }

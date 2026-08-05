@@ -111,6 +111,13 @@ export async function voiceCli(options: VoiceCliOptions) {
     );
   }
 
+  /*
+   * `as const` on each arm, not a cast away from a real type: the auth
+   * parameter is a discriminated union keyed on `type`, and without it
+   * TypeScript widens each `type` to `string`, which matches no member. The
+   * alternative is annotating `auth` with the union, and that type is not
+   * exported from the client package.
+   */
   const auth = options.projectApiKey
     ? ({
         type: "project-secret",

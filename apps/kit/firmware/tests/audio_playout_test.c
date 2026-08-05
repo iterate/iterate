@@ -132,6 +132,37 @@ static void an_interrupt_silences_the_answer_being_talked_over(void) {
 }
 
 /*
+ * The same interrupt, one frame in — where the abandoned frame IS zero.
+ *
+ * The test above accepts two frames before interrupting, so its abandoned
+ * frame is 1 and a reused number restarting at 0 slips under the rule. With
+ * only frame 0 accepted there is nothing below zero, so a plain
+ * `frame >= abandoned_frame` refuses the restart too and the answer number
+ * stays deaf until the sender's counter happens to move.
+ */
+static void an_interrupt_one_frame_in_still_admits_a_reused_number(void) {
+  struct iterate_kit_playout playout;
+  struct iterate_kit_playout_frame frame;
+
+  iterate_kit_playout_reset(&playout, 7U);
+  frame = at(7U, 1U, 0U);
+  (void)iterate_kit_playout_classify(&playout, &frame);
+
+  iterate_kit_playout_interrupt(&playout);
+
+  /* The abandoned tail continues upward, and is refused. */
+  frame = at(7U, 1U, 1U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_IGNORE);
+  /* A different answer wearing the same number begins again at zero. */
+  frame = at(7U, 1U, 0U);
+  assert(
+      iterate_kit_playout_classify(&playout, &frame) ==
+      ITERATE_KIT_PLAYOUT_REPLACE);
+}
+
+/*
  * A new answer arriving without any local interrupt — the server cancelled
  * and started again on its own, which happens when the model is handed a tool
  * result. The tail of the old answer must not be heard in front of the new
@@ -567,6 +598,7 @@ int main(void) {
   plays_one_answer_in_order();
   ignores_frames_redelivered_by_a_recycle();
   an_interrupt_silences_the_answer_being_talked_over();
+  an_interrupt_one_frame_in_still_admits_a_reused_number();
   a_newer_answer_replaces_whatever_is_queued();
   ignores_speech_belonging_to_another_call();
   counts_holes_where_they_appear();

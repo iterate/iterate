@@ -68,6 +68,18 @@ describe("playout identity classifier", () => {
     expect(classifier.classify({ call: 1, answer: 3, frame: 0 })).toBe("replace");
   });
 
+  it("still admits a reused number when the interrupt landed one frame in", () => {
+    // The case the test above cannot see: with only frame 0 accepted, the
+    // abandoned frame IS zero, so a `frame >= abandonedFrame` rule refuses
+    // everything — including this restart — and the answer stays deaf until
+    // the sender's counter happens to move.
+    const classifier = new PlayoutClassifier(1);
+    classifier.classify({ call: 1, answer: 3, frame: 0 });
+    classifier.interrupt();
+    expect(classifier.classify({ call: 1, answer: 3, frame: 1 })).toBe("ignore");
+    expect(classifier.classify({ call: 1, answer: 3, frame: 0 })).toBe("replace");
+  });
+
   it("an interrupt never authors an answer number", () => {
     // Local interrupts fire on every talk press; the sender numbers only the
     // answers it speaks. The next real answer must still be accepted even if

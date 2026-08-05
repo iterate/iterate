@@ -186,6 +186,15 @@ export class PlayoutBuffer {
     this.queue = [];
     this.queuedBytes = 0;
     this.active = false;
+    /*
+     * The "expected drain" permission dies with the audio it was granted for.
+     * It is normally spent by the drain completing, but a barge-in or a
+     * superseding answer discards the queue first — and a permission left
+     * standing would excuse the NEXT answer's first real underrun, so the one
+     * counter that means "an audible gap" would silently under-report for the
+     * rest of the run.
+     */
+    this.finishing = false;
     this.cleared++;
     return droppedMs;
   }

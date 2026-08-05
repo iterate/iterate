@@ -117,8 +117,14 @@ export class PlayoutClassifier {
        * Only the frames already on their way when the person interrupted:
        * the abandoned tail continues where it left off, while a different
        * answer wearing a reused number starts again near zero.
+       *
+       * Frame ZERO is that restart, and it must be named explicitly: an
+       * interrupt one frame into an answer leaves `abandonedFrame` at 0, and
+       * then `frame >= 0` rejects everything — including the reused-number
+       * restart this branch exists to let through. Same reasoning as the
+       * lower-answer path above, which calls that latch out by name.
        */
-      if (identity.frame >= this.abandonedFrame) {
+      if (identity.frame !== 0 && identity.frame >= this.abandonedFrame) {
         this.counters.ignoredStaleAnswer++;
         return "ignore";
       }

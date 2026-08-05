@@ -90,6 +90,32 @@ describe("encodeDeviceConfiguration", () => {
     expect(fields.get(7)).toBe("kit.stackchan");
   });
 
+  it("writes an empty password tag for an open network", () => {
+    // The firmware requires tag 2 to be PRESENT and decodes it with
+    // allow_empty — the one field where those two rules differ. Dropping it
+    // for an open SSID made the partition fail closed as "missing field".
+    const fields = decodeLikeFirmware(
+      encodeDeviceConfiguration(
+        { ...configuration, wifi: { ssid: "open-cafe", password: "" } },
+        512,
+      ),
+    );
+    expect(fields.get(2)).toBe("");
+    expect([...fields.keys()].sort()).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  it("refuses an empty required field instead of shipping a partition the device will reject", () => {
+    expect(() =>
+      encodeDeviceConfiguration({ ...configuration, wifi: { ssid: "", password: "x" } }, 512),
+    ).toThrow("missing its Wi-Fi SSID");
+    expect(() =>
+      encodeDeviceConfiguration(
+        { ...configuration, iterate: { ...configuration.iterate, projectApiKey: "" } },
+        512,
+      ),
+    ).toThrow("missing its project API key");
+  });
+
   it("pads the rest of the partition as erased flash", () => {
     const image = encodeDeviceConfiguration(configuration, 512);
     const payloadLength = new DataView(image.buffer, image.byteOffset, 16).getUint32(8, true);
