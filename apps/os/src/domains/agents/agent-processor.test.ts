@@ -1035,6 +1035,36 @@ describe("AgentProcessor script execution", () => {
     expect(h.llm.calls).toHaveLength(1); // no new turn
   });
 
+  it("does not render results from an ITX execution requested outside the agent processor", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS]);
+    const itemsBefore = h.state().contextItems.length;
+    const executionId = "agent-output:999";
+
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/script-run-requested",
+          payload: {
+            executionId,
+            code: "async () => 'external result'",
+            expiresAt: h.clock.now + 60_000,
+          },
+        },
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          payload: { executionId, settlement: { status: "succeeded", result: "external result" } },
+        },
+      ],
+      ["advanceTime", 10_000],
+    );
+
+    expect(h.state().activeScriptExecutionIds).toEqual([]);
+    expect(h.state().contextItems).toHaveLength(itemsBefore);
+    expect(h.llm.calls).toHaveLength(0);
+  });
+
   it("spills an oversized script result to a workspace file and references it; small results stay inline", async () => {
     const written: { path: string; content: string }[] = [];
     const h = makeAgentHarness(undefined, {

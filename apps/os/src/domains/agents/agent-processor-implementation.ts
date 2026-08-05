@@ -147,7 +147,8 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
   //   use `runInBackground`: a lost attempt is re-derived by ANY later
   //   delivery over the same reduced state, so nothing needs to hold the cursor.
   protected override processEvent(args: ProcessEventArgs<AgentProcessorContract>): undefined {
-    const { event, state, blockProcessorWhile, runInBackground, append, delivery } = args;
+    const { event, previousState, state, blockProcessorWhile, runInBackground, append, delivery } =
+      args;
 
     switch (event?.type) {
       case "events.iterate.com/agents/web-message-sent": {
@@ -382,12 +383,10 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
       }
       case "events.iterate.com/capability-host/script-run-settled": {
         const { executionId, settlement } = event.payload;
-        if (
-          !executionId.startsWith("agent-output:") &&
-          !executionId.startsWith(SLASH_COMMAND_EXECUTION_PREFIX)
-        ) {
-          break;
-        }
+        // Settlement reduction removes the execution from `state`, so inspect
+        // the immediately preceding projection. Only a request provenance-
+        // stamped by this agent processor can enter that active set.
+        if (!previousState.activeScriptExecutionIds.includes(executionId)) break;
         // Per-event render (blocked): the settlement is delivered once, and a
         // lost render would silently drop the script's result from the
         // conversation. Rendering may first spill an oversized result into
