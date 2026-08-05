@@ -26,12 +26,15 @@ enum iterate_kit_status iterate_kit_audio_codec_read(
     int16_t *reference,
     size_t capacity_samples,
     size_t *sample_count) {
-  if (iterate_kit_audio_codec_validate(codec) != ITERATE_KIT_OK ||
-      capture == NULL || capacity_samples == 0U || sample_count == NULL ||
-      (codec->properties->has_reference_channel != (reference != NULL))) {
+  if (sample_count == NULL) {
     return ITERATE_KIT_INVALID_ARGUMENT;
   }
   *sample_count = 0U;
+  if (iterate_kit_audio_codec_validate(codec) != ITERATE_KIT_OK ||
+      capture == NULL || capacity_samples == 0U ||
+      (codec->properties->has_reference_channel != (reference != NULL))) {
+    return ITERATE_KIT_INVALID_ARGUMENT;
+  }
   const enum iterate_kit_status status = codec->ops->read(codec->context,
                                                            capture,
                                                            reference,

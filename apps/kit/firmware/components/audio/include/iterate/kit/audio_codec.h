@@ -55,7 +55,8 @@ struct iterate_kit_audio_codec_properties {
  * reference channel. `capacity_samples` counts int16_t entries in each plane,
  * not bytes; multi-channel capture is interleaved within the capture plane.
  * A successful read returns 1..capacity_samples entries and fully writes
- * `sample_count`. Every non-OK result leaves `sample_count` at zero.
+ * `sample_count`. Whenever `sample_count` is non-NULL, every non-OK result
+ * leaves the pointed value at zero.
  *
  * write() copies one complete playback plane or returns BACKPRESSURE.
  * `sample_count` uses the same int16_t-entry convention; an adapter returns

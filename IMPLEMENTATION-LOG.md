@@ -537,3 +537,39 @@ range.
 
 **Open:** Mandatory correction review, then Phase 3. The preservation archive's
 remote-upload confirmation remains pending.
+
+## 2026-08-05 — phase 2: codec read postcondition correction
+
+**Did:** The fresh correction review verified both original Phase 2 blockers by
+mutation, then found one new contradiction between the portable codec contract
+and its implementation. Strengthened the implementation instead of weakening
+the contract: every read with a non-null count now clears that count before
+codec, property, buffer, extent, or reference validation. Kept the null-count
+case explicitly invalid, and added direct tests for both invalid properties and
+the null pointer.
+
+**Measured:** The first correction review used four parallel reviewers plus
+fresh mutation tests and returned `BLOCK` on only this postcondition. After the
+fix, the focused ASan/UBSan audio-seam test passed in 0.15 s and `git diff
+--check` passed. The complete 37-test host suite had already passed immediately
+before the two additional assertions were added; a fresh full run remains part
+of the final correction gate.
+
+**Surprised by:** The public header claimed every non-OK result cleared the
+count, while argument and property validation ran before the clearing write.
+That made a stale count possible precisely when a composition root was
+miswired. No production caller consumed the stale value because callers gate
+on status, but upcoming physical adapters would have been built against a
+false guarantee.
+
+**Reviewer said:** Both prior blockers are genuinely closed. Make the codec
+read-failure postcondition true by either documenting the stale-count behavior
+or zeroing before validation; it also listed optional documentation and scanner
+cleanup below the gate threshold. → **did:** Chose the fail-closed behavior and
+tested the validation paths directly. Deferred unrelated optional cleanup to
+keep the correction range surgical; none changes present behavior or blocks a
+physical adapter.
+
+**Open:** Commit and independently re-review this exact correction. Phase 3
+remains gated. The preservation archive's remote-upload confirmation remains
+pending.

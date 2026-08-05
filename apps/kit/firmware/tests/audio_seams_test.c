@@ -116,7 +116,7 @@ static void a_codec_refuses_reference_and_property_drift(void)
              NULL,
              ITERATE_KIT_VOICE_FRAME_SAMPLES,
              &sample_count) == ITERATE_KIT_INVALID_ARGUMENT);
-  assert(sample_count == 99U);
+  assert(sample_count == 0U);
   assert(iterate_kit_audio_codec_read(
              &codec,
              capture,
@@ -130,6 +130,20 @@ static void a_codec_refuses_reference_and_property_drift(void)
   codec.properties = &broken;
   assert(iterate_kit_audio_codec_validate(&codec) ==
          ITERATE_KIT_INVALID_ARGUMENT);
+  sample_count = 51U;
+  assert(iterate_kit_audio_codec_read(
+             &codec,
+             capture,
+             reference,
+             ITERATE_KIT_VOICE_FRAME_SAMPLES,
+             &sample_count) == ITERATE_KIT_INVALID_ARGUMENT);
+  assert(sample_count == 0U);
+  assert(iterate_kit_audio_codec_read(
+             &codec,
+             capture,
+             reference,
+             ITERATE_KIT_VOICE_FRAME_SAMPLES,
+             NULL) == ITERATE_KIT_INVALID_ARGUMENT);
   broken = fake_codec_properties;
   broken.has_output_gain_control = false;
   codec.properties = &broken;
@@ -166,7 +180,7 @@ static void a_codec_refuses_reference_and_property_drift(void)
              reference,
              ITERATE_KIT_VOICE_FRAME_SAMPLES,
              &sample_count) == ITERATE_KIT_INVALID_ARGUMENT);
-  assert(sample_count == 73U);
+  assert(sample_count == 0U);
 
   broken = fake_codec_properties;
   broken.output_gain_ceiling_centi_db = 1;
