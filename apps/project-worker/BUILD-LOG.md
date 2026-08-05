@@ -218,9 +218,9 @@ dormant:true}` after idle — the device stays registered while **nothing pins t
 
 ## Increment 14 — stateful + stateless dynamic workers (lightest version of apps/os's model)
 
-**Commit** `<pending>`. Bring apps/os's stateless/stateful dynamic-worker split into the clean room, lightest
-possible (Jonas). The stateless half already existed (`code` mount = a repo fn); this adds the **stateful**
-half and proves both.
+**Commit** `5e4451e35` (native RPC + tunnel deleted; supersedes the earlier tunnel cut `7228d45bd`/`0e3bec07a`).
+Bring apps/os's stateless/stateful dynamic-worker split into the clean room, lightest possible (Jonas). The
+stateless half already existed (`code` mount = a repo fn); this adds the **stateful** half and proves both.
 
 - **Stateless** (`code`) — a repo file exporting `(itx, ...args) => result`, loaded per call, content-addressed,
   no durable identity. (apps/os "stateless" ref, function-shaped.)
