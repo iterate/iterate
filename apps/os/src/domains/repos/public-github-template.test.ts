@@ -152,6 +152,23 @@ describe("downloadPublicGithubTemplate", () => {
       downloadPublicGithubTemplate({ owner: "iterate", repo: "config" }, githubFetch),
     ).resolves.toEqual([{ content: "worker", path: "worker.ts" }]);
   });
+
+  it("stops reading a file response at the hard byte limit", async () => {
+    const githubFetch = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse({ commit: { tree: { sha: TREE_SHA } }, sha: COMMIT_SHA }))
+      .mockResolvedValueOnce(
+        jsonResponse({
+          tree: [{ mode: "100644", path: "worker.ts", size: 1, type: "blob" }],
+          truncated: false,
+        }),
+      )
+      .mockResolvedValueOnce(new Response(new Uint8Array(2 * 1024 * 1024 + 1)));
+
+    await expect(
+      downloadPublicGithubTemplate({ owner: "iterate", repo: "oversized" }, githubFetch),
+    ).rejects.toThrow("more than 2097152 bytes");
+  });
 });
 
 function jsonResponse(body: unknown): Response {

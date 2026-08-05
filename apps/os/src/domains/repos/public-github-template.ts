@@ -8,6 +8,7 @@ import { RetryableRepoCreationError } from "./utils.ts";
 const DOWNLOAD_CONCURRENCY = 8;
 const MAX_FILE_BYTES = 2 * 1024 * 1024;
 const MAX_FILE_COUNT = 500;
+const MAX_GITHUB_API_RESPONSE_BYTES = 10 * 1024 * 1024;
 const MAX_TEMPLATE_BYTES = 10 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 15_000;
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -130,13 +131,8 @@ export async function downloadPublicGithubTemplate(
           const bytes = await fetchGithub(
             githubFetch,
             `https://raw.githubusercontent.com/${repository}/${commit.sha}/${rawPath}`,
-            (response) => response.arrayBuffer(),
+            MAX_FILE_BYTES,
           );
-          if (bytes.byteLength > MAX_FILE_BYTES) {
-            throw new Error(
-              `Template file ${JSON.stringify(file.sourcePath)} exceeds ${MAX_FILE_BYTES} bytes.`,
-            );
-          }
           downloadedBytes += bytes.byteLength;
           if (downloadedBytes > MAX_TEMPLATE_BYTES) {
             throw new Error(`The selected config template exceeds ${MAX_TEMPLATE_BYTES} bytes.`);
@@ -163,7 +159,8 @@ async function fetchGithubJson<T>(
   url: string,
   schema: z.ZodType<T>,
 ): Promise<T> {
-  const responseText = await fetchGithub(githubFetch, url, (response) => response.text());
+  const responseBytes = await fetchGithub(githubFetch, url, MAX_GITHUB_API_RESPONSE_BYTES);
+  const responseText = new TextDecoder().decode(responseBytes);
   let body: unknown;
   try {
     body = JSON.parse(responseText);
@@ -179,11 +176,11 @@ async function fetchGithubJson<T>(
   return parsed.data;
 }
 
-async function fetchGithub<T>(
+async function fetchGithub(
   githubFetch: GithubFetch,
   url: string,
-  readBody: (response: Response) => Promise<T>,
-): Promise<T> {
+  maximumBytes: number,
+): Promise<Uint8Array> {
   let response: Response;
   try {
     response = await githubFetch(url, {
@@ -213,11 +210,34 @@ async function fetchGithub<T>(
     }
     throw new Error(message);
   }
-  try {
-    return await readBody(response);
-  } catch (error) {
-    throw new RetryableRepoCreationError("GitHub interrupted the config template response.", {
-      cause: error,
-    });
+  if (response.body === null) return new Uint8Array();
+
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  const reader = response.body.getReader();
+  while (true) {
+    let result: ReadableStreamReadResult<Uint8Array>;
+    try {
+      result = await reader.read();
+    } catch (error) {
+      throw new RetryableRepoCreationError("GitHub interrupted the config template response.", {
+        cause: error,
+      });
+    }
+    if (result.done) break;
+    totalBytes += result.value.byteLength;
+    if (totalBytes > maximumBytes) {
+      await reader.cancel().catch(() => undefined);
+      throw new Error(`GitHub returned more than ${maximumBytes} bytes for one response.`);
+    }
+    chunks.push(result.value);
   }
+
+  const body = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    body.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+  return body;
 }
