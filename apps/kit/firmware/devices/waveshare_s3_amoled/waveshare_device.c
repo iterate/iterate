@@ -448,7 +448,8 @@ static struct {
   /** Captured with no turn open: room noise, never sent, never queued. */
   uint32_t mic_frames_idle;
   uint32_t speaker_frames_played;
-  uint32_t speaker_overflow_drops;
+  /* Written by both the app producer and playback consumer. */
+  atomic_uint speaker_overflow_drops;
   /*
    * Audio removed by the barge-in discard.
    *
@@ -458,7 +459,8 @@ static struct {
    * silent drop path turns a five-minute measurement into an afternoon of
    * theories - two of which were wrong - so it counts now.
    */
-  uint32_t speaker_discarded_frames;
+  /* Queue-reset accounting is app-owned; in-flight rejection is playback-owned. */
+  atomic_uint speaker_discarded_frames;
   /*
    * The two ways the reader can decline to play WITHOUT touching any other
    * counter, and therefore the only remaining blind spots in this loop.
@@ -645,7 +647,8 @@ static void on_speaker_pcm(
         &runtime.answer_emitted_ms, 0U, memory_order_release);
   }
   if (uxQueueSpacesAvailable(runtime.speaker_queue) == 0U) {
-    ++runtime.speaker_overflow_drops;
+    (void)atomic_fetch_add_explicit(
+        &runtime.speaker_overflow_drops, 1U, memory_order_relaxed);
     return;
   }
   /*
@@ -677,7 +680,8 @@ static void on_speaker_pcm(
   memcpy(frame.samples, pcm, sizeof(frame.samples));
   if (xQueueSend(runtime.speaker_queue, &frame, 0) != pdTRUE) {
     /* Only this task writes, but retain an exact signal if that invariant drifts. */
-    ++runtime.speaker_overflow_drops;
+    (void)atomic_fetch_add_explicit(
+        &runtime.speaker_overflow_drops, 1U, memory_order_relaxed);
     return;
   }
   /* Counted only for frames actually admitted: the viseme ledger must see
@@ -717,7 +721,10 @@ static uint32_t abandon_speaker_audio(void) {
   (void)atomic_fetch_add_explicit(
       &runtime.speaker_generation, 1U, memory_order_acq_rel);
   (void)xQueueReset(runtime.speaker_queue);
-  runtime.speaker_discarded_frames += bytes / FRAME_BYTES;
+  (void)atomic_fetch_add_explicit(
+      &runtime.speaker_discarded_frames,
+      bytes / FRAME_BYTES,
+      memory_order_relaxed);
   atomic_store_explicit(
       &runtime.speaker_reprime, true, memory_order_release);
   /* The face was animating this audio; it must forget what nobody will hear. */
@@ -1015,10 +1022,12 @@ static void playback_task(void *argument) {
                                   &runtime.speaker_generation,
                                   memory_order_acquire)) {
         if (xQueueSendToFront(runtime.speaker_queue, &frame, 0) != pdTRUE) {
-          ++runtime.speaker_overflow_drops;
+          (void)atomic_fetch_add_explicit(
+              &runtime.speaker_overflow_drops, 1U, memory_order_relaxed);
         }
       } else {
-        ++runtime.speaker_discarded_frames;
+        (void)atomic_fetch_add_explicit(
+            &runtime.speaker_discarded_frames, 1U, memory_order_relaxed);
       }
       continue;
     }
@@ -1078,7 +1087,8 @@ static void playback_task(void *argument) {
                                 &runtime.speaker_generation,
                                 memory_order_acquire)) {
       /* A replacement raced this frame after it left the synchronized queue. */
-      ++runtime.speaker_discarded_frames;
+      (void)atomic_fetch_add_explicit(
+          &runtime.speaker_discarded_frames, 1U, memory_order_relaxed);
       waveshare_audio_dma_watch(false);
       continue;
     }
@@ -1254,8 +1264,10 @@ static void playback_task(void *argument) {
                atomic_load_explicit(
                    &runtime.speaker_reprime, memory_order_acquire)) {
       /* Intentional replacement, not a codec failure. */
-      runtime.speaker_discarded_frames +=
-          (uint32_t)(received / (FRAME_SAMPLES * sizeof(int16_t)));
+      (void)atomic_fetch_add_explicit(
+          &runtime.speaker_discarded_frames,
+          (uint32_t)(received / (FRAME_SAMPLES * sizeof(int16_t))),
+          memory_order_relaxed);
     } else {
       /* The bounded hardware path did not admit this frame. */
       ++runtime.speaker_write_failures;
@@ -1504,7 +1516,9 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"micIdle", runtime.mic_frames_idle},
     {"spkFrames", runtime.voicelab.spk_frames_received},
     {"spkPlayed", runtime.speaker_frames_played},
-    {"spkOverflow", runtime.speaker_overflow_drops},
+    {"spkOverflow",
+     atomic_load_explicit(
+         &runtime.speaker_overflow_drops, memory_order_relaxed)},
     /* Audio arriving just after a software-dry tick. Same signal, one step on. */
     {"spkSoftDryRefills", runtime.speaker_underruns},
     /*
@@ -1564,7 +1578,9 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     {"spkBadFrames", runtime.speaker_bad_frames},
     {"spkSeqGaps", runtime.playout.gaps},
     {"spkDecodeFailures", runtime.voicelab.spk_decode_failures},
-    {"spkDiscarded", runtime.speaker_discarded_frames},
+    {"spkDiscarded",
+     atomic_load_explicit(
+         &runtime.speaker_discarded_frames, memory_order_relaxed)},
     /*
      * The playout's own census. Every other way a frame fails to reach the
      * speaker is counted somewhere; these are the four the classifier

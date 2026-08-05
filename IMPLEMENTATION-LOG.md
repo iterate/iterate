@@ -696,3 +696,39 @@ measurement.
 mandatory fresh independent review. Waveshare hardware proof remains forbidden
 by the connected-device inventory. The preservation archive's remote-upload
 confirmation remains pending.
+
+## 2026-08-05 — phase 3: frozen-tree counter audit
+
+**Did:** Audited the frozen playback generation change while both independent
+review accounts were temporarily unavailable. Made the two counters that now
+have writers on both the app and playback cores relaxed C11 atomics. The answer
+generation and queue synchronization already protected audio ownership; this
+small follow-up protects the diagnostic read-modify-writes from losing
+simultaneous overflow or discard events.
+
+Also closed the preservation archive's remote-upload question using macOS's
+first-party File Provider state. The exact 10,206,336,512-byte archive reports
+`isUploaded = 1`, `isUploading = 0`, `isExcludedFromSync = 0`, no unresolved
+conflicts, and its most recent version downloaded. `brctl status` independently
+reports the CloudDocs container caught up after the file's creation.
+
+**Measured:** Formatting and `git diff --check` passed. The atomic-counter change
+compiled natively with ESP-IDF 5.4.2 under `-Wall -Wextra -Werror`; the
+application is `0x1545c0` bytes with `0x2aba40` bytes (67%) free. No serial
+device was opened or flashed. The archive remains 27,728 entries with SHA-256
+`7205dd34651d4a7e99bdb9a578112ffbdacb5a47c0cc571bb6c8c2783227ed`.
+
+**Surprised by:** Aligned 32-bit loads do not tear on Xtensa, but that fact does
+not make two concurrent `++` operations lossless. The replacement fix had
+changed the overflow and discard counters from one writer to two; the telemetry
+ownership needed to move with the audio ownership.
+
+**Reviewer said:** Claude returned a five-hour rate-limit response without
+reviewing. The required `gpt-5.6-sol`/max Codex fallback then also returned its
+account usage limit without reviewing. → **did:** Recorded both as unavailable,
+did not claim a pass, and did not begin Phase 4. Claude reports a 07:10 London
+reset, when the exact frozen range will be submitted afresh.
+
+**Open:** Commit and rebuild this final correction, then obtain the mandatory
+independent Phase 3 PASS after the reported reset. The preservation archive no
+longer has an open upload-confirmation gap.
