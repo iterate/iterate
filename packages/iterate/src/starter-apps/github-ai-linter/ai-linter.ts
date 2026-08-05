@@ -518,52 +518,6 @@ export async function publishGithubAiLinterReview(
   // identity to the request and marker before enabling that topology.
   const publicationId = `iterate-github-ai-linter:${analysis.request.repository.id}:analysis:${analysis.analysisRequestOffset}:head:${analysis.request.headSha}`;
   const marker = `<!-- ${publicationId} -->`;
-  let review:
-    | { status: "not-published" }
-    | { reviewId: number; reviewUrl: string; status: "published" } = {
-    status: "not-published",
-  };
-  if (publishesReview) {
-    const reviews = await octokit.paginate(
-      "GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews",
-      {
-        ...params,
-        per_page: 100,
-      },
-    );
-    // The marker is predictable, so body text alone is not authority: a human
-    // reviewer could otherwise paste it and suppress the App's real review.
-    const existing = reviews.find(
-      (candidate) =>
-        candidate.user?.login === `${request.appSlug}[bot]` &&
-        candidate.body?.includes(marker) === true,
-    );
-    if (existing !== undefined) {
-      review = {
-        reviewId: existing.id,
-        reviewUrl: existing.html_url,
-        status: "published",
-      };
-    } else {
-      // GitHub validates every inline location atomically with createReview.
-      // This intentionally records an explicit failed publication if the LLM
-      // supplied a stale/non-diff span. Silently dropping one would hide
-      // malformed agent output.
-      const response = await octokit.rest.pulls.createReview({
-        ...params,
-        body: githubAiLinterReviewBody(analysis, marker),
-        comments: githubAiLinterReviewComments(analysis),
-        commit_id: request.headSha,
-        event: "COMMENT",
-      });
-      review = {
-        reviewId: response.data.id,
-        reviewUrl: response.data.html_url,
-        status: "published",
-      };
-    }
-  }
-
   const checkName = "Iterate GitHub AI linter";
   const existingChecks = await octokit.rest.checks.listForRef({
     check_name: checkName,
@@ -579,17 +533,15 @@ export async function publishGithubAiLinterReview(
   const checkResponse =
     existingCheck === undefined
       ? await octokit.rest.checks.create({
-          conclusion: review.status === "published" ? "neutral" : "success",
+          conclusion: publishesReview ? "neutral" : "success",
           external_id: publicationId,
           head_sha: request.headSha,
           name: checkName,
           output: {
-            summary:
-              review.status === "published"
-                ? `The linter completed and left a non-blocking COMMENT review.\n\n${analysis.assessment.summary}`
-                : analysis.assessment.summary,
-            title:
-              review.status === "published" ? "Advisory findings published" : "No issues found",
+            summary: publishesReview
+              ? `The linter completed and found advisory issues. A non-blocking COMMENT review contains the inline details when publication succeeds.\n\n${analysis.assessment.summary}`
+              : analysis.assessment.summary,
+            title: publishesReview ? "Advisory findings found" : "No issues found",
           },
           owner: params.owner,
           repo: params.repo,
@@ -600,17 +552,49 @@ export async function publishGithubAiLinterReview(
     throw new Error(`GitHub Check Run ${checkResponse.data.id} did not provide an HTML URL.`);
   }
   const checkRun = { id: checkResponse.data.id, url: checkResponse.data.html_url };
-  if (review.status === "not-published") {
+  if (!publishesReview) {
     return {
       checkRun,
       reason: "No visible findings to publish.",
       status: "skipped",
     };
   }
+
+  const reviews = await octokit.paginate("GET /repos/{owner}/{repo}/pulls/{pull_number}/reviews", {
+    ...params,
+    per_page: 100,
+  });
+  // The marker is predictable, so body text alone is not authority: a human
+  // reviewer could otherwise paste it and suppress the App's real review.
+  const existingReview = reviews.find(
+    (candidate) =>
+      candidate.user?.login === `${request.appSlug}[bot]` &&
+      candidate.body?.includes(marker) === true,
+  );
+  if (existingReview !== undefined) {
+    return {
+      checkRun,
+      reviewId: existingReview.id,
+      reviewUrl: existingReview.html_url,
+      status: "succeeded",
+    };
+  }
+
+  // GitHub validates every inline location atomically with createReview. This
+  // intentionally records an explicit failed publication if the LLM supplied
+  // a stale/non-diff span. The neutral Check Run already records the advisory
+  // result, so a review failure cannot leave an unexplained review-only write.
+  const reviewResponse = await octokit.rest.pulls.createReview({
+    ...params,
+    body: githubAiLinterReviewBody(analysis, marker),
+    comments: githubAiLinterReviewComments(analysis),
+    commit_id: request.headSha,
+    event: "COMMENT",
+  });
   return {
     checkRun,
-    reviewId: review.reviewId,
-    reviewUrl: review.reviewUrl,
+    reviewId: reviewResponse.data.id,
+    reviewUrl: reviewResponse.data.html_url,
     status: "succeeded",
   };
 }

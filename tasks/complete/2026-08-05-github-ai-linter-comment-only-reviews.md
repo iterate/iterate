@@ -40,3 +40,6 @@ clean run, and AI findings can be false positives.
   runner, along with every other check.
 - 2026-08-05: Review follow-up added idempotent GitHub Check Runs and bumped
   both changed agent-policy versions after human and Bugbot comments.
+- 2026-08-05: A second Bugbot pass prompted check-first publication for
+  findings. The neutral Check Run now lands before the immutable review, so a
+  Check Runs API failure cannot orphan a review-only write.

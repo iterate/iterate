@@ -208,6 +208,9 @@ describe("GithubAiLinterProcessor", () => {
         status: "completed",
       }),
     );
+    expect(createCheckRun.mock.invocationCallOrder[0]).toBeLessThan(
+      createReview.mock.invocationCallOrder[0]!,
+    );
     const reviewBody = createReview.mock.calls[0]![0].body;
     expect(reviewBody).toContain("1 errors, 0 warnings, 1 suppressed, 0 resolved.");
     expect(reviewBody).not.toContain("This diagnostic is suppressed.");
