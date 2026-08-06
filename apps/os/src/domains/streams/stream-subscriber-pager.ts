@@ -31,6 +31,7 @@
 import { z } from "zod";
 import type { StreamEvent } from "iterate/processors";
 import { HibernatablePagers } from "../hibernatable-pager.ts";
+import { ConnectionOpenerDescriptor } from "./core-processor-contract.ts";
 import { compileEventFilter, EventFilter } from "./event-filter.ts";
 
 /** Internal upgrade header carrying the stream-subscriber-pager binding; never routed from external requests. */
@@ -70,6 +71,13 @@ const StreamSubscriberPagerAttachment = z.object({
   filter: EventFilter.optional(),
   /** `false` mirrors a state-only connection (`openConnection({ events: false })`). */
   events: z.literal(false).optional(),
+  /**
+   * Stamped for CLIENT-marked connections only: a dormant client's death
+   * surfaces as this socket's close, and the departed fact it appends must
+   * echo the opener so the roster's copy feed (which withholds unmarked
+   * connection lifecycle facts) still learns the departure.
+   */
+  openedBy: ConnectionOpenerDescriptor.optional(),
   idleDeliveredThrough: z.number().int().nonnegative().optional(),
   pageSentAtOffset: z.number().int().nonnegative().optional(),
 });
@@ -191,13 +199,19 @@ export class StreamSubscriberPagerRegistry {
    * departed connectionKey and this Pager's id (for an idempotency key), or
    * undefined when no fact is owed.
    */
-  departedOnClose(ws: WebSocket): { connectionKey: string; pagerId: string } | undefined {
+  departedOnClose(
+    ws: WebSocket,
+  ): { connectionKey: string; pagerId: string; openedBy?: ConnectionOpenerDescriptor } | undefined {
     const attachment = this.#pagers.attachment(ws);
     if (attachment === undefined || attachment.idleDeliveredThrough === undefined) {
       return undefined;
     }
     if (this.#hooks.hasConnection(attachment.connectionKey)) return undefined;
-    return { connectionKey: attachment.connectionKey, pagerId: attachment.pagerId };
+    return {
+      connectionKey: attachment.connectionKey,
+      pagerId: attachment.pagerId,
+      ...(attachment.openedBy === undefined ? {} : { openedBy: attachment.openedBy }),
+    };
   }
 
   /** connectionKeys whose client has given this DO a live Pager. */
@@ -232,6 +246,7 @@ export class StreamSubscriberPagerRegistry {
     subscriberPagerId: string | undefined;
     filter: EventFilter;
     events?: boolean;
+    openedBy?: ConnectionOpenerDescriptor;
   }): void {
     const hasFilter = Object.values(args.filter).some((value) => value !== undefined);
     const claimed = this.#pagers.claim({
@@ -245,6 +260,7 @@ export class StreamSubscriberPagerRegistry {
         pagerId: claimed.attachment.pagerId,
         ...(hasFilter ? { filter: args.filter } : {}),
         ...(args.events === false ? { events: false as const } : {}),
+        ...(args.openedBy?.client === undefined ? {} : { openedBy: args.openedBy }),
       });
     }
   }

@@ -175,6 +175,28 @@ const COPY_WITHHELD_LIFECYCLE_EVENT_TYPES = new Set<string>([
   "events.iterate.com/stream/connection-closed",
 ]);
 
+/**
+ * The one exemption from the lifecycle withhold: CLIENT-marked connection
+ * facts ARE product data — the client roster (/clients) reduces presence from
+ * copies of them. They cannot feed the manufactured-lifecycle loop the
+ * withhold exists for: only a real `projects.connect` session carries the
+ * opener's `client` marker (hosted callbacks and pager dials never do), and a
+ * copy delivery cannot open one, so copying these facts can never append more
+ * of them. `stream/woken` and unmarked connection facts stay withheld. The
+ * close fact carries the marker because the sender echoes the opener
+ * descriptor onto client connections' connection-closed payloads.
+ */
+function isClientConnectionLifecycleFact(event: { type: string; payload?: unknown }): boolean {
+  if (
+    event.type !== "events.iterate.com/stream/connection-opened" &&
+    event.type !== "events.iterate.com/stream/connection-closed"
+  ) {
+    return false;
+  }
+  const payload = event.payload as { openedBy?: { client?: unknown } } | undefined;
+  return payload?.openedBy?.client !== undefined;
+}
+
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30 * 60_000;
 const BACKOFF_JITTER = 0.2;
@@ -832,7 +854,8 @@ export class StreamEventSender {
             receiver.action === "copy-to-stream"
               ? visible.filter(
                   (event) =>
-                    !COPY_WITHHELD_LIFECYCLE_EVENT_TYPES.has(event.type) &&
+                    (!COPY_WITHHELD_LIFECYCLE_EVENT_TYPES.has(event.type) ||
+                      isClientConnectionLifecycleFact(event)) &&
                     !hasStructuredIdPrefix(
                       event.idempotencyKey,
                       internalStreamIdPrefix("copy-drop"),
@@ -2457,7 +2480,16 @@ export class StreamConnections {
         // opened/closed events, remains authoritative for "open now".
         void this.#hooks.appendDeliveryEvent({
           type: "events.iterate.com/stream/connection-closed",
-          payload: { connectionKey, reason, ...(error === undefined ? {} : { error }) },
+          payload: {
+            connectionKey,
+            reason,
+            ...(error === undefined ? {} : { error }),
+            // Client connections echo their opener: the roster's copy feed
+            // discriminates presence by the `client` marker, and the copy
+            // withhold only passes marked lifecycle facts
+            // (isClientConnectionLifecycleFact).
+            ...(connection.openedBy?.client === undefined ? {} : { openedBy: connection.openedBy }),
+          },
         });
         if (reason === "rpc-broken" || reason === "delivery-failed") {
           this.#hooks.sendDueSubscriptions();

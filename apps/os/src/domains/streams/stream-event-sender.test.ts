@@ -1182,6 +1182,65 @@ describe("StreamEventSender stream delivery", () => {
     });
   });
 
+  it("copies CLIENT-marked connection facts (the roster feed) while still withholding unmarked ones", async () => {
+    const delivered: StreamEvent[][] = [];
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {
+      delivered.push(batch.events);
+      return { acknowledged: batch.events.length };
+    });
+    const clientOpener = { description: "Jonas's Chrome", client: { capabilities: true } };
+    const h = harness({
+      events: [
+        event(2, "events.iterate.com/stream/woken", { incarnationId: "incarnation-a" }),
+        event(3, "events.iterate.com/stream/connection-opened", {
+          connectionKey: "client",
+          openedBy: clientOpener,
+        }),
+        event(4, "events.iterate.com/stream/connection-opened", { connectionKey: "viewer" }),
+        event(5, "events.iterate.com/stream/connection-closed", {
+          connectionKey: "client",
+          reason: "departed",
+          openedBy: clientOpener,
+        }),
+        event(6, "events.iterate.com/stream/connection-closed", {
+          connectionKey: "viewer",
+          reason: "idle",
+        }),
+      ],
+      configuration: {
+        name: PROCESSOR_KEY,
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/clients",
+          delivery: {
+            start: "beginning",
+            onFailingEvent: "halt",
+          },
+        },
+      },
+      copyToStream,
+      wakeProcessor: async () => {
+        throw new Error("a copy must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    // The opener's `client` marker is the exemption: the client roster
+    // reduces presence from copies of exactly these facts (the closed fact
+    // carries the echoed opener), and only a real projects.connect session
+    // can append a marked fact — so the manufactured-lifecycle loop the
+    // withhold prevents cannot arise from them.
+    expect(delivered.map((batch) => batch.map(({ offset }) => offset))).toEqual([[3, 5]]);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      confirmedOffset: 6,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+
   it("halts after bounded retries when the receiving stream reports itself paused", async () => {
     const appendDeliveryEvent = vi.fn(() => true);
     const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async () => {

@@ -684,6 +684,13 @@ export const CoreProcessorContract = defineProcessorContract({
         reason: ConnectionCloseReason,
         /** Present when the connection closed because an operation failed. */
         error: z.string().trim().min(1).optional(),
+        /**
+         * The closed connection's opener descriptor, echoed by the sender for
+         * CLIENT-marked connections only: copy delivery withholds connection
+         * lifecycle facts unless the opener carries the `client` marker, and
+         * the close must be self-attributing for that check.
+         */
+        openedBy: ConnectionOpenerDescriptor.optional(),
       }),
     },
     [STREAM_PROCESSOR_REVIVED_EVENT_TYPE]: {

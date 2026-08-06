@@ -2712,6 +2712,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       subscriberPagerId: relay?.subscriberPagerId,
       filter: filterSpec,
       events: args.events,
+      ...(openedBy === undefined ? {} : { openedBy }),
     });
 
     return new StreamConnectionRpcTarget({
@@ -3083,7 +3084,14 @@ export class StreamDurableObject extends DurableObject<Env> {
         {
           type: "events.iterate.com/stream/connection-closed",
           idempotencyKey: internalStreamId("stream-subscriber-pager-departed", departed.pagerId),
-          payload: { connectionKey: departed.connectionKey, reason: "departed" },
+          payload: {
+            connectionKey: departed.connectionKey,
+            reason: "departed",
+            // A dormant CLIENT's death is roster-relevant: the echoed opener
+            // lets this fact through the copy withhold (see the attachment's
+            // openedBy doc).
+            ...(departed.openedBy === undefined ? {} : { openedBy: departed.openedBy }),
+          },
         },
       ]);
     } catch (error) {
