@@ -270,10 +270,42 @@ DataCloneError`; `Reflect.apply` → `NATIVE_OK`. (The `__HostedActor`/`stateful
     `itx.kv` → 1 then 2, and the HOST reads the SAME key → `"2"` (facet + host share the project-prefixed KV);
     a SECOND project's facet `whoAmI()` → `{projectId: "prj_other"}` (isolation — each facet reaches ITS OWN
     host, never a sibling's).
-- **Deferred:** alarms for facets (workerd#6810 — apps/os keeps
-  them on the outer DO); the runner reads its source from the repo KV, so `list`-style eventual consistency
-  doesn't bite (get is immediate). Added a `/version` smoke marker (workers.dev propagation lags ~1-2min;
-  **DO code lags the worker code by a further ~minute** — poll a behavioral probe, not just `/version`).
+- **Deferred:** alarms for facets (workerd#6810 — apps/os keeps them on the outer DO). Added a `/version` smoke
+  marker (workers.dev propagation lags ~1-2min; **DO code lags the worker code by a further ~minute** — poll a
+  behavioral probe, not just `/version`).
+
+---
+
+## Increment 15 — a dynamic worker's SOURCE is an itx EXPRESSION (the loader is repo-agnostic)
+
+**Commit** `<pending>`. Jonas: "I want to build an interpreter — it's a simple two-way codec over a narrow
+subset of JS," and "the dynamic worker loader shouldn't know about repos; the file reader is responsible."
+
+- **`core/itx-expression.ts` — the codec (~55 lines).** A capability call as DATA: `ItxExpression =
+(string | [method, ...args])[]` (a bare string = property read, a tuple = call; relative to the itx root;
+  stores the NAME never captured authority — deleting it IS revocation). Mirrors apps/os `ItxExpression`. Two
+  directions: `captureExpression()` (encode — drive a proxy, read back steps) and `evaluateItxExpression(root,
+expr)` (decode — walk with `Reflect.get`/`Reflect.apply`), plus `itxRoot(invoke)` (a root whose dotted access
+  compiles to `invoke("itx.a.b", args)`). Narrow ON PURPOSE (a codec, not a language): reads + calls only, JSON
+  args; multi-hop pipelining deferred (v1 = one terminal call).
+- **The mount carries a source EXPRESSION, not a file path.** `code` = `{ source: ItxExpression }`, `stateful` =
+  `{ source, className }`. Both lanes resolve modules by `evaluateItxExpression(itxRoot(invoke), source)` → a
+  `{ name: source }` map, then `LOADER.get`. The loader knows only "evaluate an expression to get modules" — no
+  repo/KV knowledge. The stateful runner **dropped its `ITX_KV` binding + `#source`**: it resolves source
+  through the host (`env.ITX`) like everything else. cacheKey = deploy-version + `hash(JSON.stringify(modules))`.
+- **v1 "file reader" = `itx.files.read(path)`, a built-in that PROVIDES a hello** (no repo/KV — Jonas: "since
+  we're not bundling, delete the source KV and provide a hello"). Returns `{ "cap.js": <source> }`. The real
+  repo-at-a-ref reader slots in behind the SAME capability + the SAME source expression later; the loader never
+  changes. No level-2 artifact cache (nothing expensive to cache without a bundler) — only the loader's own
+  level-1 isolate cache.
+- **Proven** (deployed `itxexpr-1`, ctx `prj_expr`): STATELESS — mount `itx.greet` with
+  `source: ["files",["read","/hello.js"]]`, call `itx.greet("world")` → `"hello world"` (the loader evaluated
+  the expression). STATEFUL — mount `itx.counter` with `["files",["read","/counter.js"]]`,
+  `increment(2)` durable across runs, `value` consistent, `whoAmI()` → `{projectId:"prj_expr"}` (env.ITX
+  intact). NEGATIVE — a bad source path throws cleanly _through_ the codec (`itx.files: no file "/missing.js"`).
+- **Deferred / next:** the real repo-backed `itx.files` reader (refs + globs + `deref-then-key`), and
+  `captureExpression` on the userspace path (config workers write `itx.files.read(...)` as sugar). `itx.repo`/
+  `itx.kv`/`#configure` left intact (separate concerns — not the dynamic-worker source path).
 
 ---
 

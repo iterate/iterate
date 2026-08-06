@@ -26,6 +26,7 @@
 
 import { DurableObject } from "cloudflare:workers";
 import { ITX_SURFACE_MODULE } from "./core/agent-runtime.ts";
+import { evaluateItxExpression, itxRoot, type ItxExpression } from "./core/itx-expression.ts";
 import { stringifyName } from "./core/names.ts";
 import type { ItxDurableObject } from "./itx-durable-object.ts";
 
@@ -34,9 +35,9 @@ const VERSION_KEY = "stateful:version";
 
 interface Env {
   LOADER: WorkerLoader;
-  ITX_KV?: KVNamespace; // the repo store (project-prefixed) this runner reads its source from
   // The capability host namespace (same worker). A stub to the owning context is minted into each facet's
-  // env.ITX + globalOutbound, so a hosted DO class reaches its own host exactly like a stateless code cap.
+  // env.ITX + globalOutbound AND is where this runner resolves its source expression (itx.files.read) — the
+  // runner reads NO KV directly; source comes through the host like everything else.
   ITX_HOST: DurableObjectNamespace<ItxDurableObject>;
   // Deploy identity (wrangler `version_metadata`). Folded into the loader cacheKey so a redeploy
   // mints a FRESH loaded isolate — a facet built from a prior deployment's isolate cannot be
@@ -53,24 +54,19 @@ function hashSource(s: string): string {
 
 /** The RPC-lane payload the capability host forwards (mirrors apps/os's StatefulWorkerDurableObject input). */
 export interface StatefulInvoke {
-  module: string;
+  source: ItxExpression; // a source EXPRESSION resolved (via the host) to the facet's modules — not a file path
   className: string;
   method: string;
   args: unknown[];
 }
 
 export class StatefulWorkerDurableObject extends DurableObject<Env> {
-  /** projectId is the first segment of this runner's name `{projectId}::{path}::{callPath}`. */
-  get #projectId(): string {
-    return (this.ctx.id.name ?? "").split("::")[0];
-  }
-
-  /** Read the capability's source from the project's repo (the same `${projectId}:repo:` view the host writes). */
-  async #source(module: string): Promise<string> {
-    if (!this.env.ITX_KV) throw new Error("stateful worker: no ITX_KV bound");
-    const source = await this.env.ITX_KV.get(`${this.#projectId}:repo:${module}`);
-    if (source == null) throw new Error(`stateful worker: no repo file "${module}"`);
-    return source;
+  /** Evaluate a source EXPRESSION against the OWNING host's itx into a `{ name: source }` modules map — the
+   *  same repo-agnostic resolution the host uses for stateless workers (v1 → `itx.files.read`). */
+  async #loadModules(source: ItxExpression): Promise<Record<string, string>> {
+    const host = this.#hostStub();
+    const root = itxRoot((p, a) => host.invokeCapability(p, a));
+    return (await evaluateItxExpression(root, source)) as Record<string, string>;
   }
 
   /** A stub to the OWNING capability host — the `env.ITX` every hosted DO class gets (like a stateless code
@@ -84,9 +80,9 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   }
 
   /** Construct (or restart on a source change) the facet hosting the user's `className`, keeping its storage
-   *  across restarts. The user source is loaded DIRECTLY (no host wrapper) — the class it exports IS the facet. */
-  #facet(source: string, className: string): Fetcher {
-    const version = hashSource(source);
+   *  across restarts. The modules are loaded DIRECTLY (no host wrapper) — the class they export IS the facet. */
+  #facet(modules: Record<string, string>, className: string): Fetcher {
+    const version = hashSource(JSON.stringify(modules));
     // ⚠️  LEARNING: the deploy version MUST be in the loader cacheKey. Worker-Loader isolates are cached
     // ACROSS deployments, but this DO is durable and survives redeploys — so without a per-deploy key
     // component a rollout leaves the runner reusing a PRIOR deployment's isolate, whose facet is
@@ -101,7 +97,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
       () => ({
         compatibilityDate: "2026-07-01",
         mainModule: "cap.js",
-        modules: { "cap.js": source, "itx.js": ITX_SURFACE_MODULE },
+        modules: { "itx.js": ITX_SURFACE_MODULE, ...modules },
         env: { ITX: host },
         globalOutbound: host,
       }),
@@ -118,7 +114,7 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   /** RPC lane: resolve/restart the facet and call the method NATIVELY on it (apps/os `replayPath`). The awaited
    *  result is plain data, so the facet stub never crosses back to the host. */
   async invokeCapability(input: StatefulInvoke): Promise<unknown> {
-    const facet = this.#facet(await this.#source(input.module), input.className);
+    const facet = this.#facet(await this.#loadModules(input.source), input.className);
     // ═══════════════════════════════════════════════════════════════════════════════════════════════════
     // ⚠️  GOTCHA — INVOKE FACET/RPC-STUB METHODS WITH Reflect.apply, *NEVER* `stub[m].apply(stub, args)`.
     // Reading `.apply` (or ANY property) off an RPC stub's method proxy is a capnweb PIPELINED REMOTE PATH;
@@ -139,11 +135,12 @@ export class StatefulWorkerDurableObject extends DurableObject<Env> {
   /** WS/streaming lane: forward the request to the facet's own `fetch`. The module + class ride in headers set
    *  by the host (small — names, not source). A 101 upgrade tunnels straight through DO→DO→facet. */
   async fetch(request: Request): Promise<Response> {
-    const module = request.headers.get("x-itx-module");
+    const sourceHdr = request.headers.get("x-itx-source");
     const className = request.headers.get("x-itx-class");
-    if (!module || !className)
-      return new Response("stateful worker: missing x-itx-module / x-itx-class\n", { status: 400 });
-    const facet = this.#facet(await this.#source(module), className);
+    if (!sourceHdr || !className)
+      return new Response("stateful worker: missing x-itx-source / x-itx-class\n", { status: 400 });
+    const modules = await this.#loadModules(JSON.parse(sourceHdr) as ItxExpression);
+    const facet = this.#facet(modules, className);
     return facet.fetch(request);
   }
 }

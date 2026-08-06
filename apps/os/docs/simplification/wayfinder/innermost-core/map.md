@@ -468,6 +468,18 @@ args)` — invokes `[[Call]]` directly, runs inside the owning DO, returns plain
   ctx.exports.ItxEntrypoint({props})`). Proven (`itxbind-1`): `Counter.whoAmI()`→ correct `projectId`, a
   round-trip through `itx.kv` shows facet + host share the project store, and a second project's facet reaches
   its OWN host (isolation). (Deferred: facet alarms — workerd#6810.)
+- **D36 — A dynamic worker's SOURCE is an itx EXPRESSION (data); the loader is repo-agnostic. (proven,
+  increment 15, `itxexpr-1`.)** A mount's `code`/`stateful` kind carries `source: ItxExpression` (`(string |
+[method,...args])[]`, mirroring apps/os `ItxExpression`), not a file path. The loader resolves it by
+  `evaluateItxExpression(itxRoot(invoke), source)` → a `{ name: source }` modules map → `LOADER.get` — it knows
+  only "evaluate an expression to get modules," never "repo." The expression is a small two-way codec
+  (`core/itx-expression.ts`, ~55 lines: capture=encode, evaluate=decode via `Reflect.get`/`Reflect.apply`;
+  reads+calls only, JSON args; pipelining deferred). Behind the expression, a built-in **file reader**
+  (`itx.files.read`) returns the modules; v1 PROVIDES a hello (no repo/KV — since the clean room doesn't bundle,
+  there's nothing expensive to cache, so no level-2 artifact cache; the real repo-at-a-ref reader slots in
+  behind the same capability + expression later). The stateful runner **dropped `ITX_KV`** — it resolves source
+  through the host (`env.ITX`) like everything else. Two caches, apps/os-shaped: level-1 = the loader isolate
+  cache (deploy-version + content-hash); level-2 (build artifact) intentionally absent until there's a bundler.
 - **D14 — Cost/billing is USERSPACE, not a control-plane primitive.** Budgets/spend limits are a key PRODUCT
   concern but implemented in userspace: a **stream processor that consumes cost-bearing events** across
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core

@@ -20,6 +20,7 @@ import { DurableObject } from "cloudflare:workers";
 import { newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { substituteHeaderSecrets } from "./core/egress.ts";
 import { ITX_SURFACE_MODULE, CODE_CAP_RUNNER } from "./core/agent-runtime.ts";
+import { evaluateItxExpression, itxRoot, type ItxExpression } from "./core/itx-expression.ts";
 import { parseName, stringifyName, parentPath } from "./core/names.ts";
 import type { StreamDurableObject, StreamEventInput } from "./stream-durable-object.ts";
 import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
@@ -80,21 +81,32 @@ function hashSource(s: string): string {
   return (h >>> 0).toString(36);
 }
 
+// The v1 "file reader" behind `itx.files.read` — NO repo/KV, it just PROVIDES a hello module (Jonas: since
+// we're not bundling, delete the source KV and provide a hello). Later this becomes a real repo read at a ref,
+// behind the SAME `itx.files` capability + the SAME source expression — the loader never changes.
+const HELLO_FILES: Record<string, string> = {
+  "/hello.js": `export default (itx, name) => "hello " + (name ?? "world");`,
+  "/counter.js": `import { DurableObject } from "cloudflare:workers";
+export class Counter extends DurableObject {
+  async increment(by) { const n = ((await this.ctx.storage.get("n")) ?? 0) + by; await this.ctx.storage.put("n", n); return n; }
+  async value() { return (await this.ctx.storage.get("n")) ?? 0; }
+  async whoAmI() { return await this.env.ITX.invokeCapability("itx.whoami", []); }
+}`,
+};
+
 // A mount (target-core §4.1). `itx-expression` = an ALIAS to another callPath. `static` = a plain value.
-// The two DYNAMIC-WORKER kinds mirror apps/os's `DynamicWorkerRef` discriminant:
-//   • `code` = a STATELESS worker — a repo file exporting `(itx, ...args) => result`, loaded + run per call
-//     (content-addressed, no durable identity). This is the apps/os "stateless" ref, function-shaped.
-//   • `stateful` = a STATEFUL worker — a repo file exporting a `DurableObject` class (`className`), run by the
-//     dedicated `StatefulWorkerDurableObject` runner (a separate DO, one instance per stateful capability, each
-//     hosting the class as a facet with its own isolated SQLite). The host just FORWARDS by name — the RPC lane
-//     is a native method call inside the runner, the WS/streaming lane is `/facet` → the runner → the facet's
-//     own `fetch`.
+// The two DYNAMIC-WORKER kinds mirror apps/os's `DynamicWorkerRef` — and their SOURCE is an itx EXPRESSION
+// (data), resolved to a `{ name: source }` modules map by evaluating it against this host. The loader is
+// repo-agnostic: it knows only "evaluate an expression to get modules" (v1 reader = `itx.files.read`, below).
+//   • `code` = STATELESS — modules whose entry `cap.js` default-exports `(itx, ...args) => result`.
+//   • `stateful` = a `DurableObject` class (`className`), run by the dedicated `StatefulWorkerDurableObject`
+//     runner (a separate DO, one per stateful capability, hosting the class as a facet with its own SQLite).
 // (`live` RPC-stub mounts are the capnweb path, above.)
 type Mount =
   | { type: "itx-expression"; expression: ItxCallPath }
   | { type: "static"; value: unknown }
-  | { type: "code"; module: string }
-  | { type: "stateful"; module: string; className: string };
+  | { type: "code"; source: ItxExpression }
+  | { type: "stateful"; source: ItxExpression; className: string };
 
 export type ProvideCapabilityInput = { path: ItxCallPath } & Mount;
 
@@ -169,7 +181,7 @@ export class ItxDurableObject extends DurableObject<Env> {
       if (!mount || mount.type !== "stateful")
         return new Response(`no stateful mount at "${callPath}"\n`, { status: 404 });
       const headers = new Headers(request.headers);
-      headers.set("x-itx-module", mount.module);
+      headers.set("x-itx-source", JSON.stringify(mount.source));
       headers.set("x-itx-class", mount.className);
       const fwd = new Request(request.url, {
         method: request.method,
@@ -250,6 +262,14 @@ export class ItxDurableObject extends DurableObject<Env> {
       await this.provideCapability(args[0] as ProvideCapabilityInput);
       return { ok: true };
     }
+    // The v1 "file reader": evaluate a source expression's terminal call. Returns a `{ name: source }` modules
+    // map. No repo/KV yet — a hardcoded hello (later: a repo snapshot at a ref, same capability + expression).
+    if (callPath === "itx.files.read") {
+      const [path] = args as [string];
+      const content = HELLO_FILES[path];
+      if (content == null) throw new Error(`itx.files: no file "${path}"`);
+      return { "cap.js": content };
+    }
     if (callPath === "itx.configure") return this.#configure(); // run the repo's config worker
     if (callPath === "itx.secrets.set") {
       const [name, value] = args as [string, string];
@@ -271,7 +291,7 @@ export class ItxDurableObject extends DurableObject<Env> {
     const mount = this.#mounts.get(callPath);
     if (mount) {
       if (mount.type === "itx-expression") return this.invokeCapability(mount.expression, args); // alias
-      if (mount.type === "code") return this.#runCode(mount.module, args); // stateless worker (repo fn)
+      if (mount.type === "code") return this.#runCode(mount.source, args); // stateless worker (from a source expr)
       if (mount.type === "static") return mount.value;
       // stateful with no method (a bare mount-path call) is not invocable — fall through to fallback.
     }
@@ -449,18 +469,24 @@ export class ItxDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Run a repo file as a dynamic capability: load its `(itx, ...args) => result` default export confined (with
-   *  env.ITX = a self-stub) and return the result. The capability's behaviour is thus DEFINED by the repo. */
-  async #runCode(module: string, args: unknown[]): Promise<unknown> {
-    const source = (await this.#repo("get", [module])) as string | null;
-    if (source == null) throw new Error(`itx.repo: no file "${module}" for the capability`);
+  /** Evaluate a source EXPRESSION against THIS host's itx into a `{ name: source }` modules map. The loader is
+   *  repo-agnostic — it only knows "evaluate an itx expression to get modules" (v1 → `itx.files.read`). */
+  async #loadModules(source: ItxExpression): Promise<Record<string, string>> {
+    const root = itxRoot((p, a) => this.invokeCapability(p, a));
+    return (await evaluateItxExpression(root, source)) as Record<string, string>;
+  }
+
+  /** Run a stateless dynamic worker: resolve its modules from the source expression, load the entry `cap.js`'s
+   *  `(itx, ...args) => result` default export confined (env.ITX = a self-stub), and return the result. */
+  async #runCode(source: ItxExpression, args: unknown[]): Promise<unknown> {
+    const modules = await this.#loadModules(source);
     const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?");
     const worker = this.env.LOADER.get(
-      `code:${this.ctx.id.name}:${module}:${hashSource(source)}`,
+      `code:${this.ctx.id.name}:${hashSource(JSON.stringify(modules))}`,
       () => ({
         compatibilityDate: "2026-07-01",
         mainModule: "run.js",
-        modules: { "run.js": CODE_CAP_RUNNER, "cap.js": source, "itx.js": ITX_SURFACE_MODULE },
+        modules: { "run.js": CODE_CAP_RUNNER, "itx.js": ITX_SURFACE_MODULE, ...modules },
         env: { ITX: self },
         globalOutbound: self,
       }),
@@ -474,7 +500,7 @@ export class ItxDurableObject extends DurableObject<Env> {
   /** Longest dotted-prefix STATEFUL mount; the remaining segment(s) name the facet method to call. */
   #statefulMountFor(
     callPath: string,
-  ): { callPath: string; mount: { module: string; className: string }; method: string } | null {
+  ): { callPath: string; mount: Extract<Mount, { type: "stateful" }>; method: string } | null {
     const parts = callPath.split(".");
     for (let i = parts.length - 1; i >= 2; i--) {
       const p = parts.slice(0, i).join(".");
@@ -497,12 +523,12 @@ export class ItxDurableObject extends DurableObject<Env> {
    *  crosses back to this host. */
   async #dispatchStateful(
     callPath: string,
-    mount: { module: string; className: string },
+    mount: Extract<Mount, { type: "stateful" }>,
     method: string,
     args: unknown[],
   ): Promise<unknown> {
     return this.#statefulRunner(callPath).invokeCapability({
-      module: mount.module,
+      source: mount.source,
       className: mount.className,
       method,
       args,
