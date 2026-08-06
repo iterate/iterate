@@ -273,3 +273,47 @@ enum capnweb_status iterate_kit_itx_connection_close(
   connection->capnweb_status = status;
   return status;
 }
+
+const char *iterate_kit_itx_connection_state_name(
+    enum iterate_kit_itx_connection_state state) {
+  switch (state) {
+    case ITERATE_KIT_ITX_CONNECTION_DISCONNECTED: return "disconnected";
+    case ITERATE_KIT_ITX_CONNECTION_MOUNTING: return "mounting";
+    case ITERATE_KIT_ITX_CONNECTION_READY: return "ready";
+    case ITERATE_KIT_ITX_CONNECTION_FAILED: return "failed";
+    case ITERATE_KIT_ITX_CONNECTION_CLOSED: return "closed";
+    default: return "unknown";
+  }
+}
+
+void iterate_kit_itx_connection_tables(
+    const struct iterate_kit_itx_connection *connection,
+    struct iterate_kit_itx_connection_tables *out) {
+  size_t index;
+
+  if (out == NULL) return;
+  /* Zeroed rather than left alone: a caller that reads a partly-filled struct
+   * after a NULL connection would report capacities of whatever was on the
+   * stack, which reads as a table that is fine. */
+  out->exports_used = 0U;
+  out->exports_capacity = 0U;
+  out->imports_used = 0U;
+  out->imports_capacity = 0U;
+  out->calls_used = 0U;
+  out->calls_capacity = 0U;
+  if (connection == NULL || !connection->initialized) return;
+
+  const struct capnweb_session_options *options = &connection->session.options;
+  out->exports_capacity = (uint32_t)options->export_count;
+  out->imports_capacity = (uint32_t)options->import_count;
+  out->calls_capacity = (uint32_t)options->pending_call_count;
+  for (index = 0U; index < options->export_count; index++) {
+    if (options->exports[index].occupied) out->exports_used++;
+  }
+  for (index = 0U; index < options->import_count; index++) {
+    if (options->imports[index].occupied) out->imports_used++;
+  }
+  for (index = 0U; index < options->pending_call_count; index++) {
+    if (options->pending_calls[index].occupied) out->calls_used++;
+  }
+}

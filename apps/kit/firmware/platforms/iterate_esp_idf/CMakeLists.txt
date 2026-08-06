@@ -1,6 +1,8 @@
 idf_component_register(
   SRCS
     configuration.c
+    reset_reason.c
+    restart_note.c
     itx_transport.c
     websocket_connection.c
   INCLUDE_DIRS include

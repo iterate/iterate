@@ -503,12 +503,104 @@ static void downlink_flow(void) {
   assert(iterate_kit_voicelab_close(&fixture.voicelab) == CAPNWEB_OK);
 }
 
+
+/** Occupied slots in the fixture session's export table. */
+static size_t exports_in_use(const struct fixture *fixture) {
+  size_t index;
+  size_t used = 0U;
+  for (index = 0U; index < CALL_CAPACITY; ++index) {
+    if (fixture->exports[index].occupied) used++;
+  }
+  return used;
+}
+
+/**
+ * One complete mount with a downlink, answering each of its four calls.
+ *
+ * Ids are counted rather than written down: a second mount on the SAME session
+ * continues the numbering, and that is the whole point of the test below.
+ */
+static void mount_with_downlink(struct fixture *fixture, int *next_id) {
+  const struct iterate_kit_voicelab_options options = {
+    .session = &fixture->session,
+    .project_id = "prj_test",
+    .project_api_key = "itxk_secret-never-log",
+    .stream_path = "/voice-agent/dev-test",
+    .conversation_id = "wsdev",
+    .now_ms = fixture_now_ms,
+    .clock_context = fixture,
+    .on_speaker = record_speaker,
+    .on_control = record_control,
+    .on_transcript = record_transcript,
+    .on_viseme = record_viseme,
+    .downlink_context = NULL,
+  };
+  char message[64];
+  int index;
+
+  assert(iterate_kit_voicelab_start(&fixture->voicelab, &options) == CAPNWEB_OK);
+  for (index = 0; index < 4; ++index) {
+    (void)snprintf(
+        message, sizeof(message), "[\"resolve\",%d,[\"export\",-%d]]",
+        *next_id, 10 + *next_id);
+    receive(fixture, message);
+    (*next_id)++;
+  }
+  assert(fixture->voicelab.state == ITERATE_KIT_VOICELAB_READY);
+}
+
+/*
+ * RE-MOUNTING MUST HAND BACK WHAT THE LAST MOUNT HELD.
+ *
+ * `iterate_kit_voicelab_start` memsets the struct, and for a long time it did
+ * that while the SESSION still held the capabilities the last mount had taken:
+ * the exported callback, and the imported connection whose reference is what
+ * keeps that callback alive at the platform. So every re-mount burned an export
+ * slot. A real board's table holds four and a healthy one already uses two, so
+ * the second re-mount filled it — the export was refused, the voicelab latched
+ * failed underneath a perfectly ready transport and connection, and nothing
+ * recovered it but the 180-second liveness restart of the whole chip. Measured
+ * on the HA Voice PE at exports 4/4, imports 0/16, pings frozen at zero.
+ *
+ * What is asserted is what this side controls: a re-mount says `release` for
+ * the previous mount before it asks for anything new. Whether the peer then
+ * drops its own reference is the peer's half of the contract, and no fixture
+ * here can stand in for it.
+ */
+static void remounting_releases_the_previous_mount(void) {
+  static struct fixture fixture;
+  int next_id = 1;
+  size_t before;
+  size_t index;
+  size_t releases = 0U;
+
+  fixture_init(&fixture);
+  mount_with_downlink(&fixture, &next_id);
+  assert(exports_in_use(&fixture) > 0U);
+
+  /*
+   * The connection stub of the first mount, named exactly. `mount_with_downlink`
+   * answers the fourth call — openConnection — with export -(10 + id), and the
+   * ids start at 1, so the first mount's connection is -14. A re-mount that
+   * forgets it never sends this, and the platform goes on holding the callback
+   * that reference keeps alive.
+   */
+  before = fixture.captured_count;
+  mount_with_downlink(&fixture, &next_id);
+  for (index = before; index < fixture.captured_count; ++index) {
+    if (strstr(fixture.captured[index], "[\"release\",-14") != NULL) releases++;
+  }
+  assert(releases > 0U);
+}
+
 int main(void) {
   static struct fixture fixture;
   /* "ABCD" + 0x00 0x01: exercises multi-chunk + 2-byte-tail base64. */
   static const uint8_t pcm[6] = {0x41U, 0x42U, 0x43U, 0x44U, 0x00U, 0x01U};
   static const uint8_t *const pcm_frames[] = {pcm};
   size_t before;
+
+  remounting_releases_the_previous_mount();
 
   fixture_init(&fixture);
   start_and_mount(&fixture);

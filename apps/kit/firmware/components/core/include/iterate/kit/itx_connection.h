@@ -19,6 +19,16 @@ enum iterate_kit_itx_connection_state {
   ITERATE_KIT_ITX_CONNECTION_CLOSED,
 };
 
+/**
+ * The connection state as a word, for `health()`.
+ *
+ * It was the one state in the mount chain nothing published, and a voicelab
+ * that had latched failed could not be told from one waiting on a connection
+ * that had latched under it. Never NULL.
+ */
+const char *iterate_kit_itx_connection_state_name(
+    enum iterate_kit_itx_connection_state state);
+
 typedef void (*iterate_kit_itx_connection_session_ended_fn)(void *context);
 
 struct iterate_kit_itx_connection_options {
@@ -74,6 +84,34 @@ struct iterate_kit_itx_connection {
   bool initialized;
   bool session_open;
 };
+
+/** How much of a session's fixed tables is in use, right now. */
+struct iterate_kit_itx_connection_tables {
+  /** Capabilities this device has handed out, and the table's size. */
+  uint32_t exports_used;
+  uint32_t exports_capacity;
+  /** Answers this device is still waiting for, and the table's size. */
+  uint32_t imports_used;
+  uint32_t imports_capacity;
+  /** Calls made TO this device that it has not answered, and the size. */
+  uint32_t calls_used;
+  uint32_t calls_capacity;
+};
+
+/**
+ * Count the occupied slots in a session's three tables.
+ *
+ * A FULL TABLE LOOKS LIKE A BROKEN DEVICE. These are fixed arrays sized at
+ * boot; when one fills, the next call fails with a status nobody traces back to
+ * a table, and the device latches into a state it never leaves. Nothing
+ * published how full they were, so "it worked twice and then never again" — the
+ * signature of a leak — could not be told from a network fault.
+ *
+ * Cheap: three linear scans of a few dozen entries, on the health path only.
+ */
+void iterate_kit_itx_connection_tables(
+    const struct iterate_kit_itx_connection *connection,
+    struct iterate_kit_itx_connection_tables *out);
 
 enum capnweb_status iterate_kit_itx_connection_init(
     struct iterate_kit_itx_connection *connection,

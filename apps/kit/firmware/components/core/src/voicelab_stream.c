@@ -1005,7 +1005,14 @@ static void stream_completed(
   }
   voicelab->state = ITERATE_KIT_VOICELAB_OPENING_CONNECTION;
   status = iterate_kit_voicelab_recycle_connection(voicelab);
-  if (status != CAPNWEB_OK) {
+  /*
+   * KEEP THE SPECIFIC FAILURE. `recycle_connection` fails through `fail()`
+   * itself for the causes it can name — a full export table is
+   * FAILURE_EXPORT — and overwriting that here relabelled every one of them
+   * "open-call". Which is how a leaked capability spent an evening looking
+   * like a networking problem.
+   */
+  if (status != CAPNWEB_OK && voicelab->state != ITERATE_KIT_VOICELAB_FAILED) {
     (void)fail(voicelab, ITERATE_KIT_VOICELAB_FAILURE_OPEN_CALL, status);
   }
 }
@@ -1133,6 +1140,26 @@ enum capnweb_status iterate_kit_voicelab_start(
 
   if (voicelab == NULL) {
     return CAPNWEB_E_INVALID_ARGUMENT;
+  }
+  /*
+   * HAND BACK WHAT THE LAST MOUNT HELD, BEFORE FORGETTING IT.
+   *
+   * The memset below is what a fresh mount needs and what made re-mounting
+   * leak: it threw away `callback_capability` and its `has_` flag while the
+   * SESSION still held that export slot, so every re-mount burned one. The
+   * export table holds four and a healthy board already uses two — so the
+   * second re-mount filled it, `capnweb_session_export_capability` refused,
+   * and the voicelab latched failed with a ready transport and a ready
+   * connection under it. Measured on the HA Voice PE: exports 4/4, imports
+   * 0/16, pings frozen at 0, every call request ignored for the three minutes
+   * it took the liveness watchdog to restart the whole chip.
+   *
+   * A zeroed struct — a static on its first mount — has no session and no
+   * `has_` flags set, so this is a no-op there rather than a release of
+   * whatever the stack happened to hold.
+   */
+  if (voicelab->options.session != NULL) {
+    (void)iterate_kit_voicelab_close(voicelab);
   }
   memset(voicelab, 0, sizeof(*voicelab));
   if (!valid_options(options)) {

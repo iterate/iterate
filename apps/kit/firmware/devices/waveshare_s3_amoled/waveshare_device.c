@@ -53,6 +53,10 @@
 
 #include "capnweb/capnweb.h"
 #include "iterate/kit/audio_codec.h"
+#include "iterate/kit/conversation_launch.h"
+#include "iterate/kit/retry_gate.h"
+#include "iterate/kit/platforms/esp_idf_reset_reason.h"
+#include "iterate/kit/platforms/esp_idf_restart_note.h"
 #include "iterate/kit/mount_watchdog.h"
 #include "iterate/kit/capabilities/conversation.h"
 #include "iterate/kit/capabilities/health.h"
@@ -1634,6 +1638,8 @@ size_t waveshare_health_json(char *out, size_t capacity) {
   size_t index;
   int written;
 
+  struct iterate_kit_itx_connection_tables tables;
+  iterate_kit_itx_connection_tables(&runtime.connection, &tables);
   iterate_kit_esp_idf_itx_transport_metrics(&runtime.transport, &metrics);
   iterate_kit_spsc_ring_metrics(&runtime.control_outbox, &outbox_metrics);
 
@@ -1779,7 +1785,18 @@ size_t waveshare_health_json(char *out, size_t capacity) {
          ? 0U
          : (uint32_t)iterate_kit_voice_elapsed_ms(
                now, runtime.voicelab.last_batch_ms)},
-    {"resetReason", (uint32_t)esp_reset_reason()},
+    /*
+     * THE THREE FIXED TABLES. Sized at boot and never grown; when one fills,
+     * the next call fails with a status that names no table and the device
+     * latches. Published as used/capacity pairs so "nearly full" is visible
+     * before "full" makes the board look broken.
+     */
+    {"rpcExports", tables.exports_used},
+    {"rpcExportsMax", tables.exports_capacity},
+    {"rpcImports", tables.imports_used},
+    {"rpcImportsMax", tables.imports_capacity},
+    {"rpcCalls", tables.calls_used},
+    {"rpcCallsMax", tables.calls_capacity},
     {"heapFree", (uint32_t)esp_get_free_heap_size()},
     /*
      * INTERNAL, NOT TOTAL. `heapFree` counts PSRAM, and on a board with eight
@@ -1838,6 +1855,10 @@ size_t waveshare_health_json(char *out, size_t capacity) {
        */
       "\"conversation\":\"%s\","
       "\"clock\":\"%s\","
+      /* WHY IT LAST RESTARTED. Uptime says one happened; only this
+       * says whether it was a panic, a stall or somebody's thumb. */
+      "\"resetReason\":\"%s\",\"restartNote\":\"%s\","
+      "\"connection\":\"%s\","
       "\"callActive\":%s,\"callPending\":%s,\"wantsCall\":%s,\"talking\":%s,"
       "\"gateOpen\":%s,\"t\":%" PRIu64 ",\"uptimeMs\":%" PRIu64,
       iterate_kit_esp_idf_itx_transport_state_name(runtime.transport.state),
@@ -1845,6 +1866,9 @@ size_t waveshare_health_json(char *out, size_t capacity) {
       iterate_kit_voicelab_failure_name(runtime.voicelab.failure),
       stream_path,
       clock,
+      iterate_kit_esp_reset_reason_name(),
+      iterate_kit_esp_last_restart_note(),
+      iterate_kit_itx_connection_state_name(runtime.connection.state),
       runtime.voicelab.call_active ? "true" : "false",
       runtime.voicelab.call_pending ? "true" : "false",
       waveshare_display_call_requested() ? "true" : "false",
@@ -1971,7 +1995,7 @@ static bool clock_slug(char *out, size_t capacity) {
  * case that genuinely cannot be named after a time: a clock that has not
  * arrived.
  */
-static void begin_new_conversation(void) {
+static bool begin_new_conversation(void) {
   char candidate[sizeof(stream_path)];
   char when[20];
 
@@ -1981,17 +2005,24 @@ static void begin_new_conversation(void) {
     (void)snprintf(candidate, sizeof(candidate), "/agents/voice/dev-%08lx%08lx",
                    (unsigned long)esp_random(), (unsigned long)esp_random());
   }
+  /*
+   * ANSWERED, so the caller does not latch a wait on a request that was never
+   * made. `setup_succeeded`/`setup_failed` only ever fire for a request that
+   * actually went out — a refusal here produces neither, so a caller that had
+   * already set "waiting for a fresh stream" would wait for the rest of the
+   * device's life.
+   */
   if (iterate_kit_voicelab_setup_conversation(&runtime.voicelab, candidate) !=
       CAPNWEB_OK) {
     /* Leave the prior status either way; the setup request has completed. */
     waveshare_display_set_state(WAVESHARE_UI_IDLE);
     waveshare_display_set_status("could not ask the server");
-    return;
+    return false;
   }
   (void)snprintf(pending_stream_path, sizeof(pending_stream_path), "%s",
                  candidate);
   waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
-  waveshare_display_set_status("preparing a new conversation...");
+  waveshare_display_set_status("preparing a new conversation...");  return true;
 }
 
 
@@ -2341,7 +2372,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
             tag,
             "transport unrecoverable for %us — restarting",
             (unsigned int)(UNHEALTHY_RESTART_MS / 1000U));
-        esp_restart();
+        iterate_kit_esp_restart_with_note("transport latched fatal");
       }
     }
 
@@ -2439,7 +2470,44 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
             tag,
             "no round trip in %us despite a ready transport — restarting",
             (unsigned int)(NO_LIVENESS_RESTART_MS / 1000U));
-        esp_restart();
+        iterate_kit_esp_restart_with_note("no round trip on a ready transport");
+      }
+    }
+
+    /*
+     * A FAILED VOICELAB IS NOT A RESTING STATE.
+     *
+     * `fail()` latches, and the only thing that re-mounts is a CONNECTION
+     * generation change — so a mount that failed while the transport stayed
+     * perfectly ready sat failed forever. Measured on the HA Voice PE:
+     * voicelab=failed, failure=open-call, transport=ready, pings frozen at 0,
+     * every later call request ignored, until the 180-second liveness watchdog
+     * restarted the whole chip. Three minutes of a device that answers nothing
+     * and then reboots, from one transient refusal.
+     *
+     * Re-mounting is the same work the connection-generation path does, so it
+     * is asked for the same way: forget which generation we mounted, and the
+     * block below builds a new one. Backed off, because a mount that fails
+     * every time must not become a spin.
+     */
+    if (runtime.voicelab.state == ITERATE_KIT_VOICELAB_FAILED &&
+        runtime.connection.state == ITERATE_KIT_ITX_CONNECTION_READY) {
+      static struct iterate_kit_retry_gate remount_gate;
+      static bool remount_gate_ready;
+      if (!remount_gate_ready) {
+        remount_gate_ready =
+            iterate_kit_retry_gate_init(&remount_gate, 2000U, 30000U) ==
+            ITERATE_KIT_OK;
+      }
+      if (remount_gate_ready &&
+          iterate_kit_retry_gate_ready(&remount_gate, (int64_t)now * 1000)) {
+        iterate_kit_retry_gate_defer(&remount_gate, (int64_t)now * 1000);
+        ESP_LOGW(
+            tag,
+            "voicelab failed (%s) with a ready connection — re-mounting",
+            iterate_kit_voicelab_failure_name(runtime.voicelab.failure));
+        (void)iterate_kit_voicelab_close(&runtime.voicelab);
+        runtime.voicelab_generation = 0U;
       }
     }
 
@@ -2570,8 +2638,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
           CONTROL_OUTBOX_SLOTS - outbox_metrics.current_slots;
       static struct mic_frame frame_storage[MIC_FRAMES_PER_APPEND];
       static uint64_t drain_window_at;
-      static uint64_t next_call_attempt_at;
-      static uint64_t next_prepare_attempt_at;
+      static struct iterate_kit_launch launch;
       static uint64_t call_pending_since;
       static bool call_active_shown;
 
@@ -2626,7 +2693,8 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         waveshare_display_set_state(WAVESHARE_UI_CONNECTING);
         waveshare_display_set_status(
             wants_call ? "call dropped — reconnecting" : "call dropped");
-        next_call_attempt_at = 0U; /* reconnect now, not on the old backoff */
+        /* Reconnect now, not on the old backoff. */
+        iterate_kit_launch_retry_now(&launch);
       }
 
       /*
@@ -2698,61 +2766,45 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         ESP_LOGW(tag, "call start went unanswered for 20s — trying again");
         iterate_kit_voicelab_forget_call(&runtime.voicelab);
         call_pending_since = 0U;
-        next_call_attempt_at = 0U;
+        iterate_kit_launch_retry_now(&launch);
       }
       if (!runtime.voicelab.call_pending) call_pending_since = 0U;
 
       /*
-       * PREPARE THE NEXT CONVERSATION BEFORE ANYBODY ASKS FOR IT.
-       *
-       * Every call gets its own stream, and creating one costs about seven
-       * seconds on the server. Paying that AFTER the tap is most of the wait
-       * between touching this device and being able to speak to it — so it is
-       * paid while the device is sitting there doing nothing instead. By the
-       * time a person taps, `stream_used` is already false and the only thing
-       * left to do is place the call.
+       * GETTING INTO A CALL. The ladder — prepare ahead, prepare now, place —
+       * and its three separate deadlines live in conversation_launch.c, which
+       * every board shares and which is tested on the host.
        */
-      if (!wants_call && stream_used && !awaiting_fresh_stream &&
-          !runtime.voicelab.call_active && !runtime.voicelab.call_pending &&
-          outbox_free >= 3U && now >= next_prepare_attempt_at) {
-        awaiting_fresh_stream = true;
-        preparing_ahead = true;
-        /* Slow retry: nobody is waiting on this one. */
-        next_prepare_attempt_at = now + 30000U;
-        ESP_LOGI(tag, "idle: preparing the next conversation in advance");
-        begin_new_conversation();
-      }
-      if (wants_call && !runtime.voicelab.call_active &&
-          !runtime.voicelab.call_pending && outbox_free >= 3U) {
-        /*
-         * TWO STEPS, TWO SEPARATE BACKOFFS. Starting a call from a tap means
-         * preparing a fresh stream and then placing the call on it, and a
-         * single shared timer made the second step serve the first one's
-         * eight-second retry deadline: the stream was ready in about a
-         * second and the call still sat waiting for a countdown that existed
-         * only in case the PREPARE went unanswered. That is most of what
-         * "tapping the screen and getting to mic takes ages" was.
-         */
-        if (stream_used && !awaiting_fresh_stream) {
-          /*
-           * This stream has a past, so the call does not happen here. Preparing
-           * one costs a couple of seconds before the call starts; carrying the
-           * last conversation into this one costs the person an answer that
-           * makes no sense.
-           */
-          if (now >= next_prepare_attempt_at) {
-            awaiting_fresh_stream = true;
-            next_prepare_attempt_at = now + 8000U;
-            ESP_LOGI(tag, "call asked for: preparing a fresh conversation first");
-            begin_new_conversation();
-          }
-        } else if (!awaiting_fresh_stream && now >= next_call_attempt_at) {
-          call_pending_since = now;
-          next_call_attempt_at = now + 8000U; /* a start takes ~1-3s; don't spam */
-          if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==
-              CAPNWEB_OK) {
-            waveshare_display_set_status("starting call");
-          }
+      {
+        const struct iterate_kit_launch_inputs launching = {
+            .call_active = runtime.voicelab.call_active,
+            .call_pending = runtime.voicelab.call_pending,
+            .link_ready = outbox_free >= 3U,
+            .now_ms = now,
+            .preparing = awaiting_fresh_stream,
+            .stream_used = stream_used,
+            .wants_call = wants_call,
+        };
+        switch (iterate_kit_launch_next_step(&launch, &launching)) {
+          case ITERATE_KIT_LAUNCH_PREPARE_AHEAD:
+            ESP_LOGI(tag, "idle: preparing the next conversation in advance");
+            preparing_ahead = begin_new_conversation();
+            awaiting_fresh_stream = preparing_ahead;
+            break;
+          case ITERATE_KIT_LAUNCH_PREPARE_NOW:
+            ESP_LOGI(tag, "call asked for: preparing a fresh conversation");
+            awaiting_fresh_stream = begin_new_conversation();
+            break;
+          case ITERATE_KIT_LAUNCH_PLACE_CALL:
+            call_pending_since = now;
+            if (iterate_kit_voicelab_start_call(&runtime.voicelab, GREETING) ==
+                CAPNWEB_OK) {
+              waveshare_display_set_status("starting call");
+            }
+            break;
+          case ITERATE_KIT_LAUNCH_NOTHING:
+          default:
+            break;
         }
       }
       if (!wants_call && runtime.voicelab.call_active && outbox_free >= 3U) {

@@ -720,6 +720,37 @@ const SPK_FRAME_MS = 20;
 const MAX_PLAYOUT_WAIT_MS = 30_000;
 /** A little for the wire, so the last frame is played and not merely sent. */
 const PLAYOUT_MARGIN_MS = 400;
+/**
+ * How long a hang-up waits for the floor before it happens anyway.
+ *
+ * A hang-up that waits forever is the failure this bound exists to stop. The
+ * settle is a POLL rather than a callback for the same reason: four separate
+ * places set `responseActive = false` — response.done, an interrupting line
+ * taking the floor, a barge-in cancel, a turn commit — and only one of them
+ * ever called the settle, so a hang-up that came free on any of the other
+ * three sat pending for the rest of the call. Measured on the StackChan: the
+ * tool fired, the model said "Goodbye!", the call stayed up.
+ */
+const HANG_UP_DEADLINE_MS = 15_000;
+
+/**
+ * Whether a hang-up the model asked for should be acted on now.
+ *
+ * Two ways to become due, and the second is what makes this safe: the floor is
+ * free (the goodbye has been generated, so all that is left is playing it), or
+ * the deadline has passed and the call ends regardless of what any flag says.
+ * "The assistant said it was hanging up and the call stayed open" is worse than
+ * a goodbye clipped by a second.
+ */
+export function hangUpIsDue(
+  pending: { askedAtMs: number } | null,
+  floorBusy: boolean,
+  nowMs: number,
+): boolean {
+  if (pending === null) return false;
+  if (nowMs - pending.askedAtMs >= HANG_UP_DEADLINE_MS) return true;
+  return !floorBusy;
+}
 
 /**
  * How much of the answer the device has still to play, in milliseconds.
@@ -2022,12 +2053,28 @@ export class VoiceBridge extends IterateDurableObject {
     /** Every response the provider has told us is running, by id. */
     const liveResponses = new Set<string>();
 
+    /**
+     * A hang-up the model has asked for, waiting on its own goodbye.
+     *
+     * Held rather than done, because `conversation-ended` reaching the device
+     * throws away everything still in its playout ring — see playoutRemainingMs
+     * for why that ring is usually nearly full at the moment an answer ends.
+     * Declared beside the floor it waits on, and above `takeTheFloorIfFree`,
+     * which reads it.
+     */
+    let pendingHangUp: { askedAtMs: number; reason: string } | null = null;
+
     let pendingSpeech:
       | { kind: "verbatim"; text: string }
       | { instructions?: string; kind: "spoken" }
       | null = null;
     const takeTheFloorIfFree = () => {
       if (pendingSpeech === null || responseActive || micOpen || closedDown) return;
+      /* Nothing new gets said once the assistant has asked to hang up. The
+       * goodbye is the last thing on this call by definition, and a back-office
+       * line arriving after it both talks over the ending and holds the floor
+       * against the settle. */
+      if (pendingHangUp !== null) return;
       const speech = pendingSpeech;
       pendingSpeech = null;
       /*
@@ -2287,39 +2334,37 @@ export class VoiceBridge extends IterateDurableObject {
         await new Promise((resolve) => setTimeout(resolve, step.speed));
       }
     };
-    /**
-     * A hang-up the model has asked for, waiting on its own goodbye.
-     *
-     * Held rather than done, because `conversation-ended` reaching the device
-     * throws away everything still in its playout ring — see playoutRemainingMs
-     * for why that ring is usually nearly full at the moment an answer ends.
-     */
-    let pendingHangUp: string | null = null;
     const settleHangUp = () => {
       if (pendingHangUp === null || closedDown) return;
+      const now = Date.now();
       /*
-       * Still speaking? Then the goodbye is not over.
+       * The floor is busy while an answer is being generated — the goodbye is
+       * not over until it is written, whatever is left to PLAY is handled by
+       * the wait below.
        *
        * `micOpen` DELIBERATELY DOES NOT APPEAR HERE. It did, on the reasoning
        * that hanging up while somebody is talking is rude — but the two boards
        * with echo cancellation hold their microphone open for the WHOLE call,
-       * so on those it is never closed and the hang-up never settled at all:
-       * the tool fired, the model said "Goodbye!", and the call stayed up.
-       * Measured on the StackChan with callActive still true afterwards.
-       *
+       * so on those it is never closed and the hang-up never settled at all.
        * An open microphone is a property of the hardware, not evidence that
-       * anybody is speaking into it. The provider tells us that separately,
-       * and it is already covered: a real interruption starts a response, and
-       * `responseActive` catches it.
+       * anybody is speaking into it. A real interruption starts a response,
+       * and `responseActive` catches that.
        */
-      if (responseActive || liveResponses.size > 0) return;
-      const reason = pendingHangUp;
+      const floorBusy = responseActive || liveResponses.size > 0;
+      if (!hangUpIsDue(pendingHangUp, floorBusy, now)) return;
+      const { askedAtMs, reason } = pendingHangUp;
       pendingHangUp = null;
       const waitMs =
-        playoutRemainingMs({ frames: answerFrames, firstFrameAtMs: answerStartedAt }, Date.now()) +
+        playoutRemainingMs({ frames: answerFrames, firstFrameAtMs: answerStartedAt }, now) +
         PLAYOUT_MARGIN_MS;
+      /* Which of the two ways it came due, in the obituary. They are a working
+       * goodbye and a stuck one, and afterwards they look identical. */
+      const how = floorBusy ? `deadline, floor still busy` : `floor free`;
       setTimeout(
-        () => teardown(`${reason} (${String(waitMs)}ms for the answer to play out)`),
+        () =>
+          teardown(
+            `${reason} (${how} after ${String(now - askedAtMs)}ms, ${String(waitMs)}ms for the answer to play out)`,
+          ),
         waitMs,
       );
     };
@@ -2339,7 +2384,7 @@ export class VoiceBridge extends IterateDurableObject {
             this.ctx.waitUntil(performGesture(mountPath, steps));
           },
           hangUp: (reason) => {
-            pendingHangUp = reason;
+            pendingHangUp = { askedAtMs: Date.now(), reason };
             settleHangUp();
           },
         });
@@ -2876,11 +2921,16 @@ export class VoiceBridge extends IterateDurableObject {
          * the final answer of a call ends with the mouth still open. */
         const closing = visemes.end(answerSeq);
         if (closing.length > 0) fireAppend(...closing);
+        /*
+         * SETTLE BEFORE HANDING THE FLOOR OUT AGAIN. These were the other way
+         * round, and `takeTheFloorIfFree` sets `responseActive = true` — so a
+         * call with anything queued to say re-took the floor microseconds
+         * before the settle was consulted, and the settle read it as "still
+         * speaking" every single time.
+         */
+        settleHangUp();
         /* The floor just came free: anything held back says itself now. */
         takeTheFloorIfFree();
-        /* …and if the model asked to hang up while it was speaking, the
-         * goodbye is now generated. What is left is playing it. */
-        settleHangUp();
       }
       if (FORWARDED_GROK_EVENTS.has(grokEvent.type)) {
         /*
@@ -3404,6 +3454,14 @@ export class VoiceBridge extends IterateDurableObject {
     const watchdog = setInterval(() => {
       if (closedDown) return;
       const now = Date.now();
+      /*
+       * POLLED, NOT NOTIFIED. Every other caller of this is an optimisation
+       * that ends the call a few hundred milliseconds sooner; this one is the
+       * guarantee that it ends at all. A hang-up that comes free on a path
+       * nobody wired up waits at most one tick here, and one that never comes
+       * free at all waits HANG_UP_DEADLINE_MS.
+       */
+      settleHangUp();
       if (now - startedAt > MAX_CALL_MS) return teardown("max call duration");
       /*
        * A CALL THAT NEVER CAME UP MUST FAIL FAST.

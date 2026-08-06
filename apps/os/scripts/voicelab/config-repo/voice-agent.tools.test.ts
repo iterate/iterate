@@ -15,6 +15,7 @@ import {
   directToolDefinitions,
   directToolsFor,
   DIRECT_TOOLS,
+  hangUpIsDue,
   HEAD_GESTURES,
   playoutRemainingMs,
   type DirectToolCall,
@@ -328,6 +329,35 @@ describe("playoutRemainingMs", () => {
      * still holding is inside that — a longer wait would be arithmetic that has
      * gone wrong, not a very long goodbye. */
     expect(playoutRemainingMs({ frames: 4_500, firstFrameAtMs: 1_000 }, 1_000)).toBe(30_000);
+  });
+});
+
+describe("hangUpIsDue", () => {
+  /*
+   * THE BUG THIS ENCODES. The settle was edge-triggered from `response.done`
+   * alone, while four separate places free the floor — and `response.done`
+   * called `takeTheFloorIfFree()` first, which takes it back. Measured on the
+   * StackChan: hang_up fired, the model said "Goodbye!", callActive stayed
+   * true. So the deadline is not belt-and-braces; it is the guarantee.
+   */
+  const asked = { askedAtMs: 10_000 };
+
+  it("is not due when nothing asked for it", () => {
+    expect(hangUpIsDue(null, false, 10_000)).toBe(false);
+    expect(hangUpIsDue(null, true, 999_999)).toBe(false);
+  });
+
+  it("is due as soon as the floor is free", () => {
+    expect(hangUpIsDue(asked, false, 10_050)).toBe(true);
+  });
+
+  it("waits while an answer is still being generated", () => {
+    expect(hangUpIsDue(asked, true, 10_050)).toBe(false);
+  });
+
+  it("happens anyway once the deadline passes, floor or no floor", () => {
+    expect(hangUpIsDue(asked, true, 10_000 + 14_999)).toBe(false);
+    expect(hangUpIsDue(asked, true, 10_000 + 15_000)).toBe(true);
   });
 });
 

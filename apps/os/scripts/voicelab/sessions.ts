@@ -169,6 +169,14 @@ const COUNTER_POLICY: readonly CounterPolicy[] = [
   { key: "sendFailures", tier: "never", why: "transport writes that failed." },
   { key: "recvFailures", tier: "never", why: "transport reads that failed." },
   { key: "protoFailures", tier: "never", why: "a message neither side could make sense of." },
+  {
+    key: "openTimeouts",
+    tier: "never",
+    why:
+      "a connection the device asked for and gave up waiting on. Every one of these is seconds " +
+      "of a person watching a device do nothing, which is the exact complaint this lab exists " +
+      "to answer.",
+  },
   { key: "inboxDiscarded", tier: "never", why: "inbound work dropped for want of room." },
   { key: "outboxDiscarded", tier: "never", why: "outbound work dropped for want of room." },
   { key: "pingFailures", tier: "never", why: "a liveness probe that went unanswered." },

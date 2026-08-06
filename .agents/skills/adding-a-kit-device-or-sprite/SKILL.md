@@ -116,11 +116,23 @@ Two specific traps:
 ### Proving it works
 
 ```bash
-pnpm --dir apps/kit firmware:test:host          # 60 host tests, seconds
+pnpm --dir apps/kit firmware:test:host          # 62 host tests, seconds
 cd apps/kit/firmware/targets/<board> && idf.py build
-idf.py -p "$(port_for_mac <ROM MAC>)" flash     # resolve by MAC, never /dev path
+idf.py -p "$(apps/kit/firmware/tools/port-for-mac.sh <ROM MAC>)" flash
 doppler run --config prd -- pnpm cli voicelab boards --project voice-test --only <name>
+doppler run --config prd -- pnpm cli voicelab latency --project voice-test --board <name>
 ```
+
+`port-for-mac.sh` resolves the port with `ioreg` and never touches the board —
+`esptool read_mac` resets it, and a `/dev` path picked by eye flashes whichever
+board happened to enumerate there. (This step used to name a `port_for_mac`
+helper that did not exist anywhere in the repo.)
+
+`voicelab latency` is the answer to "why does it take so long after I press the
+button". It splits the wait into the device's own half (`press`: preparing the
+conversation) and the server's (`wake`/`dial`/`session`/`accept`), so a slow
+bring-up names its phase instead of inviting a guess. It also prints the
+device's state — including `restartNote` — for any press that never came up.
 
 `voicelab boards` is the end-to-end proof: it speaks a prompt out of the Mac's
 own speaker and requires the board's own microphone to have heard it, then
