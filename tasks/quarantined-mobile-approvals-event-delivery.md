@@ -25,7 +25,10 @@ recovery and explicit acknowledgement-timeout classification now have
 red/green coverage. The next attempt then exposed the Project processor's
 direct readiness probe bypassing the existing not-yet-seeded repo classifier;
 that bounded retry now has red/green coverage too. The combined head needs a
-fresh preview before the gate restarts from zero.
+fresh preview before the gate restarts from zero. Its first preview found one
+test-only split catalog wait whose second half accidentally used a five-second
+default despite the test's existing 30-second propagation budget; that wait is
+now one exact-state condition under the original budget.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -173,6 +176,13 @@ notification journal.
   as “not ready yet”; only the processor's direct probe bypassed that contract.
   It now retries the same bounded 20-attempt readiness loop and still
   propagates every non-lifecycle dispatch failure.
+- The first preview after that fix passed both restored cases first try and
+  emitted no hosted-callback application errors, but an egress case retried.
+  Its first attempt waited up to 30 seconds for child stream paths, then gave
+  the repo catalog only the shared helper's five-second default before checking
+  the same combined state. The retry passed in 45.2 seconds. The two waits are
+  now one exact catalog-state condition under the test's existing 30-second
+  budget; assertions and product timeouts are unchanged.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -356,3 +366,8 @@ Test these in order; do not treat the first plausible one as the conclusion.
   processor's existing bounded readiness loop. The 31 project-processor tests,
   OS typecheck, lint, and formatting pass. The restoration streak is zero
   because this product commit changes the candidate head.
+- 2026-08-06: Candidate `888ae6e` made both target cases first-try green and
+  had zero hosted-callback application errors, but the egress catalog case
+  retried after a split 30-second/5-second wait. Consolidated it into one
+  exact-state wait using the already-declared 30-second propagation budget.
+  OS typecheck, lint, and formatting pass; the streak remains zero.
