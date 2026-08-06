@@ -51,9 +51,13 @@ import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
 } from "./capability-host/capability-host-processor-implementation.ts";
-import type { ProvideCapabilityInput } from "./capability-host/types.ts";
+import type { CapabilityProvidedPayload, CapabilityRecord } from "./capability-host/types.ts";
 import type { ScriptExecutionSettlement } from "./capability-host/script-execution-settlement.ts";
-import { checkCapabilityTypes, checkItxScriptForExecution } from "./typecheck/virtual-project.ts";
+import {
+  checkCapabilityTypes,
+  checkItxScriptForExecution,
+  checkPreamble,
+} from "./typecheck/virtual-project.ts";
 import { DeviceProcessor } from "./devices/device-processor-implementation.ts";
 import { getExpoPushReceipt, sendExpoPushNotification } from "./devices/expo-push-client.ts";
 import type { DevicePushSender } from "./devices/device-processor-implementation.ts";
@@ -90,6 +94,13 @@ import { DynamicWorkerRunner } from "./workers/worker-runner.ts";
  */
 type ParentStreamStub = ProcessorFacetAlarmProxy & {
   appendCoreEventsIfStreamId(args: { streamId: string; events: unknown[] }): Promise<unknown>;
+  /** The parent-held Capability Provider Pager runtime: acquire a live
+   * mount's provider for one invocation burst (Page → lent RPC leg → invoke). */
+  invokeLiveCapability(args: {
+    args: unknown[];
+    path: string[];
+    record: Extract<CapabilityRecord, { type: "live" }>;
+  }): Promise<unknown>;
   presentAgentRuntimeTransition(args: { transition: AgentRuntimeTransition }): Promise<unknown>;
 };
 
@@ -100,7 +111,7 @@ type ParentStreamStub = ProcessorFacetAlarmProxy & {
 type ScriptExecutionEntrypointHandle = {
   run(
     code: string,
-    options: { emittedJs?: string; expiresAt: number },
+    options: { emittedJs?: string; expiresAt: number; preambleJs?: string },
   ): Promise<ScriptExecutionSettlement>;
 };
 
@@ -186,17 +197,21 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   }
 
   // Capability-host domain doors, dispatched by identity: the retired
-  // CapabilityHostDurableObject forwarded these four methods onto its
-  // processor instance; they live here now. Only meaningful on the facet
-  // named "capability-host" (the driven runner) — the facade dials that one.
+  // CapabilityHostDurableObject forwarded these methods onto its processor
+  // instance; they live here now. Only meaningful on the facet named
+  // "capability-host" (the driven runner) — the facade dials that one. The
+  // Pager-coupled callers (the parent's Capability Provider Pager wiring)
+  // pass `afterAppend` callbacks that flow in as ordinary argument
+  // capabilities, exactly like the liveState door's subscriber callback.
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
     return this.#requireCapabilityHost().invokeCapability(input);
   }
 
   provideCapability(
-    input: ProvideCapabilityInput,
+    input: CapabilityProvidedPayload,
+    options?: { afterAppend?(record: CapabilityRecord): void | Promise<void> },
   ): Promise<{ path: string[]; providedAtOffset: number }> {
-    return this.#requireCapabilityHost().provideCapability(input);
+    return this.#requireCapabilityHost().provideCapability(input, options);
   }
 
   revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
@@ -205,6 +220,39 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
 
   describeCapabilities(): Promise<CapabilityDescription[]> {
     return this.#requireCapabilityHost().describeCapabilities();
+  }
+
+  /** Append this scope's `capability-provider-pager-connected` fact; the
+   * parent's `afterAppend` binds the physical Pager to the committed offset. */
+  connectCapabilityProviderPager(options: {
+    afterAppend(connectedAtOffset: number): void | Promise<void>;
+  }): Promise<number> {
+    return this.#requireCapabilityHost().connectCapabilityProviderPager(options);
+  }
+
+  /** Journal one Pager's departure; reduction retires every mount it owned. */
+  disconnectCapabilityProviderPager(args: { connectedAtOffset: number }): Promise<void> {
+    return this.#requireCapabilityHost().disconnectCapabilityProviderPager(args.connectedAtOffset);
+  }
+
+  // Preamble doors: mutation serialization lives with the parent's capability
+  // wiring (the set-time compile snapshots state, awaits an expensive check,
+  // then appends — concurrent sets must not validate against the same
+  // snapshot); these forwards are the processor verbs themselves.
+  setPreamble(input: { code: string; key: string }): Promise<void> {
+    return this.#requireCapabilityHost().setPreamble(input);
+  }
+
+  removePreamble(input: { key: string }): Promise<void> {
+    return this.#requireCapabilityHost().removePreamble(input);
+  }
+
+  describePreamble(): Promise<{ text: string; entries: { key: string; code: string }[] } | null> {
+    return this.#requireCapabilityHost().describePreamble();
+  }
+
+  getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
+    return this.#requireCapabilityHost().getScriptResult(executionId);
   }
 
   /**
@@ -344,11 +392,22 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
           snapshot: () => requireReads().snapshot(),
           waitUntilEvent: (input) => requireReads().waitUntilEvent(input),
         },
+        // Live providers hibernate behind the PARENT-held Capability Provider
+        // Pager (the sockets and lent RPC legs are runtime state and facets
+        // hold no hibernatable sockets), so acquisition dials back to the
+        // parent Stream DO.
+        invokeLiveCapability: (record, capabilityPath, args) =>
+          this.#parentStub(identity).invokeLiveCapability({
+            args,
+            path: capabilityPath,
+            record,
+          }),
         scriptExecutionEntrypoint: this.#scriptExecutionEntrypoint(identity),
         validateCapabilityTypes: (types) =>
           checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
         typecheckScript: (input) =>
           checkItxScriptForExecution({ ...input, typechecker: this.env.TYPECHECKER }),
+        checkPreamble: (input) => checkPreamble({ ...input, typechecker: this.env.TYPECHECKER }),
       }),
       { recovery: true },
     );

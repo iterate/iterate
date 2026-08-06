@@ -47,7 +47,7 @@ function relayOver(
   waitUntil: (promise: Promise<unknown>) => void = () => undefined,
 ) {
   return new CapabilityProviderPagerRelay({
-    env: { CAPABILITY_HOST: { getByName: () => durableObject } } as never,
+    env: { STREAM: { getByName: () => durableObject } } as never,
     scope: { path: "/", projectId: "project" },
     waitUntil,
   });
