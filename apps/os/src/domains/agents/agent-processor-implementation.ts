@@ -1296,8 +1296,10 @@ async function renderScriptSettlement(input: {
   if (settlement.result === undefined) return null;
   const text = stringifyScriptResult(settlement.result);
   // The same small-vs-large split the capability host applies when deriving
-  // the preamble `results` array (compact JSON vs typed loader) — so this
-  // note names the binding the next script will actually have.
+  // the preamble `results` array (compact JSON vs typed loader). The spill
+  // renders carry their own loader-first recipe (the recipe must BE the
+  // preamble path — a competing readFile snippet wins over a footnote); this
+  // note covers the paths that show the data itself.
   const preambleNote =
     JSON.stringify(settlement.result).length <= INLINE_RESULT_PREAMBLE_LIMIT
       ? "\nThis result is available to your next script as `results[0].data` (the preamble `results` array, newest first)."
@@ -1324,18 +1326,15 @@ async function renderScriptSettlement(input: {
           "```",
           text.slice(0, shownChars),
           "```",
-          rawTextSpillNotice({ path: spilledPath, shownChars, totalChars: text.length }) +
-            preambleNote,
+          rawTextSpillNotice({ path: spilledPath, shownChars, totalChars: text.length }),
         ].join("\n");
       }
-      return (
-        renderOversizedJsonResult({
-          historyLimit,
-          path: spilledPath,
-          result: settlement.result,
-          text,
-        }) + preambleNote
-      );
+      return renderOversizedJsonResult({
+        historyLimit,
+        path: spilledPath,
+        result: settlement.result,
+        text,
+      });
     } catch (error) {
       // Spilling is best effort: a workspace that cannot clone or write must
       // not lose the result entirely — fall through to inline truncation.
@@ -1437,13 +1436,14 @@ function renderOversizedJsonResult(input: {
     "```json",
     previewText,
     "```",
-    `The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
+    "The full result is available to your next script through the preamble `results` array — don't re-fetch:",
     "```ts",
     "async (itx) => {",
-    `  const data = JSON.parse(await itx.workspace.readFile(${JSON.stringify(input.path)}));`,
-    "  // you can now do whatever you see fit with `data`",
+    "  const data = await results[0].load(itx); // newest first; typed — the full result",
+    "  // filter/pick with plain TypeScript and return only what you need",
     "}",
     "```",
+    `(The full copy is also saved in your workspace at ${JSON.stringify(input.path)} — use itx.workspace to page a slice if that suits better.)`,
   ].join("\n");
 }
 
@@ -1459,13 +1459,14 @@ function rawTextSpillNotice(input: {
   totalChars: number;
 }): string {
   return [
-    `…truncated: showing the first ${input.shownChars.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full result is saved in your workspace at ${JSON.stringify(input.path)} — don't re-fetch; read and filter it with plain TypeScript in your next script, e.g.:`,
+    `…truncated: showing the first ${input.shownChars.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full text is available to your next script through the preamble \`results\` array — don't re-fetch:`,
     "```ts",
     "async (itx) => {",
-    `  const text = await itx.workspace.readFile(${JSON.stringify(input.path)});`,
+    "  const text = await results[0].load(itx); // newest first — the full string",
     `  return text.slice(${input.shownChars}, ${input.shownChars * 4}); // page/regex to return only what you need`,
     "}",
     "```",
+    `(The full copy is also saved in your workspace at ${JSON.stringify(input.path)}.)`,
   ].join("\n");
 }
 

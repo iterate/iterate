@@ -1258,7 +1258,9 @@ describe("AgentProcessor script execution", () => {
     const rendered = h
       .state()
       .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
-    expect(rendered!.payload.content).toContain("`await results[0].load(itx)`");
+    // The paging recipe itself uses the preamble loader, not a readFile call.
+    expect(rendered!.payload.content).toContain("await results[0].load(itx)");
+    expect(rendered!.payload.content).not.toContain("await itx.workspace.readFile(");
   });
 
   it("transcribes preamble changes as developer context without triggering a turn", async () => {
@@ -1300,7 +1302,7 @@ describe("AgentProcessor script execution", () => {
     expect(h.llm.calls.length).toBe(callsBefore);
   });
 
-  it("spills an object result as pretty-printed JSON with a readFile pointer", async () => {
+  it("spills an object result as pretty-printed JSON with a loader-first recipe", async () => {
     const written: { path: string; content: string }[] = [];
     const h = makeAgentHarness(undefined, {
       writeWorkspaceFile: async (input) => {
@@ -1341,17 +1343,17 @@ describe("AgentProcessor script execution", () => {
         content: spilled,
       },
     ]);
-    // The rendered item: a bounded preview plus the paste-ready read recipe,
-    // both naming the fully-qualified path the dep answered with.
+    // The rendered item: a bounded preview plus the paste-ready recipe. The
+    // recipe leads with the preamble loader (a competing readFile snippet
+    // would win over a footnote); the workspace path stays as a pointer.
     const rendered = h
       .state()
       .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
     expect(rendered!.payload.content).toContain(
       `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
     );
-    expect(rendered!.payload.content).toContain(
-      'JSON.parse(await itx.workspace.readFile("/workspaces/agents/main/script-results/',
-    );
+    expect(rendered!.payload.content).toContain("const data = await results[0].load(itx);");
+    expect(rendered!.payload.content).not.toContain("JSON.parse(await itx.workspace.readFile(");
     expect(rendered!.payload.content).toContain(
       `Your script returned ${spilled.length.toLocaleString("en-US")} chars of JSON — over the ~100-char inline limit.`,
     );
@@ -1359,7 +1361,6 @@ describe("AgentProcessor script execution", () => {
     expect(rendered!.payload.content).toContain("Inferred type:");
     expect(rendered!.payload.content).toContain("type Result = {");
     expect(rendered!.payload.content).toContain("items: string");
-    expect(rendered!.payload.content).toContain("const data = JSON.parse(");
     expect(rendered!.payload.content).not.toContain("x".repeat(200)); // preview stays bounded
   });
 
