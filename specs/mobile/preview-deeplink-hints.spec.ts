@@ -27,6 +27,24 @@ const target = deployedPreviewEnvs.find(
   (env) => env.baseUrl === process.env.APP_CONFIG_BASE_URL?.replace(/\/+$/, ""),
 );
 
+test("scanning the channel you're already on shows the switch screen, and Continue ferries the hints", async ({
+  page,
+}) => {
+  // Reassurance over magic: no silent redirect — the screen must SAY you're
+  // already there (Current = Target) before handing the hints onward.
+  await page.addInitScript(() => {
+    localStorage.setItem("preview-channel-override", "spec-chan");
+  });
+  await page.goto("/preview-channel/spec-chan?env=preview_3&email=spec-deeplink+test%40nustom.com");
+  await page.getByText("You're already on this channel").waitFor();
+  await page.getByText("Recommended backend").waitFor();
+  await page.getByRole("button", { name: "Continue" }).click();
+  // Landed on the sign-in screen with both hints intact (email survives the
+  // native-style +→space corruption simulated by the literal + above).
+  await page.getByText("Recommended backend for this preview channel").waitFor();
+  await page.getByText(`test sign-in as ${HINT_EMAIL}`).waitFor();
+});
+
 test("deep-link hints survive to a real auth screen with the test OTP prefilled", async ({
   page,
   context,

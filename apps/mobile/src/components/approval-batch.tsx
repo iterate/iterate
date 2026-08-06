@@ -216,6 +216,15 @@ export function ApprovalBatchBody({
             </>
           ) : null}
         </View>
+      ) : showThreadInfo && streamContext?.kind === "client-session" ? (
+        <View style={styles.detailSection}>
+          <Text style={styles.detailLabel}>
+            Triggered by {streamContext.admin ? "an admin session" : "a client session"}
+          </Text>
+          <Text style={styles.sourceMeta} selectable>
+            {streamContext.principal}
+          </Text>
+        </View>
       ) : showThreadInfo && streamContext?.kind === "scope" ? (
         <Text style={styles.sourceMeta}>Triggered from {streamContext.scopePath}</Text>
       ) : showThreadInfo && streamContext === undefined ? (

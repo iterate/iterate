@@ -9,6 +9,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Redirect, router, Stack, useLocalSearchParams } from "expo-router";
 import { ActivityIndicator, Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { AppDrawerButton } from "../components/project-drawer.tsx";
 import { hasSignIn, signIn } from "../lib/auth.ts";
 import { testEmailFromHint } from "../lib/deep-link-hints.ts";
 import { getItxSession, reconnectItxSession } from "../lib/itx.ts";
@@ -146,6 +147,12 @@ export default function SignInScreen() {
   return (
     <SafeAreaView style={styles.screen}>
       <Stack.Screen options={{ headerShown: false }} />
+      {/* Build info must stay reachable while signed out / picking a backend —
+          it names the running channel and commit, the first diagnostic when a
+          preview looks wrong. */}
+      <View style={styles.menuRow}>
+        <AppDrawerButton />
+      </View>
       <View style={styles.hero}>
         <Text style={styles.title}>Iterate</Text>
         <Text style={styles.subtitle}>
@@ -227,6 +234,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
+  menuRow: { alignItems: "flex-start" },
   hero: { flex: 1, justifyContent: "center", gap: spacing.md },
   recommendation: {
     backgroundColor: colors.surface,

@@ -847,6 +847,15 @@ importers:
       lucide-react:
         specifier: ^0.553.0
         version: 0.553.0(@types/react@19.2.17)(react@19.2.7)
+      mdast-util-from-markdown:
+        specifier: ^2.0.3
+        version: 2.0.3
+      mdast-util-gfm:
+        specifier: ^3.1.0
+        version: 3.1.0
+      micromark-extension-gfm:
+        specifier: ^3.0.0
+        version: 3.0.0
       minimatch:
         specifier: ^10.2.4
         version: 10.2.4
@@ -917,6 +926,9 @@ importers:
       '@types/json-schema':
         specifier: ^7.0.15
         version: 7.0.15
+      '@types/mdast':
+        specifier: ^4.0.4
+        version: 4.0.4
       '@types/node':
         specifier: ^25.0.10
         version: 25.6.0

@@ -4,6 +4,7 @@ import {
   ChatReplyNotifyProcessorContract,
   type ChatReplyNotifyProcessorState,
 } from "./chat-reply-notify-contract.ts";
+import { markdownToPlainText } from "./markdown-plain-text.ts";
 
 /** Push bodies carry the reply verbatim up to this length — roughly what iOS
  * shows expanded — then truncate with an ellipsis. */
@@ -105,10 +106,12 @@ export class ChatReplyNotifyProcessor extends StreamProcessor<ChatReplyNotifyPro
   }
 }
 
-/** The push body: the reply verbatim, bounded; a blank reply (files-only
- * messages) still yields a valid non-empty body. */
+/** The push body: the reply flattened to plain text (push bodies can't render
+ * markdown — stripped BEFORE truncation so markers don't eat the length
+ * budget), bounded; a blank reply (files-only messages) still yields a valid
+ * non-empty body. */
 function pushBody(message: string): string {
-  const text = message.trim();
+  const text = markdownToPlainText(message);
   if (text.length === 0) return "Sent a reply.";
   if (text.length <= PUSH_BODY_MAX_LENGTH) return text;
   return `${text.slice(0, PUSH_BODY_MAX_LENGTH - 1)}…`;
