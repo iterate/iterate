@@ -221,6 +221,36 @@ describe("CapabilityHostProcessor preamble verbs", () => {
     expect(harness.runner.currentState.preamble).toMatchObject([{ key: "stale" }, { key: "fine" }]);
   });
 
+  it("a re-set that shifts a stale entry's error line is not read as a new problem", async () => {
+    // The fake gate reports the stale symbol AT ITS ACTUAL LINE in the
+    // assembled text — re-setting an entry ABOVE it changes that number, and
+    // a position-sensitive with/without diff would call the same old problem
+    // newly introduced and reject a perfectly fine re-set.
+    const checkPreamble: CapabilityHostProcessorDeps["checkPreamble"] = (input) => {
+      const line = input.preamble.split("\n").findIndex((l) => l.includes("BROKEN")) + 1;
+      return Promise.resolve(
+        line === 0 ? [] : [`preamble:${line} — Cannot find name 'BROKEN'. (TS2304)`],
+      );
+    };
+    const stream = bornStream();
+    const harness = await makeProcessor({ checkPreamble, stream });
+    await verbDelivered(harness, () =>
+      harness.processor.setPreamble({ key: "first", code: "const a = 1;" }),
+    );
+    await stream.append({ type: PREAMBLE_SET, payload: { key: "stale", code: "BROKEN" } });
+    await harness.runner.catchUp();
+
+    // Re-set "first" to a DIFFERENT line count: the stale error shifts lines
+    // between the with/without checks, but it is the same problem.
+    await verbDelivered(harness, () =>
+      harness.processor.setPreamble({ key: "first", code: "const a = 1;\nconst b = 2;" }),
+    );
+    expect(harness.runner.currentState.preamble).toMatchObject([
+      { key: "first", code: "const a = 1;\nconst b = 2;" },
+      { key: "stale" },
+    ]);
+  });
+
   it("describePreamble reports the assembled text and entry table; getScriptResult reads a settlement back", async () => {
     const stream = bornStream();
     const harness = await makeProcessor({ stream });

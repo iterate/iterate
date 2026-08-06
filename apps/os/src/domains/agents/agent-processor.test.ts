@@ -1352,7 +1352,10 @@ describe("AgentProcessor script execution", () => {
     expect(rendered!.payload.content).toContain(
       `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
     );
-    expect(rendered!.payload.content).toContain("const data = await results[0].load(itx);");
+    // Spilled for HISTORY (tiny historyLimit) but small enough to embed in
+    // the preamble: the row has `.data`, not `.load` — the recipe must match.
+    expect(rendered!.payload.content).toContain("const data = results[0].data;");
+    expect(rendered!.payload.content).not.toContain("results[0].load(");
     expect(rendered!.payload.content).not.toContain("JSON.parse(await itx.workspace.readFile(");
     expect(rendered!.payload.content).toContain(
       `Your script returned ${spilled.length.toLocaleString("en-US")} chars of JSON — over the ~100-char inline limit.`,

@@ -323,21 +323,20 @@ export async function checkPreamble(input: {
     return [];
   }
   if (checked.diagnostics.some((diagnostic) => diagnostic.code === 0)) return [];
-  const range = project.preambleLineRange;
+  // The probe script is known-good, so EVERY script.ts error is the
+  // preamble's fault — including cascades that report at EOF or on the probe's
+  // own lines (an unclosed brace in the preamble reports nothing inside its
+  // range). Range-filtering here once let such an entry through the gate and
+  // brick the scope. Mount-file errors stay excluded: a broken mount must not
+  // veto a set, exactly as it must not veto a script.
   const preambleErrors = checked.diagnostics.filter(
-    (diagnostic) =>
-      diagnostic.category === "error" &&
-      diagnostic.fileName === "script.ts" &&
-      diagnostic.line !== undefined &&
-      range !== null &&
-      diagnostic.line >= range.start &&
-      diagnostic.line <= range.end,
+    (diagnostic) => diagnostic.category === "error" && diagnostic.fileName === "script.ts",
   );
   const problems = formatProblems(preambleErrors, {
-    label: "script",
+    label: "preamble",
     primaryFile: "script.ts",
     lineOffset: -project.preludeLineCount,
-    preambleLineRange: range,
+    preambleLineRange: project.preambleLineRange,
   });
   return problems.length > 0 ? [...problems, ...checked.notes] : [];
 }
@@ -577,6 +576,29 @@ export async function checkItxScriptForExecution(input: {
     // vouch for. Treat empty as absent: execution falls back to the raw
     // code, exactly the unchecked path's behavior.
     return { verdict: "clean", emittedJs: checked.js ? checked.js : undefined };
+  }
+  // Blockers found with a preamble present: a broken preamble can report
+  // NOTHING inside its own range (an unclosed brace cascades every error onto
+  // script lines or EOF), which would blame — and block — an innocent script
+  // forever. Re-check WITHOUT the preamble before blocking: if the bare
+  // script is blocker-free, the preamble is the culprit and the script runs
+  // unchecked; if the bare script still blocks, the blame is proven and the
+  // bare check's problems (whose line numbers match the code the model sent)
+  // are the report. One extra compile, only on this rare double condition.
+  if (range !== null) {
+    const bare = await checkItxScriptForExecution({
+      capabilities: input.capabilities,
+      code: input.code,
+      typechecker: input.typechecker,
+      deadlineMs: input.deadlineMs,
+    });
+    if (bare.verdict !== "problems") {
+      return {
+        verdict: "unchecked",
+        reason: "the scope's preamble does not compile (its errors spill past its own lines)",
+      };
+    }
+    return bare;
   }
   const problems = formatProblems(blocking, {
     label: "script",

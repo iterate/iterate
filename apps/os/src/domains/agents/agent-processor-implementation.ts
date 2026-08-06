@@ -1295,13 +1295,18 @@ async function renderScriptSettlement(input: {
   }
   if (settlement.result === undefined) return null;
   const text = stringifyScriptResult(settlement.result);
-  // The same small-vs-large split the capability host applies when deriving
-  // the preamble `results` array (compact JSON vs typed loader). The spill
-  // renders carry their own loader-first recipe (the recipe must BE the
-  // preamble path — a competing readFile snippet wins over a footnote); this
-  // note covers the paths that show the data itself.
-  const preambleNote =
+  // The preamble binding this exact result got: the SAME compact-JSON split
+  // the capability host applies when deriving the `results` array. NOT the
+  // spill decision below — that keys on pretty-printed length vs the
+  // configured historyLimit, so a result can spill to a file yet still be an
+  // inline `data` row (no `.load`); a recipe naming the wrong member fails
+  // typecheck in the very next script.
+  const resultsAccess =
     JSON.stringify(settlement.result).length <= INLINE_RESULT_PREAMBLE_LIMIT
+      ? ("data" as const)
+      : ("load" as const);
+  const preambleNote =
+    resultsAccess === "data"
       ? "\nThis result is available to your next script as `results[0].data` (the preamble `results` array, newest first)."
       : "\nThe full result is available to your next script via `await results[0].load(itx)` (the preamble `results` array, newest first).";
   // String results are raw text, not JSON — the fence label, the spill
@@ -1326,13 +1331,19 @@ async function renderScriptSettlement(input: {
           "```",
           text.slice(0, shownChars),
           "```",
-          rawTextSpillNotice({ path: spilledPath, shownChars, totalChars: text.length }),
+          rawTextSpillNotice({
+            path: spilledPath,
+            resultsAccess,
+            shownChars,
+            totalChars: text.length,
+          }),
         ].join("\n");
       }
       return renderOversizedJsonResult({
         historyLimit,
         path: spilledPath,
         result: settlement.result,
+        resultsAccess,
         text,
       });
     } catch (error) {
@@ -1406,6 +1417,10 @@ function renderOversizedJsonResult(input: {
   historyLimit: number;
   path: string;
   result: unknown;
+  /** Which member the preamble `results` row for THIS result actually has —
+   * `data` (inline literal) or `load` (typed async loader); the recipe must
+   * name the one that exists or the next script fails typecheck. */
+  resultsAccess: "data" | "load";
   text: string;
 }): string {
   let typeText: string | null = null;
@@ -1439,7 +1454,9 @@ function renderOversizedJsonResult(input: {
     "The full result is available to your next script through the preamble `results` array — don't re-fetch:",
     "```ts",
     "async (itx) => {",
-    "  const data = await results[0].load(itx); // newest first; typed — the full result",
+    input.resultsAccess === "load"
+      ? "  const data = await results[0].load(itx); // newest first; typed — the full result"
+      : "  const data = results[0].data; // newest first; the full result, typed by its literal",
     "  // filter/pick with plain TypeScript and return only what you need",
     "}",
     "```",
@@ -1455,6 +1472,8 @@ function renderOversizedJsonResult(input: {
  */
 function rawTextSpillNotice(input: {
   path: string;
+  /** See renderOversizedJsonResult: the member this result's preamble row has. */
+  resultsAccess: "data" | "load";
   shownChars: number;
   totalChars: number;
 }): string {
@@ -1462,7 +1481,9 @@ function rawTextSpillNotice(input: {
     `…truncated: showing the first ${input.shownChars.toLocaleString("en-US")} of ${input.totalChars.toLocaleString("en-US")} chars. The full text is available to your next script through the preamble \`results\` array — don't re-fetch:`,
     "```ts",
     "async (itx) => {",
-    "  const text = await results[0].load(itx); // newest first — the full string",
+    input.resultsAccess === "load"
+      ? "  const text = await results[0].load(itx); // newest first — the full string"
+      : "  const text = results[0].data; // newest first — the full string",
     `  return text.slice(${input.shownChars}, ${input.shownChars * 4}); // page/regex to return only what you need`,
     "}",
     "```",

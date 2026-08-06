@@ -957,3 +957,40 @@ test("checkPreamble ignores problems outside the preamble — a broken mount mus
   });
   expect(problems).toEqual([]);
 });
+
+test("a preamble whose syntax errors cascade past its own lines still never blocks a script", async () => {
+  // An unclosed brace reports NOTHING inside the preamble's range — every
+  // diagnostic lands on later script lines or EOF. Blocking there would blame
+  // an innocent script forever (including the one trying to removePreamble).
+  const checked = await checkItxScriptForExecution({
+    capabilities: [],
+    code: "async (itx) => 1",
+    preamble: "const broken = {",
+    typechecker,
+  });
+  expect(checked.verdict).toBe("unchecked");
+  expect((checked as { reason: string }).reason).toContain("preamble");
+});
+
+test("a script's OWN provable error still blocks when a valid preamble is present", async () => {
+  const checked = await checkItxScriptForExecution({
+    capabilities: [],
+    code: `async (itx) => {\n  return await itx.streams.gett("/");\n}`,
+    preamble: 'const TECH_CHANNEL_ID = "c1234";',
+    typechecker,
+  });
+  expect(checked.verdict).toBe("problems");
+  // The blame re-check runs without the preamble, so reported line numbers
+  // match the code the model sent.
+  expect((checked as { problems: string[] }).problems[0]).toContain("script:2");
+  expect((checked as { problems: string[] }).problems[0]).toContain("Did you mean 'get'");
+});
+
+test("checkPreamble catches syntax errors that report outside the preamble's own lines", async () => {
+  const problems = await checkPreamble({
+    capabilities: [],
+    preamble: "const broken = {",
+    typechecker,
+  });
+  expect(problems.length).toBeGreaterThan(0);
+});

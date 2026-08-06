@@ -522,12 +522,19 @@ export class CapabilityHostProcessor extends StreamProcessor<
             entries: state.preamble.filter((entry) => entry.key !== input.key),
             results: state.settledScriptResults,
           });
+          // The with/without diff keys on the problem MINUS its position: a
+          // re-set that changes an earlier entry's line count shifts every
+          // stale error's `preamble:N`, and a position-sensitive diff would
+          // read those same old problems as newly introduced.
           const preexisting = new Set(
-            without === null
+            (without === null
               ? []
-              : await checkPreamble({ capabilities, preamble: without.ts }).catch(() => []),
+              : await checkPreamble({ capabilities, preamble: without.ts }).catch(() => [])
+            ).map(positionlessProblem),
           );
-          const introduced = problems.filter((problem) => !preexisting.has(problem));
+          const introduced = problems.filter(
+            (problem) => !preexisting.has(positionlessProblem(problem)),
+          );
           if (introduced.length > 0) {
             throw new Error(
               `preamble entry "${input.key}" does not compile:\n${introduced.join("\n")}`,
@@ -1248,6 +1255,14 @@ function truncatedTypes(types: string, mountPoint: string): string {
 
 const samePath = (a: string[], b: string[]) =>
   a.length === b.length && a.every((segment, index) => segment === b[index]);
+
+/** A checkPreamble problem string with its `label:line:col` position
+ * stripped — the set-time gate's diff identity, so stale problems whose
+ * lines merely SHIFTED when an entry above them changed length still match
+ * their preexisting selves. */
+function positionlessProblem(problem: string): string {
+  return problem.replace(/^([a-z]+)(:\d+)+(?= —)/, "$1");
+}
 
 /** The reduce's upsert, reused by the set-time gate to preview the entry
  * table a candidate preamble-set would produce (offset unknown → 0; the gate
