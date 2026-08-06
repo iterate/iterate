@@ -36,7 +36,7 @@ function copiedFromSource(type: string, path: string, sourceOffset: number) {
   return {
     copiedFrom: [
       {
-        subscriptionKey: "client-collection",
+        name: "client-collection",
         streamId: "11111111-1111-4111-8111-111111111111",
         streamCreatedAt: "2026-08-06T09:00:00.000Z",
         cursorChangedAtSourceOffset: 1,

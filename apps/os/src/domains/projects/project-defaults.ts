@@ -1,7 +1,6 @@
 import type { z } from "zod";
-import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { notificationCreationEvents } from "../notifications/notification-defaults.ts";
-import { buildHostedProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
+import { buildFacetProcessorSubscriptionConfiguredEvent } from "../streams/utils.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
 
 /** The immutable `project/create-requested` creation intent. */
@@ -20,7 +19,6 @@ type ProjectCreatePayload = z.input<
  */
 export function projectCreationEvents(input: { payload: ProjectCreatePayload; projectId: string }) {
   const { payload, projectId } = input;
-  const durableObjectName = DurableObjectNameCodec.stringify({ path: "/", projectId });
   return [
     ProjectProcessorContract.buildEvent({
       type: "events.iterate.com/project/create-requested",
@@ -28,11 +26,9 @@ export function projectCreationEvents(input: { payload: ProjectCreatePayload; pr
       payload,
     }),
     ...notificationCreationEvents({ projectId }),
-    buildHostedProcessorSubscriptionConfiguredEvent({
-      durableObjectName,
-      idempotencyKey: `stream/subscription-configured:${durableObjectName}#${ProjectProcessorContract.slug}`,
-      processor: ["processor"],
-      processorSlug: ProjectProcessorContract.slug,
+    buildFacetProcessorSubscriptionConfiguredEvent({
+      idempotencyKey: `stream/subscription-configured:${ProjectProcessorContract.slug}`,
+      name: ProjectProcessorContract.slug,
     }),
   ];
 }

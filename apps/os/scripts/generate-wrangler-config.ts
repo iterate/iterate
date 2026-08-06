@@ -179,10 +179,6 @@ const SANDBOX_SSH_AUTHORIZED_KEYS: { name: string; public_key: string }[] = [
 ];
 
 const DO_CLASSES = {
-  AGENT: "AgentDurableObject",
-  AGENT_COLLECTION: "AgentCollectionDurableObject",
-  CAPABILITY_HOST: "CapabilityHostDurableObject",
-  CLIENT_COLLECTION: "ClientCollectionDurableObject",
   DEVICE: "DeviceDurableObject",
   PROJECT: "ProjectDurableObject",
   REPO: "RepoDurableObject",
@@ -233,9 +229,18 @@ const DO_EXPORTS = {
   // namespace on the next deploy of each env. Remove once every deployed env
   // reports "Safe to remove from `exports`".
   WorkspaceDurableObject: { type: "durable-object", state: "deleted" },
-  // An earlier revision of this branch provisioned a coordinator before the
-  // public-template path was simplified back onto the existing repo saga.
-  // Retire that preview namespace while keeping the coordinator code deleted.
+  // The retired processor-hosting shell DOs: all first-party processor
+  // hosting moved onto Stream DO facets (src/processor-facet.ts). Their
+  // storage was checkpoints/progress rebuilt from stream events; production
+  // is reset at this deploy by design. Remove once every deployed env
+  // reports "Safe to remove from `exports`".
+  AgentDurableObject: { type: "durable-object", state: "deleted" },
+  AgentCollectionDurableObject: { type: "durable-object", state: "deleted" },
+  CapabilityHostDurableObject: { type: "durable-object", state: "deleted" },
+  // An earlier revision of the public-template branch provisioned a
+  // coordinator before that path was simplified back onto the existing repo
+  // saga. Retire that preview namespace while keeping the coordinator code
+  // deleted.
   RepoCreationCoordinatorDurableObject: { type: "durable-object", state: "deleted" },
 };
 

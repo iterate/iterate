@@ -36,26 +36,26 @@ function isGithubNameAlreadyExistsError(error: unknown): boolean {
   return text.includes("name already exists") || (e.message ?? "").includes("name already exists");
 }
 
-/** The one subscription key used for a repo's GitHub webhooks, so
+/** The one subscription name used for a repo's GitHub webhooks, so
  * re-linking replaces it and unlinking knows what to remove. */
-function githubRepoSubscriptionKey(repoPath: string): string {
+function githubRepoSubscriptionName(repoPath: string): string {
   return `github-repo:${repoPath}`;
 }
 
 /** The subscription that copies one repository's GitHub webhooks from a connection
  * stream to the repo's own stream — built in one place so installation and
  * rollback restore exactly the same rule. The connection stream owns the cursor, retries with backoff,
- * and parks loudly on sustained failure, so webhook copies are at-least-once
+ * and halts loudly on sustained failure, so webhook copies are at-least-once
  * instead of the old fire-and-forget rule's silent losses. */
 function githubRepoSubscription(input: {
   owner: string;
   repo: string;
   repositoryId: number;
   repoPath: string;
-  subscriptionKey: string;
+  subscriptionName: string;
 }): SubscriptionConfiguredPayload {
   return {
-    subscriptionKey: input.subscriptionKey,
+    name: input.subscriptionName,
     description: `Copies GitHub webhooks for ${input.owner}/${input.repo} onto this repo's stream so default-branch pushes can be imported.`,
     filter: {
       eventTypes: ["events.iterate.com/github/webhook-received"],
@@ -83,11 +83,11 @@ async function configureGithubWebhookSubscription(
 
 async function removeGithubWebhookSubscription(
   stream: GithubConnectionStream,
-  input: { repoPath: string; subscriptionKey: string },
+  input: { repoPath: string; subscriptionName: string },
 ): Promise<void> {
   disposeIgnoredRpcResult(
     await stream.removeCopySubscription({
-      subscriptionKey: input.subscriptionKey,
+      name: input.subscriptionName,
       expectedReceiverPath: input.repoPath,
     }),
   );
@@ -189,10 +189,10 @@ export async function linkRepoToGithub(
   };
   const repoTarget = options.repo ?? repoDurableObjectStub(input.projectId, repoPath);
   const previous = await repoTarget.getGithubLink();
-  const subscriptionKey = githubRepoSubscriptionKey(repoPath);
+  const subscriptionName = githubRepoSubscriptionName(repoPath);
 
   // Re-linking through a DIFFERENT connection: the previous connection's
-  // stream holds this repo's subscription (same key, other stream). Remove it
+  // stream holds this repo's subscription (same name, other stream). Remove it
   // FIRST, before anything else changes — if the removal fails nothing has
   // moved and a retry starts clean, whereas removing it later would let a
   // failure strand a duplicate subscription that a retried linkGithub
@@ -200,14 +200,14 @@ export async function linkRepoToGithub(
   // again. If a LATER step fails, the compensation below reinstalls this
   // exact subscription (the previous link carries everything needed to
   // rebuild it), so the old link never sits unrouted. Same connection needs
-  // nothing: the subscription-configured below replaces by key.
+  // nothing: the subscription-configured below replaces by name.
   if (previous !== null && previous.connection !== input.connection) {
     await removeGithubWebhookSubscription(
       integrationStreamStub(
         input.projectId,
         integrationConnectionStreamPath("github", previous.connection),
       ),
-      { repoPath, subscriptionKey },
+      { repoPath, subscriptionName },
     );
   }
 
@@ -230,7 +230,7 @@ export async function linkRepoToGithub(
         repo,
         repositoryId,
         repoPath,
-        subscriptionKey,
+        subscriptionName,
       }),
     );
     await repoTarget.configureGithubLink(link);
@@ -241,12 +241,12 @@ export async function linkRepoToGithub(
     // previous repository on this same connection, so the still-recorded old
     // link keeps its webhook lane. Both best-effort:
     // compensation failures are named in the surfaced error, and a re-run of
-    // linkGithub repairs everything (subscriptions replace by key).
+    // linkGithub repairs everything (subscriptions replace by name).
     try {
-      await removeGithubWebhookSubscription(connectionStream, { repoPath, subscriptionKey });
+      await removeGithubWebhookSubscription(connectionStream, { repoPath, subscriptionName });
     } catch (rollbackError) {
       compensations.push(
-        `removing the new webhook subscription "${subscriptionKey}" from connection "${input.connection}" failed (${String(rollbackError)})`,
+        `removing the new webhook subscription "${subscriptionName}" from connection "${input.connection}" failed (${String(rollbackError)})`,
       );
     }
     if (previous !== null) {
@@ -261,7 +261,7 @@ export async function linkRepoToGithub(
             repo: previous.repo,
             repositoryId: previous.repositoryId,
             repoPath,
-            subscriptionKey,
+            subscriptionName,
           }),
         );
       } catch (restoreError) {
@@ -271,9 +271,9 @@ export async function linkRepoToGithub(
       }
     }
     if (compensations.length === 0) throw error;
-    console.error("github link compensation failed", { repoPath, subscriptionKey, compensations });
+    console.error("github link compensation failed", { repoPath, subscriptionName, compensations });
     throw new Error(
-      `${String(error)} (additionally: ${compensations.join("; ")} — re-run linkGithub to repair; subscriptions replace by key)`,
+      `${String(error)} (additionally: ${compensations.join("; ")} — re-run linkGithub to repair; subscriptions replace by name)`,
     );
   }
 
@@ -314,7 +314,7 @@ export async function unlinkRepoFromGithub(input: {
       input.projectId,
       integrationConnectionStreamPath("github", link.connection),
     ),
-    { repoPath, subscriptionKey: githubRepoSubscriptionKey(repoPath) },
+    { repoPath, subscriptionName: githubRepoSubscriptionName(repoPath) },
   );
   const removed = await repoStub.removeGithubLink();
   return { unlinked: removed !== null };

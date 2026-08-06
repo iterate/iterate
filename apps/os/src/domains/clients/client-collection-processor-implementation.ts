@@ -1,7 +1,7 @@
 import { StreamProcessor, type ReduceArgs, type StreamEvent } from "iterate/processors";
 import { ConnectionOpenerDescriptor } from "../streams/core-processor-contract.ts";
 import {
-  CLIENT_COLLECTION_SUBSCRIPTION_KEY,
+  CLIENT_COLLECTION_SUBSCRIPTION_NAME,
   ClientCollectionProcessorContract,
 } from "./client-collection-processor-contract.ts";
 
@@ -151,9 +151,9 @@ function receivedClientSource(event: Pick<StreamEvent, "type" | "source">): {
     console.error(`client collection skipped ${event.type}: missing source-stream coordinates`);
     return null;
   }
-  if (source.subscriptionKey !== CLIENT_COLLECTION_SUBSCRIPTION_KEY) {
+  if (source.name !== CLIENT_COLLECTION_SUBSCRIPTION_NAME) {
     console.error(
-      `client collection skipped ${event.type}: unexpected subscription "${source.subscriptionKey}"`,
+      `client collection skipped ${event.type}: unexpected subscription "${source.name}"`,
     );
     return null;
   }

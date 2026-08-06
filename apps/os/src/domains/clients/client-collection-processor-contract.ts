@@ -128,5 +128,5 @@ export type ClientCollectionProcessorState = ProcessorState<ClientCollectionProc
 
 /** The one canonical stream path a project's client collection lives at. */
 export const CLIENT_COLLECTION_PATH = "/clients";
-export const CLIENT_COLLECTION_SUBSCRIPTION_KEY = "client-collection";
+export const CLIENT_COLLECTION_SUBSCRIPTION_NAME = "client-collection";
 export const CLIENT_COLLECTION_CREATED_EVENT_TYPE = "events.iterate.com/client-collection/created";

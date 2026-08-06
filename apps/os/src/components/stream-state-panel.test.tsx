@@ -8,7 +8,7 @@ import type {
   AgentUiProcessorAnnouncement,
 } from "@iterate-com/ui/components/events/agent-ui-reducer";
 import { TooltipProvider } from "@iterate-com/ui/components/tooltip";
-import type { StreamRuntimeDebugState } from "../itx-api.generated.ts";
+import type { StreamRuntimeDebugState } from "../domains/streams/stream-runtime-state.ts";
 import { CoreProcessorContract } from "../domains/streams/core-processor-contract.ts";
 
 const liveStateMocks = vi.hoisted(() => ({
@@ -108,7 +108,7 @@ test("presence tooltips show human identity and processor names", async () => {
   );
 });
 
-test("a focused human subscriber shows their name, email address, and user id", async () => {
+test("a focused human session connection shows their name, email address, and user id", async () => {
   liveStateMocks.project.mockReturnValue({
     value: undefined,
     status: "connecting",
@@ -179,7 +179,7 @@ test("a pushed runtime update does not reload or blank a focused processor snaps
     root.render(
       <StreamStatePanel
         {...panelProps({
-          focusedKey: processorPresence.connectionKey,
+          focusedKey: PROCESSOR_SUBSCRIPTION_NAME,
           getProcessorRuntimeState,
           presence: [processorPresence],
         })}
@@ -193,6 +193,7 @@ test("a pushed runtime update does not reload or blank a focused processor snaps
     );
   });
   expect(getProcessorRuntimeState).toHaveBeenCalledTimes(1);
+  expect(getProcessorRuntimeState).toHaveBeenCalledWith(PROCESSOR_SUBSCRIPTION_NAME);
 
   projectRuntime.value = streamRuntimeState(6);
   await act(async () => render());
@@ -237,18 +238,18 @@ test.each([
   ["beginning", "beginning (all history)"],
   ["now", "now (from configure time)"],
 ] as const)("a durable receiver renders the stored %j start position", async (start, label) => {
-  const subscriptionKey = "copy-from-offset";
+  const name = "copy-from-offset";
   const state = streamRuntimeState(8);
   state.coreProcessorState = CoreProcessorContract.stateSchema.parse({
     maxOffset: 8,
     subscriptions: {
       outbound: {
-        byKey: {
-          [subscriptionKey]: {
+        byName: {
+          [name]: {
             configuredAtOffset: 7,
             configuredAt: "2026-07-21T12:00:00.000Z",
             configuration: {
-              subscriptionKey,
+              name,
               receiver: {
                 action: "copy-to-stream",
                 receivingStreamPath: "/receiver",
@@ -263,9 +264,10 @@ test.each([
       },
     },
   });
-  state.runtime.subscriptions[subscriptionKey] = {
-    acknowledgedOffset: 4,
+  state.runtime.subscriptions[name] = {
+    confirmedOffset: 4,
     lag: 4,
+    status: "active",
     attempt: 0,
     nextAttemptAt: null,
     inFlightDeadlineAt: null,
@@ -286,10 +288,106 @@ test.each([
 
   const { host, root } = mountPanel();
   await act(async () => {
-    root.render(<StreamStatePanel {...panelProps({ focusedKey: subscriptionKey })} />);
+    root.render(<StreamStatePanel {...panelProps({ focusedKey: name })} />);
   });
 
   await vi.waitFor(() => expect(host.textContent).toContain(label));
+});
+
+test("the catalog renders one uniform row per subscription with status and lag", async () => {
+  const state = streamRuntimeState(20);
+  state.coreProcessorState = CoreProcessorContract.stateSchema.parse({
+    maxOffset: 20,
+    subscriptions: {
+      outbound: {
+        byName: {
+          "live-capability": {
+            configuredAtOffset: 2,
+            configuredAt: "2026-07-21T12:00:00.000Z",
+            configuration: {
+              name: "live-capability",
+              receiver: {
+                action: "itx-call",
+                expression: ["capabilities", "processEventBatch"],
+                delivery: { start: "now", onFailingEvent: "halt" },
+              },
+            },
+          },
+          "ops-webhook": {
+            configuredAtOffset: 3,
+            configuredAt: "2026-07-21T12:00:00.000Z",
+            configuration: {
+              name: "ops-webhook",
+              receiver: {
+                action: "webhook-post",
+                url: "https://hooks.example.com/events",
+                delivery: { start: "now", onFailingEvent: "skip" },
+              },
+            },
+            deliveryHalted: {
+              reason: "delivery-failed",
+              afterOffset: 9,
+              attempts: 15,
+              error: "HTTP 500 from receiver",
+            },
+          },
+        },
+      },
+    },
+  });
+  state.runtime.subscriptions["live-capability"] = {
+    confirmedOffset: 12,
+    lag: 8,
+    status: "active",
+    attempt: 3,
+    nextAttemptAt: 1_753_000_000_000,
+    inFlightDeadlineAt: null,
+    lastError: 'capability "dashboard" is offline',
+  };
+  state.runtime.subscriptions["ops-webhook"] = {
+    confirmedOffset: 9,
+    lag: 11,
+    status: "halted",
+    attempt: 15,
+    nextAttemptAt: null,
+    inFlightDeadlineAt: null,
+    lastError: "HTTP 500 from receiver",
+  };
+  liveStateMocks.project.mockReturnValue({
+    value: state,
+    status: "live" as const,
+    error: undefined,
+    refresh: vi.fn(),
+  });
+  liveStateMocks.session.mockReturnValue({
+    value: undefined,
+    status: "connecting",
+    error: undefined,
+    refresh: vi.fn(),
+  });
+
+  const { host, root } = mountPanel();
+  await act(async () => {
+    root.render(<StreamStatePanel {...panelProps()} />);
+  });
+
+  const backoffRow = [...host.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("live-capability"),
+  );
+  expect(backoffRow?.textContent).toContain("backoff");
+  expect(backoffRow?.textContent).toContain("itx-call");
+  // lag = head − confirmed (8).
+  expect(backoffRow?.textContent).toContain("8");
+  expect(backoffRow?.textContent).toContain('capability "dashboard" is offline');
+
+  const haltedRow = [...host.querySelectorAll("button")].find((button) =>
+    button.textContent?.includes("ops-webhook"),
+  );
+  expect(haltedRow?.textContent).toContain("halted after #9 (15 attempts)");
+  expect(haltedRow?.textContent).toContain("HTTP 500 from receiver");
+
+  // The wake feed serving the processor subscription lists under connections.
+  expect(host.textContent).toContain(`wake feed · ${PROCESSOR_SUBSCRIPTION_NAME}`);
 });
 
 test("core state renders the passive inbound record for each source subscription", async () => {
@@ -325,6 +423,47 @@ test("core state renders the passive inbound record for each source subscription
   expect(host.textContent).toContain("copy-to-receiver");
   expect(host.textContent).toContain("3 received");
   expect(host.textContent).toContain("last event 2026-07-21T12:00:00.000Z");
+});
+
+test("core state marks halted outbound subscriptions distinctly", async () => {
+  const { host, root } = mountPanel();
+  await act(async () => {
+    root.render(
+      <CorePrettyState
+        runtime={undefined}
+        state={{
+          maxOffset: 12,
+          eventCount: 12,
+          subscriptions: {
+            outbound: {
+              byName: {
+                "live-capability": {
+                  configuredAtOffset: 2,
+                  configuredAt: "2026-07-21T12:00:00.000Z",
+                  configuration: {
+                    name: "live-capability",
+                    receiver: {
+                      action: "itx-call",
+                      expression: ["capabilities", "processEventBatch"],
+                      delivery: { start: "now", onFailingEvent: "halt" },
+                    },
+                  },
+                  deliveryHalted: {
+                    reason: "delivery-failed",
+                    afterOffset: 8,
+                    attempts: 15,
+                  },
+                },
+              },
+            },
+          },
+        }}
+      />,
+    );
+  });
+
+  expect(host.textContent).toContain("live-capability");
+  expect(host.textContent).toContain("itx-call · halted");
 });
 
 function mountPanel() {
@@ -380,8 +519,11 @@ const processorAnnouncement: AgentUiProcessorAnnouncement = {
   ownedEvents: [],
 };
 
+/** One name, four systems: catalog key, wake-feed connection key, itx segment, progress key. */
+const PROCESSOR_SUBSCRIPTION_NAME = "test";
+
 const processorPresence: AgentUiPresenceEntry = {
-  connectionKey: "processor:test",
+  connectionKey: PROCESSOR_SUBSCRIPTION_NAME,
   connectionKind: "hosted",
   connected: true,
   processor: processorAnnouncement,
@@ -393,14 +535,37 @@ const emptyMetrics = {
   eventConsumption: undefined,
 };
 
+/**
+ * A stream with one processor-wake subscription named `test` whose wake feed
+ * is open (the hosted connection carries the subscription name).
+ */
 function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
   return {
-    coreProcessorState: CoreProcessorContract.stateSchema.parse({ maxOffset }),
+    coreProcessorState: CoreProcessorContract.stateSchema.parse({
+      maxOffset,
+      subscriptions: {
+        outbound: {
+          byName: {
+            [PROCESSOR_SUBSCRIPTION_NAME]: {
+              configuredAtOffset: 1,
+              configuredAt: "2026-07-18T00:00:00.000Z",
+              configuration: {
+                name: PROCESSOR_SUBSCRIPTION_NAME,
+                receiver: {
+                  action: "processor-wake",
+                  expression: ["agents", "processor", "wakeStreamProcessor"],
+                },
+              },
+            },
+          },
+        },
+      },
+    }),
     runtime: {
       connections: {
-        [processorPresence.connectionKey]: {
+        [PROCESSOR_SUBSCRIPTION_NAME]: {
           kind: "hosted",
-          subscriptionKey: processorPresence.connectionKey,
+          name: PROCESSOR_SUBSCRIPTION_NAME,
           startedAt: "2026-07-18T00:00:00.000Z",
           deliveredThroughOffset: maxOffset,
           lag: 0,
@@ -412,7 +577,17 @@ function streamRuntimeState(maxOffset: number): StreamRuntimeDebugState {
         },
       },
       dormantSubscribers: {},
-      subscriptions: {},
+      subscriptions: {
+        [PROCESSOR_SUBSCRIPTION_NAME]: {
+          confirmedOffset: maxOffset,
+          lag: 0,
+          status: "active",
+          attempt: 0,
+          nextAttemptAt: null,
+          inFlightDeadlineAt: null,
+          lastError: null,
+        },
+      },
       ephemeralEvents: {
         maxBytes: 10 * 1024 * 1024,
         bytes: 0,

@@ -51,7 +51,7 @@ export const CONFIG_REPO_CREATED = {
   source: {
     copiedFrom: [
       {
-        subscriptionKey: "project-config-to-root",
+        name: "project-config-to-root",
         streamId: "00000000-0000-4000-8000-000000000002",
         streamCreatedAt: new Date(1).toISOString(),
         cursorChangedAtSourceOffset: 3,
@@ -75,7 +75,7 @@ export const CONFIG_REPO_CREATE_FAILED = {
   source: {
     copiedFrom: [
       {
-        subscriptionKey: "project-config-to-root",
+        name: "project-config-to-root",
         streamId: "00000000-0000-4000-8000-000000000002",
         streamCreatedAt: new Date(1).toISOString(),
         cursorChangedAtSourceOffset: 3,
@@ -100,7 +100,7 @@ export const CONFIG_REPO_COMMIT_COMPLETED = {
   source: {
     copiedFrom: [
       {
-        subscriptionKey: "project-config-to-root",
+        name: "project-config-to-root",
         streamId: "00000000-0000-4000-8000-000000000002",
         streamCreatedAt: new Date(1).toISOString(),
         cursorChangedAtSourceOffset: 3,

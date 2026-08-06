@@ -27,7 +27,7 @@ function streamSubscription(
   overrides: Partial<SubscriptionConfiguredPayload> = {},
 ): SubscriptionConfiguredPayload {
   return {
-    subscriptionKey: "issues",
+    name: "issues",
     description: "Receive issue events",
     filter: { eventTypes: ["example.com/issue-created"] },
     receiver: {
@@ -84,7 +84,7 @@ function copiedEvent(
     streamId?: string;
     streamCreatedAt?: string;
     cursorChangedAtSourceOffset?: number;
-    subscriptionKey?: string;
+    name?: string;
     sourceOffset?: number;
     path?: string;
   } = {},
@@ -98,7 +98,7 @@ function copiedEvent(
       source: {
         copiedFrom: [
           {
-            subscriptionKey: stamp.subscriptionKey ?? "issues",
+            name: stamp.name ?? "issues",
             streamId: stamp.streamId ?? SOURCE_STREAM_ID,
             streamCreatedAt: stamp.streamCreatedAt ?? SOURCE_CREATED_AT,
             cursorChangedAtSourceOffset: stamp.cursorChangedAtSourceOffset ?? 2,
@@ -214,7 +214,7 @@ describe("StreamCoreProcessor circuit-breaker accounting", () => {
       source: {
         copiedFrom: [
           {
-            subscriptionKey: "issues",
+            name: "issues",
             streamId: SOURCE_STREAM_ID,
             streamCreatedAt: SOURCE_CREATED_AT,
             cursorChangedAtSourceOffset: 2,
@@ -233,7 +233,7 @@ describe("StreamCoreProcessor circuit-breaker accounting", () => {
       source: {
         copiedFrom: [
           {
-            subscriptionKey: "issues",
+            name: "issues",
             streamId: SOURCE_STREAM_ID,
             streamCreatedAt: SOURCE_CREATED_AT,
             cursorChangedAtSourceOffset: 2,
@@ -417,7 +417,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
     );
     const removal: StreamEventInput = {
       type: "events.iterate.com/stream/subscription-removed",
-      payload: { subscriptionKey: "issues", reason: "requested" },
+      payload: { name: "issues", reason: "requested" },
     };
 
     expect(() => processor.validate({ event: removal, state, authority: "public" })).not.toThrow();
@@ -458,11 +458,11 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       committed(
         3,
         "events.iterate.com/stream/subscription-cursor-set",
-        { subscriptionKey: "issues", afterOffset: 1 },
+        { name: "issues", afterOffset: 1 },
         { path: SOURCE_PATH },
       ),
     );
-    expect(state.subscriptions.outbound.byKey.issues?.cursorSet).toEqual({
+    expect(state.subscriptions.outbound.byName.issues?.cursorSet).toEqual({
       afterOffset: 1,
       setAtSourceOffset: 3,
     });
@@ -474,12 +474,12 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         path: SOURCE_PATH,
       }),
     );
-    expect(state.subscriptions.outbound.byKey.issues?.cursorSet).toBeUndefined();
+    expect(state.subscriptions.outbound.byName.issues?.cursorSet).toBeUndefined();
   });
 
-  test("generates source-local keys and only lets their returned identity reuse the namespace", () => {
+  test("generates source-local names and only lets an existing subscription reuse the namespace", () => {
     const { processor } = harness(SOURCE_PATH);
-    const { subscriptionKey: _omitted, ...keylessConfiguration } = streamSubscription();
+    const { name: _omitted, ...namelessConfiguration } = streamSubscription();
 
     expect(() =>
       processor.validate({
@@ -489,47 +489,45 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
             ...streamSubscription(),
-            subscriptionKey: "subscription:caller-chosen",
+            name: "subscription:caller-chosen",
           },
         },
       }),
-    ).toThrow(/uses the generated-key namespace but does not name an existing/);
+    ).toThrow(/uses the generated-name namespace but does not name an existing/);
 
     let state = reduce(
       processor,
       coreState(SOURCE_PATH),
-      committed(7, "events.iterate.com/stream/subscription-configured", keylessConfiguration, {
+      committed(7, "events.iterate.com/stream/subscription-configured", namelessConfiguration, {
         path: SOURCE_PATH,
       }),
     );
     state = reduce(
       processor,
       state,
-      committed(8, "events.iterate.com/stream/subscription-configured", keylessConfiguration, {
+      committed(8, "events.iterate.com/stream/subscription-configured", namelessConfiguration, {
         path: SOURCE_PATH,
       }),
     );
 
-    expect(Object.keys(state.subscriptions.outbound.byKey)).toEqual([
+    expect(Object.keys(state.subscriptions.outbound.byName)).toEqual([
       "subscription:7",
       "subscription:8",
     ]);
-    expect(
-      state.subscriptions.outbound.byKey["subscription:7"]?.configuration.subscriptionKey,
-    ).toBe("subscription:7");
-    expect(
-      state.subscriptions.outbound.byKey["subscription:8"]?.configuration.subscriptionKey,
-    ).toBe("subscription:8");
-    expect(state.subscriptions.outbound.byKey["subscription:7"]?.subscriptionKeyWasGenerated).toBe(
-      true,
+    expect(state.subscriptions.outbound.byName["subscription:7"]?.configuration.name).toBe(
+      "subscription:7",
+    );
+    expect(state.subscriptions.outbound.byName["subscription:8"]?.configuration.name).toBe(
+      "subscription:8",
     );
 
+    // Generated names are first-class: a replacement may address one directly.
     const replacementInput: StreamEventInput = {
       type: "events.iterate.com/stream/subscription-configured",
       payload: {
-        ...keylessConfiguration,
-        subscriptionKey: "subscription:7",
-        description: "Move the generated subscription using its returned key",
+        ...namelessConfiguration,
+        name: "subscription:7",
+        description: "Move the generated subscription using its returned name",
       },
     };
     expect(() =>
@@ -539,12 +537,11 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       path: SOURCE_PATH,
     });
     state = reduce(processor, state, replacement);
-    expect(state.subscriptions.outbound.byKey["subscription:7"]).toMatchObject({
+    expect(state.subscriptions.outbound.byName["subscription:7"]).toMatchObject({
       configuredAtOffset: 9,
-      subscriptionKeyWasGenerated: true,
       configuration: {
-        subscriptionKey: "subscription:7",
-        description: "Move the generated subscription using its returned key",
+        name: "subscription:7",
+        description: "Move the generated subscription using its returned name",
       },
     });
   });
@@ -562,7 +559,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       processor.validate({
         event: {
           type: "events.iterate.com/stream/subscription-cursor-set",
-          payload: { subscriptionKey: "issues", afterOffset: configured.maxOffset + 1 },
+          payload: { name: "issues", afterOffset: configured.maxOffset + 1 },
         },
         state: configured,
         authority: "public",
@@ -579,7 +576,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
         `key-${index}`,
         {
           configuration: streamSubscription({
-            subscriptionKey: `key-${index}`,
+            name: `key-${index}`,
             receiver,
           }),
           configuredAtOffset: index + 1,
@@ -592,7 +589,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       path: SOURCE_PATH,
       subscriptions: {
         inbound: { bySourcePath: {} },
-        outbound: { byKey: sending },
+        outbound: { byName: sending },
       },
     });
 
@@ -600,7 +597,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       processor.validate({
         event: {
           type: "events.iterate.com/stream/subscription-configured",
-          payload: streamSubscription({ subscriptionKey: "one-too-many", receiver }),
+          payload: streamSubscription({ name: "one-too-many", receiver }),
         },
         state: full,
         authority: "public",
@@ -611,7 +608,7 @@ describe("StreamCoreProcessor stream-to-stream subscriptions", () => {
       processor.validate({
         event: {
           type: "events.iterate.com/stream/subscription-configured",
-          payload: streamSubscription({ subscriptionKey: "key-0", receiver }),
+          payload: streamSubscription({ name: "key-0", receiver }),
         },
         state: full,
         authority: "public",
@@ -713,7 +710,7 @@ describe("passive inbound records", () => {
       processor,
       state,
       copiedEvent(3, {
-        subscriptionKey: "other",
+        name: "other",
         cursorChangedAtSourceOffset: 7,
         sourceOffset: 41,
       }),
@@ -736,7 +733,7 @@ describe("passive inbound records", () => {
       source: {
         copiedFrom: [
           {
-            subscriptionKey: "issues",
+            name: "issues",
             streamId: SOURCE_STREAM_ID,
             streamCreatedAt: SOURCE_CREATED_AT,
             cursorChangedAtSourceOffset: 2,
@@ -786,7 +783,7 @@ describe("passive inbound record cap", () => {
             ]),
           ),
         },
-        outbound: { byKey: {} },
+        outbound: { byName: {} },
       },
     });
   }
@@ -817,8 +814,8 @@ describe("passive inbound record cap", () => {
     const { processor } = harness();
     const overflowing = [
       copiedEvent(2, { path: "/sources/new-a", sourceOffset: 41 }),
-      copiedEvent(3, { path: "/sources/new-b", subscriptionKey: "other", sourceOffset: 7 }),
-      copiedEvent(4, { path: "/sources/new-a", subscriptionKey: "other", sourceOffset: 9 }),
+      copiedEvent(3, { path: "/sources/new-b", name: "other", sourceOffset: 7 }),
+      copiedEvent(4, { path: "/sources/new-a", name: "other", sourceOffset: 9 }),
       copiedEvent(5, { path: "/sources/new-c", sourceOffset: 12 }),
     ];
     const first = overflowing.reduce(
@@ -892,7 +889,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
       source: {
         copiedFrom: [
           {
-            subscriptionKey: "issues",
+            name: "issues",
             streamId: SOURCE_STREAM_ID,
             streamCreatedAt: SOURCE_CREATED_AT,
             cursorChangedAtSourceOffset: 3,
@@ -911,13 +908,13 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     expect(() => processor.validate({ event: copied, state, authority: "copy" })).not.toThrow();
   });
 
-  test("rejects a subscription key longer than the contract bound", () => {
+  test("rejects a subscription name longer than the contract bound", () => {
     const { processor } = harness(SOURCE_PATH);
     expect(() =>
       processor.validate({
         event: {
           type: "events.iterate.com/stream/subscription-configured",
-          payload: streamSubscription({ subscriptionKey: "k".repeat(501) }),
+          payload: streamSubscription({ name: "k".repeat(501) }),
         },
         state: coreState(SOURCE_PATH),
         authority: "public",
@@ -942,7 +939,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
   test("accepts a webhook subscription and folds its configuration", () => {
     const { processor, state } = harness(SOURCE_PATH);
     const payload = {
-      subscriptionKey: "ops-webhook",
+      name: "ops-webhook",
       receiver: {
         action: "webhook-post",
         url: "https://hooks.example.com/iterate/stream-events",
@@ -963,7 +960,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
         path: SOURCE_PATH,
       }),
     );
-    expect(reduced.subscriptions.outbound.byKey["ops-webhook"]?.configuration.receiver).toEqual({
+    expect(reduced.subscriptions.outbound.byName["ops-webhook"]?.configuration.receiver).toEqual({
       action: "webhook-post",
       url: "https://hooks.example.com/iterate/stream-events",
       delivery: { start: "now", onFailingEvent: "skip" },
@@ -980,7 +977,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
         event: {
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
-            subscriptionKey: "ops-webhook",
+            name: "ops-webhook",
             receiver: {
               action: "webhook-post",
               url,
@@ -1002,7 +999,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
         event: {
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
-            subscriptionKey: "ops-webhook",
+            name: "ops-webhook",
             receiver: {
               action: "webhook-post",
               url: "https://hooks.example.com/iterate",
@@ -1047,7 +1044,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
   ] as const)("parse-validates a %s jsonataTransform at configure time", (_action, receiver) => {
     const { processor, state } = harness(SOURCE_PATH);
     const payload = (jsonataTransform: string) => ({
-      subscriptionKey: "transformed",
+      name: "transformed",
       receiver: receiver(jsonataTransform),
     });
     expect(() =>
@@ -1081,7 +1078,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
         event: {
           type: "events.iterate.com/stream/subscription-configured",
           payload: {
-            subscriptionKey: "wake-transformed",
+            name: "wake-transformed",
             receiver: {
               action: "processor-wake",
               expression: [
@@ -1098,5 +1095,74 @@ describe("StreamCoreProcessor validation and dispatch", () => {
         authority: "public",
       }),
     ).toThrow(/unrecognized/i);
+  });
+
+  test("processor-wake requires exactly one placement", () => {
+    const { processor, state } = harness(SOURCE_PATH);
+    const configure = (receiver: Record<string, unknown>) => () =>
+      processor.validate({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: { name: "agent", receiver },
+        },
+        state,
+        authority: "public",
+      });
+    const expression = ["agents", ["get", "/agents/reviewer"], "processor", "wakeStreamProcessor"];
+
+    // Neither placement: nothing to dial.
+    expect(configure({ action: "processor-wake" })).toThrow(/exactly one of placement/);
+    // Both placements: ambiguous.
+    expect(configure({ action: "processor-wake", placement: "facet", expression })).toThrow(
+      /exactly one of placement/,
+    );
+    // Facet placement: the subscription name IS the facet name; no expression.
+    expect(configure({ action: "processor-wake", placement: "facet" })).not.toThrow();
+    // Expression placement: today's own-DO / userspace-worker wake.
+    expect(configure({ action: "processor-wake", expression })).not.toThrow();
+  });
+
+  test("resumed requires a halted subscription", () => {
+    const { processor } = harness(SOURCE_PATH);
+    const state = reduce(
+      processor,
+      coreState(SOURCE_PATH),
+      committed(1, "events.iterate.com/stream/subscription-configured", streamSubscription(), {
+        path: SOURCE_PATH,
+      }),
+    );
+
+    // Resuming an active subscription is invalid — nothing to resume.
+    expect(() =>
+      processor.validate({
+        event: {
+          type: "events.iterate.com/stream/subscription-delivery-resumed",
+          payload: { name: "issues" },
+        },
+        state,
+        authority: "public",
+      }),
+    ).toThrow(/not halted/);
+  });
+
+  test("processor-wake accepts any name at configure time", () => {
+    const { processor, state } = harness(SOURCE_PATH);
+    const configure = (name: string) => () =>
+      processor.validate({
+        event: {
+          type: "events.iterate.com/stream/subscription-configured",
+          payload: {
+            name,
+            receiver: { action: "processor-wake", placement: "facet" },
+          },
+        },
+        state,
+        authority: "public",
+      });
+    // The NAME is the contract selector (name == registered slug), but nothing
+    // enforces that here: a name matching no registered processor fails loudly
+    // at wake with the registry's unknown-name error.
+    expect(configure("agent")).not.toThrow();
+    expect(configure("not-a-registered-processor")).not.toThrow();
   });
 });

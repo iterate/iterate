@@ -87,11 +87,22 @@ type StreamSubscriberPagerAttachment = z.infer<typeof StreamSubscriberPagerAttac
  * exclusion only defers delivery to the next matching wake, where the re-dial
  * replays everything after the relay's cursor.
  */
-const PAGE_EXCLUDED_EVENT_TYPES: ReadonlySet<string> = new Set([
+const DORMANT_SUBSCRIBER_LIFECYCLE_EVENT_TYPES: ReadonlySet<string> = new Set([
   "events.iterate.com/stream/woken",
   "events.iterate.com/stream/connection-opened",
   "events.iterate.com/stream/connection-closed",
 ]);
+
+/** The one lifecycle policy shared by hosted and session subscriber dormancy. */
+export function eventCanWakeDormantSubscriber(
+  eventType: string,
+  explicitlyIncludedTypes: readonly string[] | undefined,
+): boolean {
+  return (
+    !DORMANT_SUBSCRIBER_LIFECYCLE_EVENT_TYPES.has(eventType) ||
+    explicitlyIncludedTypes?.includes(eventType) === true
+  );
+}
 
 /** The seams {@link StreamSubscriberPagerRegistry} needs from its hosting Durable Object. */
 type StreamSubscriberPagerRegistryHooks = {
@@ -266,7 +277,8 @@ export class StreamSubscriberPagerRegistry {
    * DO, so no alarm is needed. At most one Page per dormancy period
    * (`pageSentAtOffset`; cleared when the relay's re-dial re-binds the key),
    * while the stream's own lifecycle facts remain excluded — Paging on those
-   * is the resurrection loop documented on {@link PAGE_EXCLUDED_EVENT_TYPES}.
+   * is the resurrection loop documented on
+   * {@link eventCanWakeDormantSubscriber}.
    * Ephemeral events do wake a matching subscriber as a best-effort latency
    * hint: the append itself places the event in this incarnation's memory and
    * a prompt re-dial can replay it from the subscriber's exact cursor. If the
@@ -310,12 +322,7 @@ export class StreamSubscriberPagerRegistry {
           return false;
         }
         // Lifecycle facts Page only a subscriber whose filter names them.
-        if (
-          PAGE_EXCLUDED_EVENT_TYPES.has(event.type) &&
-          explicitTypes?.includes(event.type) !== true
-        ) {
-          return false;
-        }
+        if (!eventCanWakeDormantSubscriber(event.type, explicitTypes)) return false;
         // A state-only connection wants any state change; a filterless one wants everything.
         if (attachment.events === false || matcher === undefined) return true;
         try {

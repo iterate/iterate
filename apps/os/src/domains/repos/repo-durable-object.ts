@@ -2,10 +2,6 @@ import { DurableObject } from "cloudflare:workers";
 import { Workspace } from "@cloudflare/shell";
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit, type GitLogEntry } from "@cloudflare/shell/git";
-import { LiveStateRpcTarget } from "iterate/sdk/capnweb";
-import { createStreamProcessorRegistry } from "iterate/processors/cloudflare";
-import type { StreamProcessorWakeRequest, StreamProcessorWakeResponse } from "iterate/processors";
-import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
@@ -13,7 +9,6 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { filterWorkerSnapshotPaths } from "../workers/source-masks.ts";
 import { walkWorkspaceFiles, wipeWorkspace } from "../../lib/shell-fs.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { LiveStatePagers } from "../live-state-pager.ts";
 import { parseConfig } from "../../config.ts";
 import {
   assertGithubInstallationTokenMintAuthorized,
@@ -58,7 +53,6 @@ import {
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
 import { REPO_DEFAULT_BRANCH } from "./repo-defaults.ts";
-import { RepoProcessor } from "./repo-processor-implementation.ts";
 import { linkRepoToGithub } from "./github-link.ts";
 import {
   decideHeadResolution,
@@ -119,140 +113,96 @@ export class RepoDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  /** Client-given Live State Pagers — watched repos hibernate at zero pin.
-   * The explicit field type is NOT inferable decoration: it breaks the
-   * field-initializer inference cycle with #registry (its hooks read the
-   * registry, whose onLiveAssembled reads this field back — TS7022 without
-   * it), the same pattern as the registry option getLiveState's explicit
-   * return type. */
-  readonly #liveStatePagers: LiveStatePagers = new LiveStatePagers({
-    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
-    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
-    readState: () => this.#registry.live.getState(),
-    refresh: () => this.#registry.loadAndRefreshLive(),
-    waitUntil: (work) => this.ctx.waitUntil(work),
-  });
-  readonly #registry = createStreamProcessorRegistry(this.ctx, {
-    stream: this.#stream,
-    path: this.#name.path,
-    projectId: this.#name.projectId,
-    version: workerVersion(this.env),
-    onLiveAssembled: (assembly) => this.#liveStatePagers.refreshAfterAssembly(assembly),
-  });
-  // The DO constructs the processor — no host-injected readState/writeState/
-  // keepAliveWhile deps; the runner owns durable progress and keepalive.
-  // Registered WITH recovery because GitHub-backed creation and imports are
-  // consequential `runInBackground` work (stream-committed obligations whose
-  // OUTCOME matters).
-  // The keepalive alarm appends the `stream/processor-revived` fact, whose wake
-  // produces the eventless at-head pass that re-drives the obligations (see the
-  // registry module doc's recovery rule).
-  readonly #repoProcessor = this.#registry.register(
-    new RepoProcessor({
-      stream: this.#stream,
-      path: this.#name.path,
-      projectId: this.#name.projectId,
-      // Creation and public mutations all move the same branch. A recovered
-      // creation attempt is retry-safe, but it must not move the ref between a
-      // mutation's checked clone and push.
-      createEmptyArtifact: () => this.#serializeWrite(() => this.createEmptyArtifactRepo()),
-      createPublicGithubTemplateArtifact: (input) =>
-        this.#serializeWrite(() =>
-          this.createSeededArtifactRepo(() => downloadPublicGithubTemplate(input)),
-        ),
-      importPublicGithubArtifact: (input) =>
-        this.#serializeWrite(() => this.importPublicGithubArtifact(input)),
-      linkGithub: async (input) => {
-        if (this.#name.projectId === null) {
-          throw new Error("GitHub-backed repos require a project-scoped repo.");
-        }
-        await linkRepoToGithub(
-          {
-            ...input,
-            projectId: this.#name.projectId,
-            repoPath: this.#name.path,
-          },
-          {
-            repo: {
-              configureGithubLink: (link) => this.configureGithubLink(link),
-              getGithubLink: () => this.getGithubLink(),
-              pushToGithub: (pushInput) => this.pushToGithub(pushInput),
-            },
-            // The saga is about to adopt GitHub. Pushing starter history first
-            // would be wasted for a public import and rejected for an existing
-            // private repository.
-            skipInitialPush: true,
-          },
-        );
-      },
-      syncPrivateGithub: async () => {
-        await this.syncFromGithub({ depth: 1, force: true });
-      },
-      // Sync the current GitHub head, not necessarily the delivery's SHA:
-      // GitHub webhooks may arrive out of order, and adopting a newer head
-      // also satisfies every older push delivery. syncFromGithub derives a
-      // bounded depth that still retains the previous Artifacts head.
-      syncFromGithubPush: async () => await this.syncFromGithub({ depth: 1 }),
-      observeArtifactPush: (input) =>
-        this.#observeExternalPush(input.branch, {
-          afterCommitOid: input.afterCommitOid,
-          beforeCommitOid: input.beforeCommitOid,
-        }),
-    }),
-    { recovery: true },
-  );
-  // Runner-backed reads: under runner drive the runner owns the cursors and
-  // the processor instance's internal checkpoint never advances, so every
-  // read this DO serves (the processor facade, live state) goes through the
-  // runner's committed progress.
-  readonly #reads = this.#registry.reads(this.#repoProcessor);
-
-  wakeStreamProcessor(args: StreamProcessorWakeRequest): Promise<StreamProcessorWakeResponse> {
-    return this.#registry.wakeStreamProcessor(args);
-  }
-
-  /** The registry's shared DO alarm (runner keepalives) — see stream-processor-registry.ts. */
-  alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    return this.#registry.handleAlarm(alarmInfo);
-  }
-
   /** Abort the current Durable Object incarnation; the next request boots it again. */
   kill(): void {
     this.ctx.abort("kill requested");
   }
 
-  get processor() {
-    // Runner-backed reads (#reads), never the processor instance — see the
-    // field comment: instance reads are stale forever under runner drive.
-    return new StreamProcessorRpcTarget(this.#reads, {
-      catchUpBeforeSnapshot: () => this.#registry.catchUp(RepoProcessorContract.slug),
-    });
+  // ===========================================================================
+  // Facet-processor dep doors. The repo processor runs as a facet of the repo
+  // stream's own Durable Object (src/domains/processor-facet-durable-object.ts); the deps that need
+  // THIS object's storage — the branch-head authority, the write serializer,
+  // the Artifacts credentials — dial back through these doors.
+  // ===========================================================================
+
+  /** The processor's `createEmptyArtifact` dep. Creation and public mutations
+   * all move the same branch: a recovered creation attempt is retry-safe, but
+   * it must not move the ref between a mutation's checked clone and push —
+   * hence the write serializer. */
+  processorCreateEmptyArtifact(): Promise<{
+    artifactName: string;
+    defaultBranch: string;
+    remote: string;
+  }> {
+    return this.#serializeWrite(() => this.createEmptyArtifactRepo());
   }
 
-  /** The repo's live state — the get/set/assign/subscribe surface behind `itx.repos.get(path).liveState`. */
-  get liveState() {
-    return new LiveStateRpcTarget(this.#registry);
-  }
-
-  /** The repo DO's only fetch surface: the client-given Live State Pager. */
-  async fetch(request: Request): Promise<Response> {
-    return (
-      (await this.#liveStatePagers.acceptUpgrade(request)) ??
-      Response.json(
-        { error: "repo durable objects accept only liveState-socket upgrades" },
-        { status: 400 },
-      )
+  /** The processor's `createPublicGithubTemplateArtifact` dep: download the
+   * selected public GitHub folder as text files and seed them into the
+   * backing Artifact (serialized like every branch-moving write). */
+  processorCreatePublicGithubTemplateArtifact(input: {
+    owner: string;
+    path?: string;
+    ref?: string;
+    repo: string;
+  }): Promise<{ artifactName: string; defaultBranch: string; remote: string }> {
+    return this.#serializeWrite(() =>
+      this.createSeededArtifactRepo(() => downloadPublicGithubTemplate(input)),
     );
   }
 
-  /** Live State Pagers are one-way (this DO → relay); inbound frames are ignored. */
-  webSocketMessage(): void {}
+  /** The processor's `importPublicGithubArtifact` dep (serialized like every
+   * branch-moving write). */
+  processorImportPublicGithubArtifact(input: {
+    depth?: number;
+    owner: string;
+    repo: string;
+  }): Promise<{ artifactName: string; defaultBranch: string; remote: string }> {
+    return this.#serializeWrite(() => this.importPublicGithubArtifact(input));
+  }
 
-  /** A closed watcher socket simply drops off `getWebSockets`; nothing to clean up. */
-  webSocketClose(): void {}
+  /** The processor's `linkGithub` dep: configure the link and arm webhook
+   * delivery without pushing starter history first (the saga is about to
+   * adopt GitHub — see repo-processor-implementation.ts). */
+  async processorLinkGithub(input: {
+    connection: string;
+    owner: string;
+    repo: string;
+  }): Promise<void> {
+    if (this.#name.projectId === null) {
+      throw new Error("GitHub-backed repos require a project-scoped repo.");
+    }
+    await linkRepoToGithub(
+      {
+        ...input,
+        projectId: this.#name.projectId,
+        repoPath: this.#name.path,
+      },
+      {
+        repo: {
+          configureGithubLink: (link) => this.configureGithubLink(link),
+          getGithubLink: () => this.getGithubLink(),
+          pushToGithub: (pushInput) => this.pushToGithub(pushInput),
+        },
+        // The saga is about to adopt GitHub. Pushing starter history first
+        // would be wasted for a public import and rejected for an existing
+        // private repository.
+        skipInitialPush: true,
+      },
+    );
+  }
 
-  webSocketError(_ws: WebSocket, error: unknown): void {
-    this.#liveStatePagers.pagerError(error);
+  /** The processor's `observeArtifactPush` dep: feed a queue-observed push —
+   * including ref deletions — into this object's branch-head authority. */
+  processorObserveExternalPush(input: {
+    afterCommitOid: string | null;
+    beforeCommitOid: string | null;
+    branch: string;
+  }): void {
+    this.#observeExternalPush(input.branch, {
+      afterCommitOid: input.afterCommitOid,
+      beforeCommitOid: input.beforeCommitOid,
+    });
   }
 
   /**

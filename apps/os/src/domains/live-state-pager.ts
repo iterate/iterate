@@ -41,9 +41,11 @@ import { LiveState, type LiveStateSubscription, type LiveUpdate } from "iterate/
  * header gets a watcher on its own project's liveState — the same data its
  * `itx.liveState` already serves it — for the lifetime of its own run. Not a
  * boundary worth crypto. REVISIT if lane payloads ever exceed what the
- * caller could read via itx (e.g. capability attenuation, or facet states
- * post-#2395): the upgrade is an unforgeable header VALUE derived from a
- * deployment secret, added in this one gate.
+ * caller could read via itx (e.g. capability attenuation): the upgrade is an
+ * unforgeable header VALUE derived from a deployment secret, added in this
+ * one gate. (The facet-processor lanes are keyed lanes on STREAM Durable
+ * Objects, which no user-influenced fetch can reach — no change to this
+ * posture.)
  */
 export const LIVE_STATE_PAGER_HEADER = "x-iterate-live-state-pager";
 
@@ -52,6 +54,40 @@ const LIVE_STATE_PAGER_URL = "https://live-state-pager.internal/";
 
 /** The hibernation tag every Live State Pager is accepted under. */
 const LIVE_STATE_PAGER_TAG = "live-state-pager";
+
+/**
+ * The hibernation tag for one KEYED lane's Pagers. A host that serves more
+ * than one liveState (the Stream DO: its own runtime debug state plus one
+ * lane per facet-hosted processor, keyed by subscription name) runs one
+ * {@link LiveStatePagers} per lane and namespaces the tag so each instance
+ * only ever sees its own watchers.
+ */
+export function liveStatePagerLaneTag(lane: string): string {
+  return `${LIVE_STATE_PAGER_TAG}:${lane}`;
+}
+
+/**
+ * Recover the lane key from a hibernated Pager's tag on a fresh incarnation
+ * (`ctx.getTags(ws)`), so a host can rebuild its per-lane
+ * {@link LiveStatePagers} instances for watchers that attached in an earlier
+ * incarnation. `undefined` for the unkeyed tag and for foreign tags (e.g. the
+ * Stream Subscriber Pager lane's).
+ */
+export function parseLiveStatePagerLaneTag(tag: string): string | undefined {
+  const prefix = `${LIVE_STATE_PAGER_TAG}:`;
+  return tag.startsWith(prefix) ? tag.slice(prefix.length) : undefined;
+}
+
+/**
+ * Read the lane key a dial put on the upgrade URL, or `undefined` for the
+ * unkeyed (host's own state) lane. The header still claims the request — the
+ * URL only selects WHICH lane serves it, so a host routes: header absent →
+ * not ours; lane key → that lane's `acceptUpgrade`; no key → the default.
+ */
+export function liveStatePagerLaneKey(request: Request): string | undefined {
+  const match = /^\/lane\/(.+)$/.exec(new URL(request.url).pathname);
+  return match === null ? undefined : decodeURIComponent(match[1]!);
+}
 
 /**
  * Trailing debounce for outgoing state Pages: a busy fold burst becomes one
@@ -112,6 +148,8 @@ export class LiveStatePagers {
   readonly #hooks: LiveStatePagersHooks;
   #flushTimer: ReturnType<typeof setTimeout> | undefined;
   #reloadInFlight: Promise<void> | undefined;
+  #externalRefresh: Promise<void> | undefined;
+  #externalRefreshAgain = false;
 
   constructor(hooks: LiveStatePagersHooks) {
     this.#hooks = hooks;
@@ -219,6 +257,40 @@ export class LiveStatePagers {
     this.#hooks.waitUntil(this.#reloadInFlight);
   }
 
+  /**
+   * The change trigger for hosts whose state is materialized OUTSIDE this
+   * Durable Object — the stream's facet lanes, where `readState` returns a
+   * parent-held cache and `refresh` pulls the facet's current live state into
+   * it. Where {@link scheduleFlush} assumes the state is already current at
+   * flush time, this runs `refresh` FIRST, then flushes; single-flight with a
+   * trailing re-run so a trigger landing mid-refresh still produces one more
+   * refresh that starts after it (the in-flight pull may have read state from
+   * before the triggering change — without the re-run that change would stay
+   * invisible until the next trigger). A refresh that FAILS drops the
+   * watchers, the one repair (see {@link #dropWatchers}).
+   */
+  refreshThenFlush(): void {
+    if (!this.hasPagers()) return;
+    if (this.#externalRefresh !== undefined) {
+      this.#externalRefreshAgain = true;
+      return;
+    }
+    this.#externalRefresh = (async () => {
+      try {
+        do {
+          this.#externalRefreshAgain = false;
+          await this.#hooks.refresh();
+        } while (this.#externalRefreshAgain);
+        this.scheduleFlush();
+      } catch (error) {
+        this.#dropWatchers("refresh failed", error);
+      } finally {
+        this.#externalRefresh = undefined;
+      }
+    })();
+    this.#hooks.waitUntil(this.#externalRefresh);
+  }
+
   #flush(): void {
     const sockets = this.#hooks.getWebSockets(LIVE_STATE_PAGER_TAG);
     if (sockets.length === 0) return;
@@ -244,18 +316,27 @@ export class LiveStatePagers {
 }
 
 /** What {@link openRelayedLiveState} needs from a dialed upgrade response. */
-type LiveStatePagerUpgrade = { status: number; webSocket?: WebSocket | null };
+export type LiveStatePagerUpgrade = { status: number; webSocket?: WebSocket | null };
 
 /**
  * Give a host DO a Live State Pager through its stub's real `fetch()`
  * (a 101 cannot cross an RPC method call). The stub is not disposed here —
  * dial-path stubs are minted per call and the established socket owns its own
- * lifetime, mirroring the Stream Subscriber Pager dial.
+ * lifetime, mirroring the Stream Subscriber Pager dial. `lane` selects a
+ * keyed lane on a multi-lane host (see {@link liveStatePagerLaneKey});
+ * omitted, the host's own (unkeyed) state lane answers.
  */
-export async function dialLiveStatePager(stub: {
-  fetch(input: string, init?: RequestInit): Promise<LiveStatePagerUpgrade>;
-}): Promise<LiveStatePagerUpgrade> {
-  return await stub.fetch(LIVE_STATE_PAGER_URL, {
+export async function dialLiveStatePager(
+  stub: {
+    fetch(input: string, init?: RequestInit): Promise<LiveStatePagerUpgrade>;
+  },
+  options?: { lane?: string },
+): Promise<LiveStatePagerUpgrade> {
+  const url =
+    options?.lane === undefined
+      ? LIVE_STATE_PAGER_URL
+      : `${LIVE_STATE_PAGER_URL}lane/${encodeURIComponent(options.lane)}`;
+  return await stub.fetch(url, {
     headers: { Upgrade: "websocket", [LIVE_STATE_PAGER_HEADER]: "watch" },
   });
 }

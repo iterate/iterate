@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "Iterate",
+  "description": "Share Chrome with an Iterate project and view its live processor state.",
+  "version": "0.1.0",
+  "minimum_chrome_version": "114",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAspgSUwSfiXguZe3WByjp613X57nr6/xazInTLwa7flo9sR1XREgiLCG1ZcrWR8LoottD2Hbs9ESpRLbIapj6rDAZwc/o3Q9HNVqNaS1AyInNG3WFHs8EFM/zS5UWZ5FxV5hHwQv5/soV24FDkcfvjJ81GwwizSsBxG0YTap+2WRQZkyipnQLQLgpf7Ei+MfIhUchxb4TBjgs9dKCD6ObRkHunEg3NUENGoVoKAs3+CctotvenoxgTsjLByC3tJBRwF7NLorAockPz7l6THWwi1F7J25LpvUpB0TdYrU8U2ygNUefU7+dWgkN13av5iAll2/sFNPJEsnwGpfVNagJZwIDAQAB",
+  "action": {
+    "default_title": "Open Iterate"
+  },
+  "side_panel": {
+    "default_path": "index.html"
+  },
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "permissions": ["identity", "sidePanel", "storage"],
+  "host_permissions": ["https://auth.iterate.com/*", "https://os.iterate.com/*"]
+}
