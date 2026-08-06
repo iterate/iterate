@@ -185,6 +185,8 @@ bool face_draw(void) {
   iterate_kit_conversation_overlay_render(
       &status,
       sample_clock,
+      /* No LEDs on this board, so the face carries them. */
+      ITERATE_KIT_OVERLAY_LIGHTS_RAIL,
       face.frame,
       static_cast<uint32_t>(int{FACE_RENDER_WIDTH}),
       static_cast<uint32_t>(int{FACE_RENDER_HEIGHT}));

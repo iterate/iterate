@@ -49,6 +49,8 @@ enum {
   ITERATE_KIT_OVERLAY_BANNER_HEIGHT = 24,
   /** The banner's breathing period, in milliseconds. */
   ITERATE_KIT_OVERLAY_PULSE_PERIOD_MS = 1400,
+  /** Source rows a horizontal light strip occupies below the face. */
+  ITERATE_KIT_OVERLAY_STRIP_HEIGHT = 14,
 };
 
 /**
@@ -120,7 +122,31 @@ void iterate_kit_conversation_lights_animate(
     struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT]);
 
 /**
- * Draws the rail, and the banner when one is needed, into an RGB565 frame.
+ * Where a screen puts the twelve lights, if it puts them anywhere.
+ *
+ * NOT EVERY SCREEN SHOULD DRAW THEM. The StackChan has a real twelve-pixel LED
+ * run on its body, already fed from this same snapshot — painting a second
+ * copy down the side of its face was a picture of its own LEDs, which is
+ * clutter, not information. A board with real lights renders NONE.
+ */
+enum iterate_kit_overlay_lights {
+  ITERATE_KIT_OVERLAY_LIGHTS_NONE = 0,
+  /** A vertical rail in the left margin, for a face with no LEDs beside it. */
+  ITERATE_KIT_OVERLAY_LIGHTS_RAIL,
+  /**
+   * A horizontal strip across the bottom, for a panel with room below the
+   * face. The caller makes its frame taller than the face by
+   * ITERATE_KIT_OVERLAY_STRIP_HEIGHT and the strip lands in those rows, so
+   * the lights scale with the face and are drawn by the same code as
+   * everywhere else — rather than by whatever widget toolkit that board
+   * happens to use.
+   */
+  ITERATE_KIT_OVERLAY_LIGHTS_STRIP,
+};
+
+/**
+ * Draws the lights in the requested layout, and the banner when one is
+ * needed, into an RGB565 frame.
  *
  * The frame is the caller's — typically a rendered avatar — and is modified
  * in place; only the left rail and, when raised, the bottom banner are
@@ -130,6 +156,7 @@ void iterate_kit_conversation_lights_animate(
 void iterate_kit_conversation_overlay_render(
     const struct iterate_kit_conversation_visual_state *state,
     uint32_t now_ms,
+    enum iterate_kit_overlay_lights lights,
     uint16_t *rgb565,
     uint32_t width,
     uint32_t height);

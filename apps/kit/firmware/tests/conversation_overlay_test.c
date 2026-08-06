@@ -46,7 +46,7 @@ static struct iterate_kit_conversation_visual_state ready_state(void) {
 static void rail_stays_inside_the_left_margin(void) {
   const struct iterate_kit_conversation_visual_state state = ready_state();
   clear_frame();
-  iterate_kit_conversation_overlay_render(&state, 0U, frame, WIDTH, HEIGHT);
+  iterate_kit_conversation_overlay_render(&state, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, WIDTH, HEIGHT);
   assert(any_pixel_in(0U, 0U, (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH, HEIGHT));
   assert(!any_pixel_in(
       (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH,
@@ -62,7 +62,7 @@ static void rail_stays_inside_the_left_margin(void) {
 static void every_light_has_a_socket(void) {
   const struct iterate_kit_conversation_visual_state state = ready_state();
   clear_frame();
-  iterate_kit_conversation_overlay_render(&state, 0U, frame, WIDTH, HEIGHT);
+  iterate_kit_conversation_overlay_render(&state, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, WIDTH, HEIGHT);
   for (uint32_t index = 0U;
        index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
        ++index) {
@@ -75,7 +75,7 @@ static void every_light_has_a_socket(void) {
 static void ready_leaves_the_face_alone(void) {
   const struct iterate_kit_conversation_visual_state state = ready_state();
   clear_frame();
-  iterate_kit_conversation_overlay_render(&state, 0U, frame, WIDTH, HEIGHT);
+  iterate_kit_conversation_overlay_render(&state, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, WIDTH, HEIGHT);
   assert(!any_pixel_in(
       (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH,
       (uint32_t)HEIGHT - (uint32_t)ITERATE_KIT_OVERLAY_BANNER_HEIGHT,
@@ -92,7 +92,7 @@ static void not_connected_raises_a_banner(void) {
   struct iterate_kit_conversation_visual_state state = ready_state();
   state.network = ITERATE_KIT_NETWORK_CONNECTING;
   clear_frame();
-  iterate_kit_conversation_overlay_render(&state, 0U, frame, WIDTH, HEIGHT);
+  iterate_kit_conversation_overlay_render(&state, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, WIDTH, HEIGHT);
   assert(any_pixel_in(
       (uint32_t)WIDTH / 2U,
       (uint32_t)HEIGHT - (uint32_t)ITERATE_KIT_OVERLAY_BANNER_HEIGHT,
@@ -131,7 +131,7 @@ static void an_absent_state_still_says_something(void) {
   assert(iterate_kit_conversation_needs_attention(NULL));
   assert(iterate_kit_conversation_status_word(NULL) != NULL);
   clear_frame();
-  iterate_kit_conversation_overlay_render(NULL, 0U, frame, WIDTH, HEIGHT);
+  iterate_kit_conversation_overlay_render(NULL, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, WIDTH, HEIGHT);
   assert(any_pixel_in(0U, 0U, (uint32_t)WIDTH, (uint32_t)HEIGHT));
 }
 
@@ -143,7 +143,7 @@ static void a_frame_too_small_is_left_alone(void) {
   clear_frame();
   {
     const struct iterate_kit_conversation_visual_state state = ready_state();
-    iterate_kit_conversation_overlay_render(&state, 0U, frame, 4U, 4U);
+    iterate_kit_conversation_overlay_render(&state, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, 4U, 4U);
   }
   assert(!any_pixel_in(0U, 0U, (uint32_t)WIDTH, (uint32_t)HEIGHT));
 }

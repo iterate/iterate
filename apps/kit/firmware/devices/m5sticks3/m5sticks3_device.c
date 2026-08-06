@@ -308,9 +308,17 @@ static uint32_t speaker_queued_bytes(void) {
  * flattens this mount and reports children: {}).
  */
 static const char instructions[] =
-    "M5StickS3 voice endpoint. Hold the physical front button for "
-    "push-to-talk; the side button starts and ends the call; audio and "
-    "lifecycle events share this stream connection.";
+    "M5StickS3: a pocket-sized voice endpoint with a small screen showing a "
+    "face. The side button starts and ends the call; the front button is "
+    "push-to-talk. "
+    "conversation.start() and conversation.end() begin and end a call. "
+    "health() returns this device's full diagnostics, the same document it "
+    "pushes as dev-stats — start there when it seems unwell. "
+    "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to a "
+    "ceiling this board has a measured reason for; speaker.volume() reads it "
+    "back. Both answer {percent,ceiling}. "    "pushToTalk.start() and pushToTalk.stop() hold its microphone open, "
+    "joining the physical button as a wired-OR: it has no echo cancellation, "
+    "so it only listens while one of them is held. "    "Audio and lifecycle events share this stream connection.";
 /*
  * WHAT THE MODEL IS TOLD IT CAN DO. `children` stays empty because this is a
  * flattened dispatch target — sub-paths are routes the device interprets, not

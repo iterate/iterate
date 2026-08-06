@@ -30,8 +30,15 @@ enum {
   DISPLAY_WIDTH = 368,
   DISPLAY_HEIGHT = 448,
   FACE_SCALE = 2,
+  /*
+   * The card is the face PLUS a strip of status lights under it, drawn by the
+   * shared overlay in source pixels so it scales with the face and is the
+   * same code every other surface uses. It replaces a text label that said
+   * "ready" — a word where twelve lights belong.
+   */
+  CARD_SOURCE_HEIGHT = FACE_RENDER_HEIGHT + ITERATE_KIT_OVERLAY_STRIP_HEIGHT,
   FACE_WIDTH = FACE_RENDER_WIDTH * FACE_SCALE,
-  FACE_HEIGHT = FACE_RENDER_HEIGHT * FACE_SCALE,
+  FACE_HEIGHT = CARD_SOURCE_HEIGHT * FACE_SCALE,
   STATUS_CAPACITY = 64,
   REFRESH_PERIOD_MS = 100,
 };
@@ -51,7 +58,6 @@ static struct {
   bool fault;
 } ui;
 
-static lv_obj_t *state_label;
 static lv_obj_t *status_label;
 static lv_obj_t *face_canvas;
 static uint16_t *face_pixels;
@@ -165,27 +171,10 @@ static struct iterate_kit_conversation_visual_state face_status(void) {
 
 static void refresh_ui(void) {
   char status[STATUS_CAPACITY];
-  const struct iterate_kit_conversation_visual_state visual = face_status();
-  const bool needs_attention =
-      iterate_kit_conversation_needs_attention(&visual);
-
   xSemaphoreTake(ui.lock, portMAX_DELAY);
   memcpy(status, ui.status, sizeof(status));
   xSemaphoreGive(ui.lock);
 
-  /*
-   * The headline is the SHARED word, not this panel's own vocabulary. It used
-   * to say "offline" the moment the link dropped, where the ring on the next
-   * device was still amber for "connecting" — the same device state, two
-   * different stories, told to the same person.
-   */
-  lv_label_set_text(
-      state_label, iterate_kit_conversation_status_word(&visual));
-  lv_label_set_text(status_label, status);
-  lv_obj_set_style_text_color(
-      state_label,
-      lv_color_hex(needs_attention ? 0xf87171U : 0x4ade80U),
-      0);
 }
 
 static void refresh_face(void) {
@@ -203,14 +192,17 @@ static void refresh_face(void) {
   iterate_kit_conversation_overlay_render(
       &status,
       (uint32_t)now,
+      ITERATE_KIT_OVERLAY_LIGHTS_STRIP,
       face_frame,
       (uint32_t)FACE_RENDER_WIDTH,
-      (uint32_t)FACE_RENDER_HEIGHT);
-  if (memcmp(face_frame, face_shown, (size_t)FACE_RENDER_FRAME_BYTES) == 0) {
-    return;
+      (uint32_t)CARD_SOURCE_HEIGHT);
+  {
+    const size_t card_bytes =
+        (size_t)FACE_RENDER_WIDTH * CARD_SOURCE_HEIGHT * sizeof(*face_frame);
+    if (memcmp(face_frame, face_shown, card_bytes) == 0) return;
+    memcpy(face_shown, face_frame, card_bytes);
   }
-  memcpy(face_shown, face_frame, (size_t)FACE_RENDER_FRAME_BYTES);
-  for (source_y = 0; source_y < FACE_RENDER_HEIGHT; ++source_y) {
+  for (source_y = 0; source_y < CARD_SOURCE_HEIGHT; ++source_y) {
     uint16_t *const output =
         &face_pixels[(size_t)source_y * FACE_SCALE * FACE_WIDTH];
     const uint16_t *const input =
@@ -302,9 +294,6 @@ static void build_ui(void) {
     lv_obj_align(face_canvas, LV_ALIGN_TOP_MID, 0, 54);
   }
 
-  state_label = lv_label_create(screen);
-  lv_obj_set_style_text_font(state_label, &lv_font_montserrat_20, 0);
-  lv_obj_align(state_label, LV_ALIGN_BOTTOM_MID, 0, -60);
   status_label = lv_label_create(screen);
   lv_obj_set_width(status_label, DISPLAY_WIDTH - 40);
   lv_obj_set_style_text_align(status_label, LV_TEXT_ALIGN_CENTER, 0);
@@ -326,16 +315,22 @@ bool waveshare_display_init(void) {
 
   face_pixels = heap_caps_calloc(
       (size_t)FACE_WIDTH * FACE_HEIGHT, sizeof(*face_pixels), MALLOC_CAP_SPIRAM);
-  face_frame = heap_caps_malloc(
-      (size_t)FACE_RENDER_FRAME_BYTES, MALLOC_CAP_SPIRAM);
+  face_frame = heap_caps_calloc(
+      (size_t)FACE_RENDER_WIDTH * CARD_SOURCE_HEIGHT,
+      sizeof(*face_frame),
+      MALLOC_CAP_SPIRAM);
   face_shown = heap_caps_malloc(
-      (size_t)FACE_RENDER_FRAME_BYTES, MALLOC_CAP_SPIRAM);
+      (size_t)FACE_RENDER_WIDTH * CARD_SOURCE_HEIGHT * sizeof(*face_shown),
+      MALLOC_CAP_SPIRAM);
   if (face_pixels == NULL || face_frame == NULL || face_shown == NULL ||
       !waveshare_avatar_init()) {
     ESP_LOGE(tag, "avatar allocation or initialization failed");
     return false;
   }
-  memset(face_shown, 0xff, (size_t)FACE_RENDER_FRAME_BYTES);
+  memset(
+      face_shown,
+      0xff,
+      (size_t)FACE_RENDER_WIDTH * CARD_SOURCE_HEIGHT * sizeof(*face_shown));
 
   if (!bsp_display_lock(0)) return false;
   build_ui();

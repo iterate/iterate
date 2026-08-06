@@ -238,11 +238,14 @@ static void draw_banner(
     uint32_t now_ms,
     uint16_t *rgb565,
     uint32_t width,
-    uint32_t height) {
+    uint32_t height,
+    /* Rows reserved below it, so a strip is never written over. */
+    uint32_t banner_lift) {
   const struct iterate_kit_rgb8 colour = attention_colour(state);
   const uint8_t scale = iterate_kit_conversation_attention_scale(state, now_ms);
   const char *const word = iterate_kit_conversation_status_word(state);
-  const uint32_t banner_top = height - (uint32_t)ITERATE_KIT_OVERLAY_BANNER_HEIGHT;
+  const uint32_t banner_top =
+      height - (uint32_t)ITERATE_KIT_OVERLAY_BANNER_HEIGHT - banner_lift;
   const struct iterate_kit_rgb8 background = {
     scale_channel(colour.red, scale) / 5U,
     scale_channel(colour.green, scale) / 5U,
@@ -328,9 +331,47 @@ static void draw_rail(
   }
 }
 
+static void draw_strip(
+    const struct iterate_kit_conversation_visual_state *state,
+    uint32_t now_ms,
+    uint16_t *rgb565,
+    uint32_t width,
+    uint32_t height) {
+  struct iterate_kit_rgb8 pixels[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  const uint32_t pitch =
+      width / (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
+  const uint32_t dot = pitch > 6U ? 5U : (pitch > 1U ? pitch - 1U : 1U);
+  const uint32_t left =
+      (width - pitch * (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT +
+       pitch - dot) /
+      2U;
+  const uint32_t top =
+      height - (uint32_t)ITERATE_KIT_OVERLAY_STRIP_HEIGHT +
+      ((uint32_t)ITERATE_KIT_OVERLAY_STRIP_HEIGHT - dot) / 2U;
+
+  iterate_kit_conversation_lights_animate(state, now_ms, pixels);
+  for (uint32_t index = 0U;
+       index < (uint32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
+       ++index) {
+    /* Same socket rule as the rail: an unlit light still holds its place. */
+    const struct iterate_kit_rgb8 light = pixels[index];
+    const bool lit = light.red != 0U || light.green != 0U || light.blue != 0U;
+    fill_rectangle(
+        rgb565,
+        width,
+        height,
+        left + index * pitch,
+        top,
+        dot,
+        dot,
+        to_rgb565(lit ? light : (struct iterate_kit_rgb8){20U, 20U, 24U}));
+  }
+}
+
 void iterate_kit_conversation_overlay_render(
     const struct iterate_kit_conversation_visual_state *state,
     uint32_t now_ms,
+    enum iterate_kit_overlay_lights lights,
     uint16_t *rgb565,
     uint32_t width,
     uint32_t height) {
@@ -348,7 +389,19 @@ void iterate_kit_conversation_overlay_render(
     return;
   }
   if (iterate_kit_conversation_needs_attention(state)) {
-    draw_banner(state, now_ms, rgb565, width, height);
+    draw_banner(
+        state,
+        now_ms,
+        rgb565,
+        width,
+        height,
+        lights == ITERATE_KIT_OVERLAY_LIGHTS_STRIP
+            ? (uint32_t)ITERATE_KIT_OVERLAY_STRIP_HEIGHT
+            : 0U);
   }
-  draw_rail(state, now_ms, rgb565, width, height);
+  if (lights == ITERATE_KIT_OVERLAY_LIGHTS_RAIL) {
+    draw_rail(state, now_ms, rgb565, width, height);
+  } else if (lights == ITERATE_KIT_OVERLAY_LIGHTS_STRIP) {
+    draw_strip(state, now_ms, rgb565, width, height);
+  }
 }

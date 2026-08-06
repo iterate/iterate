@@ -521,6 +521,8 @@ static bool prepare_avatar_frame_under_lock(
     iterate_kit_conversation_overlay_render(
         &status,
         (uint32_t)(now_us_wide() / 1000U),
+        /* Its twelve lights are REAL, on its body, from this same snapshot. */
+        ITERATE_KIT_OVERLAY_LIGHTS_NONE,
         owner.framebuffer,
         (uint32_t)FACE_RENDER_WIDTH,
         (uint32_t)FACE_RENDER_HEIGHT);

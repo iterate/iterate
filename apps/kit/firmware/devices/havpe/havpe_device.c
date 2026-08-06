@@ -306,9 +306,21 @@ static uint32_t speaker_queued_bytes(void) {
  * flattens this mount and reports children: {}).
  */
 static const char instructions[] =
-    "Home Assistant Voice Preview Edition voice endpoint. Hold the physical "
-    "center button for push-to-talk; a short tap starts and ends the call; "
-    "audio and lifecycle events share this stream connection.";
+    "Home Assistant Voice Preview Edition: a voice endpoint with no screen — "
+    "a twelve-LED ring is its only local feedback. A tap on the centre button "
+    "starts and ends the call. Its microphone stays OPEN throughout: it has "
+    "hardware echo cancellation in an XMOS DSP, so it can be interrupted and "
+    "there is no push-to-talk. "
+    "conversation.start() and conversation.end() begin and end a call. "
+    "health() returns this device's full diagnostics, the same document it "
+    "pushes as dev-stats — start there when it seems unwell. "
+    "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to a "
+    "ceiling this board has a measured reason for; speaker.volume() reads it "
+    "back. Both answer {percent,ceiling}. "    "aec.setStage({channel,stage}) moves an XMOS output tap for diagnosis — "
+    "stage 0 is the raw microphone, 1 AEC, 2 AEC+IC, 3 AEC+IC+NS, 4 with AGC — "
+    "and health() reports echoRawPeak and echoCleanPeak measured while the "
+    "speaker was running, which is how its cancellation is measured. "
+    "Audio and lifecycle events share this stream connection.";
 /*
  * WHAT THE MODEL IS TOLD IT CAN DO — and it matters more on this board than on
  * any other, because it has NO SCREEN. There is no glanceable state here at

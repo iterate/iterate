@@ -582,8 +582,16 @@ static uint32_t speaker_queued_bytes(void) {
  * peer_description is the model-facing one.
  */
 static const char instructions[] =
-    "Waveshare voice endpoint. Use the physical upper button for "
-    "push-to-talk; audio and lifecycle events share this stream connection.";
+    "Waveshare AMOLED: a voice endpoint with a touch screen showing a face. "
+    "The upper button is push-to-talk; the lower button hangs up. "
+    "conversation.start() and conversation.end() begin and end a call. "
+    "health() returns this device's full diagnostics, the same document it "
+    "pushes as dev-stats — start there when it seems unwell. "
+    "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to a "
+    "ceiling this board has a measured reason for; speaker.volume() reads it "
+    "back. Both answer {percent,ceiling}. "    "pushToTalk.start() and pushToTalk.stop() hold its microphone open, "
+    "joining the physical button as a wired-OR: it has no echo cancellation, "
+    "so it only listens while one of them is held. "    "Audio and lifecycle events share this stream connection.";
 static const char peer_description[] =
     "{\"instructions\":\"Waveshare voice endpoint. "
     "conversation.start() / conversation.end() begin and end a call; "

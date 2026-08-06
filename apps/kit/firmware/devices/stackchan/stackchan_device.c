@@ -313,10 +313,22 @@ static uint32_t speaker_queued_bytes(void) {
  * flattens this mount and reports children: {}).
  */
 static const char instructions[] =
-    "StackChan voice robot. Touching its screen starts and ends the call; "
-    "the microphone stays open during a call (it cancels its own speaker). "
-    "servos.move({yawDegrees,pitchDegrees,speed}) turns its head; audio and "
-    "lifecycle events share this stream connection.";
+    "StackChan: a small desk robot with a face, a moving head and a camera. "
+    "Touching its screen starts and ends the call, and its microphone stays "
+    "OPEN throughout — it cancels its own speaker, so it can be interrupted. "
+    "conversation.start() and conversation.end() begin and end a call. "
+    "health() returns this device's full diagnostics, the same document it "
+    "pushes as dev-stats — start there when it seems unwell. "
+    "speaker.setVolume({percent}) sets how loud it plays, 0-100, clamped to a "
+    "ceiling this board has a measured reason for; speaker.volume() reads it "
+    "back. Both answer {percent,ceiling}. "    "servos.move({yawDegrees,pitchDegrees,speed}) turns its head: yaw -128 to "
+    "128, pitch 0 to 90, speed up to 1000. Returning to 0,0 is looking "
+    "straight ahead. "
+    "camera.take() photographs what it can see and returns "
+    "{width,height,contentType,bytes,chunkSize,chunks}; camera.readChunk({index}) "
+    "then returns each piece in order, because one image is larger than a "
+    "single message. The first take() powers the sensor up, so it is the slow "
+    "one. Audio and lifecycle events share this stream connection.";
 /*
  * WHAT THE MODEL IS TOLD IT CAN DO. `children` stays empty because this is a
  * flattened dispatch target — sub-paths are routes the device interprets, not
