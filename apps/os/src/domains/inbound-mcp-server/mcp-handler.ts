@@ -137,10 +137,6 @@ function createServer(input: {
       auth: trustedInternalAuthContext(),
       config: input.context.config,
       ctx: input.context.executionCtx,
-      // The MCP caller's own verified identity isn't threaded this deep yet
-      // (the itx runs with first-party authority); keep the scope fallback
-      // rather than mint a "client-session" claiming the internal principal.
-      streamContext: { kind: "scope", scopePath: "/" },
     }).get(projectId);
 
   server.registerTool(

@@ -5105,16 +5105,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     });
   }
 
-  constructor(
-    readonly props: {
-      auth: ItxAuth;
-      config?: AppConfig;
-      ctx: CfExecutionContext;
-      /** Provenance stamped on every itx this collection vends — see the
-       * SessionRpcTarget prop of the same name. */
-      streamContext: StreamContext;
-    },
-  ) {
+  constructor(readonly props: { auth: ItxAuth; config?: AppConfig; ctx: CfExecutionContext }) {
     super();
   }
 
@@ -5137,7 +5128,6 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
         auth: this.props.auth,
         ctx: this.props.ctx,
         prospectiveSlug: idOrSlug,
-        streamContext: this.props.streamContext,
       });
     }
     // Claims can lag right after a create; the auth context may consult the
@@ -5147,7 +5137,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
-      streamContext: this.props.streamContext,
+      streamContext: streamContextForAuth(this.props.auth),
       path: "/",
       projectId,
     });
@@ -5597,7 +5587,6 @@ type ProspectiveProjectRpcTargetProps = {
   auth: ItxAuth;
   ctx: CfExecutionContext;
   prospectiveSlug: string;
-  streamContext: StreamContext;
 };
 
 type ProjectRpcTargetProps = ExistingProjectRpcTargetProps | ProspectiveProjectRpcTargetProps;
@@ -5740,7 +5729,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           projectId: registered.projectId,
         }),
         ctx: prospective.ctx,
-        streamContext: prospective.streamContext,
+        streamContext: streamContextForAuth(prospective.auth),
         projectId: registered.projectId,
       };
       existing.auth.assertCanAccessProject(existing.projectId);
@@ -6631,17 +6620,20 @@ export function itxForScope(props: {
  * "wakeStreamProcessor"]`) walks the same shape a project stream's does.
  */
 export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutionContext }) {
-  return new SessionRpcTarget({ ...props, streamContext: { kind: "scope", scopePath: "/" } });
+  return new SessionRpcTarget(props);
 }
 
 /**
- * Server-derived provenance for a direct external session (CLI, REPL,
- * dashboard, MCP): exactly what auth verified for the socket, never
- * client-declared — so approval surfaces can show WHO asked instead of the
- * anonymous scope-"/" fallback.
+ * The stream context a project-root itx vends for this authority. External
+ * origin (a credential presented over the wire — CLI, REPL, dashboard,
+ * harness) journals server-derived client-session provenance, so approval
+ * surfaces can show WHO asked; internal mints keep the plain root scope.
+ * Never client-declared — both fields come from what auth verified.
  */
-export function clientSessionStreamContext(auth: ItxAuth): StreamContext {
-  return { kind: "client-session", principal: auth.principal, admin: auth.isAdmin() };
+function streamContextForAuth(auth: ItxAuth): StreamContext {
+  return auth.origin === "external"
+    ? { kind: "client-session", principal: auth.principal, admin: auth.isAdmin() }
+    : { kind: "scope", scopePath: "/" };
 }
 
 /** The project stream's reduced state (repo catalog, worker builds, …) — also
@@ -6685,17 +6677,7 @@ function disposeProjectProcessorStateResource(
  * auth can reach them.
  */
 class SessionRpcTarget extends IterateRpcTarget<"Session"> {
-  constructor(
-    readonly props: {
-      auth: ItxAuth;
-      config?: AppConfig;
-      ctx: CfExecutionContext;
-      /** Provenance stamped on every itx this session vends. `authenticate`
-       * passes {@link clientSessionStreamContext}; internal session-shaped
-       * roots pass an explicit `scope` context. */
-      streamContext: StreamContext;
-    },
-  ) {
+  constructor(readonly props: { auth: ItxAuth; config?: AppConfig; ctx: CfExecutionContext }) {
     super();
   }
 
@@ -6736,7 +6718,6 @@ class SessionRpcTarget extends IterateRpcTarget<"Session"> {
       auth: this.props.auth,
       config: this.props.config,
       ctx: this.props.ctx,
-      streamContext: this.props.streamContext,
     });
   }
 }
@@ -6805,12 +6786,7 @@ export class UnauthenticatedOsRpcTarget extends IterateRpcTarget<"Unauthenticate
         return claims === null ? null : { projectId: claims.projectId, userId: claims.userId };
       },
     });
-    return new SessionRpcTarget({
-      auth,
-      config: this.props.config,
-      ctx: this.props.ctx,
-      streamContext: clientSessionStreamContext(auth),
-    });
+    return new SessionRpcTarget({ auth, config: this.props.config, ctx: this.props.ctx });
   }
 }
 

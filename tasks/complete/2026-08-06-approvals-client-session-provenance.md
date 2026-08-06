@@ -65,11 +65,14 @@ client-declared label in this task (deliberately deferred — see non-goals).
       server-minted trust model_
 - [x] Derive it from `ItxAuth` at the session-rooted handle sites in
       `apps/os/src/rpc-targets.ts`
-      _`clientSessionStreamContext(auth)` helper; `streamContext` is now a
-      required prop on SessionRpcTarget and ProjectCollectionRpcTarget so every
-      constructor site chooses explicitly: `authenticate()` and
-      project-server-fns pass client-session; deploymentItxForInternal,
-      integration-api, and mcp-handler keep explicit scope-"/"_
+      _reworked after review: instead of threading a `streamContext` prop
+      through SessionRpcTarget/ProjectCollectionRpcTarget, `ItxAuth` now
+      carries `origin: "external" | "internal"`, set at the mint sites in
+      auth.ts (every resolveItxAuth door and itxAuthFromPrincipal are
+      external; trustedInternalAuthContext/streamDeliveryAuthContext are
+      internal). The project-root vending sites derive via a private
+      `streamContextForAuth(auth)` — external → client-session, internal →
+      scope-"/". No rpc-target surface changes survive._
 - [x] Confirm the approval signing scheme is unaffected
       _`buildApprovalMessage` deliberately excludes display/provenance fields —
       streamContext is not part of the signed subject_
@@ -98,10 +101,12 @@ client-declared label in this task (deliberately deferred — see non-goals).
 
 - The generated itx API files did not change — StreamContext is server-internal
   and not part of the public surface (`generate:itx-api` produced no diff).
-- MCP (`mcp-handler.ts`) keeps the scope-"/" fallback: it runs project itx with
-  `trustedInternalAuthContext()` after verifying the caller separately, so
-  minting a client-session there would falsely claim the internal principal.
-  Threading the MCP caller's real identity is a natural follow-up.
+- MCP (`mcp-handler.ts`) stays unattributed automatically: it runs project itx
+  with `trustedInternalAuthContext()` (origin "internal") after verifying the
+  caller separately. Threading the MCP caller's real identity is a natural
+  follow-up.
+- Dashboard SSR server-fns (`project-server-fns.ts`) now get client-session
+  provenance for free — their `itxAuthFromPrincipal` auth is external.
 - Push-notification body ("GET gmail.googleapis.com is waiting for approval.")
   still has no provenance; the card does once opened. Adding the principal to
   the notification body is another possible follow-up.
