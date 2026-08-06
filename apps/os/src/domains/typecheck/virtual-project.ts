@@ -255,6 +255,7 @@ export async function checkCapabilityTypes(input: {
 export async function checkItxScript(input: {
   capabilities: CapabilityDescription[];
   code: string;
+  preamble?: string;
   typechecker: Typechecker;
 }): Promise<string[]> {
   if (typeof input.code !== "string") {
@@ -272,7 +273,7 @@ export async function checkItxScript(input: {
         "before it, comments included.",
     ];
   }
-  const project = assembleScriptProject(input.capabilities, input.code);
+  const project = assembleScriptProject(input.capabilities, input.code, input.preamble);
   const { diagnostics, notes } = await input.typechecker.check({ files: project.files });
   const problems = formatProblems(diagnostics, {
     label: "script",
@@ -280,17 +281,80 @@ export async function checkItxScript(input: {
     // The script's first line is preceded by the prelude lines, so subtract
     // them: reported positions match the code the caller sent.
     lineOffset: -project.preludeLineCount,
+    preambleLineRange: project.preambleLineRange,
   });
   // Notes only contextualize failures — see checkCapabilityTypes.
   return problems.length > 0 ? [...problems, ...notes] : [];
 }
 
+/**
+ * Set-time validation for ONE would-be preamble (the scope's assembled
+ * preamble text including the candidate entry), against a trivial script.
+ * Returns problems attributable to the preamble's own lines — a broken mount
+ * declaration elsewhere in the scope must not veto an unrelated setPreamble,
+ * exactly as it must not veto a script. Shares the execution gate's
+ * permissive-on-infrastructure stance: an unreachable checker returns [].
+ */
+export async function checkPreamble(input: {
+  capabilities: CapabilityDescription[];
+  preamble: string;
+  typechecker: Typechecker;
+  deadlineMs?: number;
+}): Promise<string[]> {
+  if (input.preamble.length > MAX_SCRIPT_CHARS) {
+    return [
+      `preamble — ${input.preamble.length} characters is over the ${MAX_SCRIPT_CHARS}-character check limit.`,
+    ];
+  }
+  if (exceedsNestingDepth(input.preamble, MAX_NESTING_DEPTH)) {
+    return [
+      `preamble — nesting deeper than ${MAX_NESTING_DEPTH} levels; simplify the entry ` +
+        `(code this deep would wedge the checker on every future script in this scope).`,
+    ];
+  }
+  const project = assembleScriptProject(input.capabilities, "async (itx) => {}", input.preamble);
+  let checked: TypecheckResult;
+  try {
+    checked = await withDeadline(
+      input.typechecker.check({ files: project.files }),
+      input.deadlineMs ?? EXECUTION_CHECK_DEADLINE_MS,
+    );
+  } catch {
+    return [];
+  }
+  if (checked.diagnostics.some((diagnostic) => diagnostic.code === 0)) return [];
+  // The probe script is known-good, so EVERY script.ts error is the
+  // preamble's fault — including cascades that report at EOF or on the probe's
+  // own lines (an unclosed brace in the preamble reports nothing inside its
+  // range). Range-filtering here once let such an entry through the gate and
+  // brick the scope. Mount-file errors stay excluded: a broken mount must not
+  // veto a set, exactly as it must not veto a script.
+  const preambleErrors = checked.diagnostics.filter(
+    (diagnostic) => diagnostic.category === "error" && diagnostic.fileName === "script.ts",
+  );
+  const problems = formatProblems(preambleErrors, {
+    label: "preamble",
+    primaryFile: "script.ts",
+    lineOffset: -project.preludeLineCount,
+    preambleLineRange: project.preambleLineRange,
+  });
+  return problems.length > 0 ? [...problems, ...checked.notes] : [];
+}
+
 /** The virtual project for one script check — shared by the advisory door
- * (checkItxScript) and the execution gate (checkItxScriptForExecution). */
+ * (checkItxScript) and the execution gate (checkItxScriptForExecution).
+ * `preambleLineRange` (1-based, inclusive, in script.ts coordinates) is where
+ * the scope's injected preamble sits — the attribution boundary: errors there
+ * belong to the scope, never to the script under check. */
 function assembleScriptProject(
   capabilities: CapabilityDescription[],
   code: string,
-): { files: Record<string, string>; preludeLineCount: number } {
+  preamble: string | undefined,
+): {
+  files: Record<string, string>;
+  preludeLineCount: number;
+  preambleLineRange: { start: number; end: number } | null;
+} {
   const files: Record<string, string> = { ...SHARED_FILES };
   // Each mount is its own single-path intersection term: `{ tools: { weather:
   // T } } & { tools: U }` merges correctly even when one mount's path prefixes
@@ -313,9 +377,14 @@ function assembleScriptProject(
         .reduce((type, segment) => `{ ${segment}: ${type} }`, typeReference),
     );
   }
+  // The preamble injects AFTER the Itx alias (its loaders reference `Itx`)
+  // and BEFORE the script const, at module scope: the emitted module then
+  // carries the preamble for free and the script closes over its names.
+  const preambleLines = preamble === undefined || preamble === "" ? [] : preamble.split("\n");
   const prelude = [
     `import type { Project } from "./itx-types";`,
     `type Itx = ${["Project", ...mountTerms].join(" & ")};`,
+    ...preambleLines,
     // Rest params so a script declaring extra parameters (the runtime calls
     // fn(itx), extras just stay undefined) stays assignable.
     `const script: (itx: Itx, ...rest: any[]) => unknown = (`,
@@ -324,7 +393,12 @@ function assembleScriptProject(
   // loadable module: the execution harness imports it, so what runs is the
   // compiler's own type-stripped output — scripts are genuinely TypeScript.
   files["script.ts"] = [...prelude, code, ");", "export default script;"].join("\n");
-  return { files, preludeLineCount: prelude.length };
+  return {
+    files,
+    preludeLineCount: prelude.length,
+    preambleLineRange:
+      preambleLines.length === 0 ? null : { start: 3, end: 2 + preambleLines.length },
+  };
 }
 
 /**
@@ -437,6 +511,7 @@ function exceedsNestingDepth(code: string, limit: number): boolean {
 export async function checkItxScriptForExecution(input: {
   capabilities: CapabilityDescription[];
   code: string;
+  preamble?: string;
   typechecker: Typechecker;
   deadlineMs?: number;
 }): Promise<ScriptExecutionCheck> {
@@ -455,7 +530,7 @@ export async function checkItxScriptForExecution(input: {
   if (exceedsNestingDepth(input.code, MAX_NESTING_DEPTH)) {
     return { verdict: "unchecked", reason: `nesting deeper than ${MAX_NESTING_DEPTH}` };
   }
-  const project = assembleScriptProject(input.capabilities, input.code);
+  const project = assembleScriptProject(input.capabilities, input.code, input.preamble);
   let checked: TypecheckResult;
   try {
     checked = await withDeadline(
@@ -470,6 +545,25 @@ export async function checkItxScriptForExecution(input: {
   if (checked.diagnostics.some((diagnostic) => diagnostic.code === 0)) {
     return { verdict: "unchecked", reason: "type checking crashed" };
   }
+  // A script must never be stopped by code it didn't write. Any error inside
+  // the injected preamble poisons the whole verdict — a preamble syntax error
+  // cascades misparses into script lines, so even "script" diagnostics are
+  // untrustworthy here. Run unchecked instead (setPreamble gates entries at
+  // set time; this catches entries gone stale against a changed scope).
+  const range = project.preambleLineRange;
+  if (
+    range !== null &&
+    checked.diagnostics.some(
+      (diagnostic) =>
+        diagnostic.category === "error" &&
+        diagnostic.fileName === "script.ts" &&
+        diagnostic.line !== undefined &&
+        diagnostic.line >= range.start &&
+        diagnostic.line <= range.end,
+    )
+  ) {
+    return { verdict: "unchecked", reason: "the scope's preamble does not compile" };
+  }
   const blocking = checked.diagnostics.filter(
     (diagnostic) =>
       diagnostic.category === "error" &&
@@ -483,10 +577,35 @@ export async function checkItxScriptForExecution(input: {
     // code, exactly the unchecked path's behavior.
     return { verdict: "clean", emittedJs: checked.js ? checked.js : undefined };
   }
+  // Blockers found with a preamble present: a broken preamble can report
+  // NOTHING inside its own range (an unclosed brace cascades every error onto
+  // script lines or EOF), which would blame — and block — an innocent script
+  // forever. Probe the PREAMBLE ALONE (checkPreamble compiles it against a
+  // trivial script) before blocking: probe-dirty means the preamble is the
+  // culprit and the script runs unchecked; probe-clean proves the blockers
+  // are the script's own — reported from THIS check, where preamble names
+  // were in scope, so a typo near-missing `results` keeps its did-you-mean
+  // (a bare re-check would see plain cannot-find-name and let it run). One
+  // extra compile, only on this rare double condition.
+  if (range !== null && input.preamble !== undefined) {
+    const probe = await checkPreamble({
+      capabilities: input.capabilities,
+      preamble: input.preamble,
+      typechecker: input.typechecker,
+      deadlineMs: input.deadlineMs,
+    });
+    if (probe.length > 0) {
+      return {
+        verdict: "unchecked",
+        reason: "the scope's preamble does not compile (its errors spill past its own lines)",
+      };
+    }
+  }
   const problems = formatProblems(blocking, {
     label: "script",
     primaryFile: "script.ts",
     lineOffset: -project.preludeLineCount,
+    preambleLineRange: range,
   });
   return { verdict: "problems", problems: [...problems, ...checked.notes] };
 }
@@ -516,13 +635,30 @@ async function withDeadline<T>(promise: Promise<T>, ms: number): Promise<T> {
  */
 function formatProblems(
   diagnostics: TypecheckDiagnostic[],
-  options: { label: string; primaryFile: string; lineOffset: number },
+  options: {
+    label: string;
+    primaryFile: string;
+    lineOffset: number;
+    preambleLineRange?: { start: number; end: number } | null;
+  },
 ): string[] {
   return diagnostics
     .filter((diagnostic) => diagnostic.category === "error")
     .map((diagnostic) => {
       const { fileName } = diagnostic;
       if (fileName === undefined || fileName === options.primaryFile) {
+        const range = options.preambleLineRange;
+        // Blame the scope's injected preamble by name — a "script:-3" (or a
+        // positionless "script") error for code the caller never wrote reads
+        // as compiler gaslighting.
+        if (
+          range != null &&
+          diagnostic.line !== undefined &&
+          diagnostic.line >= range.start &&
+          diagnostic.line <= range.end
+        ) {
+          return `preamble:${diagnostic.line - range.start + 1} — ${diagnostic.message} (TS${diagnostic.code})`;
+        }
         const line =
           diagnostic.line === undefined ? undefined : diagnostic.line + options.lineOffset;
         // Lines the assembly prepended (the prelude, an injected import) map

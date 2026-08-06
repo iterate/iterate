@@ -84,8 +84,10 @@ test(
     // where private scratch is writable and never committable.
     const referencedPath = /saved in your workspace at "([^"]+)"/.exec(content)?.[1];
     expect(referencedPath).toBe(`/workspaces${AGENT_PATH}/script-results/agent-output-1.json`);
-    // The recipe the model is told to run next turn names the same file.
-    expect(content).toContain(`itx.workspace.readFile(${JSON.stringify(referencedPath)})`);
+    // The paste-ready recipe leads with the preamble loader (this 2MB result
+    // is over the inline gate, so its `results` row has `.load`); the
+    // workspace file stays a secondary pointer for itx.workspace paging.
+    expect(content).toContain("await results[0].load(itx)");
     // The inline preview stayed bounded — full result only in the file.
     expect(content.length).toBeLessThan(35_000);
 

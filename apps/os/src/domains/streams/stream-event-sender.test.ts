@@ -157,9 +157,9 @@ function harness(args: {
       clearAlarm: () => alarmClears.push(now),
       runDurable: (work) => kept.push(work()),
       keepAlive: (promise) => kept.push(promise),
-      wakeChannelKeys: () => new Set<string>(),
+      subscriberPagerConnectionKeys: () => new Set<string>(),
       onSessionsIdleClosed: () => undefined,
-      wakeDormantSubscribers: () => undefined,
+      pageDormantSubscribers: () => undefined,
     },
   });
 
@@ -1886,7 +1886,7 @@ async function flushMicrotasks() {
 function connectionsHarness(
   options: {
     events?: StreamEvent[];
-    wakeChannelKeys?: () => ReadonlySet<string>;
+    subscriberPagerConnectionKeys?: () => ReadonlySet<string>;
     onSessionsIdleClosed?: (connectionKeys: readonly string[]) => void;
     readBatch?: ConstructorParameters<typeof StreamConnections>[0]["hooks"]["readBatch"];
     onAppend?: (args: {
@@ -1948,7 +1948,8 @@ function connectionsHarness(
       now: () => now,
       armAlarm: (atMs) => alarmTimes.push(atMs),
       keepAlive: () => undefined,
-      wakeChannelKeys: options.wakeChannelKeys ?? (() => new Set<string>()),
+      subscriberPagerConnectionKeys:
+        options.subscriberPagerConnectionKeys ?? (() => new Set<string>()),
       onSessionsIdleClosed: (keys) => {
         sessionsIdleClosed.push([...keys]);
         options.onSessionsIdleClosed?.(keys);
@@ -2558,11 +2559,11 @@ describe("StreamConnections hosted delivery watchdog", () => {
     });
   });
 
-  it("idle-tears a session connection only when it has a wake channel, stamping after the close fact", () => {
+  it("idle-tears a session connection only when it has a Pager, stamping after the close fact", () => {
     // One shared journal so append-vs-stamp ORDERING is actually assertable.
     const journal: string[] = [];
     const h = connectionsHarness({
-      wakeChannelKeys: () => new Set(["with-channel"]),
+      subscriberPagerConnectionKeys: () => new Set(["with-channel"]),
       onAppend: ({ event }) => {
         journal.push(event.type);
       },
@@ -2596,7 +2597,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
 
   it("derives the idle deadline from delivery activity instead of sliding it per reconcile", () => {
     const h = connectionsHarness({
-      wakeChannelKeys: () => new Set(["session"]),
+      subscriberPagerConnectionKeys: () => new Set(["session"]),
       events: [],
     });
     h.connections.openSession({

@@ -34,12 +34,26 @@ import {
 } from "../../rpc-targets.ts";
 import { canonicalizeStreamPath, DurableObjectNameCodec } from "../durable-object-names.ts";
 import { posthogSubscriptionEvent } from "../integrations/posthog.ts";
+import { CapabilityHostProcessorContract } from "../capability-host/capability-host-processor-contract.ts";
+import { sameCapabilityPath } from "../capability-host/capability-path.ts";
 import {
-  LiveStateSockets,
-  liveStateSocketLaneKey,
-  liveStateSocketLaneTag,
-  parseLiveStateSocketLaneTag,
-} from "../live-state-socket.ts";
+  CAPABILITY_PROVIDER_PAGER_HEADER,
+  CAPABILITY_PROVIDER_PAGER_TAG,
+  CapabilityProviderPagers,
+  type CapabilityProviderCallLegRpcTarget,
+  type CapabilityProviderPagerActivation,
+} from "../capability-host/capability-provider-pager.ts";
+import type {
+  CapabilityProvidedPayload,
+  CapabilityRecord,
+  RevokeCapabilityInput,
+} from "../capability-host/types.ts";
+import {
+  LiveStatePagers,
+  liveStatePagerLaneKey,
+  liveStatePagerLaneTag,
+  parseLiveStatePagerLaneTag,
+} from "../live-state-pager.ts";
 import { projectEgressFetcher } from "../projects/utils.ts";
 import { buildCopyAppends } from "./copy-appends.ts";
 import {
@@ -49,7 +63,7 @@ import {
 } from "./core-processor.ts";
 import { compileEventFilter, type EventFilter } from "./event-filter.ts";
 import { EphemeralEventBuffer } from "./ephemeral-event-buffer.ts";
-import { WakeSocketRegistry } from "./wake-socket.ts";
+import { StreamSubscriberPagerRegistry } from "./stream-subscriber-pager.ts";
 import {
   internalStreamId,
   isInternalStreamIdempotencyKey,
@@ -326,10 +340,50 @@ type ProcessorFacetStub = {
   waitUntilProcessed(args: { offset: number; timeoutMs?: number; name?: string }): Promise<void>;
   liveState(): Promise<LiveStateRpc<Record<string, unknown>>>;
   invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
-  provideCapability(input: unknown): Promise<{ path: string[]; providedAtOffset: number }>;
+  provideCapability(
+    input: CapabilityProvidedPayload,
+    options?: { afterAppend?(record: CapabilityRecord): void | Promise<void> },
+  ): Promise<{ path: string[]; providedAtOffset: number }>;
   revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void>;
   describeCapabilities(): Promise<unknown[]>;
+  connectCapabilityProviderPager(options: {
+    afterAppend(connectedAtOffset: number): void | Promise<void>;
+  }): Promise<number>;
+  disconnectCapabilityProviderPager(args: { connectedAtOffset: number }): Promise<void>;
+  setPreamble(input: { code: string; key: string }): Promise<void>;
+  removePreamble(input: { key: string }): Promise<void>;
+  describePreamble(): Promise<{ text: string; entries: { key: string; code: string }[] } | null>;
+  getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
   presentAgentRuntimeTransition(args: { transition: unknown }): Promise<unknown>;
+};
+
+/**
+ * The slice of the capability-host fold the parent-held Capability Provider
+ * Pager wiring reads: the mount table plus the connected-Pager references —
+ * enough to gate live provisions, retire displaced mounts, and reconcile
+ * Pagers that did not survive a restart.
+ */
+type CapabilityHostFacetState = {
+  capabilities: CapabilityRecord[];
+  capabilityProviderPagers: { connectedAtOffset: number }[];
+};
+
+/**
+ * The parent-side capability doors {@link StreamProcessorFacadeRpcTarget}
+ * routes through for THIS stream's capability-host facet, so live-mount
+ * bookkeeping and the control-plane serialization stay coupled to the
+ * parent-held Pager sockets — exactly as the retired
+ * CapabilityHostDurableObject coupled them in one class.
+ */
+type CapabilityHostFacadeWiring = {
+  invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown>;
+  provideCapability(
+    input: CapabilityProvidedPayload,
+  ): Promise<{ path: string[]; providedAtOffset: number }>;
+  revokeCapability(input: RevokeCapabilityInput): Promise<void>;
+  describeCapabilities(): Promise<unknown[]>;
+  setPreamble(input: { code: string; key: string }): Promise<void>;
+  removePreamble(input: { key: string }): Promise<void>;
 };
 
 /** Build the concrete calls used by the receiver union. */
@@ -512,11 +566,19 @@ export type StreamSubscriptionDescription = {
 class StreamProcessorFacadeRpcTarget extends RpcTarget {
   readonly #name: string;
   readonly #dial: () => Promise<ProcessorFacetStub>;
+  readonly #capabilityHost: CapabilityHostFacadeWiring | undefined;
 
-  constructor(input: { name: string; dial: () => Promise<ProcessorFacetStub> }) {
+  constructor(input: {
+    name: string;
+    dial: () => Promise<ProcessorFacetStub>;
+    /** Present only on the capability-host facade: routes the capability
+     * doors through the parent's Pager wiring instead of straight to the facet. */
+    capabilityHost?: CapabilityHostFacadeWiring;
+  }) {
     super();
     this.#name = input.name;
     this.#dial = input.dial;
+    this.#capabilityHost = input.capabilityHost;
   }
 
   /** One consistent read of the committed fold, after a pull through the
@@ -561,20 +623,69 @@ class StreamProcessorFacadeRpcTarget extends RpcTarget {
 
   // Capability-host domain doors (meaningful on the "capability-host"
   // facade): the retired CapabilityHostDurableObject's forwarded methods.
+  // With the parent wiring present they route through it, so reconciliation,
+  // live-mount retirement, and the control-plane serialization all engage.
   async invokeCapability(input: { args?: unknown[]; path: string[] }): Promise<unknown> {
+    if (this.#capabilityHost !== undefined) {
+      return await this.#capabilityHost.invokeCapability(input);
+    }
     return await (await this.#dial()).invokeCapability(input);
   }
 
-  async provideCapability(input: unknown): Promise<{ path: string[]; providedAtOffset: number }> {
+  async provideCapability(
+    input: CapabilityProvidedPayload,
+  ): Promise<{ path: string[]; providedAtOffset: number }> {
+    if (this.#capabilityHost !== undefined) {
+      return await this.#capabilityHost.provideCapability(input);
+    }
     return await (await this.#dial()).provideCapability(input);
   }
 
   async revokeCapability(input: { path: string[]; providedAtOffset?: number }): Promise<void> {
+    if (this.#capabilityHost !== undefined) {
+      await this.#capabilityHost.revokeCapability(input);
+      return;
+    }
     await (await this.#dial()).revokeCapability(input);
   }
 
   async describeCapabilities(): Promise<unknown[]> {
+    if (this.#capabilityHost !== undefined) {
+      return await this.#capabilityHost.describeCapabilities();
+    }
     return await (await this.#dial()).describeCapabilities();
+  }
+
+  // Preamble doors (capability-host facades): the mutations ride the parent's
+  // capability serialization — a set-time compile snapshots state, awaits an
+  // expensive check, then appends, so two concurrent sets validating against
+  // the same snapshot could otherwise commit a preamble that no longer
+  // compiles. The reads forward plainly.
+  async setPreamble(input: { code: string; key: string }): Promise<void> {
+    if (this.#capabilityHost !== undefined) {
+      await this.#capabilityHost.setPreamble(input);
+      return;
+    }
+    await (await this.#dial()).setPreamble(input);
+  }
+
+  async removePreamble(input: { key: string }): Promise<void> {
+    if (this.#capabilityHost !== undefined) {
+      await this.#capabilityHost.removePreamble(input);
+      return;
+    }
+    await (await this.#dial()).removePreamble(input);
+  }
+
+  async describePreamble(): Promise<{
+    text: string;
+    entries: { key: string; code: string }[];
+  } | null> {
+    return await (await this.#dial()).describePreamble();
+  }
+
+  async getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
+    return await (await this.#dial()).getScriptResult(executionId);
   }
 }
 
@@ -840,21 +951,33 @@ export class StreamDurableObject extends DurableObject<Env> {
       },
       runDurable: (work) => this.#deliveryAlarmBoundary.scheduleOrRun(work),
       keepAlive: (promise) => this.#runInBackground(() => promise),
-      wakeChannelKeys: () => this.#wakeSockets.channelKeys(),
-      onSessionsIdleClosed: (connectionKeys) => this.#wakeSockets.recordIdleClosed(connectionKeys),
-      wakeDormantSubscribers: (justCommitted) =>
-        this.#wakeSockets.wakeDormant(justCommitted.map((entry) => entry.event)),
+      subscriberPagerConnectionKeys: () => this.#subscriberPagers.connectionKeys(),
+      onSessionsIdleClosed: (connectionKeys) =>
+        this.#subscriberPagers.recordIdleClosed(connectionKeys),
+      pageDormantSubscribers: (justCommitted) =>
+        this.#subscriberPagers.pageDormant(justCommitted.map((entry) => entry.event)),
     },
   });
-  /** DO-side wake-socket mechanics (wake-socket.ts); the attachment is the durable state. */
-  readonly #wakeSockets = new WakeSocketRegistry({
+  /** The client-given Stream Subscriber Pager; its attachment is the durable state. */
+  readonly #subscriberPagers = new StreamSubscriberPagerRegistry({
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     maxOffset: () => this.#coreProcessorState.maxOffset,
     hasConnection: (connectionKey) => this.#eventSender.connections.has(connectionKey),
   });
-  /** liveState watcher sockets (live-state-socket.ts) — push-driven runtime debug state at zero pin. */
-  readonly #liveStateSockets = new LiveStateSockets({
+  /** Client-given Capability Provider Pagers for the capability-host FACET.
+   * The sockets, retained provider legs, and pending activations are all
+   * runtime state, so they live HERE on the parent — the facet keeps only the
+   * durable mount facts — mirroring how the facet liveState lanes keep their
+   * watcher sockets parent-side. See the Capability Provider Pagers section. */
+  readonly #capabilityProviderPagers = new CapabilityProviderPagers({
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+  });
+  #capabilityMutationTail = Promise.resolve();
+  #capabilityProviderPagerStartup: Promise<void> | undefined;
+  /** Client-given Live State Pagers — push-driven runtime debug state at zero pin. */
+  readonly #liveStatePagers = new LiveStatePagers({
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     readState: () => this.#readRuntimeState(),
@@ -880,9 +1003,9 @@ export class StreamDurableObject extends DurableObject<Env> {
    * on upgrade and rebuilt by #finishInitialization for watcher sockets that
    * hibernated across an eviction.
    */
-  readonly #facetLiveStateLanes = new Map<string, LiveStateSockets>();
+  readonly #facetLiveStateLanes = new Map<string, LiveStatePagers>();
 
-  #facetLiveStateLane(name: string): LiveStateSockets {
+  #facetLiveStateLane(name: string): LiveStatePagers {
     let lane = this.#facetLiveStateLanes.get(name);
     if (lane === undefined) {
       // The cache the flusher reads (readState must be synchronous — the
@@ -896,8 +1019,8 @@ export class StreamDurableObject extends DurableObject<Env> {
         const facet = await this.#dialProcessorFacet(name);
         state = await (await facet.liveState()).get();
       };
-      const tag = liveStateSocketLaneTag(name);
-      lane = new LiveStateSockets({
+      const tag = liveStatePagerLaneTag(name);
+      lane = new LiveStatePagers({
         getWebSockets: () => this.ctx.getWebSockets(tag),
         acceptWebSocket: (ws) => this.ctx.acceptWebSocket(ws, [tag]),
         readState: () => state,
@@ -974,7 +1097,7 @@ export class StreamDurableObject extends DurableObject<Env> {
     // field.)
     for (const ws of this.ctx.getWebSockets()) {
       for (const tag of this.ctx.getTags(ws)) {
-        const lane = parseLiveStateSocketLaneTag(tag);
+        const lane = parseLiveStatePagerLaneTag(tag);
         if (lane !== undefined) this.#facetLiveStateLane(lane);
       }
     }
@@ -1263,6 +1386,13 @@ export class StreamDurableObject extends DurableObject<Env> {
       return new StreamProcessorFacadeRpcTarget({
         name,
         dial: () => this.#dialProcessorFacet(name),
+        // Only the capability-host facade routes its capability doors through
+        // the parent-held Capability Provider Pager wiring — that is the one
+        // facet whose live mounts have runtime state (sockets, provider legs)
+        // living on this parent.
+        ...(name === CapabilityHostProcessorContract.slug
+          ? { capabilityHost: this.#capabilityHostFacadeWiring() }
+          : {}),
       });
     }
     return new ExpressionProcessorFacadeRpcTarget({
@@ -1297,6 +1427,240 @@ export class StreamDurableObject extends DurableObject<Env> {
       call,
     ]);
     return value;
+  }
+
+  // ===========================================================================
+  // Capability Provider Pagers: the parent-held runtime half of the
+  // capability-host FACET's live mounts. A provider client gives THIS Durable
+  // Object one hibernatable Pager ("release my RPC references while idle;
+  // Page this return channel when a mount of mine is called"); the facet owns
+  // the durable facts (connected/provided/disconnected events and their
+  // reduction), while the sockets, retained provider legs, and pending
+  // activations live here — the same parent-owns-the-socket split as the
+  // facet liveState lanes. This section is the retired
+  // CapabilityHostDurableObject's wiring with every processor/registry read
+  // replaced by a facet dial.
+  // ===========================================================================
+
+  /** The capability-host facet behind this stream's capability doors. */
+  #dialCapabilityHostFacet(): Promise<ProcessorFacetStub> {
+    return this.#dialProcessorFacet(CapabilityHostProcessorContract.slug);
+  }
+
+  /** One catch-up-backed read of the capability-host fold. */
+  async #capabilityHostState(facet: ProcessorFacetStub): Promise<CapabilityHostFacetState> {
+    await facet.catchUp({ name: CapabilityHostProcessorContract.slug });
+    const snapshot = await facet.snapshot({ name: CapabilityHostProcessorContract.slug });
+    // Safe: every project-scoped facet composition registers the
+    // CapabilityHostProcessor under its contract slug, so this snapshot's
+    // state is that contract's fold; CapabilityHostFacetState is the narrow
+    // slice of it this wiring reads.
+    return snapshot.state as CapabilityHostFacetState;
+  }
+
+  /**
+   * Bind a relay's freshly dialed Pager to its durable connected event. The
+   * `pagerDialId` only correlates the WebSocket upgrade with this call — the
+   * connected event's offset is the Pager's durable identity from here on.
+   */
+  async connectCapabilityProviderPager(input: { pagerDialId: string }): Promise<number> {
+    await this.#ensureCapabilityProviderPagersReconciled();
+    try {
+      return await this.#serializeCapabilityMutation(async () => {
+        const facet = await this.#dialCapabilityHostFacet();
+        return await facet.connectCapabilityProviderPager({
+          afterAppend: (connectedAtOffset) => {
+            if (!this.#capabilityProviderPagers.connect(input.pagerDialId, connectedAtOffset)) {
+              throw new Error("Capability Provider Pager disappeared while connecting");
+            }
+          },
+        });
+      });
+    } catch (error) {
+      // The connected event may have committed before its opening Pager
+      // vanished. Re-run the cold-start sweep to journal that exact drop.
+      this.#capabilityProviderPagerStartup = undefined;
+      this.ctx.waitUntil(this.#ensureCapabilityProviderPagersReconciled());
+      throw error;
+    }
+  }
+
+  /**
+   * Mount a capability on this stream's capability scope. Live provisions are
+   * gated on their Pager still being both durably connected and physically
+   * attached; a replaced live mount's provider relay is retired even when
+   * binding the replacement fails.
+   */
+  async provideCapability(
+    input: CapabilityProvidedPayload,
+  ): Promise<{ path: string[]; providedAtOffset: number }> {
+    await this.#ensureCapabilityProviderPagersReconciled();
+    return await this.#serializeCapabilityMutation(async () => {
+      const facet = await this.#dialCapabilityHostFacet();
+      const state = await this.#capabilityHostState(facet);
+      if (input.type === "live") {
+        const connectedAtOffset = input.providerPager.connectedAtOffset;
+        if (
+          !state.capabilityProviderPagers.some(
+            (pager) => pager.connectedAtOffset === connectedAtOffset,
+          ) ||
+          !this.#capabilityProviderPagers.hasPager(connectedAtOffset)
+        ) {
+          throw new Error("live capability provision's Capability Provider Pager is disconnected");
+        }
+      }
+      const replaced = state.capabilities.find((record) =>
+        sameCapabilityPath(record.path, input.path),
+      );
+      return await facet.provideCapability(input, {
+        afterAppend: (record) => {
+          // The append has already displaced this row. Retire its relay even
+          // if binding the replacement fails; otherwise the old ownership
+          // handle would remain active for a mount the table no longer holds.
+          if (replaced?.type === "live") this.#capabilityProviderPagers.removeMount(replaced);
+          if (input.type === "live") {
+            if (record.type !== "live") {
+              throw new Error("live capability provision committed a non-live record");
+            }
+            if (!this.#capabilityProviderPagers.hasPager(input.providerPager.connectedAtOffset)) {
+              this.#capabilityProviderPagerStartup = undefined;
+              this.ctx.waitUntil(this.#ensureCapabilityProviderPagersReconciled());
+              throw new Error(
+                `live capability "${input.path.join(".")}" Provider Pager disappeared`,
+              );
+            }
+          }
+        },
+      });
+    });
+  }
+
+  /** Remove the current mount at a path (or one exact mount by offset) and retire its live relay. */
+  async revokeCapability(input: RevokeCapabilityInput): Promise<void> {
+    await this.#ensureCapabilityProviderPagersReconciled();
+    await this.#serializeCapabilityMutation(async () => {
+      const facet = await this.#dialCapabilityHostFacet();
+      const state = await this.#capabilityHostState(facet);
+      const record = state.capabilities.find((candidate) =>
+        sameCapabilityPath(candidate.path, input.path),
+      );
+      await facet.revokeCapability(input);
+      if (
+        record?.type === "live" &&
+        (input.providedAtOffset === undefined || input.providedAtOffset === record.providedAtOffset)
+      ) {
+        this.#capabilityProviderPagers.removeMount(record);
+      }
+    });
+  }
+
+  /** Adopt one short provider call leg after an activation Page (relay-dialed). */
+  async activateLiveCapability(
+    input: CapabilityProviderPagerActivation,
+  ): Promise<CapabilityProviderCallLegRpcTarget | undefined> {
+    await this.#ensureCapabilityProviderPagersReconciled();
+    const facet = await this.#dialCapabilityHostFacet();
+    const state = await this.#capabilityHostState(facet);
+    const record = state.capabilities.find(
+      (candidate): candidate is Extract<CapabilityRecord, { type: "live" }> =>
+        candidate.type === "live" && candidate.providedAtOffset === input.providedAtOffset,
+    );
+    if (record === undefined) return undefined;
+    return this.#capabilityProviderPagers.activate(input, record);
+  }
+
+  /**
+   * The capability-host FACET's `invokeLiveCapability` dep door: the facet's
+   * processor resolved a live mount and needs its provider — acquired through
+   * the parent-held Pager (Page → relay lends a short RPC leg → invoke →
+   * release at quiescence).
+   */
+  async invokeLiveCapability(input: {
+    args: unknown[];
+    path: string[];
+    record: Extract<CapabilityRecord, { type: "live" }>;
+  }): Promise<unknown> {
+    await this.#ensureCapabilityProviderPagersReconciled();
+    return await this.#capabilityProviderPagers.invoke(input.record, input.path, input.args);
+  }
+
+  /** The facade-side capability doors — see {@link CapabilityHostFacadeWiring}. */
+  #capabilityHostFacadeWiring(): CapabilityHostFacadeWiring {
+    return {
+      invokeCapability: async (input) => {
+        await this.#ensureCapabilityProviderPagersReconciled();
+        return await (await this.#dialCapabilityHostFacet()).invokeCapability(input);
+      },
+      describeCapabilities: async () => {
+        await this.#ensureCapabilityProviderPagersReconciled();
+        return await (await this.#dialCapabilityHostFacet()).describeCapabilities();
+      },
+      provideCapability: (input) => this.provideCapability(input),
+      revokeCapability: (input) => this.revokeCapability(input),
+      setPreamble: (input) =>
+        this.#serializeCapabilityMutation(async () =>
+          (await this.#dialCapabilityHostFacet()).setPreamble(input),
+        ),
+      removePreamble: (input) =>
+        this.#serializeCapabilityMutation(async () =>
+          (await this.#dialCapabilityHostFacet()).removePreamble(input),
+        ),
+    };
+  }
+
+  /**
+   * Record each connected Pager whose physical WebSocket did not survive a
+   * deployment/restart. One disconnected event atomically retires every live
+   * mount that references the Pager's connected offset.
+   * Cloudflare terminates WebSockets during shutdown but does not promise the
+   * dying incarnation enough time to journal every close callback. A fresh
+   * incarnation can decide from durable bindings plus runtime-owned sockets,
+   * so its first capability operation repairs that state in one exact event.
+   */
+  async #ensureCapabilityProviderPagersReconciled(): Promise<void> {
+    const active = this.#capabilityProviderPagerStartup;
+    if (active !== undefined) return await active;
+    const startup = this.#reconcileMissingCapabilityProviderPagers();
+    this.#capabilityProviderPagerStartup = startup;
+    try {
+      await startup;
+    } catch (error) {
+      if (this.#capabilityProviderPagerStartup === startup)
+        this.#capabilityProviderPagerStartup = undefined;
+      throw error;
+    }
+  }
+
+  async #reconcileMissingCapabilityProviderPagers(): Promise<void> {
+    await this.#serializeCapabilityMutation(async () => {
+      const facet = await this.#dialCapabilityHostFacet();
+      const state = await this.#capabilityHostState(facet);
+      for (const pager of state.capabilityProviderPagers) {
+        if (this.#capabilityProviderPagers.hasPager(pager.connectedAtOffset)) continue;
+        await facet.disconnectCapabilityProviderPager({
+          connectedAtOffset: pager.connectedAtOffset,
+        });
+        this.#capabilityProviderPagers.removePager(pager.connectedAtOffset);
+      }
+    });
+  }
+
+  async #disconnectCapabilityProviderPager(connectedAtOffset: number): Promise<void> {
+    await this.#serializeCapabilityMutation(async () => {
+      const facet = await this.#dialCapabilityHostFacet();
+      await facet.disconnectCapabilityProviderPager({ connectedAtOffset });
+      this.#capabilityProviderPagers.removePager(connectedAtOffset);
+    });
+  }
+
+  /** Serialize this scope's low-volume capability control-plane mutations. */
+  #serializeCapabilityMutation<T>(mutation: () => Promise<T>): Promise<T> {
+    const result = this.#capabilityMutationTail.then(mutation);
+    this.#capabilityMutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
   }
 
   /**
@@ -2248,12 +2612,12 @@ export class StreamDurableObject extends DurableObject<Env> {
    */
   openConnection(
     args: Parameters<Stream["openConnection"]>[0],
-    // Internal relay plumbing (which wake socket this open binds) rides a
+    // Internal relay plumbing (which client-given Pager this open binds) rides a
     // separate parameter, never the public arg bag: the relay spreads the
     // caller's args through, so anything merged into their shape would be
     // client-spoofable by default. Public callers cannot reach this DO
     // directly; the relay generates the id.
-    relay?: { wakeSocketId: string },
+    relay?: { subscriberPagerId: string },
   ): StreamConnectionHandle {
     const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
     if (this.#coreProcessorState.subscriptions.outbound.byName[connectionKey] !== undefined) {
@@ -2335,9 +2699,9 @@ export class StreamDurableObject extends DurableObject<Env> {
       ping: args.ping,
     });
 
-    this.#wakeSockets.bind({
+    this.#subscriberPagers.bind({
       connectionKey,
-      wakeSocketId: relay?.wakeSocketId,
+      subscriberPagerId: relay?.subscriberPagerId,
       filter: filterSpec,
       events: args.events,
     });
@@ -2560,10 +2924,10 @@ export class StreamDurableObject extends DurableObject<Env> {
     // point — is complete coverage; the flusher reads state at flush time.
     // Cursor cleanup can reach this before the constructor assigns the
     // fields; the optional reads are therefore intentional.
-    this.#liveStateSockets?.scheduleFlush();
+    this.#liveStatePagers?.scheduleFlush();
     // Facet lanes refresh-then-flush: a cursor mutation is the parent-side
     // signal that a hosted delivery just landed in a facet, so its watchers'
-    // state must be re-pulled before pushing (no-op per lane without sockets).
+    // state must be re-pulled before pushing (no-op per lane without Pagers).
     for (const lane of this.#facetLiveStateLanes?.values() ?? []) lane.refreshThenFlush();
     const liveState = this.#liveState;
     if (liveState?.observed !== true || this.#liveStateRefreshScheduled) return;
@@ -2579,7 +2943,7 @@ export class StreamDurableObject extends DurableObject<Env> {
       coreProcessorState: this.#coreProcessorState,
       runtime: {
         connections: this.#eventSender.connections.runtimeState(),
-        dormantSubscribers: this.#wakeSockets.dormantRuntimeState(),
+        dormantSubscribers: this.#subscriberPagers.dormantRuntimeState(),
         subscriptions: this.#eventSender.subscriptionRuntimeState(),
         metrics: this.#metrics.report(Date.now()),
         ephemeralEvents: this.#ephemeralEvents.runtimeState(),
@@ -2589,16 +2953,17 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   // ===========================================================================
-  // Wake sockets: the hibernatable channel behind idle-closed session
-  // connections. All mechanics live in WakeSocketRegistry (wake-socket.ts);
+  // Stream Subscriber Pagers: client-given hibernatable return channels for
+  // idle-closed session connections. All mechanics live in the registry;
   // this class only routes the platform entry points to it.
   // ===========================================================================
 
-  /** The Stream DO's fetch surface: the liveState-socket (unkeyed = runtime
-   * debug state; keyed = one facet processor's live state) and wake-socket
-   * upgrades, nothing else. */
+  /** The Stream DO's fetch surface: the Live State Pager (unkeyed = runtime
+   * debug state; keyed = one facet processor's live state), the Capability
+   * Provider Pager for the capability-host facet, and the Stream Subscriber
+   * Pager upgrades — nothing else. */
   async fetch(request: Request): Promise<Response> {
-    const lane = liveStateSocketLaneKey(request);
+    const lane = liveStatePagerLaneKey(request);
     if (lane !== undefined) {
       // A socket upgrade is a read: it must not create a lane (whose pulls
       // dial the named facet) for a caller-chosen key the committed catalog
@@ -2622,13 +2987,33 @@ export class StreamDurableObject extends DurableObject<Env> {
         )
       );
     }
+    if (request.headers.get(CAPABILITY_PROVIDER_PAGER_HEADER) !== null) {
+      // Same catalog gate as the facet liveState lanes: a Pager may only
+      // attach to a stream whose committed catalog places the capability-host
+      // subscription under facet placement (the host create batch configures
+      // it), so a caller cannot park provider sockets on arbitrary streams.
+      try {
+        const receiver = this.#requireProcessorWakeSubscription(
+          CapabilityHostProcessorContract.slug,
+        );
+        if (receiver.placement !== "facet") {
+          throw new Error("the capability-host subscription does not run under facet placement");
+        }
+      } catch (error) {
+        return Response.json(
+          { error: error instanceof Error ? error.message : String(error) },
+          { status: 404 },
+        );
+      }
+      return this.#capabilityProviderPagers.acceptUpgrade(request);
+    }
     return (
-      (await this.#liveStateSockets.acceptUpgrade(request)) ??
-      this.#wakeSockets.acceptUpgrade(request)
+      (await this.#liveStatePagers.acceptUpgrade(request)) ??
+      this.#subscriberPagers.acceptUpgrade(request)
     );
   }
 
-  /** Wake sockets are one-way (this DO → relay); inbound frames are ignored. */
+  /** Pagers are one-way (this DO → relay); inbound frames are ignored. */
   webSocketMessage(): void {}
 
   /**
@@ -2640,14 +3025,22 @@ export class StreamDurableObject extends DurableObject<Env> {
    * presence consumers get the durable `"departed"` fact here. Idempotent
    * per socket; best-effort like every connection-close observation.
    */
-  webSocketClose(ws: WebSocket): void {
-    const departed = this.#wakeSockets.departedOnClose(ws);
+  async webSocketClose(ws: WebSocket): Promise<void> {
+    // A closed Capability Provider Pager is its provider's real departure:
+    // journal the disconnect so reduction retires every mount it owned.
+    const connectedAtOffset = this.#capabilityProviderPagers.connectedAtOffset(ws);
+    if (connectedAtOffset !== undefined) {
+      await this.#ensureCapabilityProviderPagersReconciled();
+      await this.#disconnectCapabilityProviderPager(connectedAtOffset);
+      return;
+    }
+    const departed = this.#subscriberPagers.departedOnClose(ws);
     if (departed === undefined) return;
     try {
       this.#append({ authority: "core-event" }, [
         {
           type: "events.iterate.com/stream/connection-closed",
-          idempotencyKey: internalStreamId("wake-socket-departed", departed.socketId),
+          idempotencyKey: internalStreamId("stream-subscriber-pager-departed", departed.pagerId),
           payload: { connectionKey: departed.connectionKey, reason: "departed" },
         },
       ]);
@@ -2656,9 +3049,15 @@ export class StreamDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Shared by both socket lanes; a fault is only ever explicable after the fact. */
-  webSocketError(_ws: WebSocket, error: unknown): void {
-    this.#liveStateSockets.socketError(error);
+  /** Shared by every Pager lane; a fault is only ever explicable after the fact. */
+  webSocketError(ws: WebSocket, error: unknown): void {
+    if (this.ctx.getTags(ws).includes(CAPABILITY_PROVIDER_PAGER_TAG)) {
+      // Terminal for the provider Pager: close it so webSocketClose journals
+      // the disconnect and the relay can reconnect and re-provide.
+      this.#capabilityProviderPagers.handleError(ws, error);
+      return;
+    }
+    this.#liveStatePagers.pagerError(error);
   }
 
   // ===========================================================================

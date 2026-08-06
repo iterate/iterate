@@ -204,7 +204,7 @@ return {
     id: "provide-live-capability",
     title: "Provide a live capability — your object IS the capability",
     description:
-      "provideCapability({ type: 'live', … }) mounts a plain object of functions (nested at any depth) on the project. Dotted calls replay onto its members, back in the provider's process — your browser tab or Node session. The returned provision owns the mount: provision.revoke() removes it. Live caps are session-bound: gone when this session disconnects.",
+      "provideCapability({ type: 'live', … }) mounts a plain object of functions (nested at any depth) on the project. The client gives the CapabilityHost a hibernatable Capability Provider Pager: after releasing ordinary RPC references, the host Pages that return channel when it needs the provider again. One Pager may back many mounts. The returned provision owns this mount: provision.revoke() removes it. Its calls go offline when that Pager disconnects.",
     context: "project",
     runtimes: ["browser", "node", "cli"],
     code: `

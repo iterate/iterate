@@ -6,6 +6,7 @@
 // isolate with no DO).
 import { expect, test } from "vitest";
 import { applyPatch, type LiveUpdate } from "iterate/sdk/capnweb";
+import { LIVE_STATE_PAGER_HEADER } from "../../src/domains/live-state-pager.ts";
 import type { ProjectLiveState } from "../../src/domains/projects/project-live-state.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import { adminSecret, withItxSession } from "./test-helpers.ts";
@@ -107,8 +108,8 @@ test("itx.liveState indexes stream activity as a peer slice", async () => {
   expect(await subscription.ping()).toBe(true);
 });
 
-// Stream liveState rides the hibernatable liveState socket
-// (domains/live-state-socket.ts): the worker relay seeds itself from the
+// Stream liveState rides the client-given hibernatable Live State Pager
+// (domains/live-state-pager.ts): the worker relay seeds itself from the
 // socket's first frame and then receives `{"type":"state"}` frames — no
 // retained subscription pins the Stream DO. Same public LiveStateRpc
 // contract; this proves updates flow end-to-end through the socket-fed
@@ -147,12 +148,12 @@ test("stream.liveState pushes updates through the state socket without a DO-side
   expect(await subscription.ping()).toBe(true);
 });
 
-// Secret liveState rides the socket lane too — as a KEYED facet lane on the
+// Secret liveState rides the Pager lane too — as a KEYED facet lane on the
 // secret STREAM Durable Object (the secret processor is facet-hosted; see
 // facetProcessorLiveStateRelay and the stream DO's facet lanes): pushed
 // DESCRIPTION updates — never material — flow without a DO-side retained
 // subscription.
-test("secret.liveState pushes description updates through the liveState socket", async () => {
+test("secret.liveState pushes description updates through the Live State Pager", async () => {
   const marker = crypto.randomUUID().slice(0, 8);
   using session = withItxSession();
   using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
@@ -196,7 +197,7 @@ test("a user egress request wearing the liveState lane header is claimed by the 
 
   const claimed = await project.egress.fetch(
     new Request("https://live-state.internal/", {
-      headers: { "x-iterate-live-state": "watch" },
+      headers: { [LIVE_STATE_PAGER_HEADER]: "watch" },
     }),
   );
   expect(claimed).toMatchObject({ status: 400 });

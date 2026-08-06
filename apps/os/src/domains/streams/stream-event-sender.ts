@@ -14,8 +14,8 @@
 // | ITX expression   | evaluate and await the named method             | method result          |
 // | webhook          | send one attributed HTTP POST per event         | 2xx response           |
 //
-// Session connections are forgotten when they close (a wake-socket-backed
-// session's dormancy lives on in its socket attachment — wake-socket.ts —
+// Session connections are forgotten when they close (a stream-subscriber-pager-backed
+// session's dormancy lives on in its socket attachment — stream-subscriber-pager.ts —
 // never in this module's memory).
 // Stored subscriptions are stored configuration — the directional events
 // reduced into core state. Delivery uses one SQLite cursor row per subscription
@@ -324,12 +324,13 @@ type StreamEventSenderHooks = {
   /** Keep the Durable Object alive through background delivery work. */
   keepAlive(promise: Promise<unknown>): void;
   /**
-   * connectionKeys with a live hibernatable wake channel (wake-socket.ts).
+   * connectionKeys whose client has given this DO a live hibernatable
+   * Subscriber Pager (stream-subscriber-pager.ts).
    * Only such session connections are idle-teardown-eligible: severing a
-   * session callback with no wake channel would strand the subscriber with
+   * session callback with no Pager would strand the subscriber with
    * no way to learn about new events.
    */
-  wakeChannelKeys(): ReadonlySet<string>;
+  subscriberPagerConnectionKeys(): ReadonlySet<string>;
   /**
    * Idle teardown just closed these session connections; ensure this
    * teardown's own close facts can never wake the subscribers they closed.
@@ -337,12 +338,12 @@ type StreamEventSenderHooks = {
    */
   onSessionsIdleClosed(connectionKeys: readonly string[]): void;
   /**
-   * Post-commit: offer just-committed events to dormant wake-channel
-   * subscribers (wake-socket.ts). Edge-triggered by design — a frame lost to
+   * Post-commit: offer just-committed events to dormant Pager-backed
+   * subscribers (stream-subscriber-pager.ts). Edge-triggered by design — a Page lost to
    * a crash between commit and send is repaired by the next qualifying
    * append (or the relay's liveness probe), never by the repair alarm.
    */
-  wakeDormantSubscribers(justCommitted: SizedStreamEvent[]): void;
+  pageDormantSubscribers(justCommitted: SizedStreamEvent[]): void;
 };
 
 export class StreamEventSender {
@@ -439,14 +440,14 @@ export class StreamEventSender {
       );
       this.connections.sendQueued();
       if (this.connections.isTearingDown) {
-        // Also guards the dormant-wake offer below: close-fact appends during
+        // Also guards the dormant-Page offer below: close-fact appends during
         // teardown must not fan back out to the subscribers they closed.
         this.#armAlarmFromStore();
         this.#consecutiveSendStartFailures = 0;
         return true;
       }
       if (justCommittedEvents !== undefined && justCommittedEvents.length > 0) {
-        this.#hooks.wakeDormantSubscribers(justCommittedEvents);
+        this.#hooks.pageDormantSubscribers(justCommittedEvents);
       }
       this.#sendDueSubscriptions();
       // A new Durable Object incarnation cannot trust an in-memory notion of
@@ -1645,7 +1646,7 @@ type StreamConnectionsHooks = Pick<
   | "now"
   | "armAlarm"
   | "keepAlive"
-  | "wakeChannelKeys"
+  | "subscriberPagerConnectionKeys"
   | "onSessionsIdleClosed"
 > & {
   readBatch(afterOffset: number, beforeOffset: number, limit: number): SizedStreamEvent[];
@@ -2044,7 +2045,7 @@ export class StreamConnections {
       this.#hooks.store.ack(connectionKey, maxOffset);
     }
     // Session connections have no cursor row; their equivalent of the ack
-    // above is the wake-socket attachment stamp, which must likewise land
+    // above is the stream-subscriber-pager attachment stamp, which must likewise land
     // AFTER the close facts so those facts can never wake the subscriber.
     if (session.length > 0) this.#hooks.onSessionsIdleClosed(session);
     this.#idleTeardownAtMs = null;
@@ -2055,16 +2056,17 @@ export class StreamConnections {
   /**
    * Hosted connections are always idle-eligible (the durable subscription
    * re-wakes them). A session connection is eligible only when its owner's
-   * relay holds a live wake socket; every other session connection keeps
-   * today's semantics — it lives (and pins) as long as its session does.
+   * client has given the Stream DO a live Subscriber Pager; every other
+   * session connection keeps today's semantics — it lives (and pins) as long
+   * as its session does.
    */
   #idleEligibleConnectionKeys(): { hosted: string[]; session: string[] } {
     const hosted: string[] = [];
     const session: string[] = [];
-    let wakeKeys: ReadonlySet<string> | undefined;
+    let pagerKeys: ReadonlySet<string> | undefined;
     for (const [connectionKey, connection] of this.#connections) {
       if (connection.kind === "hosted") hosted.push(connectionKey);
-      else if ((wakeKeys ??= this.#hooks.wakeChannelKeys()).has(connectionKey)) {
+      else if ((pagerKeys ??= this.#hooks.subscriberPagerConnectionKeys()).has(connectionKey)) {
         session.push(connectionKey);
       }
     }

@@ -63,6 +63,12 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
        * error into the corrective-retry lane.
        */
       emittedJs?: string;
+      /**
+       * The scope's assembled preamble, type-free rendering — used ONLY by
+       * the no-emit fallback (the emitted module already carries the
+       * preamble, compiled from the same source the gate checked).
+       */
+      preambleJs?: string;
       /** Absolute epoch-ms deadline for the complete dynamic-worker call. */
       expiresAt: number;
       streamContext: Extract<StreamContext, { kind: "script-execution" }>;
@@ -85,6 +91,7 @@ export class ScriptExecutionEntrypoint extends WorkerEntrypoint<
         code,
         emittedJs: options.emittedJs,
         expiresAt: options.expiresAt,
+        preambleJs: options.preambleJs,
         scopePath,
       }),
       traceRole: "run_script",
@@ -137,14 +144,25 @@ export function scriptWorkerRef(input: {
   code: string;
   emittedJs?: string;
   expiresAt: number;
+  preambleJs?: string;
   scopePath: string;
 }): StatelessDynamicWorkerRef {
   // Preferred shape: the gate's emitted module (default export = the script
   // function) as its own file, imported by the harness — the compiler's
-  // type-stripped output is what runs. Fallback shape (no emit available):
-  // embed the raw code as an expression, exactly the pre-gate behavior.
+  // type-stripped output is what runs, and it already CONTAINS the scope's
+  // preamble (compiled in with the script). Fallback shape (no emit
+  // available): embed the raw code as an expression, exactly the pre-gate
+  // behavior — with the preamble's type-free rendering scoped inside an async
+  // IIFE, so preamble names can never collide with this harness's own
+  // symbols and the script still closes over them.
   const scriptModule = input.emittedJs;
-  const fnSource = scriptModule === undefined ? input.code : `scriptModule`;
+  const preambleJs = input.preambleJs;
+  const fnSource =
+    scriptModule !== undefined
+      ? `scriptModule`
+      : preambleJs === undefined || preambleJs === ""
+        ? input.code
+        : `await (async () => {\n${preambleJs}\nreturn (${input.code});\n})()`;
   const importLine = scriptModule === undefined ? "" : `import scriptModule from "./script.js";`;
   const sandboxExecTimeoutSource = sandboxExecTimeout.toString();
   const source = `
