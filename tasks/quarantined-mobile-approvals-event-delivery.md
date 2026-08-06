@@ -46,7 +46,14 @@ deadline that returns the obligation to durable recovery. The first preview on
 that head proved recovery but exposed both named repo-readiness outcomes still
 crossing processor RPC without their retryable flag and polluting callback
 error telemetry. The repo errors now carry that wire-safe availability tag;
-the exact-head gate remains at zero pending deployment.
+the exact-head gate remains at zero pending deployment. The next exact-head
+preview kept all restored mobile cases first-try green, but a repo-IDE case
+retried after recovery certified an empty Artifact as seeded. The Workers
+binding repo handle omitted the assumed REST-only `lastPushAt` metadata, so
+`undefined !== null` skipped the seed. Recovery now verifies the actual
+default-branch head through the binding's server-side `log()` call inside the
+same eight-second budget; missing heads seed, while existing heads avoid a
+potentially unbounded clone. The gate remains at zero pending that deployment.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -232,6 +239,16 @@ notification journal.
   A red/green contract test now requires that flag on both errors; the existing
   wire serializer and stream receiver classification route them to warning
   telemetry while keeping the durable retry ladder unchanged.
+- That workflow was also correctly rejected for a `repo-ide-svg-index-preview`
+  retry. Project `prj_86b46f9224d849788e7e9d22a101bff6` spent two bounded
+  drives in `artifact-get-or-create`, then emitted `repos/created` at
+  02:34:22.267Z without a Git push. `Repo.commitFiles` immediately failed with
+  `Could not find main`; the live Artifact still reports `last_push_at: null`.
+  The recovery read returned a Workers binding handle whose runtime shape has
+  `log()` but no `lastPushAt`, while the old condition treated the missing
+  property as proof of a push. Red/green tests now cover a handle with no
+  branch, a missing default-branch error, a valid existing head, and a stalled
+  head check sharing the original deadline.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 

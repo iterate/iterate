@@ -1888,10 +1888,12 @@ export class RepoDurableObject extends DurableObject<Env> {
     const defaultBranch = REPO_DEFAULT_BRANCH;
     const remote = this.artifactRemote(artifactName);
 
-    // A prior push is authoritative evidence that an existing Artifact is
-    // already seeded. Recovery only needs to journal repos/created; cloning the
-    // whole repo to rediscover that fact can exceed a Repo DO's memory limit.
-    if (artifact.lastPushAt !== null) return { artifactName, defaultBranch, remote };
+    // A branch head is authoritative evidence that an existing Artifact is
+    // already seeded. Recovery only needs to journal repos/created; the
+    // binding's server-side log check avoids cloning a potentially large repo.
+    if (!artifact.created && artifact.hasCommits) {
+      return { artifactName, defaultBranch, remote };
+    }
 
     const files = await loadFiles();
 

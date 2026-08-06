@@ -1,12 +1,14 @@
 import { expect, test, vi } from "vitest";
 import { getOrCreateArtifact } from "./artifact-creation.ts";
 
-test("an existing seeded repo reports its last push", async () => {
+test("an existing seeded repo reports its branch head", async () => {
   const artifacts = {
     create: vi.fn(async () => {
       throw artifactError("ALREADY_EXISTS");
     }),
-    get: vi.fn(async () => ({ lastPushAt: "2026-07-20T12:00:00.000Z" })),
+    get: vi.fn(async () => ({
+      log: vi.fn(async () => [{ hash: "a".repeat(40) }]),
+    })),
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
@@ -15,8 +17,8 @@ test("an existing seeded repo reports its last push", async () => {
 
   expect(result).toEqual({
     created: false,
+    hasCommits: true,
     initialWriteToken: null,
-    lastPushAt: "2026-07-20T12:00:00.000Z",
   });
 });
 
@@ -35,7 +37,6 @@ test("a new repo preserves create's initial write token without reading it back"
   expect(result).toEqual({
     created: true,
     initialWriteToken: "art_v1_initial",
-    lastPushAt: null,
   });
   expect(artifacts.create).toHaveBeenCalledExactlyOnceWith("project-repo", {
     setDefaultBranch: "trunk",
@@ -43,12 +44,16 @@ test("a new repo preserves create's initial write token without reading it back"
   expect(artifacts.get).not.toHaveBeenCalled();
 });
 
-test("an unseeded existing repo remains eligible for recovery", async () => {
+test("an existing repo without a branch remains eligible for recovery", async () => {
   const artifacts = {
     create: vi.fn(async () => {
       throw artifactError("ALREADY_EXISTS");
     }),
-    get: vi.fn(async () => ({ lastPushAt: null })),
+    // The deployed Workers binding returns a repo handle, not REST metadata:
+    // lastPushAt can be absent even though TypeScript's beta surface exposed it.
+    get: vi.fn(async () => ({
+      log: vi.fn(async () => []),
+    })),
   };
 
   const result = await getOrCreateArtifact(artifacts, "project-repo", {
@@ -57,9 +62,54 @@ test("an unseeded existing repo remains eligible for recovery", async () => {
 
   expect(result).toEqual({
     created: false,
+    hasCommits: false,
     initialWriteToken: null,
-    lastPushAt: null,
   });
+});
+
+test("a missing default branch remains eligible for recovery", async () => {
+  const artifacts = {
+    create: vi.fn(async () => {
+      throw artifactError("ALREADY_EXISTS");
+    }),
+    get: vi.fn(async () => ({
+      log: vi.fn(async () => {
+        throw Object.assign(new Error("Could not find main."), { code: "NotFoundError" });
+      }),
+    })),
+  };
+
+  await expect(
+    getOrCreateArtifact(artifacts, "project-repo", { defaultBranch: "main" }),
+  ).resolves.toEqual({
+    created: false,
+    hasCommits: false,
+    initialWriteToken: null,
+  });
+});
+
+test("branch verification shares the creation recovery deadline", async () => {
+  vi.useFakeTimers();
+  try {
+    const artifacts = {
+      create: vi.fn(async () => {
+        throw artifactError("ALREADY_EXISTS");
+      }),
+      get: vi.fn(async () => ({
+        log: vi.fn(() => new Promise<never>(() => undefined)),
+      })),
+    };
+
+    const result = getOrCreateArtifact(artifacts, "project-repo", {
+      defaultBranch: "main",
+    });
+    const rejection = expect(result).rejects.toMatchObject({ name: "RepoNotSeededError" });
+    await vi.advanceTimersByTimeAsync(8_000);
+
+    await rejection;
+  } finally {
+    vi.useRealTimers();
+  }
 });
 
 test("an ambiguous create waits for the existing repo to become readable", async () => {
@@ -73,7 +123,7 @@ test("an ambiguous create waits for the existing repo to become readable", async
         .fn()
         .mockRejectedValueOnce(artifactError("NOT_FOUND"))
         .mockRejectedValueOnce(artifactError("NOT_FOUND"))
-        .mockResolvedValueOnce({ lastPushAt: null }),
+        .mockResolvedValueOnce({ log: vi.fn(async () => []) }),
     };
 
     const result = getOrCreateArtifact(artifacts, "project-repo", {
@@ -83,8 +133,8 @@ test("an ambiguous create waits for the existing repo to become readable", async
 
     await expect(result).resolves.toEqual({
       created: false,
+      hasCommits: false,
       initialWriteToken: null,
-      lastPushAt: null,
     });
     expect(artifacts.create).toHaveBeenCalledOnce();
     expect(artifacts.get).toHaveBeenCalledTimes(3);

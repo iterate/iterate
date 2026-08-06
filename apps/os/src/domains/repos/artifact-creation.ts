@@ -1,4 +1,9 @@
-import { isRepoNotSeededError, RepoNotSeededError, RetryableRepoCreationError } from "./utils.ts";
+import {
+  classifyRepoAccessError,
+  isRepoNotSeededError,
+  RepoNotSeededError,
+  RetryableRepoCreationError,
+} from "./utils.ts";
 
 // Healthy creates finish in about two seconds (live p99 2.1s). Keep the whole
 // idempotent create/readback operation below the hosted callback's 20-second
@@ -12,13 +17,16 @@ export type GetOrCreateArtifactResult =
   | {
       created: true;
       initialWriteToken: string;
-      lastPushAt: null;
     }
   | {
       created: false;
+      hasCommits: boolean;
       initialWriteToken: null;
-      lastPushAt: string | null;
     };
+
+type ExistingArtifact = {
+  log(options: { limit: number; ref: string }): Promise<Array<{ hash: string }>>;
+};
 
 /**
  * Create an Artifacts repository idempotently and report whether it has
@@ -40,7 +48,7 @@ export async function getOrCreateArtifact(
       name: string,
       input: { setDefaultBranch: string },
     ): Promise<Pick<ArtifactsCreateRepoResult, "token">>;
-    get(name: string): Promise<{ lastPushAt: string | null }>;
+    get(name: string): Promise<unknown>;
   },
   name: string,
   input: { defaultBranch: string },
@@ -55,21 +63,40 @@ export async function getOrCreateArtifact(
     return {
       created: true,
       initialWriteToken: stripArtifactTokenExpiry(created.token),
-      lastPushAt: null,
     };
   } catch (error) {
     if ((error as { code?: string }).code !== "ALREADY_EXISTS") throw error;
   }
 
-  const existing = await waitForExistingArtifact(artifacts, name, deadlineAt);
-  return { created: false, initialWriteToken: null, lastPushAt: existing.lastPushAt };
+  const existing = requireExistingArtifact(
+    await waitForExistingArtifact(artifacts, name, deadlineAt),
+  );
+  const hasCommits = await beforeArtifactCreationDeadline(
+    async () => {
+      try {
+        const history = await existing.log({ limit: 1, ref: input.defaultBranch });
+        const head = history[0]?.hash;
+        if (head === undefined) return false;
+        if (!/^[0-9a-f]{40}$/i.test(head)) {
+          throw new Error(`Artifact ${name} returned an invalid ${input.defaultBranch} head.`);
+        }
+        return true;
+      } catch (error) {
+        if (isRepoNotSeededError(classifyRepoAccessError(error, input.defaultBranch))) return false;
+        throw error;
+      }
+    },
+    deadlineAt,
+    () => artifactReadTimeout(name, undefined),
+  );
+  return { created: false, hasCommits, initialWriteToken: null };
 }
 
 async function waitForExistingArtifact(
-  artifacts: { get(name: string): Promise<{ lastPushAt: string | null }> },
+  artifacts: { get(name: string): Promise<unknown> },
   name: string,
   deadlineAt: number,
-): Promise<{ lastPushAt: string | null }> {
+): Promise<unknown> {
   let lastError: unknown;
   let retryDelayMs = EXISTING_ARTIFACT_READY_INITIAL_RETRY_MS;
 
@@ -96,6 +123,20 @@ async function waitForExistingArtifact(
     `Artifact ${name} did not become readable within ${ARTIFACT_CREATION_DEADLINE_MS}ms.`,
     { cause: lastError },
   );
+}
+
+function requireExistingArtifact(value: unknown): ExistingArtifact {
+  if (
+    typeof value !== "object" ||
+    value === null ||
+    !("log" in value) ||
+    typeof value.log !== "function"
+  ) {
+    throw new Error("Artifacts get() returned a repo handle without log().");
+  }
+  // The runtime check above supplies the content-read method missing from the
+  // pinned workers-types release but present in the deployed binding.
+  return value as ExistingArtifact;
 }
 
 async function beforeArtifactCreationDeadline<T>(
