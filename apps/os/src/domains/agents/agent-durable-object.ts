@@ -16,7 +16,12 @@ import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { agentWorkspacePath } from "../workspaces/utils.ts";
 import { parseConfig } from "../../config.ts";
 import { AgentProcessor } from "./agent-processor-implementation.ts";
-import { AgentProcessorContract, type AgentLiveState } from "./agent-processor-contract.ts";
+import { HeadlessAgentProcessor } from "./agent-headless-processor.ts";
+import {
+  AgentProcessorContract,
+  type AgentFileAttachment,
+  type AgentLiveState,
+} from "./agent-processor-contract.ts";
 import { parseAgentDurableObjectName } from "./utils.ts";
 
 export class AgentDurableObject extends DurableObject<Env> {
@@ -37,7 +42,11 @@ export class AgentDurableObject extends DurableObject<Env> {
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
     getLiveState: (): AgentLiveState => ({
-      runtimeChange: this.#agentReads.currentState.runtimeChange,
+      // An agent runs under the classic OR the headless processor, never
+      // both — whichever was woken holds the reduced state with a stamp.
+      runtimeChange:
+        this.#agentReads.currentState.runtimeChange ||
+        this.#headlessReads.currentState.runtimeChange,
     }),
   });
   // The DO constructs its processors — no host-injected readState/writeState/
@@ -50,8 +59,26 @@ export class AgentDurableObject extends DurableObject<Env> {
   // produces the eventless at-head pass (`delivery.caughtUp`) that settles or
   // re-drives the open obligations (see the registry module doc's recovery
   // rule).
-  readonly #agentProcessor = this.#registry.register(
-    new AgentProcessor({
+  readonly #agentProcessor = this.#registry.register(new AgentProcessor(this.#agentArgs()), {
+    recovery: true,
+  });
+  // Runner-backed reads serve the processor facade and live-state surface.
+  readonly #agentReads = this.#registry.reads(this.#agentProcessor);
+  // The headless variant (same wiring minus the codemode component; see
+  // agent-headless-processor.ts). Registered on every agent host, woken only
+  // on streams whose wake subscription was retargeted to its slug — an agent
+  // runs under exactly ONE of the two, so shared `agent/` idempotency keys
+  // make the handover dedupe instead of double-executing.
+  readonly #headlessAgentProcessor = this.#registry.register(
+    new HeadlessAgentProcessor(this.#agentArgs()),
+    { recovery: true },
+  );
+  readonly #headlessReads = this.#registry.reads(this.#headlessAgentProcessor);
+
+  /** Constructor args shared by the classic and headless agent processors —
+   * one stream, one deps recipe, two compositions. */
+  #agentArgs() {
+    return {
       stream: this.#stream,
       path: this.#name.path,
       projectId: this.#name.projectId,
@@ -63,16 +90,16 @@ export class AgentDurableObject extends DurableObject<Env> {
       // provider-side prompt-cache shard.
       cloudflareAiGatewayTransport: () => {
         const gateway = parseConfig(this.env).cloudflareAiGateway;
-        if (gateway.transport === "unified") return { kind: "unified" };
+        if (gateway.transport === "unified") return { kind: "unified" as const };
         return {
-          kind: "byok",
+          kind: "byok" as const,
           gatewayId: gateway.id,
           openaiApiKey: parseConfig(this.env).openAiApiKey.exposeSecret(),
           openaiPromptCacheKey: `${this.#name.projectId}:${this.#name.path}`,
           responseCacheTtlSeconds: gateway.responseCacheTtlSeconds,
         };
       },
-      resolveModelFileUrl: (file) =>
+      resolveModelFileUrl: (file: AgentFileAttachment) =>
         mintProjectFileUrl({
           config: parseConfig(this.env),
           expiresInSeconds: MODEL_FILE_URL_TTL_SECONDS,
@@ -83,7 +110,7 @@ export class AgentDurableObject extends DurableObject<Env> {
       // directory (private scratch under its stream path — never committable),
       // so the model can page through the file instead of blowing its context
       // window. The workspace was explicitly created at agent birth.
-      writeWorkspaceFile: async ({ content, path }) => {
+      writeWorkspaceFile: async ({ content, path }: { content: string; path: string }) => {
         const absolutePath = `${agentWorkspacePath(this.#name.path)}/${path}`;
         await this.env.WORKSPACE_V2.getByName(
           DurableObjectNameCodec.stringify({
@@ -93,11 +120,8 @@ export class AgentDurableObject extends DurableObject<Env> {
         ).writeFile(absolutePath, content);
         return { absolutePath };
       },
-    }),
-    { recovery: true },
-  );
-  // Runner-backed reads serve the processor facade and live-state surface.
-  readonly #agentReads = this.#registry.reads(this.#agentProcessor);
+    };
+  }
 
   // Registered on every agent host; it only wakes on routed Slack agent
   // streams (`/agents/slack/**`) where the project processor configured its

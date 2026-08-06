@@ -85,7 +85,7 @@ function buildAgentComponents(
  * class's members are protected, so the adapter reaches them through a
  * scoped cast rather than widening them to public. `idempotencyKey` is
  * pinned to the `agent/` namespace on purpose; see the class doc. */
-function agentComponentHost(processor: object): AgentHost {
+export function agentComponentHost(processor: object): AgentHost {
   const p = processor as {
     deps: AgentProcessorDeps;
     stream: { readEvents: AgentHost["readEvents"] };

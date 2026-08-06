@@ -2671,6 +2671,7 @@ export type AgentEventInput =
         files?:
           | { contentType: string; filename: string; path: string; size: number; url: string }[]
           | undefined;
+        llmRequestOffset?: number | undefined;
       }
     >
   | TypedConsumedEventInput<
