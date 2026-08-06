@@ -45,7 +45,10 @@ const CHARS_PER_TOKEN = 4;
 // 4150 → 4200 (2026-08-04): THE SHAPE OF WORK gained one bullet — "YOU are
 // the LLM": a prod chat piped email content through ai.run and relayed a 3B
 // model's summary verbatim; the docs invited it and nothing forbade it.
-const DEFAULT_PROMPT_TOKEN_CEILING = 4_200;
+// 4200 → 4250 (2026-08-06): the script preamble shipped — the fresh-scripts
+// bullet now teaches `results` (prior outcomes in scope, typed) and
+// setPreamble; without the teach the injected symbols are dead weight.
+const DEFAULT_PROMPT_TOKEN_CEILING = 4_250;
 
 const AGENT_PROMPTS: Record<string, string> = {
   default: DEFAULT_AGENT_SYSTEM_PROMPT,
