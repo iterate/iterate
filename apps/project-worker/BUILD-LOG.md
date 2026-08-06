@@ -386,7 +386,7 @@ sockets, `onRpcBroken` death, thin streams), so this is composition on what exis
 
 ## Increment 18 — capnweb at the EDGE, the DO doesn't pin: `connect → itx`, `itx.clients`, don't-pin
 
-**Commit** `<pending>`. Supersedes increments 6 + 17 (a clean break — no backcompat). Jonas pointed at two
+**Commit** `134aff35f`. Supersedes increments 6 + 17 (a clean break — no backcompat). Jonas pointed at two
 worktrees: `dont-pin-capability-host` (PR #2424 — the transport) and `client-and-connections` (the `itx.clients`
 API), and said use those APIs exactly, keep it simple, and implement `.connect`/`.clients` WITHOUT the stream-
 connection machinery. Two hard rules landed together: **capnweb terminates ONLY in the stateless worker** (never
