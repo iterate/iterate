@@ -422,25 +422,10 @@ test("Project egress substitutes path-addressed secrets for explicit and project
     await waitForCondition(async () => (await secret.__describe()).audit.usedCount === 3, {
       description: "secret usage audit to fold",
     });
-    // Child-stream birth certificates propagate to the project root stream
-    // asynchronously (child DO → parent chain → project processor), so wait
-    // for the fold before asserting its content — same treatment the secret
-    // fold gets above. Cold deployments take several seconds here.
-    await waitForCondition(
-      async () => {
-        const streams = (await project.processor.snapshot()).state.streams;
-        return [agentPath, repoPath, secretPath].every((path) =>
-          streams.some((item) => item.path === path),
-        );
-      },
-      { description: "project processor to fold the created child streams", timeoutMs: 30_000 },
-    );
-    expect(await project.streams.list()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ path: "/" }),
-        expect.objectContaining({ path: secretPath }),
-      ]),
-    );
+    // Child-stream birth certificates and repo catalog facts propagate to the
+    // project root asynchronously (child DO → parent chain → project
+    // processor), so wait for the complete fold once before asserting it.
+    // Cold deployments take several seconds here.
     await waitForCondition(
       async () => {
         const state = (await project.processor.snapshot()).state;
@@ -453,7 +438,16 @@ test("Project egress substitutes path-addressed secrets for explicit and project
           repoPaths.has(repoPath)
         );
       },
-      { description: "project processor to fold agent, repo, and secret stream lists" },
+      {
+        description: "project processor to fold agent, repo, and secret stream lists",
+        timeoutMs: 30_000,
+      },
+    );
+    expect(await project.streams.list()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ path: "/" }),
+        expect.objectContaining({ path: secretPath }),
+      ]),
     );
     const projectState = (await project.processor.snapshot()).state;
     expect(projectState).toMatchObject({

@@ -8,6 +8,8 @@ import type { ResourceCoordinator } from "~/durable-objects/resource-coordinator
  * (src/lib/worker-env.d.ts) is this same interface.
  */
 export interface Env {
+  /** Immutable identity of the deployed Worker version. */
+  CF_VERSION_METADATA?: { id: string; tag?: string };
   /** D1: lease inventory mirror (`<worker>-resources`). */
   DB: D1Database;
   /** One coordinator DO per resource type: active leases, waiters, expiry alarms. */
@@ -15,3 +17,7 @@ export interface Env {
 }
 
 export const Env = workerEnv as unknown as Env;
+
+export function workerVersion(env: Env): string {
+  return env.CF_VERSION_METADATA?.id || "unversioned";
+}

@@ -10,6 +10,7 @@
 
 import { expect, test } from "vitest";
 import {
+  isStreamReceiverUnavailableError,
   MAX_COPIED_FROM_HOPS,
   type StreamDeliveryBatch,
   type StreamEvent,
@@ -22,7 +23,10 @@ import type {
   Stream,
   StreamRuntimeDebugState,
 } from "../../src/itx-api.generated.ts";
-import { deliveryId as streamDeliveryId } from "../../src/domains/streams/stream-event-sender.ts";
+import {
+  deliveryId as streamDeliveryId,
+  PROCESSOR_RUNTIME_STATE_TIMEOUT_MS,
+} from "../../src/domains/streams/stream-event-sender.ts";
 import { subscriptionConfigurationForDelivery } from "../../src/domains/streams/core-processor-contract.ts";
 import { waitForCondition } from "../test-support/wait-for-condition.ts";
 import {
@@ -2257,6 +2261,75 @@ test("an idle-torn session connection resumes on the next matching append withou
   }
 });
 
+test("a session connection detects an interrupted stream incarnation and resumes from its cursor", async () => {
+  const marker = crypto.randomUUID();
+  const streamPath = `/e2e/subscriptions/session/interrupted/${marker}`;
+  const connectionKey = `interrupted-${marker.slice(0, 8)}`;
+
+  using testProject = await openTestProject(marker);
+  const { project } = testProject;
+  using stream = project.streams.get(streamPath);
+
+  const received: StreamEvent[] = [];
+  const handle = await stream.openConnection({
+    connectionKey,
+    eventTypes: [MATCHING_EVENT_TYPE],
+    processEventBatch: ({ events }) => {
+      received.push(...events);
+    },
+  });
+  try {
+    const [first] = await stream.append({
+      type: MATCHING_EVENT_TYPE,
+      payload: { round: "before-interruption" },
+    });
+    await waitForCondition(async () => received.some((event) => event.offset === first!.offset), {
+      description: "the live session connection to deliver before interruption",
+    });
+
+    await expect(stream.kill()).rejects.toThrow("kill requested");
+    const [second] = await stream.append({
+      type: MATCHING_EVENT_TYPE,
+      payload: { round: "after-interruption" },
+    });
+
+    // The wake socket and old RPC handle can both appear locally live after the
+    // Stream DO has lost them. The relay therefore asks a fresh incarnation
+    // about the exact socket identity. Require the same bounded liveness
+    // transition that the owner's watchdog polls, then reopen from its last
+    // delivered cursor explicitly.
+    await waitForCondition(async () => (await handle.ping()) === false, {
+      description: "the session relay to observe the interrupted stream RPC leg",
+      timeoutMs: 15_000,
+    });
+    await handle.close();
+    const resumed = await stream.openConnection({
+      connectionKey,
+      eventTypes: [MATCHING_EVENT_TYPE],
+      replayAfterOffset: first!.offset,
+      processEventBatch: ({ events }) => {
+        received.push(...events);
+      },
+    });
+    try {
+      await waitForCondition(
+        async () => received.some((event) => event.offset === second!.offset),
+        {
+          description: "the replacement callback to replay after stream interruption",
+          timeoutMs: 30_000,
+        },
+      );
+    } finally {
+      await resumed.close();
+      disposeRpc(resumed);
+    }
+    expect(received.map((event) => event.offset)).toEqual([first!.offset, second!.offset]);
+  } finally {
+    await handle.close();
+    disposeRpc(handle);
+  }
+});
+
 // The resurrection-loop regression (Bugbot 9d27eb22): a subscriber whose
 // filter explicitly names connection-closed must NOT be Paged by its own idle
 // close fact — the teardown's nested reconcile runs before the dormancy stamp
@@ -2384,7 +2457,7 @@ test.skipIf(deployedBaseUrl() === null)(
     );
     await waitForCondition(
       async () => {
-        const snapshot = (await stream.getProcessorRuntimeState({ subscriptionKey }))?.snapshot;
+        const snapshot = (await readProcessorRuntimeState(stream, subscriptionKey))?.snapshot;
         return (
           (snapshot?.offset ?? 0) >= oldRoute!.offset &&
           (snapshot?.state as { routes?: Record<string, string> } | undefined)?.routes?.[
@@ -2408,7 +2481,7 @@ test.skipIf(deployedBaseUrl() === null)(
     const [newConfiguration] = await stream.append(configuredEvent());
     await waitForCondition(
       async () => {
-        const runtime = await stream.getProcessorRuntimeState({ subscriptionKey });
+        const runtime = await readProcessorRuntimeState(stream, subscriptionKey);
         const state = runtime?.snapshot.state as
           | {
               birthCertificate?: unknown;
@@ -2443,7 +2516,7 @@ test.skipIf(deployedBaseUrl() === null)(
     );
     await waitForCondition(
       async () => {
-        const snapshot = (await stream.getProcessorRuntimeState({ subscriptionKey }))?.snapshot;
+        const snapshot = (await readProcessorRuntimeState(stream, subscriptionKey))?.snapshot;
         const state = snapshot?.state as
           | {
               birthCertificate?: { config?: { connection?: string } };
@@ -3421,6 +3494,25 @@ async function forceStreamReset(stream: Stream): Promise<void> {
       testReset(): Promise<void>;
     }
   ).testReset();
+}
+
+async function readProcessorRuntimeState(stream: Stream, subscriptionKey: string) {
+  try {
+    return await stream.getProcessorRuntimeState({ subscriptionKey });
+  } catch (error) {
+    // Runtime state is an observational callback into the hosted processor.
+    // A wedged incarnation is bounded by the product and is safe to poll
+    // through while the durable wake/recovery path replaces it.
+    if (
+      isStreamReceiverUnavailableError(error) &&
+      error instanceof Error &&
+      error.message ===
+        `hosted processor runtime-state callback ${subscriptionKey} timed out after ${PROCESSOR_RUNTIME_STATE_TIMEOUT_MS}ms`
+    ) {
+      return null;
+    }
+    throw error;
+  }
 }
 
 async function appendTrustedCoreEvents(

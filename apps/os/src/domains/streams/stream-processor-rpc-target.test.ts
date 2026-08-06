@@ -3,6 +3,7 @@ import type { StreamEvent } from "iterate/processors";
 import type { ProcessorReads } from "iterate/processors";
 import {
   ProcessorRelayRpcTarget,
+  STREAM_DURABLE_OBJECT_APPEND,
   STREAM_DURABLE_OBJECT_STUB,
   StreamProcessorRpcTarget,
   StreamRpcTarget,
@@ -10,6 +11,37 @@ import {
 import { streamDeliveryAuthContext } from "../../auth.ts";
 
 describe("StreamRpcTarget", () => {
+  it("appends project birth facts through the exact rollout-proven root Stream stub", async () => {
+    const event = {
+      createdAt: new Date(0).toISOString(),
+      offset: 1,
+      path: "/",
+      payload: {},
+      type: "events.iterate.com/test/project-birth",
+    } satisfies StreamEvent;
+    const provenAppend = vi.fn(async () => [event]);
+    const unprovenAppend = vi.fn(async () => {
+      throw new Error("must not reacquire after the version proof");
+    });
+
+    class TestStreamRpcTarget extends StreamRpcTarget {
+      override get [STREAM_DURABLE_OBJECT_STUB]() {
+        return { append: unprovenAppend } as never;
+      }
+    }
+    const stream = new TestStreamRpcTarget({
+      auth: { assertCanAccessProject: vi.fn() } as never,
+      path: "/",
+      projectId: "prj_test",
+    });
+
+    await expect(
+      stream[STREAM_DURABLE_OBJECT_APPEND]({ append: provenAppend }, event),
+    ).resolves.toEqual([event]);
+    expect(provenAppend).toHaveBeenCalledExactlyOnceWith(event);
+    expect(unprovenAppend).not.toHaveBeenCalled();
+  });
+
   it("serves liveState from the socket-fed relay engine, never the DO's liveState property", async () => {
     const runtimeState = {
       coreProcessorState: { maxOffset: 4 },

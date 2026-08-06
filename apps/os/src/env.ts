@@ -99,6 +99,9 @@ export interface Env {
     import("./domains/projects/project-durable-object.ts").ProjectDurableObject
   >;
   REPO: DurableObjectNamespace<import("./domains/repos/repo-durable-object.ts").RepoDurableObject>;
+  REPO_BIRTH_COORDINATOR: DurableObjectNamespace<
+    import("./domains/repos/repo-birth-coordinator-durable-object.ts").RepoBirthCoordinatorDurableObject
+  >;
   /**
    * Sandbox container namespaces, ONE PER INSTANCE TYPE: Cloudflare fixes the
    * container instance type per container class, so each instance type is its own

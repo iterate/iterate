@@ -1370,6 +1370,15 @@ describe("StreamProcessorRunner caught-up processing (delivery.caughtUp)", () =>
     journal.seed({ type: REQUESTED, payload: { id: "b" } }); // 2 — the head event
 
     let headAttempts = 0;
+    const blockedFailure = Object.assign(
+      new Error("caught-up work failed; reference = abcdefghijklmnopqrstuvwxyz0123456789"),
+      {
+        code: "CF_RESET",
+        durableObjectReset: true,
+        retryable: true,
+        itxCallId: "log_0123456789abcdef0123456789abcdef",
+      },
+    );
     const processedOffsets: number[] = [];
     const hooks: TaskHooks = {
       onProcess: (args) => void processedOffsets.push(args.event.offset),
@@ -1378,7 +1387,7 @@ describe("StreamProcessorRunner caught-up processing (delivery.caughtUp)", () =>
         if (headAttempts === 1) {
           // The caught-up call's own blocking work fails (or the incarnation
           // dies mid-blocker — same durable outcome).
-          args.blockProcessorWhile(() => Promise.reject(new Error("caught-up work failed")));
+          args.blockProcessorWhile(() => Promise.reject(blockedFailure));
           return;
         }
         args.blockProcessorWhile(() =>
@@ -1397,10 +1406,25 @@ describe("StreamProcessorRunner caught-up processing (delivery.caughtUp)", () =>
     // blocking work — the caught-up processing's included — so the failed pass
     // leaves the whole batch uncommitted and retryable.
     const harness = makeHarness({ journal, hooks });
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
 
     const { processEventBatch } = await harness.runner.openEventBatchCallback();
     const batch = eventBatch(journal.rows().slice(), 2);
     await expect(processEventBatch(batch)).rejects.toThrow("caught-up work failed");
+    expect(errorLog).toHaveBeenCalledWith({
+      schema: "iterate.stream-processor-blocked-work.v1",
+      message: "stream processor blocked work failed",
+      processorSlug: "test-task",
+      error: {
+        name: "Error",
+        message: "caught-up work failed; reference = abcdefghijklmnopqrstuvwxyz0123456789",
+        code: "CF_RESET",
+        durableObjectReset: true,
+        retryable: true,
+        itxCallId: "log_0123456789abcdef0123456789abcdef",
+        cloudflareErrorReference: "abcdefghijklmnopqrstuvwxyz0123456789",
+      },
+    });
 
     // Only the stream-lifetime binding is committed; the head event and its
     // caught-up call both stay retryable.

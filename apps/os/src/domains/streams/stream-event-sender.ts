@@ -29,8 +29,10 @@
 // sent, lag from cursor), durable sends record commit→acknowledgement
 // latency on the stream's own clock (hosted: the processor reports its result;
 // copy/ITX/webhook: the receiver call returns), and callback owners that hand over a ping capability
-// get NTP-style RTT sampled when runtime observation begins, throttled, and
-// purely observational (a failed ping drops the sample, nothing else).
+// get NTP-style RTT sampled when runtime observation begins, throttled. While
+// a hosted batch is pending, the same pure ping is also its fast lifecycle
+// probe: a dead processor callback is retried without waiting for the longer
+// application-work watchdog.
 // Session-callback consumption is deliberately NOT measured here: those results stay
 // unread (zero returned event batches), and the receiving processor reports through
 // its getRuntimeState capability instead (see event-consumption-metrics.ts).
@@ -56,7 +58,10 @@ import type {
   StreamWakeEventBatch,
   StreamWebhookDelivery,
 } from "iterate/processors";
-import { isStreamReceiverUnavailableError } from "iterate/processors";
+import {
+  isStreamReceiverUnavailableError,
+  StreamReceiverUnavailableError,
+} from "iterate/processors";
 import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import type {
@@ -111,10 +116,12 @@ import {
 // =============================================================================
 
 /**
- * Consecutive failures after which a subscription halts. With the backoff
- * below this tolerates roughly 2–2.5 hours of continuous receiver outage before
- * giving up loudly (an `subscription-delivery-halted` event + a red row in the
- * UI); `subscription-delivery-resumed` is one itx call away.
+ * Consecutive failures after which a subscription halts. Application failures
+ * use the exponential backoff below (roughly 2–2.5 hours through the whole
+ * ladder). Explicit Durable Object availability failures retry after one
+ * second so a routine incarnation reset cannot inherit a minutes-long delay;
+ * the same attempt bound still makes a sustained outage halt loudly. An
+ * `subscription-delivery-resumed` event is the operator's way back.
  */
 const MAX_DELIVERY_ATTEMPTS = 15;
 
@@ -998,7 +1005,14 @@ export class StreamEventSender {
           this.#limitNextReadToOne.delete(subscriptionKey);
         }
       } catch (error) {
-        console.error("durable subscription send loop failed", { subscriptionKey, error });
+        if (isRetryableDurableObjectAvailabilityError(error)) {
+          console.warn("durable subscription send loop interrupted by lifecycle availability", {
+            subscriptionKey,
+            error,
+          });
+        } else {
+          console.error("durable subscription send loop failed", { subscriptionKey, error });
+        }
         // An unexpected local delivery-loop failure is still a bounded, observable
         // delivery failure. Without this transition a quiet stream could keep
         // an active row forever with neither an alarm nor a halted event.
@@ -1234,6 +1248,19 @@ export class StreamEventSender {
       this.#halt(subscriptionKey, attempt, error);
       return;
     }
+    if (
+      isStreamReceiverUnavailableError(error) ||
+      isRetryableDurableObjectAvailabilityError(error)
+    ) {
+      const nextAttemptAt = this.#hooks.now() + LIFECYCLE_RETRY_DELAY_MS;
+      this.#hooks.store.nack(subscriptionKey, {
+        attempt,
+        nextAttemptAt,
+        error: errorMessage(error),
+      });
+      this.#hooks.armAlarm(nextAttemptAt);
+      return;
+    }
     this.#backoff(subscriptionKey, attempt, error);
   }
 
@@ -1262,7 +1289,7 @@ export class StreamEventSender {
       }
       this.#onDeliveryFailure(
         row.subscriptionKey,
-        new Error(
+        new StreamReceiverUnavailableError(
           `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms; the source isolate no longer owns a live callback`,
         ),
         row.attempt,
@@ -1377,6 +1404,10 @@ export class StreamEventSender {
         continue;
       }
       if (next === null || row.nextAttemptAt < next) next = row.nextAttemptAt;
+    }
+    const pendingProbeAt = this.connections.nextPendingDeliveryProbeAtMs();
+    if (pendingProbeAt !== null && (next === null || pendingProbeAt < next)) {
+      next = pendingProbeAt;
     }
     if (next !== null) this.#hooks.armAlarm(next);
     this.connections.rearmIdleAlarm();
@@ -1555,6 +1586,11 @@ type StreamConnection = {
   hasPendingDelivery(): boolean;
   pendingDeliveryStartedAtMs(): number | null;
   pendingDeliveryDeadlineAtMs(): number | null;
+  pendingDeliveryProbeAtMs(): number | null;
+  takeDuePendingDeliveryProbe(nowMs: number): boolean;
+  schedulePendingDeliveryProbe(atMs: number): void;
+  notePendingDeliveryProbeReachedOwner(): void;
+  notePendingDeliveryProbeTimedOut(): boolean;
   close(reason: ConnectionCloseReason, error?: string): void;
 };
 
@@ -1632,6 +1668,10 @@ type StreamConnectionsHooks = Pick<
 
 const PING_ROUND_MIN_INTERVAL_MS = 5_000;
 const PING_TIMEOUT_MS = 10_000;
+export const PROCESSOR_RUNTIME_STATE_TIMEOUT_MS = 5_000;
+const HOSTED_PENDING_PROBE_INTERVAL_MS = 1_000;
+const HOSTED_PENDING_PROBE_TIMEOUT_MS = 1_000;
+const HOSTED_PENDING_PROBE_TIMEOUT_LIMIT = 3;
 function connectionError(error: unknown): string {
   return boundedErrorMessage(error) ?? "unknown error";
 }
@@ -1689,6 +1729,7 @@ export class StreamConnections {
   #idleTeardownAtMs: number | null = null;
   #tearingDown = false;
   #lastPingRoundAtMs: number | null = null;
+  readonly #pendingDeliveryProbes = new Set<StreamConnection>();
 
   constructor(args: { idleTeardownMs: number; hooks: StreamConnectionsHooks }) {
     this.#idleTeardownMs = args.idleTeardownMs;
@@ -1735,11 +1776,18 @@ export class StreamConnections {
         deadlineAt > now ||
         connection.expectedHostedDelivery === undefined
       ) {
+        if (
+          connection.kind === "hosted" &&
+          connection.expectedHostedDelivery !== undefined &&
+          connection.takeDuePendingDeliveryProbe(now)
+        ) {
+          this.#probePendingHostedDelivery(connectionKey, connection);
+        }
         continue;
       }
       this.onHostedDeliveryError(
         connectionKey,
-        new Error(
+        new StreamReceiverUnavailableError(
           `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
         ),
         connection.expectedHostedDelivery,
@@ -1751,8 +1799,75 @@ export class StreamConnections {
     return [];
   }
 
+  #probePendingHostedDelivery(connectionKey: string, connection: StreamConnection): void {
+    const ping = connection.ping;
+    const expectedDelivery = connection.expectedHostedDelivery;
+    if (
+      ping === undefined ||
+      expectedDelivery === undefined ||
+      this.#pendingDeliveryProbes.has(connection)
+    ) {
+      return;
+    }
+    this.#pendingDeliveryProbes.add(connection);
+    const t0 = this.#hooks.now();
+    const work = withDeliveryTimeout(
+      Promise.resolve().then(() => ping({ t0 })),
+      `pending hosted delivery probe ${connectionKey}`,
+      { timeoutMs: HOSTED_PENDING_PROBE_TIMEOUT_MS },
+    )
+      .then(() => connection.notePendingDeliveryProbeReachedOwner())
+      .catch((error: unknown) => {
+        // One or two missed slices can mean this incarnation is busy. Three
+        // consecutive misses cannot consume the entire application-work
+        // watchdog: the ping is pure, the delivery lane is at-least-once, and
+        // code-update/storage resets can leave both retained calls hanging
+        // rather than rejecting with Cloudflare's lifecycle flags.
+        if (
+          isStreamReceiverUnavailableError(error) &&
+          !connection.notePendingDeliveryProbeTimedOut()
+        ) {
+          return;
+        }
+        const unavailable = isRetryableDurableObjectAvailabilityError(error)
+          ? error
+          : Object.assign(new Error(errorMessage(error), { cause: error }), { retryable: true });
+        this.onHostedDeliveryError(connectionKey, unavailable, expectedDelivery, "rpc-broken");
+      })
+      .finally(() => {
+        this.#pendingDeliveryProbes.delete(connection);
+        const deadlineAt = connection.pendingDeliveryDeadlineAtMs();
+        if (
+          !connection.isLive() ||
+          !connection.hasPendingDelivery() ||
+          this.#connections.get(connectionKey) !== connection ||
+          deadlineAt === null ||
+          deadlineAt <= this.#hooks.now()
+        ) {
+          return;
+        }
+        const nextProbeAt = Math.min(
+          this.#hooks.now() + HOSTED_PENDING_PROBE_INTERVAL_MS,
+          deadlineAt,
+        );
+        connection.schedulePendingDeliveryProbe(nextProbeAt);
+        this.#hooks.armAlarm(nextProbeAt);
+      });
+    this.#hooks.keepAlive(work);
+  }
+
   rearmIdleAlarm(): void {
     if (this.#idleTeardownAtMs !== null) this.#hooks.armAlarm(this.#idleTeardownAtMs);
+  }
+
+  /** The earliest live callback probe that the shared native alarm must preserve. */
+  nextPendingDeliveryProbeAtMs(): number | null {
+    let next: number | null = null;
+    for (const connection of this.#connections.values()) {
+      const atMs = connection.pendingDeliveryProbeAtMs();
+      if (atMs !== null && (next === null || atMs < next)) next = atMs;
+    }
+    return next;
   }
 
   /** Whether an idle-teardown deadline is pending (the alarm must stay armed for it). */
@@ -1802,7 +1917,13 @@ export class StreamConnections {
 
   async getProcessorRuntimeState(connectionKey: string): Promise<ProcessorRuntimeState | null> {
     const connection = this.#connections.get(connectionKey);
-    return (await connection?.getProcessorRuntimeState?.()) ?? null;
+    const getRuntimeState = connection?.getProcessorRuntimeState;
+    if (getRuntimeState === undefined) return null;
+    return await withDeliveryTimeout(
+      Promise.resolve().then(() => getRuntimeState()),
+      `hosted processor runtime-state callback ${connectionKey}`,
+      { timeoutMs: PROCESSOR_RUNTIME_STATE_TIMEOUT_MS },
+    );
   }
 
   /** Back off a failing hosted callback before closing and activating it again. */
@@ -1852,7 +1973,11 @@ export class StreamConnections {
     };
     if (error instanceof EventFilterEvaluationError) {
       console.info("stream hosted callback filter condition failed; backing off", details);
-    } else if (source === "rpc-broken" || isDurableObjectLifecycleError(error)) {
+    } else if (
+      source === "rpc-broken" ||
+      isStreamReceiverUnavailableError(error) ||
+      isDurableObjectLifecycleError(error)
+    ) {
       console.warn(
         "stream durable callback unavailable; backing off before waking it again",
         details,
@@ -2134,6 +2259,8 @@ export class StreamConnections {
     let hostedBatchToken: symbol | null = null;
     let hostedBatchStartedAtMs: number | null = null;
     let hostedBatchDeadlineAtMs: number | null = null;
+    let hostedBatchProbeAtMs: number | null = null;
+    let hostedBatchProbeTimeouts = 0;
     let connection!: StreamConnection;
 
     const sendQueuedBatches = async () => {
@@ -2233,6 +2360,8 @@ export class StreamConnections {
             hostedBatchToken = deliveryToken;
             hostedBatchStartedAtMs = this.#hooks.now();
             hostedBatchDeadlineAtMs = hostedBatchStartedAtMs + DEFAULT_DELIVERY_TIMEOUT_MS;
+            hostedBatchProbeAtMs = hostedBatchStartedAtMs + HOSTED_PENDING_PROBE_INTERVAL_MS;
+            hostedBatchProbeTimeouts = 0;
             // This SQLite write and the native alarm are both issued before
             // the callback leaves the source DO. The output gate therefore
             // makes a vanished isolate recover as an expired durable attempt,
@@ -2243,6 +2372,7 @@ export class StreamConnections {
               cursorChangedAtOffset: expectedDelivery.cursorChangedAtOffset,
             });
             this.#hooks.armAlarm(hostedBatchDeadlineAtMs);
+            this.#hooks.armAlarm(hostedBatchProbeAtMs);
             (processEventBatch as unknown as RetainedProcessEventBatch<StreamWakeEventBatch>)({
               ...batch,
               reportDeliveryResult: (deliveryResult) => {
@@ -2254,6 +2384,8 @@ export class StreamConnections {
                 hostedBatchToken = null;
                 hostedBatchStartedAtMs = null;
                 hostedBatchDeadlineAtMs = null;
+                hostedBatchProbeAtMs = null;
+                hostedBatchProbeTimeouts = 0;
                 const parsed = parseWakeDeliveryResult(deliveryResult);
                 if (
                   parsed.outcome === "ok" &&
@@ -2338,6 +2470,22 @@ export class StreamConnections {
       hasPendingDelivery: () => (kind === "hosted" ? hostedBatchPending : false),
       pendingDeliveryStartedAtMs: () => hostedBatchStartedAtMs,
       pendingDeliveryDeadlineAtMs: () => hostedBatchDeadlineAtMs,
+      pendingDeliveryProbeAtMs: () => hostedBatchProbeAtMs,
+      takeDuePendingDeliveryProbe: (nowMs) => {
+        if (hostedBatchProbeAtMs === null || hostedBatchProbeAtMs > nowMs) return false;
+        hostedBatchProbeAtMs = null;
+        return true;
+      },
+      schedulePendingDeliveryProbe: (atMs) => {
+        if (hostedBatchPending) hostedBatchProbeAtMs = atMs;
+      },
+      notePendingDeliveryProbeReachedOwner: () => {
+        hostedBatchProbeTimeouts = 0;
+      },
+      notePendingDeliveryProbeTimedOut: () => {
+        hostedBatchProbeTimeouts += 1;
+        return hostedBatchProbeTimeouts >= HOSTED_PENDING_PROBE_TIMEOUT_LIMIT;
+      },
       close: (reason, error) => {
         if (!open) return;
         open = false;
@@ -2345,6 +2493,8 @@ export class StreamConnections {
         hostedBatchToken = null;
         hostedBatchStartedAtMs = null;
         hostedBatchDeadlineAtMs = null;
+        hostedBatchProbeAtMs = null;
+        hostedBatchProbeTimeouts = 0;
         if (this.#connections.get(connectionKey) === connection) {
           this.#connections.delete(connectionKey);
           this.#hooks.runtimeChanged();

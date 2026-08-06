@@ -28,9 +28,9 @@ export const SeedOAuthClientSpec = z.object({
 export type SeedOAuthClientSpec = z.infer<typeof SeedOAuthClientSpec>;
 
 const oauthSeedPropagationRetryDelaysMs = [3_000, 3_000, 6_000, 12_000, 24_000, 30_000];
-const transientCloudflarePropagationStatuses = new Set([522, 523, 524, 525, 526]);
+const transientOAuthSeedStatuses = new Set([503, 522, 523, 524, 525, 526]);
 
-export async function retryTransientCloudflarePropagation<T>(
+export async function retryTransientOAuthSeed<T>(
   operation: () => Promise<T>,
   options: {
     delaysMs: number[];
@@ -44,11 +44,11 @@ export async function retryTransientCloudflarePropagation<T>(
     } catch (error) {
       const status = cloudflareStatus(error);
       const delayMs = options.delaysMs[attempt];
-      if (!status || !transientCloudflarePropagationStatuses.has(status) || delayMs === undefined) {
+      if (!status || !transientOAuthSeedStatuses.has(status) || delayMs === undefined) {
         throw error;
       }
       console.warn(
-        `[seed-oauth-clients] ${options.label} received Cloudflare ${status}; ` +
+        `[seed-oauth-clients] ${options.label} received transient HTTP ${status}; ` +
           `retrying in ${delayMs / 1_000}s (attempt ${attempt + 1}/${options.delaysMs.length + 1})`,
       );
       await options.sleep(delayMs);
@@ -150,7 +150,7 @@ export async function seedOAuthClients(
   });
 
   for (const spec of clients) {
-    const result = await retryTransientCloudflarePropagation(
+    const result = await retryTransientOAuthSeed(
       () =>
         authClient.internal.oauth.setClient({
           clientId: spec.clientId,

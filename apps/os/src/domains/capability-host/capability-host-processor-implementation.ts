@@ -838,14 +838,13 @@ export class CapabilityHostProcessor extends StreamProcessor<
         },
       });
       const runOutcome = await settleByDeadline(runPromise, executionExpiresAt, now);
-      if (runOutcome.status === "deadline") {
-        // Workers RPC promises are disposable capabilities at runtime. End
-        // this host's retained call as soon as its absolute wait expires;
-        // the durable settlement still conservatively says arbitrary
-        // external work may continue because disposal is not a cancellation
-        // acknowledgement from code the script already invoked.
-        (runPromise as Promise<unknown> & Partial<Disposable>)[Symbol.dispose]?.();
-      }
+      // Workers RPC promises are disposable capabilities at runtime. Once the
+      // result is copied into plain settlement data—or the deadline wins—this
+      // host no longer owns a useful reference. Releasing every outcome closes
+      // the ScriptExecutionEntrypoint session and lets a one-off Worker Loader
+      // isolate leave memory. On deadline this is still not a cancellation
+      // acknowledgement for arbitrary external work the script already began.
+      (runPromise as Promise<unknown> & Partial<Disposable>)[Symbol.dispose]?.();
       const settlement = settlementFromWorkerOutcome(runOutcome);
       // Deliberately outside the worker-invocation catch: a failed stream
       // append must never be reclassified as a script runtime failure. It

@@ -42,7 +42,20 @@ export function isDurableObjectLifecycleError(error: unknown): boolean {
     overloaded?: unknown;
     retryable?: unknown;
   };
-  return flags.durableObjectReset === true || flags.overloaded === true || flags.retryable === true;
+  if (flags.durableObjectReset === true || flags.overloaded === true || flags.retryable === true) {
+    return true;
+  }
+  // A local storage operation can throw from this DO's own SQLite/KV access,
+  // rather than from a remote stub. Workerd supplies no lifecycle flags on
+  // that path. Match only its exact code-update sentence or its opaque storage
+  // reference so lookalike application messages stay outside this classifier.
+  return (
+    error instanceof Error &&
+    (error.message === "Durable Object reset because its code was updated." ||
+      /^Internal error in Durable Object storage caused object to be reset; reference = [a-z0-9]{8,128}$/u.test(
+        error.message,
+      ))
+  );
 }
 
 /**

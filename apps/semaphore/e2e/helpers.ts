@@ -1,7 +1,5 @@
-import {
-  createCloudflareWorkerVersionOverrideFetch,
-  mergeCloudflareWorkerVersionOverrideHeaders,
-} from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { createCloudflareWorkerVersionOverrideFetch } from "@iterate-com/shared/test-support/cloudflare-worker-version-overrides";
+import { z } from "zod";
 import { createSemaphoreTokenProvider } from "../../../scripts/auth/semaphore-token.ts";
 
 type SemaphoreAppFixture = {
@@ -63,25 +61,41 @@ export function createSemaphoreAppFixture(args: {
   };
 }
 
-export async function waitForHealth(baseURL: string, timeoutMs: number) {
-  const startedAt = Date.now();
+const DeploymentHealth = z.strictObject({
+  ok: z.literal(true),
+  workerVersion: z.string(),
+  coordinatorVersion: z.string(),
+});
 
-  while (Date.now() - startedAt < timeoutMs) {
+export async function waitForHealth(args: {
+  baseURL: string;
+  timeoutMs: number;
+  networkFetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+}) {
+  const startedAt = args.now();
+
+  while (args.now() - startedAt < args.timeoutMs) {
     try {
-      const response = await fetch(new URL("/health", baseURL), {
-        headers: mergeCloudflareWorkerVersionOverrideHeaders(undefined, process.env),
-      });
-      if (response.ok && (await response.text()) === "OK") {
+      const response = await args.networkFetch(new URL("/health", args.baseURL));
+      const health = DeploymentHealth.safeParse(await response.json());
+      if (
+        response.ok &&
+        health.success &&
+        health.data.workerVersion === health.data.coordinatorVersion &&
+        response.headers.get("x-iterate-worker-version") === health.data.workerVersion
+      ) {
         return;
       }
     } catch {
       // Keep polling until timeout.
     }
 
-    await sleep(500);
+    await args.sleep(500);
   }
 
-  throw new Error(`Timed out waiting for health at ${baseURL}`);
+  throw new Error(`Timed out waiting for health at ${args.baseURL}`);
 }
 
 export async function sleep(ms: number) {

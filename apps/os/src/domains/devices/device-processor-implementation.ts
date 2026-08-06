@@ -33,6 +33,9 @@ import {
  * BEFORE the vendor is dialed), dials Expo, and records the returned receipt
  * ticket as `notification-ticket-observed`. A ticket is Expo accepting the
  * payload, not delivery — the receipt check later resolves what APNs/FCM did.
+ * The vendor wait is bounded even while this incarnation stays alive: a send
+ * that rejects or misses its deadline settles uncertain, because Expo may
+ * already have accepted it and a retry could ring the phone twice.
  * The same pass settles what can no longer be attempted: `requested` past its
  * `expiresAt` settles expired; `requested` with no credential settles
  * device-unavailable; `started` with nobody in this incarnation's live-set
@@ -45,13 +48,15 @@ import {
  * approvalRequestEventOffset) additionally wait `config.approvalGraceMs`
  * before any attempt: a client already showing the batch appends a
  * `project/approval-presented` claim to the project root stream (the same
- * subscription copies it here), and a claim that reduces while the obligation
- * is still `requested` settles it `suppressed` — the phone must not ring
- * about something on screen. A grace expiry appends no event, so the at-head
- * pass points the DO's grace alarm slice at the earliest pending expiry and
- * the alarm calls `releaseGraces` to run the send outside delivery
- * (the receipt check's exact shape). A claim arriving after the attempt
- * started is a no-op.
+ * subscription copies it here). The claim can cross the ordered lane before
+ * the notification processor's matching intent; it waits durably by approval
+ * offset until the intent opens. Either ordering marks the still-unattempted
+ * obligation and settles it `suppressed` — the phone must not ring about
+ * something on screen. A grace expiry appends no event, so the at-head pass
+ * points the DO's grace alarm slice at the earliest pending expiry and the
+ * alarm calls `releaseApprovalGraces` to run the send outside delivery (the
+ * receipt check's exact shape). A claim arriving after the attempt started is
+ * a no-op.
  *
  * Chat-reply obligations (their request carries an agentReplyEventOffset)
  * work the same way with `config.replyGraceMs` and the
@@ -59,10 +64,8 @@ import {
  * reply offset) pair — with one addition: reduced claims are remembered in
  * `state.recentReplyClaims` (bounded, deterministically pruned), so an
  * intent copied AFTER its claim still opens pre-claimed. Approvals accept
- * that race because their request always commits long before a client can
- * render the batch; a reply's claim and intent are both triggered by the
- * same reply event, so for replies the race is real and losing it would
- * ring a phone the user is actively looking at.
+ * the same race through `state.pendingApprovalPresentations`; replies use a
+ * bounded list because the destination path and reply offset form their key.
  *
  * User-scoped intents (`audience: {kind:"user"}`) reduce to obligations only
  * on devices whose enrollment ownerId matches; other devices never open the
@@ -329,32 +332,47 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         ) {
           return state;
         }
-        // A reply intent copied after its claim (see recentReplyClaims) opens
-        // already-presented, so the send pass settles it suppressed.
+        // An approval or reply intent copied after its matching foreground
+        // claim opens already-presented, so the send pass settles it
+        // suppressed. Consume approval claims by their stable request offset;
+        // reply claims remain in the bounded recent list for later intents.
+        const approvalRequestEventOffset = event.payload.approvalRequestEventOffset;
+        const pendingApprovalPresentations = { ...state.pendingApprovalPresentations };
+        const approvalClaimedAt =
+          approvalRequestEventOffset === undefined
+            ? undefined
+            : pendingApprovalPresentations[String(approvalRequestEventOffset)];
+        if (approvalRequestEventOffset !== undefined) {
+          delete pendingApprovalPresentations[String(approvalRequestEventOffset)];
+        }
         const replyOffset = event.payload.agentReplyEventOffset;
         const destination = event.payload.destination;
-        const claimed =
+        const replyClaim =
           replyOffset !== undefined && destination.kind === "agent-chat"
             ? state.recentReplyClaims.find(
                 (claim) =>
                   claim.path === destination.path && claim.replyEventOffset === replyOffset,
               )
             : undefined;
+        const presentedAt = approvalClaimedAt || replyClaim?.claimedAt;
         return {
           ...state,
+          latestApprovalRequestEventOffset:
+            approvalRequestEventOffset === undefined
+              ? state.latestApprovalRequestEventOffset
+              : Math.max(state.latestApprovalRequestEventOffset, approvalRequestEventOffset),
+          pendingApprovalPresentations,
           notifications: {
             ...state.notifications,
             [event.offset]: {
               ...(event.payload.agentReplyEventOffset === undefined
                 ? {}
                 : { agentReplyEventOffset: event.payload.agentReplyEventOffset }),
-              ...(event.payload.approvalRequestEventOffset === undefined
-                ? {}
-                : { approvalRequestEventOffset: event.payload.approvalRequestEventOffset }),
-              ...(claimed ? { presentedAt: claimed.claimedAt } : {}),
+              ...(approvalRequestEventOffset === undefined ? {} : { approvalRequestEventOffset }),
               body: event.payload.body,
               destination: event.payload.destination,
               expiresAt: event.payload.expiresAt,
+              ...(presentedAt === undefined ? {} : { presentedAt }),
               requestedAt: Date.parse(event.createdAt),
               title: event.payload.title,
               status: "requested" as const,
@@ -364,23 +382,34 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
       }
       case "events.iterate.com/project/approval-presented": {
         // The claim marks every still-`requested` obligation for the batch;
-        // the send pass settles them `suppressed`. Claims matching nothing
-        // reduce to nothing — the obligation may already be settled, the
-        // attempt may already have started (the push is out; too late), or
-        // the claim may even have been copied here before the intent (an
-        // accepted race: the push then goes out despite the claim).
+        // the send pass settles them `suppressed`. The ordered copy lane may
+        // carry the claim before the notification processor's later intent,
+        // so a claim above the intent high-water mark waits durably for that
+        // intent. A claim at or below the frontier matching no requested
+        // obligation is late (already sent or settled) and remains a no-op.
         const claimed = Object.entries(state.notifications).filter(
           ([, notification]) =>
             notification.status === "requested" &&
             notification.approvalRequestEventOffset === event.payload.approvalRequestEventOffset &&
             notification.presentedAt === undefined,
         );
-        if (claimed.length === 0) return state;
-        const notifications = { ...state.notifications };
-        for (const [offset, notification] of claimed) {
-          notifications[offset] = { ...notification, presentedAt: Date.parse(event.createdAt) };
+        if (claimed.length > 0) {
+          const notifications = { ...state.notifications };
+          for (const [offset, notification] of claimed) {
+            notifications[offset] = { ...notification, presentedAt: Date.parse(event.createdAt) };
+          }
+          return { ...state, notifications };
         }
-        return { ...state, notifications };
+        if (event.payload.approvalRequestEventOffset <= state.latestApprovalRequestEventOffset) {
+          return state;
+        }
+        return {
+          ...state,
+          pendingApprovalPresentations: {
+            ...state.pendingApprovalPresentations,
+            [event.payload.approvalRequestEventOffset]: Date.parse(event.createdAt),
+          },
+        };
       }
       case "events.iterate.com/project/agent-reply-presented": {
         // Same shape as the approval claim, matched on the (destination
@@ -657,7 +686,7 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         idempotencyKey: this.idempotencyKey(`notification-attempt-started@${input.requestOffset}`),
         payload: { requestOffset: input.requestOffset },
       });
-      const ticket = await this.deps.send({
+      const sendAttempt = this.deps.send({
         notification: {
           body: input.notification.body,
           data: {
@@ -671,6 +700,51 @@ export class DeviceProcessor extends StreamProcessor<DeviceProcessorContract, De
         pushTokenSecretPath: input.pushTokenSecretPath,
         pushTokenSecretUpdatedOffset: input.pushTokenSecretUpdatedOffset,
       });
+      const observedSend: Promise<
+        | { status: "fulfilled"; ticket: Awaited<ReturnType<DevicePushSender>> }
+        | { status: "rejected"; error: unknown }
+      > = sendAttempt.then(
+        (ticket) => ({ status: "fulfilled" as const, ticket }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      );
+      let sendDeadline: ReturnType<typeof setTimeout> | undefined;
+      const sendOutcome = await Promise.race([
+        observedSend,
+        new Promise<{ status: "deadline" }>((resolve) => {
+          sendDeadline = setTimeout(() => resolve({ status: "deadline" }), this.deps.sendTimeoutMs);
+        }),
+      ]).finally(() => clearTimeout(sendDeadline));
+      if (sendOutcome.status !== "fulfilled") {
+        let detail: string;
+        if (sendOutcome.status === "deadline") {
+          detail = `the ${this.deps.sendTimeoutMs}ms deadline elapsed`;
+        } else if (sendOutcome.error instanceof Error) {
+          detail = sendOutcome.error.message;
+        } else {
+          detail = String(sendOutcome.error);
+        }
+        await this.#appendUnlessLostIdempotencyRace(
+          (...events) => this.append(...events),
+          [
+            {
+              type: "events.iterate.com/device/notification-settled",
+              idempotencyKey: this.idempotencyKey(`notification-settled@${input.requestOffset}`),
+              payload: {
+                requestOffset: input.requestOffset,
+                outcome: {
+                  kind: "uncertain",
+                  phase: "expo-send",
+                  reason:
+                    `The Expo send did not produce a ticket after the durable attempt began: ` +
+                    `${detail.slice(0, 500)}. The vendor may have accepted the push, so it was not retried.`,
+                },
+              },
+            },
+          ],
+        );
+        return;
+      }
+      const ticket = sendOutcome.ticket;
       if (ticket.status === "error") {
         const pushTokenInvalidated =
           ticket.error === "DeviceNotRegistered"
@@ -792,6 +866,8 @@ type DeviceProcessorDeps = {
   repointGraceAlarm: (atMs: number | null) => Promise<void>;
   /** Point the DO's receipt alarm slice at an epoch ms, or disarm with null. */
   repointReceiptAlarm: (atMs: number | null) => Promise<void>;
+  /** Bound one vendor attempt so a live incarnation cannot strand it forever. */
+  sendTimeoutMs: number;
   send: DevicePushSender;
 };
 

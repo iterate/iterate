@@ -177,7 +177,10 @@ const RECONNECT_BACKOFF_MAX_MS = 10_000;
  * (the watchdog) prove they are not silently dead. ONE shared cadence: the two
  * checks deliberately use the same value, so a change here moves both.
  */
-const LIVENESS_INTERVAL_MS = 45_000;
+// Keep callback-loss recovery inside the product's 30-second visible-progress
+// bound. A Stream DO reset can sever only one callback while the shared socket
+// remains healthy, so transport activity alone cannot prove subscriptions live.
+const LIVENESS_INTERVAL_MS = 15_000;
 /** A probe slower than this counts as a strike (two strikes ⇒ half-open). */
 const LIVENESS_TIMEOUT_MS = 10_000;
 

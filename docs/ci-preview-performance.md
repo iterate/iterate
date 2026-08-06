@@ -15,9 +15,11 @@ The preview lifecycle has two barriers:
    and readiness check finishes.
 2. Start every selected app test lane together; wait until every lane finishes.
 
-Every freshly deployed live suite that addresses Durable Objects respects one
-bounded deployment-age clock. Short Semaphore, Streams, and Petshop suites wait
-at their own command boundary. OS starts its onboarding smoke, explicit TUI
+Freshly deployed live suites that address Durable Objects prove rollout before
+creating test state. Semaphore's health route compares the public Worker with a
+version-keyed coordinator object, so it releases as soon as both run the exact
+deployment. The Streams and Petshop suites use one bounded deployment-age clock
+at their command boundary. OS starts its onboarding smoke, explicit TUI
 quarantine marker, Chromium setup, and Playwright immediately; browser and auth
 setup continue while project-backed Playwright fixture creation and high-fanout
 Vitest wait for the same absolute boundary. The clock normally finishes under
@@ -38,8 +40,9 @@ raise the budget automatically.
   it is not a deployment-order edge. Each deploy owns its readiness check, and
   tests start only after the whole selected fleet is ready.
 - Different app suites run concurrently.
-- The short Semaphore, Streams, and Petshop commands wait independently at
-  their own rollout boundary; this does not serialize them with OS or with one
+- Semaphore waits inside deploy readiness until a version-keyed coordinator DO
+  reports the exact public Worker version. Streams and Petshop wait
+  independently at their rollout-age boundary. None serialize with OS or one
   another. Auth has no live Durable Object suite and starts immediately.
 - OS smoke, the explicit TUI quarantine marker, Chromium setup, Playwright, and
   the rollout-age clock run concurrently. Playwright workers may perform
@@ -96,6 +99,13 @@ serially because they intentionally share one warm container.
   lanes remain concurrent, and reused old deployments wait zero seconds. This
   is one visible lifecycle boundary per deployment, not a retry or a synthetic
   placement sample.
+- **Semaphore proves its coordinator rollout directly.** Its readiness route
+  names a coordinator object with the public Worker's immutable version and
+  returns 503 until that object reports the same version. This replaced the
+  fixed age gate after a coordinator still ran the preceding version 94.8
+  seconds after deploy and reset the first E2E operation. The exact version is
+  also returned in `x-iterate-worker-version`, so the orchestrator cannot
+  accept an old public Worker paired with an old coordinator.
 - **Warm OS deploys skip only proven-unchanged container work.** Wrangler
   otherwise builds and reconciles the six stock sandbox image applications
   serially even when all six report `no changes`. The orchestrator requests

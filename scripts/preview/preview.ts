@@ -2366,6 +2366,13 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     paths: ["apps/semaphore/**"],
     // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
+    previewReadyUrlPath: "/health",
+    previewReadyWorkerVersion: true,
+    // ResourceCoordinator is a Durable Object. One exact-version health
+    // response is not enough to prove Cloudflare has stopped assigning the
+    // prior code globally: a later request can still hit that assignment and
+    // be reset during handoff. Keep the live suite behind the same bounded
+    // deployment-age gate as every other preview suite that calls DOs.
     previewTestRolloutGate: "before-suite",
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/semaphore")],

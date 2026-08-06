@@ -8,7 +8,7 @@ import {
   PREVIEW_DISPOSABLE_TTL_SECONDS,
   PREVIEW_FILES_OBJECT_EXPIRY,
   removeWorkerSecrets,
-  runCloudflareCommandWith429Retry,
+  runCloudflareCommandWithRetry,
   runAsync,
   SANDBOX_BACKUP_EXPIRY_RULE,
   SANDBOX_BACKUP_TTL_SECONDS_PRD,
@@ -36,7 +36,7 @@ describe("runAsync", () => {
   });
 });
 
-describe("runCloudflareCommandWith429Retry", () => {
+describe("runCloudflareCommandWithRetry", () => {
   it("retries an explicit Wrangler 429 and then succeeds", async () => {
     const directory = mkdtempSync(join(tmpdir(), "deploy-command-retry-"));
     const attemptFile = join(directory, "attempts");
@@ -54,7 +54,39 @@ describe("runCloudflareCommandWith429Retry", () => {
 
     try {
       await expect(
-        runCloudflareCommandWith429Retry(
+        runCloudflareCommandWithRetry(
+          process.execPath,
+          ["--eval", script],
+          { cwd: process.cwd() },
+          { backoffMs: [7], sleep },
+        ),
+      ).resolves.toBeUndefined();
+
+      expect(readFileSync(attemptFile, "utf8")).toBe("2");
+      expect(sleep).toHaveBeenCalledExactlyOnceWith(7);
+    } finally {
+      rmSync(directory, { recursive: true, force: true });
+    }
+  });
+
+  it("retries an explicit Cloudflare upstream-unavailable response and then succeeds", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "deploy-command-retry-"));
+    const attemptFile = join(directory, "attempts");
+    const script = `
+      const fs = require("node:fs");
+      const file = ${JSON.stringify(attemptFile)};
+      const attempts = fs.existsSync(file) ? Number(fs.readFileSync(file, "utf8")) : 0;
+      fs.writeFileSync(file, String(attempts + 1));
+      if (attempts === 0) {
+        console.error("Upstream service unavailable [code: 7009]");
+        process.exit(1);
+      }
+    `;
+    const sleep = vi.fn(async () => {});
+
+    try {
+      await expect(
+        runCloudflareCommandWithRetry(
           process.execPath,
           ["--eval", script],
           { cwd: process.cwd() },
@@ -73,7 +105,7 @@ describe("runCloudflareCommandWith429Retry", () => {
     const sleep = vi.fn(async () => {});
 
     await expect(
-      runCloudflareCommandWith429Retry(
+      runCloudflareCommandWithRetry(
         process.execPath,
         ["--eval", 'console.error("500 Internal Server Error"); process.exit(7)'],
         { cwd: process.cwd() },
@@ -87,7 +119,7 @@ describe("runCloudflareCommandWith429Retry", () => {
     const sleep = vi.fn(async () => {});
 
     await expect(
-      runCloudflareCommandWith429Retry(
+      runCloudflareCommandWithRetry(
         process.execPath,
         [
           "--eval",
@@ -104,7 +136,7 @@ describe("runCloudflareCommandWith429Retry", () => {
     const sleep = vi.fn(async () => {});
 
     await expect(
-      runCloudflareCommandWith429Retry(
+      runCloudflareCommandWithRetry(
         process.execPath,
         ["--eval", 'console.error("429 Too Many Requests"); process.exit(1)'],
         { cwd: process.cwd() },

@@ -194,6 +194,16 @@ export class StreamSubscriberPagerRegistry {
     return new Set(this.#pagers.entries().map(({ attachment }) => attachment.connectionKey));
   }
 
+  /** Current DO-side state of one exact relay/Pager pair. */
+  relayState(connectionKey: string, pagerId: string): "live" | "dormant" | "dead" {
+    const pager = this.#pagers
+      .entries(connectionKey)
+      .find(({ binding }) => binding.pagerId === pagerId);
+    if (pager === undefined) return "dead";
+    if (this.#hooks.hasConnection(connectionKey)) return "live";
+    return pager.attachment.idleDeliveredThrough === undefined ? "dead" : "dormant";
+  }
+
   /**
    * Bind this connection's Pager (given by its relay just before
    * the openConnection call, or surviving a DO eviction): store the raw

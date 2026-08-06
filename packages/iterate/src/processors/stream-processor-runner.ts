@@ -52,6 +52,52 @@ import {
   type StreamProcessorRunnerHooks,
 } from "./stream-processor.ts";
 
+function processorBlockedWorkErrorDiagnostics(error: unknown): {
+  name: string;
+  message: string;
+  code?: string;
+  durableObjectReset?: true;
+  overloaded?: true;
+  retryable?: true;
+  itxCallId?: string;
+  cloudflareErrorReference?: string;
+} {
+  // Native Error does not declare runtime/platform correlation flags. This
+  // boundary only reads and bounds primitive fields; it never trusts the
+  // throwable as application data or serializes arbitrary properties.
+  const candidate =
+    typeof error === "object" && error !== null
+      ? (error as {
+          name?: unknown;
+          message?: unknown;
+          code?: unknown;
+          durableObjectReset?: unknown;
+          overloaded?: unknown;
+          retryable?: unknown;
+          itxCallId?: unknown;
+        })
+      : null;
+  const name =
+    typeof candidate?.name === "string" ? candidate.name.slice(0, 200) : "NonErrorThrowable";
+  const message =
+    typeof candidate?.message === "string"
+      ? candidate.message.slice(0, 2_000)
+      : String(error).slice(0, 2_000);
+  const cloudflareErrorReference = /\breference\s*=\s*([a-z0-9]{8,128})\b/iu.exec(message)?.[1];
+  return {
+    name,
+    message,
+    ...(typeof candidate?.code === "string" ? { code: candidate.code.slice(0, 200) } : {}),
+    ...(candidate?.durableObjectReset === true ? { durableObjectReset: true } : {}),
+    ...(candidate?.overloaded === true ? { overloaded: true } : {}),
+    ...(candidate?.retryable === true ? { retryable: true } : {}),
+    ...(typeof candidate?.itxCallId === "string"
+      ? { itxCallId: candidate.itxCallId.slice(0, 200) }
+      : {}),
+    ...(cloudflareErrorReference === undefined ? {} : { cloudflareErrorReference }),
+  };
+}
+
 /**
  * The reduction half of a processor's durable progress: a disposable CACHE of
  * the fold (the journal is the authority). `reducerVersion` is the cache key —
@@ -644,10 +690,12 @@ export class StreamProcessorRunner<
             blockProcessorWhile: (work) => {
               const attempt = eventChain.then(() =>
                 this.#keepAliveBackedWork(work).catch((error: unknown) => {
-                  console.error(
-                    `stream processor blocked work failed (${this.hooks.contract.slug})`,
-                    error,
-                  );
+                  console.error({
+                    schema: "iterate.stream-processor-blocked-work.v1",
+                    message: "stream processor blocked work failed",
+                    processorSlug: this.hooks.contract.slug,
+                    error: processorBlockedWorkErrorDiagnostics(error),
+                  });
                   throw error;
                 }),
               );
@@ -702,10 +750,12 @@ export class StreamProcessorRunner<
           blockProcessorWhile: (work) => {
             const attempt = caughtUpChain.then(() =>
               this.#keepAliveBackedWork(work).catch((error: unknown) => {
-                console.error(
-                  `stream processor blocked work failed (${this.hooks.contract.slug})`,
-                  error,
-                );
+                console.error({
+                  schema: "iterate.stream-processor-blocked-work.v1",
+                  message: "stream processor blocked work failed",
+                  processorSlug: this.hooks.contract.slug,
+                  error: processorBlockedWorkErrorDiagnostics(error),
+                });
                 throw error;
               }),
             );

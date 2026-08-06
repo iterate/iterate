@@ -41,6 +41,7 @@ import { isPlatformAdminUser } from "./platform-admin.ts";
 import {
   type CloudflareEmailBinding,
   TEST_OTP_CODE,
+  getEmailOtpRateLimit,
   getOrganizationInvitationEmailConfigError,
   sendEmailOtp,
   sendOrganizationInvitationEmail,
@@ -195,6 +196,7 @@ export function getAuthPlugins(options: AuthPluginOptions) {
           emailOTP({
             otpLength: 6,
             expiresIn: 300,
+            rateLimit: getEmailOtpRateLimit(options.fixedTestOtpEnabled),
             generateOTP: ({ email }) => {
               if (shouldUseTestOtp({ email, fixedTestOtpEnabled: options.fixedTestOtpEnabled })) {
                 return TEST_OTP_CODE;

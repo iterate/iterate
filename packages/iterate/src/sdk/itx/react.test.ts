@@ -653,7 +653,7 @@ describe("ProjectScope", () => {
 // public useStreamConnection hook with a real React tree — which also covers the
 // epoch/reopen integration the bare watchdog can't show.
 describe("useStreamConnection liveness", () => {
-  const INTERVAL = 45_000;
+  const INTERVAL = 15_000;
   const PING_TIMEOUT = 10_000;
 
   beforeEach(() => {

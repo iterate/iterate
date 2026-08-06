@@ -92,7 +92,7 @@ const CoreStateRebuildCheckpoint = z.strictObject({
 function isStreamPausedError(error: unknown): error is Error {
   return (
     error instanceof Error &&
-    error.name === "Error" &&
+    (error.name === StreamReceiverUnavailableError.NAME || error.name === "Error") &&
     error.message.startsWith(STREAM_PAUSED_ERROR_PREFIX)
   );
 }
@@ -119,8 +119,50 @@ export async function settleStreamCoreBackgroundWork(work: () => Promise<unknown
       });
       return;
     }
-    console.error("stream core background work failed", error);
+    console.error({
+      schema: "iterate.stream-core-background-work.v1",
+      message: "stream core background work failed",
+      error: streamCoreBackgroundErrorDiagnostics(error),
+    });
   }
+}
+
+function streamCoreBackgroundErrorDiagnostics(error: unknown): {
+  name: string;
+  message: string;
+  code?: string;
+  durableObjectReset?: true;
+  overloaded?: true;
+  retryable?: true;
+  cloudflareErrorReference?: string;
+} {
+  const candidate =
+    typeof error === "object" && error !== null
+      ? (error as {
+          name?: unknown;
+          message?: unknown;
+          code?: unknown;
+          durableObjectReset?: unknown;
+          overloaded?: unknown;
+          retryable?: unknown;
+        })
+      : null;
+  const name =
+    typeof candidate?.name === "string" ? candidate.name.slice(0, 200) : "NonErrorThrowable";
+  const message =
+    typeof candidate?.message === "string"
+      ? candidate.message.slice(0, 2_000)
+      : String(error).slice(0, 2_000);
+  const cloudflareErrorReference = /\breference\s*=\s*([a-z0-9]{8,128})\b/iu.exec(message)?.[1];
+  return {
+    name,
+    message,
+    ...(typeof candidate?.code === "string" ? { code: candidate.code.slice(0, 200) } : {}),
+    ...(candidate?.durableObjectReset === true ? { durableObjectReset: true } : {}),
+    ...(candidate?.overloaded === true ? { overloaded: true } : {}),
+    ...(candidate?.retryable === true ? { retryable: true } : {}),
+    ...(cloudflareErrorReference === undefined ? {} : { cloudflareErrorReference }),
+  };
 }
 
 /**
@@ -1197,12 +1239,13 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** Tell every ancestor stream (up to the root) that this stream exists. */
-  #announceToAncestors(): void {
-    if (this.#ancestorsAnnouncedThisIncarnation || this.#ancestorAnnouncementInFlight) return;
+  #announceToAncestors(): boolean {
+    if (this.#ancestorsAnnouncedThisIncarnation) return true;
+    if (this.#ancestorAnnouncementInFlight) return false;
     const path = this.#coreProcessorState.path;
     if (path === undefined || path === "/") {
       this.#ancestorsAnnouncedThisIncarnation = true;
-      return;
+      return true;
     }
 
     const pathSegments = path.split("/").filter(Boolean);
@@ -1228,6 +1271,11 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#ancestorAnnouncementInFlight = false;
       }
     });
+    // The idempotent remote appends are not committed state on this child
+    // stream. Keep a native alarm armed until a later reconciliation observes
+    // that they completed; otherwise a transient background rejection clears
+    // the in-memory flag and silently strands ancestor discovery.
+    return false;
   }
 
   #streamStub(path: string) {
@@ -1643,6 +1691,14 @@ export class StreamDurableObject extends DurableObject<Env> {
       connectionKey,
       streamMaxOffset: this.#coreProcessorState.maxOffset,
     });
+  }
+
+  /** @internal Fresh-incarnation liveness for the worker-side Subscriber Pager relay. */
+  relayedConnectionState(args: {
+    connectionKey: string;
+    subscriberPagerId: string;
+  }): "live" | "dormant" | "dead" {
+    return this.#subscriberPagers.relayState(args.connectionKey, args.subscriberPagerId);
   }
 
   /**

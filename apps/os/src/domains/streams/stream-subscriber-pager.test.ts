@@ -64,6 +64,19 @@ const dormant = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("StreamSubscriberPagerRegistry", () => {
+  it("classifies an exact relay as live, deliberately dormant, or dead", () => {
+    const livePager = fakeSocket(dormant({ idleDeliveredThrough: undefined }));
+    expect(registryOver([livePager], ["sub"]).relayState("sub", "pager-1")).toBe("live");
+
+    const dormantPager = fakeSocket(dormant());
+    expect(registryOver([dormantPager]).relayState("sub", "pager-1")).toBe("dormant");
+
+    const orphanedPager = fakeSocket(dormant({ idleDeliveredThrough: undefined }));
+    expect(registryOver([orphanedPager]).relayState("sub", "pager-1")).toBe("dead");
+    expect(registryOver([]).relayState("sub", "pager-1")).toBe("dead");
+    expect(registryOver([dormantPager]).relayState("sub", "another-pager")).toBe("dead");
+  });
+
   it("Pages a dormant subscriber once per dormancy period, offset-gated", () => {
     const socket = fakeSocket(dormant());
     const registry = registryOver([socket]);

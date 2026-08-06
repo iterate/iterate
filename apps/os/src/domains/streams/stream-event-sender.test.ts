@@ -5,6 +5,7 @@ import {
   type StreamEvent,
   type StreamEventBatch,
   type StreamEventInput,
+  type StreamPingInput,
   type StreamWakeEventBatch,
   type StreamWebhookDelivery,
 } from "iterate/processors";
@@ -189,6 +190,60 @@ function harness(args: {
 }
 
 describe("StreamEventSender hosted processor delivery", () => {
+  it("retries a lifecycle-reset processor after one second even after earlier availability failures", async () => {
+    const reset = Object.assign(new Error("processor incarnation reset"), {
+      durableObjectReset: true,
+      retryable: true,
+    });
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      wakeProcessor: async () => {
+        throw reset;
+      },
+    });
+    h.store.nack(PROCESSOR_KEY, {
+      attempt: 6,
+      nextAttemptAt: 10_000,
+      error: "earlier availability failure",
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      attempt: 7,
+      nextAttemptAt: 11_000,
+      lastError: "processor incarnation reset",
+    });
+    expect(h.alarms).toContain(11_000);
+  });
+
+  it("retries an unacknowledged hosted batch after one second even after earlier failures", async () => {
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      wakeProcessor: async () => {
+        throw new StreamReceiverUnavailableError(
+          `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
+        );
+      },
+    });
+    h.store.nack(PROCESSOR_KEY, {
+      attempt: 6,
+      nextAttemptAt: 10_000,
+      error: "earlier delivery failure",
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      attempt: 7,
+      nextAttemptAt: 11_000,
+      lastError: `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
+    });
+    expect(h.alarms).toContain(11_000);
+  });
+
   it("backs off without publishing when recording the hosted open is interrupted", async () => {
     const disposed = vi.fn();
     const h = harness({
@@ -499,6 +554,28 @@ describe("StreamEventSender hosted processor delivery", () => {
     });
   });
 
+  it("keeps the pending hosted probe as the earliest alarm after wake settlement", async () => {
+    const h = harness({
+      events: [event(2, "b", { keep: true })],
+      wakeProcessor: async () => ({
+        streamId: SOURCE_STREAM_ID,
+        checkpointOffset: 0,
+        processEventBatch: retainedProcessEventBatch(() => undefined),
+        ping: Object.assign(async ({ t0 }: StreamPingInput) => ({ t0, t1: t0, t2: t0 }), {
+          [Symbol.dispose]: () => undefined,
+        }),
+      }),
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    // The wake's final reconciliation must still derive the one-second live
+    // callback probe. Re-arming only the durable 20-second watchdog can replace
+    // the probe in native alarm state and strand a reset callback until timeout.
+    expect(h.alarms.at(-1)).toBe(11_000);
+  });
+
   it("closes a hosted callback whose durable configuration was replaced", async () => {
     const disposed: ReturnType<typeof vi.fn>[] = [];
     const h = harness({
@@ -537,6 +614,60 @@ describe("StreamEventSender hosted processor delivery", () => {
 });
 
 describe("StreamEventSender stream delivery", () => {
+  it("reports a nested lifecycle reset outside error telemetry and retries from its durable cursor", async () => {
+    const lifecycleReset = Object.assign(new Error("cursor storage reset"), {
+      durableObjectReset: true,
+      retryable: true,
+    });
+    const cursorUpdate = new Error("subscription cursor update failed", { cause: lifecycleReset });
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      configuration: {
+        subscriptionKey: PROCESSOR_KEY,
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/receiver",
+          delivery: { start: "beginning", onFailingEvent: "halt" },
+        },
+      },
+      wakeProcessor: async () => {
+        throw new Error("a copy must not wake a hosted processor");
+      },
+      copyToStream: async () => ({ acknowledged: 1 }),
+    });
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    vi.spyOn(h.store, "ack").mockImplementationOnce(() => {
+      throw cursorUpdate;
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(warnLog).toHaveBeenCalledWith(
+      "durable subscription send loop interrupted by lifecycle availability",
+      { subscriptionKey: PROCESSOR_KEY, error: cursorUpdate },
+    );
+    expect(errorLog).not.toHaveBeenCalled();
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 0,
+      attempt: 1,
+      nextAttemptAt: 11_000,
+      lastError: "subscription cursor update failed",
+    });
+
+    h.setNow(11_000);
+    h.eventSender.onAlarm();
+    await h.settle();
+
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      acknowledgedOffset: 2,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+
   it("pins the next read to one event after a batch failure so a poison event cannot strand its healthy prefix", async () => {
     const attemptedOffsets: number[][] = [];
     const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {
@@ -1868,6 +1999,7 @@ function connectionsHarness(
     maxOffset: events.length,
   }) satisfies CoreProcessorState;
   const alarmTimes: number[] = [];
+  const keptAlive: Promise<unknown>[] = [];
   const sessionsIdleClosed: string[][] = [];
   const durableDeliveryWakes = vi.fn();
   const deliveryFailures = vi.fn((connectionKey: string, error: unknown) => {
@@ -1899,7 +2031,9 @@ function connectionsHarness(
       runtimeChanged: () => undefined,
       now: () => now,
       armAlarm: (atMs) => alarmTimes.push(atMs),
-      keepAlive: () => undefined,
+      keepAlive: (work) => {
+        keptAlive.push(work);
+      },
       subscriberPagerConnectionKeys:
         options.subscriberPagerConnectionKeys ?? (() => new Set<string>()),
       onSessionsIdleClosed: (keys) => {
@@ -1921,6 +2055,7 @@ function connectionsHarness(
     store,
     expectedDelivery,
     alarmTimes,
+    keptAlive,
     sessionsIdleClosed,
     deliveryFailures,
     durableDeliveryWakes,
@@ -1931,6 +2066,143 @@ function connectionsHarness(
 }
 
 describe("StreamConnections hosted delivery watchdog", () => {
+  it("bounds an unresponsive hosted processor runtime-state callback", async () => {
+    vi.useFakeTimers();
+    try {
+      const h = connectionsHarness();
+      h.connections.openHosted({
+        connectionKey: "processor",
+        expectedHostedDelivery: h.expectedDelivery,
+        processEventBatch: recordingProcessEventBatch([], () => undefined),
+        replayAfterOffset: 0,
+        getRuntimeState: () => new Promise(() => undefined),
+      });
+
+      const runtimeState = h.connections.getProcessorRuntimeState("processor");
+      const rejection = expect(runtimeState).rejects.toThrow(
+        "hosted processor runtime-state callback processor timed out after 5000ms",
+      );
+      await vi.runAllTimersAsync();
+      await rejection;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("probes a pending hosted batch and recovers before its watchdog when the processor resets", async () => {
+    const calls: DeliveryCall[] = [];
+    const reset = Object.assign(new Error("processor incarnation reset"), {
+      durableObjectReset: true,
+      retryable: true,
+    });
+    const h = connectionsHarness();
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      ping: async () => {
+        throw reset;
+      },
+    });
+
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    expect(h.alarmTimes).toContain(2_000);
+
+    h.setNow(2_000);
+    h.connections.onAlarm();
+    await Promise.allSettled(h.keptAlive);
+
+    expect(h.deliveryFailures).toHaveBeenCalledWith("processor", reset);
+    expect(connection.isLive()).toBe(false);
+    expect(warnLog).toHaveBeenCalledWith(
+      "stream durable callback unavailable; backing off before waking it again",
+      expect.objectContaining({
+        connectionKey: "processor",
+        source: "rpc-broken",
+        errorMessage: "processor incarnation reset",
+      }),
+    );
+    warnLog.mockRestore();
+  });
+
+  it("recovers after three consecutive pending-batch probes cannot reach the processor", async () => {
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness();
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      ping: async () => {
+        throw new StreamReceiverUnavailableError("pending hosted delivery probe timed out");
+      },
+    });
+
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    for (const now of [2_000, 3_000]) {
+      h.setNow(now);
+      h.connections.onAlarm();
+      await Promise.allSettled(h.keptAlive);
+      expect(connection.isLive()).toBe(true);
+    }
+
+    h.setNow(4_000);
+    h.connections.onAlarm();
+    await Promise.allSettled(h.keptAlive);
+
+    expect(h.deliveryFailures).toHaveBeenCalledWith(
+      "processor",
+      expect.objectContaining({
+        message: "pending hosted delivery probe timed out",
+        retryable: true,
+      }),
+    );
+    expect(connection.isLive()).toBe(false);
+    expect(warnLog).toHaveBeenCalledWith(
+      "stream durable callback unavailable; backing off before waking it again",
+      expect.objectContaining({
+        connectionKey: "processor",
+        source: "rpc-broken",
+        errorMessage: "pending hosted delivery probe timed out",
+      }),
+    );
+    warnLog.mockRestore();
+  });
+
+  it("keeps a slow hosted batch when an intervening probe reaches its processor", async () => {
+    const calls: DeliveryCall[] = [];
+    const replies = ["timeout", "timeout", "reached", "timeout", "timeout"] as const;
+    let replyIndex = 0;
+    const h = connectionsHarness();
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      ping: async ({ t0 }) => {
+        if (replies[replyIndex++] === "timeout") {
+          throw new StreamReceiverUnavailableError("pending hosted delivery probe timed out");
+        }
+        return { t0, t1: t0, t2: t0 };
+      },
+    });
+
+    connection.sendQueued();
+    for (const now of [2_000, 3_000, 4_000, 5_000, 6_000]) {
+      h.setNow(now);
+      h.connections.onAlarm();
+      await Promise.allSettled(h.keptAlive);
+    }
+
+    expect(h.deliveryFailures).not.toHaveBeenCalled();
+    expect(connection.isLive()).toBe(true);
+  });
+
   it("does not publish a hosted callback until its opened event finishes appending", () => {
     const calls: DeliveryCall[] = [];
     const h = connectionsHarness({
@@ -2380,6 +2652,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
     const h = connectionsHarness();
     const calls: DeliveryCall[] = [];
     const disposed = vi.fn();
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const connection = h.connections.openHosted({
       connectionKey: "processor",
@@ -2414,12 +2687,12 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(connection.isLive()).toBe(false);
     expect(disposed).toHaveBeenCalledTimes(1);
     expect(h.durableDeliveryWakes).toHaveBeenCalledTimes(1);
-    expect(errorLog).toHaveBeenCalledWith(
-      "stream durable callback failed; backing off before waking it again",
+    expect(warnLog).toHaveBeenCalledWith(
+      "stream durable callback unavailable; backing off before waking it again",
       {
         connectionKey: "processor",
         source: "delivery",
-        errorName: "Error",
+        errorName: "StreamReceiverUnavailableError",
         errorMessage: `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
         projectId: "project",
         streamPath: "/source",
@@ -2435,11 +2708,14 @@ describe("StreamConnections hosted delivery watchdog", () => {
         processorContractVersion: "1.0.0",
       },
     );
+    expect(errorLog).not.toHaveBeenCalled();
 
     calls[0]!.report("ok");
     await flushMicrotasks();
     expect(calls).toHaveLength(1);
     expect(h.deliveryFailures).toHaveBeenCalledTimes(1);
+    warnLog.mockRestore();
+    errorLog.mockRestore();
   });
 
   it("keeps ITX and Cloudflare references when a hosted processor reports an opaque failure", async () => {

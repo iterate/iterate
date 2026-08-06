@@ -134,6 +134,34 @@ describe("script execution recovery at head", () => {
     });
     expect(run[Symbol.dispose]).toHaveBeenCalledOnce();
   });
+
+  it("releases a completed script entrypoint call after recording its result", async () => {
+    const run = Promise.resolve({
+      status: "succeeded" as const,
+      result: "ok",
+    }) as Promise<unknown> & {
+      [Symbol.dispose]: ReturnType<typeof vi.fn>;
+    };
+    run[Symbol.dispose] = vi.fn();
+    const h = makeHarness();
+    h.run.impl = () => run;
+
+    await h.append({
+      type: T.requested,
+      payload: {
+        code: 'async () => "ok"',
+        executionId: "agent-output:completed",
+        expiresAt: h.clock.now + 60_000,
+      },
+    });
+    await h.settle();
+
+    expect(h.events(T.completed)[0]?.payload).toMatchObject({
+      executionId: "agent-output:completed",
+      settlement: { status: "succeeded", result: "ok" },
+    });
+    expect(run[Symbol.dispose]).toHaveBeenCalledOnce();
+  });
 });
 
 describe("eviction recovery end to end", () => {

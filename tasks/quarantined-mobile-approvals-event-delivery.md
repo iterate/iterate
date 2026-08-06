@@ -1,11 +1,184 @@
 ---
-state: todo
+state: in-progress
 priority: high
-size: medium
+size: large
 tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 ---
 
 # Restore the quarantined mobile approvals event-delivery e2es
+
+## Status
+
+Implementation is about 99% complete. Both mobile skips are removed and the
+reported delivery defects plus each recovery failure found by the strict gate
+have regression coverage. The latest exact-head baseline kept both restored
+mobile flows first-try green but was rejected for six OS retries sharing one
+stalled config-repo birth.
+
+Gate candidate one then caught two classified Auth deployment gaps: the
+post-deploy OAuth seed could race bootstrap-admin visibility, and Wrangler did
+not recover Cloudflare D1 code 7009. The server now reports the first as 503;
+the seed and captured-output command wrapper bound retries to explicit
+availability outcomes while still rejecting unclassified failures. Auth's 86
+tests, the 18-test deploy-helper suite, typechecks, lint, and formatting are
+green. The next baseline exposed a Semaphore waiter timing out while its lease
+assignment was already in flight; that lifecycle is now explicit. Its
+successor exposed a deeper Artifacts flaw: the retained repo-processor callback
+raced first creation against eight seconds, abandoned the successful response's
+one-time write token, then hammered an existing but unreadable repo. Empty repo
+birth now transfers to an independent durable alarm actor which awaits that
+token, checkpoints the seeded Artifact, and appends the terminal fact under the
+original stream-lifetime fence. Its first baseline made every preview group
+green with both restored mobile flows first try, but the exact-version audit
+caught one remaining dynamic-worker concurrency error. A later config commit
+was probing the project worker from the retained root Stream alarm while that
+alarm delivered the same commit to the userspace worker feed. The probe now
+transfers to the Project DO's durable alarm queue and keeps the original stream
+fence. Its exact-head baseline passed all six groups, including both restored
+mobile flows first try, and had no dynamic-worker concurrency failure. The
+strict audit then found three expected paused-ancestor rejections mislabeled as
+application errors because their direct Durable Object error name differed
+from the public-RPC-normalized name. After that fix passed its exact-head
+baseline, the first cold candidate found one unflagged local SQLite reset in
+subscription `nack`; a narrow referenced-reset classifier is locally green.
+The 25-run streak remains at zero until the new exact head passes preview and
+trace audit. Its first baseline passed cleanly; the next completed candidate
+was rejected by a short account-wide Cloudflare internal-error burst across
+unrelated Durable Object calls, and the following attempt failed before tests
+on a Cloudflare D1 API internal error. No product retry or telemetry
+classification was weakened to admit either run.
+The next exact-head baseline kept all OS and mobile coverage green but was
+rejected when Semaphore reached the preceding Durable Object version after its
+90-second rollout clock. Semaphore now has an exact public-Worker/coordinator
+version readiness proof. Its first deployed check proved the orchestrator
+waited for that condition, then exposed an E2E helper still requiring the old
+literal `OK` body. The helper now validates the exact JSON/header version
+contract; a fresh head is pending.
+That fresh baseline and three cold candidates passed every group and both
+restored mobile flows first try. Two intervening Semaphore D1 code-7500 deploy
+failures never reached tests and were excluded as infrastructure non-candidates.
+The fourth candidate passed cleanly but its exact-version audit caught local
+subscription `nack` logging an unflagged code-update reset as an application
+error. The shared lifecycle classifier now accepts only Cloudflare's exact
+code-update sentence in addition to the existing flagged and referenced-reset
+shapes. Its next eight rapid redeploys produced three broad, unrelated Project
+Durable Object failure waves despite the fixed 90-second rollout delay. Project
+birth now proves the new Project and root Stream objects report the caller's
+exact Worker version before it appends any birth facts, and uses the exact
+proven Stream stub for that append. Its first preview caught the initial probe
+loop overlapping seven uncancellable RPC calls after a reset; the gate now
+leaves an invocation-free handoff window and never starts another probe after
+one times out. Focused regressions and OS typecheck pass; the 25-run streak
+remains zero. That exact head then passed the canonical baseline with every app,
+both restored mobile flows, and both recovery proofs first try. Cold candidate
+one was rejected for four background ancestor-append failures from one Stream
+alarm plus its downstream Project processor failure. Cloudflare discarded the
+remote error payload from the two-argument console call, so the next exact head
+adds bounded structured diagnostics before another preview identifies and
+classifies the cause. Its first dispatch never reached tests because the branch
+conflicted with `main`, preventing GitHub from publishing the exact-sha preview
+packages. Current `main` is now merged; its chat-reply suppression and this
+branch's approval claim-before-intent state are combined under Device processor
+version 0.7.0 so existing 0.6.0 caches refold. The merged-head baseline then
+failed both attempts of the approvals spec because the new chat-reply feature
+correctly added two `Agent replied` notification rows, and the spec's broad
+notification-row locator clicked one of those rows instead of an approval
+batch. The locator now selects `Approvals needed` rows and inspects them one at
+a time; the exact spec passes against preview with no timeout increase. The
+corrected head then passed its canonical preflight and two formal candidates
+with all app retry fields null. Candidate two's exact trace audit still found a
+nested retryable SQLite reset reported by the source-owned subscription loop as
+an application error. The loop now keeps that already-bounded lifecycle retry
+outside error telemetry; its red/green regression proves the cursor stays
+durable and advances on the one-second retry. The next clean-slate workflow kept
+all six apps green and both mobile flows first try, but was rejected for one
+Semaphore retry and three processor blocked-work error rows. One row retained
+an explicit `stream-unavailable` timeout; two more lost their nested throwable
+fields at Cloudflare's two-argument console boundary. The runner now emits a
+bounded structured diagnostic before the next exact-head run classifies those
+outcomes. That diagnostic-head candidate passed every app with no retry or
+blocked-work row, but its wider exact-version audit caught a flagged retryable
+processor-host revival reset still logged at error level. Keepalive now reports
+only its narrow lifecycle shapes outside error telemetry while preserving true
+application failures. The strict streak remains zero.
+
+On the current keepalive-classifier head, a clean baseline passed in 325
+seconds, but its successor exceeded the 420-second budget without retrying.
+Three later candidates were rejected by short Cloudflare internal-error waves:
+the largest produced 54 distinct references across six Project/Stream objects
+in 19.6 seconds. The latest wave also exposed a product recovery gap. Three
+classified platform failures made the root-Stream readiness loop sleep for
+5 + 10 + 15 seconds, consuming its entire 30-second bound before it could make
+a fourth probe after Cloudflare recovered. The handoff remains five seconds
+but no longer grows exponentially, so the same three-error regression reaches
+the ready fourth target in 15 seconds. Nine focused readiness/create tests pass;
+the 25-run streak remains zero for this new exact head.
+
+The corrected readiness head passed all linked proofs in preview, but its
+first run was excluded for a one-time 453-second package/deploy preflight and
+two opaque Stream background failures. Its warmed 350-second successor
+repeated the two background failures and the corresponding agent-chat case
+retried after its first project never rendered the assistant reply. The child
+Stream's ancestor announcement reset its in-memory in-flight flag after a
+background rejection but did not durably request another reconciliation turn.
+Ancestor discovery now remains an explicit repair obligation until its
+idempotent remote appends succeed. A red full-Durable-Object regression proves
+three failed turns each preserve a native alarm and the fourth succeeds; all
+29 copy-recovery/background-work tests pass. The streak remains zero for the
+next exact head.
+
+That ancestor-repair head's first cold candidate passed all six app groups,
+both mobile flows, and both recovery proofs first try in 343 seconds. Candidate
+two kept both mobile flows first try but retried two unrelated keyed appends
+after 10-second no-response bounds and retried one project create after its
+root-Stream version probe consumed the full 30-second birth deadline. Exact
+trace `6a8259d3eb218f033ce38abdc7a08c27` shows Cloudflare canceled the Stream DO
+invocation after 4.38 seconds while its parent subrequest remained unsettled
+until the caller's 30-second bound. Each readiness probe now has its own
+five-second bound: a timed-out stub is disposed, the existing five-second
+invocation-free handoff is preserved, and a fresh read-only probe can recover
+inside the original overall deadline. The red/green regression proves that a
+hung first probe is released and the second reaches the current version. The
+strict 25-run streak remains zero for this new exact head.
+
+That probe-timeout head produced one fully accepted 395-second candidate with
+all six app groups and both mobile flows first try. The next candidate broke
+the streak before OS testing when Semaphore timed out in deployment health.
+Exact Cloudflare telemetry showed its new Worker version answer successfully
+once, then later version-pinned requests ran the old Worker for another 40
+seconds while its `ResourceCoordinator` reset for the code update. Semaphore
+was the only preview suite that calls a Durable Object without the shared
+90-second deployment-age gate. It now waits at that same bounded before-suite
+boundary; the preview-policy regression failed before the change and all 139
+tests pass after it. The strict streak is zero pending a new exact head.
+
+Current `main` then replaced the stream wake-socket implementation with the
+shared Subscriber Pager transport. The merge keeps the branch's
+fresh-incarnation relay-state proof and missed-idle recovery on that new
+transport rather than restoring the retired module. All 38 Stream test files
+(481 passing, 7 expected failures), OS typecheck, and the 139 preview-policy
+tests pass on the merge result. The gate still starts from zero on its final
+merge head.
+
+That merge-head candidate was excluded for a broad Cloudflare D1 internal-error
+wave across Semaphore. It also exposed a deterministic selector regression from
+the merged mobile navigation: both restored specs matched the visible project
+menu and its hidden responsive duplicate. They now select the visible menu.
+The notifications spec passed its exact-version focused run in 1.3 minutes;
+the first approvals run was excluded because three Durable Objects on that
+exact OS version reported Cloudflare's `object has moved to a different
+machine` failure during delivery, and its fresh rerun passed in 54.8 seconds.
+The next paired run reproduced the original notification hang with zero
+exact-version Cloudflare errors: the second attempt remained `started` for the
+whole 90-second spec because the same Device incarnation kept an unsettled
+Expo/Secret promise in its live set. Vendor sends now have a 15-second bound.
+Once durable `attempt-started` exists, a rejection or deadline records an
+`uncertain` terminal fact instead of retrying a push Expo may already have
+accepted. The mobile row calls that outcome `Delivery uncertain`; the spec
+accepts only that exact shape or an explicit Expo rejection. The red/green
+same-incarnation regression, all 30 Device tests, all 10 mobile notification
+projection tests, both app typechecks, targeted lint, and formatting pass. The
+strict streak remains zero pending this corrected exact head.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -42,6 +215,185 @@ notification journal.
   entry for the first two canonical runs. The missing transition is therefore
   silent today, which is itself the defect rather than evidence of a healthy
   request.
+- PostHog's longer pre-quarantine baseline shows this was not introduced by
+  PR #2388: approvals finished failed in 9/221 runs and retried in 22/221;
+  notifications finished failed in 8/102 runs and retried in 29/102 between
+  2026-07-25 and the decisive PR runs.
+- On 2026-08-03 the two specs failed across several unrelated PRs. The same
+  day's e2e telemetry recorded 37 dynamic-worker saturation errors and 16
+  `stream-wait-timeout` errors, up from 11 and 3 on 2026-08-02. The decisive
+  PR #2388 workflows also retried tests after `Too many dynamic workers`,
+  script-concurrency failure, and stream-wait timeouts.
+- Local reproduction confirmed the causal capacity path. `runScript` used
+  Worker Loader `get()` with a fresh identity for every unique execution, so
+  one-off code-mode isolates entered the reusable-worker cache and could not
+  be reused. One approvals run grew local workerd RSS from 164 MB to 4.6 GB;
+  the next browser flow then lost its OS/auth connection. Cloudflare's current
+  Worker Loader contract reserves `get()` for reusable workers and `load()`
+  for one-off code execution.
+- The first fixed canonical preview, Depot run `s3xmd7x093` on `preview-14`,
+  passed approvals in 57.5 seconds and notifications in 71.5 seconds with no
+  retry. PostHog independently recorded both exact Playwright results as
+  passed with `retry_count = 0` and `error_count = 0`.
+- The same run was not accepted as a restoration-gate run because Cloudflare
+  still recorded 27 error rows across ten traces from 21:34:31.649Z through
+  21:34:39.859Z: `Dynamic worker concurrency limit exceeded: each request may
+  have up to 4 concurrent dynamic worker invocations`. Exact trace
+  `4bab3d906a7603a15e78c8910fc0f55e` roots at a `StreamDurableObject` alarm,
+  enters `ProjectDurableObject.wakeStreamProcessor`, and fails in
+  `#waitForDefaultProjectWorker` while probing the project-config worker.
+  `withWorkerCommit` had replaced the dynamic worker's disposable `Response`
+  with a plain stamped `Response`, so every bounded readiness probe dropped
+  its invocation ownership instead of releasing it.
+- Restoration attempt `2hpdtl6rqz` exposed a different deterministic device
+  race. On project `prj_b6b560b9895c4c01b2612df3ea8b6c47`, the ordered copy
+  lane put `approval-presented` root offset 48 at device offset 8, then the
+  matching notification root offset 49 at device offset 9. The reducer dropped
+  the early claim, sent the fake token, revoked the device on Expo rejection,
+  removed the subscription at root offset 56, and therefore could not copy the
+  second notification at root offset 59. The failure diagnostic correctly
+  named `notification/requested copied to device` as the first missing link.
+- Final-head preview run `9wgmlm2ztp` passed approvals in 52.2 seconds and
+  notifications in 1.1 minutes without either test retrying. The workflow was
+  rejected because `workspace-edit-and-push` retried once after two Cloudflare
+  Durable Object storage resets (`rnobmgjufmksoiinfovt95q1` and
+  `hubulkncdqrp82raijd9a82b`) in its execution window. The interrupted CLI child
+  exited without its promised JSON document, which the matrix previously
+  surfaced as the generic parser error `Unexpected end of JSON input`. The
+  adapter now names that missing result and interrupted lifecycle directly.
+- Canonical preview workflow `xn1rbdkrdx` passed approvals on its first attempt
+  but retried notifications after the first approval request missed its 15s
+  behavior budget. Durable events and trace `c1cec4015eb11c878a7d04e39078e162`
+  show the script was accepted at 23:30:46Z but its first egress request did
+  not start until 23:31:16Z. The same window began with the 20-script
+  concurrency proof and then a steady run-script catalogue stream. Later
+  scripts completed ahead of this one. The one-off path released the derived
+  entrypoint stub but dropped the `WorkerStub` returned by `LOADER.load()`;
+  current Cloudflare Code Mode explicitly disposes both native handles.
+- Exact-head preview on `4fbdd93` passed approvals in 52.5 seconds and
+  notifications in 49.6 seconds, both first try under 16-worker Playwright.
+  The run was still rejected because the new forced-stream-reset Vitest case
+  failed twice. A Stream DO `ctx.abort()` can leave the relay's local wake
+  socket looking open even though the next DO incarnation no longer owns it;
+  the dead RPC leg was detected, but `ping()` incorrectly returned `true`, so
+  the owner never reopened from its cursor. A focused run preserved the exact
+  red assertion: expected the stale handle to report `false`, received `true`.
+- Exact-head preview workflow `wxczbq1zp3` on `16c29a0` was green overall, but
+  PostHog rejected it for the restoration gate: approvals failed after 60.4
+  seconds when the second notification row did not render, then passed its
+  retry in 49.4 seconds. Cloudflare recorded an internal storage reset on the
+  Project DO (`skeb35u7pdbcs1uscf038h2i`) at 00:03:58Z. Both live hosted
+  callbacks timed out at 00:04:18Z, then did not reopen until 00:05:15Z. The
+  source Stream had no intervening retry alarm; the 56.8-second delay matches
+  an attempt-7 exponential backoff, showing that lifecycle availability
+  failures could inherit an already-inflated retry delay.
+- A focused deployed E2E now restarts the Project DO while its notification
+  callback is live, appends an approval request to the surviving root Stream,
+  and requires the notification intent within 12 seconds. It failed against
+  `16c29a0` with the public wait timing out after 12 seconds; the old path took
+  about 20 seconds because only the batch watchdog detected the dead callback.
+- Canonical workflow `79mpzrv8mt` on `1c66ee9` passed approvals in 52.7s,
+  notifications in 57.8s, and the new Project-restart E2E, all with zero
+  retries/errors in PostHog. The Cloudflare audit still rejected it: rollout
+  resets left retained callbacks whose pure ping calls hung instead of
+  rejecting. One or two missed one-second probes are allowed for a busy
+  processor; three consecutive misses now classify that callback as
+  unavailable and use the bounded one-second lifecycle retry before the 20s
+  application-work watchdog can report a false application failure.
+- The first strict-gate workflow on `df641ef` passed both mobile cases first
+  try, but the gate rejected the whole run because the worker-bundler case
+  retried. Cloudflare trace `0f1fb6230b48c7b95031e366154cc27b`
+  (`vit5vef1jngi9mh659bpbflk`) showed the actual failure happened earlier in
+  `Project.create()`: an internal storage reset rejected the root Stream DO's
+  terminal `waitForEvent`. Project creation now reacquires that idempotent
+  terminal wait exactly once, with the second attempt consuming only the
+  original deadline's remainder; a second lifecycle failure still propagates.
+- PostHog recorded both restored cases on that workflow with
+  `retry_count = 0` and `error_count = 0`, but the exact deployed Worker still
+  emitted 285 error-level 20-second hosted acknowledgement timeouts. The
+  owner ping can remain healthy while the batch's separate one-shot result
+  capability is unusable, so owner liveness cannot classify the specific
+  acknowledgement path. An expired acknowledgement is now an explicit
+  receiver-unavailable outcome: it stays attempt-bounded, retries after one
+  second even after prior failures, and logs as expected availability rather
+  than an application error. Late results remain ignored by the existing
+  per-batch token fence.
+- The next unchanged-head attempt again made both restored cases 0/0 in
+  PostHog and had no test retry, but the exact trace audit rejected it for a
+  `RepoNotSeededError` from the Project processor's default-worker readiness
+  probe (`prj_f7984c399815471887c4f38259c46677`). Browser fetch dispatch and
+  project-worker event delivery already classify this config-repo birth window
+  as “not ready yet”; only the processor's direct probe bypassed that contract.
+  It now retries the same bounded 20-attempt readiness loop and still
+  propagates every non-lifecycle dispatch failure.
+- The first preview after that fix passed both restored cases first try and
+  emitted no hosted-callback application errors, but an egress case retried.
+  Its first attempt waited up to 30 seconds for child stream paths, then gave
+  the repo catalog only the shared helper's five-second default before checking
+  the same combined state. The retry passed in 45.2 seconds. The two waits are
+  now one exact catalog-state condition under the test's existing 30-second
+  budget; assertions and product timeouts are unchanged.
+- The first canonical workflow on `ddcdcf2` passed both restored mobile cases
+  and the stream-incarnation regression first try, but the forced Project
+  restart case retried after its first 12-second public wait expired. Exact
+  Stream telemetry showed the pending hosted batch start at 02:03:21.748Z but
+  no one-second probe alarm; the first alarm fired at 02:03:37.520Z and only
+  then classified the killed callbacks. A focused unit regression reproduced
+  the final reconciliation arming the 20-second watchdog (`30000`) after the
+  one-second probe (`11000`). Alarm recomputation now includes the earliest
+  live pending-delivery probe, and the regression plus both adjacent stream
+  suites pass.
+- An earlier rejected gate attempt retried `repo-lazy` after `Repo.log` returned
+  the property-stripped `HTTP Error: 503 Service Unavailable`. Trace
+  `563d23a0e7a5ac39aa9dc89d134d3989` showed the project had already completed
+  all four commits; only its later Artifacts-backed clone failed. Clone reads
+  now retry that existing transient-infrastructure classifier locally at most
+  three times, while branch/domain failures still propagate immediately.
+- The same gate attempt timed out a live-capabilities project after its config
+  artifact create occupied the callback for 160.512 seconds. Across 1,262
+  creates in the surrounding window, p99 was 2.074 seconds and only this call
+  exceeded eight seconds. The idempotent create plus ambiguous-create readback
+  now share one eight-second deadline, safely below the 20-second hosted
+  callback watchdog; expiry is an explicit retryable repo-creation obligation.
+- Workflow `vhg630lf2m` passed all four linked cases first try, but its exact OS
+  Worker version emitted two callback application errors for the same repo:
+  first `RetryableRepoCreationError` at the eight-second create deadline, then
+  `RepoNotSeededError` at the shared readback deadline. Both are explicitly
+  retryable obligations, but neither class carried `retryable: true`, so the
+  processor serializer could not preserve their availability classification.
+  A red/green contract test now requires that flag on both errors; the existing
+  wire serializer and stream receiver classification route them to warning
+  telemetry while keeping the durable retry ladder unchanged.
+- That workflow was also correctly rejected for a `repo-ide-svg-index-preview`
+  retry. Project `prj_86b46f9224d849788e7e9d22a101bff6` spent two bounded
+  drives in `artifact-get-or-create`, then emitted `repos/created` at
+  02:34:22.267Z without a Git push. `Repo.commitFiles` immediately failed with
+  `Could not find main`; the live Artifact still reports `last_push_at: null`.
+  The recovery read returned a Workers binding handle whose runtime shape has
+  `log()` but no `lastPushAt`, while the old condition treated the missing
+  property as proof of a push. Red/green tests now cover a handle with no
+  branch, a missing default-branch error, a valid existing head, and a stalled
+  head check sharing the original deadline.
+- Exact-head workflow `2lhj7j115w` rejected the next streak after two clean
+  candidates. The approvals trace captured a 429 from
+  `/api/auth/email-otp/send-verification-otp` with `x-retry-after: 46` while
+  the popup still showed its email form. Better Auth keys that plugin limit by
+  runner IP and endpoint, so seven unique test emails still contend for its
+  default three requests per minute. Fixed-test-OTP stages now use 100/minute;
+  production keeps 3/minute, with red/green policy coverage. The same workflow
+  retried the recreated-source hosted-processor proof; its stream recovery
+  remains separate from this auth fix.
+- Since the quarantine merged, each test has been skipped 99 times across 98
+  preview workflows through 2026-08-05 16:05 UTC.
+- Exact-head baseline `pjdxkm1kjb` / attempt `ljkjs8v9mc` on `7df2242c3`
+  passed all six preview groups, 190 OS tests, interrupted-session recovery,
+  approvals in 51.6 seconds, and notifications in about one minute with no
+  test retry. The strict Cloudflare audit rejected it for one unexplained
+  exact-version error in trace `54342071e9bcc5e682d1166fe77f2194`:
+  `ProjectDurableObject` called the project-config dynamic worker from its
+  config-commit processor while the root Stream alarm's permanent
+  `project-worker` feed called that worker in the same invocation tree. The
+  latter succeeded; the former hit Cloudflare's four-dynamic-worker limit.
 
 ## Quarantined behavior
 
@@ -56,24 +408,524 @@ notification journal.
 - Other approval, script-execution, stream-delivery, and notification tests
   remain active.
 
+## Working hypotheses
+
+Test these in order; do not treat the first plausible one as the conclusion.
+
+1. **Confirmed:** shared dynamic-worker capacity pressure rejects or delays a
+   Script Execution. One-off `runScript` workers were loaded through the
+   reusable `get()` cache under per-execution identities, retaining every
+   unique isolate until eviction and exhausting capacity under preview load.
+2. The egress batching processor loses or strands a held-request obligation
+   during concurrent delivery or Durable Object eviction. Prediction: the
+   Script Execution starts and the fetch parks, but no matching Approval Batch
+   fact appears; replay or eviction reproduces the same source-offset gap.
+3. **Confirmed:** approval facts can exist durably while the live thread misses
+   them. A forced Stream DO reset can orphan both callback channels without a
+   close event; the relay then treated its stale local wake socket as proof of
+   life. The callback owner must see `ping() === false` and reopen from its
+   durable cursor. An accepted mobile message is also projected as pending
+   agent activity until the first durable script/LLM/assistant/error outcome,
+   closing the transient no-spinner gap without inventing durable state.
+4. **Confirmed:** notification intent delivery can disappear after an earlier
+   foreground claim loses its ordering race. The dropped claim permits an
+   unwanted Expo send; token rejection revokes the device and removes its
+   subscription before the next intent.
+
 ## Work
 
-- Add correlated diagnostics for every transition from script fetch hold,
-  through batch creation and decision, to the device notification journal.
-  A missing transition must become a bounded, classified failure rather than a
-  vanished button or row.
-- Minimize whether the loss occurs in the egress batching processor, the live
-  thread subscription, or notification journaling, then fix the owning state
-  machine without polling, broader waits, or another retry layer.
-- Verify that a settled script cannot lose its approval batch or device row
-  across Durable Object eviction and concurrent preview load.
+- [x] Remove both skips on the investigation branch so failures are observable
+  without weakening assertions, waits, or retries. _Both original tests are
+  active; approval/notification assertions and retry policy are unchanged._
+- [x] Add one correlated diagnostic surface covering Script Execution request,
+  start and settlement; held request and Approval Batch creation; approval
+  decision; root notification intent; and device notification settlement. A
+  failure must identify the first absent transition, project, stream path,
+  execution/batch/device identity, and source offset where applicable.
+  _`specs/mobile/approval-delivery-diagnostics.ts` reports each execution ID,
+  durable offsets, settlement, and first missing transition on UI failure._
+- [x] Establish a serial baseline, then raise the reproduction rate with the
+  existing four-worker stress shape and a production-shaped fully parallel
+  preview. Capture the exact first absent transition for each failure.
+  _Serial and fully parallel runs crossed different boundaries; strict run
+  `2hpdtl6rqz` preserved the exact root/device offsets and first missing copy._
+- [x] Minimize the first confirmed failure at the public itx or stream-
+  processor harness seam. Preserve it as a readable red regression test before
+  changing product behavior. _Red tests proved one-off scripts still called
+  cached Worker Loader `get()`, completed entrypoint calls were not released,
+  stamped responses lost disposal ownership, and pre-intent presentation
+  claims were discarded on an otherwise healthy ordered copy lane._
+- [x] Fix the owning state machine. Capacity exhaustion must become bounded
+  durable recovery or an explicit terminal outcome; processor obligations
+  must survive eviction. Do not add polling, broader waits, fallback values,
+  compatibility shims, or another retry layer.
+  _`run_script` now uses one-off Worker Loader `load()`; reusable apps remain
+  content-addressed through `get()`. Completed RPC calls, entrypoint targets,
+  and copied result disposal groups are released on every outcome. The device
+  reducer retains claims that precede their matching intent, consumes them on
+  arrival, and uses an approval-offset high-water mark to reject late claims
+  without retaining unbounded history. The stream relay reports a probed-dead
+  RPC leg as dead even when its local wake socket is stale, allowing the
+  existing bounded owner watchdog to reopen from the durable cursor._
+- [x] Re-run the original browser flows serially, under the focused concurrent
+  stress loop, and in the canonical fully parallel preview lane. _Both cases
+  pass independently and passed first try together in the exact-head
+  16-worker preview on `4fbdd93`; the run was rejected only by the deliberately
+  added stream-reset regression._
+- [ ] Update this task with the confirmed cause, diagnostic contract, fix,
+  traces, and validation evidence.
 
 ## Exit criteria
 
-- Remove the explicit skip and make the original case pass without increasing
-  its timeouts or retries.
-- The test asserts a durable diagnostic at the first missing transition, so a
+- Remove the explicit skips and make both original cases pass without increasing
+  their timeouts or retries.
+- Each test asserts a durable diagnostic at the first missing transition, so a
   future failure identifies the owning processor and source offset.
 - At least 25 consecutive canonical, fully parallel preview runs complete with
   no retry, silent event loss, unexplained Worker error, or missing approval or
   notification row.
+- CI and review are green with zero unresolved threads. The pull request stays
+  unmerged until the user explicitly approves it.
+
+## Implementation log
+
+- 2026-08-05: Re-read the Slack report, PR #2388 evidence, current task, and
+  PostHog CI telemetry. Confirmed the reported 4/4 approvals and 2/2
+  notifications attempts while finding earlier passing PR runs and correlated
+  capacity/stream failures in the same workflows. Created the isolated
+  `fix/mobile-approval-event-delivery` branch from current `origin/main`.
+- 2026-08-05: Reproduced local workerd growth and separated several unrelated
+  auth/project-bootstrap failures from the quarantined delivery boundary.
+  Added red/green Worker Loader and RPC ownership tests, switched only
+  `run_script` to one-off loading, released completed RPC ownership, removed
+  both skips, and added correlated failure diagnostics. Focused 45 unit tests,
+  repo typecheck, approvals browser flow, and notifications browser flow pass.
+- 2026-08-05: The first canonical preview passed both restored cases, but the
+  required Cloudflare audit rejected the apparently green run. A new red test
+  proved trusted response stamping discarded the dynamic worker response's
+  disposal group; `withWorkerCommit` now transfers that ownership to the
+  stamped response. The focused worker/capability-host suite passes 71 tests.
+  The initial marathon counted one retry-free workflow before this trace
+  finding; its streak was deliberately discarded and run two was cancelled.
+- 2026-08-05: The strict gate rejected two more workflows: one for a Cloudflare
+  internal Durable Object storage reset in Semaphore, then one for a separate
+  Cloudflare reset plus an approvals retry. The new diagnostic led to the live
+  root/device journals and proved the early-claim ordering race above. Added a
+  red state-machine spec, durable pending-claim/high-water state, and a contract
+  version bump; all 24 device processor tests, OS typecheck, lint, and format
+  checks pass.
+- 2026-08-05: A final-head preview passed both restored mobile cases, but an
+  unrelated catalogue case retried. PostHog placed the retry at 22:20:19Z and
+  Cloudflare traces showed two internal storage resets in the same window. The
+  reset interrupted the CLI child before it wrote its result. Added an explicit
+  empty-result diagnostic so a repeat names the lifecycle boundary instead of
+  failing later in `JSON.parse`; the next canonical preview is the
+  production-shaped regression check.
+- 2026-08-06: The next canonical preview's initial notification attempt
+  exposed a 30-second fresh-worker queue after the concurrency burst. Added a
+  red ownership test proving `run_script` disposed only the entrypoint stub,
+  then retained and disposed the parent one-off `WorkerStub` as well. Focused
+  worker-runner tests, formatting, lint, and OS typecheck pass; the next preview
+  will test whether fresh loads now drain promptly under the same full-suite
+  pressure.
+- 2026-08-06: Exact-head preview `4fbdd93` passed approvals and notifications
+  first try, but the new stream-incarnation regression failed both attempts.
+  A focused red run proved the relay returned `true` after its RPC leg died
+  because an orphaned local wake socket still looked open. The relay now
+  reports `false`; the existing 15-second owner watchdog reopens the logical
+  subscription, and the regression will prove cursor replay through the
+  replacement connection on the next deployment. OS typecheck, the 36
+  React/session tests, and focused formatting checks pass.
+- 2026-08-06: Exact-head preview `16c29a0` passed CI but approvals retried. The
+  root journal, PostHog result, and Cloudflare Worker logs tied the missing
+  second notification to an internal Project DO storage reset and a 56.8s
+  hosted-callback recovery gap. Added a deployed red Project-restart E2E plus
+  unit coverage. A pending callback now gets a one-second liveness probe; a
+  dead callback is closed and re-woken before the 20s work watchdog, while a
+  busy callback keeps that full deadline. Explicit DO-availability failures
+  retain the bounded attempt count but use a fixed one-second retry so prior
+  infrastructure resets cannot inflate recovery latency. The focused 54-test
+  sender suite, OS typecheck, lint, and formatting pass; preview validation is
+  next.
+- 2026-08-06: Preview `1c66ee9` made all three target cases retry-free, but its
+  trace audit found callbacks orphaned by the deployment itself still reaching
+  the 20s error watchdog. Their liveness probes timed out rather than returning
+  Cloudflare lifecycle flags. Added a red/green three-consecutive-miss test and
+  a success-between-misses test: a reachable slow processor keeps its full work
+  deadline, while a callback whose owner cannot answer three pure pings moves
+  onto the one-second availability path. The restoration streak remains zero
+  until the next exact-head audit is clean.
+- 2026-08-06: The first `df641ef` gate workflow passed both restored mobile
+  specs but retried worker-bundler after a Cloudflare Stream DO storage reset.
+  Trace reconstruction proved the reset interrupted `Project.create()` before
+  worker-bundler ran. Added red/green project-create coverage and a one-retry
+  terminal-wait recovery under the existing 100-second creation deadline; the
+  focused project/stream suites pass 35 tests, and OS typecheck is green.
+- 2026-08-06: PostHog confirmed both restored specs were retry/error-free, but
+  the exact-version trace audit rejected the same workflow for 285 error-level
+  hosted acknowledgement timeouts. A processor-owner ping does not prove its
+  separate per-batch result callback survived. Added red/green classification
+  and retry-policy coverage: an expired acknowledgement is now a bounded
+  receiver-unavailable warning with a one-second retry, even late in the
+  attempt ladder; genuine processor failures remain errors.
+- 2026-08-06: One strict rerun passed every test without retry but emitted one
+  Project processor callback error after the suite: `RepoNotSeededError` while
+  probing a newly born config repo. Added a red lifecycle spec and routed that
+  named transient (plus the matching build-in-progress shape) through the
+  processor's existing bounded readiness loop. The 31 project-processor tests,
+  OS typecheck, lint, and formatting pass. The restoration streak is zero
+  because this product commit changes the candidate head.
+- 2026-08-06: Candidate `888ae6e` made both target cases first-try green and
+  had zero hosted-callback application errors, but the egress catalog case
+  retried after a split 30-second/5-second wait. Consolidated it into one
+  exact-state wait using the already-declared 30-second propagation budget.
+  OS typecheck, lint, and formatting pass; the streak remains zero.
+- 2026-08-06: Rejected gate candidates then exposed three independent recovery
+  defects: final callback settlement could overwrite the one-second owner
+  probe with a 20-second watchdog; one read clone surfaced a transient
+  Artifacts 503; and one idempotent artifact create ran for 160.512 seconds.
+  Added red/green alarm reconciliation, bounded clone retry, and shared
+  eight-second artifact-creation deadline coverage. The four focused suites
+  pass 104 tests, OS typecheck is green, and the streak remains zero pending a
+  fresh exact-head preview.
+- 2026-08-06: The next preview exercised both bounded repo recovery outcomes
+  and proved they still arrived at the source Stream as application errors.
+  Added the missing wire-safe `retryable` flag to both named repo-readiness
+  errors. The expanded four-suite set passes 105 tests and OS typecheck is
+  green; no test wait or assertion changed.
+- 2026-08-06: Candidate `2lhj7j115w` reset a four-run clean streak. Besides
+  the fixed-test-OTP rate limit, its recreated-source proof exposed an
+  unbounded retained processor-state callback after the stream reset and wake
+  had completed. A red/green unit spec now enforces a five-second
+  receiver-unavailable boundary; the deployed proof retries only that named
+  observation inside its existing 30-second restoration budget. The full
+  sender suite passes 59 tests, and OS typecheck, lint, and format checks pass.
+- 2026-08-06: The corrected Artifacts head passed four strict gate candidates.
+  Candidate five reset the streak for an auth 429 and one
+  recreated-source lifecycle retry. Trace evidence showed the OTP request was
+  the fourth-or-later same-IP send inside Better Auth's 60-second window, not
+  a slow locator. Added red/green policy coverage and raised only fixed-test-
+  OTP stages to 100/minute; production remains at 3/minute.
+- 2026-08-06: Head `050cd7c` passed its initial preview and three strict gate
+  candidates. Candidate four `fdjddkrnf7` retried only the interrupted-session
+  regression. Exact-version traces recorded 276 successful
+  `StreamConnection.ping` calls after the deliberate kill: the aborted DO's
+  old capability kept returning captured in-memory liveness indefinitely.
+  Added red/green relay and wake-registry coverage. A relay with a wake socket
+  now probes a fresh DO for that exact socket identity. Its tri-state result
+  preserves intentional dormancy, clears a stale handle when an idle frame was
+  missed, and rejects orphaned old incarnations. The three focused suites pass
+  69 tests; OS typecheck, lint, and formatting are green.
+- 2026-08-06: The first six relay-fix candidates yielded three clean runs and
+  four rejected outcomes across three candidates. Two rejected candidates
+  independently returned an Artifacts `get()` value without the documented
+  `log()` method; another repo-lazy attempt saw an opaque Artifacts HTTP 503.
+  Added red/green coverage that keeps the incomplete handle inside the same
+  eight-second readiness loop. Real binding errors still surface unchanged.
+- 2026-08-06: Head `6ff4108bd` passed three wholly clean strict candidates.
+  Candidate four `4f0vk02271` passed the restoration targets but emitted one
+  exact-version callback error. Cloudflare request `JYIM4U7R0977H5GL` showed
+  a memory reset while acknowledging the root `project-worker` feed at offset
+  380 for `matrix-cli-1`; PostHog tied the project to the examples-matrix pool.
+  The same alarm showed 16 concurrent `getEventPage` calls. Removed the
+  unconditional `loadAndRefreshLive()` from durable stream-index ingestion:
+  the row still commits synchronously, loaded folds refresh inline, and cold
+  folds load only for an attached live-state watcher. The regression is red on
+  the old fan-out and green with the fix; four focused suites pass 42 tests,
+  and OS typecheck, lint, and formatting pass.
+- 2026-08-06: The first `cb7f670c5` candidate passed both restored mobile
+  flows first try but retried `dashboard.spec.ts`. Its trace proved project
+  creation, not the browser, was stuck: config repo
+  `prj_2de87d10bdc34ea48b0b5ed0f622ea42` repeated the bounded eight-second
+  Artifacts drive until `waitUntilProcessed` expired at offset 7. REST state
+  confirmed an existing empty repo (`last_push_at: null`, empty `main` log),
+  while the Workers binding returned a valid token-management handle without
+  `log()`. Added red/green coverage and an explicit `requires-clone` branch
+  state. Recovery now lets the existing clone-and-seed operation preserve a
+  real head or seed the empty remote instead of retrying that handle forever.
+  The 273-test repo/project set, OS typecheck, lint, and formatting pass.
+- 2026-08-06: Head `29c441742` passed its baseline with 190 OS tests, both
+  restored mobile flows first try, interrupted-session recovery, and no retry
+  markers. Candidate `hx0b2b0z3n` failed before tests when Auth's post-deploy
+  `setClient` returned 500. Exact trace `b877e9090b092860b9d935d678180e47`
+  showed the freshly seeded bootstrap admin was not yet visible; the same
+  idempotent seed passed immediately afterward. Added a red/green bounded-503
+  seed test and an explicit server precondition: only that missing-admin state
+  becomes `SERVICE_UNAVAILABLE`; arbitrary 500s remain terminal. Auth's 86
+  tests, Auth and contract typechecks, lint, and formatting pass.
+- 2026-08-06: The next exact-head preview `3nnr6dn0pw` reached Auth's D1 admin
+  seed but Wrangler's import API returned Cloudflare code 7009, “Upstream
+  service unavailable.” Added a red/green captured-output command spec and
+  routed Auth migrations and seed imports through the deploy helper's bounded
+  retry schedule. Only exact 429/7009 outcomes retry; recovered markers before
+  a later unrelated error and all unclassified failures remain terminal. The
+  18 deploy-helper tests and Auth's 86 tests pass with typecheck, lint, and
+  formatting green.
+- 2026-08-06: Head `e32c5486a` passed 190 OS tests and both restored mobile
+  flows first try, but its baseline was rejected because Semaphore's
+  allowed-slug waiter case retried once. Exact traces showed both waiters
+  started before release; beta was reserved, then its D1 mirror write took
+  6.944 seconds and crossed the five-second wait deadline. The old timeout
+  discarded an assignment already in flight and returned both requests as
+  conflicts. Waiters now time out only while idle in the queue; an in-flight
+  assignment finishes, while its own failure rejects that waiter explicitly.
+  The live case no longer relies on a 250 ms cushion. Semaphore typecheck, its
+  four local tests, lint, and formatting pass.
+- 2026-08-06: Baseline `3v3313vbpl` on `a7ec3271f` kept both restored mobile
+  flows first-try green but retried six OS cases. Exact-version telemetry had
+  277 error rows across config repos: each first `create()` crossed the
+  processor's eight-second `Promise.race`; the late invocation could reserve
+  the name, but its successful response and one-time initial write token were
+  abandoned. Recovery then saw `ALREADY_EXISTS`, could not read the repo, and
+  retried every second until project waits expired. The first sampled 503 also
+  lost its availability property over hosted-processor RPC, now preserved by
+  `RetryableRepoCreationError`, but the broader audit showed classification
+  alone could not repair the orphaned create.
+- 2026-08-06: Empty creation now durably enqueues a new
+  `RepoBirthCoordinatorDurableObject` and releases the retained Stream
+  callback. Its alarm validates the journaled request and stream ID, awaits
+  first `create()` without abandoning the token, bounds only ambiguous
+  readback, checkpoints the seeded Artifact before the terminal append, and
+  publishes `repos/created` through `appendIfStreamId`. Repo adopts the exact
+  seeded head before acknowledging birth. Classified vendor outages use a
+  bounded explicit alarm retry; invariant failures remain error-visible. A
+  180-second outer create deadline preserves the live-observed 160.5-second
+  response while guaranteeing that a hung vendor call returns to the
+  five-attempt ladder; the fifth classified failure appends one durable
+  `repos/create-failed`. The red/green no-abandon, deadline, handoff,
+  checkpoint, append-recovery, stale-lifetime, and wire-stripped-503 cases
+  pass with all 246 repo tests (two expected failures), OS typecheck, root
+  lint, and formatting. The generated itx API was refreshed for the new
+  optional seeded-head certificate field after its freshness check caught the
+  omission.
+- 2026-08-06: Repo-birth baseline `pjdxkm1kjb` passed all six groups and both
+  restored mobile flows first try, but strict trace audit rejected one
+  dynamic-worker concurrency error in trace
+  `54342071e9bcc5e682d1166fe77f2194`. A post-creation config commit was sent
+  concurrently to the userspace `project-worker` feed and the Project
+  processor's inline readiness probe from one retained root Stream alarm.
+  Added a red handoff spec and a pure durable queue state machine. The
+  processor now checkpoints an alarm handoff without probing; the Project DO
+  later probes in an independent alarm invocation, checkpoints the exact
+  success/failure outcome, and appends it through the original stream-ID
+  fence. Queue tests cover dedupe, lost acknowledgement, stale stream,
+  deterministic failure, bounded classified retry, visible invariant failure,
+  and a second commit interleaving while the first probe is in flight. The 83
+  Project-domain tests, OS typecheck, root lint, and formatting pass; a fresh
+  exact-head preview and trace audit are next, so the 25-run streak remains
+  zero.
+- 2026-08-06: Exact-head workflow `tmsts7hq51` on `d12aea6fe` passed all six
+  groups: 190 OS tests, both restored mobile flows first try, interrupted and
+  recreated session recovery, and no retry markers. Exact version
+  `5313b4d3-013b-4735-b709-3bf8cb415298` had no dynamic-worker concurrency
+  failure, proving the alarm handoff. Its strict audit did catch three
+  `stream core background work failed` rows from the deliberate
+  paused-ancestor recovery spec. The receiving stream throws
+  `StreamReceiverUnavailableError`; the classifier accepted only the plain
+  `Error` name used after public RPC normalization, so direct Durable Object
+  calls fell into error telemetry. A red/green spec now covers both wire
+  shapes and keeps only the exact `stream paused:` contract outside error
+  telemetry. The focused 10-test suite passes; a new exact-head baseline is
+  required before the 25-run gate starts.
+- 2026-08-06: Baseline `bnl8c233r4` on `03e0bda48` passed all groups and linked
+  targets first try with no retry marker or restoration-blocking telemetry.
+  Cold candidate `dd028cn0kp` also passed the workflow, but the strict audit
+  rejected one `stream core background work failed`: local subscription
+  `nack` hit Cloudflare storage reset reference `rke8qila30vbnhapsf1qshri`.
+  Unlike a rejected stub call, local SQLite throws no lifecycle flags. A red
+  regression now proves the exact referenced reset is classified outside error
+  telemetry while a lookalike application message remains visible. Both
+  focused suites pass (32 tests); the streak remains zero for the new head.
+- 2026-08-06: Baseline `rxmld9w48m` on `9c28874a0` passed all six groups,
+  including 190 OS tests, approvals in 55.3 seconds, and notifications in 63.3
+  seconds with no retry. PostHog recorded both restored cases as passed with
+  `retry_count = 0` and `error_count = 0`. The exact Worker version's test
+  window contained only known deliberate test noise; rollout lifecycle logs
+  ended before readiness and were excluded. This established a one-run streak.
+- 2026-08-06: Candidate `j52phnjsrw` reset that streak. Within 33 seconds,
+  Cloudflare returned 33 distinct opaque Durable Object internal-error
+  references across unrelated projects, triggers, and RPC methods. Ten OS
+  tests retried and dashboard settings still failed; both restored mobile
+  flows nevertheless passed first try. The same errors caused 27 hosted
+  callback backoffs and 46 processor-blocked failures, so the run is rejected
+  rather than relabelled. The immediately following workflow `qs26kq809p`
+  never reached tests: Semaphore's remote D1 migration API returned Cloudflare
+  code 7500 with its own internal reference while OS smoke checks initially
+  returned 503. That deployment-only infrastructure failure is not a gate
+  candidate. The streak remains zero.
+- 2026-08-06: Baseline `w44x17p14q` on `b05a35229` passed every app and both
+  restored mobile cases first try, but Semaphore's CRUD case retried. Request
+  `a26cf13218f15ca1` reached coordinator version
+  `210fa2ef-c67d-41d1-b89a-fc3262a91891` and was reset for a code update 94.8
+  seconds after the successful Semaphore deploy, beyond the fixed 90-second
+  gate. Replaced that guessed delay with an exact readiness condition: `/health`
+  addresses a coordinator named for the public Worker's immutable version and
+  stays 503 through a mismatch or reset. It returns the public version in the
+  canonical readiness header, so the orchestrator proves both sides before
+  starting tests. Three red/green health cases, 139 preview-orchestrator tests,
+  both affected typechecks, lint, and formatting pass. The streak remains zero
+  for the new head.
+- 2026-08-06: Baseline `82cxg80fnt` on `8668ab37c` proved the exact Semaphore
+  readiness gate worked: the first deploy smoke was healthy at 09:23:11 UTC,
+  while the preview orchestrator waited another 42 seconds for the public
+  Worker version header before starting tests. Both Semaphore E2E files then
+  timed out before their cases because their local waiter still required the
+  retired literal `OK` body from `/health`. It now uses the fixture's
+  version-pinned fetch and accepts only matching JSON body versions plus the
+  public version header. Focused red/green coverage rejects both coordinator
+  and header mismatches. This run is rejected; the streak remains zero.
+- 2026-08-06: Exact-head baseline workflow `xw97zz815h` on `e896429c2` passed
+  all six groups. Semaphore's 14 tests passed first try after two expected 503
+  rollout probes; mobile approvals passed in 49.3 seconds and notifications in
+  60 seconds. The gate still rejected one OS Vitest retry. PostHog isolated its
+  first attempt to the `create test project` phase (100.685 seconds). Exact
+  Worker logs for project `prj_bb200507b3424c189c342ad04f3cb2bc` show config
+  Artifact creation succeeded in 1.463 seconds, its Git seed failed after
+  5.671 seconds, then the alarm discarded the create response's write token
+  and exhausted the full 75-second read-plane recovery bound. The public
+  `Project.create` wait expired at 99.296 seconds. The birth queue now
+  checkpoints the prepared Artifact and write token before Git seeding, so a
+  classified seed retry skips create/read and repeats only the deterministic
+  push. A red/green coordinator regression and OS typecheck pass; the streak
+  remains zero for the new head.
+- 2026-08-06: Canonical baseline `0c7df0qwmb` and cold candidates
+  `m2jqb4cwd5`, `v48nxrd221`, and `7ww9l64vgz` on `40b0fddbe` passed all six
+  groups without retries. Both restored mobile specs and both linked recovery
+  proofs passed first try; each exact-version audit had zero restoration-
+  blocking errors. Semaphore D1 migration failures `fztdq6xgpx` and
+  `p64kmjtqjl` returned Cloudflare code 7500 before tests and are not gate
+  candidates. Candidate `879n79wzv9` then passed every test first try but was
+  rejected for two ingested copies of one Stream DO error: local subscription
+  `nack` threw the exact unflagged `Durable Object reset because its code was
+  updated.` platform shape. Red/green classifier and background-work specs now
+  keep that exact lifecycle interruption outside error telemetry while
+  preserving arbitrary application failures. The 34 focused tests and OS
+  typecheck pass; the streak is zero for the new head.
+- 2026-08-06: Head `afa794639` passed its baseline and four candidates, then
+  workflows `jznj3pln0w`, `xt9rv0shlg`, and `qnj0qgn1c6` each produced broad
+  failure waves after rapid unchanged-head redeploys. The first wave emitted
+  106 distinct internal references from 19 Project Durable Objects; the next
+  two retried or failed unrelated dashboard, SSR, reactivity, stream-resume,
+  and Vitest cases. Cloudflare can therefore route the version-pinned public
+  Worker to retiring Project/root Stream incarnations even after the fixed
+  90-second creation gate. Added a bounded, read-only exact-version boundary
+  before project birth. It reacquires only on a version mismatch, explicit
+  lifecycle reset, probe timeout, or opaque platform reference; arbitrary
+  application errors remain terminal. Root birth facts are appended through
+  the exact Stream stub that passed the probe, and neither readiness deadline
+  can append product state. The 36 focused tests and OS typecheck pass; an
+  exact-head preview is next and the strict streak remains zero.
+- 2026-08-06: The first readiness baseline on `fd5025c7c` kept both mobile
+  flows first-try green but rejected the dashboard navigation case's initial
+  attempt. Project `prj_48c56b4263e74ab08793a581299cec43` reached the current
+  Project DO immediately; its root Stream probe then received one code-update
+  reset and seven two-second timeouts. Exact trace
+  `78918c0f067129cc020ae9e09f0231df` showed the flaw: timed-out native RPCs are
+  uncancellable, so every retry remained in flight against the same Stream DO
+  and pinned the retiring incarnation until the 33.2-second client request was
+  cancelled. The readiness state machine now gives reset/mismatch outcomes a
+  five-second invocation-free handoff window with bounded exponential backoff.
+  A probe owns the whole remaining deadline; if it times out the attempt fails
+  explicitly and no overlapping probe starts. A fake-time regression requires
+  exactly one acquisition for a hung target. The streak remains zero for the
+  corrected head.
+- 2026-08-06: Canonical baseline `vxslkwj22t` on `956b48b1e` passed all six
+  groups, both restored mobile flows, and both recovery proofs first try with
+  no blocking exact-version telemetry. Cold candidate `z767p1p1p9` also passed
+  every test first try, but its audit rejected four alarm-driven
+  `stream core background work failed` events from one Stream object and the
+  downstream Project processor failure. Cloudflare's event retained the caller
+  stack but dropped the rejected ancestor append's name, message, and lifecycle
+  flags. A structured, bounded error record now preserves those fields so a
+  fresh exact-head preview can distinguish a missing lifecycle shape from an
+  application defect. The focused 12-test suite, OS typecheck, lint, and
+  formatting pass; the strict streak remains zero.
+- 2026-08-06: Diagnostic-head workflow `81b2k7x0mh` was excluded before tests:
+  OS timed out waiting for exact-sha `pkg.pr.new` artifacts because the PR had
+  become merge-conflicted and GitHub could not create the pull-request merge
+  ref that runs the publisher. Merging `main` exposed two Device reducer
+  branches that had independently claimed version 0.6.0. The resolution keeps
+  both chat-reply suppression and durable approval claim-before-intent state,
+  and bumps the combined contract to 0.7.0 so deployed 0.6.0 caches refold.
+  The 49 focused Device, chat-reply, and stream-background tests plus OS
+  typecheck and lint pass. The strict streak remains zero.
+- 2026-08-06: Merged-head baseline `9rdgznlx1l` deployed successfully and all
+  non-mobile OS tests passed, but approvals failed both attempts after the
+  first notification-row click navigated back to chat. The local page snapshot
+  showed why: `main`'s chat-reply notification feature now journals each
+  scripted outcome as `Agent replied`, so the test's broad row locator selected
+  those valid deep-link rows before the two approval rows. A red local preview
+  repro captured the same navigation. The spec now selects only exact
+  `Approvals needed` rows and expands/collapses them one at a time for FlatList
+  stability; the same preview-backed spec passes in 1.1 minutes without any
+  timeout increase. The strict streak remains zero for the next exact head.
+- 2026-08-06: Corrected-head preflight `mfl1wv1rbt` and clean-slate candidates
+  `zrn9kl630j` and `k2jm610wbw` passed all six groups, both restored mobile
+  specs, and both restart/resume proofs first try with every app retry field
+  null. The exact-version audit for candidate two caught one
+  `durable subscription send loop failed` row: cursor `ack` threw a nested
+  `SqlfuError` whose cause was explicitly marked `durableObjectReset` and
+  `retryable`. Existing behavior retained the cursor and retried after one
+  second, but the outer catch mislabeled that expected lifecycle outcome as an
+  application error. A red/green regression now proves the nested classifier,
+  non-error telemetry, durable cursor, and successful alarm retry. All 60
+  stream-sender tests, OS typecheck, targeted lint, formatting, and diff checks
+  pass. The two candidates are discarded; the streak restarts at zero on the
+  new head.
+- 2026-08-06: Workflow `76nfz93j3j` on `91ba44fab` finished all six app
+  groups green and both restored mobile specs first try, but Semaphore retried
+  one generic 500 and the OS exact-version audit found three
+  `stream processor blocked work failed` rows across Project, Capability Host,
+  and Repo Durable Objects. The Project row's adjacent exception proves an
+  explicit `stream-unavailable` append timeout; Cloudflare dropped the nested
+  throwable from the other two two-argument console calls. A bounded structured
+  runner diagnostic now preserves name, message, lifecycle flags, call ID, and
+  opaque reference without changing failure or retry behavior. Its focused 34
+  tests, OS typecheck, lint, and formatting pass. The run is rejected and the
+  streak remains zero.
+- 2026-08-06: Diagnostic-head workflow `5nk0q0n1bj` on `95b05db3b` passed all
+  six apps in 362 seconds with every retry field null. Both restored mobile
+  specs and both recovery proofs passed first try, and no structured
+  blocked-work error appeared. Its wider exact-version audit found one
+  `stream processor host revival failed; backing off` row whose embedded error
+  was explicitly `durableObjectReset: true` and `retryable: true`; the durable
+  backoff then recovered. A red/green keepalive regression now routes only
+  exact lifecycle flags, code-update/storage-reset messages, and the explicit
+  `stream-unavailable` contract to warning telemetry while an application
+  failure remains error-level. All 18 keepalive tests pass. The candidate and
+  its cancelled successor are discarded; the streak restarts at zero.
+- 2026-08-06: Head `12c80d831` produced one accepted 325-second baseline, then
+  a green but rejected 436-second candidate. Subsequent candidates
+  `hn37cs3qhp`, `3wj8fm7d35`, and `1lg8jr6lvh` kept both mobile flows and both
+  recovery proofs first-try green but were excluded for Cloudflare failure
+  waves. Exact-version telemetry found, respectively, 54 references across six
+  Durable Objects in 19.6 seconds, ten references across three objects in ten
+  seconds, and seven references across Project/Stream objects plus a later
+  storage reset. The last run also showed root-Stream readiness exhausting its
+  30-second budget after only three retryable failures. Its exponential
+  5/10/15-second handoff consumed the deadline despite the provider wave ending
+  after 4.5 seconds. A red regression reproduced that exact three-failure
+  sequence; capping each invocation-free handoff at five seconds reaches the
+  ready fourth target in 15 seconds without raising the timeout. The focused
+  nine-test readiness/create set passes; the streak restarts at zero.
+- 2026-08-06: Readiness head `88c258e7e` kept every linked proof first-try
+  green in preflight `w8z672bxsg`, but that run was excluded at 453 seconds and
+  its exact-version audit found two opaque `stream core background work failed`
+  rows. Warmed candidate `p5g7jl72cd` finished in 350 seconds and repeated the
+  same two rows; its corresponding agent-chat attempt never rendered the reply
+  and passed only on test retry. The child Stream's ancestor-discovery work was
+  level-triggered only in memory: a background rejection cleared the in-flight
+  flag but did not durably arm a later reconciliation. A red full-Durable-
+  Object regression now injects three opaque ancestor-append failures, proves
+  each turn preserves another native alarm, and observes the fourth idempotent
+  append succeed. All 29 copy-recovery/background-work tests pass; the streak
+  restarts at zero.
+- 2026-08-06: A focused merged-head run reproduced the notification spec's
+  original one-of-two settlement after 90 seconds with no exact-version
+  Cloudflare error. The row and device stream both remained at `started`: the
+  same processor incarnation still held an unsettled Expo/Secret send, so the
+  eviction-only recovery path never ran. A red processor regression now parks
+  that send without crashing. Production bounds the attempt at 15 seconds and
+  appends an `uncertain` settlement on rejection/deadline, preserving the
+  no-double-push rule. The UI renders `Delivery uncertain`, and the browser
+  spec accepts only that exact send-phase outcome or explicit Expo rejection.

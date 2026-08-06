@@ -10,6 +10,7 @@ import { timedStep } from "../../lib/step-timing.ts";
 import { parseConfigRepoTemplateReference } from "../../lib/config-repo-template-reference.ts";
 import { CONFIG_REPO_PATH } from "../repos/paths.ts";
 import { repoCreationEvents } from "../repos/repo-defaults.ts";
+import { isRepoNotSeededError } from "../repos/utils.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import { capabilityHostCreationEvents } from "../capability-host/capability-host-defaults.ts";
@@ -19,6 +20,7 @@ import { emailRouterCreationEvents } from "../email/email-defaults.ts";
 import { EMAIL_INTEGRATION_STREAM_PATH } from "../email/utils.ts";
 import { isWorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
+import { isWorkerBuildInProgressError } from "../workers/worker-loader.ts";
 import { WORKER_SERVE_HEADER } from "../workers/worker-serve-info.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import type { ProjectCustomDomainDeps } from "./custom-domains.ts";
@@ -72,12 +74,14 @@ const SIBLING_BIRTH_BARRIER_TIMEOUT_MS = 75_000;
  *
  * WORKER LIFECYCLE. After terminal creation, every later config-repo
  * `repo/commit-completed` fact is copied onto `/` by that same subscription.
- * Once the current default worker answers its readiness probe, this processor
- * translates the raw repo fact into `project/worker-updated`; deterministic
- * source-build failures become `project/worker-update-failed`, while
- * transient availability remains open for durable redelivery. The trusted
- * seed commit is creation input and is deliberately not translated;
- * creation's successful probe publishes its worker-update certificate.
+ * This processor durably hands the update to the Project DO's alarm and then
+ * releases the retained Stream callback. The independent alarm probes the
+ * current worker and translates the raw repo fact into
+ * `project/worker-updated`; this separation keeps the root Stream's parallel
+ * userspace worker feed and platform readiness probe out of the same dynamic
+ * worker invocation tree. The trusted seed commit is creation input and is
+ * deliberately not translated; creation's successful inline probe publishes
+ * its worker-update certificate before that feed exists.
  *
  * CATALOGS. `reduce` projects received domain facts into list state:
  * physical streams (`stream/created`, `stream/child-stream-created`),
@@ -221,7 +225,10 @@ export class ProjectProcessor extends StreamProcessor<
           let seedCommitOid: string;
           try {
             seedCommitOid = await timedStep("create-timing", timing, "worker-probe", () =>
-              this.#waitForDefaultProjectWorker(),
+              waitForDefaultProjectWorker({
+                sleep: (ms) => this.#sleep(ms),
+                workerFetch: this.deps.workerFetch,
+              }),
             );
           } catch (error) {
             if (!isWorkerBuildFailedError(error)) throw error;
@@ -310,39 +317,9 @@ export class ProjectProcessor extends StreamProcessor<
             return;
           }
 
-          let servedCommitOid: string;
-          try {
-            servedCommitOid = await this.#waitForDefaultProjectWorker();
-          } catch (error) {
-            if (!isWorkerBuildFailedError(error)) throw error;
-            await this.deps.appendPlatformEvents({
-              streamId: delivery.streamId,
-              events: [
-                ProjectProcessorContract.parseEventInput({
-                  type: "events.iterate.com/project/worker-update-failed",
-                  idempotencyKey: outcomeIdempotencyKey,
-                  payload: {
-                    commitOid: event.payload.commitOid,
-                    error: errorMessage(error),
-                  },
-                }),
-              ],
-            });
-            return;
-          }
-          await this.deps.appendPlatformEvents({
+          await this.deps.updateDefaultWorker({
+            commitOid: event.payload.commitOid,
             streamId: delivery.streamId,
-            events: [
-              ProjectProcessorContract.parseEventInput({
-                type: "events.iterate.com/project/worker-updated",
-                // The trigger owns the outcome key even when the readiness probe
-                // observes a newer HEAD. A lost checkpoint therefore finds this
-                // committed result instead of probing the now-current worker
-                // again and possibly contradicting the prior success.
-                idempotencyKey: outcomeIdempotencyKey,
-                payload: { commitOid: servedCommitOid },
-              }),
-            ],
           });
         });
         break;
@@ -572,45 +549,6 @@ export class ProjectProcessor extends StreamProcessor<
     );
   }
 
-  /** Probe until the default worker answers and return OS-stamped source identity. */
-  async #waitForDefaultProjectWorker(): Promise<string> {
-    for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
-      // Use the platform's fetch lane, not `itx.worker.fetch`: the latter is
-      // ordinary capability dispatch and returns the userspace Response
-      // without the trusted source stamp. DynamicWorkerRunner owns this
-      // authority boundary and replaces any userspace-authored serve header
-      // with the commit it actually resolved, built, loaded, and invoked.
-      const response = await this.deps.workerFetch(
-        new Request("https://iterate-project.localhost/__itx_project_ready"),
-      );
-      try {
-        if (response.headers.get(WORKER_BUILDING_HEADER) !== "1") {
-          // Any application response proves the module built and loaded. Its
-          // HTTP status belongs to userspace fetch behavior, not bootstrap.
-          const commitOid = response.headers.get(WORKER_SERVE_HEADER);
-          if (commitOid === null) {
-            throw new Error(
-              `Default project worker response is missing trusted "${WORKER_SERVE_HEADER}" source identity.`,
-            );
-          }
-          return commitOid;
-        }
-      } finally {
-        // The returned Response can be a Cap'n Web RPC stub, and keeping that
-        // stub alive after the probe finishes pins the JS-RPC session.
-        disposeRpcResult(response);
-      }
-      if (attempt < PROJECT_WORKER_READY_ATTEMPTS) {
-        await this.#sleep(PROJECT_WORKER_READY_RETRY_MS);
-      }
-    }
-    const error = new Error(
-      "Default project worker is still building after the bounded readiness probe.",
-    );
-    error.name = "WorkerBuildInProgressError";
-    throw error;
-  }
-
   #customDomainProvisioner(): ProjectCustomDomainDeps {
     if (!this.deps.customDomains) throw new Error("Custom-domain provisioning is not configured.");
     return this.deps.customDomains;
@@ -745,6 +683,8 @@ type ProjectProcessorDeps = {
   itx: ProjectRpcTarget;
   /** Fetch-lane dispatch into the default worker; successful responses carry OS source identity. */
   workerFetch: (request: Request) => Promise<Response>;
+  /** Durably hand a post-creation worker update to an independent alarm invocation. */
+  updateDefaultWorker: (input: { commitOid: string; streamId: string }) => Promise<void>;
   /** Commit platform lifecycle facts through the stream's reserved-key door. */
   appendPlatformEvents: (args: { events: StreamEventInput[]; streamId: string }) => Promise<void>;
   /** Cloudflare custom-hostname provisioning; absent in hosts without it. */
@@ -753,6 +693,58 @@ type ProjectProcessorDeps = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
 };
+
+/** Probe until the default worker answers and return OS-stamped source identity. */
+export async function waitForDefaultProjectWorker(deps: {
+  sleep: (ms: number) => Promise<void>;
+  workerFetch: (request: Request) => Promise<Response>;
+}): Promise<string> {
+  for (let attempt = 1; attempt <= PROJECT_WORKER_READY_ATTEMPTS; attempt += 1) {
+    // Use the platform's fetch lane, not `itx.worker.fetch`: the latter is
+    // ordinary capability dispatch and returns the userspace Response
+    // without the trusted source stamp. DynamicWorkerRunner owns this
+    // authority boundary and replaces any userspace-authored serve header
+    // with the commit it actually resolved, built, loaded, and invoked.
+    let response: Response;
+    try {
+      response = await deps.workerFetch(
+        new Request("https://iterate-project.localhost/__itx_project_ready"),
+      );
+    } catch (error) {
+      if (!isRepoNotSeededError(error) && !isWorkerBuildInProgressError(error)) throw error;
+      if (attempt < PROJECT_WORKER_READY_ATTEMPTS) {
+        await deps.sleep(PROJECT_WORKER_READY_RETRY_MS);
+        continue;
+      }
+      break;
+    }
+    try {
+      if (response.headers.get(WORKER_BUILDING_HEADER) !== "1") {
+        // Any application response proves the module built and loaded. Its
+        // HTTP status belongs to userspace fetch behavior, not bootstrap.
+        const commitOid = response.headers.get(WORKER_SERVE_HEADER);
+        if (commitOid === null) {
+          throw new Error(
+            `Default project worker response is missing trusted "${WORKER_SERVE_HEADER}" source identity.`,
+          );
+        }
+        return commitOid;
+      }
+    } finally {
+      // The returned Response can be a Cap'n Web RPC stub, and keeping that
+      // stub alive after the probe finishes pins the JS-RPC session.
+      disposeRpcResult(response);
+    }
+    if (attempt < PROJECT_WORKER_READY_ATTEMPTS) {
+      await deps.sleep(PROJECT_WORKER_READY_RETRY_MS);
+    }
+  }
+  const error = new Error(
+    "Default project worker is still building after the bounded readiness probe.",
+  );
+  error.name = "WorkerBuildInProgressError";
+  throw error;
+}
 
 // -----------------------------------------------------------------------------
 // Pure helpers.

@@ -16,8 +16,9 @@ export const ApprovalPresentedEvents = {
       "A signed-in client is ALREADY SHOWING a held approval batch to the user (the mobile " +
       "in-thread dialog appends this when it renders foregrounded). Purely a delivery hint, " +
       "never a decision: push channels holding a pending notification for the batch settle it " +
-      "suppressed instead of ringing a phone about something on screen. Claims for unknown or " +
-      "already-sent notifications are no-ops, so clients append freely.",
+      "suppressed instead of ringing a phone about something on screen. A claim copied before " +
+      "its notification intent waits durably for it; claims known to be late after an intent " +
+      "was already sent or settled are no-ops, so clients append freely.",
     payloadSchema: z.strictObject({
       approvalRequestEventOffset: z
         .number()

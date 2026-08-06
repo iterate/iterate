@@ -449,6 +449,57 @@ test("a script run's parked hold survives a stream Durable Object restart", asyn
   }
 }, 120_000);
 
+test("notification delivery recovers promptly after its Project Durable Object restarts", async () => {
+  const marker = crypto.randomUUID();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`notification-restart-${marker}`).create({});
+  const root = project.streams.get("/");
+  const projectId = (await project.__describe()).projectId;
+  const notificationSubscriptionKey = `${projectId}.iterate/#notification`;
+
+  await waitForCondition(
+    async () =>
+      (await root.runtimeState()).runtime.connections[notificationSubscriptionKey]?.kind ===
+      "hosted",
+    { description: "the notification processor callback to be live" },
+  );
+
+  // The receiver owns the callback retained by the source Stream DO. Restart
+  // it while that callback is live, then append directly to the surviving
+  // source: this is the deterministic form of the Cloudflare storage reset
+  // that orphaned the callback in the mobile approval run.
+  await project.kill().catch(() => undefined);
+  const [requested] = await root.append({
+    type: REQUESTED,
+    payload: {
+      requests: [
+        {
+          method: "POST",
+          url: "https://api.iterate.com/restart-proof",
+          headers: {},
+          body: null,
+          secretPaths: [],
+        },
+      ],
+      ruleKey: "restart-proof",
+      ruleDescription: "Prove notification delivery recovery",
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+    },
+  });
+
+  const intent = await root.waitForEvent({
+    afterOffset: requested!.offset,
+    eventTypes: [NOTIFICATION_REQUESTED],
+    timeoutMs: 12_000,
+  });
+  expect(intent.payload).toMatchObject({
+    approvalRequestEventOffset: requested!.offset,
+    audience: { kind: "project" },
+    body: "POST api.iterate.com is waiting for approval.",
+  });
+}, 60_000);
+
 test("approved worker WebSocket egress stays on the fetch-native transport", async () => {
   await using echo = await startWebSocketEcho();
   using session = withItxSession();

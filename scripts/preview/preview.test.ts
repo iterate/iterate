@@ -1009,7 +1009,7 @@ describe("preview test commands", () => {
         nowMs: now + 90_000,
       }),
     ).toBe(0);
-    for (const appSlug of ["semaphore", "streams-example-app", "dummy-petshop"] as const) {
+    for (const appSlug of ["streams-example-app", "semaphore", "dummy-petshop"] as const) {
       expect(resolvePreviewRolloutRemainingSeconds({ appSlug, deployedAt, nowMs: now })).toBe(90);
       expect(resolvePreviewRolloutReadyAtMs({ appSlug, deployedAt })).toBe(now + 90_000);
     }
@@ -1039,7 +1039,11 @@ describe("preview test commands", () => {
       previewReadyWorkerVersion: true,
       previewTestRolloutGate: "before-suite",
     });
-    expect(cloudflarePreviewApps.semaphore.previewTestRolloutGate).toBe("before-suite");
+    expect(cloudflarePreviewApps.semaphore).toMatchObject({
+      previewReadyUrlPath: "/health",
+      previewReadyWorkerVersion: true,
+      previewTestRolloutGate: "before-suite",
+    });
     expect(cloudflarePreviewApps["dummy-petshop"].previewTestRolloutGate).toBe("before-suite");
     expect(cloudflarePreviewApps.auth.previewTestRolloutGate).toBeUndefined();
 

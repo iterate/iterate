@@ -1,5 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeMemoryProgressStore } from "iterate/processors/testing";
+import { RepoNotSeededError } from "../repos/utils.ts";
 import { WorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { workerBuildingResponse } from "../workers/worker-fetch-dispatch.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
@@ -65,6 +66,23 @@ describe("ProjectProcessor worker lifecycle", () => {
         payload: { commitOid: "b".repeat(40) },
       },
     ]);
+  });
+
+  it("hands a changed config worker to the durable updater without probing in the retained stream callback", async () => {
+    const updateDefaultWorker = vi.fn(async () => undefined);
+    const h = makeProjectHarness({ updateDefaultWorker });
+    await h.play([
+      "append",
+      PROJECT_CREATE_REQUESTED,
+      PROJECT_CREATED,
+      CONFIG_REPO_COMMIT_COMPLETED,
+    ]);
+
+    expect(updateDefaultWorker).toHaveBeenCalledWith({
+      commitOid: CONFIG_REPO_COMMIT_COMPLETED.payload.commitOid,
+      streamId: h.stream.streamId,
+    });
+    expect(h.workerFetchCalls()).toBe(0);
   });
 
   it("publishes the worker identity actually served when HEAD advances past the triggering commit", async () => {
@@ -435,6 +453,23 @@ describe("ProjectProcessor bootstrap", () => {
       },
     ]);
     expect(h.state().birthCertificate).toEqual(PROJECT_CREATED.payload);
+  });
+
+  it("waits through a not-yet-seeded config repo before appending project/created", async () => {
+    const h = makeProjectHarness({
+      workerOutcomes: [
+        new RepoNotSeededError("Repo has no commits yet: Could not find main."),
+        Response.json({ app: "hello", projectId: "prj_test" }),
+      ],
+      workerRetrySleep: async () => undefined,
+    });
+    await h.stream.append(PROJECT_CREATE_REQUESTED, CONFIG_REPO_CREATED);
+
+    await h.settle();
+
+    expect(h.workerFetchCalls()).toBe(2);
+    expect(h.events("events.iterate.com/project/create-failed")).toEqual([]);
+    expect(h.events("events.iterate.com/project/created")).toHaveLength(1);
   });
 
   it("terminalizes a deterministic worker source-build failure", async () => {

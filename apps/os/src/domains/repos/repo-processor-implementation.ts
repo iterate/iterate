@@ -28,10 +28,9 @@ import {
  * private GitHub pull at depth one, or a public GitHub import performed by
  * Cloudflare Artifacts outside the Worker);
  * `repos/created` or `repos/create-failed` is its terminal fact. Empty seeding
- * is short must-complete work, so the at-head pass holds the stream checkpoint
- * with `blockProcessorWhile`; an interrupted attempt is redelivered by the
- * stream spine immediately instead of depending on another event to wake a
- * quiet config repo. GitHub-backed creation remains a state-derived
+ * is handed to an independent durable alarm actor so an Artifacts create can
+ * outlive the retained processor callback without losing its one-time write
+ * token. GitHub-backed creation remains a state-derived
  * background obligation because it can perform network work. The terminal
  * certificate's idempotency keys are offset-free (`created` /
  * `create-failed`), so a
@@ -112,6 +111,31 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     if (state.createFailure !== null) return;
 
     switch (event?.type) {
+      case "events.iterate.com/repos/create-requested": {
+        // Arm from the intent delivery itself, not only from an eventual
+        // at-head pass. Selector-filtered raw offsets may still be ahead; the
+        // coordinator is the independent durable wake-up for a quiet config
+        // repo. Duplicate enqueues preserve the existing alarm cadence.
+        if (event.payload.type === "empty" && state.birthCertificate === null) {
+          const request = event.payload;
+          blockProcessorWhile(() =>
+            this.deps.enqueueEmptyCreation({
+              request,
+              streamId: delivery.streamId,
+            }),
+          );
+        }
+        break;
+      }
+      case "events.iterate.com/repos/created": {
+        // Coordinator materialization happens outside Repo storage. Adopt its
+        // exact pushed head before acknowledging the terminal fact, preserving
+        // the same read-your-write boundary as Repo-local seeds.
+        if (event.payload.seededHead !== undefined) {
+          this.deps.recordSeededHead(event.payload.seededHead);
+        }
+        break;
+      }
       case "events.iterate.com/repo/cloudflare-artifact-event-received": {
         const push = repoArtifactPushFromEventPayload(event.payload);
         if (push === null || state.defaultBranch === null || push.branch !== state.defaultBranch) {
@@ -188,18 +212,21 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
     // yet replayed, and acting on that would re-run completed obligations.
     if (!delivery.caughtUp) return;
 
-    // The creation saga. Empty seeding is short and must complete before this
-    // frame is acknowledged: if an Artifacts DO is reset during a deployment,
-    // the stream spine redelivers the uncommitted frame and retries promptly.
-    // GitHub-backed creation can perform network work, so it remains a
-    // background obligation re-derived from state after eviction.
+    // The creation saga. Empty seeding belongs to the independent durable
+    // coordinator. Other creation modes retain the established background
+    // obligation re-derived from state after eviction.
     const createRequest = state.createRequest;
     if (
       createRequest !== null &&
       state.birthCertificate === null &&
       createRequest.type === "empty"
     ) {
-      blockProcessorWhile(async () => append(await this.#createRepoTerminal(createRequest)));
+      blockProcessorWhile(() =>
+        this.deps.enqueueEmptyCreation({
+          request: createRequest,
+          streamId: delivery.streamId,
+        }),
+      );
     } else if (
       createRequest !== null &&
       state.birthCertificate === null &&
@@ -253,9 +280,14 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         payload: { ...artifact, request },
       };
     } catch (error) {
+      if (isRetryableArtifactsInfrastructureError(error)) {
+        throw new RetryableRepoCreationError(
+          `Artifacts temporarily unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
       if (
         isRepoNotSeededError(error) ||
-        isRetryableArtifactsInfrastructureError(error) ||
         isRetryableDurableObjectAvailabilityError(error) ||
         error instanceof RetryableRepoCreationError
       ) {
@@ -447,6 +479,15 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
 // -----------------------------------------------------------------------------
 
 type RepoProcessorDeps = {
+  /** Durably hand empty creation to a separate alarm actor. Duplicate enqueue
+   * calls preserve an already-queued attempt and its retry cadence. */
+  enqueueEmptyCreation(input: {
+    request: Extract<RepoCreateRequest, { type: "empty" }>;
+    streamId: string;
+  }): Promise<void>;
+  /** Adopt a seed pushed by the independent birth coordinator into Repo's
+   * durable branch authority before its certificate is acknowledged. */
+  recordSeededHead(input: { branch: string; commitOid: string; contentHash: string }): void;
   /** Seed the backing Cloudflare Artifacts repository with the starter files.
    * Idempotent: leaves an existing branch untouched and gives concurrent
    * first seeds the same commit oid. */

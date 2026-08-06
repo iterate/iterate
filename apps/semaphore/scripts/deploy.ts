@@ -89,9 +89,9 @@ export default async function deploy(
     },
     smokes: (env) => [
       {
-        url: `${env.baseUrl}/api/__internal/health`,
+        url: `${env.baseUrl}/health`,
         ok: (status) => status === 200,
-        label: "health",
+        label: "Worker + coordinator rollout health",
       },
     ],
   });

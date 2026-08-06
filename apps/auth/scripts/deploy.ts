@@ -30,7 +30,7 @@ import { createBuiltInPrompts, createCli, isAgent, yamlTableConsoleLogger } from
 import { authEnvs } from "../../../envs.ts";
 import { authSigningEs256PrivateJwkForEnvironment } from "../../../scripts/lib/bake-auth-jwks.ts";
 import { deployApp } from "../../../scripts/lib/deploy-app.ts";
-import { run } from "../../../scripts/lib/deploy-helpers.ts";
+import { run, runCloudflareCommandWithRetry } from "../../../scripts/lib/deploy-helpers.ts";
 import { DEFAULT_ADMIN_ALLOWLIST } from "../src/config.ts";
 import {
   envShapedVars,
@@ -60,7 +60,7 @@ export default async function deploy(
     // projectDirectoryKvId is not auth's concern.
     resources: (env) => ({ authDbId: env.resources.authDbId }),
     requiredSecrets: REQUIRED_SECRETS,
-    prepare: (ctx, secretValues, credentials) => {
+    prepare: async (ctx, secretValues, credentials) => {
       // Validate the single ES256 signing key's shape and the production-key
       // opt-in before migrations or any other deployed state can change.
       authSigningEs256PrivateJwkForEnvironment({
@@ -95,10 +95,11 @@ export default async function deploy(
       // build regenerates it again on its own) — write a fresh one now.
       writeWranglerConfig();
       const checkedInConfigArgs = ["--env", ctx.name, "--remote", "--config", "wrangler.jsonc"];
-      run("pnpm", ["exec", "wrangler", "d1", "migrations", "apply", "DB", ...checkedInConfigArgs], {
-        cwd: APP_ROOT,
-        env: credentials,
-      });
+      await runCloudflareCommandWithRetry(
+        "pnpm",
+        ["exec", "wrangler", "d1", "migrations", "apply", "DB", ...checkedInConfigArgs],
+        { cwd: APP_ROOT, env: credentials },
+      );
 
       // The rendered seed contains a password hash for the bootstrap-admin
       // credential account — keep it in a 0700 tmpdir and delete it afterwards.
@@ -112,7 +113,7 @@ export default async function deploy(
             APP_CONFIG_ADMIN_ALLOWLIST: secretValues.APP_CONFIG_ADMIN_ALLOWLIST,
           },
         });
-        run(
+        await runCloudflareCommandWithRetry(
           "pnpm",
           [
             "exec",

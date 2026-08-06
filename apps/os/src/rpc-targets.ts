@@ -69,7 +69,7 @@ import {
   userPrincipalOf,
   widenProjectAccess,
 } from "./auth.ts";
-import { itxEnv as env } from "./env.ts";
+import { itxEnv as env, workerVersion, type Env } from "./env.ts";
 import {
   listProjectDirectory,
   primeProjectDirectory,
@@ -85,7 +85,6 @@ import { timedStep } from "./lib/step-timing.ts";
 import { buildCollectSecretUrl } from "./lib/collect-secret-link.ts";
 import { buildProjectStreamViewerUrl } from "./lib/stream-viewer-url.ts";
 import { buildProjectWorkerUrl } from "./lib/project-host-routing.ts";
-import type { Env } from "./env.ts";
 import {
   canonicalizeStreamPath,
   DurableObjectNameCodec,
@@ -107,6 +106,7 @@ import {
   installPrototypeInvokeCapabilityFallback,
 } from "./domains/itx/utils.ts";
 import { projectStub } from "./domains/projects/egress.ts";
+import { waitForProjectBirthDeploymentVersion } from "./domains/projects/project-birth-deployment-readiness.ts";
 import { projectCreationEvents } from "./domains/projects/project-defaults.ts";
 import {
   normalizeProjectCustomDomain,
@@ -549,6 +549,11 @@ function retryLoggedIdempotentOperation<Result>(input: {
  * native authority unreachable by Cap'n Web property traversal while still
  * allowing in-process domains and focused tests to use the exact stub. */
 export const STREAM_DURABLE_OBJECT_STUB = Symbol("stream-durable-object-stub");
+export const STREAM_DURABLE_OBJECT_APPEND = Symbol("stream-durable-object-append");
+
+type StreamDurableObjectAppendTarget = {
+  append: (...events: StreamEventInput[]) => PromiseLike<StreamEvent[]> | StreamEvent[];
+};
 
 /**
  * Durable event stream capability.
@@ -632,14 +637,19 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // ride the tagged methods. Native Workers RPC also makes every object-valued
   // result disposable: detach its plain data, then release the invocation here
   // so a read cannot inherit the surrounding wake connection's lifetime.
-  /** Commit events; resolves with the same events carrying offsets and timestamps. */
-  async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+  async #append(
+    events: StreamEventInput[],
+    initialTarget?: StreamDurableObjectAppendTarget,
+  ): Promise<StreamEvent[]> {
     const isKeyed = events.every(
       (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
     );
     const canDeadlineReplay = isKeyed && this.props.path !== "/";
+    let nextTarget = initialTarget;
     const append = async () => {
-      const invocation = Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events));
+      const target = nextTarget || this[STREAM_DURABLE_OBJECT_STUB];
+      nextTarget = undefined;
+      const invocation = Promise.resolve(target.append(...events));
       if (!canDeadlineReplay) return await invocation;
 
       const outcome = await settleByDeadline(
@@ -669,6 +679,25 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
         : append()
     ).catch(rethrowStreamUnavailable);
     return detachPlainRpcResult(result);
+  }
+
+  /** Commit events; resolves with the same events carrying offsets and timestamps. */
+  async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    return await this.#append(events);
+  }
+
+  /**
+   * Server-only append through the exact stub that passed the project-birth
+   * rollout probe. The symbol keeps native Durable Object authority out of the
+   * public Cap'n Web surface.
+   *
+   * @internal
+   */
+  async [STREAM_DURABLE_OBJECT_APPEND](
+    target: StreamDurableObjectAppendTarget,
+    ...events: StreamEventInput[]
+  ): Promise<StreamEvent[]> {
+    return await this.#append(events, target);
   }
 
   /** Commit only if this path still names the supplied stream lifetime. */
@@ -5796,24 +5825,55 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     }
 
     const timing = { projectId: registered.projectId };
-    const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
-    // Every birth event carries an idempotency key, so the keyed-append door
-    // retry in StreamRpcTarget.append is the single deploy-reset recovery.
-    const committed = await timedStep("create-timing", timing, "root-append", () =>
-      rootStream({ auth: this.#props.auth, projectId: registered.projectId }).append(
-        ...projectCreationEvents({
+    const birthStream = rootStream({ auth: this.#props.auth, projectId: registered.projectId });
+    const expectedDeploymentVersion = workerVersion(env);
+    const { target: readyProject } = await timedStep(
+      "create-timing",
+      timing,
+      "wait-project-deployment-before-birth",
+      () =>
+        waitForProjectBirthDeploymentVersion({
+          expectedVersion: expectedDeploymentVersion,
+          getTarget: () => this.durableObjectStub,
           projectId: registered.projectId,
-          payload: {
-            config: {
-              onboardingActive: true,
-              slug: registered.slug,
-              ...(creatorEmail === undefined ? {} : { creatorEmail }),
-              ...(configRepoTemplate === undefined ? {} : { configRepoTemplate }),
-            },
-          },
+          targetKind: "Project Durable Object",
         }),
-      ),
     );
+    disposeIgnoredRpcResult(readyProject);
+    const { target: readyBirthStream } = await timedStep(
+      "create-timing",
+      timing,
+      "wait-root-stream-deployment-before-birth",
+      () =>
+        waitForProjectBirthDeploymentVersion({
+          expectedVersion: expectedDeploymentVersion,
+          getTarget: () => birthStream[STREAM_DURABLE_OBJECT_STUB],
+          projectId: registered.projectId,
+          targetKind: "Stream Durable Object",
+        }),
+    );
+    const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
+    let committed: StreamEvent[];
+    try {
+      committed = await timedStep("create-timing", timing, "root-append", () =>
+        birthStream[STREAM_DURABLE_OBJECT_APPEND](
+          readyBirthStream,
+          ...projectCreationEvents({
+            projectId: registered.projectId,
+            payload: {
+              config: {
+                onboardingActive: true,
+                slug: registered.slug,
+                ...(creatorEmail === undefined ? {} : { creatorEmail }),
+                ...(configRepoTemplate === undefined ? {} : { configRepoTemplate }),
+              },
+            },
+          }),
+        ),
+      );
+    } finally {
+      disposeIgnoredRpcResult(readyBirthStream);
+    }
     const maxOffset = Math.max(...committed.map((event) => event.offset));
 
     // The ingress API key is a sibling Secret birth with its own atomic
@@ -6124,8 +6184,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const createRequest = ProjectProcessorContract.events[
       "events.iterate.com/project/create-requested"
     ].payloadSchema.parse(request.payload);
-    const waitForTerminalMs = deadline - Date.now();
-    if (waitForTerminalMs <= 0) throw timeoutError();
+    if (deadline - Date.now() <= 0) throw timeoutError();
 
     // snapshot() pulls the journal through the registry's catch-up, so this
     // wait drives a stalled saga instead of just watching it. Post-response
@@ -6137,24 +6196,32 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
         () => undefined,
       ),
     );
-    const terminal = await stream.waitForEvent({
-      afterOffset: request.offset,
-      eventTypes: [
-        "events.iterate.com/project/created",
-        "events.iterate.com/project/create-failed",
-      ],
-      predicate: (event) =>
-        parseProjectCreationTerminal({
-          event,
-          projectId: this.#projectId,
-          request: createRequest,
-          requestOffset: request.offset,
-        }) !== null,
-      // The default covers the complete project birth saga, including the
-      // config repository's bounded Artifacts tail. Healthy calls still
-      // resolve in seconds; tasks/os-cold-create-latency.md tracks reducing
-      // the tail without making this correctness boundary dishonest.
-      timeoutMs: waitForTerminalMs,
+    const terminal = await retryLoggedIdempotentOperation({
+      context: { projectId: this.#projectId },
+      message: "project creation terminal wait retrying after Stream lifecycle reset",
+      operation: () => {
+        const waitForTerminalMs = deadline - Date.now();
+        if (waitForTerminalMs <= 0) return Promise.reject(timeoutError());
+        return stream.waitForEvent({
+          afterOffset: request.offset,
+          eventTypes: [
+            "events.iterate.com/project/created",
+            "events.iterate.com/project/create-failed",
+          ],
+          predicate: (event) =>
+            parseProjectCreationTerminal({
+              event,
+              projectId: this.#projectId,
+              request: createRequest,
+              requestOffset: request.offset,
+            }) !== null,
+          // The default covers the complete project birth saga, including the
+          // config repository's bounded Artifacts tail. Healthy calls still
+          // resolve in seconds; tasks/os-cold-create-latency.md tracks reducing
+          // the tail without making this correctness boundary dishonest.
+          timeoutMs: waitForTerminalMs,
+        });
+      },
     });
 
     const remainingMs = deadline - Date.now();

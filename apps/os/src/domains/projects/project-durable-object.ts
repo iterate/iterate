@@ -64,7 +64,14 @@ import {
 } from "./openai-ai-gateway-egress.ts";
 import { takeStreamContext, type StreamContext } from "./stream-context.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
-import { ProjectProcessor } from "./project-processor-implementation.ts";
+import {
+  ProjectProcessor,
+  waitForDefaultProjectWorker,
+} from "./project-processor-implementation.ts";
+import {
+  isRetryableProjectWorkerUpdateError,
+  ProjectWorkerUpdateCoordinator,
+} from "./project-worker-update-coordinator.ts";
 import { StreamDatabase, type TouchInput } from "./stream-database.ts";
 import type { ProjectLiveState } from "./project-live-state.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./custom-domains.ts";
@@ -128,6 +135,29 @@ export class ProjectDurableObject extends DurableObject<Env> {
       };
     },
   });
+  readonly #workerUpdateCoordinator = new ProjectWorkerUpdateCoordinator({
+    append: async (streamId, outcome) => {
+      disposeIgnoredRpcResult(
+        await this.#stream[STREAM_DURABLE_OBJECT_STUB].appendCoreEventsIfStreamId({
+          events: [outcome],
+          streamId,
+        }),
+      );
+    },
+    clearAlarm: () => this.#registry.setAlarmSlice("project-worker-update", null),
+    deleteQueue: () => void this.ctx.storage.kv.delete("project-worker-update:queue"),
+    getAlarm: () => this.#registry.getAlarmSlice("project-worker-update"),
+    getQueue: () => this.ctx.storage.kv.get<unknown>("project-worker-update:queue"),
+    isRetryableError: isRetryableProjectWorkerUpdateError,
+    now: () => Date.now(),
+    probe: () =>
+      waitForDefaultProjectWorker({
+        sleep: (ms) => this.#sleep(ms),
+        workerFetch: (request) => this.#defaultProjectWorkerFetch(request),
+      }),
+    putQueue: (queue) => void this.ctx.storage.kv.put("project-worker-update:queue", queue),
+    setAlarm: (atMs) => this.#registry.setAlarmSlice("project-worker-update", atMs),
+  });
   // The DO constructs its processors — no host-injected readState/writeState/
   // keepAliveWhile deps; the runner owns durable progress and keepalive. NO
   // recovery on any of them, on purpose (parity with the host wiring): none
@@ -153,17 +183,8 @@ export class ProjectDurableObject extends DurableObject<Env> {
         path: "/",
         projectId: this.#name.projectId,
       }),
-      workerFetch: (request) =>
-        new DynamicWorkerRunner({
-          streamContext: { kind: "scope", scopePath: "/" },
-          exports: this.ctx.exports,
-          projectId: this.#name.projectId,
-          scopePath: "/",
-        }).fetch({
-          ref: defaultProjectWorkerRef(),
-          request,
-          traceRole: "project_config",
-        }),
+      workerFetch: (request) => this.#defaultProjectWorkerFetch(request),
+      updateDefaultWorker: (input) => this.#workerUpdateCoordinator.enqueue(input),
       appendPlatformEvents: async ({ events, streamId }) => {
         disposeIgnoredRpcResult(
           await this.#stream[STREAM_DURABLE_OBJECT_STUB].appendCoreEventsIfStreamId({
@@ -278,9 +299,18 @@ export class ProjectDurableObject extends DurableObject<Env> {
     return this.#registry.wakeStreamProcessor(args);
   }
 
-  /** The registry's shared DO alarm — runner keepalives only. */
+  /** The registry's shared alarm: runner keepalives plus queued worker updates. */
   async alarm(alarmInfo?: AlarmInvocationInfo): Promise<void> {
-    await this.#registry.handleAlarm(alarmInfo);
+    let registryFailure: unknown;
+    try {
+      await this.#registry.handleAlarm(alarmInfo);
+    } catch (error) {
+      registryFailure = error;
+    }
+    // Always service the independent update queue. A failing runner keepalive
+    // must not consume the one alarm that releases this durable handoff.
+    await this.#workerUpdateCoordinator.alarm();
+    if (registryFailure !== undefined) throw registryFailure;
   }
 
   get slackProcessor() {
@@ -354,15 +384,20 @@ export class ProjectDurableObject extends DurableObject<Env> {
   }
 
   /**
-   * Update the live projections from one committed delivery before that
-   * batch call returns. Both reducers are idempotent, so repeated calls
-   * are harmless; a storage/RPC failure rejects the batch instead of silently
-   * leaving live state stale.
+   * Persist the streams-index projection from one committed delivery before
+   * that batch call returns. Both reducers are idempotent, so repeated calls
+   * are harmless; a storage failure rejects the batch instead of silently
+   * leaving the index stale.
+   *
+   * Do not cold-load every processor merely to publish this auxiliary slice.
+   * A busy project can have many processors and no liveState watcher: eagerly
+   * loading all of their folds for every project-worker batch caused the host
+   * Durable Object to exceed its isolate memory limit. `refreshLive()` updates
+   * synchronously when the folds are already loaded; on the cold-runner wall,
+   * LiveStateSockets loads them only when an attached watcher actually needs a
+   * frame (and keeps that load single-flight).
    */
   async indexCommittedBatchFacts(input: { stream: TouchInput }): Promise<void> {
-    // See incrementLiveDemo: once this resolves every peer slice is real, so
-    // the synchronous refresh below cannot drop this external index update.
-    await this.#registry.loadAndRefreshLive();
     const streamsBefore = this.#streamDatabase.all();
     this.#streamDatabase.touch(input.stream);
     if (streamsBefore !== this.#streamDatabase.all()) {
@@ -834,6 +869,19 @@ export class ProjectDurableObject extends DurableObject<Env> {
   /** A cancellable-free delay for the catch-up backoff; clamps negatives to 0. */
   #sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, Math.max(0, ms)));
+  }
+
+  #defaultProjectWorkerFetch(request: Request): Promise<Response> {
+    return new DynamicWorkerRunner({
+      streamContext: { kind: "scope", scopePath: "/" },
+      exports: this.ctx.exports,
+      projectId: this.#name.projectId,
+      scopePath: "/",
+    }).fetch({
+      ref: defaultProjectWorkerRef(),
+      request,
+      traceRole: "project_config",
+    });
   }
 
   /** The egress lanes proper: platform references, secret substitution, bare fetch. */

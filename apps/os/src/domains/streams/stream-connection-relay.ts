@@ -144,6 +144,17 @@ export async function openRelayedStreamConnection(input: {
       .then(() => handle.ping())
       .catch(() => false);
 
+  // A Workers RPC capability from an aborted Durable Object can keep
+  // returning its captured in-memory `true` indefinitely. Ask a fresh stub
+  // about this exact relay/socket pair so liveness comes from the current
+  // incarnation. A deliberately idle relay remains logically alive; a socket
+  // absent from the current incarnation is orphaned even if its local endpoint
+  // has not emitted `close`.
+  const probeRelayState = () =>
+    Promise.resolve()
+      .then(() => input.stub().relayedConnectionState({ connectionKey, subscriberPagerId }))
+      .catch(() => "dead" as const);
+
   /** The one terminal transition; every teardown path funnels here. */
   const teardown = (args2: { reason: string; socketCode: number; warn?: unknown }) => {
     if (!active) return;
@@ -246,13 +257,34 @@ export async function openRelayedStreamConnection(input: {
     if (!active || closedByOwner) return;
     void (async () => {
       // While the RPC leg is live the Pager was only a future optimization:
-      // degrade to pinned mode (the DO's Pager scan already sees it gone). A
-      // dead Pager while dormant means Pages can no longer arrive —
-      // break, and the owner's watchdog re-subscribes.
+      // degrade to pinned mode (the DO's Pager scan already sees it gone). If
+      // the leg died with the Pager, recover from the relay's exact cursor
+      // immediately. That replacement has no Pager, so it stays
+      // pinned for the rest of this logical subscription instead of silently
+      // losing events until the owner's next watchdog round.
       const handle = currentHandle;
       const live = handle === undefined ? false : await probeLeg(handle);
-      if (live !== true) {
-        teardown({ reason: "Subscriber Pager closed while dormant", socketCode: 1000 });
+      if (live === true || currentHandle !== handle || dialing) return;
+      currentHandle = undefined;
+      disposeStub(handle);
+      dialing = true;
+      try {
+        const fresh = await dial(deliveredThroughOffset, true);
+        if (!active) {
+          void Promise.resolve()
+            .then(() => fresh.close())
+            .catch(() => undefined)
+            .finally(() => disposeStub(fresh));
+          return;
+        }
+        currentHandle = fresh;
+        console.warn("stream Subscriber Pager closed; session connection resumed in pinned mode", {
+          connectionKey,
+        });
+      } catch (error) {
+        teardown({ reason: "Subscriber Pager recovery failed", socketCode: 1011, warn: error });
+      } finally {
+        dialing = false;
       }
     })();
   });
@@ -310,19 +342,40 @@ export async function openRelayedStreamConnection(input: {
     isLive: () => {
       if (!active) return false;
       const handle = currentHandle;
-      // Dormant: the Pager carries liveness (its close breaks the relay).
+      const pager = subscriberPager;
+      if (pager !== undefined) {
+        return probeRelayState().then((state) => {
+          if (currentHandle !== handle || subscriberPager !== pager) return active;
+          if (state === "live") return active;
+          if (state === "dormant") {
+            currentHandle = undefined;
+            disposeStub(handle);
+            return active;
+          }
+          teardown({
+            reason: "Subscriber Pager absent from current stream incarnation",
+            socketCode: 1000,
+          });
+          return false;
+        });
+      }
+      // Pagerless pinned mode owns only the RPC leg.
       if (handle === undefined) return true;
       return probeLeg(handle).then((live) => {
         if (live === true || currentHandle !== handle) return active;
-        // A gone leg with the Pager still open is dormancy, not death —
-        // the next matching append re-dials (the DO wakes any socket whose
-        // connection is absent, stamped or not).
+        // An idle frame clears currentHandle before the ordinary dormant state
+        // reaches this branch. A handle that was present and now fails its
+        // probe is therefore dead even when the local Pager endpoint
+        // still LOOKS open: ctx.abort() can orphan that endpoint without a
+        // close event or a socket in the next DO incarnation. Report false so
+        // the owner reopens from its durable cursor instead of waiting forever
+        // for a Page that can no longer exist.
         currentHandle = undefined;
         disposeStub(handle);
         if (subscriberPager === undefined) {
           teardown({ reason: "rpc leg gone with no Subscriber Pager", socketCode: 1000 });
         }
-        return active;
+        return false;
       });
     },
     close: () => {
