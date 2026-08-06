@@ -120,10 +120,13 @@ export async function reliability(options: ReliabilityOptions) {
   const openWatch = (generation: number) =>
     stream.openConnection({
       connectionKey: `reliability-${Date.now()}-g${generation}`,
-      eventTypes: ["voice-agent/grok-event", "voice-agent/call-accepted"],
+      eventTypes: [
+        "events.iterate.com/voice-agent/grok-event",
+        "events.iterate.com/voice-agent/conversation-accepted",
+      ],
       processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
         for (const event of batch.events) {
-          if (event.type === "voice-agent/call-accepted") {
+          if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
             callLiveAt = Date.now();
             continue;
           }
@@ -236,7 +239,7 @@ export async function reliability(options: ReliabilityOptions) {
         while (Date.now() - at < LIMITS.callLiveMs && callLiveAt < at) await sleep(250);
         ms.callLive = Date.now() - at;
         if (callLiveAt < at) {
-          fail("call", `no call-accepted within ${LIMITS.callLiveMs}ms`);
+          fail("call", `no conversation-accepted within ${LIMITS.callLiveMs}ms`);
           throw new Error("call");
         }
         console.error(`  · call live in ${(ms.callLive / 1000).toFixed(1)}s`);

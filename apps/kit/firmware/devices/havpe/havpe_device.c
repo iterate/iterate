@@ -5,8 +5,8 @@
  * ONE Cap'n Web WebSocket to /api carries everything, exactly like the
  * Waveshare port and the TypeScript voicelab client: authenticate ->
  * projects.get -> streams.get, then 50 Hz one-way appends of ephemeral
- * voice-agent/mic-frame events (the XMOS's echo-cancelled capture), and a
- * live openConnection callback delivering voice-agent/spk-frame events
+ * events.iterate.com/voice-agent/mic-frame events (the XMOS's echo-cancelled capture), and a
+ * live openConnection callback delivering events.iterate.com/voice-agent/spk-frame events
  * (decoded to the speaker) plus grok-events (speech_started = barge-in
  * flush, response.done = end of answer).
  *
@@ -158,7 +158,7 @@ static bool awaiting_fresh_stream;
  * turn a speculative preparation into a call nobody wanted.
  */
 static bool preparing_ahead;
-#define CALL_ID "havpedev"
+#define CONVERSATION_ID "havpedev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
 
 /*
@@ -1336,7 +1336,7 @@ static size_t render_health(void *context, char *out, size_t capacity) {
 
 static void append_stats(uint64_t now) {
   static const char prefix[] =
-      "[{\"type\":\"voice-agent/dev-stats\",\"ephemeral\":true,\"payload\":";
+      "[{\"type\":\"events.iterate.com/voice-agent/dev-stats\",\"ephemeral\":true,\"payload\":";
   const size_t prefix_length = sizeof(prefix) - 1U;
   size_t body;
   (void)now;
@@ -1767,7 +1767,7 @@ void iterate_kit_havpe_run(void) {
         .project_id = runtime.configuration.project_id,
         .project_api_key = runtime.configuration.project_api_key,
         .stream_path = stream_path,
-        .call_id = CALL_ID,
+        .conversation_id = CONVERSATION_ID,
         /*
          * The provider segments turns, because nothing on this device does
          * any more. Requesting the default manual turns with no turn machine
@@ -1880,7 +1880,7 @@ void iterate_kit_havpe_run(void) {
 
       /*
        * The bridge holds the call in a Durable Object this device cannot
-       * see, and it can stop without appending the call-ended that would say
+       * see, and it can stop without appending the conversation-ended that would say
        * so. The call is believed only while its bridge keeps proving it is
        * there; losing the proof drops the BELIEF, never the INTENT.
        */

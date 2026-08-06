@@ -45,7 +45,7 @@ export interface LoudnessOptions extends VoicelabConnectOptions {
    * is its job — so a tone sent under a made-up id is silently discarded and
    * the sweep measures an empty room. The Waveshare's is "wsdev".
    */
-  callId?: string;
+  conversationId?: string;
 }
 
 const SAMPLE_RATE = 16_000;
@@ -103,7 +103,7 @@ function energyAt(samples: Int16Array, hz: number): number {
 async function playTone(
   stream: { append(...events: unknown[]): Promise<unknown> },
   seconds: number,
-  callId: string,
+  conversationId: string,
 ): Promise<void> {
   const frames = Math.round((seconds * 1000) / 20);
   const started = Date.now();
@@ -119,9 +119,9 @@ async function playTone(
         pcm.writeInt16LE(Math.round(Math.sin(phase) * 16_384), sample * 2);
       }
       events.push({
-        type: "voice-agent/spk-frame",
+        type: "events.iterate.com/voice-agent/spk-frame",
         ephemeral: true,
-        payload: { callId, pcm: pcm.toString("base64"), seq: sequence++, t: Date.now() },
+        payload: { conversationId, pcm: pcm.toString("base64"), seq: sequence++, t: Date.now() },
       });
     }
     await stream.append(...events);
@@ -158,7 +158,7 @@ export async function loudness(options: LoudnessOptions) {
     // The tone starts first so the recorder never catches its leading edge,
     // where the class-D amplifier is still settling and would read as
     // distortion the steady state does not have.
-    const playing = playTone(stream, seconds + 1, options.callId ?? "wsdev");
+    const playing = playTone(stream, seconds + 1, options.conversationId ?? "wsdev");
     await new Promise((resolve) => setTimeout(resolve, 700));
     const captured = recordRoom(seconds - 1, String(volume));
     await playing;

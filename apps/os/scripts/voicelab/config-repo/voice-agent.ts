@@ -64,9 +64,9 @@ async function discardRpcResult(result: Promise<unknown>, label: string): Promis
 //
 //   mode=detached same bridge, no anchor socket: the call holds ITSELF open
 //                 with ctx.waitUntil for as long as it is doing work, and
-//                 ends on the stream's call-ended event, on Grok hanging up,
+//                 ends on the stream's conversation-ended event, on Grok hanging up,
 //                 on silence, or at the hard deadline. This is what a device
-//                 uses — a `voicelab/call-requested` stream event returns the moment the
+//                 uses — an `events.iterate.com/voice-agent/conversation-requested` stream event returns the moment the
 //                 Grok session is live and nothing outside the platform has
 //                 to stay running for the call to continue.
 //
@@ -263,9 +263,10 @@ const BACK_OFFICE_BRIEF = [
   "at any time. Nothing is waiting on you, so silence is always an option",
   "and a slow careful reply is better than a fast wrong one.",
   "",
-  "TO PUT SOMETHING IN FRONT OF THE VOICE DIRECTLY, append a",
-  "`voice-agent/context-added` event to your own stream. It mirrors the",
-  "`agents/context-added` you already use on yourself, one layer along:",
+  "TO PUT SOMETHING IN FRONT OF THE VOICE DIRECTLY, append an",
+  "`events.iterate.com/voice-agent/context-added` event to your own stream.",
+  "It mirrors the `agents/context-added` you already use on yourself, one",
+  "layer along:",
   "  content       what the voice should know, in plain spoken language",
   '  speechPolicy  { behaviour: "dont-trigger-speech" } — it learns this',
   '                but says nothing now; { behaviour: "after-current-speech" }',
@@ -397,10 +398,10 @@ async function describeProvidedCapabilities(project: Awaited<IterateWorkerEntryp
  * So setup states the answer instead. Each setup appends the brief under a
  * per-setup identity and then a marker naming it; the marker is a type the
  * processor's subscription carries, so the processor learns which brief is
- * current through the same filtered delivery a `call-requested` arrives on, and
+ * current through the same filtered delivery a `conversation-requested` arrives on, and
  * folds it into state. No history is read by anyone.
  */
-const BRIEF_MARKER_TYPE = "voice-agent/brief-current";
+const BRIEF_MARKER_TYPE = "events.iterate.com/voice-agent/brief-current";
 
 /** The brief setup installed, and the setup that installed it. */
 export interface BriefMarker {
@@ -441,13 +442,13 @@ export function briefMarkerFromEvent(event: {
   };
 }
 
-/** One `voice-agent/viseme` outbound event, ready for the append lane. */
+/** One `events.iterate.com/voice-agent/viseme` outbound event, ready for the append lane. */
 export interface VisemeAppendEvent {
-  type: "voice-agent/viseme";
+  type: "events.iterate.com/voice-agent/viseme";
   ephemeral: true;
   payload: {
     /** The call whose mouth this drives. */
-    callId: string;
+    conversationId: string;
     /** Which answer the offset is relative to — the spk-frame `answer`. */
     answer: number;
     /** 16 kHz samples from the answer's first sample. */
@@ -462,7 +463,7 @@ export interface VisemeAppendEvent {
 /**
  * The per-call seam between speaker audio and the device's mouth: the same
  * whole 20 ms frames `appendSpkPcm` ships (their PCM16, before the mu-law
- * encode) go in, and the sparse `voice-agent/viseme` events to append come
+ * encode) go in, and the sparse `events.iterate.com/voice-agent/viseme` events to append come
  * out, already shaped for the outbound lane. Exported, and separate from the
  * lane itself, so the emission rule can be tested with literal expectations.
  *
@@ -471,14 +472,14 @@ export interface VisemeAppendEvent {
  * after `end` for the same answer is dropped rather than reopening a closed
  * mouth; the next `reset` starts a fresh track.
  */
-export function createVisemeEmitter(callId: string) {
+export function createVisemeEmitter(conversationId: string) {
   const tracker = createVisemeTracker();
   let ended = false;
   const shape = (event: VisemeChangeEvent, answer: number): VisemeAppendEvent => ({
-    type: "voice-agent/viseme",
+    type: "events.iterate.com/voice-agent/viseme",
     ephemeral: true,
     payload: {
-      callId,
+      conversationId,
       answer,
       playoutSamples: event.playoutSamples,
       viseme: event.viseme,
@@ -566,7 +567,7 @@ async function ensureVoiceAgent(
 }
 
 /*
- * LOOSE, DELIBERATELY — the same doctrine the callId filter is built on: the
+ * LOOSE, DELIBERATELY — the same doctrine the conversationId filter is built on: the
  * peers are not all in this repository.
  *
  * A strict object rejects the whole event for one field nobody here has heard
@@ -577,7 +578,7 @@ async function ensureVoiceAgent(
  * this bridge acts on are still validated; the rest ride along untouched.
  */
 const VoiceCallRequestedPayload = z.looseObject({
-  callId: z.string().trim().min(1),
+  conversationId: z.string().trim().min(1),
   colleague: z.boolean().optional(),
   effort: z.enum(["none", "high"]).optional(),
   greet: z.string().optional(),
@@ -614,12 +615,12 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
      * Starting a bridge is long work that no longer holds the cursor, so what
      * recovers the outcome when an attempt is dropped cannot be the closure
      * that was dropped with it. It is this: a request opens the obligation,
-     * the bridge's own `call-accepted` or this processor's `call-failed`
+     * the bridge's own `conversation-accepted` or this processor's `conversation-failed`
      * closes it, and the at-head pass takes on whatever is still open.
      */
     pendingCall: z
       .object({
-        callId: z.string(),
+        conversationId: z.string(),
         /** Epoch ms of the request, so the freshness window survives eviction. */
         requestedAtMs: z.number(),
         /** What to start, verbatim, so a revived incarnation can retry it. */
@@ -633,19 +634,19 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
       description: "The voice-agent guest exists on this stream.",
       payloadSchema: z.strictObject({}),
     },
-    "voice-agent/call-requested": {
+    "events.iterate.com/voice-agent/conversation-requested": {
       description: "A listener asked the configured voice-agent guest to open a call.",
       payloadSchema: VoiceCallRequestedPayload,
     },
-    "voice-agent/call-accepted": {
+    "events.iterate.com/voice-agent/conversation-accepted": {
       description: "A bridge has this call live: the provider accepted the session.",
       /* The BRIDGE writes this one; loose for the same reason as the request. */
-      payloadSchema: z.looseObject({ callId: z.string().trim().min(1) }),
+      payloadSchema: z.looseObject({ conversationId: z.string().trim().min(1) }),
     },
-    "voice-agent/call-failed": {
+    "events.iterate.com/voice-agent/conversation-failed": {
       description: "The call a listener asked for will not happen, and why.",
       payloadSchema: z.looseObject({
-        callId: z.string().trim().min(1),
+        conversationId: z.string().trim().min(1),
         reason: z.string(),
       }),
     },
@@ -663,7 +664,7 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
      * not a type the bridge or the device's downlink subscribes to, so it cannot
      * reach the audio path.
      */
-    "voice-agent/brief-current": {
+    "events.iterate.com/voice-agent/brief-current": {
       description:
         "Names the brief setup just installed. The processor folds it, so it knows which " +
         "prompt is current without reading history.",
@@ -673,11 +674,11 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
         contentHash: z.string(),
       }),
     },
-    "voice-agent/warmup": {
+    "events.iterate.com/voice-agent/warmup": {
       description: "A readiness probe for this stream's processor. Starts nothing.",
       payloadSchema: z.strictObject({ token: z.string().trim().min(1) }),
     },
-    "voice-agent/warmup-ready": {
+    "events.iterate.com/voice-agent/warmup-ready": {
       description: "This stream's processor is built and running; echoes the token.",
       payloadSchema: z.looseObject({ token: z.string().trim().min(1) }),
     },
@@ -687,22 +688,26 @@ export const VoiceAgentProcessorContract = defineProcessorContract({
      * exists so the reason is on the stream instead of the difference between
      * "never woke" and "woke and failed" being invisible.
      */
-    "voice-agent/warmup-unresolved": {
+    "events.iterate.com/voice-agent/warmup-unresolved": {
       description: "This stream's processor woke for a warm-up but could not resolve its brief.",
       payloadSchema: z.looseObject({ token: z.string().trim().min(1) }),
     },
   },
   consumes: [
     "events.iterate.com/voice-agent/created",
-    "voice-agent/call-requested",
+    "events.iterate.com/voice-agent/conversation-requested",
     /* The ANSWERS, so an outstanding request is a fact of the fold rather
      * than a closure that an eviction takes with it. */
-    "voice-agent/call-accepted",
-    "voice-agent/call-failed",
-    "voice-agent/warmup",
-    "voice-agent/brief-current",
+    "events.iterate.com/voice-agent/conversation-accepted",
+    "events.iterate.com/voice-agent/conversation-failed",
+    "events.iterate.com/voice-agent/warmup",
+    "events.iterate.com/voice-agent/brief-current",
   ],
-  emits: ["voice-agent/call-failed", "voice-agent/warmup-ready", "voice-agent/warmup-unresolved"],
+  emits: [
+    "events.iterate.com/voice-agent/conversation-failed",
+    "events.iterate.com/voice-agent/warmup-ready",
+    "events.iterate.com/voice-agent/warmup-unresolved",
+  ],
 });
 export type VoiceAgentProcessorContract = typeof VoiceAgentProcessorContract;
 const FORWARDED_GROK_EVENTS = new Set([
@@ -737,7 +742,7 @@ export class VoiceBridge extends IterateDurableObject {
    */
   #endActiveCall: ((reason: string, superseded?: boolean) => void) | null = null;
   /**
-   * The callId the live call belongs to.
+   * The conversationId the live call belongs to.
    *
    * Kept because "a second startCall on this stream" and "the SAME call asked
    * for again" are different things and used not to be. A client that has not
@@ -745,30 +750,30 @@ export class VoiceBridge extends IterateDurableObject {
    * seconds, and it must, since a request can be lost. Superseding on that
    * re-request made the bridge kill its own call mid-build, the client then
    * asked again, and the conversation never started: the stream showed
-   * `call-failed "superseded by a new call"` followed by an acceptance that
+   * `conversation-failed "superseded by a new call"` followed by an acceptance that
    * was itself superseded, over and over. A cold bridge takes longer to build
    * than the client waits, so this was reachable on any first call.
    */
-  #activeCallId: string | null = null;
+  #activeConversationId: string | null = null;
   /**
-   * The callId of a call that is being BUILT, latched before anything slow.
+   * The conversationId of a call that is being BUILT, latched before anything slow.
    *
-   * `#activeCallId` is only set once the provider has accepted, which is
+   * `#activeConversationId` is only set once the provider has accepted, which is
    * seconds after the request arrives — a cold dynamic-worker build plus a
    * WebSocket handshake. For that whole window the guard above reads null and
    * a re-ask starts a SECOND call: two Grok sockets, two subscriptions to one
    * stream, and every delivery, transcript and answer doubled. Measured on
-   * production: two `call-accepted` events for callId "wsdev", bridges
+   * production: two `conversation-accepted` events for conversationId "wsdev", bridges
    * 57b84b42 and 8354c57d, entering the same millisecond.
    *
    * Latched on entry instead, so the window does not exist. There can never be
    * two sessions on one stream.
    */
-  #startingCallId: string | null = null;
+  #startingConversationId: string | null = null;
   /**
    * When that latch was taken, so a wedged one cannot outlive its call.
    *
-   * The device asks with a CONSTANT callId ("wsdev"), so a latch left set by a
+   * The device asks with a CONSTANT conversationId ("wsdev"), so a latch left set by a
    * dial that threw would block every future call on this stream forever — a
    * worse failure than the one it prevents. Bounded to comfortably more than a
    * cold build plus handshake, and cleared explicitly on every failure path.
@@ -800,7 +805,7 @@ export class VoiceBridge extends IterateDurableObject {
     if (mode === "warm") {
       return new Response(
         JSON.stringify({
-          activeCallId: this.#activeCallId,
+          activeConversationId: this.#activeConversationId,
           building: this.#endActiveCall !== null,
           className: "VoiceBridge",
           ok: true,
@@ -837,37 +842,48 @@ export class VoiceBridge extends IterateDurableObject {
      * worker build plus a provider handshake, comfortably longer than the
      * client waits — tore down the call it was in the middle of building,
      * whereupon the client asked again and it happened again. The stream
-     * recorded it exactly: call-requested, call-failed "superseded by a new
+     * recorded it exactly: conversation-requested, conversation-failed "superseded by a new
      * call", an acceptance, then "superseded by a newer bridge", and no
      * conversation at either end.
      *
-     * So the same callId arriving twice is the SAME call, and the build in
+     * So the same conversationId arriving twice is the SAME call, and the build in
      * flight is left alone to finish.
      */
-    const requestedCallId = url.searchParams.get("callId");
+    const requestedConversationId = url.searchParams.get("conversationId");
     /*
      * BEFORE ANY WORK, including the dial. This is the check that makes two
-     * sessions impossible rather than merely unlikely — see #startingCallId.
+     * sessions impossible rather than merely unlikely — see #startingConversationId.
      */
-    if (Date.now() - this.#startingSince > 60_000) this.#startingCallId = null;
-    if (this.#startingCallId !== null && this.#startingCallId === requestedCallId) {
+    if (Date.now() - this.#startingSince > 60_000) this.#startingConversationId = null;
+    if (
+      this.#startingConversationId !== null &&
+      this.#startingConversationId === requestedConversationId
+    ) {
       return new Response(
-        JSON.stringify({ callId: requestedCallId, ok: true, reason: "already starting" }),
+        JSON.stringify({
+          conversationId: requestedConversationId,
+          ok: true,
+          reason: "already starting",
+        }),
         { headers: { "content-type": "application/json" } },
       );
     }
-    if (this.#endActiveCall !== null && this.#activeCallId === requestedCallId) {
+    if (this.#endActiveCall !== null && this.#activeConversationId === requestedConversationId) {
       return new Response(
-        JSON.stringify({ callId: requestedCallId, ok: true, reason: "already building" }),
+        JSON.stringify({
+          conversationId: requestedConversationId,
+          ok: true,
+          reason: "already building",
+        }),
         { headers: { "content-type": "application/json" } },
       );
     }
-    this.#startingCallId = requestedCallId;
+    this.#startingConversationId = requestedConversationId;
     this.#startingSince = Date.now();
     if (this.#endActiveCall !== null) {
       this.#endActiveCall("superseded by a new call on this stream", true);
       this.#endActiveCall = null;
-      this.#activeCallId = null;
+      this.#activeConversationId = null;
     }
     const dialGrok = async () => {
       const target = new URL(grokBaseUrl);
@@ -917,7 +933,7 @@ export class VoiceBridge extends IterateDurableObject {
      * PHASE TIMINGS FOR CALL STARTUP.
      *
      * A 16.2s "call live" told us nothing about which part was slow, and the
-     * event log showed the first call-requested going unaccepted for 8s before
+     * event log showed the first conversation-requested going unaccepted for 8s before
      * the harness pressed again. These stamps split the bridge's own share —
      * request seen, provider dialled, provider ready — from the rest, so the
      * next slow start names its phase instead of inviting a guess.
@@ -926,8 +942,8 @@ export class VoiceBridge extends IterateDurableObject {
     const first = await dialGrok();
     phases.providerDialledMs = Date.now() - phases.bridgeEnteredAt;
     if (first.socket === null) {
-      /* Released, or the constant callId could never be dialled again. */
-      this.#startingCallId = null;
+      /* Released, or the constant conversationId could never be dialled again. */
+      this.#startingConversationId = null;
       return new Response(`xai upgrade failed: ${first.status}`, { status: 502 });
     }
     /*
@@ -1012,14 +1028,15 @@ export class VoiceBridge extends IterateDurableObject {
       upstream.close();
       return new Response("bridge mode requires ?path=", { status: 400 });
     }
-    const callId = url.searchParams.get("callId") ?? crypto.randomUUID().slice(0, 8);
+    const conversationId =
+      url.searchParams.get("conversationId") ?? crypto.randomUUID().slice(0, 8);
     /*
      * Identity for THIS bridge instance. Superseding within one Durable
      * Object instance is not enough: a redeploy or an eviction leaves the
      * previous isolate holding a live Grok socket and a live subscription,
      * and both then answer the same turn — the listener hears two voices and
      * the device's buffer sees twice the audio it can play. A bridge that
-     * observes a call-accepted for its own callId from a DIFFERENT bridge
+     * observes a conversation-accepted for its own conversationId from a DIFFERENT bridge
      * stands down, so the newest one always wins wherever it is running.
      */
     const bridgeId = crypto.randomUUID().slice(0, 8);
@@ -1069,7 +1086,7 @@ export class VoiceBridge extends IterateDurableObject {
      * immediately behind the frames that produced them, so a viseme can
      * never overtake or outlive its audio.
      */
-    const visemes = createVisemeEmitter(callId);
+    const visemes = createVisemeEmitter(conversationId);
     let appendErrors = 0;
 
     /*
@@ -1107,7 +1124,7 @@ export class VoiceBridge extends IterateDurableObject {
      * through, so this never fires in a healthy call. When it does, the
      * OLDEST audio goes: a listener holding a queue that deep has long since
      * stopped caring about the beginning of it, and the count rides out on
-     * call-ended so the drop is never silent.
+     * conversation-ended so the drop is never silent.
      */
     const MAX_QUEUED_EVENTS = 20_000;
     const outbound: Parameters<typeof stream.append> = [];
@@ -1157,7 +1174,10 @@ export class VoiceBridge extends IterateDurableObject {
          * the thing filling this queue. */
         for (let index = 0; index < outbound.length && outbound.length > MAX_QUEUED_EVENTS; ) {
           const queuedType = (outbound[index] as { type?: string })?.type;
-          if (queuedType === "voice-agent/spk-frame" || queuedType === "voice-agent/viseme") {
+          if (
+            queuedType === "events.iterate.com/voice-agent/spk-frame" ||
+            queuedType === "events.iterate.com/voice-agent/viseme"
+          ) {
             outbound.splice(index, 1);
             droppedSpk++;
           } else {
@@ -1261,10 +1281,10 @@ export class VoiceBridge extends IterateDurableObject {
       const events = [];
       for (let offset = 0; offset < whole; offset += 640) {
         events.push({
-          type: "voice-agent/spk-frame",
+          type: "events.iterate.com/voice-agent/spk-frame",
           ephemeral: true as const,
           payload: {
-            callId,
+            conversationId,
             answer: answerSeq,
             frame: answerFrames++,
             seq: spkSeq++,
@@ -1413,7 +1433,8 @@ export class VoiceBridge extends IterateDurableObject {
      * `voicelab chronology` is where to read it.
      */
     /**
-     * What a `voice-agent/context-added` event says, and what it may do.
+     * What an `events.iterate.com/voice-agent/context-added` event says, and
+     * what it may do.
      *
      * DELIBERATELY THE SHAPE OF `agents/context-added`, because it is the same
      * idea one layer along: something arrives that a model should know, and the
@@ -1594,8 +1615,8 @@ export class VoiceBridge extends IterateDurableObject {
        * frame, so keeping it costs the stream almost nothing.
        */
       fireAppend({
-        payload: { activity: trimmed, callId },
-        type: "voice-agent/background-activity",
+        payload: { activity: trimmed, conversationId },
+        type: "events.iterate.com/voice-agent/background-activity",
       });
       /* The wire format the voice's instructions describe by name. */
       /*
@@ -1629,8 +1650,8 @@ export class VoiceBridge extends IterateDurableObject {
       if (!backOffice) return;
       try {
         const connection = await stream.openConnection({
-          /* Same collision, same fix: one lane per bridge, not per callId. */
-          connectionKey: `voicelab-back-office-${bridgeId}-${callId}`,
+          /* Same collision, same fix: one lane per bridge, not per conversationId. */
+          connectionKey: `voicelab-back-office-${bridgeId}-${conversationId}`,
           eventTypes: [
             "events.iterate.com/agent/summary-updated",
             "events.iterate.com/agents/web-message-sent",
@@ -1656,8 +1677,8 @@ export class VoiceBridge extends IterateDurableObject {
                * the call, which is exactly when the question gets asked.
                */
               fireAppend({
-                payload: { callId, direction: "in", heard: backOfficeHeard, text },
-                type: "voice-agent/back-office-message",
+                payload: { conversationId, direction: "in", heard: backOfficeHeard, text },
+                type: "events.iterate.com/voice-agent/back-office-message",
               });
               answeredAt = Date.now();
               /*
@@ -1697,8 +1718,8 @@ export class VoiceBridge extends IterateDurableObject {
       const number = ++sentCount;
       fireAppend({
         ephemeral: true,
-        payload: { callId, direction: "out", number, text },
-        type: "voice-agent/back-office-message",
+        payload: { conversationId, direction: "out", number, text },
+        type: "events.iterate.com/voice-agent/back-office-message",
       });
       this.ctx.waitUntil(
         (async () => {
@@ -1935,7 +1956,7 @@ export class VoiceBridge extends IterateDurableObject {
      * that owns the whole call. An exception escaping it does not just lose
      * one frame: measured, ONE truncated JSON frame ended the call outright —
      * no more audio, no answer to the next turn the customer spoke, no
-     * redial, and no call-ended, so the listener was never told anything had
+     * redial, and no conversation-ended, so the listener was never told anything had
      * happened. A provider is allowed to send rubbish; it is not allowed to
      * hang up on the customer by doing it.
      */
@@ -2094,11 +2115,11 @@ export class VoiceBridge extends IterateDurableObject {
           });
         }
         fireAppend({
-          type: "voice-agent/call-accepted",
+          type: "events.iterate.com/voice-agent/conversation-accepted",
           payload: {
             bridge: detached ? "worker-detached" : "worker",
             bridgeId,
-            callId,
+            conversationId,
             model,
             /* Which phase spent the time, from the bridge's own clock. */
             phases: { ...phases, acceptedMs: Date.now() - phases.bridgeEnteredAt },
@@ -2249,10 +2270,10 @@ export class VoiceBridge extends IterateDurableObject {
          */
         const slim = grokEvent as Record<string, unknown>;
         fireAppend({
-          type: "voice-agent/grok-event" as const,
+          type: "events.iterate.com/voice-agent/grok-event" as const,
           ephemeral: true as const,
           payload: {
-            callId,
+            conversationId,
             answer: answerSeq,
             t: Date.now(),
             event: {
@@ -2360,8 +2381,8 @@ export class VoiceBridge extends IterateDurableObject {
       if (redials > 40) return teardown(`${reason}; redialled ${redials} times`);
       fireAppend({
         ephemeral: true,
-        payload: { bridgeId, callId, close, reason, redials },
-        type: "voice-agent/bridge-redialling",
+        payload: { bridgeId, conversationId, close, reason, redials },
+        type: "events.iterate.com/voice-agent/bridge-redialling",
       });
       responseActive = false;
       await new Promise((resolve) => setTimeout(resolve, Math.min(500 * redials, 5000)));
@@ -2410,8 +2431,8 @@ export class VoiceBridge extends IterateDurableObject {
     let lastSeenOffset = -1;
     /** Events on this stream that belong to some other call. */
     let strayEvents = 0;
-    /** True once the peer driving this call has used our callId. */
-    let sawOwnCallId = false;
+    /** True once the peer driving this call has used our conversationId. */
+    let sawOwnConversationId = false;
     let reconnects = 0;
     let opening = false;
 
@@ -2426,41 +2447,41 @@ export class VoiceBridge extends IterateDurableObject {
         recyclesWithoutPeer = 0;
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         /*
-         * A CALL BELONGS TO ITS callId.
+         * A CALL BELONGS TO ITS conversationId.
          *
-         * `call-ended` and `call-accepted` were checked; the events that
+         * `conversation-ended` and `conversation-accepted` were checked; the events that
          * actually drive the conversation were not, so anything able to
          * append to this stream could put words in the assistant's mouth and
          * commit turns on somebody else's call — proven with a plain
-         * `voicelab/say` carrying a made-up callId. The realistic source is
+         * `voicelab/say` carrying a made-up conversationId. The realistic source is
          * not an attacker but arithmetic: a redeploy or an eviction can leave
          * a previous bridge running, the device opens a new call with a new
-         * callId on the SAME stream, and the old bridge — which only stands
-         * down for its OWN callId — happily consumes the new call's
+         * conversationId on the SAME stream, and the old bridge — which only stands
+         * down for its OWN conversationId — happily consumes the new call's
          * microphone and answers alongside. That is the "assistant replied
          * two or three times to one turn" this lab has already heard.
          *
          * The rule CALIBRATES ITSELF rather than being asserted, because the
          * peers are not all in this repository: `voicelab/say` from a script
-         * has never carried a callId, and a firmware that stamps something
+         * has never carried a conversationId, and a firmware that stamps something
          * else would be struck deaf by a filter that simply demanded a
          * match. So nothing is rejected until this bridge has heard its own
-         * callId at least once from the peer actually driving it. A peer that
-         * does not use callIds is never second-guessed; one that does gets
+         * conversationId at least once from the peer actually driving it. A peer that
+         * does not use conversationIds is never second-guessed; one that does gets
          * everybody else's traffic filtered out from that moment on — which
          * is exactly when a second bridge on this stream becomes audible.
          */
-        if (payload.callId === callId) sawOwnCallId = true;
+        if (payload.conversationId === conversationId) sawOwnConversationId = true;
         else if (
-          sawOwnCallId &&
-          typeof payload.callId === "string" &&
-          event.type !== "voice-agent/call-accepted"
+          sawOwnConversationId &&
+          typeof payload.conversationId === "string" &&
+          event.type !== "events.iterate.com/voice-agent/conversation-accepted"
         ) {
           strayEvents++;
           continue;
         }
         switch (event.type) {
-          case "voice-agent/mic-frame": {
+          case "events.iterate.com/voice-agent/mic-frame": {
             lastActivityAt = Date.now();
             micFrames++;
             try {
@@ -2480,7 +2501,7 @@ export class VoiceBridge extends IterateDurableObject {
             }
             break;
           }
-          case "voice-agent/context-added": {
+          case "events.iterate.com/voice-agent/context-added": {
             /*
              * The thinking half putting something in front of the voice
              * directly, without the bridge deciding what it meant.
@@ -2503,7 +2524,7 @@ export class VoiceBridge extends IterateDurableObject {
             );
             break;
           }
-          case "voice-agent/say": {
+          case "events.iterate.com/voice-agent/say": {
             /*
              * A turn made of text rather than speech: the same commit and
              * response the microphone path produces, so anything that can
@@ -2544,7 +2565,7 @@ export class VoiceBridge extends IterateDurableObject {
             sendUpstream({ type: "response.create" });
             break;
           }
-          case "voice-agent/turn": {
+          case "events.iterate.com/voice-agent/turn": {
             lastActivityAt = Date.now();
             if (payload.action === "start") {
               micOpen = true;
@@ -2608,11 +2629,11 @@ export class VoiceBridge extends IterateDurableObject {
                * threw speech away, and that gap is the whole diagnosis.
                */
               fireAppend({
-                type: "voice-agent/turn-committed",
+                type: "events.iterate.com/voice-agent/turn-committed",
                 ephemeral: true,
                 payload: {
                   bridgeId,
-                  callId,
+                  conversationId,
                   frames: micDeliveredFrames,
                   bytes: micDeliveredBytes,
                   ms: Math.round(micDeliveredBytes / 32),
@@ -2631,29 +2652,29 @@ export class VoiceBridge extends IterateDurableObject {
             }
             break;
           }
-          case "voice-agent/ping":
+          case "events.iterate.com/voice-agent/ping":
             /*
              * The pong is this bridge's proof of life, and the only event a
              * device receives during a silent call. A detached call lives in
              * a Durable Object that can be evicted or replaced without ever
-             * running its teardown, so "no call-ended arrived" is NOT
+             * running its teardown, so "no conversation-ended arrived" is NOT
              * evidence that the call is alive — the pong is.
              */
             pingsSeen++;
             fireAppend({
-              type: "voice-agent/pong",
+              type: "events.iterate.com/voice-agent/pong",
               ephemeral: true,
-              payload: { bridgeId, callId, id: payload.id, t0: payload.t0, t1: Date.now() },
+              payload: { bridgeId, conversationId, id: payload.id, t0: payload.t0, t1: Date.now() },
             });
             break;
-          case "voice-agent/call-accepted":
+          case "events.iterate.com/voice-agent/conversation-accepted":
             // Another bridge has taken this call over; stand down quietly.
-            if (payload.callId === callId && payload.bridgeId !== bridgeId) {
+            if (payload.conversationId === conversationId && payload.bridgeId !== bridgeId) {
               teardown("superseded by a newer bridge", true);
             }
             break;
-          case "voice-agent/call-ended":
-            if (payload.callId === callId) teardown("call-ended event");
+          case "events.iterate.com/voice-agent/conversation-ended":
+            if (payload.conversationId === conversationId) teardown("conversation-ended event");
             break;
           default:
             break;
@@ -2673,7 +2694,7 @@ export class VoiceBridge extends IterateDurableObject {
           /*
            * BRIDGE ID IN THE KEY, or two bridges share one connection.
            *
-           * The key was callId + generation. A harness that reuses a callId —
+           * The key was conversationId + generation. A harness that reuses a conversationId —
            * `wsdev`, every session — makes a NEW bridge open `-g1` while the
            * PREVIOUS bridge's `-g1` may still exist. The stream then has one
            * connection under that key, and the mutual pings can be answered by
@@ -2685,15 +2706,15 @@ export class VoiceBridge extends IterateDurableObject {
            *
            * bridgeId is unique per bridge, so a lane belongs to exactly one.
            */
-          connectionKey: `voicelab-worker-bridge-${bridgeId}-${callId}-g${generation}`,
+          connectionKey: `voicelab-worker-bridge-${bridgeId}-${conversationId}-g${generation}`,
           eventTypes: [
-            "voice-agent/mic-frame",
-            "voice-agent/ping",
-            "voice-agent/turn",
-            "voice-agent/say",
-            "voice-agent/context-added",
-            "voice-agent/call-ended",
-            "voice-agent/call-accepted",
+            "events.iterate.com/voice-agent/mic-frame",
+            "events.iterate.com/voice-agent/ping",
+            "events.iterate.com/voice-agent/turn",
+            "events.iterate.com/voice-agent/say",
+            "events.iterate.com/voice-agent/context-added",
+            "events.iterate.com/voice-agent/conversation-ended",
+            "events.iterate.com/voice-agent/conversation-accepted",
           ],
           processEventBatch: (batch) => handleEvents(batch.events),
           ...(lastSeenOffset >= 0 ? { replayAfterOffset: lastSeenOffset } : {}),
@@ -2777,16 +2798,16 @@ export class VoiceBridge extends IterateDurableObject {
       closedDown = true;
       clearInterval(watchdog);
       /*
-       * A superseded call must NOT announce call-ended: the successor is
-       * taking over the same callId, and the device would read its
+       * A superseded call must NOT announce conversation-ended: the successor is
+       * taking over the same conversationId, and the device would read its
        * predecessor's obituary as "your call ended" and stop sending audio.
        */
       if (!superseded) {
         fireAppend({
-          type: "voice-agent/call-ended",
+          type: "events.iterate.com/voice-agent/conversation-ended",
           payload: {
             bridgeId,
-            callId,
+            conversationId,
             reason: `worker bridge: ${reason} (appendErrors=${appendErrors}, reconnects=${reconnects}, redials=${redials}, providerJunk=${providerJunk}, handlerErrors=${handlerErrors}, sendFailures=${sendFailures}, droppedSpk=${droppedSpk}, stray=${strayEvents})`,
           },
         });
@@ -2803,11 +2824,11 @@ export class VoiceBridge extends IterateDurableObject {
       } catch {}
       if (this.#endActiveCall === teardown) {
         this.#endActiveCall = null;
-        this.#activeCallId = null;
-        this.#startingCallId = null;
+        this.#activeConversationId = null;
+        this.#startingConversationId = null;
       }
       markReady({ ok: false, reason });
-      /* `call-ended` shares the ordered append lane with the audio before it.
+      /* `conversation-ended` shares the ordered append lane with the audio before it.
        * Keep the owning stream/project stubs alive until that lane is empty,
        * then release every remaining capability before allowing this
        * invocation to finish. */
@@ -2827,7 +2848,7 @@ export class VoiceBridge extends IterateDurableObject {
     this.#endActiveCall = teardown;
     // Paired with the teardown, so a re-request of THIS call is recognised as
     // the same one for exactly as long as the call is alive.
-    this.#activeCallId = callId;
+    this.#activeConversationId = conversationId;
     /* Grok's close is handled by attachGrok: it redials rather than ending. */
     server?.addEventListener("close", () => teardown("anchor socket closed"));
     server?.addEventListener("message", () => {
@@ -2837,14 +2858,14 @@ export class VoiceBridge extends IterateDurableObject {
     await reopen();
     if (closedDown) {
       const ready = await sessionReady;
-      return Response.json({ callId, ...ready }, { status: 502 });
+      return Response.json({ conversationId, ...ready }, { status: 502 });
     }
     // `pair` is non-null exactly when this call has an anchor socket to hand back.
     if (pair !== null) return new Response(null, { status: 101, webSocket: pair[0] });
 
     this.ctx.waitUntil(finished);
     const ready = await sessionReady;
-    return Response.json({ callId, ...ready });
+    return Response.json({ conversationId, ...ready });
   }
 }
 
@@ -2942,8 +2963,8 @@ function voiceAgentProcessorRef(streamPath: string) {
 export interface StartCallOptions {
   /** Stream the call rides on, e.g. "/voicelab/waveshare". */
   path: string;
-  /** Caller-chosen id; the same id ends the call via a call-ended event. */
-  callId?: string;
+  /** Caller-chosen id; the same id ends the call via a conversation-ended event. */
+  conversationId?: string;
   model?: string;
   /**
    * Realtime provider endpoint. Defaults to xAI's. A test points this at a
@@ -3063,8 +3084,8 @@ async function startVoiceCall(
 ): Promise<Record<string, unknown>> {
   const path = options.path;
   if (!path.startsWith("/")) return { ok: false, reason: "path must be an absolute stream path" };
-  const callId = options.callId ?? crypto.randomUUID().slice(0, 8);
-  const params = new URLSearchParams({ callId, mode: "detached", path });
+  const conversationId = options.conversationId ?? crypto.randomUUID().slice(0, 8);
+  const params = new URLSearchParams({ conversationId, mode: "detached", path });
   if (options.model) params.set("model", options.model);
   if (options.grokBaseUrl) params.set("grokBaseUrl", options.grokBaseUrl);
   if (options.voice) params.set("voice", options.voice);
@@ -3082,13 +3103,13 @@ async function startVoiceCall(
   );
   if (!response.ok) {
     return {
-      callId,
+      conversationId,
       ok: false,
       reason: `bridge ${response.status}: ${(await response.text()).slice(0, 200)}`,
     };
   }
   const result = (await response.json()) as Record<string, unknown>;
-  return { ...result, callId, startMs: Date.now() - startedAt };
+  return { ...result, conversationId, startMs: Date.now() - startedAt };
 }
 
 export class VoiceAgentProcessor extends StreamProcessor<
@@ -3114,15 +3135,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
   readonly contract = VoiceAgentProcessorContract;
 
   /**
-   * Attempts THIS isolate is already making, as `<callId>@<requestedAtMs>`.
+   * Attempts THIS isolate is already making, as `<conversationId>@<requestedAtMs>`.
    *
    * The at-head pass below runs on every frame and a bridge start takes
    * seconds, so without this each frame arriving mid-build would start another
    * bridge for the same request. Keyed by the REQUEST rather than the call, so
-   * a peer that asks again under the same callId is dialled again rather than
+   * a peer that asks again under the same conversationId is dialled again rather than
    * silently ignored by an isolate that remembers the name.
    *
-   * A finished attempt is never forgotten on success: `call-accepted` is
+   * A finished attempt is never forgotten on success: `conversation-accepted` is
    * appended by the bridge and takes a moment to come back round, and
    * forgetting the attempt inside that window is exactly how a second bridge
    * gets started for a call that is already live. Only a total failure — no
@@ -3150,13 +3171,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
      */
     if (state.birthCertificate === null) return;
 
-    if (event?.type === "voice-agent/warmup") {
+    if (event?.type === "events.iterate.com/voice-agent/warmup") {
       /*
        * THE SAME PATH A CALL TAKES, MINUS THE DIAL.
        *
        * Deliberately placed AFTER the birth-certificate gate and judged by the
        * same freshness rule as a real request, because those are the two things
-       * that can silently drop a `voicelab/call-requested` — and a probe that
+       * that can silently drop an `events.iterate.com/voice-agent/conversation-requested` — and a probe that
        * skips them proves readiness the call path does not have. It arrives
        * through the same subscription and the same filtered delivery, is
        * dispatched from the same branch, and warms the same bridge worker
@@ -3184,7 +3205,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       runInBackground(async () => {
         if (marker === null) {
           append({
-            type: "voice-agent/warmup-unresolved",
+            type: "events.iterate.com/voice-agent/warmup-unresolved",
             payload: {
               token,
               streamPath: path,
@@ -3197,13 +3218,13 @@ export class VoiceAgentProcessor extends StreamProcessor<
         const bridge = await this.deps.warmBridge({ path, token });
         if (!bridge.ok) {
           append({
-            type: "voice-agent/warmup-unresolved",
+            type: "events.iterate.com/voice-agent/warmup-unresolved",
             payload: { token, streamPath: path, reason: bridge.reason, stage: "bridge" },
           });
           return;
         }
         append({
-          type: "voice-agent/warmup-ready",
+          type: "events.iterate.com/voice-agent/warmup-ready",
           payload: {
             token,
             streamPath: path,
@@ -3220,7 +3241,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
       return;
     }
 
-    if (event?.type === "voice-agent/call-requested") {
+    if (event?.type === "events.iterate.com/voice-agent/conversation-requested") {
       const requestedAtMs = Date.parse(event.createdAt);
       /*
        * A fresh request is dialled the moment it is seen. A stale one falls
@@ -3240,7 +3261,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
      * Starting a bridge is a cold dynamic-worker build (30s budget) plus up
      * to HANDSHAKE_TIMEOUT_MS of provider handshake, and under
      * `blockProcessorWhile` all of that head-of-line-blocked every later
-     * event on this stream — including the call-ended that would have
+     * event on this stream — including the conversation-ended that would have
      * cancelled it. So the start is kicked off droppably and the OUTCOME is
      * recovered here: `pendingCall` is the fold's record of a request nothing
      * has answered, and this pass takes it on again when an eviction lost the
@@ -3254,8 +3275,8 @@ export class VoiceAgentProcessor extends StreamProcessor<
       return;
     }
     /* Not while this isolate is still building it: that attempt answers with
-     * a call-accepted or a call-failed of its own. */
-    if (this.#starting.has(attemptKey(pending.callId, pending.requestedAtMs))) return;
+     * a conversation-accepted or a conversation-failed of its own. */
+    if (this.#starting.has(attemptKey(pending.conversationId, pending.requestedAtMs))) return;
     /*
      * BLOCKING, and only because this is one short append that closes an
      * obligation: the next event must not pass a request whose only remaining
@@ -3265,7 +3286,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
     blockProcessorWhile(async () => {
       await this.#recordFailure(
         append,
-        pending.callId,
+        pending.conversationId,
         pending.requestedAtMs,
         `no bridge started within ${CALL_REQUEST_FRESHNESS_MS}ms of the request`,
       );
@@ -3279,20 +3300,23 @@ export class VoiceAgentProcessor extends StreamProcessor<
     /* The newest marker wins, however much audio sits between markers. */
     const marker = briefMarkerFromEvent(event);
     if (marker !== null) return { ...state, briefCurrent: marker };
-    if (event.type === "voice-agent/call-requested") {
+    if (event.type === "events.iterate.com/voice-agent/conversation-requested") {
       const requestedAtMs = Date.parse(event.createdAt);
       return {
         ...state,
         pendingCall: {
-          callId: event.payload.callId,
+          conversationId: event.payload.conversationId,
           requestedAtMs: Number.isFinite(requestedAtMs) ? requestedAtMs : 0,
           request: event.payload,
         },
       };
     }
     /* The two answers. Either one closes the obligation it names. */
-    if (event.type === "voice-agent/call-accepted" || event.type === "voice-agent/call-failed") {
-      if (state.pendingCall?.callId !== event.payload.callId) return state;
+    if (
+      event.type === "events.iterate.com/voice-agent/conversation-accepted" ||
+      event.type === "events.iterate.com/voice-agent/conversation-failed"
+    ) {
+      if (state.pendingCall?.conversationId !== event.payload.conversationId) return state;
       return { ...state, pendingCall: null };
     }
     return state;
@@ -3310,15 +3334,15 @@ export class VoiceAgentProcessor extends StreamProcessor<
     request: ProcessorRequest,
     requestedAtMs: number,
   ): void {
-    const callId = request.callId;
-    const attempt = attemptKey(callId, requestedAtMs);
+    const conversationId = request.conversationId;
+    const attempt = attemptKey(conversationId, requestedAtMs);
     if (this.#starting.has(attempt)) return;
     this.#starting.add(attempt);
     lane.runInBackground(async () => {
       let reason: string;
       try {
         const result = await this.deps.startCall({ path: this.path, ...request });
-        /* The BRIDGE appends call-accepted when the provider accepts the
+        /* The BRIDGE appends conversation-accepted when the provider accepts the
          * session; that is what closes this obligation on success. */
         if (result.ok === true) return;
         reason =
@@ -3329,7 +3353,7 @@ export class VoiceAgentProcessor extends StreamProcessor<
         reason = String(error);
       }
       try {
-        await this.#recordFailure(lane.append, callId, requestedAtMs, reason);
+        await this.#recordFailure(lane.append, conversationId, requestedAtMs, reason);
       } catch (error) {
         /*
          * Neither the call nor its obituary landed, so nothing closed the
@@ -3347,22 +3371,22 @@ export class VoiceAgentProcessor extends StreamProcessor<
    *
    * A failed start used to append nothing at all, and past the freshness
    * window the handler returned early forever — so a device that appended
-   * `voicelab/call-requested` and never saw `voicelab/call-accepted` had no
+   * `events.iterate.com/voice-agent/conversation-requested` and never saw `events.iterate.com/voice-agent/conversation-accepted` had no
    * way to tell "still building" from "never going to happen".
    */
   async #recordFailure(
     append: ProcessEventArgs<VoiceAgentProcessorContract>["append"],
-    callId: string,
+    conversationId: string,
     requestedAtMs: number,
     reason: string,
   ): Promise<void> {
     await append({
-      type: "voice-agent/call-failed",
+      type: "events.iterate.com/voice-agent/conversation-failed",
       /* State-derived, so the deciding state is folded into the key and NO
        * event is bound: a redelivery or a revival must not rotate this into a
        * second obituary for one call. */
-      idempotencyKey: this.idempotencyKey(`call-failed:${callId}:${requestedAtMs}`),
-      payload: { callId, reason: reason.slice(0, 500) },
+      idempotencyKey: this.idempotencyKey(`conversation-failed:${conversationId}:${requestedAtMs}`),
+      payload: { conversationId, reason: reason.slice(0, 500) },
     });
   }
 }
@@ -3370,10 +3394,10 @@ export class VoiceAgentProcessor extends StreamProcessor<
 /** The call-request payload as the fold stores and replays it. */
 type ProcessorRequest = z.output<typeof VoiceCallRequestedPayload>;
 
-/** One attempt at one request — a callId reused for a second request is a
+/** One attempt at one request — a conversationId reused for a second request is a
  * second attempt, not the same one already in flight. */
-function attemptKey(callId: string, requestedAtMs: number): string {
-  return `${callId}@${String(requestedAtMs)}`;
+function attemptKey(conversationId: string, requestedAtMs: number): string {
+  return `${conversationId}@${String(requestedAtMs)}`;
 }
 
 export class VoiceAgentProcessorHost extends IterateDurableObject {
@@ -3393,7 +3417,7 @@ export class VoiceAgentProcessorHost extends IterateDurableObject {
           ),
         /*
          * The brief at the head of the agent's own stream — the same stream
-         * call-requested rides on, so this resolves what a real call would see.
+         * conversation-requested rides on, so this resolves what a real call would see.
          * Read from the HEAD: a plain getEvents starts at offset zero and on a
          * long stream returns the first brief ever installed instead of the
          * current one.
@@ -3571,13 +3595,13 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
         filter: {
           eventTypes: [
             "events.iterate.com/voice-agent/created",
-            "voice-agent/call-requested",
+            "events.iterate.com/voice-agent/conversation-requested",
             /* The processor folds the ANSWERS too — an outstanding call request
              * is a fact of its state, not a closure an eviction can take with
              * it — and hosted delivery is filtered, so an event missing from
              * this list never reaches the fold at all. */
-            "voice-agent/call-accepted",
-            "voice-agent/call-failed",
+            "events.iterate.com/voice-agent/conversation-accepted",
+            "events.iterate.com/voice-agent/conversation-failed",
             /*
              * The warm-up token. Hosted delivery is FILTERED, so a type missing
              * from this list never reaches the processor at all — which is what
@@ -3587,16 +3611,16 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
              * re-setup append a new subscription-configured event under the same
              * subscriptionKey, replacing the old filter rather than running two.
              *
-             * Neither the bridge (mic-frame, ping, turn, say, call-ended,
-             * call-accepted) nor the device's downlink (speaker-frame,
-             * grok-event, call-ended, call-accepted, pong) lists this type, so
+             * Neither the bridge (mic-frame, ping, turn, say, conversation-ended,
+             * conversation-accepted) nor the device's downlink (speaker-frame,
+             * grok-event, conversation-ended, conversation-accepted, pong) lists this type, so
              * the token cannot reach the provider socket or the audio path.
              */
-            "voice-agent/warmup",
+            "events.iterate.com/voice-agent/warmup",
             /* Setup's statement of which brief is current. Without this in the
              * filter the processor would never be told, and hosted delivery is
              * filtered — the same trap that made the first handshake silent. */
-            "voice-agent/brief-current",
+            "events.iterate.com/voice-agent/brief-current",
           ],
         },
         receiver: {
@@ -3789,7 +3813,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
       };
       const warmStartedAt = Date.now();
       await discardRpcResult(
-        stream.append({ type: "voice-agent/warmup", payload: { token } }),
+        stream.append({ type: "events.iterate.com/voice-agent/warmup", payload: { token } }),
         "warm-up append result",
       );
       try {
@@ -3800,7 +3824,10 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
          * setup on this long-lived stream must not satisfy or fail this one.
          */
         const answer = await stream.waitForEvent({
-          eventTypes: ["voice-agent/warmup-ready", "voice-agent/warmup-unresolved"],
+          eventTypes: [
+            "events.iterate.com/voice-agent/warmup-ready",
+            "events.iterate.com/voice-agent/warmup-unresolved",
+          ],
           predicate: (event) => (event.payload as { token?: string } | null)?.token === token,
           timeoutMs: WARMUP_DEADLINE_MS,
         });
@@ -3813,7 +3840,7 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
             stage?: string;
             bridgeWarmMs?: number;
           };
-          if (answer.type === "voice-agent/warmup-unresolved") {
+          if (answer.type === "events.iterate.com/voice-agent/warmup-unresolved") {
             /* Woke and failed. Never a success, whatever else matches. */
             warm.error =
               `the processor woke and got as far as the ${payload.stage ?? "unknown"} stage: ` +
@@ -3945,8 +3972,8 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
    * Grok socket and the stream subscription by itself, so the only thing a
    * device has to do is call this once over its ordinary itx session and
    * then push mic frames. Returns when Grok has accepted the session.
-   * Ending it is an ordinary `voicelab/call-ended` append with the same
-   * callId — no second connection, anywhere.
+   * Ending it is an ordinary `events.iterate.com/voice-agent/conversation-ended` append with the same
+   * conversationId — no second connection, anywhere.
    */
   async startCall(options: StartCallOptions): Promise<Record<string, unknown>> {
     return await startVoiceCall(
@@ -3956,16 +3983,16 @@ export default class VoiceAgentEntrypoint extends IterateWorkerEntrypoint {
     );
   }
 
-  /** Hang up. Equivalent to appending call-ended yourself; here for callers
+  /** Hang up. Equivalent to appending conversation-ended yourself; here for callers
    * that would rather not build the event. */
-  async endCall(options: { path: string; callId: string; reason?: string }): Promise<void> {
+  async endCall(options: { path: string; conversationId: string; reason?: string }): Promise<void> {
     const project = await this.env.ITX.get();
     const stream = project.streams.get(options.path);
     try {
       await discardRpcResult(
         stream.append({
-          type: "voice-agent/call-ended",
-          payload: { callId: options.callId, reason: options.reason ?? "hangup" },
+          type: "events.iterate.com/voice-agent/conversation-ended",
+          payload: { conversationId: options.conversationId, reason: options.reason ?? "hangup" },
         }),
         "endCall append result",
       );

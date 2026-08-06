@@ -131,15 +131,15 @@ function describe(event: StreamEventLike, width: number): Row | null {
     default:
       break;
   }
-  if (event.type === "voice-agent/background-activity") {
+  if (event.type === "events.iterate.com/voice-agent/background-activity") {
     return row("→VOICE", `STATUS: ${clip(payload.activity, width)}`);
   }
-  if (event.type === "voice-agent/back-office-message") {
+  if (event.type === "events.iterate.com/voice-agent/back-office-message") {
     const way = payload.direction === "out" ? "note_to_self" : "RESULT";
     return row("→VOICE", `${way}: ${clip(payload.text, width)}`);
   }
-  if (event.type.startsWith("voice-agent/")) {
-    const name = event.type.replace("voice-agent/", "");
+  if (event.type.startsWith("events.iterate.com/voice-agent/")) {
+    const name = event.type.replace("events.iterate.com/voice-agent/", "");
     return row("VOICE ", `${name} ${clip(JSON.stringify(payload), 120)}`);
   }
   return row("      ", short);
@@ -216,7 +216,9 @@ export async function chronology(options: ChronologyOptions) {
    * interval in it something you had to subtract by hand.
    */
   const first =
-    rows.find((row) => row.line.startsWith("call-requested"))?.atMs ?? rows.at(0)?.atMs ?? 0;
+    rows.find((row) => row.line.startsWith("conversation-requested"))?.atMs ??
+    rows.at(0)?.atMs ??
+    0;
   const dialogue = (row: Row): boolean =>
     row.line.startsWith("[developer] The customer said:") ||
     row.line.startsWith("[developer] You, out loud said:") ||

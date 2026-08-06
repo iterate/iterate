@@ -15,7 +15,7 @@ export interface BringCallUpOptions {
   press: () => Promise<unknown>;
   /**
    * When the BRIDGE last said it had this call, as a timestamp; 0 for "no
-   * call". Liveness has to come from `voicelab/call-accepted` on the stream:
+   * call". Liveness has to come from `events.iterate.com/voice-agent/conversation-accepted` on the stream:
    * the device's own recording status is a proxy for a proxy, and a harness
    * that will not start because a diagnostic is unavailable tests the wrong
    * thing.
@@ -33,8 +33,8 @@ export interface BringCallUpOptions {
  * Pressing once and waiting is not enough. Hanging up whatever was there and
  * starting a fresh call are two messages to a device that applies them in its
  * own loop, and the hang-up can land AFTER the new call has been accepted —
- * killing it. Measured on the first run of `stress`: `call-accepted`, then
- * `call-ended: button`, then sixty seconds of waiting for a call that had been
+ * killing it. Measured on the first run of `stress`: `conversation-accepted`, then
+ * `conversation-ended: button`, then sixty seconds of waiting for a call that had been
  * made and destroyed. So a call counts as live only once it has STAYED live.
  */
 export async function bringCallUp(options: BringCallUpOptions): Promise<boolean> {
@@ -51,7 +51,7 @@ export async function bringCallUp(options: BringCallUpOptions): Promise<boolean>
        * NEVER ACCEPTED: FAIL, DO NOT PRESS AGAIN.
        *
        * A second press makes a second bridge, and the stream showed exactly
-       * that: two `call-requested`, two bridges, one `call-failed: superseded by
+       * that: two `conversation-requested`, two bridges, one `conversation-failed: superseded by
        * a newer bridge`, and a 16.2s "call live" that was really 8s of the first
        * bridge never answering plus a race. Pressing again hides a slow startup
        * behind a worse one.

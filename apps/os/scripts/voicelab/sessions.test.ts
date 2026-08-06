@@ -11,25 +11,25 @@
 // Excusing every end that named an asked call fixed that by being loose: it
 // would equally excuse a third report, or one arriving a minute later from
 // something else. One transition is reported twice BY DESIGN — the device and
-// the worker bridge each append their own call-ended for the same callId — and
+// the worker bridge each append their own conversation-ended for the same conversationId — and
 // that specific pair is what must reconcile, not "any number of ends for a call
 // somebody hung up".
 import { describe, expect, it } from "vitest";
 
 import { callStartProblems, reconcileCallEnds } from "./sessions.ts";
 
-const asked = [{ callId: "call-a", issuedAtMs: 40_000 }];
+const asked = [{ conversationId: "call-a", issuedAtMs: 40_000 }];
 
 describe("reconcileCallEnds", () => {
   it("reconciles the two expected reports of one hang-up", () => {
     /*
-     * The device appends call-ended with its own reason; the bridge, watching the
+     * The device appends conversation-ended with its own reason; the bridge, watching the
      * same stream, appends its own about a second later. Two reports, one
      * transition, both inside the window after the hang-up went out.
      */
     const ends = [
-      { atMs: 40_400, callId: "call-a", reason: "button" },
-      { atMs: 41_500, callId: "call-a", reason: "worker bridge: call-ended event" },
+      { atMs: 40_400, conversationId: "call-a", reason: "button" },
+      { atMs: 41_500, conversationId: "call-a", reason: "worker bridge: conversation-ended event" },
     ];
     expect(reconcileCallEnds(ends, asked)).toEqual([]);
   });
@@ -38,9 +38,9 @@ describe("reconcileCallEnds", () => {
     /* Two observers, two reports. A third means something reported an end twice,
      * and the loose version of this rule waved it through. */
     const ends = [
-      { atMs: 40_400, callId: "call-a", reason: "button" },
-      { atMs: 41_500, callId: "call-a", reason: "worker bridge: call-ended event" },
-      { atMs: 42_000, callId: "call-a", reason: "worker bridge: call-ended event" },
+      { atMs: 40_400, conversationId: "call-a", reason: "button" },
+      { atMs: 41_500, conversationId: "call-a", reason: "worker bridge: conversation-ended event" },
+      { atMs: 42_000, conversationId: "call-a", reason: "worker bridge: conversation-ended event" },
     ];
     const problems = reconcileCallEnds(ends, asked);
     expect(problems).toHaveLength(1);
@@ -55,17 +55,17 @@ describe("reconcileCallEnds", () => {
      * of one did.
      */
     const ends = [
-      { atMs: 40_400, callId: "call-a", reason: "button" },
-      { atMs: 41_000, callId: "call-b", reason: "provider socket closed" },
+      { atMs: 40_400, conversationId: "call-a", reason: "button" },
+      { atMs: 41_000, conversationId: "call-b", reason: "provider socket closed" },
     ];
     const problems = reconcileCallEnds(ends, asked);
-    expect(problems.map((problem) => problem.end.callId)).toEqual(["call-b"]);
+    expect(problems.map((problem) => problem.end.conversationId)).toEqual(["call-b"]);
     expect(problems[0]!.why).toContain("no hang-up was asked");
   });
 
   it("fails an end that arrives after the window", () => {
     /* A hang-up explains the reports it caused, not a call that died later. */
-    const ends = [{ atMs: 56_000, callId: "call-a", reason: "provider socket closed" }];
+    const ends = [{ atMs: 56_000, conversationId: "call-a", reason: "provider socket closed" }];
     const problems = reconcileCallEnds(ends, asked);
     expect(problems).toHaveLength(1);
     expect(problems[0]!.why).toContain("outside the 10s window");
@@ -74,7 +74,7 @@ describe("reconcileCallEnds", () => {
   it("fails an end that does not name its call", () => {
     /* Every end this harness asks for names its call, so an anonymous one came
      * from somewhere this accounting cannot vouch for. */
-    const ends = [{ atMs: 40_400, callId: null, reason: "button" }];
+    const ends = [{ atMs: 40_400, conversationId: null, reason: "button" }];
     expect(reconcileCallEnds(ends, asked)).toHaveLength(1);
   });
 
@@ -86,8 +86,8 @@ describe("reconcileCallEnds", () => {
      * threw grants nothing either.
      */
     const ends = [
-      { atMs: 40_400, callId: "call-a", reason: "button" },
-      { atMs: 41_500, callId: "call-a", reason: "worker bridge: call-ended event" },
+      { atMs: 40_400, conversationId: "call-a", reason: "button" },
+      { atMs: 41_500, conversationId: "call-a", reason: "worker bridge: conversation-ended event" },
     ];
     expect(reconcileCallEnds(ends, [])).toHaveLength(2);
   });
@@ -95,7 +95,7 @@ describe("reconcileCallEnds", () => {
   it("does not let a report predate the hang-up that would explain it", () => {
     /* Causality as a bound: an end observed before the request went out was
      * caused by something else, whatever call it names. */
-    const ends = [{ atMs: 39_000, callId: "call-a", reason: "button" }];
+    const ends = [{ atMs: 39_000, conversationId: "call-a", reason: "button" }];
     expect(reconcileCallEnds(ends, asked)).toHaveLength(1);
   });
 });
@@ -103,20 +103,20 @@ describe("reconcileCallEnds", () => {
 describe("callStartProblems", () => {
   it("passes one call accepted once", () => {
     /* What a warm bridge produces: the request is served, nothing races it. */
-    expect(callStartProblems([{ atMs: 8_000, callId: "wsdev" }], [])).toEqual([]);
+    expect(callStartProblems([{ atMs: 8_000, conversationId: "wsdev" }], [])).toEqual([]);
   });
 
   it("fails the double-start a cold bridge caused", () => {
     /*
-     * MEASURED, on deployed preview_3: call-requested at 01:14:20.573 got no
+     * MEASURED, on deployed preview_3: conversation-requested at 01:14:20.573 got no
      * bridge, the device re-asked at 01:14:28.573, both bridges entered at
      * ~01:14:29.1, and the older one appended "superseded by a newer bridge".
      * The session passed everything except the 15s time-to-live, so on a
      * quicker day this defect would have gone unrecorded.
      */
     const problems = callStartProblems(
-      [{ atMs: 9_800, callId: "wsdev" }],
-      [{ atMs: 9_838, callId: "wsdev", reason: "superseded by a newer bridge" }],
+      [{ atMs: 9_800, conversationId: "wsdev" }],
+      [{ atMs: 9_838, conversationId: "wsdev", reason: "superseded by a newer bridge" }],
     );
     expect(problems).toHaveLength(1);
     expect(problems[0]).toContain("superseded by a newer bridge");
@@ -126,8 +126,8 @@ describe("callStartProblems", () => {
     /* Two bridges that both believe they own the call. */
     const problems = callStartProblems(
       [
-        { atMs: 9_000, callId: "wsdev" },
-        { atMs: 9_900, callId: "wsdev" },
+        { atMs: 9_000, conversationId: "wsdev" },
+        { atMs: 9_900, conversationId: "wsdev" },
       ],
       [],
     );
@@ -139,7 +139,11 @@ describe("callStartProblems", () => {
 describe("callStartProblems: one request per call", () => {
   it("passes one request answered once", () => {
     expect(
-      callStartProblems([{ atMs: 8_000, callId: "wsdev" }], [], [{ atMs: 5_000, callId: "wsdev" }]),
+      callStartProblems(
+        [{ atMs: 8_000, conversationId: "wsdev" }],
+        [],
+        [{ atMs: 5_000, conversationId: "wsdev" }],
+      ),
     ).toEqual([]);
   });
 
@@ -151,11 +155,11 @@ describe("callStartProblems: one request per call", () => {
      * worker built. Recovering from it is not the same as not needing to.
      */
     const problems = callStartProblems(
-      [{ atMs: 9_800, callId: "wsdev" }],
+      [{ atMs: 9_800, conversationId: "wsdev" }],
       [],
       [
-        { atMs: 1_573, callId: "wsdev" },
-        { atMs: 9_573, callId: "wsdev" },
+        { atMs: 1_573, conversationId: "wsdev" },
+        { atMs: 9_573, conversationId: "wsdev" },
       ],
     );
     expect(problems).toHaveLength(1);

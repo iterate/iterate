@@ -3,7 +3,8 @@
 //   stream mic-frame (ephemeral)  -> grok binary audio
 //   grok audio                    -> stream spk-frame (ephemeral)
 //   grok control events (subset)  -> stream grok-event (ephemeral)
-// A voicelab/call-requested durable event starts a Grok session; call-ended (or the
+// An events.iterate.com/voice-agent/conversation-requested durable event starts a
+// Grok session; conversation-ended (or the
 // Grok socket closing) ends it. The same protocol is what a userspace worker.ts
 // bridge implements — this node variant exists to isolate stream-transport latency
 // from Cloudflare-side execution.
@@ -56,7 +57,7 @@ export async function bridge(options: BridgeOptions) {
   using stream = itx.streams.get(options.path);
 
   let grok: GrokClient | null = null;
-  let callId: string | null = null;
+  let conversationId: string | null = null;
   let spkSeq = 0;
   let micFrames = 0;
   /** Frames whose payload had no usable audio; dropped, and said so. */
@@ -98,26 +99,32 @@ export async function bridge(options: BridgeOptions) {
   };
 
   const endCall = (reason: string) => {
-    if (callId === null) return;
-    const endedCallId = callId;
-    callId = null;
+    if (conversationId === null) return;
+    const endedConversationId = conversationId;
+    conversationId = null;
     grok?.close();
     grok = null;
-    fireAppend({ type: "voice-agent/call-ended", payload: { callId: endedCallId, reason } });
-    console.error(`bridge: call ${endedCallId} ended (${reason})`);
+    fireAppend({
+      type: "events.iterate.com/voice-agent/conversation-ended",
+      payload: { conversationId: endedConversationId, reason },
+    });
+    console.error(`bridge: call ${endedConversationId} ended (${reason})`);
     printSummary();
     if (options.once) done?.();
   };
 
   const startCall = (payload: Record<string, unknown>) => {
     if (grok) {
-      console.error("bridge: ignoring call-requested while a call is active");
+      console.error("bridge: ignoring conversation-requested while a call is active");
       return;
     }
     // Checked, not asserted: the payload crossed a stream, so a non-string
-    // callId is a thing that can actually arrive, and `??` would have let it
+    // conversationId is a thing that can actually arrive, and `??` would have let it
     // through to be used as an identity.
-    callId = typeof payload.callId === "string" ? payload.callId : crypto.randomUUID().slice(0, 8);
+    conversationId =
+      typeof payload.conversationId === "string"
+        ? payload.conversationId
+        : crypto.randomUUID().slice(0, 8);
     spkSeq = 0;
     const client = new GrokClient({
       apiKey,
@@ -132,10 +139,10 @@ export async function bridge(options: BridgeOptions) {
     client.connect();
     client.on("ready", () => {
       fireAppend({
-        type: "voice-agent/call-accepted",
-        payload: { callId, bridge: "node", model: client.options.model },
+        type: "events.iterate.com/voice-agent/conversation-accepted",
+        payload: { conversationId, bridge: "node", model: client.options.model },
       });
-      console.error(`bridge: call ${callId} accepted (model=${client.options.model})`);
+      console.error(`bridge: call ${conversationId} accepted (model=${client.options.model})`);
       if (options.greet) {
         client.send({
           type: "conversation.item.create",
@@ -159,10 +166,10 @@ export async function bridge(options: BridgeOptions) {
       for (let offset = 0; offset < pcm.length; offset += 640) {
         spkFrames++;
         events.push({
-          type: "voice-agent/spk-frame",
+          type: "events.iterate.com/voice-agent/spk-frame",
           ephemeral: true as const,
           payload: {
-            callId,
+            conversationId,
             seq: spkSeq++,
             t: Date.now(),
             tGrok,
@@ -184,9 +191,9 @@ export async function bridge(options: BridgeOptions) {
         paceQueue.length = 0; // barge-in: never drip stale response audio
       }
       fireAppend({
-        type: "voice-agent/grok-event",
+        type: "events.iterate.com/voice-agent/grok-event",
         ephemeral: true,
-        payload: { callId, t: Date.now(), event },
+        payload: { conversationId, t: Date.now(), event },
       });
     });
     client.on("error", (error: Error) => console.error(`bridge: grok error: ${error.message}`));
@@ -196,15 +203,15 @@ export async function bridge(options: BridgeOptions) {
   const connection = await openResilientConnection(stream, {
     connectionKey: `voicelab-bridge-${crypto.randomUUID().slice(0, 8)}`,
     eventTypes: [
-      "voice-agent/mic-frame",
-      "voice-agent/call-requested",
-      "voice-agent/call-ended",
-      "voice-agent/ping",
+      "events.iterate.com/voice-agent/mic-frame",
+      "events.iterate.com/voice-agent/conversation-requested",
+      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/ping",
     ],
     quietMs: 4000,
     // Pings flow every 2s during a call; when idle, silence is expected and
     // reopen churn would only pollute the stream with connection facts.
-    trafficExpected: () => callId !== null,
+    trafficExpected: () => conversationId !== null,
     onEvents: (events) => {
       let micInBatch = 0;
       for (const event of events) {
@@ -220,7 +227,7 @@ export async function bridge(options: BridgeOptions) {
             ? (event.payload as Record<string, unknown>)
             : {};
         switch (event.type) {
-          case "voice-agent/mic-frame": {
+          case "events.iterate.com/voice-agent/mic-frame": {
             if (typeof payload.pcm !== "string") {
               micMalformed++;
               break;
@@ -231,15 +238,15 @@ export async function bridge(options: BridgeOptions) {
             grok?.sendAudio(Buffer.from(payload.pcm, "base64"));
             break;
           }
-          case "voice-agent/call-requested":
+          case "events.iterate.com/voice-agent/conversation-requested":
             startCall(payload);
             break;
-          case "voice-agent/call-ended":
-            if (payload.callId === callId) endCall("client requested end");
+          case "events.iterate.com/voice-agent/conversation-ended":
+            if (payload.conversationId === conversationId) endCall("client requested end");
             break;
-          case "voice-agent/ping":
+          case "events.iterate.com/voice-agent/ping":
             fireAppend({
-              type: "voice-agent/pong",
+              type: "events.iterate.com/voice-agent/pong",
               ephemeral: true,
               payload: { id: payload.id, t0: payload.t0, t1: Date.now() },
             });
@@ -272,7 +279,7 @@ export async function bridge(options: BridgeOptions) {
   };
 
   console.error(
-    `bridge: listening on ${options.path} (connection open, waiting for call-requested)`,
+    `bridge: listening on ${options.path} (connection open, waiting for conversation-requested)`,
   );
   process.once("SIGINT", () => {
     endCall("bridge interrupted");

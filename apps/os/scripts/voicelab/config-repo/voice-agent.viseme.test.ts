@@ -1,7 +1,7 @@
 // The mouth's contract with the wire.
 //
-// The device drops any `voice-agent/viseme` event whose payload is not
-// `{ callId, answer, playoutSamples, viseme, confidence }` with numbers in
+// The device drops any `events.iterate.com/voice-agent/viseme` event whose payload is not
+// `{ conversationId, answer, playoutSamples, viseme, confidence }` with numbers in
 // range — silently, by design. So the seam that shapes those events is tested
 // with literal expectations: the exact objects that ride the outbound lane,
 // not properties of them. The PCM fixture and its anchors (VAD opens at
@@ -65,19 +65,25 @@ describe("createVisemeEmitter", () => {
   // Cuts land mid-burst (speech spans samples 8000-17599) on 20 ms frame
   // boundaries, so the closing SIL's offset is exactly the samples consumed.
   test.for([
-    { answer: 0, callId: "call-a", cutSamples: 12160 },
-    { answer: 7, callId: "call-b", cutSamples: 9600 },
+    { answer: 0, conversationId: "call-a", cutSamples: 12160 },
+    { answer: 7, conversationId: "call-b", cutSamples: 9600 },
   ])(
     "ending answer $answer mid-speech appends exactly one SIL at the cut",
-    ({ answer, callId, cutSamples }) => {
-      const emitter = createVisemeEmitter(callId);
+    ({ answer, conversationId, cutSamples }) => {
+      const emitter = createVisemeEmitter(conversationId);
       const events = pushFrames(emitter, buildBurstPcm().subarray(0, cutSamples), answer);
       expect(events.length).toBeGreaterThanOrEqual(1);
       expect(emitter.end(answer)).toEqual([
         {
-          type: "voice-agent/viseme",
+          type: "events.iterate.com/voice-agent/viseme",
           ephemeral: true,
-          payload: { callId, answer, playoutSamples: cutSamples, viseme: 14, confidence: 0 },
+          payload: {
+            conversationId,
+            answer,
+            playoutSamples: cutSamples,
+            viseme: 14,
+            confidence: 0,
+          },
         },
       ]);
       // Ended twice stays closed, and audio arriving after the end is dropped
@@ -99,10 +105,10 @@ describe("createVisemeEmitter", () => {
     }
     expect(shaped).toEqual(
       bare.map((event) => ({
-        type: "voice-agent/viseme",
+        type: "events.iterate.com/voice-agent/viseme",
         ephemeral: true,
         payload: {
-          callId: "call-parity",
+          conversationId: "call-parity",
           answer: 3,
           playoutSamples: event.playoutSamples,
           viseme: event.viseme,

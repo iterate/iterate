@@ -2,8 +2,8 @@
 // C firmware (phase 5 of consolidation-plan.md).
 //
 // Same single Cap'n Web /api socket, same events: 50 Hz ephemeral
-// voice-agent/mic-frame appends (mu-law + base64, decision D4), a resilient
-// openConnection delivering voice-agent/spk-frame (mu-law decoded, classified
+// events.iterate.com/voice-agent/mic-frame appends (mu-law + base64, decision D4), a resilient
+// openConnection delivering events.iterate.com/voice-agent/spk-frame (mu-law decoded, classified
 // by (call, answer, frame) identity exactly as the firmware's playout module
 // does) plus grok-events, turn markers around push-to-talk, and one
 // itx.workers startCall against the project's own voice agent. Authenticates
@@ -115,7 +115,7 @@ export async function voiceCli(options: VoiceCliOptions) {
     options.path ?? `/agents/voice/${new Date().toISOString().replace(/[:.]/g, "").slice(0, 15)}`;
   const framesPerAppend = options.framesPerAppend ?? 4;
   const turnsTarget = options.turns ?? (options.mic ? 0 : 1);
-  const callId = crypto.randomUUID().slice(0, 8);
+  const conversationId = crypto.randomUUID().slice(0, 8);
 
   let syntheticPcmPath = options.pcm;
   if (!options.mic && !syntheticPcmPath) {
@@ -212,19 +212,19 @@ export async function voiceCli(options: VoiceCliOptions) {
   };
 
   using connection = await openResilientConnection(stream, {
-    connectionKey: `kit-voice-${callId}`,
+    connectionKey: `kit-voice-${conversationId}`,
     eventTypes: [
-      "voice-agent/spk-frame",
-      "voice-agent/grok-event",
-      "voice-agent/pong",
-      "voice-agent/call-accepted",
+      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/grok-event",
+      "events.iterate.com/voice-agent/pong",
+      "events.iterate.com/voice-agent/conversation-accepted",
     ],
     quietMs: 4000,
     trafficExpected: () => accepted,
     onEvents: (events) => {
       for (const event of events) {
         switch (event.type) {
-          case "voice-agent/call-accepted": {
+          case "events.iterate.com/voice-agent/conversation-accepted": {
             const payload = CallAcceptedPayload.safeParse(event.payload);
             if (!payload.success) {
               invalidEvents++;
@@ -234,7 +234,7 @@ export async function voiceCli(options: VoiceCliOptions) {
             console.error(`voice: call accepted by ${payload.data.bridge} bridge`);
             break;
           }
-          case "voice-agent/spk-frame": {
+          case "events.iterate.com/voice-agent/spk-frame": {
             const payload = SpeakerFramePayload.safeParse(event.payload);
             if (!payload.success) {
               invalidEvents++;
@@ -259,7 +259,7 @@ export async function voiceCli(options: VoiceCliOptions) {
             playout.write(pcm);
             break;
           }
-          case "voice-agent/grok-event": {
+          case "events.iterate.com/voice-agent/grok-event": {
             const payload = GrokEventPayload.safeParse(event.payload);
             if (!payload.success) {
               invalidEvents++;
@@ -288,13 +288,13 @@ export async function voiceCli(options: VoiceCliOptions) {
   ) as unknown as DynamicWorkerCapability<VoiceAgentWorker>;
   await discardRpcResult(
     stream.append({
-      type: "voice-agent/call-requested",
-      payload: { callId, effort: "none", bridge: "worker-detached" },
+      type: "events.iterate.com/voice-agent/conversation-requested",
+      payload: { conversationId, effort: "none", bridge: "worker-detached" },
     }),
   );
   const started = await withRpcResult(
     worker.startCall({
-      callId,
+      conversationId,
       effort: "none",
       path: streamPath,
       ...(options.greet ? { greet: options.greet } : {}),
@@ -309,7 +309,7 @@ export async function voiceCli(options: VoiceCliOptions) {
   const acceptDeadline = Date.now() + 20_000;
   while (!accepted) {
     if (Date.now() > acceptDeadline) {
-      throw new Error("No call-accepted within 20s — is the voice agent installed?");
+      throw new Error("No conversation-accepted within 20s — is the voice agent installed?");
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -320,11 +320,11 @@ export async function voiceCli(options: VoiceCliOptions) {
    * interactive mode maps the spacebar to the talk button.
    */
   const markTurn = (action: "start" | "commit") => {
-    /* The exact firmware payload shape: {callId, action, t}. */
+    /* The exact firmware payload shape: {conversationId, action, t}. */
     fireAppend({
-      type: "voice-agent/turn",
+      type: "events.iterate.com/voice-agent/turn",
       ephemeral: true,
-      payload: { callId, action, t: Date.now() },
+      payload: { conversationId, action, t: Date.now() },
     });
   };
   let micSeq = 0;
@@ -339,9 +339,9 @@ export async function voiceCli(options: VoiceCliOptions) {
     });
     if (pending.length >= framesPerAppend) {
       const events = pending.map((payload) => ({
-        type: "voice-agent/mic-frame",
+        type: "events.iterate.com/voice-agent/mic-frame",
         ephemeral: true as const,
-        payload: { callId, ...payload },
+        payload: { conversationId, ...payload },
       }));
       pending = [];
       micFramesSent += events.length;
@@ -358,7 +358,7 @@ export async function voiceCli(options: VoiceCliOptions) {
    */
   const pingTimer = setInterval(() => {
     fireAppend({
-      type: "voice-agent/ping",
+      type: "events.iterate.com/voice-agent/ping",
       ephemeral: true,
       payload: { id: crypto.randomUUID().slice(0, 8), t0: Date.now() },
     });
@@ -377,9 +377,9 @@ export async function voiceCli(options: VoiceCliOptions) {
     if (!talking) return;
     if (pending.length > 0) {
       const events = pending.map((payload) => ({
-        type: "voice-agent/mic-frame",
+        type: "events.iterate.com/voice-agent/mic-frame",
         ephemeral: true as const,
-        payload: { callId, ...payload },
+        payload: { conversationId, ...payload },
       }));
       pending = [];
       micFramesSent += events.length;
@@ -420,14 +420,17 @@ export async function voiceCli(options: VoiceCliOptions) {
   if (talking) stopTalking();
   mic.stop();
   playout.stop();
-  fireAppend({ type: "voice-agent/call-ended", payload: { callId, reason: "client done" } });
+  fireAppend({
+    type: "events.iterate.com/voice-agent/conversation-ended",
+    payload: { conversationId, reason: "client done" },
+  });
   await appendResults.drain();
   connection.close();
 
   const summary = {
     role: "kit-voice-cli",
     path: streamPath,
-    callId,
+    conversationId,
     auth: auth.type,
     micFramesSent,
     spkFrames,

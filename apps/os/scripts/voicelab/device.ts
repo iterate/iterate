@@ -151,10 +151,10 @@ export async function device(options: DeviceOptions) {
           pcm.writeInt16LE(Math.round(Math.sin(phase) * 16_384), sample * 2);
         }
         events.push({
-          type: "voice-agent/spk-frame" as const,
+          type: "events.iterate.com/voice-agent/spk-frame" as const,
           ephemeral: true as const,
           payload: {
-            callId: "tone",
+            conversationId: "tone",
             pcm: pcm.toString("base64"),
             seq: sequence++,
             t: Date.now(),
@@ -283,7 +283,7 @@ export async function device(options: DeviceOptions) {
       let spokenText = "";
       const connection = await stream.openConnection({
         connectionKey: `journey-${Date.now()}`,
-        eventTypes: ["voice-agent/grok-event"],
+        eventTypes: ["events.iterate.com/voice-agent/grok-event"],
         processEventBatch: (batch: { events: { payload?: unknown }[] }) => {
           for (const event of batch.events) {
             const inner = (event.payload as { event?: { type?: string; delta?: string } })?.event;

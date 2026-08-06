@@ -16,7 +16,7 @@
 //
 // So setup states the answer: it appends the brief under its own setup identity,
 // then a marker naming it, and the processor folds that marker from the same
-// filtered delivery a call-requested arrives on. The test below is the shape
+// filtered delivery a conversation-requested arrives on. The test below is the shape
 // that killed designs 1 and 2 — tens of thousands of audio events between
 // markers — and the fold does not care how many there are.
 import { describe, expect, it } from "vitest";
@@ -29,13 +29,16 @@ function history(markers: { setupId: string; briefKey: string }[], audioBetween:
   for (const marker of markers) {
     for (let frame = 0; frame < audioBetween; frame++) {
       /* The bulk: both directions of audio, plus the stats that ride along. */
-      events.push({ type: "voice-agent/spk-frame", payload: { seq: frame } });
-      events.push({ type: "voice-agent/mic-frame", payload: { seq: frame } });
+      events.push({ type: "events.iterate.com/voice-agent/spk-frame", payload: { seq: frame } });
+      events.push({ type: "events.iterate.com/voice-agent/mic-frame", payload: { seq: frame } });
       if (frame % 50 === 0)
-        events.push({ type: "voice-agent/dev-stats", payload: { spkPlayed: frame } });
+        events.push({
+          type: "events.iterate.com/voice-agent/dev-stats",
+          payload: { spkPlayed: frame },
+        });
     }
     events.push({
-      type: "voice-agent/brief-current",
+      type: "events.iterate.com/voice-agent/brief-current",
       payload: { ...marker, contentHash: `hash-of-${marker.setupId}` },
     });
   }
@@ -99,25 +102,32 @@ describe("briefMarkerFromEvent", () => {
     /* Which is what setup's bounded failure reports, rather than acknowledging
      * a brief nobody named. */
     expect(fold(history([], 100))).toBeNull();
-    expect(fold([{ type: "voice-agent/spk-frame", payload: { seq: 1 } }])).toBeNull();
+    expect(
+      fold([{ type: "events.iterate.com/voice-agent/spk-frame", payload: { seq: 1 } }]),
+    ).toBeNull();
   });
 
   it("refuses a marker missing either half of its identity", () => {
     /* Both halves are required: the key alone could belong to an identical brief
      * from another setup, and the setupId alone names no context event. */
-    expect(briefMarkerFromEvent({ type: "voice-agent/brief-current", payload: {} })).toBeNull();
     expect(
-      briefMarkerFromEvent({ type: "voice-agent/brief-current", payload: { setupId: "s1" } }),
+      briefMarkerFromEvent({ type: "events.iterate.com/voice-agent/brief-current", payload: {} }),
     ).toBeNull();
     expect(
       briefMarkerFromEvent({
-        type: "voice-agent/brief-current",
+        type: "events.iterate.com/voice-agent/brief-current",
+        payload: { setupId: "s1" },
+      }),
+    ).toBeNull();
+    expect(
+      briefMarkerFromEvent({
+        type: "events.iterate.com/voice-agent/brief-current",
         payload: { briefKey: "k", contentHash: "h" },
       }),
     ).toBeNull();
     expect(
       briefMarkerFromEvent({
-        type: "voice-agent/brief-current",
+        type: "events.iterate.com/voice-agent/brief-current",
         payload: { setupId: "", briefKey: "k", contentHash: "h" },
       }),
     ).toBeNull();

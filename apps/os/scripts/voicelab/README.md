@@ -22,16 +22,19 @@ repo (the real deployment shape).
 
 ## Event protocol (one stream per call)
 
-| Event                             | Durability | Payload                                                           |
-| --------------------------------- | ---------- | ----------------------------------------------------------------- |
-| `voicelab/call-requested`         | durable    | `{ callId, model?, voice?, effort }` — client opens a call        |
-| `voicelab/call-accepted`          | durable    | `{ callId, bridge, model }` — bridge's Grok session is ready      |
-| `voicelab/call-ended`             | durable    | `{ callId, reason }`                                              |
-| `voicelab/mic-frame`              | ephemeral  | `{ callId, seq, t, pcm }` — 20ms base64 PCM16 @16kHz              |
-| `voicelab/spk-frame`              | ephemeral  | `{ callId, seq, t, tGrok, pcm }`                                  |
-| `voicelab/grok-event`             | ephemeral  | `{ callId, t, event }` — VAD/transcript/response lifecycle subset |
-| `voicelab/ping` / `voicelab/pong` | ephemeral  | RTT + clock-offset probe                                          |
-| `voicelab/bench-frame`            | ephemeral  | transport bench traffic                                           |
+Every type below is prefixed `events.iterate.com/voice-agent/`, elided here
+for width.
+
+| Event                    | Durability | Payload                                                                    |
+| ------------------------ | ---------- | -------------------------------------------------------------------------- |
+| `conversation-requested` | durable    | `{ conversationId, model?, voice?, effort }` — client opens a conversation |
+| `conversation-accepted`  | durable    | `{ conversationId, bridge, model }` — bridge's Grok session is ready       |
+| `conversation-ended`     | durable    | `{ conversationId, reason }`                                               |
+| `mic-frame`              | ephemeral  | `{ conversationId, seq, t, pcm }` — 20ms base64 PCM16 @16kHz               |
+| `spk-frame`              | ephemeral  | `{ conversationId, seq, t, tGrok, pcm }`                                   |
+| `grok-event`             | ephemeral  | `{ conversationId, t, event }` — VAD/transcript/response lifecycle subset  |
+| `ping` / `pong`          | ephemeral  | RTT + clock-offset probe                                                   |
+| `bench-frame`            | ephemeral  | transport bench traffic                                                    |
 
 Ephemeral frames are only visible to live `openConnection()` callbacks — never
 to durable subscriptions or hosted processors — which is exactly the delivery
@@ -71,7 +74,8 @@ and `direct` share a summary shape so overhead subtracts cleanly.
 ## Endurance, against a real device
 
 Both drive one call on one stream and never restart it, take turns as text so
-nobody has to be in the room, and read the device's own `voicelab/dev-stats`
+nobody has to be in the room, and read the device's own
+`events.iterate.com/voice-agent/dev-stats`
 (every 5s) rather than trusting a snapshot.
 
 ```bash

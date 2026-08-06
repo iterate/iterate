@@ -364,14 +364,14 @@ function assertPolicyCoversEveryKnownCounter(): void {
 /** One end of one call, as the stream reported it. */
 export interface ObservedCallEnd {
   atMs: number;
-  callId: string | null;
+  conversationId: string | null;
   reason: string;
 }
 
 /** One acceptance or one refusal of a call start, as the stream reported it. */
 export interface ObservedCallStart {
   atMs: number;
-  callId: string | null;
+  conversationId: string | null;
   /** Absent on an acceptance; the refusal's reason otherwise. */
   reason?: string;
 }
@@ -381,10 +381,10 @@ export interface ObservedCallStart {
  *
  * A session asks for ONE call and must get exactly one, started once. Anything
  * else means two bridges raced for it, and the loser says so on the stream:
- * `call-failed: superseded by a newer bridge`.
+ * `conversation-failed: superseded by a newer bridge`.
  *
  * This exists because a session passed with that exact event in it. The first
- * `call-requested` after a remount went unanswered for eight seconds while the
+ * `conversation-requested` after a remount went unanswered for eight seconds while the
  * bridge worker built, the device re-asked — correctly, a request can be lost —
  * and both bridges then entered within a second of each other. The only symptom
  * the harness noticed was the 16.2s time to go live; the double-start itself was
@@ -400,7 +400,10 @@ export function callStartProblems(
     problems.push(
       `starting one call took ${requested.length} requests, so the first one was not answered: ` +
         requested
-          .map((one) => `${(one.atMs / 1000).toFixed(0)}s[${one.callId ?? "no callId"}]`)
+          .map(
+            (one) =>
+              `${(one.atMs / 1000).toFixed(0)}s[${one.conversationId ?? "no conversationId"}]`,
+          )
           .join(", "),
     );
   }
@@ -409,7 +412,10 @@ export function callStartProblems(
       `the call was accepted ${accepted.length} times, so more than one bridge served one ` +
         `request: ` +
         accepted
-          .map((one) => `${(one.atMs / 1000).toFixed(0)}s[${one.callId ?? "no callId"}]`)
+          .map(
+            (one) =>
+              `${(one.atMs / 1000).toFixed(0)}s[${one.conversationId ?? "no conversationId"}]`,
+          )
           .join(", "),
     );
   }
@@ -417,7 +423,7 @@ export function callStartProblems(
     problems.push(
       `starting the call failed once before it worked: ` +
         `${failure.reason ?? "unknown"}@${(failure.atMs / 1000).toFixed(0)}s` +
-        `[${failure.callId ?? "no callId"}]`,
+        `[${failure.conversationId ?? "no conversationId"}]`,
     );
   }
   return problems;
@@ -425,7 +431,7 @@ export function callStartProblems(
 
 /** A hang-up this harness issued and the device accepted: which call, and when. */
 export interface AskedCallEnd {
-  callId: string;
+  conversationId: string;
   /** Session time the request went out. Nothing it caused can predate it. */
   issuedAtMs: number;
 }
@@ -433,9 +439,9 @@ export interface AskedCallEnd {
 /**
  * How long after a hang-up the two expected reports of it may still arrive.
  *
- * ONE transition is reported TWICE by design: the device appends call-ended with
+ * ONE transition is reported TWICE by design: the device appends conversation-ended with
  * its own reason, and the worker bridge — watching the same stream, gated on the
- * callId — appends its own when it tears down. Measured on this hardware, the
+ * conversationId — appends its own when it tears down. Measured on this hardware, the
  * bridge's echo lands about a second behind the device's.
  *
  * Ten seconds, so a busy bridge still reconciles while a call that dies a turn
@@ -478,13 +484,13 @@ export function reconcileCallEnds(
   const heard = new Map<string, Set<"bridge" | "device">>();
   const problems: UnreconciledCallEnd[] = [];
   for (const end of ends) {
-    if (end.callId === null) {
+    if (end.conversationId === null) {
       /* Every end this harness asks for names its call, so an anonymous one
        * came from somewhere this accounting cannot vouch for. */
       problems.push({ end, why: "the end did not name a call" });
       continue;
     }
-    const forThisCall = asked.filter((ask) => ask.callId === end.callId);
+    const forThisCall = asked.filter((ask) => ask.conversationId === end.conversationId);
     const ask = forThisCall.find(
       (candidate) =>
         end.atMs >= candidate.issuedAtMs &&
@@ -501,7 +507,7 @@ export function reconcileCallEnds(
       });
       continue;
     }
-    const key = `${ask.callId}@${String(ask.issuedAtMs)}`;
+    const key = `${ask.conversationId}@${String(ask.issuedAtMs)}`;
     const already = heard.get(key) ?? new Set<"bridge" | "device">();
     const source = callEndSource(end.reason);
     if (already.has(source)) {
@@ -1347,20 +1353,20 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
     /*
      * ONE TRANSITION CAN BE REPORTED TWICE.
      *
-     * The device ends a call and appends voicelab/call-ended with its own
+     * The device ends a call and appends events.iterate.com/voice-agent/conversation-ended with its own
      * reason ("button"). The worker bridge is watching that same stream and
-     * tears down when it sees the event — gated on `payload.callId === callId`
-     * (voice-agent.ts) — and reports "worker bridge: call-ended event" a second
+     * tears down when it sees the event — gated on `payload.conversationId === conversationId`
+     * (voice-agent.ts) — and reports "worker bridge: conversation-ended event" a second
      * later. Both describe the SAME end of the SAME call, so counting events
      * made every hang-up case fail with `ended 2 time(s)`.
      *
-     * The callId is therefore recorded and the accounting is done on DISTINCT
-     * calls. Two ends carrying two different callIds is still a real
+     * The conversationId is therefore recorded and the accounting is done on DISTINCT
+     * calls. Two ends carrying two different conversationIds is still a real
      * double-end, and still fails.
      */
     const callEnds: ObservedCallEnd[] = [];
     /* Before this, the harness has deliberately hung up whatever call it found,
-     * and the device duly reports call-ended for it. Counting that would put
+     * and the device duly reports conversation-ended for it. Counting that would put
      * "the call ended" in the report of every healthy session. */
     let sessionLive = false;
     /*
@@ -1395,7 +1401,7 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
      */
     const callRequests: ObservedCallStart[] = [];
     /** Which call the stream currently says is up. Null when nothing is. */
-    let liveCallId: string | null = null;
+    let liveConversationId: string | null = null;
     /**
      * Hang up, and record the ask — against the call it was aimed at, and only
      * once the device has accepted the request.
@@ -1406,10 +1412,10 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
      * asked for nothing and must not excuse a call that died on its own.
      */
     const hangUpAsked = async () => {
-      const target = callLiveAt !== 0 ? liveCallId : null;
+      const target = callLiveAt !== 0 ? liveConversationId : null;
       const issuedAtMs = elapsed();
       await device().conversation.hangUp();
-      if (target !== null) endsAskedFor.push({ callId: target, issuedAtMs });
+      if (target !== null) endsAskedFor.push({ conversationId: target, issuedAtMs });
     };
 
     /*
@@ -1422,15 +1428,15 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
      */
     const watch = await watchStream({
       eventTypes: [
-        "voice-agent/dev-stats",
-        "voice-agent/grok-event",
-        "voice-agent/call-accepted",
-        "voice-agent/call-ended",
+        "events.iterate.com/voice-agent/dev-stats",
+        "events.iterate.com/voice-agent/grok-event",
+        "events.iterate.com/voice-agent/conversation-accepted",
+        "events.iterate.com/voice-agent/conversation-ended",
         /* A losing bridge announces itself here and nowhere else. */
-        "voice-agent/call-failed",
+        "events.iterate.com/voice-agent/conversation-failed",
         /* The device's own re-asks, which is how a lost request shows up. */
-        "voice-agent/call-requested",
-        "voice-agent/bridge-redialling",
+        "events.iterate.com/voice-agent/conversation-requested",
+        "events.iterate.com/voice-agent/bridge-redialling",
       ],
       key: `sessions-${input.runStartedAt}-s${input.index}`,
       onNote: (what) => step(what),
@@ -1438,37 +1444,40 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
       onBatch: (batch) => {
         for (const event of batch.events) {
           const payload = (event.payload ?? {}) as Record<string, unknown>;
-          if (event.type === "voice-agent/dev-stats") {
+          if (event.type === "events.iterate.com/voice-agent/dev-stats") {
             const sample: StatsSample = { ...(payload as DeviceStats), atMs: elapsed() };
             samples.push(sample);
             input.samples.push({ ...sample, session: input.index });
             continue;
           }
-          if (event.type === "voice-agent/call-accepted") {
+          if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
             callLiveAt = Date.now();
             if (sessionLive || callAccepts.length === 0) {
               callAccepts.push({
                 atMs: elapsed(),
-                callId: typeof payload.callId === "string" ? payload.callId : null,
+                conversationId:
+                  typeof payload.conversationId === "string" ? payload.conversationId : null,
               });
             }
             /* Which call, so a hang-up can be correlated to the thing it ended. */
-            liveCallId = typeof payload.callId === "string" ? payload.callId : null;
+            liveConversationId =
+              typeof payload.conversationId === "string" ? payload.conversationId : null;
             continue;
           }
-          if (event.type === "voice-agent/call-ended") {
+          if (event.type === "events.iterate.com/voice-agent/conversation-ended") {
             callLiveAt = 0;
-            liveCallId = null;
+            liveConversationId = null;
             if (sessionLive) {
               callEnds.push({
                 atMs: elapsed(),
-                callId: typeof payload.callId === "string" ? payload.callId : null,
+                conversationId:
+                  typeof payload.conversationId === "string" ? payload.conversationId : null,
                 reason: String(payload.reason ?? "unknown"),
               });
             }
             continue;
           }
-          if (event.type === "voice-agent/call-requested") {
+          if (event.type === "events.iterate.com/voice-agent/conversation-requested") {
             /*
              * ONLY THE BRING-UP WINDOW.
              *
@@ -1481,20 +1490,22 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
             if (!sessionLive) {
               callRequests.push({
                 atMs: elapsed(),
-                callId: typeof payload.callId === "string" ? payload.callId : null,
+                conversationId:
+                  typeof payload.conversationId === "string" ? payload.conversationId : null,
               });
             }
             continue;
           }
-          if (event.type === "voice-agent/call-failed") {
+          if (event.type === "events.iterate.com/voice-agent/conversation-failed") {
             callFailures.push({
               atMs: elapsed(),
-              callId: typeof payload.callId === "string" ? payload.callId : null,
+              conversationId:
+                typeof payload.conversationId === "string" ? payload.conversationId : null,
               reason: String(payload.reason ?? "unknown"),
             });
             continue;
           }
-          if (event.type === "voice-agent/bridge-redialling") {
+          if (event.type === "events.iterate.com/voice-agent/bridge-redialling") {
             redials++;
             continue;
           }
@@ -1540,7 +1551,7 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
       let firstAt = 0;
       const handle = await stream.openConnection({
         connectionKey: `sessions-audio-${input.runStartedAt}-${label}`,
-        eventTypes: ["voice-agent/spk-frame"],
+        eventTypes: ["events.iterate.com/voice-agent/spk-frame"],
         maxDeliveryBytes: 1400,
         maxDeliveryEvents: 1,
         processEventBatch: (batch) => {
@@ -1692,7 +1703,7 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
           ok = callEnds.length === endsBefore && health.callActive === true;
           detail =
             `callActive=${String(health.callActive)} sessionGeneration=` +
-            `${String(health.sessionGeneration)} call-ended events=${callEnds.length - endsBefore}`;
+            `${String(health.sessionGeneration)} conversation-ended events=${callEnds.length - endsBefore}`;
         } catch (error) {
           detail = String(error).slice(0, 160);
         }
@@ -1871,7 +1882,7 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
      * the point of the case that asked, and is required rather than tolerated. */
     /* Distinct CALLS ended, not events observed — see the note on callEnds. */
     const callsEnded = new Set(
-      callEnds.map((end, index) => end.callId ?? `unidentified-${String(index)}`),
+      callEnds.map((end, index) => end.conversationId ?? `unidentified-${String(index)}`),
     );
     for (const problem of callStartProblems(callAccepts, callFailures, callRequests)) fail(problem);
     const unreconciled = reconcileCallEnds(callEnds, endsAskedFor);
@@ -1879,12 +1890,12 @@ async function runSession(input: RunSessionInput): Promise<SessionReport> {
       fail(
         `${unreconciled.length} call end(s) nothing accounts for, of ${callsEnded.size} distinct ` +
           `call(s) ended. Hang-ups asked: ` +
-          `${endsAskedFor.map((ask) => `${ask.callId}@${(ask.issuedAtMs / 1000).toFixed(0)}s`).join(", ") || "none"}. ` +
+          `${endsAskedFor.map((ask) => `${ask.conversationId}@${(ask.issuedAtMs / 1000).toFixed(0)}s`).join(", ") || "none"}. ` +
           unreconciled
             .map(
               ({ end, why }) =>
                 `${end.reason}@${(end.atMs / 1000).toFixed(0)}s` +
-                `[${end.callId ?? "no callId"}] — ${why}`,
+                `[${end.conversationId ?? "no conversationId"}] — ${why}`,
             )
             .join("; "),
       );
@@ -1957,7 +1968,7 @@ async function voiceAgentRemovalConfirmed(
     const recent = events.slice(-40);
     const bridgeAlive = recent.some(
       (event: StreamEventLike) =>
-        event.type === "voice-agent/call-accepted" &&
+        event.type === "events.iterate.com/voice-agent/conversation-accepted" &&
         Date.parse(event.createdAt) > Date.now() - 10_000,
     );
     if (!subscribed && !bridgeAlive) {
@@ -1982,7 +1993,7 @@ interface TakeTurnInput {
    *
    * The cut cases end a call on purpose, so they must register that ask the
    * same way teardown does — the session's accounting correlates ends to asks
-   * by callId and does not care which part of the harness asked.
+   * by conversationId and does not care which part of the harness asked.
    */
   hangUpAsked: () => Promise<void>;
   readAnswer: () => AnswerInFlight | null;
@@ -2026,7 +2037,10 @@ async function takeTurn(input: TakeTurnInput): Promise<SessionTurn> {
     promptClass: planned.promptClass,
     proves: planned.proves,
   };
-  await input.stream.append({ payload: { text: planned.text }, type: "voice-agent/say" });
+  await input.stream.append({
+    payload: { text: planned.text },
+    type: "events.iterate.com/voice-agent/say",
+  });
 
   /** The answer this turn's latency is measured against, and when it was asked. */
   let measuredFrom = askedAt;
@@ -2054,7 +2068,7 @@ async function takeTurn(input: TakeTurnInput): Promise<SessionTurn> {
       turn.interruptPrompt = planned.interruptWith;
       await input.stream.append({
         payload: { text: planned.interruptWith ?? "" },
-        type: "voice-agent/say",
+        type: "events.iterate.com/voice-agent/say",
       });
       const deadline = measuredFrom + ANSWER_TIMEOUT_MS.short;
       while (Date.now() < deadline && (input.readAnswer()?.doneAt ?? 0) === 0) {
@@ -2159,7 +2173,7 @@ async function takeTurn(input: TakeTurnInput): Promise<SessionTurn> {
   if (cut === "hangup") {
     if (endedHere === 0) {
       turn.failures.push(
-        "hanging up mid-playout produced no call-ended on the stream — the teardown was not one",
+        "hanging up mid-playout produced no conversation-ended on the stream — the teardown was not one",
       );
     }
   } else if (endedHere > 0) {

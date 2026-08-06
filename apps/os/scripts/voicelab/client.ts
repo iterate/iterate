@@ -53,7 +53,7 @@ export interface ClientOptions extends VoicelabConnectOptions {
   device?: boolean;
   /** Exit after this many completed responses (0 = run until Ctrl+C). */
   turns?: number;
-  /** Grok model for call-requested. */
+  /** Grok model for conversation-requested. */
   model?: string;
   /** Grok voice. */
   voice?: string;
@@ -92,7 +92,7 @@ export async function client(options: ClientOptions) {
   const streamPath = options.path ?? `/voicelab/call-${Date.now()}`;
   const framesPerAppend = options.framesPerAppend ?? 1;
   const turnsTarget = options.turns ?? (options.mic ? 0 : options.say2 ? 2 : 1);
-  const callId = crypto.randomUUID().slice(0, 8);
+  const conversationId = crypto.randomUUID().slice(0, 8);
   const impair = createImpairment(parseImpairSpec(options.impair));
   if (impair.describe) console.error(`client: impairment ${impair.describe}`);
 
@@ -158,15 +158,15 @@ export async function client(options: ClientOptions) {
   };
 
   using connection = await openResilientConnection(stream, {
-    connectionKey: `voicelab-client-${callId}`,
+    connectionKey: `voicelab-client-${conversationId}`,
     eventTypes: [
-      "voice-agent/spk-frame",
-      "voice-agent/grok-event",
-      "voice-agent/pong",
-      "voice-agent/call-accepted",
+      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/grok-event",
+      "events.iterate.com/voice-agent/pong",
+      "events.iterate.com/voice-agent/conversation-accepted",
     ],
     quietMs: 4000,
-    // Before call-accepted there is legitimately no traffic; afterwards pings
+    // Before conversation-accepted there is legitimately no traffic; afterwards pings
     // guarantee a batch at least every 2s.
     trafficExpected: () => accepted,
     onEvents: (events) => {
@@ -174,7 +174,7 @@ export async function client(options: ClientOptions) {
         const now = Date.now();
         for (const event of events) {
           switch (event.type) {
-            case "voice-agent/call-accepted": {
+            case "events.iterate.com/voice-agent/conversation-accepted": {
               const payload = CallAcceptedPayload.safeParse(event.payload);
               if (!payload.success) {
                 rejectInvalidEvent(event.type, payload.error.message);
@@ -186,7 +186,7 @@ export async function client(options: ClientOptions) {
               );
               break;
             }
-            case "voice-agent/spk-frame": {
+            case "events.iterate.com/voice-agent/spk-frame": {
               const payload = SpeakerFramePayload.safeParse(event.payload);
               if (!payload.success) {
                 rejectInvalidEvent(event.type, payload.error.message);
@@ -215,7 +215,7 @@ export async function client(options: ClientOptions) {
               playout.write(pcm);
               break;
             }
-            case "voice-agent/grok-event": {
+            case "events.iterate.com/voice-agent/grok-event": {
               const payload = GrokEventPayload.safeParse(event.payload);
               if (!payload.success) {
                 rejectInvalidEvent(event.type, payload.error.message);
@@ -224,7 +224,7 @@ export async function client(options: ClientOptions) {
               handleGrokEvent(payload.data.event, now);
               break;
             }
-            case "voice-agent/pong": {
+            case "events.iterate.com/voice-agent/pong": {
               const payload = PongPayload.safeParse(event.payload);
               if (!payload.success) {
                 rejectInvalidEvent(event.type, payload.error.message);
@@ -301,12 +301,12 @@ export async function client(options: ClientOptions) {
     }
   };
 
-  // Durable control-plane event opens the call; the bridge answers call-accepted.
+  // Durable control-plane event opens the call; the bridge answers conversation-accepted.
   await discardRpcResult(
     stream.append({
-      type: "voice-agent/call-requested",
+      type: "events.iterate.com/voice-agent/conversation-requested",
       payload: {
-        callId,
+        conversationId,
         ...(options.model ? { model: options.model } : {}),
         ...(options.voice ? { voice: options.voice } : {}),
         ...(options.grokBaseUrl ? { grokBaseUrl: options.grokBaseUrl } : {}),
@@ -315,7 +315,9 @@ export async function client(options: ClientOptions) {
       },
     }),
   );
-  console.error(`client: call-requested on ${streamPath} (callId=${callId})`);
+  console.error(
+    `client: conversation-requested on ${streamPath} (conversationId=${conversationId})`,
+  );
 
   // Detached mode: one RPC starts a call that outlives this process. The
   // only thing this client does afterwards is push mic frames and play what
@@ -333,7 +335,7 @@ export async function client(options: ClientOptions) {
     }>;
     const started = await withRpcResult(
       worker.startCall({
-        callId,
+        conversationId,
         effort: options.effort === "high" ? "high" : "none",
         path: streamPath,
         ...(options.greet ? { greet: options.greet } : {}),
@@ -357,7 +359,7 @@ export async function client(options: ClientOptions) {
     const anchorUrl = new URL(options.workerUrl);
     anchorUrl.searchParams.set("mode", "bridge");
     anchorUrl.searchParams.set("path", streamPath);
-    anchorUrl.searchParams.set("callId", callId);
+    anchorUrl.searchParams.set("conversationId", conversationId);
     anchorUrl.searchParams.set("effort", options.effort === "high" ? "high" : "none");
     if (options.model) anchorUrl.searchParams.set("model", options.model);
     if (options.voice) anchorUrl.searchParams.set("voice", options.voice);
@@ -378,7 +380,7 @@ export async function client(options: ClientOptions) {
       throw new Error(firstInvalidEvent ?? "invalid stream event before call acceptance");
     }
     if (Date.now() > acceptDeadline) {
-      throw new Error("No call-accepted within 20s — is a bridge running on this path?");
+      throw new Error("No conversation-accepted within 20s — is a bridge running on this path?");
     }
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
@@ -390,9 +392,9 @@ export async function client(options: ClientOptions) {
     pendingFrames.push({ seq: micSeq++, t: Date.now(), pcm: frame.toString("base64") });
     if (pendingFrames.length >= framesPerAppend) {
       const events = pendingFrames.map((payload) => ({
-        type: "voice-agent/mic-frame",
+        type: "events.iterate.com/voice-agent/mic-frame",
         ephemeral: true as const,
-        payload: { callId, ...payload },
+        payload: { conversationId, ...payload },
       }));
       pendingFrames = [];
       micFramesSent += events.length;
@@ -403,7 +405,9 @@ export async function client(options: ClientOptions) {
 
   const pingTimer = setInterval(() => {
     const payload = { id: crypto.randomUUID().slice(0, 8), t0: Date.now() };
-    impair.tx(() => fireAppend({ type: "voice-agent/ping", ephemeral: true, payload }));
+    impair.tx(() =>
+      fireAppend({ type: "events.iterate.com/voice-agent/ping", ephemeral: true, payload }),
+    );
   }, 2000);
 
   if (options.mic) {
@@ -427,7 +431,10 @@ export async function client(options: ClientOptions) {
   if (anchorPingTimer) clearInterval(anchorPingTimer);
   mic.stop();
   playout.stop();
-  fireAppend({ type: "voice-agent/call-ended", payload: { callId, reason: "client done" } });
+  fireAppend({
+    type: "events.iterate.com/voice-agent/conversation-ended",
+    payload: { conversationId, reason: "client done" },
+  });
   await appendResults.drain();
   anchor?.close();
   connection.close();
@@ -436,7 +443,7 @@ export async function client(options: ClientOptions) {
   const summary = {
     role: "client",
     path: streamPath,
-    callId,
+    conversationId,
     config: {
       framesPerAppend,
       effort: options.effort === "high" ? "high" : "none",

@@ -37,7 +37,7 @@ static bool valid_options(
       nonempty(options->project_id) &&
       nonempty(options->project_api_key) &&
       nonempty(options->stream_path) &&
-      nonempty(options->call_id) &&
+      nonempty(options->conversation_id) &&
       options->now_ms != NULL;
 }
 
@@ -650,16 +650,20 @@ static enum capnweb_status batch_dispatch(
      */
     voicelab->last_bridge_ms =
         voicelab->options.now_ms(voicelab->options.clock_context);
-    if (capnweb_value_string_equals(&type_value, "voice-agent/spk-frame")) {
+    if (capnweb_value_string_equals(
+            &type_value, "events.iterate.com/voice-agent/spk-frame")) {
       handle_spk_frame(voicelab, &payload);
-    } else if (capnweb_value_string_equals(&type_value, "voice-agent/grok-event")) {
+    } else if (capnweb_value_string_equals(
+                   &type_value, "events.iterate.com/voice-agent/grok-event")) {
       handle_grok_event(voicelab, &payload);
-    } else if (capnweb_value_string_equals(&type_value, "voice-agent/viseme")) {
+    } else if (capnweb_value_string_equals(
+                   &type_value, "events.iterate.com/voice-agent/viseme")) {
       handle_viseme(voicelab, &payload);
-    } else if (capnweb_value_string_equals(&type_value, "voice-agent/pong")) {
+    } else if (capnweb_value_string_equals(
+                   &type_value, "events.iterate.com/voice-agent/pong")) {
       /* Liveness only; the RTT number comes from the append's own echo. */
     } else if (capnweb_value_string_equals(
-                   &type_value, "voice-agent/call-accepted")) {
+                   &type_value, "events.iterate.com/voice-agent/conversation-accepted")) {
       /*
        * The stream is what says a call is live, not the startCall reply: the
        * reply can be slow or lost, and a call opened by anyone else counts
@@ -684,7 +688,9 @@ static enum capnweb_status batch_dispatch(
             voicelab->options.downlink_context,
             ITERATE_KIT_VOICELAB_CONTROL_CALL_ACCEPTED);
       }
-    } else if (capnweb_value_string_equals(&type_value, "voice-agent/call-ended")) {
+    } else if (capnweb_value_string_equals(
+                   &type_value,
+                   "events.iterate.com/voice-agent/conversation-ended")) {
       /* Only the bridge serving this call may end it. */
       struct capnweb_value bridge_value;
       char ended_by[sizeof(voicelab->live_bridge_id)] = {0};
@@ -824,7 +830,7 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
       key_text,
       sizeof(key_text),
       "%s-cb-g%" PRIu32,
-      voicelab->options.call_id,
+      voicelab->options.conversation_id,
       voicelab->connection_generation);
   if (key_length < 0 || (size_t)key_length >= sizeof(key_text)) {
     return CAPNWEB_E_LIMIT;
@@ -832,19 +838,31 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
 
   event_type_items[0] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voice-agent/spk-frame", sizeof("voice-agent/spk-frame") - 1U}},
+    {.string = {
+      "events.iterate.com/voice-agent/spk-frame",
+      sizeof("events.iterate.com/voice-agent/spk-frame") - 1U,
+    }},
   };
   event_type_items[1] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voice-agent/grok-event", sizeof("voice-agent/grok-event") - 1U}},
+    {.string = {
+      "events.iterate.com/voice-agent/grok-event",
+      sizeof("events.iterate.com/voice-agent/grok-event") - 1U,
+    }},
   };
   event_type_items[2] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voice-agent/call-ended", sizeof("voice-agent/call-ended") - 1U}},
+    {.string = {
+      "events.iterate.com/voice-agent/conversation-ended",
+      sizeof("events.iterate.com/voice-agent/conversation-ended") - 1U,
+    }},
   };
   event_type_items[3] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voice-agent/call-accepted", sizeof("voice-agent/call-accepted") - 1U}},
+    {.string = {
+      "events.iterate.com/voice-agent/conversation-accepted",
+      sizeof("events.iterate.com/voice-agent/conversation-accepted") - 1U,
+    }},
   };
   /*
    * The pong exists to be heard, not read: it is the only bridge-sourced
@@ -853,12 +871,18 @@ enum capnweb_status iterate_kit_voicelab_recycle_connection(
    */
   event_type_items[4] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voice-agent/pong", sizeof("voice-agent/pong") - 1U}},
+    {.string = {
+      "events.iterate.com/voice-agent/pong",
+      sizeof("events.iterate.com/voice-agent/pong") - 1U,
+    }},
   };
   /* The mouth track rides the same lane as the audio it describes. */
   event_type_items[5] = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_STRING,
-    {.string = {"voice-agent/viseme", sizeof("voice-agent/viseme") - 1U}},
+    {.string = {
+      "events.iterate.com/voice-agent/viseme",
+      sizeof("events.iterate.com/voice-agent/viseme") - 1U,
+    }},
   };
   event_types = (struct capnweb_expression){
     CAPNWEB_EXPRESSION_ARRAY,
@@ -1199,11 +1223,11 @@ enum capnweb_status iterate_kit_voicelab_append_frames(
     written = snprintf(
         voicelab->args_buffer + offset,
         sizeof(voicelab->args_buffer) - offset,
-        "%s{\"type\":\"voice-agent/mic-frame\",\"ephemeral\":true,"
-        "\"payload\":{\"callId\":\"%s\",\"seq\":%" PRIu32
+        "%s{\"type\":\"events.iterate.com/voice-agent/mic-frame\",\"ephemeral\":true,"
+        "\"payload\":{\"conversationId\":\"%s\",\"seq\":%" PRIu32
         ",\"t\":%" PRIu64 ",\"enc\":\"u\",\"pcm\":\"",
         index == 0U ? "" : ",",
-        voicelab->options.call_id,
+        voicelab->options.conversation_id,
         sequence + (uint32_t)index,
         captured_at_ms);
     if (written < 0 ||
@@ -1319,9 +1343,9 @@ enum capnweb_status iterate_kit_voicelab_start_call(
        * think in; anything that has to be RIGHT is asked of a colleague with
        * no clock on it, and the voice says so and keeps talking meanwhile.
        */
-      "[{\"type\":\"voice-agent/call-requested\",\"payload\":{"
-      "\"callId\":\"%s\",\"colleague\":true,\"turns\":\"%s\"%s%s%s}}]",
-      voicelab->options.call_id,
+      "[{\"type\":\"events.iterate.com/voice-agent/conversation-requested\",\"payload\":{"
+      "\"conversationId\":\"%s\",\"colleague\":true,\"turns\":\"%s\"%s%s%s}}]",
+      voicelab->options.conversation_id,
       voicelab->options.turns != NULL ? voicelab->options.turns : "manual",
       greeting != NULL ? ",\"greet\":\"" : "",
       greeting != NULL ? greeting : "",
@@ -1369,9 +1393,9 @@ enum capnweb_status iterate_kit_voicelab_end_call(
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"voice-agent/call-ended\",\"payload\":{"
-      "\"callId\":\"%s\",\"reason\":\"%s\"}}]",
-      voicelab->options.call_id,
+      "[{\"type\":\"events.iterate.com/voice-agent/conversation-ended\",\"payload\":{"
+      "\"conversationId\":\"%s\",\"reason\":\"%s\"}}]",
+      voicelab->options.conversation_id,
       reason != NULL ? reason : "hangup");
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
     return CAPNWEB_E_LIMIT;
@@ -1404,9 +1428,9 @@ enum capnweb_status iterate_kit_voicelab_mark_turn(
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"voice-agent/turn\",\"ephemeral\":true,\"payload\":{"
-      "\"callId\":\"%s\",\"action\":\"%s\",\"t\":%" PRIu64 "}}]",
-      voicelab->options.call_id,
+      "[{\"type\":\"events.iterate.com/voice-agent/turn\",\"ephemeral\":true,\"payload\":{"
+      "\"conversationId\":\"%s\",\"action\":\"%s\",\"t\":%" PRIu64 "}}]",
+      voicelab->options.conversation_id,
       turn == ITERATE_KIT_VOICELAB_TURN_START ? "start" : "commit",
       voicelab->options.now_ms(voicelab->options.clock_context));
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {
@@ -1451,9 +1475,9 @@ enum capnweb_status iterate_kit_voicelab_ping(
   length = snprintf(
       voicelab->args_buffer,
       sizeof(voicelab->args_buffer),
-      "[{\"type\":\"voice-agent/ping\",\"ephemeral\":true,"
+      "[{\"type\":\"events.iterate.com/voice-agent/ping\",\"ephemeral\":true,"
       "\"payload\":{\"id\":\"%s-%" PRIu32 "\",\"t0\":%" PRIu64 "}}]",
-      voicelab->options.call_id,
+      voicelab->options.conversation_id,
       voicelab->ping_count,
       voicelab->ping_started_ms);
   if (length < 0 || (size_t)length >= sizeof(voicelab->args_buffer)) {

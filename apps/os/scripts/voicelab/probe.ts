@@ -57,26 +57,26 @@ export async function probe(options: ProbeOptions) {
   const connection = await stream.openConnection({
     connectionKey: `probe-${startedAt}`,
     eventTypes: [
-      "voice-agent/grok-event",
-      "voice-agent/call-accepted",
-      "voice-agent/call-ended",
-      "voice-agent/colleague-asked",
-      "voice-agent/colleague-answered",
+      "events.iterate.com/voice-agent/grok-event",
+      "events.iterate.com/voice-agent/conversation-accepted",
+      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/colleague-asked",
+      "events.iterate.com/voice-agent/colleague-answered",
     ],
     processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
       for (const event of batch.events) {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
-        if (event.type === "voice-agent/colleague-asked") {
+        if (event.type === "events.iterate.com/voice-agent/colleague-asked") {
           colleagueAsks++;
           console.log(`${at()}  ASKED COLLEAGUE: ${String(payload.question)}`);
           continue;
         }
-        if (event.type === "voice-agent/colleague-answered") {
+        if (event.type === "events.iterate.com/voice-agent/colleague-answered") {
           colleagueAnswers++;
           console.log(`${at()}  COLLEAGUE (${payload.ms}ms): ${String(payload.answer)}`);
           continue;
         }
-        if (event.type !== "voice-agent/grok-event") {
+        if (event.type !== "events.iterate.com/voice-agent/grok-event") {
           console.log(`${at()}  ${event.type}: ${JSON.stringify(payload).slice(0, 160)}`);
           continue;
         }
@@ -134,7 +134,7 @@ export async function probe(options: ProbeOptions) {
     console.log(`${at()}  --- turn ${index + 1}: ${prompt}`);
     responded = false;
     const turnAt = Date.now();
-    await stream.append({ payload: { text: prompt }, type: "voice-agent/say" });
+    await stream.append({ payload: { text: prompt }, type: "events.iterate.com/voice-agent/say" });
     while (!responded && Date.now() - turnAt < 45_000) {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
@@ -161,8 +161,8 @@ export async function probe(options: ProbeOptions) {
   }
 
   await stream.append({
-    payload: { callId: started.callId, reason: "probe done" },
-    type: "voice-agent/call-ended",
+    payload: { conversationId: started.conversationId, reason: "probe done" },
+    type: "events.iterate.com/voice-agent/conversation-ended",
   });
   await new Promise((resolve) => setTimeout(resolve, 1500));
   connection.close();

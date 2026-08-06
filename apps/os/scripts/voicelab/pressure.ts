@@ -41,7 +41,7 @@ interface StreamEventSeen {
 
 /** One call under test, plus everything both ends observed. */
 interface Call {
-  callId: string;
+  conversationId: string;
   path: string;
   started: Record<string, unknown>;
   startMs: number;
@@ -61,7 +61,7 @@ interface Call {
     seqBase?: number;
     gapAfter?: number;
   }): Promise<void>;
-  /** Append any event to this call's stream verbatim — including a foreign callId. */
+  /** Append any event to this call's stream verbatim — including a foreign conversationId. */
   strayer(type: string, payload: Record<string, unknown>): Promise<void>;
   /**
    * Make the colleague appear to send a chat message it was never asked for.
@@ -92,7 +92,7 @@ interface Harness {
     /** How long to wait for startCall before calling it hung. */
     startPatienceMs?: number;
     path?: string;
-    callId?: string;
+    conversationId?: string;
     instructions?: string;
   }): Promise<Call>;
   note(line: string): void;
@@ -247,7 +247,7 @@ async function openCall(
     colleague?: boolean;
     startPatienceMs?: number;
     path?: string;
-    callId?: string;
+    conversationId?: string;
     instructions?: string;
   },
 ): Promise<Call> {
@@ -257,31 +257,31 @@ async function openCall(
    * gives the conversation no agent identity to be the back office of.
    */
   const path = options.path ?? `/agents/voice/pressure-${Date.now().toString(36)}`;
-  const callId = options.callId ?? `p${Date.now().toString(36).slice(-6)}`;
+  const conversationId = options.conversationId ?? `p${Date.now().toString(36).slice(-6)}`;
   const stream = itx.streams.get(path);
   const seen: StreamEventSeen[] = [];
   const grok: Call["grok"] = [];
   const spk: Call["spk"] = [];
 
   const connection = await stream.openConnection({
-    connectionKey: `pressure-${callId}`,
+    connectionKey: `pressure-${conversationId}`,
     eventTypes: [
-      "voice-agent/spk-frame",
-      "voice-agent/grok-event",
-      "voice-agent/call-accepted",
-      "voice-agent/call-ended",
-      "voice-agent/turn-committed",
-      "voice-agent/bridge-redialling",
-      "voice-agent/colleague-asked",
-      "voice-agent/colleague-answered",
-      "voice-agent/pong",
+      "events.iterate.com/voice-agent/spk-frame",
+      "events.iterate.com/voice-agent/grok-event",
+      "events.iterate.com/voice-agent/conversation-accepted",
+      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/turn-committed",
+      "events.iterate.com/voice-agent/bridge-redialling",
+      "events.iterate.com/voice-agent/colleague-asked",
+      "events.iterate.com/voice-agent/colleague-answered",
+      "events.iterate.com/voice-agent/pong",
     ],
     processEventBatch: (batch: { events: { type: string; payload?: unknown }[] }) => {
       const at = Date.now();
       for (const event of batch.events) {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
         seen.push({ at, payload, type: event.type });
-        if (event.type === "voice-agent/spk-frame") {
+        if (event.type === "events.iterate.com/voice-agent/spk-frame") {
           spk.push({
             answer: Number(payload.answer),
             at,
@@ -289,7 +289,7 @@ async function openCall(
             seq: Number(payload.seq),
           });
         }
-        if (event.type === "voice-agent/grok-event") {
+        if (event.type === "events.iterate.com/voice-agent/grok-event") {
           const inner = (payload.event ?? {}) as Record<string, unknown>;
           grok.push({ at, event: inner, type: String(inner.type) });
         }
@@ -314,7 +314,7 @@ async function openCall(
   let startTimedOut = false;
   const started = await Promise.race([
     worker.startCall({
-      callId,
+      conversationId,
       colleague: options.colleague === true,
       grokBaseUrl: url.toString(),
       path,
@@ -330,25 +330,34 @@ async function openCall(
 
   let micSeq = 0;
   const call: Call = {
-    callId,
+    conversationId,
     close: () => connection.close(),
     grok,
     hangUp: async () => {
       await stream
-        .append({ payload: { callId, reason: "pressure done" }, type: "voice-agent/call-ended" })
+        .append({
+          payload: { conversationId, reason: "pressure done" },
+          type: "events.iterate.com/voice-agent/conversation-ended",
+        })
         .catch(() => {});
       await sleep(700);
     },
     path,
     say: async (text) => {
-      await stream.append({ payload: { callId, text }, type: "voice-agent/say" });
+      await stream.append({
+        payload: { conversationId, text },
+        type: "events.iterate.com/voice-agent/say",
+      });
     },
     seen,
     speak: async (speakOptions) => {
       const frames = speakOptions.frames ?? 10;
       if (speakOptions.start !== false) {
         micSeq = 0;
-        await stream.append({ payload: { action: "start", callId }, type: "voice-agent/turn" });
+        await stream.append({
+          payload: { action: "start", conversationId },
+          type: "events.iterate.com/voice-agent/turn",
+        });
       }
       const base = speakOptions.seqBase ?? micSeq;
       let order = Array.from({ length: frames }, (_, index) => base + index);
@@ -359,13 +368,16 @@ async function openCall(
       for (const seq of order) {
         await stream.append({
           ephemeral: true,
-          payload: { callId, pcm: SILENT_FRAME, seq, t: Date.now() },
-          type: "voice-agent/mic-frame",
+          payload: { conversationId, pcm: SILENT_FRAME, seq, t: Date.now() },
+          type: "events.iterate.com/voice-agent/mic-frame",
         });
       }
       micSeq = base + frames;
       if (speakOptions.commit !== false) {
-        await stream.append({ payload: { action: "commit", callId }, type: "voice-agent/turn" });
+        await stream.append({
+          payload: { action: "commit", conversationId },
+          type: "events.iterate.com/voice-agent/turn",
+        });
       }
     },
     spk,
@@ -385,7 +397,9 @@ async function openCall(
     },
     strayer: async (type, payload) => {
       await stream.append({
-        ...(type === "voice-agent/mic-frame" ? { ephemeral: true as const } : {}),
+        ...(type === "events.iterate.com/voice-agent/mic-frame"
+          ? { ephemeral: true as const }
+          : {}),
         payload,
         type,
       });
@@ -455,7 +469,9 @@ function buildScenarios(): Scenario[] {
         () => call.grok.filter((event) => event.type === "response.done").length >= 2,
         20_000,
       );
-      const committed = call.seen.filter((event) => event.type === "voice-agent/turn-committed");
+      const committed = call.seen.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/turn-committed",
+      );
       evidence.push(...describeSpeaker(call));
       evidence.push(`turn-committed: ${JSON.stringify(committed.map((event) => event.payload))}`);
       evidence.push(describeSession(harness.lastSession()));
@@ -548,7 +564,9 @@ function buildScenarios(): Scenario[] {
     name: "close-handshake",
     run: async (harness) => {
       const call = await harness.open({ script: "close-handshake", startPatienceMs: 75_000 });
-      const redials = call.seen.filter((event) => event.type === "voice-agent/bridge-redialling");
+      const redials = call.seen.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/bridge-redialling",
+      );
       const evidence = [
         `startCall returned ${JSON.stringify(call.started)} after ${call.startMs}ms (timedOut=${call.startTimedOut})`,
         `redial announcements on the stream: ${redials.length}`,
@@ -583,7 +601,7 @@ function buildScenarios(): Scenario[] {
       await sleep(6000);
       evidence.push(`fake dial attempts: ${harness.newSessions().length}`);
       evidence.push(
-        `redial announcements: ${call.seen.filter((e) => e.type === "voice-agent/bridge-redialling").length}`,
+        `redial announcements: ${call.seen.filter((e) => e.type === "events.iterate.com/voice-agent/bridge-redialling").length}`,
       );
       await call.hangUp();
       call.close();
@@ -623,8 +641,12 @@ function buildScenarios(): Scenario[] {
       );
       evidence.push(`answered after redial: ${recovered}`);
       evidence.push(...harness.newSessions().map(describeSession));
-      const ended = call.seen.filter((event) => event.type === "voice-agent/call-ended");
-      evidence.push(`call-ended seen: ${JSON.stringify(ended.map((event) => event.payload))}`);
+      const ended = call.seen.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/conversation-ended",
+      );
+      evidence.push(
+        `conversation-ended seen: ${JSON.stringify(ended.map((event) => event.payload))}`,
+      );
       await call.hangUp();
       call.close();
       return {
@@ -659,7 +681,9 @@ function buildScenarios(): Scenario[] {
       evidence.push(`provider sessions: ${harness.newSessions().length}`);
       evidence.push(...harness.newSessions().map(describeSession));
       evidence.push(`second turn answered: ${answered}`);
-      const committed = call.seen.filter((event) => event.type === "voice-agent/turn-committed");
+      const committed = call.seen.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/turn-committed",
+      );
       evidence.push(`turn-committed: ${JSON.stringify(committed.map((event) => event.payload))}`);
       await call.hangUp();
       call.close();
@@ -701,7 +725,7 @@ function buildScenarios(): Scenario[] {
       evidence.push(`provider sessions: ${harness.newSessions().length}`);
       evidence.push(...harness.newSessions().map(describeSession));
       evidence.push(
-        `call-ended: ${JSON.stringify(call.seen.filter((e) => e.type === "voice-agent/call-ended").map((e) => e.payload))}`,
+        `conversation-ended: ${JSON.stringify(call.seen.filter((e) => e.type === "events.iterate.com/voice-agent/conversation-ended").map((e) => e.payload))}`,
       );
       await call.hangUp();
       call.close();
@@ -821,8 +845,10 @@ function buildScenarios(): Scenario[] {
       evidence.push(`90s of audio = ${Math.round((90 * 16000 * 2) / 640)} expected 20ms frames`);
       evidence.push(...describeSpeaker(call));
       evidence.push(`speaker frames received: ${floodFrames}, drained over ${drainMs}ms`);
-      const ended = call.seen.filter((event) => event.type === "voice-agent/call-ended");
-      evidence.push(`call-ended: ${JSON.stringify(ended.map((event) => event.payload))}`);
+      const ended = call.seen.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/conversation-ended",
+      );
+      evidence.push(`conversation-ended: ${JSON.stringify(ended.map((event) => event.payload))}`);
       // Is the call still usable?
       const before = call.grok.filter((event) => event.type === "response.done").length;
       await call.speak({ frames: 10 });
@@ -863,10 +889,12 @@ function buildScenarios(): Scenario[] {
       });
       await call.until(
         "commit",
-        () => call.seen.some((e) => e.type === "voice-agent/turn-committed"),
+        () => call.seen.some((e) => e.type === "events.iterate.com/voice-agent/turn-committed"),
         20_000,
       );
-      const committed = call.seen.find((event) => event.type === "voice-agent/turn-committed");
+      const committed = call.seen.find(
+        (event) => event.type === "events.iterate.com/voice-agent/turn-committed",
+      );
       evidence.push(`turn-committed: ${JSON.stringify(committed?.payload)}`);
       const session = harness.lastSession();
       evidence.push(describeSession(session));
@@ -892,10 +920,12 @@ function buildScenarios(): Scenario[] {
       await call.speak({ frames: 40, gapAfter: 5 });
       await call.until(
         "commit",
-        () => call.seen.some((e) => e.type === "voice-agent/turn-committed"),
+        () => call.seen.some((e) => e.type === "events.iterate.com/voice-agent/turn-committed"),
         20_000,
       );
-      const committed = call.seen.find((event) => event.type === "voice-agent/turn-committed");
+      const committed = call.seen.find(
+        (event) => event.type === "events.iterate.com/voice-agent/turn-committed",
+      );
       evidence.push(`turn-committed: ${JSON.stringify(committed?.payload)}`);
       const session = harness.lastSession();
       evidence.push(describeSession(session));
@@ -923,10 +953,12 @@ function buildScenarios(): Scenario[] {
       });
       await call.until(
         "commit",
-        () => call.seen.some((e) => e.type === "voice-agent/turn-committed"),
+        () => call.seen.some((e) => e.type === "events.iterate.com/voice-agent/turn-committed"),
         20_000,
       );
-      const committed = call.seen.find((event) => event.type === "voice-agent/turn-committed");
+      const committed = call.seen.find(
+        (event) => event.type === "events.iterate.com/voice-agent/turn-committed",
+      );
       evidence.push(`turn-committed: ${JSON.stringify(committed?.payload)}`);
       const session = harness.lastSession();
       evidence.push(describeSession(session));
@@ -953,7 +985,7 @@ function buildScenarios(): Scenario[] {
       await call.speak({ frames: 20 });
       await call.until(
         "commit 1",
-        () => call.seen.some((e) => e.type === "voice-agent/turn-committed"),
+        () => call.seen.some((e) => e.type === "events.iterate.com/voice-agent/turn-committed"),
         20_000,
       );
       // Now the shape of a barge-in: the customer starts talking again while
@@ -971,10 +1003,14 @@ function buildScenarios(): Scenario[] {
       await stream.speak({ commit: true, frames: 30, seqBase: 0, start: false });
       await call.until(
         "commit 2",
-        () => call.seen.filter((e) => e.type === "voice-agent/turn-committed").length >= 2,
+        () =>
+          call.seen.filter((e) => e.type === "events.iterate.com/voice-agent/turn-committed")
+            .length >= 2,
         20_000,
       );
-      const committed = call.seen.filter((event) => event.type === "voice-agent/turn-committed");
+      const committed = call.seen.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/turn-committed",
+      );
       evidence.push(`turn-committed: ${JSON.stringify(committed.map((event) => event.payload))}`);
       const session = harness.lastSession();
       evidence.push(describeSession(session));
@@ -1000,7 +1036,9 @@ function buildScenarios(): Scenario[] {
       const evidence = [`startCall: ${JSON.stringify(call.started)} in ${call.startMs}ms`];
       await call.speak({ frames: 0 });
       await sleep(4000);
-      const committed = call.seen.filter((event) => event.type === "voice-agent/turn-committed");
+      const committed = call.seen.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/turn-committed",
+      );
       evidence.push(`turn-committed: ${JSON.stringify(committed.map((event) => event.payload))}`);
       const session = harness.lastSession();
       evidence.push(describeSession(session));
@@ -1125,20 +1163,25 @@ function buildScenarios(): Scenario[] {
       await call.say("ask your colleague two things");
       const asked = await call.until(
         "two asks",
-        () => call.seen.filter((event) => event.type === "voice-agent/colleague-asked").length >= 2,
+        () =>
+          call.seen.filter(
+            (event) => event.type === "events.iterate.com/voice-agent/colleague-asked",
+          ).length >= 2,
         60_000,
       );
       const answered = await call.until(
         "two answers",
         () =>
-          call.seen.filter((event) => event.type === "voice-agent/colleague-answered").length >= 2,
+          call.seen.filter(
+            (event) => event.type === "events.iterate.com/voice-agent/colleague-answered",
+          ).length >= 2,
         180_000,
       );
       const asks = call.seen
-        .filter((event) => event.type === "voice-agent/colleague-asked")
+        .filter((event) => event.type === "events.iterate.com/voice-agent/colleague-asked")
         .map((event) => event.payload);
       const answers = call.seen
-        .filter((event) => event.type === "voice-agent/colleague-answered")
+        .filter((event) => event.type === "events.iterate.com/voice-agent/colleague-answered")
         .map((event) => event.payload);
       evidence.push(`asked: ${JSON.stringify(asks)}`);
       evidence.push(`answered: ${JSON.stringify(answers).slice(0, 1200)}`);
@@ -1196,15 +1239,19 @@ function buildScenarios(): Scenario[] {
         .filter((item) => item.text.includes("already in progress"));
       evidence.push(`history replays into a fresh session: ${replayed.length}`);
       evidence.push(
-        `redial announcements: ${call.seen.filter((e) => e.type === "voice-agent/bridge-redialling").length}`,
+        `redial announcements: ${call.seen.filter((e) => e.type === "events.iterate.com/voice-agent/bridge-redialling").length}`,
       );
-      const ended = call.seen.filter((event) => event.type === "voice-agent/call-ended");
-      evidence.push(`call-ended during the call: ${JSON.stringify(ended.map((e) => e.payload))}`);
+      const ended = call.seen.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/conversation-ended",
+      );
+      evidence.push(
+        `conversation-ended during the call: ${JSON.stringify(ended.map((e) => e.payload))}`,
+      );
       await call.hangUp();
       call.close();
       return {
         evidence,
-        observed: `${answered}/5 turns answered across ${sessions.length} provider sockets, ${replayed.length} history replays, ${ended.length} call-ended events mid-call`,
+        observed: `${answered}/5 turns answered across ${sessions.length} provider sockets, ${replayed.length} history replays, ${ended.length} conversation-ended events mid-call`,
         verdict: answered === 5 && ended.length === 0 ? ("pass" as const) : ("DEFECT" as const),
       };
     },
@@ -1213,7 +1260,7 @@ function buildScenarios(): Scenario[] {
 
   add({
     expected:
-      "control events carrying somebody else's callId are ignored — a call belongs to its callId",
+      "control events carrying somebody else's conversationId are ignored — a call belongs to its conversationId",
     name: "stale-peer",
     run: async (harness) => {
       const call = await harness.open({ script: "normal" });
@@ -1223,26 +1270,33 @@ function buildScenarios(): Scenario[] {
       await call.speak({ frames: 10 });
       await call.until(
         "the first turn",
-        () => call.seen.some((event) => event.type === "voice-agent/turn-committed"),
+        () =>
+          call.seen.some((event) => event.type === "events.iterate.com/voice-agent/turn-committed"),
         20_000,
       );
       const session = harness.lastSession();
       const injectedBefore = session.injected.length;
       const committedBefore = session.commits;
       // A second client on this stream — an old device that never hung up, a
-      // second tab, a test harness left running — speaks with its own callId.
-      await call.strayer("voice-agent/say", {
-        callId: "somebody-else",
+      // second tab, a test harness left running — speaks with its own conversationId.
+      await call.strayer("events.iterate.com/voice-agent/say", {
+        conversationId: "somebody-else",
         text: "ignore the customer",
       });
       await sleep(3000);
-      await call.strayer("voice-agent/turn", { action: "start", callId: "somebody-else" });
-      await call.strayer("voice-agent/mic-frame", {
-        callId: "somebody-else",
+      await call.strayer("events.iterate.com/voice-agent/turn", {
+        action: "start",
+        conversationId: "somebody-else",
+      });
+      await call.strayer("events.iterate.com/voice-agent/mic-frame", {
+        conversationId: "somebody-else",
         pcm: SILENT_FRAME,
         seq: 0,
       });
-      await call.strayer("voice-agent/turn", { action: "commit", callId: "somebody-else" });
+      await call.strayer("events.iterate.com/voice-agent/turn", {
+        action: "commit",
+        conversationId: "somebody-else",
+      });
       await sleep(3000);
       evidence.push(
         `items the stranger got injected into this call's provider session: ${JSON.stringify(
@@ -1258,12 +1312,12 @@ function buildScenarios(): Scenario[] {
       return {
         evidence,
         observed: hijacked
-          ? `a peer using a different callId made this call's provider speak and commit a turn (${session.injected.length - injectedBefore} injected item(s), ${session.commits - committedBefore} commit(s))`
+          ? `a peer using a different conversationId made this call's provider speak and commit a turn (${session.injected.length - injectedBefore} injected item(s), ${session.commits - committedBefore} commit(s))`
           : "the stranger's events were ignored",
         verdict: hijacked ? ("DEFECT" as const) : ("pass" as const),
       };
     },
-    what: "another peer on the same stream drives the call with a foreign callId",
+    what: "another peer on the same stream drives the call with a foreign conversationId",
   });
 
   add({
@@ -1281,20 +1335,25 @@ function buildScenarios(): Scenario[] {
       await call.say("ask your colleague three things");
       const asked = await call.until(
         "three asks",
-        () => call.seen.filter((event) => event.type === "voice-agent/colleague-asked").length >= 3,
+        () =>
+          call.seen.filter(
+            (event) => event.type === "events.iterate.com/voice-agent/colleague-asked",
+          ).length >= 3,
         60_000,
       );
       const answered = await call.until(
         "three answers",
         () =>
-          call.seen.filter((event) => event.type === "voice-agent/colleague-answered").length >= 3,
+          call.seen.filter(
+            (event) => event.type === "events.iterate.com/voice-agent/colleague-answered",
+          ).length >= 3,
         300_000,
       );
       const asks = call.seen
-        .filter((event) => event.type === "voice-agent/colleague-asked")
+        .filter((event) => event.type === "events.iterate.com/voice-agent/colleague-asked")
         .map((event) => event.payload);
       const answers = call.seen
-        .filter((event) => event.type === "voice-agent/colleague-answered")
+        .filter((event) => event.type === "events.iterate.com/voice-agent/colleague-answered")
         .map((event) => event.payload);
       evidence.push(`asked (${asks.length}): ${JSON.stringify(asks)}`);
       evidence.push(`answered (${answers.length}): ${JSON.stringify(answers).slice(0, 2000)}`);
@@ -1362,20 +1421,31 @@ function buildScenarios(): Scenario[] {
       await call.say("ask your colleague something");
       await call.until(
         "the ask",
-        () => call.seen.some((event) => event.type === "voice-agent/colleague-asked"),
+        () =>
+          call.seen.some(
+            (event) => event.type === "events.iterate.com/voice-agent/colleague-asked",
+          ),
         60_000,
       );
       // Talk over everything while the colleague thinks, and keep the mic
       // open across the moment the answer lands.
       const answeredAt = call.until(
         "the answer",
-        () => call.seen.some((event) => event.type === "voice-agent/colleague-answered"),
+        () =>
+          call.seen.some(
+            (event) => event.type === "events.iterate.com/voice-agent/colleague-answered",
+          ),
         180_000,
       );
       for (let index = 0; index < 20; index++) {
         await call.speak({ commit: false, frames: 3 });
         await sleep(1500);
-        if (call.seen.some((event) => event.type === "voice-agent/colleague-answered")) break;
+        if (
+          call.seen.some(
+            (event) => event.type === "events.iterate.com/voice-agent/colleague-answered",
+          )
+        )
+          break;
       }
       const gotAnswer = await answeredAt;
       // Now stop talking: the gap the delivery has been waiting for.
@@ -1438,7 +1508,7 @@ function buildScenarios(): Scenario[] {
         await sleep(1500);
       }
       const committed = call.seen
-        .filter((event) => event.type === "voice-agent/turn-committed")
+        .filter((event) => event.type === "events.iterate.com/voice-agent/turn-committed")
         .map((event) => event.payload as Record<string, number>);
       const lost = committed.reduce((total, payload) => total + Number(payload.lost ?? 0), 0);
       const late = committed.reduce((total, payload) => total + Number(payload.late ?? 0), 0);
@@ -1453,8 +1523,12 @@ function buildScenarios(): Scenario[] {
       evidence.push(
         `provider mic bytes per turn (first 5 / last 5): ${session.micBytesByTurn.slice(0, 5).join(",")} … ${session.micBytesByTurn.slice(-5).join(",")}`,
       );
-      const ended = call.seen.filter((event) => event.type === "voice-agent/call-ended");
-      evidence.push(`call-ended mid-run: ${JSON.stringify(ended.map((event) => event.payload))}`);
+      const ended = call.seen.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/conversation-ended",
+      );
+      evidence.push(
+        `conversation-ended mid-run: ${JSON.stringify(ended.map((event) => event.payload))}`,
+      );
       await call.hangUp();
       call.close();
       const firstHalf = lateness.slice(0, Math.floor(lateness.length / 2));
@@ -1463,7 +1537,7 @@ function buildScenarios(): Scenario[] {
         values.length === 0 ? 0 : Math.round(values.reduce((a, b) => a + b, 0) / values.length);
       return {
         evidence,
-        observed: `${answered}/${turns} turns answered; mean answer latency ${mean(firstHalf)}ms early vs ${mean(lastHalf)}ms late; ${lost} mic frames lost, ${late} late; ${ended.length} call-ended mid-run`,
+        observed: `${answered}/${turns} turns answered; mean answer latency ${mean(firstHalf)}ms early vs ${mean(lastHalf)}ms late; ${lost} mic frames lost, ${late} late; ${ended.length} conversation-ended mid-run`,
         verdict: answered === turns && ended.length === 0 ? ("pass" as const) : ("DEFECT" as const),
       };
     },
@@ -1496,14 +1570,16 @@ function buildScenarios(): Scenario[] {
       const session = harness.lastSession();
       evidence.push(describeSession(session));
       evidence.push(
-        `turn-committed: ${JSON.stringify(call.seen.filter((e) => e.type === "voice-agent/turn-committed").map((e) => e.payload))}`,
+        `turn-committed: ${JSON.stringify(call.seen.filter((e) => e.type === "events.iterate.com/voice-agent/turn-committed").map((e) => e.payload))}`,
       );
       evidence.push(`anything from the provider in 30s: ${answered}`);
       evidence.push(
-        `call-ended: ${JSON.stringify(call.seen.filter((e) => e.type === "voice-agent/call-ended").map((e) => e.payload))}`,
+        `conversation-ended: ${JSON.stringify(call.seen.filter((e) => e.type === "events.iterate.com/voice-agent/conversation-ended").map((e) => e.payload))}`,
       );
       // Is the call still usable if the provider starts behaving again?
-      const pongs = call.seen.filter((event) => event.type === "voice-agent/pong").length;
+      const pongs = call.seen.filter(
+        (event) => event.type === "events.iterate.com/voice-agent/pong",
+      ).length;
       evidence.push(`pongs (the bridge's proof of life): ${pongs}`);
       await call.hangUp();
       call.close();
@@ -1587,12 +1663,18 @@ function buildScenarios(): Scenario[] {
       await call.say("ask your colleague two things");
       const asked = await call.until(
         "two asks",
-        () => call.seen.filter((event) => event.type === "voice-agent/colleague-asked").length >= 2,
+        () =>
+          call.seen.filter(
+            (event) => event.type === "events.iterate.com/voice-agent/colleague-asked",
+          ).length >= 2,
         60_000,
       );
       const first = await call.until(
         "the first answer",
-        () => call.seen.some((event) => event.type === "voice-agent/colleague-answered"),
+        () =>
+          call.seen.some(
+            (event) => event.type === "events.iterate.com/voice-agent/colleague-answered",
+          ),
         180_000,
       );
       // Question 2's ask is now in flight. Have the colleague "say something
@@ -1603,11 +1685,13 @@ function buildScenarios(): Scenario[] {
       const second = await call.until(
         "the second answer",
         () =>
-          call.seen.filter((event) => event.type === "voice-agent/colleague-answered").length >= 2,
+          call.seen.filter(
+            (event) => event.type === "events.iterate.com/voice-agent/colleague-answered",
+          ).length >= 2,
         180_000,
       );
       const answers = call.seen
-        .filter((event) => event.type === "voice-agent/colleague-answered")
+        .filter((event) => event.type === "events.iterate.com/voice-agent/colleague-answered")
         .map((event) => event.payload);
       evidence.push(`answered: ${JSON.stringify(answers)}`);
       const session = harness.lastSession();

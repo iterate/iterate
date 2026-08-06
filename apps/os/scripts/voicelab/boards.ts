@@ -161,7 +161,7 @@ export async function boards(options: BoardsOptions) {
       let saidBack = "";
       const connection = await itx.streams.get(streamPath).openConnection({
         connectionKey: `boards-${board.name}-${askedAt}`,
-        eventTypes: ["voice-agent/grok-event"],
+        eventTypes: ["events.iterate.com/voice-agent/grok-event"],
         processEventBatch: (batch: { events?: { payload?: unknown }[] }) => {
           for (const event of batch.events ?? []) {
             const inner = (

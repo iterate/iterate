@@ -450,7 +450,7 @@ export async function stress(options: StressOptions) {
    * True once the conversation under test is up.
    *
    * Before that the harness has deliberately hung up any call it found, and
-   * the device duly reports `call-ended: button` for it — counting that would
+   * the device duly reports `conversation-ended: button` for it — counting that would
    * put "the call ended" in the report of every healthy run.
    */
   let runLive = false;
@@ -470,11 +470,11 @@ export async function stress(options: StressOptions) {
    */
   const watch = await watchStream({
     eventTypes: [
-      "voice-agent/dev-stats",
-      "voice-agent/grok-event",
-      "voice-agent/call-accepted",
-      "voice-agent/call-ended",
-      "voice-agent/bridge-redialling",
+      "events.iterate.com/voice-agent/dev-stats",
+      "events.iterate.com/voice-agent/grok-event",
+      "events.iterate.com/voice-agent/conversation-accepted",
+      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/bridge-redialling",
     ],
     key: `stress-${startedAt}`,
     onNote: note,
@@ -505,17 +505,19 @@ export async function stress(options: StressOptions) {
     onBatch: (batch) => {
       for (const event of batch.events) {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
-        if (event.type === "voice-agent/dev-stats") {
+        if (event.type === "events.iterate.com/voice-agent/dev-stats") {
           samples.push({ ...(payload as DeviceStats), atMs: elapsed() });
           continue;
         }
-        if (event.type === "voice-agent/call-accepted") {
+        if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
           callLiveAt = Date.now();
           callAccepts++;
-          note(`call-accepted by bridge ${String(payload.bridgeId ?? payload.bridge ?? "?")}`);
+          note(
+            `conversation-accepted by bridge ${String(payload.bridgeId ?? payload.bridge ?? "?")}`,
+          );
           continue;
         }
-        if (event.type === "voice-agent/call-ended") {
+        if (event.type === "events.iterate.com/voice-agent/conversation-ended") {
           callLiveAt = 0;
           if (runLive) {
             callEnds.push({
@@ -527,7 +529,7 @@ export async function stress(options: StressOptions) {
           note(`CALL ENDED: ${String(payload.reason)}`);
           continue;
         }
-        if (event.type === "voice-agent/bridge-redialling") {
+        if (event.type === "events.iterate.com/voice-agent/bridge-redialling") {
           /* Not a failure: the provider closes its socket on its own schedule
            * and the bridge replaces it under the conversation, replaying what
            * was said. Counted, because one per turn would mean something else. */
@@ -569,7 +571,7 @@ export async function stress(options: StressOptions) {
     let firstAt = 0;
     const handle = await stream.openConnection({
       connectionKey: `stress-audio-${startedAt}-${index}`,
-      eventTypes: ["voice-agent/spk-frame"],
+      eventTypes: ["events.iterate.com/voice-agent/spk-frame"],
       maxDeliveryBytes: 1400,
       maxDeliveryEvents: 1,
       processEventBatch: (batch) => {
@@ -675,7 +677,10 @@ export async function stress(options: StressOptions) {
     const probe = await openAudioProbe(index);
     const turnAt = Date.now();
     answer = { createdAt: 0, doneAt: 0, firstTranscriptAt: 0, text: "" };
-    await stream.append({ payload: { text: prompt.text }, type: "voice-agent/say" });
+    await stream.append({
+      payload: { text: prompt.text },
+      type: "events.iterate.com/voice-agent/say",
+    });
 
     const timeoutMs = ANSWER_TIMEOUT_MS[prompt.promptClass];
     const answerDeadline = turnAt + timeoutMs;

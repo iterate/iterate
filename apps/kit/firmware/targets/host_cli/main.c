@@ -1019,7 +1019,7 @@ static void cli_main_start_voicelab(struct cli_runtime *runtime)
     .project_id = runtime->configuration.project_id,
     .project_api_key = runtime->configuration.project_api_key,
     .stream_path = runtime->options.stream_path,
-    .call_id = runtime->options.name,
+    .conversation_id = runtime->options.name,
     .now_ms = cli_runtime_now_ms,
     .on_speaker = cli_main_on_speaker,
     .on_control = cli_main_on_control,

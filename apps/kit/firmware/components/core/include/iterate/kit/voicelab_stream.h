@@ -39,7 +39,7 @@ enum {
       ITERATE_KIT_VOICE_MIC_FRAMES_PER_APPEND,
   /*
    * Each frame costs at most ~980 characters here: ~125 of JSON envelope
-   * (type, callId, a 10-digit sequence, a 20-digit timestamp) plus 854 of
+   * (type, conversationId, a 10-digit sequence, a 20-digit timestamp) plus 854 of
    * base64. Eight frames needed ~7.8 KiB against a 7600-byte buffer, so
    * base64_encode ran out of room and the whole append was abandoned — with
    * the microphone silently disconnected, because that path returns before
@@ -112,8 +112,9 @@ typedef void (*iterate_kit_voicelab_transcript_fn)(
     void *context, bool from_user, const char *text, bool final);
 
 /**
- * One scheduled assistant mouth shape, decoded from a voice-agent/viseme
- * event. `offset_samples` counts 16 kHz samples from the first sample of
+ * One scheduled assistant mouth shape, decoded from an
+ * events.iterate.com/voice-agent/viseme event.
+ * `offset_samples` counts 16 kHz samples from the first sample of
  * `answer`, so the shape belongs to a position in the audio rather than to a
  * moment on any clock — the same identity rule spk-frames already live by,
  * which is what lets a superseded answer take its mouth track down with it.
@@ -150,7 +151,7 @@ struct iterate_kit_voicelab_options {
   /** Stream path for the call, e.g. "/voice-agent/dev-waveshare". */
   const char *stream_path;
   /** Short call identity stamped into every frame payload. */
-  const char *call_id;
+  const char *conversation_id;
   /**
    * Who segments turns, as the worker's voice-agent understands it:
    * "manual" (NULL defaults here) for push-to-talk boards that commit
@@ -179,9 +180,9 @@ struct iterate_kit_voicelab_options {
  * The device end of the voicelab stream protocol over ONE Cap'n Web session:
  * authenticate(project-secret) -> projects.get -> streams.get(path), then
  * high-frequency one-way `append` calls carrying ephemeral
- * `voice-agent/mic-frame` events (base64 PCM16), with a low-rate pulled
- * `voice-agent/ping` append as the RTT/health probe (one-way appends never
- * report peer-side errors by design).
+ * `events.iterate.com/voice-agent/mic-frame` events (base64 PCM16), with a
+ * low-rate pulled `events.iterate.com/voice-agent/ping` append as the
+ * RTT/health probe (one-way appends never report peer-side errors by design).
  *
  * Single-owner, callback-driven, no internal retry — the enclosing
  * connection owns reconnect policy, mirroring iterate_kit_itx_mount.
@@ -234,7 +235,7 @@ struct iterate_kit_voicelab {
    * When the BRIDGE was last heard from, by its own events — not by ours
    * being accepted. A detached call lives in a Durable Object this device
    * cannot see: it can be evicted, redeployed, or simply stop, and none of
-   * those append the call-ended this device waits for. Left to trust its own
+   * those append the conversation-ended this device waits for. Left to trust its own
    * flags the device then sits on a call that no longer exists, showing
    * "listening" and "speaking" to a listener no one is on the other end of —
    * observed after an overnight run, and the reason this field exists.
@@ -256,7 +257,7 @@ struct iterate_kit_voicelab {
    * the socket closing, without an error, and without this device being told
    * anything at all.
    *
-   * Measured: 68 seconds in which the bridge appended eight call-accepted
+   * Measured: 68 seconds in which the bridge appended eight conversation-accepted
    * events and eleven pongs, every one of them visible to another
    * subscriber, while this device's batch counter sat frozen at 77 and it
    * cheerfully started a ninth call. That is the "stuck on starting call"
@@ -278,10 +279,10 @@ struct iterate_kit_voicelab {
    */
   bool recycle_pending;
   /*
-   * Which bridge owns the live call. Every bridge announces call-ended when
-   * it dies, and they all share one callId — so a stale bridge shutting down
+   * Which bridge owns the live call. Every bridge announces conversation-ended when
+   * it dies, and they all share one conversationId — so a stale bridge shutting down
    * was ending the call that a NEWER bridge was actively serving. The device
-   * honours call-ended only from the bridge whose call-accepted it last saw.
+   * honours conversation-ended only from the bridge whose conversation-accepted it last saw.
    */
   char live_bridge_id[24];
   uint32_t batches_on_connection;
@@ -337,11 +338,12 @@ enum capnweb_status iterate_kit_voicelab_append_raw(
     size_t length);
 
 /**
- * Append a durable voice-agent/call-requested event to this stream. The installed
- * voice-agent guest processor opens the Grok call; the project worker is not
+ * Append a durable events.iterate.com/voice-agent/conversation-requested event
+ * to this stream. The installed voice-agent guest processor opens the Grok
+ * call; the project worker is not
  * involved. Nothing outside the platform holds the call open afterwards: no
  * laptop bridge, no second socket. One start in flight at a time;
- * `call_active` turns true when call-accepted arrives on the stream.
+ * `call_active` turns true when conversation-accepted arrives on the stream.
  * `greeting` may be NULL. Strings containing JSON control, quote, or backslash
  * characters are rejected rather than emitted as malformed events.
  */
@@ -349,8 +351,9 @@ enum capnweb_status iterate_kit_voicelab_start_call(
     struct iterate_kit_voicelab *voicelab, const char *greeting);
 
 /**
- * Hang up: a durable voice-agent/call-ended event carrying this call's id, which
- * is what the bridge watches for. One-way — the bridge's own call-ended echo
+ * Hang up: a durable events.iterate.com/voice-agent/conversation-ended event
+ * carrying this call's id, which is what the bridge watches for. One-way —
+ * the bridge's own conversation-ended echo
  * confirms it. `reason` follows the same restricted JSON-string contract as
  * `greeting`; NULL becomes `hangup`.
  */
@@ -360,7 +363,7 @@ enum capnweb_status iterate_kit_voicelab_end_call(
 /**
  * Forget a call this device can no longer prove exists, WITHOUT announcing
  * an end that would be a lie — a bridge that stopped answering may well be
- * gone already, and a call-ended carrying a stale bridge id is ignored by
+ * gone already, and a conversation-ended carrying a stale bridge id is ignored by
  * design. This drops the local belief only, so the owner's "the user wants a
  * call" intent can reconcile by starting a fresh one.
  */
@@ -386,8 +389,9 @@ enum capnweb_status iterate_kit_voicelab_mark_turn(
     enum iterate_kit_voicelab_turn turn);
 
 /**
- * Pulled append of a tiny durable voice-agent/ping event. The resolution echo
- * is small (no PCM), so it is safe inside the bounded inbox and token
+ * Pulled append of a tiny durable events.iterate.com/voice-agent/ping event.
+ * The resolution echo is small (no PCM), so it is safe inside the bounded
+ * inbox and token
  * budget; completion updates last_rtt_ms. One probe in flight at a time.
  */
 enum capnweb_status iterate_kit_voicelab_ping(

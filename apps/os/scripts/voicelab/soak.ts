@@ -95,11 +95,11 @@ export async function soak(options: SoakOptions) {
    */
   const watch = await watchStream({
     eventTypes: [
-      "voice-agent/dev-stats",
-      "voice-agent/grok-event",
-      "voice-agent/call-accepted",
-      "voice-agent/call-ended",
-      "voice-agent/bridge-redialling",
+      "events.iterate.com/voice-agent/dev-stats",
+      "events.iterate.com/voice-agent/grok-event",
+      "events.iterate.com/voice-agent/conversation-accepted",
+      "events.iterate.com/voice-agent/conversation-ended",
+      "events.iterate.com/voice-agent/bridge-redialling",
     ],
     key: `soak-${startedAt}`,
     onNote: note,
@@ -107,20 +107,20 @@ export async function soak(options: SoakOptions) {
     onBatch: (batch) => {
       for (const event of batch.events) {
         const payload = (event.payload ?? {}) as Record<string, unknown>;
-        if (event.type === "voice-agent/dev-stats") {
+        if (event.type === "events.iterate.com/voice-agent/dev-stats") {
           samples.push(payload as unknown as DeviceStats);
           continue;
         }
-        if (event.type === "voice-agent/call-accepted") {
+        if (event.type === "events.iterate.com/voice-agent/conversation-accepted") {
           callLiveAt = Date.now();
-          note(`call-accepted by bridge ${String(payload.bridgeId)}`);
+          note(`conversation-accepted by bridge ${String(payload.bridgeId)}`);
           continue;
         }
-        if (event.type === "voice-agent/call-ended") {
+        if (event.type === "events.iterate.com/voice-agent/conversation-ended") {
           note(`CALL ENDED: ${String(payload.reason)}`);
           continue;
         }
-        if (event.type === "voice-agent/bridge-redialling") {
+        if (event.type === "events.iterate.com/voice-agent/bridge-redialling") {
           /*
            * Not a failure: the provider closes its socket on its own
            * schedule and the bridge replaces it underneath the
@@ -167,7 +167,7 @@ export async function soak(options: SoakOptions) {
   await capability.conversation.start();
   {
     /*
-     * Live means THE BRIDGE SAID SO — a call-accepted on this stream. It used
+     * Live means THE BRIDGE SAID SO — a conversation-accepted on this stream. It used
      * to mean "the device says it is recording", which is a proxy for a
      * proxy: the SD card is optional, its state lags by a task hop, and a
      * soak that will not start because a diagnostic is unavailable is a soak
@@ -201,7 +201,7 @@ export async function soak(options: SoakOptions) {
     } else {
       await stream.append({
         payload: { text: prompt },
-        type: "voice-agent/say",
+        type: "events.iterate.com/voice-agent/say",
       });
     }
     const answer = await waitForAnswer(45_000);

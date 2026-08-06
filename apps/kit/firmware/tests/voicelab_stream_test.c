@@ -148,7 +148,7 @@ static void start_and_mount(struct fixture *fixture) {
     .project_id = "prj_test",
     .project_api_key = "itxk_secret-never-log",
     .stream_path = "/voice-agent/dev-test",
-    .call_id = "wsdev",
+    .conversation_id = "wsdev",
     .now_ms = fixture_now_ms,
     .clock_context = fixture,
   };
@@ -278,7 +278,7 @@ static void downlink_flow(void) {
       .project_id = "prj_test",
       .project_api_key = "itxk_secret-never-log",
       .stream_path = "/voice-agent/dev-test",
-      .call_id = "wsdev",
+      .conversation_id = "wsdev",
       .now_ms = fixture_now_ms,
       .clock_context = &fixture,
       .on_speaker = record_speaker,
@@ -317,9 +317,13 @@ static void downlink_flow(void) {
     assert(
         strstr(
             open_message,
-            "\"eventTypes\":[[\"voice-agent/spk-frame\",\"voice-agent/grok-event\","
-      "\"voice-agent/call-ended\",\"voice-agent/call-accepted\","
-      "\"voice-agent/pong\",\"voice-agent/viseme\"]]") !=
+            "\"eventTypes\":[["
+            "\"events.iterate.com/voice-agent/spk-frame\","
+            "\"events.iterate.com/voice-agent/grok-event\","
+            "\"events.iterate.com/voice-agent/conversation-ended\","
+            "\"events.iterate.com/voice-agent/conversation-accepted\","
+            "\"events.iterate.com/voice-agent/pong\","
+            "\"events.iterate.com/voice-agent/viseme\"]]") !=
         NULL);
     assert(strstr(open_message, "\"maxDeliveryEvents\":16") != NULL);
     assert(strstr(open_message, "\"maxDeliveryBytes\":13000") != NULL);
@@ -337,9 +341,9 @@ static void downlink_flow(void) {
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"projectId\":\"prj_test\","
       "\"path\":\"/voice-agent/dev-test\",\"streamId\":\"sid\",\"events\":[["
-      "{\"type\":\"voice-agent/spk-frame\",\"offset\":40,"
+      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
       "\"payload\":{\"seq\":0,\"pcm\":\"QUJDRA\"}},"
-      "{\"type\":\"voice-agent/grok-event\",\"offset\":41,"
+      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":41,"
       "\"payload\":{\"event\":{\"type\":\"input_audio_buffer.speech_started\"}}}"
       "]],\"scannedAfterOffset\":39,\"scannedThroughOffset\":41,"
       "\"streamMaxOffset\":41,\"state\":null}]]]");
@@ -356,9 +360,9 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voice-agent/grok-event\",\"offset\":43,"
+      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":43,"
       "\"payload\":{\"event\":{\"type\":\"response.created\"}}},"
-      "{\"type\":\"voice-agent/grok-event\",\"offset\":44,"
+      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":44,"
       "\"payload\":{\"event\":{\"type\":"
       "\"response.output_audio_transcript.delta\",\"delta\":\"Hel\"}}}"
       "]],\"scannedThroughOffset\":44,\"state\":null}]]]");
@@ -369,10 +373,10 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voice-agent/grok-event\",\"offset\":45,"
+      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":45,"
       "\"payload\":{\"event\":{\"type\":"
       "\"response.output_audio_transcript.delta\",\"delta\":\"lo.\"}}},"
-      "{\"type\":\"voice-agent/grok-event\",\"offset\":46,"
+      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":46,"
       "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
       "]],\"scannedThroughOffset\":46,\"state\":null}]]]");
   receive(&fixture, "[\"release\",3,1]");
@@ -382,7 +386,7 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voice-agent/grok-event\",\"offset\":47,"
+      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":47,"
       "\"payload\":{\"event\":{\"type\":\"conversation.item.added\","
       "\"item\":{\"id\":\"item_1\",\"role\":\"user\",\"content\":[[{\"type\":"
       "\"input_audio\",\"transcript\":\"what is the capital of France\"}]]}}}}"
@@ -396,7 +400,7 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voice-agent/grok-event\",\"offset\":48,"
+      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":48,"
       "\"payload\":{\"event\":{\"type\":"
       "\"conversation.item.input_audio_transcription.completed\","
       "\"item_id\":\"item_1\","
@@ -409,7 +413,7 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voice-agent/grok-event\",\"offset\":49,"
+      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":49,"
       "\"payload\":{\"event\":{\"type\":"
       "\"conversation.item.input_audio_transcription.completed\","
       "\"item_id\":\"item_2\","
@@ -418,13 +422,13 @@ static void downlink_flow(void) {
   receive(&fixture, "[\"release\",6,1]");
   assert(heard_user_count == 2);
 
-  /* call-accepted on the stream is what makes a call live. */
+  /* conversation-accepted on the stream is what makes a call live. */
   assert(!fixture.voicelab.call_active);
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voice-agent/call-accepted\",\"offset\":50,"
-      "\"payload\":{\"callId\":\"wsdev\",\"bridge\":\"worker\"}}"
+      "{\"type\":\"events.iterate.com/voice-agent/conversation-accepted\",\"offset\":50,"
+      "\"payload\":{\"conversationId\":\"wsdev\",\"bridge\":\"worker\"}}"
       "]],\"scannedThroughOffset\":50,\"state\":null}]]]");
   receive(&fixture, "[\"release\",7,1]");
   assert(fixture.voicelab.call_active);
@@ -438,14 +442,14 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voice-agent/viseme\",\"offset\":51,"
-      "\"payload\":{\"callId\":\"wsdev\",\"answer\":3,"
+      "{\"type\":\"events.iterate.com/voice-agent/viseme\",\"offset\":51,"
+      "\"payload\":{\"conversationId\":\"wsdev\",\"answer\":3,"
       "\"playoutSamples\":6400,\"viseme\":9,\"confidence\":204}},"
-      "{\"type\":\"voice-agent/viseme\",\"offset\":52,"
-      "\"payload\":{\"callId\":\"wsdev\",\"answer\":3,"
+      "{\"type\":\"events.iterate.com/voice-agent/viseme\",\"offset\":52,"
+      "\"payload\":{\"conversationId\":\"wsdev\",\"answer\":3,"
       "\"playoutSamples\":9600,\"viseme\":15,\"confidence\":204}},"
-      "{\"type\":\"voice-agent/viseme\",\"offset\":53,"
-      "\"payload\":{\"callId\":\"wsdev\",\"answer\":3,\"viseme\":2,"
+      "{\"type\":\"events.iterate.com/voice-agent/viseme\",\"offset\":53,"
+      "\"payload\":{\"conversationId\":\"wsdev\",\"answer\":3,\"viseme\":2,"
       "\"confidence\":100}}"
       "]],\"scannedThroughOffset\":53,\"state\":null}]]]");
   receive(&fixture, "[\"release\",8,1]");
@@ -460,9 +464,9 @@ static void downlink_flow(void) {
   receive(
       &fixture,
       "[\"push\",[\"pipeline\",-1,[],[{\"events\":[["
-      "{\"type\":\"voice-agent/spk-frame\",\"offset\":40,"
+      "{\"type\":\"events.iterate.com/voice-agent/spk-frame\",\"offset\":40,"
       "\"payload\":{\"seq\":0,\"pcm\":\"QUJDRA\"}},"
-      "{\"type\":\"voice-agent/grok-event\",\"offset\":42,"
+      "{\"type\":\"events.iterate.com/voice-agent/grok-event\",\"offset\":42,"
       "\"payload\":{\"event\":{\"type\":\"response.done\"}}}"
       "]],\"scannedThroughOffset\":42,\"state\":null}]]]");
   receive(&fixture, "[\"release\",9,1]");
@@ -534,7 +538,7 @@ int main(void) {
   assert(fixture.voicelab.ping_pending);
   assert(strstr(
       fixture.captured[before],
-      "{\"type\":\"voice-agent/ping\",\"ephemeral\":true,"
+      "{\"type\":\"events.iterate.com/voice-agent/ping\",\"ephemeral\":true,"
       "\"payload\":{\"id\":\"wsdev-0\",\"t0\":2000}}") != NULL);
   /* Second probe while pending is refused. */
   assert(
@@ -586,14 +590,18 @@ int main(void) {
         CAPNWEB_OK);
     assert(fixture.voicelab.call_pending);
     for (index = before; index < fixture.captured_count; ++index) {
-      if (strstr(fixture.captured[index], "call-requested") != NULL) {
+      if (strstr(fixture.captured[index], "conversation-requested") != NULL) {
         start_message = fixture.captured[index];
       }
     }
     assert(start_message != NULL);
     assert(strstr(start_message, "[\"append\"]") != NULL);
-    assert(strstr(start_message, "\"type\":\"voice-agent/call-requested\"") != NULL);
-    assert(strstr(start_message, "\"callId\":\"wsdev\"") != NULL);
+    assert(
+        strstr(
+            start_message,
+            "\"type\":\"events.iterate.com/voice-agent/conversation-requested\"") !=
+        NULL);
+    assert(strstr(start_message, "\"conversationId\":\"wsdev\"") != NULL);
     assert(strstr(start_message, "\"colleague\":true") != NULL);
     assert(strstr(start_message, "\"turns\":\"manual\"") != NULL);
     assert(strstr(start_message, "\"greet\":\"Ready.\"") != NULL);
@@ -604,7 +612,7 @@ int main(void) {
     receive(&fixture, "[\"resolve\",7,[{\"ok\":true}]]");
     assert(!fixture.voicelab.call_pending);
     assert(fixture.voicelab.call_starts == 1U);
-    /* The reply does not make the call live — the stream's call-accepted
+    /* The reply does not make the call live — the stream's conversation-accepted
      * does, because the reply can be slow or lost and a call opened by
      * anyone else counts just the same. */
     assert(!fixture.voicelab.call_active);
@@ -615,12 +623,12 @@ int main(void) {
         CAPNWEB_OK);
     assert(!fixture.voicelab.call_active);
     for (index = before; index < fixture.captured_count; ++index) {
-      if (strstr(fixture.captured[index], "call-ended") != NULL) {
+      if (strstr(fixture.captured[index], "conversation-ended") != NULL) {
         end_message = fixture.captured[index];
       }
     }
     assert(end_message != NULL);
-    assert(strstr(end_message, "\"callId\":\"wsdev\"") != NULL);
+    assert(strstr(end_message, "\"conversationId\":\"wsdev\"") != NULL);
     assert(strstr(end_message, "\"reason\":\"button\"") != NULL);
     /* Durable: no ephemeral marker, or the bridge would still see it but
      * nothing would record that the call was hung up. */
@@ -635,7 +643,7 @@ int main(void) {
         iterate_kit_voicelab_start_call(&fixture.voicelab, NULL) ==
         CAPNWEB_OK);
     for (index = before; index < fixture.captured_count; ++index) {
-      if (strstr(fixture.captured[index], "call-requested") != NULL) {
+      if (strstr(fixture.captured[index], "conversation-requested") != NULL) {
         start_message = fixture.captured[index];
       }
     }
@@ -648,7 +656,7 @@ int main(void) {
   /* Raw diagnostics appends share the one-way lane. */
   {
     static const char stats[] =
-        "[{\"type\":\"voice-agent/dev-stats\",\"ephemeral\":true,"
+        "[{\"type\":\"events.iterate.com/voice-agent/dev-stats\",\"ephemeral\":true,"
         "\"payload\":{\"heapFree\":123456}}]";
     assert(
         iterate_kit_voicelab_append_raw(

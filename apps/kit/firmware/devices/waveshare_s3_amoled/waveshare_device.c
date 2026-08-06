@@ -7,9 +7,9 @@
  *
  * ONE Cap'n Web WebSocket to /api carries everything, exactly like the
  * TypeScript voicelab client: authenticate -> projects.get -> streams.get,
- * then 50 Hz one-way appends of ephemeral voice-agent/mic-frame events (real
+ * then 50 Hz one-way appends of ephemeral events.iterate.com/voice-agent/mic-frame events (real
  * ES8311 microphone), and a live openConnection callback delivering
- * voice-agent/spk-frame events (decoded to the speaker) plus grok-events
+ * events.iterate.com/voice-agent/spk-frame events (decoded to the speaker) plus grok-events
  * (speech_started = barge-in flush, response.done = end of answer,
  * transcript deltas to the screen).
  *
@@ -24,7 +24,7 @@
  * AEC reference — the speaker is never live into an open microphone, and
  * pressing PWR cancels an answer in flight instead of talking over it.
  *
- * Observability is the stream itself (durable voice-agent/dev-stats every 5s);
+ * Observability is the stream itself (durable events.iterate.com/voice-agent/dev-stats every 5s);
  * opening the USB console resets the board.
  *
  * DELIBERATE DEPARTURE from the dual-WebSocket decision in
@@ -380,7 +380,7 @@ static bool awaiting_fresh_stream;
  * turn a speculative preparation into a call nobody wanted.
  */
 static bool preparing_ahead;
-#define CALL_ID "wsdev"
+#define CONVERSATION_ID "wsdev"
 #define GREETING "Hi, I am your Iterate device. What can I do for you?"
 
 /*
@@ -834,7 +834,7 @@ static void on_control(
      * THIS is the place, not the app loop's display observation where it was
      * first written: that runs later and could easily follow the first audio
      * frame of the new call, classifying it against stale state before the reset
-     * landed. This branch is the stream's own call-accepted, on the same
+     * landed. This branch is the stream's own conversation-accepted, on the same
      * serialized receive path that classifies frames — so the reset provably
      * precedes every frame of the call it belongs to, and cannot race the
      * classifier because they are the same task.
@@ -1877,7 +1877,7 @@ static size_t render_health(void *context, char *out, size_t capacity) {
 
 static void append_stats(uint64_t now) {
   static const char prefix[] =
-      "[{\"type\":\"voice-agent/dev-stats\",\"ephemeral\":true,\"payload\":";
+      "[{\"type\":\"events.iterate.com/voice-agent/dev-stats\",\"ephemeral\":true,\"payload\":";
   const size_t prefix_length = sizeof(prefix) - 1U;
   size_t body;
   (void)now;
@@ -2445,7 +2445,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         .project_id = runtime.configuration.project_id,
         .project_api_key = runtime.configuration.project_api_key,
         .stream_path = stream_path,
-        .call_id = CALL_ID,
+        .conversation_id = CONVERSATION_ID,
         .now_ms = now_ms,
         .clock_context = NULL,
         .on_speaker = on_speaker_pcm,
@@ -2590,7 +2590,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
       /*
        * The bridge holds the call in a Durable Object this device cannot
        * see, and it can stop — evicted, redeployed, or simply gone — without
-       * appending the call-ended that would say so. Overnight that left the
+       * appending the conversation-ended that would say so. Overnight that left the
        * device holding a call that had not existed for hours.
        *
        * So the call is believed only while its bridge keeps proving it is
@@ -2625,7 +2625,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
        * device hears it. That is one lane, held by the platform as a
        * callback registration inside the stream's Durable Object, and it can
        * be lost on its own: measured here, a device pinging happily every
-       * five seconds (uplink resolving, RTT 130ms) while eight call-accepted
+       * five seconds (uplink resolving, RTT 130ms) while eight conversation-accepted
        * events and eleven pongs were appended by live bridges and NOT ONE of
        * them arrived. Its batch counter did not move for 68 seconds. The UI
        * said "starting call" the whole time, which is exactly what a person
@@ -2676,7 +2676,7 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
 
       /*
        * call_pending is a promise that something will answer, and promises
-       * expire. It is cleared by call-accepted or by the start RPC failing —
+       * expire. It is cleared by conversation-accepted or by the start RPC failing —
        * so a start whose reply is simply lost (the session died underneath
        * it, the bridge never came up) latched it true forever, and the
        * reconcile below never ran again. The device then waits, with a call

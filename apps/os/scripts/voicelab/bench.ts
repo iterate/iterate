@@ -51,7 +51,7 @@ export async function bench(options: BenchOptions) {
   using subStream = sub.streams.get(path);
   const connection = await openResilientConnection(subStream, {
     connectionKey: `voicelab-bench-${crypto.randomUUID().slice(0, 8)}`,
-    eventTypes: ["voice-agent/bench-frame"],
+    eventTypes: ["events.iterate.com/voice-agent/bench-frame"],
     quietMs: 1500,
     trafficExpected: () => sending,
     onEvents: (events, batch) => {
@@ -96,7 +96,7 @@ export async function bench(options: BenchOptions) {
     const events = [];
     for (let i = 0; i < framesPerAppend && seq < total; i++, seq++) {
       events.push({
-        type: "voice-agent/bench-frame",
+        type: "events.iterate.com/voice-agent/bench-frame",
         ephemeral: true as const,
         payload: {
           seq,
