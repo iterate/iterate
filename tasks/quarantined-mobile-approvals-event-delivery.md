@@ -9,79 +9,17 @@ tags: [ci, e2e, mobile, approvals, notifications, quarantine, flake]
 
 ## Status
 
-Implementation is about 98% complete. Both skips are removed, failures name
-the first missing durable transition, and the dynamic-worker ownership leaks,
-foreground-approval ordering race, accepted-message UI gap, and orphaned live
-stream callback now have regression coverage. Exact-head preview `16c29a0`
-passed its workflow, but approvals needed its test-level retry after a
-Cloudflare storage reset orphaned the project and notification callbacks. A
-new deployed red E2E reproduces the 20-second recovery delay. Pending hosted
-callbacks now probe their owner after one second, and infrastructure resets
-retry after one second without inheriting an inflated exponential backoff.
-The corrected head passed one clean exact-head preview. The first 25-run gate
-attempt was correctly rejected for a separate Project-create lifecycle reset
-and error-level hosted acknowledgement timeouts after rollout. Project-create
-recovery and explicit acknowledgement-timeout classification now have
-red/green coverage. The next attempt then exposed the Project processor's
-direct readiness probe bypassing the existing not-yet-seeded repo classifier;
-that bounded retry now has red/green coverage too. The combined head needs a
-fresh preview before the gate restarts from zero. Its first preview found one
-test-only split catalog wait whose second half accidentally used a five-second
-default despite the test's existing 30-second propagation budget; that wait is
-now one exact-state condition under the original budget. Eight subsequent
-gate candidates made both restored cases first-try green with no durable
-callback failures. Candidate nine exposed a race in the new stream-incarnation
-regression: Cloudflare can return from the deliberate kill just before the
-relay observes its broken RPC leg. The test now requires that public ping to
-transition to false inside the owner's existing 15-second liveness window. The
-next head's first candidate exposed a separate product defect: final hosted-
-wake alarm reconciliation re-derived only the 20-second durable watchdog, not
-the live callback's one-second owner probe. A red/green unit regression now
-makes the probe part of every alarm recomputation. The exact-head gate restarts
-from zero after preview deployment. Two other rejected candidates exposed an
-isolated Artifacts 503 during `Repo.log` and one 160.5-second Artifacts create
-outlier. Repo clones now retry only classified transient infrastructure
-failures, while idempotent artifact create/readback has one eight-second total
-deadline that returns the obligation to durable recovery. The first preview on
-that head proved recovery but exposed both named repo-readiness outcomes still
-crossing processor RPC without their retryable flag and polluting callback
-error telemetry. The repo errors now carry that wire-safe availability tag;
-the exact-head gate remains at zero pending deployment. The next exact-head
-preview kept all restored mobile cases first-try green, but a repo-IDE case
-retried after recovery certified an empty Artifact as seeded. The Workers
-binding repo handle omitted the assumed REST-only `lastPushAt` metadata, so
-`undefined !== null` skipped the seed. Recovery now verifies the actual
-default-branch head through the binding's server-side `log()` call inside the
-same eight-second budget; missing heads seed, while existing heads avoid a
-potentially unbounded clone. Four exact-head canonical candidates were retry-
-free. The fifth candidate reset the streak: approvals
-hit Better Auth's IP-wide 3/minute email-OTP limit while seven signup flows
-shared one CI runner, and the recreated-source lifecycle proof also retried.
-Fixed-test-OTP stages now allow the fully parallel signup lane while production
-retains 3/minute. Cloudflare traces show the lifecycle proof's stream reset,
-append, and wake completed before its observational processor-state callback
-stayed pending until Vitest's outer timeout. That callback now has a five-
-second receiver-unavailable boundary, and the proof polls through only that
-named transient inside its unchanged restoration deadline. Both fixes need
-exact-head verification. Their combined head passed its initial preview and
-three strict candidates before candidate four exposed a different stale-
-capability defect: after `ctx.abort()`, 276 rapid relay pings all returned the
-old handle's captured `true`. Relay liveness now asks a fresh Stream DO about
-the exact wake-socket identity; live and deliberately dormant sockets remain
-healthy, while an orphan absent from the current incarnation reports dead.
-Its first gate attempt exposed unrelated project-creation instability: one
-candidate had three retries, the next three were clean, then a repo-lazy 503
-and a second malformed Artifacts readback reset the streak. The binding
-contract says `get()` returns a repo handle with `log()`, so incomplete
-readbacks now remain inside the existing bounded readiness loop instead of
-escaping immediately. That head then passed three wholly clean candidates;
-candidate four emitted a real callback error after a long-lived matrix test
-project's host Durable Object exceeded its memory limit. Cloudflare and
-PostHog correlation traced this to streams-index ingestion eagerly loading all
-project processor folds even with no live-state watcher. Cold batch indexing
-now commits its durable row without that fan-out; watcher-driven reload remains
-single-flight. A red/green host regression, 42 focused tests, OS typecheck,
-lint, and formatting are green. The gate is zero pending deployment.
+Implementation is about 98% complete. Both mobile skips are removed and the
+reported delivery defects plus each recovery failure found by the strict gate
+have regression coverage. The latest head also stops cold project indexing
+from eagerly loading every processor fold.
+
+The new-head baseline was clean, but its first gate candidate exposed an
+ambiguous empty Artifacts repo whose valid control-plane handle never gained
+`log()`. Recovery now treats that shape explicitly and uses the safe Git
+clone-and-seed path to preserve a real head or seed an empty remote. Local
+repo/project suites, typecheck, lint, and formatting are green. The 25-run
+streak remains at zero until this fix passes a fresh preview.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -527,3 +465,14 @@ Test these in order; do not treat the first plausible one as the conclusion.
   folds load only for an attached live-state watcher. The regression is red on
   the old fan-out and green with the fix; four focused suites pass 42 tests,
   and OS typecheck, lint, and formatting pass.
+- 2026-08-06: The first `cb7f670c5` candidate passed both restored mobile
+  flows first try but retried `dashboard.spec.ts`. Its trace proved project
+  creation, not the browser, was stuck: config repo
+  `prj_2de87d10bdc34ea48b0b5ed0f622ea42` repeated the bounded eight-second
+  Artifacts drive until `waitUntilProcessed` expired at offset 7. REST state
+  confirmed an existing empty repo (`last_push_at: null`, empty `main` log),
+  while the Workers binding returned a valid token-management handle without
+  `log()`. Added red/green coverage and an explicit `requires-clone` branch
+  state. Recovery now lets the existing clone-and-seed operation preserve a
+  real head or seed the empty remote instead of retrying that handle forever.
+  The 273-test repo/project set, OS typecheck, lint, and formatting pass.

@@ -16,8 +16,8 @@ test("an existing seeded repo reports its branch head", async () => {
   });
 
   expect(result).toEqual({
+    branchState: "has-commits",
     created: false,
-    hasCommits: true,
     initialWriteToken: null,
   });
 });
@@ -35,6 +35,7 @@ test("a new repo preserves create's initial write token without reading it back"
   });
 
   expect(result).toEqual({
+    branchState: "empty",
     created: true,
     initialWriteToken: "art_v1_initial",
   });
@@ -61,8 +62,8 @@ test("an existing repo without a branch remains eligible for recovery", async ()
   });
 
   expect(result).toEqual({
+    branchState: "empty",
     created: false,
-    hasCommits: false,
     initialWriteToken: null,
   });
 });
@@ -82,8 +83,8 @@ test("a missing default branch remains eligible for recovery", async () => {
   await expect(
     getOrCreateArtifact(artifacts, "project-repo", { defaultBranch: "main" }),
   ).resolves.toEqual({
+    branchState: "empty",
     created: false,
-    hasCommits: false,
     initialWriteToken: null,
   });
 });
@@ -132,8 +133,8 @@ test("an ambiguous create waits for the existing repo to become readable", async
     await vi.runAllTimersAsync();
 
     await expect(result).resolves.toEqual({
+      branchState: "empty",
       created: false,
-      hasCommits: false,
       initialWriteToken: null,
     });
     expect(artifacts.create).toHaveBeenCalledOnce();
@@ -159,11 +160,31 @@ test("an ambiguous create waits for get to return a complete repo handle", async
   });
 
   expect(result).toEqual({
+    branchState: "empty",
     created: false,
-    hasCommits: false,
     initialWriteToken: null,
   });
   expect(artifacts.get).toHaveBeenCalledTimes(2);
+});
+
+test("an existing control-plane repo handle defers branch verification to the git remote", async () => {
+  const artifacts = {
+    create: vi.fn(async () => {
+      throw artifactError("ALREADY_EXISTS");
+    }),
+    get: vi.fn(async () => ({
+      createToken: vi.fn(async () => ({ plaintext: "art_v1_recovery" })),
+    })),
+  };
+
+  await expect(
+    getOrCreateArtifact(artifacts, "project-repo", { defaultBranch: "main" }),
+  ).resolves.toEqual({
+    branchState: "requires-clone",
+    created: false,
+    initialWriteToken: null,
+  });
+  expect(artifacts.get).toHaveBeenCalledOnce();
 });
 
 test("a stalled create returns to durable recovery before the hosted callback deadline", async () => {

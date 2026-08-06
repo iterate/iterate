@@ -15,18 +15,22 @@ const EXISTING_ARTIFACT_READY_MAX_RETRY_MS = 4_000;
 
 export type GetOrCreateArtifactResult =
   | {
+      branchState: "empty";
       created: true;
       initialWriteToken: string;
     }
   | {
+      branchState: "empty" | "has-commits" | "requires-clone";
       created: false;
-      hasCommits: boolean;
       initialWriteToken: null;
     };
 
-type ExistingArtifact = {
-  log(options: { limit: number; ref: string }): Promise<Array<{ hash: string }>>;
-};
+type ExistingArtifact =
+  | {
+      kind: "content-readable";
+      log(options: { limit: number; ref: string }): Promise<Array<{ hash: string }>>;
+    }
+  | { kind: "control-plane-only" };
 
 /**
  * Create an Artifacts repository idempotently and report whether it has
@@ -61,6 +65,7 @@ export async function getOrCreateArtifact(
       () => artifactCreationTimeout(name, undefined),
     );
     return {
+      branchState: "empty",
       created: true,
       initialWriteToken: stripArtifactTokenExpiry(created.token),
     };
@@ -69,6 +74,14 @@ export async function getOrCreateArtifact(
   }
 
   const existing = await waitForExistingArtifact(artifacts, name, deadlineAt);
+  if (existing.kind === "control-plane-only") {
+    // Artifacts can expose the documented token-management handle without its
+    // content-read methods after an ambiguous empty create. The caller's
+    // clone-and-seed path is authoritative: it preserves
+    // an existing branch unchanged and creates the deterministic root only
+    // when the Git remote is empty.
+    return { branchState: "requires-clone", created: false, initialWriteToken: null };
+  }
   const hasCommits = await beforeArtifactCreationDeadline(
     async () => {
       try {
@@ -87,7 +100,11 @@ export async function getOrCreateArtifact(
     deadlineAt,
     () => artifactReadTimeout(name, undefined),
   );
-  return { created: false, hasCommits, initialWriteToken: null };
+  return {
+    branchState: hasCommits ? "has-commits" : "empty",
+    created: false,
+    initialWriteToken: null,
+  };
 }
 
 async function waitForExistingArtifact(
@@ -126,17 +143,29 @@ async function waitForExistingArtifact(
 }
 
 function requireExistingArtifact(value: unknown): ExistingArtifact {
-  if (
-    typeof value !== "object" ||
-    value === null ||
-    !("log" in value) ||
-    typeof value.log !== "function"
-  ) {
-    throw new RepoNotSeededError("Artifacts get() returned a repo handle without log().");
+  if (typeof value !== "object" || value === null) {
+    throw new RepoNotSeededError("Artifacts get() did not return a repo handle.");
   }
-  // The runtime check above supplies the content-read method missing from the
-  // pinned workers-types release but present in the deployed binding.
-  return value as ExistingArtifact;
+  if (hasArtifactLog(value)) {
+    // The runtime check supplies the content-read method missing from the
+    // pinned workers-types release but present in the deployed binding.
+    return { kind: "content-readable", log: value.log.bind(value) };
+  }
+  if ("createToken" in value && typeof value.createToken === "function") {
+    return { kind: "control-plane-only" };
+  }
+  throw new RepoNotSeededError(
+    "Artifacts get() returned a repo handle without log() or createToken().",
+  );
+}
+
+type ExistingArtifactLog = (options: {
+  limit: number;
+  ref: string;
+}) => Promise<Array<{ hash: string }>>;
+
+function hasArtifactLog(value: object): value is { log: ExistingArtifactLog } {
+  return "log" in value && typeof value.log === "function";
 }
 
 async function beforeArtifactCreationDeadline<T>(

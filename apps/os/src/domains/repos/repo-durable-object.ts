@@ -1891,7 +1891,7 @@ export class RepoDurableObject extends DurableObject<Env> {
     // A branch head is authoritative evidence that an existing Artifact is
     // already seeded. Recovery only needs to journal repos/created; the
     // binding's server-side log check avoids cloning a potentially large repo.
-    if (!artifact.created && artifact.hasCommits) {
+    if (artifact.branchState === "has-commits") {
       return { artifactName, defaultBranch, remote };
     }
 
