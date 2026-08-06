@@ -392,6 +392,15 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // the immediately preceding projection. Only a request provenance-
         // stamped by this agent processor can enter that active set.
         if (!previousState.activeScriptExecutionIds.includes(executionId)) break;
+        // `/script` publishes its successful result directly as interruptive
+        // context, then returns the same value so the capability host keeps it
+        // in the script-results preamble. Only its failures render here.
+        if (
+          executionId.startsWith(SLASH_COMMAND_EXECUTION_PREFIX) &&
+          settlement.status === "succeeded"
+        ) {
+          break;
+        }
         // Per-event render (blocked): the settlement is delivered once, and a
         // lost render would silently drop the script's result from the
         // conversation. Rendering may first spill an oversized result into

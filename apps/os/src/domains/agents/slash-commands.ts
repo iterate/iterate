@@ -29,6 +29,8 @@ type ResolvedSlashCommand =
     }
   | {
       command: "script";
+      /** The normalized command text shown alongside its result. */
+      invocation: string;
       /** The user-authored body, normalized to return a single expression. */
       body: string;
     };
@@ -76,8 +78,9 @@ export function resolveSlashCommand(content: string): ResolvedSlashCommand | nul
     const fenced = code.match(/^```(?:ts|typescript|js|javascript)?\s*\n([\s\S]*?)\n?```$/);
     if (fenced) code = fenced[1]!.trim();
     if (code === "") return null;
-    // A single expression gets an implicit `return` so `/script await
-    // itx.whatever()` answers with the value; anything statement-shaped
+    // A single expression gets an implicit `return await`, so `/script
+    // itx.whatever()` and `/script await itx.whatever()` behave identically;
+    // anything statement-shaped
     // (semicolons, braces, multiple lines, statement keywords — anything
     // where `return (...)` would be wrong or invalid) runs verbatim and
     // returns whatever it explicitly returns.
@@ -88,48 +91,42 @@ export function resolveSlashCommand(content: string): ResolvedSlashCommand | nul
     // Closing paren on its OWN line: a trailing `// note` on the expression
     // must not comment it out (and `//` inside a URL string makes detecting
     // comments non-trivial, so the newline handles every case).
-    const body = singleExpression ? `return (${code}\n);` : code;
-    return { command: "script", body };
+    const expression = code.replace(/^await\s+/, "");
+    const body = singleExpression ? `return await (${expression}\n);` : code;
+    return { command: "script", invocation: `/script ${code}`, body };
   }
 
   return null;
 }
 
 /** Build the event-specific script source after the command's execution ID is
- * known. `/script` publishes successful results itself; its settlement stays
- * reserved for failures and the no-result completion fact. */
+ * known. `/script` publishes successful results itself and still returns the
+ * value so the capability host can retain it in the script-results preamble. */
 export function buildSlashCommandCode(command: ResolvedSlashCommand, executionId: string): string {
   if (command.command === "example") return command.code;
 
   const actor = JSON.stringify({ type: "script", executionId });
   const idempotencyKey = JSON.stringify(`agent/slash-command-result@${executionId}`);
+  const resultPrefix = JSON.stringify(
+    `User ran \`${command.invocation}\` command with the following result:\n\n`,
+  );
   return `async (itx) => {
-const agent = itx.agent;
-if (!agent) throw new Error("/script requires an agent-scoped itx");
 const result = await (async () => {
 ${command.body}
 })();
-if (result === undefined) return;
-let content;
-if (typeof result === "string") {
-  content = result;
-} else {
-  try {
-    content = JSON.stringify(result, null, 2) ?? String(result);
-  } catch {
-    content = String(result);
-  }
-}
-await agent.append({
+if (result === undefined) return result;
+if (!itx.agent) throw new Error("/script requires an agent-scoped itx");
+await itx.agent.append({
   type: "events.iterate.com/agents/context-added",
   payload: {
     role: "developer",
-    content,
+    content: ${resultPrefix} + (typeof result === "string" ? result : JSON.stringify(result, null, 2)),
     actor: ${actor},
     llmRequestPolicy: { behaviour: "interrupt-current-request" },
   },
   idempotencyKey: ${idempotencyKey},
 });
+return result;
 }`;
 }
 

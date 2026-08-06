@@ -2,23 +2,27 @@ import { expect, test } from "vitest";
 import { buildSlashCommandCode, resolveSlashCommand } from "./slash-commands.ts";
 
 test("/script wraps a single expression and appends its result as interruptive context", () => {
-  const resolved = resolveSlashCommand("/script await itx.__describe()");
+  const resolved = resolveSlashCommand("/script itx.__describe()");
   expect(resolved).toMatchObject({ command: "script" });
   const code = buildSlashCommandCode(resolved!, "slash-command:7");
   expect(code).toContain(
-    "const result = await (async () => {\nreturn (await itx.__describe()\n);\n})();",
+    "const result = await (async () => {\nreturn await (itx.__describe()\n);\n})();",
   );
   expect(code).toContain('type: "events.iterate.com/agents/context-added"');
+  expect(code).toContain(
+    'content: "User ran `/script itx.__describe()` command with the following result:\\n\\n"',
+  );
   expect(code).toContain('actor: {"type":"script","executionId":"slash-command:7"}');
   expect(code).toContain('llmRequestPolicy: { behaviour: "interrupt-current-request" }');
   expect(code).toContain('idempotencyKey: "agent/slash-command-result@slash-command:7"');
+  expect(code).toContain("return result;");
 });
 
 test("/script return wrap survives a trailing line comment", () => {
   // The closing paren lives on its own line, so `// note` cannot eat it.
   const resolved = resolveSlashCommand("/script await itx.__describe() // sanity check");
   expect(buildSlashCommandCode(resolved!, "slash-command:8")).toContain(
-    "return (await itx.__describe() // sanity check\n);",
+    "return await (itx.__describe() // sanity check\n);",
   );
 });
 

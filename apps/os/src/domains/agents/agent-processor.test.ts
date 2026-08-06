@@ -1994,7 +1994,10 @@ describe("AgentProcessor slash commands", () => {
       executionId: `slash-command:${commandOffset}`,
     });
     expect(scriptRequests[0]!.payload.code).toContain(
-      "const result = await (async () => {\nreturn (await itx.__describe()\n);\n})();",
+      "const result = await (async () => {\nreturn await (itx.__describe()\n);\n})();",
+    );
+    expect(scriptRequests[0]!.payload.code).toContain(
+      "User ran `/script await itx.__describe()` command with the following result",
     );
     expect(scriptRequests[0]!.payload.code).toContain(
       'llmRequestPolicy: { behaviour: "interrupt-current-request" }',
@@ -2003,6 +2006,22 @@ describe("AgentProcessor slash commands", () => {
     // context item appended by the script, not from the command message.
     expect(h.llm.calls).toHaveLength(0);
     expect(h.events(REQUESTED)).toHaveLength(0);
+
+    const itemsBeforeSettlement = h.state().contextItems.length;
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: {
+          executionId: `slash-command:${commandOffset}`,
+          settlement: { status: "succeeded", result: { projectId: "project-1" } },
+        },
+      },
+    ]);
+    // The generated script already appended this result. Its successful
+    // settlement only preserves the value for `results`; it must not append a
+    // second context item.
+    expect(h.state().contextItems).toHaveLength(itemsBeforeSettlement);
   });
 
   it("a /script mid-turn runs as a side-band action: no interrupt, no lost command", async () => {
