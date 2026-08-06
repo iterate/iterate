@@ -42,9 +42,16 @@ const MaterializedEmptyArtifact = z.strictObject({
     })
     .optional(),
 });
+const PreparedEmptyArtifact = z.strictObject({
+  artifactName: z.string().min(1),
+  defaultBranch: z.string().min(1),
+  remote: z.string().url(),
+  writeToken: z.string().min(1),
+});
 const QueuedRepoBirth = RepoBirthHandoffInput.extend({
   failedAttempts: z.number().int().nonnegative(),
   materializedArtifact: MaterializedEmptyArtifact.optional(),
+  preparedArtifact: PreparedEmptyArtifact.optional(),
 });
 
 type RepoBirthHandoff = {
@@ -52,9 +59,14 @@ type RepoBirthHandoff = {
   streamId: string;
 };
 type MaterializedEmptyArtifact = z.infer<typeof MaterializedEmptyArtifact>;
+type PreparedEmptyArtifact = z.infer<typeof PreparedEmptyArtifact>;
+type PreparedEmptyArtifactResult =
+  | { kind: "already-seeded"; artifact: MaterializedEmptyArtifact }
+  | { kind: "needs-seed"; artifact: PreparedEmptyArtifact };
 type QueuedRepoBirth = RepoBirthHandoff & {
   failedAttempts: number;
   materializedArtifact?: MaterializedEmptyArtifact;
+  preparedArtifact?: PreparedEmptyArtifact;
 };
 type RepoBirthTerminal = EmittedInput<RepoProcessorContract> & {
   type: "events.iterate.com/repos/created" | "events.iterate.com/repos/create-failed";
@@ -67,9 +79,10 @@ type RepoBirthCoordinatorDeps = {
   getEventPage(): Promise<{ events: StreamEvent[]; streamId: string }>;
   getQueue(): unknown;
   isRetryableError(error: unknown): boolean;
-  materialize(): Promise<MaterializedEmptyArtifact>;
   now(): number;
+  prepare(): Promise<PreparedEmptyArtifactResult>;
   putQueue(queued: QueuedRepoBirth): void;
+  seed(prepared: PreparedEmptyArtifact): Promise<MaterializedEmptyArtifact>;
   setAlarm(scheduledTime: number): Promise<void>;
 };
 
@@ -143,26 +156,45 @@ export class RepoBirthCoordinator {
       }
 
       let artifact = queued.materializedArtifact;
-      if (artifact === undefined) {
+      let prepared = queued.preparedArtifact;
+      if (artifact === undefined && prepared === undefined) {
         try {
-          artifact = await this.deps.materialize();
+          const preparation = await this.deps.prepare();
+          if (preparation.kind === "already-seeded") {
+            artifact = preparation.artifact;
+            active = { ...queued, materializedArtifact: artifact };
+          } else {
+            prepared = preparation.artifact;
+            active = { ...queued, preparedArtifact: prepared };
+          }
+          this.deps.putQueue(active);
         } catch (error) {
           if (this.deps.isRetryableError(error)) throw error;
-          await this.deps.append(queued.streamId, {
-            type: "events.iterate.com/repos/create-failed",
-            idempotencyKey: `${RepoProcessorContract.slug}/create-failed`,
-            payload: {
-              error: error instanceof Error ? error.message : String(error),
-              request: queued.request,
-            },
-          });
-          this.deps.deleteQueue();
+          await this.#recordTerminalCreationFailure(queued, error);
+          return;
+        }
+      }
+
+      if (artifact === undefined) {
+        if (prepared === undefined) {
+          throw new Error("Empty repo creation has neither a prepared nor materialized Artifact.");
+        }
+        try {
+          artifact = await this.deps.seed(prepared);
+        } catch (error) {
+          if (this.deps.isRetryableError(error)) throw error;
+          await this.#recordTerminalCreationFailure(queued, error);
           return;
         }
         // The Artifact and seed may be durable before the Stream append
         // acknowledges. Persist their exact result first so recovery never
         // repeats vendor work merely because the terminal acknowledgement died.
-        active = { ...queued, materializedArtifact: artifact };
+        active = {
+          request: queued.request,
+          streamId: queued.streamId,
+          failedAttempts: queued.failedAttempts,
+          materializedArtifact: artifact,
+        };
         this.deps.putQueue(active);
       }
 
@@ -186,6 +218,7 @@ export class RepoBirthCoordinator {
         console.info("empty repo creation will retry after a classified outage", {
           failedAttempts,
           maxAttempts: MAX_CREATION_ATTEMPTS,
+          reason: error instanceof Error ? `${error.name}: ${error.message}` : String(error),
         });
         await this.deps.setAlarm(this.deps.now() + CREATION_RETRY_DELAY_MS);
         return;
@@ -217,6 +250,18 @@ export class RepoBirthCoordinator {
     if ((await this.deps.getAlarm()) !== null) return;
     await this.deps.setAlarm(this.deps.now() + CREATION_HANDOFF_DELAY_MS);
   }
+
+  async #recordTerminalCreationFailure(queued: QueuedRepoBirth, error: unknown): Promise<void> {
+    await this.deps.append(queued.streamId, {
+      type: "events.iterate.com/repos/create-failed",
+      idempotencyKey: `${RepoProcessorContract.slug}/create-failed`,
+      payload: {
+        error: error instanceof Error ? error.message : String(error),
+        request: queued.request,
+      },
+    });
+    this.deps.deleteQueue();
+  }
 }
 
 /**
@@ -246,9 +291,10 @@ export class RepoBirthCoordinatorDurableObject extends DurableObject<Env> {
       }),
     getQueue: () => this.ctx.storage.kv.get<unknown>("repo-birth:queued"),
     isRetryableError: isRetryableRepoBirthError,
-    materialize: () => this.#materialize(),
     now: () => Date.now(),
+    prepare: () => this.#prepare(),
     putQueue: (queued) => void this.ctx.storage.kv.put("repo-birth:queued", queued),
+    seed: (prepared) => this.#seed(prepared),
     setAlarm: (scheduledTime) => this.ctx.storage.setAlarm(scheduledTime),
   });
 
@@ -264,7 +310,7 @@ export class RepoBirthCoordinatorDurableObject extends DurableObject<Env> {
     return this.#coordinator.alarm();
   }
 
-  async #materialize(): Promise<MaterializedEmptyArtifact> {
+  async #prepare(): Promise<PreparedEmptyArtifactResult> {
     const artifactName = RepoArtifactNameCodec.stringify(this.#name);
     const defaultBranch = REPO_DEFAULT_BRANCH;
     const remote = `https://${this.env.ARTIFACTS_ACCOUNT_ID}.artifacts.cloudflare.net/git/${this.env.ARTIFACTS_NAMESPACE}/${artifactName}.git`;
@@ -281,27 +327,35 @@ export class RepoBirthCoordinatorDurableObject extends DurableObject<Env> {
       }),
     );
     if (artifact.branchState === "has-commits") {
-      return { artifactName, defaultBranch, remote };
+      return { kind: "already-seeded", artifact: { artifactName, defaultBranch, remote } };
     }
 
-    const token =
+    const writeToken =
       artifact.initialWriteToken ||
       (await timedStep("create-timing", timing, "artifact-token", () =>
         artifactWriteToken(this.env.ARTIFACTS, artifactName),
       ));
+    return {
+      kind: "needs-seed",
+      artifact: { artifactName, defaultBranch, remote, writeToken },
+    };
+  }
+
+  async #seed(prepared: PreparedEmptyArtifact): Promise<MaterializedEmptyArtifact> {
+    const timing = { path: this.#name.path, projectId: this.#name.projectId };
     const seeded = await timedStep("create-timing", timing, "artifact-seed", () =>
       seedArtifactRepo({
-        branch: defaultBranch,
+        branch: prepared.defaultBranch,
         files: projectRepoSeedFiles(parseConfig(this.env)),
-        remote,
-        token,
+        remote: prepared.remote,
+        token: prepared.writeToken,
       }),
     );
     return {
-      artifactName,
-      defaultBranch,
-      remote,
-      seededHead: { branch: defaultBranch, ...seeded },
+      artifactName: prepared.artifactName,
+      defaultBranch: prepared.defaultBranch,
+      remote: prepared.remote,
+      seededHead: { branch: prepared.defaultBranch, ...seeded },
     };
   }
 

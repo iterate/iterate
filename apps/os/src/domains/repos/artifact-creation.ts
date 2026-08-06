@@ -6,9 +6,10 @@ import {
 } from "./utils.ts";
 
 // Healthy creates finish in about two seconds (live p99 2.1s). Hosted callers
-// bound both the create attempt and an ambiguous-create readback. The durable
-// coordinator deliberately passes a null create timeout: the successful
-// response carries a one-time token and must not be abandoned by Promise.race.
+// tightly bound both the create attempt and an ambiguous-create readback. The
+// durable coordinator uses a wider bound and checkpoints the successful
+// response's one-time token before Git seeding, so a seed retry never abandons
+// that token or waits for the new repository's read plane.
 export const HOSTED_ARTIFACT_CREATE_TIMEOUT_MS = 8_000;
 export const HOSTED_ARTIFACT_RECOVERY_TIMEOUT_MS = 8_000;
 const EXISTING_ARTIFACT_READY_INITIAL_RETRY_MS = 250;

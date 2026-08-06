@@ -19,6 +19,12 @@ const ARTIFACT = {
     contentHash: "seed-content-hash",
   },
 };
+const PREPARED_ARTIFACT = {
+  artifactName: ARTIFACT.artifactName,
+  defaultBranch: ARTIFACT.defaultBranch,
+  remote: ARTIFACT.remote,
+  writeToken: "initial-artifact-write-token",
+};
 
 test("enqueue persists the fenced obligation and only arms the alarm", async () => {
   const h = coordinator();
@@ -27,7 +33,7 @@ test("enqueue persists the fenced obligation and only arms the alarm", async () 
 
   expect(h.queued()).toEqual({ ...HANDOFF, failedAttempts: 0 });
   expect(h.setAlarm).toHaveBeenCalledOnce();
-  expect(h.materialize).not.toHaveBeenCalled();
+  expect(h.prepare).not.toHaveBeenCalled();
   expect(h.append).not.toHaveBeenCalled();
 });
 
@@ -37,7 +43,8 @@ test("alarm materializes once, checkpoints it, and appends the fenced birth cert
 
   await h.value.alarm();
 
-  expect(h.materialize).toHaveBeenCalledOnce();
+  expect(h.prepare).toHaveBeenCalledOnce();
+  expect(h.seed).toHaveBeenCalledExactlyOnceWith(PREPARED_ARTIFACT);
   expect(h.append).toHaveBeenCalledWith(HANDOFF.streamId, {
     type: "events.iterate.com/repos/created",
     idempotencyKey: "repo/created",
@@ -61,7 +68,8 @@ test("a lost terminal acknowledgement resumes from the materialized checkpoint",
   const recovered = coordinator(first.records);
   await recovered.value.alarm();
 
-  expect(recovered.materialize).not.toHaveBeenCalled();
+  expect(recovered.prepare).not.toHaveBeenCalled();
+  expect(recovered.seed).not.toHaveBeenCalled();
   expect(recovered.append).toHaveBeenCalledOnce();
   expect(recovered.queued()).toBeUndefined();
 });
@@ -86,9 +94,7 @@ test("a classified terminal-append outage preserves the materialized checkpoint"
 test("a classified outage re-arms explicitly without emitting error telemetry", async () => {
   const h = coordinator();
   await h.value.enqueue(HANDOFF);
-  h.materialize.mockRejectedValueOnce(
-    Object.assign(new Error("Artifacts 503"), { retryable: true }),
-  );
+  h.prepare.mockRejectedValueOnce(Object.assign(new Error("Artifacts 503"), { retryable: true }));
 
   await expect(h.value.alarm()).resolves.toBeUndefined();
 
@@ -97,10 +103,38 @@ test("a classified outage re-arms explicitly without emitting error telemetry", 
   expect(h.append).not.toHaveBeenCalled();
 });
 
+test("a seed outage checkpoints the initial write token before retrying", async () => {
+  const first = coordinator();
+  await first.value.enqueue(HANDOFF);
+  first.seed.mockRejectedValueOnce(
+    Object.assign(new Error("Artifacts Git 503"), { retryable: true }),
+  );
+
+  await expect(first.value.alarm()).resolves.toBeUndefined();
+
+  expect(first.queued()).toEqual({
+    ...HANDOFF,
+    failedAttempts: 1,
+    preparedArtifact: PREPARED_ARTIFACT,
+  });
+
+  const recovered = coordinator(first.records);
+  await recovered.value.alarm();
+
+  expect(recovered.prepare).not.toHaveBeenCalled();
+  expect(recovered.seed).toHaveBeenCalledExactlyOnceWith(PREPARED_ARTIFACT);
+  expect(recovered.append).toHaveBeenCalledExactlyOnceWith(HANDOFF.streamId, {
+    type: "events.iterate.com/repos/created",
+    idempotencyKey: "repo/created",
+    payload: { ...ARTIFACT, request: REQUEST },
+  });
+  expect(recovered.queued()).toBeUndefined();
+});
+
 test("five classified outages append one durable terminal failure", async () => {
   const h = coordinator();
   await h.value.enqueue(HANDOFF);
-  h.materialize.mockRejectedValue(Object.assign(new Error("Artifacts 503"), { retryable: true }));
+  h.prepare.mockRejectedValue(Object.assign(new Error("Artifacts 503"), { retryable: true }));
 
   for (let attempt = 0; attempt < 5; attempt += 1) await h.value.alarm();
 
@@ -130,7 +164,7 @@ test("an obsolete stream lifetime is dropped before Artifacts work", async () =>
 
   await h.value.alarm();
 
-  expect(h.materialize).not.toHaveBeenCalled();
+  expect(h.prepare).not.toHaveBeenCalled();
   expect(h.append).not.toHaveBeenCalled();
   expect(h.queued()).toBeUndefined();
 });
@@ -154,7 +188,11 @@ function coordinator(records = new Map<string, unknown>()) {
     events: [committedRequest()],
     streamId: HANDOFF.streamId,
   }));
-  const materialize = vi.fn(async () => ARTIFACT);
+  const prepare = vi.fn(async () => ({
+    kind: "needs-seed" as const,
+    artifact: PREPARED_ARTIFACT,
+  }));
+  const seed = vi.fn(async () => ARTIFACT);
   const append = vi.fn(async () => undefined);
   const value = new RepoBirthCoordinator({
     append,
@@ -163,17 +201,19 @@ function coordinator(records = new Map<string, unknown>()) {
     getEventPage,
     getQueue: () => records.get("repo-birth:queued"),
     isRetryableError: (error) => (error as { retryable?: boolean }).retryable === true,
-    materialize,
     now: () => 1_000,
+    prepare,
     putQueue: (queued) => void records.set("repo-birth:queued", queued),
+    seed,
     setAlarm,
   });
   return {
     append,
     getEventPage,
-    materialize,
+    prepare,
     queued: () => records.get("repo-birth:queued"),
     records,
+    seed,
     setAlarm,
     value,
   };

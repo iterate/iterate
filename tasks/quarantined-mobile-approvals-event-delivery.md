@@ -54,6 +54,11 @@ version readiness proof. Its first deployed check proved the orchestrator
 waited for that condition, then exposed an E2E helper still requiring the old
 literal `OK` body. The helper now validates the exact JSON/header version
 contract; a fresh head is pending.
+That fresh baseline passed every group and both restored mobile flows first
+try, but a sandbox case retried after project config-repo birth lost its
+successful Artifact create token when the first Git seed failed. The durable
+birth queue now checkpoints that token before seeding and reuses it on the
+bounded alarm retry; another exact-head baseline is pending.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -649,3 +654,17 @@ Test these in order; do not treat the first plausible one as the conclusion.
   version-pinned fetch and accepts only matching JSON body versions plus the
   public version header. Focused red/green coverage rejects both coordinator
   and header mismatches. This run is rejected; the streak remains zero.
+- 2026-08-06: Exact-head baseline workflow `xw97zz815h` on `e896429c2` passed
+  all six groups. Semaphore's 14 tests passed first try after two expected 503
+  rollout probes; mobile approvals passed in 49.3 seconds and notifications in
+  60 seconds. The gate still rejected one OS Vitest retry. PostHog isolated its
+  first attempt to the `create test project` phase (100.685 seconds). Exact
+  Worker logs for project `prj_bb200507b3424c189c342ad04f3cb2bc` show config
+  Artifact creation succeeded in 1.463 seconds, its Git seed failed after
+  5.671 seconds, then the alarm discarded the create response's write token
+  and exhausted the full 75-second read-plane recovery bound. The public
+  `Project.create` wait expired at 99.296 seconds. The birth queue now
+  checkpoints the prepared Artifact and write token before Git seeding, so a
+  classified seed retry skips create/read and repeats only the deterministic
+  push. A red/green coordinator regression and OS typecheck pass; the streak
+  remains zero for the new head.
