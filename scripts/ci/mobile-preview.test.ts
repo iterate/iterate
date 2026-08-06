@@ -1,5 +1,7 @@
 import { expect, test } from "vitest";
+import { markdownAnnotator } from "../../packages/shared/src/dev/markdown-annotator.ts";
 import { channelForBranch, planPreview, renderPreviewSection } from "./mobile-preview.ts";
+import { deepLinkForPr } from "./publish-mobile-pr-preview.ts";
 
 test("branch names become valid EAS channel names", () => {
   expect(channelForBranch("mobile-per-pr-preview-channels")).toBe("mobile-per-pr-preview-channels");
@@ -16,6 +18,7 @@ test("links go through the https interstitial, never a raw iterate:// href", () 
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    deepLinkParams: {},
   });
   expect(plan).toMatchObject({
     runtimeMatchesInstalled: true,
@@ -52,6 +55,7 @@ test("a runtime-matching PR renders with the OTA details open and install collap
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    deepLinkParams: {},
   });
   const section = renderPreviewSection({
     variant: "pr",
@@ -78,6 +82,7 @@ test("a native-change PR flips the expanded details to the install QR", () => {
     publishedRuntime: "aaaa000000000000000000000000000000000000",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-2",
+    deepLinkParams: {},
   });
   expect(plan).toMatchObject({ runtimeMatchesInstalled: false });
 
@@ -103,6 +108,7 @@ test("the main variant reads as a switch-back, not a PR switch", () => {
     publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    deepLinkParams: {},
   });
   const section = renderPreviewSection({
     variant: "main",
@@ -128,6 +134,60 @@ test("no finished preview build at all counts as a runtime mismatch", () => {
     publishedRuntime: "aaaa000000000000000000000000000000000000",
     installedRuntime: undefined,
     installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-3",
+    deepLinkParams: {},
   });
   expect(plan).toMatchObject({ runtimeMatchesInstalled: false });
+});
+
+test("deep link params ride both the interstitial URL and the scan-path scheme URL", () => {
+  const plan = planPreview({
+    baseUrl: "https://os.iterate-preview-12.com",
+    scheme: "iterate",
+    channel: "my-feature",
+    publishedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
+    installedRuntime: "37fb004ced1120b5d1fc8e57c7dd87e0aee98e8e",
+    installUrl: "https://expo.dev/accounts/o/projects/p/builds/build-1",
+    deepLinkParams: { env: "preview_12", email: "pr2422+test@nustom.com" },
+  });
+  expect(plan.deepLinkUrl).toBe(
+    "https://os.iterate-preview-12.com/m/preview-channel/my-feature?env=preview_12&email=pr2422%2Btest%40nustom.com",
+  );
+  // The camera opens the scheme directly — the params must already be there,
+  // with no interstitial hop to (re)attach them.
+  expect(plan.otaQrContent).toBe(
+    "iterate://preview-channel/my-feature?env=preview_12&email=pr2422%2Btest%40nustom.com",
+  );
+});
+
+test("deepLinkForPr reads the leased slot out of the PR body's hidden preview state", () => {
+  const state = { environmentConfigLease: { slug: "preview-12", dopplerConfig: "preview_12" } };
+  const body = [
+    "Some PR description.",
+    markdownAnnotator("", "CLOUDFLARE_PREVIEW_STATE").update(
+      `<!--\n${JSON.stringify(state, null, 2)}\n-->`,
+    ),
+  ].join("\n\n");
+  expect(deepLinkForPr({ body, pullRequestNumber: 2422 })).toEqual({
+    params: { env: "preview_12", email: "pr2422+test@nustom.com" },
+    // The slot's own OS serves the interstitial: prd may be running an older
+    // revision that drops the query params before the iterate:// bounce.
+    interstitialBaseUrl: "https://os.iterate-preview-12.com",
+  });
+});
+
+test("deepLinkForPr yields a bare prd link without a leased preview slot", () => {
+  // No preview state at all (e.g. a draft PR that never deployed).
+  expect(deepLinkForPr({ body: "just a description", pullRequestNumber: 7 })).toEqual({
+    params: {},
+    interstitialBaseUrl: "https://os.iterate.com",
+  });
+  // A slot that is not a known preview_N envs.ts config must not be offered.
+  const bogus = { environmentConfigLease: { slug: "prd", dopplerConfig: "prd" } };
+  const body = markdownAnnotator("", "CLOUDFLARE_PREVIEW_STATE").update(
+    `<!--\n${JSON.stringify(bogus)}\n-->`,
+  );
+  expect(deepLinkForPr({ body, pullRequestNumber: 7 })).toEqual({
+    params: {},
+    interstitialBaseUrl: "https://os.iterate.com",
+  });
 });
