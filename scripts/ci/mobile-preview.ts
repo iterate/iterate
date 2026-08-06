@@ -103,13 +103,19 @@ export type PreviewPlan = {
   /** Does the published JS run on the binary a phone already has installed? */
   runtimeMatchesInstalled: boolean;
   channel: string;
-  /** Https interstitial that bounces to iterate://preview-channel/<channel>. */
+  /** Https interstitial that bounces to iterate://preview-channel/<channel> —
+   * the TAP path (GitHub strips custom-scheme hrefs, so links need https). */
   deepLinkUrl: string;
+  /** Raw app-scheme URL — the SCAN path. The camera opens custom schemes
+   * directly, so QR codes encode this and skip the interstitial hop. */
+  otaQrContent: string;
   installUrl: string;
 };
 
 export const planPreview = (input: {
   baseUrl: string;
+  /** The app's URL scheme (app.json `scheme`, i.e. "iterate"). */
+  scheme: string;
   channel: string;
   publishedRuntime: string;
   /** Runtime of the newest FINISHED preview-profile build — what's installable today. */
@@ -121,6 +127,7 @@ export const planPreview = (input: {
   runtimeMatchesInstalled: input.publishedRuntime === input.installedRuntime,
   channel: input.channel,
   deepLinkUrl: interstitialUrl(input.baseUrl, input.channel),
+  otaQrContent: `${input.scheme}://preview-channel/${input.channel}`,
   installUrl: input.installUrl,
 });
 

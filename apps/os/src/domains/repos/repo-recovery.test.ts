@@ -18,7 +18,6 @@ const EMPTY_REQUEST = {
   type: "events.iterate.com/repos/create-requested" as const,
   payload: { type: "empty" as const },
 };
-
 function makeHarness() {
   const createEmpty: { impl: () => Promise<typeof CREATED_ARTIFACT> } = {
     impl: () => {
@@ -32,6 +31,9 @@ function makeHarness() {
         ...deps,
         projectId: "prj_1",
         createEmptyArtifact: () => createEmpty.impl(),
+        createPublicGithubTemplateArtifact: async () => {
+          throw new Error("must not create from a template in this scenario");
+        },
         importPublicGithubArtifact: async () => {
           throw new Error("must not import in this scenario");
         },
@@ -140,7 +142,7 @@ describe("RepoProcessor eviction recovery", () => {
     expect(h.events("events.iterate.com/repos/created")).toHaveLength(1);
   });
 
-  it("re-drives an interrupted creation obligation after the keepalive alarm", async () => {
+  it("re-drives an interrupted empty creation obligation after the keepalive alarm", async () => {
     const h = makeHarness();
     h.createEmpty.impl = () => new Promise<never>(() => {});
     await h.append(EMPTY_REQUEST);

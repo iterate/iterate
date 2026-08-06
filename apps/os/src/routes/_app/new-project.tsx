@@ -46,7 +46,8 @@ function NewProjectPage() {
         <SheetHeader className="border-b">
           <SheetTitle>Create project</SheetTitle>
           <SheetDescription>
-            Pick a slug for your project. You can configure hostnames later.
+            Pick a slug and optionally copy a public config template. You can configure hostnames
+            later.
           </SheetDescription>
         </SheetHeader>
         <div className="p-4">

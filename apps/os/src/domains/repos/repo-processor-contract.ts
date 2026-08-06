@@ -17,11 +17,12 @@
 
 import { z } from "zod";
 import { defineProcessorContract, type ProcessorState } from "iterate/processors";
+import { isSafeConfigRepoTemplatePath } from "../../lib/config-repo-template-reference.ts";
 import { CoreProcessorContract } from "../streams/core-processor-contract.ts";
 
 export const RepoProcessorContract = defineProcessorContract({
   slug: "repo",
-  version: "0.6.0",
+  version: "0.8.0",
   description: "Projects repo lifecycle, Git activity, and linked GitHub default-branch imports.",
   stateSchema: z.object({
     createRequest: repoCreateRequestSchema().nullable().default(null).meta({
@@ -124,7 +125,10 @@ export const RepoProcessorContract = defineProcessorContract({
   events: {
     "events.iterate.com/repos/create-requested": {
       description:
-        "Requests the repo creation saga: seed an empty repo, import a private GitHub repo at depth one, or import a public GitHub repo through Cloudflare Artifacts (full history unless depth is set). Terminates in repos/created or repos/create-failed.",
+        "Requests the repo creation saga: seed an empty repo, copy a public GitHub template " +
+        "subtree, import a private GitHub repo at depth one, or import a public GitHub repo " +
+        "through Cloudflare Artifacts (full history unless depth is set). Terminates in " +
+        "repos/created or repos/create-failed.",
       payloadSchema: repoCreateRequestSchema(),
     },
     "events.iterate.com/repos/created": {
@@ -385,6 +389,28 @@ function repoCreateRequestSchema() {
         type: z.literal("empty"),
       })
       .meta({ description: "Seed a fresh repo with iterate's starter files." }),
+    z
+      .strictObject({
+        type: z.literal("github-public-template"),
+        owner: z.string().trim().min(1).meta({ description: "GitHub owner (org or user)." }),
+        path: z
+          .string()
+          .trim()
+          .min(1)
+          .refine(isSafeConfigRepoTemplatePath, {
+            error: "Template path must stay within the public repository and outside .git.",
+          })
+          .optional()
+          .meta({ description: "Repository-relative directory copied as the new repo root." }),
+        ref: z.string().trim().min(1).optional().meta({
+          description: "Branch, tag, or commit to copy; the default branch when omitted.",
+        }),
+        repo: z.string().trim().min(1).meta({ description: "GitHub repository name." }),
+      })
+      .meta({
+        description:
+          "Copy the text files in one public GitHub repository folder into a fresh Artifact.",
+      }),
     z
       .strictObject({
         type: z.literal("github-private"),

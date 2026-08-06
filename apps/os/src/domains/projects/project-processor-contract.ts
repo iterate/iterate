@@ -28,13 +28,14 @@ import { SchedulerProcessorContract } from "../scheduler/scheduler-processor-con
 import { DeviceProcessorContract } from "../devices/device-processor-contract.ts";
 import { NotificationLifecycleContract } from "../notifications/notification-lifecycle-contract.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
+import { parseConfigRepoTemplateReference } from "../../lib/config-repo-template-reference.ts";
 import { ApprovalPresentedEvents } from "./approval-presented-contract.ts";
 import { AgentReplyPresentedEvents } from "./agent-reply-presented-contract.ts";
 import { StreamContext } from "./stream-context.ts";
 
 export const ProjectProcessorContract = defineProcessorContract({
   slug: "project",
-  version: "0.6.0",
+  version: "0.7.0",
   description:
     "Project root: runs the project/create-requested → project/created bootstrap saga, births " +
     "the sibling processors every project gets (root capability host, primary scheduler, config " +
@@ -544,7 +545,8 @@ function sameProjectCreationRequest(
   return (
     left.config.slug === right.config.slug &&
     left.config.onboardingActive === right.config.onboardingActive &&
-    left.config.creatorEmail === right.config.creatorEmail
+    left.config.creatorEmail === right.config.creatorEmail &&
+    left.config.configRepoTemplate === right.config.configRepoTemplate
   );
 }
 
@@ -654,6 +656,27 @@ function projectCreationPayloadSchema() {
             description:
               "The creating user's login email, when known. Seeds owner-scoped project state " +
               "such as the inbound email sender allowlist.",
+          }),
+        configRepoTemplate: z
+          .string()
+          .trim()
+          .min(1)
+          .refine(
+            (value) => {
+              try {
+                parseConfigRepoTemplateReference(value);
+                return true;
+              } catch {
+                return false;
+              }
+            },
+            { message: "Invalid public GitHub config template reference." },
+          )
+          .optional()
+          .meta({
+            description:
+              "Canonical public GitHub reference copied into /repos/config at project birth; " +
+              "omit for Iterate's embedded default.",
           }),
       })
       .meta({ description: "Birth-time configuration, recorded verbatim onto state." }),

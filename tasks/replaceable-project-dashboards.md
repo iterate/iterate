@@ -83,7 +83,7 @@ same-origin BFF, or receive an explicit browser credential.
 The relevant implementation is:
 
 - the project router in
-  [`config-repo-template/worker.ts`](../apps/os/config-repo-template/worker.ts);
+  [`configs/default/worker.ts`](../configs/default/worker.ts);
 - the full-stack Tasks entrypoint in
   [`apps/tasks/src/worker.ts`](../apps/tasks/src/worker.ts);
 - the Tasks Cap'n Web root in
