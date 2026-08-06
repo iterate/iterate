@@ -697,6 +697,15 @@ function agentContextItemSchema() {
             origin: z
               .enum(["web", "mcp"])
               .meta({ description: "Which surface the user wrote from." }),
+            userId: z
+              .string()
+              .optional()
+              .meta({
+                description:
+                  "The authenticated principal who wrote the message — the same identity " +
+                  "device enrollments record as ownerId, so a chat-reply push can be " +
+                  "addressed to the sender's devices only.",
+              }),
           }),
           z.object({
             type: z.literal("agent"),

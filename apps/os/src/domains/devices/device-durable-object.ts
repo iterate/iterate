@@ -67,8 +67,9 @@ export class DeviceDurableObject extends DurableObject<Env> {
       clearPushToken: (input) =>
         this.#serializeCredentialUpdate(() => this.#clearPushTokenSecret(input)),
       getReceipt: getExpoPushReceipt,
-      repointApprovalGraceAlarm: (atMs) =>
-        this.#registry.setAlarmSlice("device-approval-grace", atMs),
+      // The slice name predates reply graces; it stays because armed slices
+      // persist across deploys and a rename would strand one mid-window.
+      repointGraceAlarm: (atMs) => this.#registry.setAlarmSlice("device-approval-grace", atMs),
       repointReceiptAlarm: (atMs) => this.#registry.setAlarmSlice("device-receipts", atMs),
       send: async ({
         notification,
@@ -107,7 +108,7 @@ export class DeviceDurableObject extends DurableObject<Env> {
     try {
       await this.#registry.catchUp(DeviceProcessorContract.slug);
       await this.#deviceProcessor.checkReceipts(this.#reads.currentState);
-      await this.#deviceProcessor.releaseApprovalGraces(() => this.#reads.currentState);
+      await this.#deviceProcessor.releaseGraces(() => this.#reads.currentState);
       await this.#registry.catchUp(DeviceProcessorContract.slug);
     } catch (error) {
       // Cloudflare retries a throwing alarm only a bounded number of times; a
