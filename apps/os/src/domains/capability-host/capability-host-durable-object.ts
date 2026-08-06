@@ -27,7 +27,9 @@ import {
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
+  GetScriptResultOptions,
   RevokeCapabilityInput,
+  ScriptResultSlicedFrom,
 } from "./types.ts";
 
 type ScriptExecutionEntrypoint = {
@@ -362,7 +364,13 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
     return this.#serializeMutation(() => this.#capabilityHostProcessor.removePreamble(input));
   }
 
-  getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
-    return this.#capabilityHostProcessor.getScriptResult(executionId);
+  getScriptResult(
+    executionId: string,
+    options?: GetScriptResultOptions,
+  ): Promise<
+    | { executionId: string; data: unknown }
+    | { executionId: string; data: string; slicedFrom: ScriptResultSlicedFrom }
+  > {
+    return this.#capabilityHostProcessor.getScriptResult(executionId, options);
   }
 }

@@ -591,8 +591,23 @@ export interface CapabilityHost {
    * executionId — the durable storage behind the preamble `results` array's
    * async `load(itx)` helpers for results too large to embed inline. Throws
    * for unknown executions and for scripts that failed.
+   *
+   * `options.slice: [start, end?]` pages a huge result server-side instead
+   * of returning it whole: `data` becomes one string page of the result's
+   * canonical text (string results as themselves, JSON results
+   * pretty-printed — the same text an oversized result's workspace spill
+   * file holds, so quoted char counts line up), and `slicedFrom` reports the
+   * resolved offsets plus `totalChars` so the caller can keep paging.
+   * `String.prototype.slice` semantics: negatives count from the end,
+   * out-of-range clamps.
    */
-  getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
+  getScriptResult(
+    executionId: string,
+    options?: GetScriptResultOptions,
+  ): Promise<
+    | { executionId: string; data: unknown }
+    | { executionId: string; data: string; slicedFrom: ScriptResultSlicedFrom }
+  >;
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
@@ -2810,6 +2825,28 @@ export type CapabilityHostCreateInput = { config: Record<string, never>; fallbac
 export type SetPreambleInput = {
   key: string;
   code: string;
+};
+
+/**
+ * `getScriptResult` options. `slice: [start, end?]` reads one page of the
+ * result's canonical text server-side instead of returning the whole value —
+ * how a script pages a huge stored result without loading it all. Canonical
+ * text: string results as themselves; JSON results pretty-printed
+ * (`JSON.stringify(data, null, 2)`) — the same text an oversized result's
+ * workspace spill file holds, so char counts quoted in chat history line up
+ * with slice offsets. `String.prototype.slice` semantics: negative indices
+ * count from the end, out-of-range clamps, `end` defaults to the text's end.
+ */
+export type GetScriptResultOptions = {
+  slice?: [start: number, end?: number];
+};
+
+/** A sliced read's provenance: the canonical text's total length plus the
+ * resolved (clamped) offsets actually served — what a paging loop needs. */
+export type ScriptResultSlicedFrom = {
+  totalChars: number;
+  start: number;
+  end: number;
 };
 
 /** Target shape for a live capability that wants to receive flattened paths. */

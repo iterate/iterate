@@ -10,8 +10,10 @@ import type { JsonValue } from "../workers/schemas.ts";
 import type {
   CapabilityProvidedPayload,
   CapabilityRecord,
+  GetScriptResultOptions,
   ProvideCapabilityInput,
   RevokeCapabilityInput,
+  ScriptResultSlicedFrom,
   SetPreambleInput,
 } from "./types.ts";
 import {
@@ -603,9 +605,22 @@ export class CapabilityHostProcessor extends StreamProcessor<
    * results retain only their inferred type in state). Point read by the
    * settle idempotency key, so it works for any retained-or-not execution
    * that ever settled in this scope.
+   *
+   * `options.slice` pages the result instead: `data` becomes one string page
+   * of the result's canonical text (string results as themselves, JSON
+   * results pretty-printed — the same text the workspace spill file holds,
+   * see {@link GetScriptResultOptions}), with `slicedFrom` reporting the
+   * resolved offsets so a caller can keep paging.
    */
-  async getScriptResult(executionId: string): Promise<{ executionId: string; data: JsonValue }> {
+  async getScriptResult(
+    executionId: string,
+    options?: GetScriptResultOptions,
+  ): Promise<
+    | { executionId: string; data: JsonValue }
+    | { executionId: string; data: string; slicedFrom: ScriptResultSlicedFrom }
+  > {
     await this.#assertCreated();
+    const slice = validatedSlice(options);
     const event = await this.stream.getEvent({
       idempotencyKey: `capability-host/script-run-settled@${executionId}`,
     });
@@ -616,7 +631,17 @@ export class CapabilityHostProcessor extends StreamProcessor<
     if (settlement.status === "failed") {
       throw new Error(`script execution "${executionId}" failed: ${settlement.error}`);
     }
-    return { executionId, data: settlement.result ?? null };
+    const data = settlement.result ?? null;
+    if (slice === undefined) return { executionId, data };
+    const text = typeof data === "string" ? data : JSON.stringify(data, null, 2);
+    const totalChars = text.length;
+    // String.prototype.slice offset resolution: negatives count from the
+    // end, everything clamps into [0, totalChars], end never precedes start.
+    const resolve = (index: number) =>
+      index < 0 ? Math.max(totalChars + index, 0) : Math.min(index, totalChars);
+    const start = resolve(slice[0]);
+    const end = Math.max(resolve(slice[1] === undefined ? totalChars : slice[1]), start);
+    return { executionId, data: text.slice(start, end), slicedFrom: { totalChars, start, end } };
   }
 
   async invokeCapability({ args = [], path }: { args?: unknown[]; path: string[] }) {
@@ -1338,6 +1363,24 @@ function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {
     }
   }
   return best;
+}
+
+/** Reject malformed slice tuples loudly instead of guessing: a wrong-shaped
+ * page request from a script is a bug the author should see immediately. */
+function validatedSlice(options: GetScriptResultOptions | undefined) {
+  const slice = options?.slice;
+  if (slice === undefined) return undefined;
+  const shapeOk =
+    Array.isArray(slice) &&
+    (slice.length === 1 || slice.length === 2) &&
+    slice.every((index) => index === undefined || Number.isInteger(index)) &&
+    Number.isInteger(slice[0]);
+  if (!shapeOk) {
+    throw new Error(
+      `getScriptResult "slice" must be [start] or [start, end] with integer offsets, got ${JSON.stringify(slice)}`,
+    );
+  }
+  return slice;
 }
 
 function settlementFromSettledEvent(

@@ -26,6 +26,28 @@ export type SetPreambleInput = {
   code: string;
 };
 
+/**
+ * `getScriptResult` options. `slice: [start, end?]` reads one page of the
+ * result's canonical text server-side instead of returning the whole value —
+ * how a script pages a huge stored result without loading it all. Canonical
+ * text: string results as themselves; JSON results pretty-printed
+ * (`JSON.stringify(data, null, 2)`) — the same text an oversized result's
+ * workspace spill file holds, so char counts quoted in chat history line up
+ * with slice offsets. `String.prototype.slice` semantics: negative indices
+ * count from the end, out-of-range clamps, `end` defaults to the text's end.
+ */
+export type GetScriptResultOptions = {
+  slice?: [start: number, end?: number];
+};
+
+/** A sliced read's provenance: the canonical text's total length plus the
+ * resolved (clamped) offsets actually served — what a paging loop needs. */
+export type ScriptResultSlicedFrom = {
+  totalChars: number;
+  start: number;
+  end: number;
+};
+
 /** Durable reference to the event that connected the provider's client-given Pager. */
 export type CapabilityProviderPagerReference = {
   connectedAtOffset: number;

@@ -1258,7 +1258,12 @@ describe("AgentProcessor script execution", () => {
     const rendered = h
       .state()
       .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
-    // The paging recipe itself uses the preamble loader, not a readFile call.
+    // The paging recipe pages server-side via getScriptResult's slice — the
+    // script never loads the whole string — with the loader kept as the
+    // whole-string escape hatch; no readFile call anywhere.
+    expect(rendered!.payload.content).toContain(
+      "await itx.capabilityHost.getScriptResult(results[0].executionId, { slice: [",
+    );
     expect(rendered!.payload.content).toContain("await results[0].load(itx)");
     expect(rendered!.payload.content).not.toContain("await itx.workspace.readFile(");
   });
