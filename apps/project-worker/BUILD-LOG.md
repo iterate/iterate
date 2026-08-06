@@ -466,7 +466,7 @@ proof still passes unchanged.
 
 ## Increment 21 — name it what it is: a **hibernatable stub**
 
-**Commit** `<pending>`. Jonas: "what is a lease-server? that needs a better name — is it really some kind of
+**Commit** `dc1a299f2`. Jonas: "what is a lease-server? that needs a better name — is it really some kind of
 hibernatable rpc stub?" Yes. workerd has no native hibernatable _outbound_ stub (retaining one pins the DO —
 the whole problem), so this emulates one: the DO holds only a `{ socketId }` record on a hibernatable Pager and
 materializes a real short-lived RPC leg on demand. So it IS a hibernatable stub. "Lease" was wrong (implies a
