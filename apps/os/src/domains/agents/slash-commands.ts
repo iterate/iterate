@@ -134,3 +134,4 @@ return result;
  * agent-authored `agent-output:` prefix, keyed by the commanding user
  * message's offset. */
 export const SLASH_COMMAND_EXECUTION_PREFIX = "slash-command:";
+export const SCRIPT_SLASH_COMMAND_EXECUTION_PREFIX = `${SLASH_COMMAND_EXECUTION_PREFIX}script:`;

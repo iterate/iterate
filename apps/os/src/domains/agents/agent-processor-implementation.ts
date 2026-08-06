@@ -19,6 +19,7 @@ import {
 import {
   buildSlashCommandCode,
   resolveSlashCommand,
+  SCRIPT_SLASH_COMMAND_EXECUTION_PREFIX,
   SLASH_COMMAND_EXECUTION_PREFIX,
 } from "./slash-commands.ts";
 import {
@@ -214,7 +215,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (payload.role === "user") {
           const slashCommand = resolveSlashCommand(payload.content);
           if (slashCommand !== null) {
-            const executionId = `${SLASH_COMMAND_EXECUTION_PREFIX}${event.offset}`;
+            const executionId = `${SLASH_COMMAND_EXECUTION_PREFIX}${slashCommand.command}:${event.offset}`;
             blockProcessorWhile(() =>
               this.#appendUnlessLostIdempotencyRace(append, [
                 {
@@ -396,7 +397,7 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         // context, then returns the same value so the capability host keeps it
         // in the script-results preamble. Only its failures render here.
         if (
-          executionId.startsWith(SLASH_COMMAND_EXECUTION_PREFIX) &&
+          executionId.startsWith(SCRIPT_SLASH_COMMAND_EXECUTION_PREFIX) &&
           settlement.status === "succeeded"
         ) {
           break;

@@ -1991,7 +1991,7 @@ describe("AgentProcessor slash commands", () => {
         (event.payload as { content?: string }).content?.startsWith("/script"),
       )!.offset;
     expect(scriptRequests[0]!.payload).toMatchObject({
-      executionId: `slash-command:${commandOffset}`,
+      executionId: `slash-command:script:${commandOffset}`,
     });
     expect(scriptRequests[0]!.payload.code).toContain(
       "const result = await (async () => {\nreturn await (itx.__describe()\n);\n})();",
@@ -2013,7 +2013,7 @@ describe("AgentProcessor slash commands", () => {
       {
         type: "events.iterate.com/capability-host/script-run-settled",
         payload: {
-          executionId: `slash-command:${commandOffset}`,
+          executionId: `slash-command:script:${commandOffset}`,
           settlement: { status: "succeeded", result: { projectId: "project-1" } },
         },
       },
@@ -2022,6 +2022,38 @@ describe("AgentProcessor slash commands", () => {
     // settlement only preserves the value for `results`; it must not append a
     // second context item.
     expect(h.state().contextItems).toHaveLength(itemsBeforeSettlement);
+  });
+
+  it("a resolving /example still renders its successful settlement", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS, userMessage("/example describe-project")]);
+
+    const scriptRequest = h.events("events.iterate.com/capability-host/script-run-requested")[0]!;
+    expect(scriptRequest.payload.executionId).toMatch(/^slash-command:example:/);
+
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/script-run-settled",
+          payload: {
+            executionId: scriptRequest.payload.executionId,
+            settlement: { status: "succeeded", result: { projectId: "project-1" } },
+          },
+        },
+      ],
+      ["advanceTime", 10_000],
+    );
+
+    const renderedResult = h
+      .state()
+      .contextItems.find(
+        (item) =>
+          item.payload.actor?.type === "script" &&
+          item.payload.actor.executionId === scriptRequest.payload.executionId,
+      );
+    expect(renderedResult?.payload.content).toContain('"projectId": "project-1"');
+    expect(h.llm.calls).toHaveLength(1);
   });
 
   it("a /script mid-turn runs as a side-band action: no interrupt, no lost command", async () => {
