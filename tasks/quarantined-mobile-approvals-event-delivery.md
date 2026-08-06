@@ -47,6 +47,10 @@ was rejected by a short account-wide Cloudflare internal-error burst across
 unrelated Durable Object calls, and the following attempt failed before tests
 on a Cloudflare D1 API internal error. No product retry or telemetry
 classification was weakened to admit either run.
+The next exact-head baseline kept all OS and mobile coverage green but was
+rejected when Semaphore reached the preceding Durable Object version after its
+90-second rollout clock. Semaphore now has an exact public-Worker/coordinator
+version readiness proof; a fresh head is pending.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -621,3 +625,15 @@ Test these in order; do not treat the first plausible one as the conclusion.
   code 7500 with its own internal reference while OS smoke checks initially
   returned 503. That deployment-only infrastructure failure is not a gate
   candidate. The streak remains zero.
+- 2026-08-06: Baseline `w44x17p14q` on `b05a35229` passed every app and both
+  restored mobile cases first try, but Semaphore's CRUD case retried. Request
+  `a26cf13218f15ca1` reached coordinator version
+  `210fa2ef-c67d-41d1-b89a-fc3262a91891` and was reset for a code update 94.8
+  seconds after the successful Semaphore deploy, beyond the fixed 90-second
+  gate. Replaced that guessed delay with an exact readiness condition: `/health`
+  addresses a coordinator named for the public Worker's immutable version and
+  stays 503 through a mismatch or reset. It returns the public version in the
+  canonical readiness header, so the orchestrator proves both sides before
+  starting tests. Three red/green health cases, 139 preview-orchestrator tests,
+  both affected typechecks, lint, and formatting pass. The streak remains zero
+  for the new head.

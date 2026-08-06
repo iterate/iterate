@@ -9,6 +9,7 @@ import {
   type SemaphoreLeaseRecord,
 } from "~/contract.ts";
 import type { Env } from "~/env.ts";
+import { workerVersion } from "~/env.ts";
 import {
   markResourceAvailableInDb,
   markResourceLeasedInDb,
@@ -41,6 +42,11 @@ export class ResourceCoordinator extends DurableObject<Env> {
       this.initializeSql();
       await this.scheduleNextAlarm();
     });
+  }
+
+  /** The exact deployment running this Durable Object incarnation. */
+  version(): string {
+    return workerVersion(this.env);
   }
 
   async acquire(params: {

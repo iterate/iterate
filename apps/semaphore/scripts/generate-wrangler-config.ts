@@ -61,6 +61,7 @@ export function envShapedVars(env: SemaphoreEnv) {
 /** Binding config identical across local dev and every deployed env, apart from the D1 id. */
 function workerBindings(input: { resourcesDbId: string }) {
   return {
+    version_metadata: { binding: "CF_VERSION_METADATA" },
     d1_databases: [
       {
         binding: "DB",

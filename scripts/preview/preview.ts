@@ -2366,7 +2366,8 @@ export const cloudflarePreviewApps: Record<CloudflarePreviewAppSlug, CloudflareP
     paths: ["apps/semaphore/**"],
     // Co-select auth for an environment-coherent test run. Deploys are independent.
     previewDependencies: ["auth"],
-    previewTestRolloutGate: "before-suite",
+    previewReadyUrlPath: "/health",
+    previewReadyWorkerVersion: true,
     previewTestBaseUrlEnvVar: "SEMAPHORE_BASE_URL",
     previewTestArtifactSources: [previewVitestArtifactSource("@iterate-com/semaphore")],
     // `env -u SEMAPHORE_API_TOKEN`: the CI lane runs under an outer
