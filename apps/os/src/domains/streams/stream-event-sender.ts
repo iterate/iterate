@@ -58,7 +58,10 @@ import type {
   StreamWakeEventBatch,
   StreamWebhookDelivery,
 } from "iterate/processors";
-import { isStreamReceiverUnavailableError } from "iterate/processors";
+import {
+  isStreamReceiverUnavailableError,
+  StreamReceiverUnavailableError,
+} from "iterate/processors";
 import { LatencyRing, pingRoundTrip, type LatencyStats } from "iterate/processors";
 import type { ItxExpression } from "../../itx/expression.ts";
 import type {
@@ -1237,7 +1240,10 @@ export class StreamEventSender {
       this.#halt(subscriptionKey, attempt, error);
       return;
     }
-    if (isRetryableDurableObjectAvailabilityError(error)) {
+    if (
+      isStreamReceiverUnavailableError(error) ||
+      isRetryableDurableObjectAvailabilityError(error)
+    ) {
       const nextAttemptAt = this.#hooks.now() + LIFECYCLE_RETRY_DELAY_MS;
       this.#hooks.store.nack(subscriptionKey, {
         attempt,
@@ -1275,7 +1281,7 @@ export class StreamEventSender {
       }
       this.#onDeliveryFailure(
         row.subscriptionKey,
-        new Error(
+        new StreamReceiverUnavailableError(
           `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms; the source isolate no longer owns a live callback`,
         ),
         row.attempt,
@@ -1767,7 +1773,7 @@ export class StreamConnections {
       }
       this.onHostedDeliveryError(
         connectionKey,
-        new Error(
+        new StreamReceiverUnavailableError(
           `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
         ),
         connection.expectedHostedDelivery,
@@ -1937,7 +1943,11 @@ export class StreamConnections {
     };
     if (error instanceof EventFilterEvaluationError) {
       console.info("stream hosted callback filter condition failed; backing off", details);
-    } else if (source === "rpc-broken" || isDurableObjectLifecycleError(error)) {
+    } else if (
+      source === "rpc-broken" ||
+      isStreamReceiverUnavailableError(error) ||
+      isDurableObjectLifecycleError(error)
+    ) {
       console.warn(
         "stream durable callback unavailable; backing off before waking it again",
         details,

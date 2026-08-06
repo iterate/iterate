@@ -217,6 +217,32 @@ describe("StreamEventSender hosted processor delivery", () => {
     expect(h.alarms).toContain(11_000);
   });
 
+  it("retries an unacknowledged hosted batch after one second even after earlier failures", async () => {
+    const h = harness({
+      events: [event(2, "a", { keep: true })],
+      wakeProcessor: async () => {
+        throw new StreamReceiverUnavailableError(
+          `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
+        );
+      },
+    });
+    h.store.nack(PROCESSOR_KEY, {
+      attempt: 6,
+      nextAttemptAt: 10_000,
+      error: "earlier delivery failure",
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      attempt: 7,
+      nextAttemptAt: 11_000,
+      lastError: `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
+    });
+    expect(h.alarms).toContain(11_000);
+  });
+
   it("backs off without publishing when recording the hosted open is interrupted", async () => {
     const disposed = vi.fn();
     const h = harness({
@@ -2525,6 +2551,7 @@ describe("StreamConnections hosted delivery watchdog", () => {
     const h = connectionsHarness();
     const calls: DeliveryCall[] = [];
     const disposed = vi.fn();
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const connection = h.connections.openHosted({
       connectionKey: "processor",
@@ -2559,12 +2586,12 @@ describe("StreamConnections hosted delivery watchdog", () => {
     expect(connection.isLive()).toBe(false);
     expect(disposed).toHaveBeenCalledTimes(1);
     expect(h.durableDeliveryWakes).toHaveBeenCalledTimes(1);
-    expect(errorLog).toHaveBeenCalledWith(
-      "stream durable callback failed; backing off before waking it again",
+    expect(warnLog).toHaveBeenCalledWith(
+      "stream durable callback unavailable; backing off before waking it again",
       {
         connectionKey: "processor",
         source: "delivery",
-        errorName: "Error",
+        errorName: "StreamReceiverUnavailableError",
         errorMessage: `hosted processor batch acknowledgement timed out after ${DEFAULT_DELIVERY_TIMEOUT_MS}ms`,
         projectId: "project",
         streamPath: "/source",
@@ -2580,11 +2607,14 @@ describe("StreamConnections hosted delivery watchdog", () => {
         processorContractVersion: "1.0.0",
       },
     );
+    expect(errorLog).not.toHaveBeenCalled();
 
     calls[0]!.report("ok");
     await flushMicrotasks();
     expect(calls).toHaveLength(1);
     expect(h.deliveryFailures).toHaveBeenCalledTimes(1);
+    warnLog.mockRestore();
+    errorLog.mockRestore();
   });
 
   it("keeps ITX and Cloudflare references when a hosted processor reports an opaque failure", async () => {

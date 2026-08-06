@@ -19,9 +19,11 @@ new deployed red E2E reproduces the 20-second recovery delay. Pending hosted
 callbacks now probe their owner after one second, and infrastructure resets
 retry after one second without inheriting an inflated exponential backoff.
 The corrected head passed one clean exact-head preview. The first 25-run gate
-attempt was correctly rejected for a separate Project-create lifecycle reset;
-that bounded recovery fix now has red/green coverage and needs a fresh preview
-before the gate restarts from zero.
+attempt was correctly rejected for a separate Project-create lifecycle reset
+and error-level hosted acknowledgement timeouts after rollout. Project-create
+recovery and explicit acknowledgement-timeout classification now have
+red/green coverage; the combined head needs a fresh preview before the gate
+restarts from zero.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -151,6 +153,16 @@ notification journal.
   terminal `waitForEvent`. Project creation now reacquires that idempotent
   terminal wait exactly once, with the second attempt consuming only the
   original deadline's remainder; a second lifecycle failure still propagates.
+- PostHog recorded both restored cases on that workflow with
+  `retry_count = 0` and `error_count = 0`, but the exact deployed Worker still
+  emitted 285 error-level 20-second hosted acknowledgement timeouts. The
+  owner ping can remain healthy while the batch's separate one-shot result
+  capability is unusable, so owner liveness cannot classify the specific
+  acknowledgement path. An expired acknowledgement is now an explicit
+  receiver-unavailable outcome: it stays attempt-bounded, retries after one
+  second even after prior failures, and logs as expected availability rather
+  than an application error. Late results remain ignored by the existing
+  per-batch token fence.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -320,3 +332,10 @@ Test these in order; do not treat the first plausible one as the conclusion.
   worker-bundler ran. Added red/green project-create coverage and a one-retry
   terminal-wait recovery under the existing 100-second creation deadline; the
   focused project/stream suites pass 35 tests, and OS typecheck is green.
+- 2026-08-06: PostHog confirmed both restored specs were retry/error-free, but
+  the exact-version trace audit rejected the same workflow for 285 error-level
+  hosted acknowledgement timeouts. A processor-owner ping does not prove its
+  separate per-batch result callback survived. Added red/green classification
+  and retry-policy coverage: an expired acknowledgement is now a bounded
+  receiver-unavailable warning with a one-second retry, even late in the
+  attempt ladder; genuine processor failures remain errors.
