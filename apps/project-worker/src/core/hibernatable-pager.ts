@@ -10,9 +10,13 @@
 export const PAGER_HEADER = "x-itx-pager";
 const PAGER_TAG = "itx-pager";
 
-/** A one-way DO→relay message over a Pager. Best-effort prompt; durable records remain the source of truth. */
+/** A one-way DO→relay message over a Pager. Best-effort prompt; the record on the socket is the source of truth. */
 export type Page = { type: "wake" } | { type: "idle" };
-export type PagerAttachment = { socketId: string };
+
+/** The socket's serialized attachment — the ONLY per-lease durable state, and it SURVIVES hibernation. The caller
+ *  stamps its own record here (e.g. a lease); a fresh DO incarnation reads it straight back from the socket, so
+ *  there is nothing else to reconcile. `socketId` is always present. */
+export type PagerRecord = { socketId: string; [k: string]: unknown };
 
 export function parsePage(data: unknown): Page | undefined {
   if (typeof data !== "string") return undefined;
@@ -36,8 +40,13 @@ export function acceptPager(
     });
   const pair = new WebSocketPair();
   hooks.acceptWebSocket(pair[1], [PAGER_TAG]);
-  pair[1].serializeAttachment({ socketId } satisfies PagerAttachment);
+  pair[1].serializeAttachment({ socketId } satisfies PagerRecord);
   return new Response(null, { status: 101, webSocket: pair[0] });
+}
+
+/** DO side: every open Pager socket (the runtime-owned set that survives hibernation). */
+export function pagerSockets(hooks: { getWebSockets(tag: string): WebSocket[] }): WebSocket[] {
+  return hooks.getWebSockets(PAGER_TAG).filter((ws) => ws.readyState === WebSocket.OPEN);
 }
 
 /** DO side: the open Pager socket for `socketId` (matched by attachment), or undefined. */
@@ -45,21 +54,22 @@ export function pagerSocketFor(
   socketId: string,
   hooks: { getWebSockets(tag: string): WebSocket[] },
 ): WebSocket | undefined {
-  for (const ws of hooks.getWebSockets(PAGER_TAG)) {
-    if (ws.readyState !== WebSocket.OPEN) continue;
-    if (pagerAttachment(ws)?.socketId === socketId) return ws;
-  }
-  return undefined;
+  return pagerSockets(hooks).find((ws) => pagerAttachment(ws)?.socketId === socketId);
 }
 
-/** DO side: is `ws` a Pager socket, and for which socketId? */
-export function pagerAttachment(ws: WebSocket): PagerAttachment | undefined {
+/** DO side: read a Pager socket's record (the caller-stamped attachment), or undefined. */
+export function pagerAttachment(ws: WebSocket): PagerRecord | undefined {
   try {
-    const a = ws.deserializeAttachment() as PagerAttachment | null;
+    const a = ws.deserializeAttachment() as PagerRecord | null;
     return a && typeof a.socketId === "string" ? a : undefined;
   } catch {
     return undefined;
   }
+}
+
+/** DO side: (re)stamp a Pager socket's record — the caller's per-lease durable state, carried through hibernation. */
+export function stampPager(ws: WebSocket, record: PagerRecord): void {
+  ws.serializeAttachment(record);
 }
 
 /** DO side: send one Page; on failure close the socket so it can't stay healthy-looking and stale. */

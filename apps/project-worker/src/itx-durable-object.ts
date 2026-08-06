@@ -25,47 +25,12 @@ import {
   itxRoot,
   type ItxExpression,
 } from "./core/itx-expression.ts";
-import {
-  PAGER_HEADER,
-  acceptPager,
-  pagerAttachment,
-  pagerSocketFor,
-  sendPage,
-} from "./core/hibernatable-pager.ts";
+import { PAGER_HEADER } from "./core/hibernatable-pager.ts";
+import { LeaseServer, type Invoker } from "./core/lease-server.ts";
 import { parseName, stringifyName, parentPath } from "./core/names.ts";
 import type { StreamDurableObject, StreamEventInput } from "./stream-durable-object.ts";
 import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 import type { ItxCallPath } from "./core/config.ts";
-
-/** A short Workers-RPC leg the relay hands the DO on wake: it wraps the retained provider and forwards ONE
- *  invocation burst (DO → relay → provider). The DO drops it at quiescence so nothing pins it between bursts. */
-type Invoker = {
-  invoke(capPath: string[], args: unknown[]): Promise<unknown>;
-  dup?(): Invoker;
-};
-
-// `Symbol.dispose` isn't in the current lib target; reference it defensively to free a (Workers-RPC) stub.
-const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
-function disposeStub(stub: unknown): void {
-  const fn = DISPOSE ? (stub as Record<symbol, unknown>)[DISPOSE] : undefined;
-  if (typeof fn === "function") (fn as () => void).call(stub);
-}
-
-const ATTACH_TIMEOUT_MS = 10_000; // a woken relay has this long to hand back its short leg before we give up
-
-/** One live-capability LEASE: a provider that lives in a stateless relay, reachable via its Pager socket. The DO
- *  holds NO stub — only this record + the hibernatable Pager. `kind`:
- *    • "capability" — an `itx.provideCapability({type:"live"})` mount at the dotted `capPath`.
- *    • "client"     — a `.connect` client connection at `path` (fanned out via `itx.clients`). */
-interface Lease {
-  socketId: string;
-  kind: "capability" | "client";
-  capPath?: string; // "capability": the dotted mount path, e.g. "itx.myComputer"
-  path?: string; // "client": the client identity + stream path, e.g. "/clients/chrome"
-  connectionKey?: string; // "client": the connection key (reconnect under the same key replaces)
-  description?: string;
-  openedAt: string;
-}
 
 interface Env {
   ITX_HOST: DurableObjectNamespace<ItxDurableObject>;
@@ -132,15 +97,13 @@ export type ProvideCapabilityInput = { path: ItxCallPath } & Mount;
 
 export class ItxDurableObject extends DurableObject<Env> {
   #mounts = new Map<string, Mount>(); // callPath -> mount (mirrors DO storage; the event-sourced fold is later)
-  // DON'T-PIN live state. All IN-MEMORY + the hibernatable Pager sockets: the DO holds NO provider stub between
-  // bursts, so it hibernates while idle. `#leases` is the runtime table (socketId -> record); `#activeLegs` holds
-  // a short Workers-RPC leg ONLY during an in-flight burst; `#pending` tracks in-flight wake handshakes.
-  #leases = new Map<string, Lease>();
-  #activeLegs = new Map<string, { invoker: Invoker; inFlight: number }>();
-  #pending = new Map<
-    string,
-    { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
-  >();
+  // DON'T-PIN: the live-capability lease server. Leases live in the hibernatable Pager sockets' attachments (not
+  // in memory here), and a live leg is held ONLY mid-burst — so the DO hibernates while 1000 clients stay
+  // connected. This DO is a thin dispatcher over it.
+  #leases = new LeaseServer({
+    acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+    getWebSockets: (tag) => this.ctx.getWebSockets(tag),
+  });
   incarnation = 0; // durable, bumped on every (re)construction — grows across an idle gap ⇒ the DO hibernated
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -162,8 +125,6 @@ export class ItxDurableObject extends DurableObject<Env> {
     return this.#name.projectId;
   }
 
-  #getWebSockets = (tag: string) => this.ctx.getWebSockets(tag);
-
   // ── native fetch (target-core §4.1, §6.0). ──
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -171,10 +132,7 @@ export class ItxDurableObject extends DurableObject<Env> {
     // A relay opens its HIBERNATABLE PAGER here — a hibernation-safe DO→relay back-channel accepted through the
     // DO's own hibernation API. The DO stores only its `{ socketId }` attachment (no stub) and later sends
     // one-way Pages over it. Checked FIRST so it isn't grabbed as an ingress-echo socket.
-    if (request.headers.get(PAGER_HEADER))
-      return acceptPager(request, {
-        acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
-      });
+    if (request.headers.get(PAGER_HEADER)) return this.#leases.acceptUpgrade(request);
 
     // ── THE FETCH LANE (target-core §6.0 / D33). A request carrying `x-itx-cap` (a serialized ItxExpression or
     // a bare callPath) is routed to a FETCH-SHAPED capability by NATIVE `.fetch()` hops, so a WebSocket upgrade
@@ -205,17 +163,9 @@ export class ItxDurableObject extends DurableObject<Env> {
       return this.#statefulRunner(callPath).fetch(fwd);
     }
 
-    // Observability: incarnation (the hibernation tell) + what's live right now. `dormant` ⇒ holds no leg.
-    if (url.pathname === "/state") {
-      return Response.json({
-        incarnation: this.incarnation,
-        pagers: this.ctx.getWebSockets("itx-pager").length,
-        leases: this.#leases.size,
-        activeLegs: this.#activeLegs.size,
-        pending: this.#pending.size,
-        dormant: this.#activeLegs.size === 0 && this.#pending.size === 0,
-      });
-    }
+    // Observability: incarnation (the hibernation tell) + the lease server's live state. `dormant` ⇒ no leg held.
+    if (url.pathname === "/state")
+      return Response.json({ incarnation: this.incarnation, ...this.#leases.state() });
 
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
       const pair = new WebSocketPair();
@@ -236,12 +186,10 @@ export class ItxDurableObject extends DurableObject<Env> {
     }
   }
   webSocketClose(ws: WebSocket): void {
-    const att = pagerAttachment(ws);
-    if (att) this.#pagerClosed(att.socketId); // a relay's Pager dropped → reconcile its lease away
+    this.#leases.pagerClosed(ws); // a relay's Pager dropped → the lease vanishes with the socket
   }
   webSocketError(ws: WebSocket): void {
-    const att = pagerAttachment(ws);
-    if (att) this.#pagerClosed(att.socketId);
+    this.#leases.pagerClosed(ws);
   }
 
   // ── the capability model ──
@@ -278,10 +226,10 @@ export class ItxDurableObject extends DurableObject<Env> {
     // methods directly; this branch is for LOADED AGENTS reaching clients through their itx surface.)
     if (callPath.startsWith("itx.clients.") && this.#name.path === "/") {
       const op = callPath.slice("itx.clients.".length);
-      if (op === "list") return this.clientsList();
-      if (op === "connections") return this.clientConnections(args[0] as string);
+      if (op === "list") return this.#leases.clientsList();
+      if (op === "connections") return this.#leases.clientConnections(args[0] as string);
       if (op === "call")
-        return this.invokeClientCapabilities(
+        return this.#leases.invokeClientCapabilities(
           args[0] as string,
           args[1] as string[],
           (args[2] as unknown[]) ?? [],
@@ -304,8 +252,8 @@ export class ItxDurableObject extends DurableObject<Env> {
 
     // LIVE capability (a relay-owned provider): reach it via its Pager + a short Workers-RPC leg on demand — the
     // DO holds no stub between bursts. Longest dotted-prefix lease; the remaining segment(s) name the method.
-    const lease = this.#liveLeaseFor(callPath);
-    if (lease) return this.#invokeVia(lease.socketId, lease.method, args);
+    const lease = this.#leases.liveLeaseFor(callPath);
+    if (lease) return this.#leases.invokeVia(lease.socketId, lease.method, args);
 
     const mount = this.#mounts.get(callPath);
     if (mount) {
@@ -323,210 +271,43 @@ export class ItxDurableObject extends DurableObject<Env> {
     return this.env.ITX_HOST.getByName(parentName).invokeCapability(callPath, args); // → parent path
   }
 
-  // ── DON'T-PIN live-capability leases (Workers-RPC methods the stateless relay calls) ──
+  // ── DON'T-PIN live capabilities + clients — thin Workers-RPC facade over the LeaseServer (the stateless relay
+  //    calls these; the DO holds no stub between bursts, so it hibernates while clients stay connected). ──
 
   /** The relay recorded a live capability (`itx.provideCapability({type:"live"})`) after opening its Pager. */
-  recordLease(input: { socketId: string; capPath: string; description?: string }): { ok: true } {
-    this.#leases.set(input.socketId, {
-      socketId: input.socketId,
-      kind: "capability",
-      capPath: input.capPath,
-      description: input.description,
-      openedAt: new Date(Date.now()).toISOString(),
-    });
-    return { ok: true };
+  recordLease(input: { socketId: string; capPath: string; description?: string }) {
+    return this.#leases.recordCapability(input);
   }
-
-  /** The relay opened a `.connect` CLIENT connection. Reconnecting under the same path+connectionKey replaces
-   *  the dead predecessor (the 0..1 shape a device wants; browsers pass unique keys for unlimited tabs). */
+  /** The relay opened a `.connect` CLIENT connection (reconnect under the same key replaces its predecessor). */
   recordClientConnection(input: {
     socketId: string;
     path: string;
     connectionKey: string;
     description?: string;
-  }): { ok: true; connectionKey: string } {
-    for (const [sid, l] of this.#leases)
-      if (
-        l.kind === "client" &&
-        l.path === input.path &&
-        l.connectionKey === input.connectionKey &&
-        sid !== input.socketId
-      )
-        this.#closePager(sid, 1000, "replaced");
-    this.#leases.set(input.socketId, {
-      socketId: input.socketId,
-      kind: "client",
-      path: input.path,
-      connectionKey: input.connectionKey,
-      description: input.description,
-      openedAt: new Date(Date.now()).toISOString(),
-    });
-    return { ok: true, connectionKey: input.connectionKey };
+  }) {
+    return this.#leases.recordClient(input);
   }
-
-  /** Wake handshake: the relay, having received a "wake" Page, hands the DO a short leg (an Invoker) for the
-   *  burst. Returns undefined for a STALE wake (nothing waiting) so the relay drops it. */
-  activateLiveCapability(input: { socketId: string; invoker: Invoker }): { ok: true } | undefined {
-    const pending = this.#pending.get(input.socketId);
-    if (pending === undefined) return undefined;
-    const prev = this.#activeLegs.get(input.socketId);
-    const invoker = input.invoker.dup?.() ?? input.invoker; // retain past this call; disposed at quiescence
-    this.#activeLegs.set(input.socketId, { invoker, inFlight: 0 });
-    if (prev) disposeStub(prev.invoker);
-    clearTimeout(pending.timer);
-    this.#pending.delete(input.socketId);
-    pending.resolve();
-    return { ok: true };
+  /** Wake handshake: the woken relay hands the DO its short leg for one burst. */
+  activateLiveCapability(input: { socketId: string; invoker: Invoker }) {
+    return this.#leases.activate(input);
   }
-
-  /** Revoke a live capability mount (its relay's provision handle called this). */
-  revokeCapability(input: { capPath: string }): { ok: true } {
-    for (const l of [...this.#leases.values()])
-      if (l.kind === "capability" && l.capPath === input.capPath)
-        this.#closePager(l.socketId, 1000, "revoked");
-    return { ok: true };
+  revokeCapability(input: { capPath: string }) {
+    return this.#leases.revokeCapability(input.capPath);
   }
-
-  /** Acquire a short leg for `socketId`: reuse an active one, else send a "wake" Page and await the relay's
-   *  `activateLiveCapability`. */
-  async #acquireLeg(socketId: string): Promise<{ invoker: Invoker; inFlight: number }> {
-    let leg = this.#activeLegs.get(socketId);
-    if (leg === undefined) {
-      const ws = pagerSocketFor(socketId, { getWebSockets: this.#getWebSockets });
-      if (ws === undefined) throw new Error("live capability offline (no pager)");
-      const arrived = new Promise<void>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          if (this.#pending.delete(socketId)) reject(new Error("provider attach timed out"));
-        }, ATTACH_TIMEOUT_MS);
-        this.#pending.set(socketId, { resolve, reject, timer });
-      });
-      sendPage(ws, { type: "wake" });
-      await arrived;
-      leg = this.#activeLegs.get(socketId);
-      if (leg === undefined) throw new Error("provider attach completed empty");
-    }
-    leg.inFlight += 1;
-    return leg;
+  clientsList() {
+    return this.#leases.clientsList();
   }
-
-  /** Invoke through an on-demand short leg, then release it at quiescence (send "idle" so the relay drops it). */
-  async #invokeVia(socketId: string, capPath: string[], args: unknown[]): Promise<unknown> {
-    const leg = await this.#acquireLeg(socketId);
-    try {
-      return await leg.invoker.invoke(capPath, args);
-    } finally {
-      leg.inFlight -= 1;
-      if (leg.inFlight === 0 && this.#activeLegs.get(socketId) === leg) {
-        this.#activeLegs.delete(socketId);
-        disposeStub(leg.invoker);
-        const ws = pagerSocketFor(socketId, { getWebSockets: this.#getWebSockets });
-        if (ws) sendPage(ws, { type: "idle" });
-      }
-    }
+  clientConnections(path: string) {
+    return this.#leases.clientConnections(path);
   }
-
-  /** Longest dotted-prefix LIVE CAPABILITY lease; the remaining segment(s) name the provider method. */
-  #liveLeaseFor(callPath: string): { socketId: string; method: string[] } | null {
-    const parts = callPath.split(".");
-    for (let i = parts.length - 1; i >= 2; i--) {
-      const prefix = parts.slice(0, i).join(".");
-      for (const l of this.#leases.values())
-        if (l.kind === "capability" && l.capPath === prefix)
-          return { socketId: l.socketId, method: parts.slice(i) };
-    }
-    return null;
+  invokeClientCapabilities(path: string, capPath: string[], args: unknown[]) {
+    return this.#leases.invokeClientCapabilities(path, capPath, args);
   }
-
-  /** A Pager dropped (socket close / revoke / kick): drop its lease + any active leg, fail any pending wake. */
-  #pagerClosed(socketId: string): void {
-    const leg = this.#activeLegs.get(socketId);
-    if (leg) {
-      this.#activeLegs.delete(socketId);
-      disposeStub(leg.invoker);
-    }
-    const p = this.#pending.get(socketId);
-    if (p) {
-      clearTimeout(p.timer);
-      this.#pending.delete(socketId);
-      p.reject(new Error("provider went offline"));
-    }
-    this.#leases.delete(socketId);
+  invokeClientCapability(connectionKey: string, capPath: string[], args: unknown[]) {
+    return this.#leases.invokeClientCapability(connectionKey, capPath, args);
   }
-
-  #closePager(socketId: string, code: number, reason: string): void {
-    const ws = pagerSocketFor(socketId, { getWebSockets: this.#getWebSockets });
-    if (ws)
-      try {
-        ws.close(code, reason);
-      } catch {
-        /* already closing */
-      }
-    this.#pagerClosed(socketId);
-  }
-
-  // ── CLIENTS (itx.clients): the roster + fan-out over `.connect` client connections. No stream-connection
-  //    machinery — a client connection IS a live-capability lease tagged `{ path, connectionKey }`. ──
-
-  /** itx.clients.list — one row per client path, from the lease table (authoritative for "connected now"). */
-  clientsList(): unknown[] {
-    const byPath = new Map<string, Lease[]>();
-    for (const l of this.#leases.values())
-      if (l.kind === "client" && l.path !== undefined) {
-        const list = byPath.get(l.path) ?? [];
-        list.push(l);
-        byPath.set(l.path, list);
-      }
-    return [...byPath.entries()].map(([path, list]) => ({
-      path,
-      description: list[list.length - 1]?.description ?? null,
-      connections: list.length,
-      hasCapabilities: true,
-    }));
-  }
-
-  /** itx.clients.get(path).connections() — the open connections at a client path. */
-  clientConnections(path: string): unknown[] {
-    return [...this.#leases.values()]
-      .filter((l) => l.kind === "client" && l.path === path)
-      .map((l) => ({
-        connectionKey: l.connectionKey,
-        description: l.description,
-        openedAt: l.openedAt,
-        hasCapabilities: true,
-      }));
-  }
-
-  /** itx.clients.get(path).capabilities.* — FAN OUT one call over every open connection at `path`, Promise.all
-   *  (each via its own on-demand short leg). Zero connections resolves `[]`. */
-  async invokeClientCapabilities(
-    path: string,
-    capPath: string[],
-    args: unknown[],
-  ): Promise<unknown[]> {
-    const conns = [...this.#leases.values()].filter((l) => l.kind === "client" && l.path === path);
-    return Promise.all(conns.map((l) => this.#invokeVia(l.socketId, capPath, args)));
-  }
-
-  /** itx.clients.get(path).getConnection(key).capabilities.* — single-target (bare result). */
-  async invokeClientCapability(
-    connectionKey: string,
-    capPath: string[],
-    args: unknown[],
-  ): Promise<unknown> {
-    const lease = [...this.#leases.values()].find(
-      (l) => l.kind === "client" && l.connectionKey === connectionKey,
-    );
-    if (lease === undefined) throw new Error(`no client connection "${connectionKey}"`);
-    return this.#invokeVia(lease.socketId, capPath, args);
-  }
-
-  /** Kick one client connection from the platform side (closes its Pager). */
-  closeClientConnection(connectionKey: string): { ok: true } {
-    const lease = [...this.#leases.values()].find(
-      (l) => l.kind === "client" && l.connectionKey === connectionKey,
-    );
-    if (lease) this.#closePager(lease.socketId, 1000, "kicked");
-    return { ok: true };
+  closeClientConnection(connectionKey: string) {
+    return this.#leases.closeClientConnection(connectionKey);
   }
 
   /** itx.kv — a project-prefixed view of env.ITX_KV (D8 / target-core §4.5). */
@@ -626,7 +407,7 @@ export class ItxDurableObject extends DurableObject<Env> {
       });
     }
     // A live capnweb provider: a 101 can't cross capnweb, so a WS to a device needs a frame bridge (deferred).
-    if (this.#liveLeaseFor(callPath))
+    if (this.#leases.liveLeaseFor(callPath))
       return new Response(
         `fetch to a live provider "${callPath}" needs a frame bridge (deferred)\n`,
         { status: 501 },

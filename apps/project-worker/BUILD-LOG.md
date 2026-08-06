@@ -426,6 +426,31 @@ args})` **fans out** over the connections at a path (`Promise.all`, `[]` if none
 
 ---
 
+## Increment 19 — don't-pin PROVEN at 1000, and hibernation-safe by extracting a `LeaseServer`
+
+**Commit** `<pending>`. Jonas: prove the DO really doesn't pin (1000 clients for minutes, then call one or two),
+and cook the code down. Both, and they turned out to be the same fix.
+
+- **The correctness fix (also the simplification): leases live in the Pager socket ATTACHMENT, not memory.** My
+  increment-18 leases were an in-memory `#leases` map — which is **lost when the DO actually hibernates**, so a
+  woken DO couldn't route a call. Now each lease is stamped into its hibernatable Pager socket's attachment;
+  leases are **derived** from the surviving sockets (`pagerSockets` + `pagerAttachment`), so a fresh incarnation
+  reads them straight back — nothing to reconcile. This is exactly the hibernation-survival property that makes
+  the 1000-scale proof pass.
+- **Extracted `core/lease-server.ts` (`LeaseServer`).** The whole don't-pin mechanism (records, wake/activate,
+  acquire/invoke/release, fan-out, reconcile) moved out of the DO into one focused class the DO delegates to via
+  a thin facade. `hibernatable-pager.ts` gained `pagerSockets` / `stampPager` and a generic `PagerRecord`. The
+  DO dropped ~120 lines and is now a thin dispatcher (499 lines); the lease logic is 283 lines in one place.
+- **PROVEN — the DO really doesn't pin** (deployed `leaseserver-1`, `prj_thousand`, real capnweb Node clients):
+  **1000 clients connected** → `/state` = `{ pagers:1050, leases:1050, activeLegs:0, dormant:true }`. Held **180s
+  idle**, then called `ping()` on **exactly two** (`/clients/c7`, `/clients/c42`) → `pong:7`, `pong:42`, and only
+  those two clients' processes were touched. **incarnation went 4 → 11 during the hold — the DO truly HIBERNATED
+  and was reconstructed ~7 times while 1000 clients stayed connected**, and every call still resolved (leases
+  survived in the sockets). Back to `dormant:true` after. Definitive: 1000 connected, DO evicted repeatedly, only
+  the two named clients woken.
+
+---
+
 ## Status after increment 13 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project
