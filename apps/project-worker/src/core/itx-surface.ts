@@ -79,9 +79,7 @@ async function startRelay(
     const page = parsePage(event.data);
     if (page?.type !== "wake") return; // "idle" → the DO dropped its leg; keep the provider for the next wake
     waitUntil(
-      host
-        .activateLiveCapability({ socketId, invoker: new Invoker(retained) })
-        .catch(() => undefined), // a stale wake (nobody waiting) returns undefined; offline throws — ignore
+      host.activateStub({ socketId, invoker: new Invoker(retained) }).catch(() => undefined), // a stale wake (nobody waiting) returns undefined; offline throws — ignore
     );
   });
   pager.addEventListener("close", disposeRetained);
@@ -126,7 +124,7 @@ export class ProjectSession extends RpcTarget {
       const connectionKey = opts.connectionKey ?? socketId;
       const relay = await startRelay(this.#host, opts.capabilities, socketId, this.#waitUntil);
       this.#relays.add(relay);
-      await this.#host.recordClientConnection({
+      await this.#host.parkClient({
         socketId,
         path: opts.path,
         connectionKey,
@@ -175,7 +173,7 @@ export class Itx extends RpcTarget {
     const capPath = `itx.${input.path.join(".")}`;
     const relay = await startRelay(this.#host, input.capability, socketId, this.#waitUntil);
     this.#relays.add(relay);
-    await this.#host.recordLease({ socketId, capPath, description: input.instructions });
+    await this.#host.parkCapability({ socketId, capPath, description: input.instructions });
     return new CapabilityProvision(this.#host, capPath, relay, this.#relays);
   }
 }
@@ -254,7 +252,7 @@ export class CapabilityProvision extends RpcTarget {
   async revoke(): Promise<void> {
     this.#active = false;
     this.#relays.delete(this.#relay);
-    await this.#host.revokeCapability({ capPath: this.#capPath });
+    await this.#host.dropCapability({ capPath: this.#capPath });
     this.#relay.dispose();
   }
 }

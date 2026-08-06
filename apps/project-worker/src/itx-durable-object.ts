@@ -10,11 +10,12 @@
 //     Workers-RPC leg on demand) → local mounts (alias/static/code/stateful) → fall back to the PARENT PATH,
 //     then the SHELL. "Reads fall back, writes stay local."
 //
-// DON'T-PIN (mirrors dont-pin-capability-host): a live capability's provider lives in the stateless relay. The
-// DO stores only a `{ socketId }` LEASE + the hibernatable Pager socket — NO stub — so it hibernates while idle.
-// On an invocation it sends a "wake" Page; the relay hands back a short Workers-RPC leg (an Invoker) for the
-// burst; at quiescence the DO drops the leg and sends "idle". A `.connect` client connection is just a live
-// capability lease tagged `{ path, connectionKey }`; `itx.clients` groups those by path and fans out.
+// DON'T-PIN (mirrors dont-pin-capability-host): a live capability's provider lives in the stateless relay, and
+// the DO holds it as a HIBERNATABLE STUB (core/hibernatable-stub.ts) — only a `{ socketId }` record on a
+// hibernatable Pager socket, NO stub — so it hibernates while idle. On an invocation it sends a "wake" Page; the
+// relay hands back a short Workers-RPC leg (an Invoker) for the burst; at quiescence the DO drops the leg and
+// sends "idle". A capability and a `.connect` client connection are both just parked stubs; `itx.clients` groups
+// the client stubs by path and fans out.
 
 import { DurableObject } from "cloudflare:workers";
 import { substituteHeaderSecrets } from "./core/egress.ts";
@@ -26,7 +27,7 @@ import {
   type ItxExpression,
 } from "./core/itx-expression.ts";
 import { PAGER_HEADER } from "./core/hibernatable-pager.ts";
-import { LeaseServer, type Invoker } from "./core/lease-server.ts";
+import { HibernatableStubs, type Invoker, type Stub } from "./core/hibernatable-stub.ts";
 import { parseName, stringifyName, parentPath } from "./core/names.ts";
 import type { StreamDurableObject, StreamEventInput } from "./stream-durable-object.ts";
 import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
@@ -85,7 +86,7 @@ export class Counter extends DurableObject {
 //   • `stateful` = a `DurableObject` class (`className`), run by the dedicated `StatefulWorkerDurableObject`.
 //   • `web` = FETCH-SHAPED — entry `cap.js` default-exports `{ fetch(request, env) }`; reached by the FETCH LANE
 //     so a WebSocket upgrade (101) passes through natively.
-// (LIVE capabilities aren't mounts — they're relay-owned leases; see `#leases`.)
+// (LIVE capabilities aren't mounts — they're relay-owned hibernatable stubs; see `#stubs`.)
 type Mount =
   | { type: "itx-expression"; expression: ItxCallPath }
   | { type: "static"; value: unknown }
@@ -97,10 +98,10 @@ export type ProvideCapabilityInput = { path: ItxCallPath } & Mount;
 
 export class ItxDurableObject extends DurableObject<Env> {
   #mounts = new Map<string, Mount>(); // callPath -> mount (mirrors DO storage; the event-sourced fold is later)
-  // DON'T-PIN: the live-capability lease server. Leases live in the hibernatable Pager sockets' attachments (not
-  // in memory here), and a live leg is held ONLY mid-burst — so the DO hibernates while 1000 clients stay
-  // connected. This DO is a thin dispatcher over it.
-  #leases = new LeaseServer({
+  // DON'T-PIN: the DO's set of hibernatable stubs (to relay-held providers). A stub's record lives in its
+  // Pager socket's attachment, and a live leg is borrowed ONLY mid-call — so the DO hibernates while any number
+  // of providers stay connected. Capabilities + client connections are both just parked stubs (see below).
+  #stubs = new HibernatableStubs({
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
   });
@@ -132,7 +133,7 @@ export class ItxDurableObject extends DurableObject<Env> {
     // A relay opens its HIBERNATABLE PAGER here — a hibernation-safe DO→relay back-channel accepted through the
     // DO's own hibernation API. The DO stores only its `{ socketId }` attachment (no stub) and later sends
     // one-way Pages over it. Checked FIRST so it isn't grabbed as an ingress-echo socket.
-    if (request.headers.get(PAGER_HEADER)) return this.#leases.acceptUpgrade(request);
+    if (request.headers.get(PAGER_HEADER)) return this.#stubs.accept(request);
 
     // ── THE FETCH LANE (target-core §6.0 / D33). A request carrying `x-itx-cap` (a serialized ItxExpression or
     // a bare callPath) is routed to a FETCH-SHAPED capability by NATIVE `.fetch()` hops, so a WebSocket upgrade
@@ -165,7 +166,7 @@ export class ItxDurableObject extends DurableObject<Env> {
 
     // Observability: incarnation (the hibernation tell) + the lease server's live state. `dormant` ⇒ no leg held.
     if (url.pathname === "/state")
-      return Response.json({ incarnation: this.incarnation, ...this.#leases.state() });
+      return Response.json({ incarnation: this.incarnation, ...this.#stubs.state() });
 
     if ((request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket") {
       const pair = new WebSocketPair();
@@ -186,10 +187,10 @@ export class ItxDurableObject extends DurableObject<Env> {
     }
   }
   webSocketClose(ws: WebSocket): void {
-    this.#leases.pagerClosed(ws); // a relay's Pager dropped → the lease vanishes with the socket
+    this.#stubs.closed(ws); // a relay's Pager dropped → the stub vanishes with the socket
   }
   webSocketError(ws: WebSocket): void {
-    this.#leases.pagerClosed(ws);
+    this.#stubs.closed(ws);
   }
 
   // ── the capability model ──
@@ -226,10 +227,10 @@ export class ItxDurableObject extends DurableObject<Env> {
     // methods directly; this branch is for LOADED AGENTS reaching clients through their itx surface.)
     if (callPath.startsWith("itx.clients.") && this.#name.path === "/") {
       const op = callPath.slice("itx.clients.".length);
-      if (op === "list") return this.#leases.clientsList();
-      if (op === "connections") return this.#leases.clientConnections(args[0] as string);
+      if (op === "list") return this.clientsList();
+      if (op === "connections") return this.clientConnections(args[0] as string);
       if (op === "call")
-        return this.#leases.invokeClientCapabilities(
+        return this.invokeClientCapabilities(
           args[0] as string,
           args[1] as string[],
           (args[2] as unknown[]) ?? [],
@@ -252,8 +253,8 @@ export class ItxDurableObject extends DurableObject<Env> {
 
     // LIVE capability (a relay-owned provider): reach it via its Pager + a short Workers-RPC leg on demand — the
     // DO holds no stub between bursts. Longest dotted-prefix lease; the remaining segment(s) name the method.
-    const lease = this.#leases.liveLeaseFor(callPath);
-    if (lease) return this.#leases.invokeVia(lease.socketId, lease.method, args);
+    const cap = this.#capabilityStub(callPath);
+    if (cap) return this.#stubs.invoke(cap.socketId, cap.method, args);
 
     const mount = this.#mounts.get(callPath);
     if (mount) {
@@ -271,43 +272,113 @@ export class ItxDurableObject extends DurableObject<Env> {
     return this.env.ITX_HOST.getByName(parentName).invokeCapability(callPath, args); // → parent path
   }
 
-  // ── DON'T-PIN live capabilities + clients — thin Workers-RPC facade over the LeaseServer (the stateless relay
-  //    calls these; the DO holds no stub between bursts, so it hibernates while clients stay connected). ──
+  // ── DON'T-PIN: capabilities + client connections are both just hibernatable STUBS (core/hibernatable-stub.ts).
+  //    The relay parks one per provider; the DO invokes it on demand and holds nothing between bursts, so it
+  //    hibernates while any number of providers stay connected. Relay-facing Workers-RPC methods + itx.clients. ──
 
-  /** The relay recorded a live capability (`itx.provideCapability({type:"live"})`) after opening its Pager. */
-  recordLease(input: { socketId: string; capPath: string; description?: string }) {
-    return this.#leases.recordCapability(input);
+  /** The relay parked a live capability (`itx.provideCapability({type:"live"})`) at the dotted `capPath`. */
+  parkCapability(input: { socketId: string; capPath: string; description?: string }): { ok: true } {
+    this.#stubs.park(input.socketId, { capPath: input.capPath, description: input.description });
+    return { ok: true };
   }
-  /** The relay opened a `.connect` CLIENT connection (reconnect under the same key replaces its predecessor). */
-  recordClientConnection(input: {
+  /** The relay opened a `.connect` client connection (reconnect under the same key replaces its predecessor). */
+  parkClient(input: {
     socketId: string;
     path: string;
     connectionKey: string;
     description?: string;
-  }) {
-    return this.#leases.recordClient(input);
+  }): {
+    ok: true;
+    connectionKey: string;
+  } {
+    for (const s of this.#stubs.all())
+      if (
+        s.clientPath === input.path &&
+        s.connectionKey === input.connectionKey &&
+        s.socketId !== input.socketId
+      )
+        this.#stubs.drop(s.socketId, "replaced");
+    this.#stubs.park(input.socketId, {
+      clientPath: input.path,
+      connectionKey: input.connectionKey,
+      description: input.description,
+      openedAt: new Date(Date.now()).toISOString(),
+    });
+    return { ok: true, connectionKey: input.connectionKey };
   }
   /** Wake handshake: the woken relay hands the DO its short leg for one burst. */
-  activateLiveCapability(input: { socketId: string; invoker: Invoker }) {
-    return this.#leases.activate(input);
+  activateStub(input: { socketId: string; invoker: Invoker }) {
+    return this.#stubs.activate(input);
   }
-  revokeCapability(input: { capPath: string }) {
-    return this.#leases.revokeCapability(input.capPath);
+  /** Revoke a live capability (its relay's provision handle called this). */
+  dropCapability(input: { capPath: string }): { ok: true } {
+    for (const s of this.#stubs.all())
+      if (s.capPath === input.capPath) this.#stubs.drop(s.socketId, "revoked");
+    return { ok: true };
   }
-  clientsList() {
-    return this.#leases.clientsList();
+
+  /** Longest dotted-prefix live-CAPABILITY stub for a callPath; the remaining segment(s) name the method. */
+  #capabilityStub(callPath: string): { socketId: string; method: string[] } | null {
+    const parts = callPath.split(".");
+    for (let i = parts.length - 1; i >= 2; i--) {
+      const prefix = parts.slice(0, i).join(".");
+      const s = this.#stubs.all().find((x) => x.capPath === prefix);
+      if (s) return { socketId: s.socketId, method: parts.slice(i) };
+    }
+    return null;
   }
-  clientConnections(path: string) {
-    return this.#leases.clientConnections(path);
+
+  /** itx.clients.list — one row per client path (from the parked client stubs). */
+  clientsList(): unknown[] {
+    const byPath = new Map<string, Stub[]>();
+    for (const s of this.#stubs.all())
+      if (typeof s.clientPath === "string") {
+        const list = byPath.get(s.clientPath) ?? [];
+        list.push(s);
+        byPath.set(s.clientPath, list);
+      }
+    return [...byPath.entries()].map(([path, list]) => ({
+      path,
+      description: list[list.length - 1]?.description ?? null,
+      connections: list.length,
+      hasCapabilities: true,
+    }));
   }
-  invokeClientCapabilities(path: string, capPath: string[], args: unknown[]) {
-    return this.#leases.invokeClientCapabilities(path, capPath, args);
+  /** itx.clients.get(path).connections() */
+  clientConnections(path: string): unknown[] {
+    return this.#stubs
+      .all()
+      .filter((s) => s.clientPath === path)
+      .map((s) => ({
+        connectionKey: s.connectionKey,
+        description: s.description,
+        openedAt: s.openedAt,
+        hasCapabilities: true,
+      }));
   }
-  invokeClientCapability(connectionKey: string, capPath: string[], args: unknown[]) {
-    return this.#leases.invokeClientCapability(connectionKey, capPath, args);
+  /** itx.clients.get(path).capabilities.* — FAN OUT over every connection at `path` (Promise.all; `[]` if none). */
+  invokeClientCapabilities(path: string, method: string[], args: unknown[]): Promise<unknown[]> {
+    return Promise.all(
+      this.#stubs
+        .all()
+        .filter((s) => s.clientPath === path)
+        .map((s) => this.#stubs.invoke(s.socketId, method, args)),
+    );
   }
-  closeClientConnection(connectionKey: string) {
-    return this.#leases.closeClientConnection(connectionKey);
+  /** Single-target (getConnection(key).capabilities.*). */
+  invokeClientCapability(
+    connectionKey: string,
+    method: string[],
+    args: unknown[],
+  ): Promise<unknown> {
+    const s = this.#stubs.all().find((x) => x.connectionKey === connectionKey);
+    if (s === undefined) throw new Error(`no client connection "${connectionKey}"`);
+    return this.#stubs.invoke(s.socketId, method, args);
+  }
+  closeClientConnection(connectionKey: string): { ok: true } {
+    const s = this.#stubs.all().find((x) => x.connectionKey === connectionKey);
+    if (s) this.#stubs.drop(s.socketId, "kicked");
+    return { ok: true };
   }
 
   /** itx.kv — a project-prefixed view of env.ITX_KV (D8 / target-core §4.5). */
@@ -407,7 +478,7 @@ export class ItxDurableObject extends DurableObject<Env> {
       });
     }
     // A live capnweb provider: a 101 can't cross capnweb, so a WS to a device needs a frame bridge (deferred).
-    if (this.#leases.liveLeaseFor(callPath))
+    if (this.#capabilityStub(callPath))
       return new Response(
         `fetch to a live provider "${callPath}" needs a frame bridge (deferred)\n`,
         { status: 501 },

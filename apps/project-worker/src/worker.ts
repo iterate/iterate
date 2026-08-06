@@ -34,7 +34,7 @@ export class DummyControlPlane extends WorkerEntrypoint<Env> {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "cooked-1";
+const CODE_VERSION = "stubs-1";
 
 /** The context host DO for a request's `?ctx=` (defaults to `prj_demo`). The DO does the real work. */
 function host(env: Env, url: URL) {

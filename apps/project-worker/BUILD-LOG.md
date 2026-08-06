@@ -464,6 +464,29 @@ proof still passes unchanged.
 
 ---
 
+## Increment 21 — name it what it is: a **hibernatable stub**
+
+**Commit** `<pending>`. Jonas: "what is a lease-server? that needs a better name — is it really some kind of
+hibernatable rpc stub?" Yes. workerd has no native hibernatable _outbound_ stub (retaining one pins the DO —
+the whole problem), so this emulates one: the DO holds only a `{ socketId }` record on a hibernatable Pager and
+materializes a real short-lived RPC leg on demand. So it IS a hibernatable stub. "Lease" was wrong (implies a
+time-bound, renewable grant; this is just "alive while its socket is") and "server" said nothing.
+
+- Renamed `core/lease-server.ts` → **`core/hibernatable-stub.ts`**; `LeaseServer` → **`HibernatableStubs`**;
+  `LeaseRecord` → **`Stub`**; methods read honestly now (`park`, `invoke`, `activate`, `drop`, `all`, `state`).
+- **Split so the mechanism stands alone.** `HibernatableStubs` is now provider-AGNOSTIC — it knows only
+  `{ socketId }` + opaque meta and how to invoke a stub on demand (166 lines, was 290). The capability/client
+  _semantics_ (what a stub represents, roster, fan-out) moved to the DO, where they belong — it's the capability
+  host: `parkCapability` / `parkClient` / `activateStub` / `dropCapability` / `#capabilityStub` / the `itx.clients`
+  methods, each a thin call into `#stubs`. `/state` fields renamed `leases`/`activeLegs` → `stubs`/`active`.
+- Re-proven (deploy `stubs-1`): connect → itx, clients fan-out, `provideCapability(live)`, `dormant:true` while
+  connected, and death all pass unchanged.
+- **Known-fragile (design Q4, deferred):** `itx.clients` fan-out is `Promise.all`, so one dead-but-not-yet-
+  reconciled connection rejects the whole call. Fine for v1; make it per-connection-tolerant when a real caller
+  is burned.
+
+---
+
 ## Status after increment 13 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project
