@@ -39,8 +39,9 @@ import type { AppConfig } from "~/config.ts";
 
 const config = {
   cloudflare: { workerName: "os-prd" },
+  environmentName: "prd",
   posthog: { apiKey: "phc_test" },
-} as Pick<AppConfig, "cloudflare" | "posthog">;
+} as Pick<AppConfig, "cloudflare" | "environmentName" | "posthog">;
 
 function captureContext(operation: object = {}) {
   const pending: Promise<unknown>[] = [];

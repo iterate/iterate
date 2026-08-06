@@ -5,7 +5,7 @@ const POSTHOG_HOST = "https://eu.i.posthog.com";
 const scheduledOperations = new WeakSet<object>();
 
 type PosthogExceptionContext = {
-  config: Pick<AppConfig, "cloudflare" | "posthog">;
+  config: Pick<AppConfig, "cloudflare" | "environmentName" | "posthog">;
   distinctId?: string;
   /** One unique object per Cloudflare invocation; deduplicates nested boundaries. */
   operation: object;
@@ -37,6 +37,8 @@ export async function withPosthogExceptionCapture<T>(
 /** Report an unhandled backend exception without changing the failed operation. */
 export function schedulePosthogException(input: PosthogExceptionContext & { error: unknown }) {
   try {
+    // Preview/dev: no exception capture even if APP_CONFIG_POSTHOG is set.
+    if (input.config.environmentName !== "prd") return;
     const apiKey = input.config.posthog?.apiKey;
     if (!apiKey || scheduledOperations.has(input.operation)) return;
     scheduledOperations.add(input.operation);

@@ -120,6 +120,8 @@ function RootComponent() {
       posthog={{
         appStage: config?.cloudflare?.workerName,
         capturePageviews: false,
+        // Product capture only in production (preview/dev keys still may be present).
+        enabled: config?.environmentName === "prd",
         proxyUrl: "/e",
       }}
       devtools={

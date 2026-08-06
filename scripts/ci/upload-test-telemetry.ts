@@ -101,7 +101,16 @@ export async function finalizeTestTelemetry(options: {
   console.log(
     `[test-telemetry] normalized ${loaded.length} artifact(s) into ${events.length} event(s)`,
   );
-  if (!options.dryRun && !options.cancelled && events.length > 0) await sendPostHogEvents(events);
+  // PostHog upload paused (billing). Artifacts still normalized/retained.
+  // Re-enable: CI_TELEMETRY_POSTHOG_ENABLED=1
+  if (
+    !options.dryRun &&
+    !options.cancelled &&
+    events.length > 0 &&
+    process.env.CI_TELEMETRY_POSTHOG_ENABLED === "1"
+  ) {
+    await sendPostHogEvents(events);
+  }
   if (!options.cancelled) {
     const failures = [
       ...(missingWorkspaces.length > 0
