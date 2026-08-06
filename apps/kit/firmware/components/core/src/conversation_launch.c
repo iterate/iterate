@@ -23,6 +23,12 @@ enum iterate_kit_launch_step iterate_kit_launch_next_step(
     if (inputs->now_ms < launch->next_prepare_ahead_ms) {
       return ITERATE_KIT_LAUNCH_NOTHING;
     }
+    /* Bounded: see ITERATE_KIT_LAUNCH_PREPARE_AHEAD_LIMIT. A prepare nobody is
+     * waiting on must not become a stream minted every thirty seconds. */
+    if (launch->prepares_without_call >= ITERATE_KIT_LAUNCH_PREPARE_AHEAD_LIMIT) {
+      return ITERATE_KIT_LAUNCH_NOTHING;
+    }
+    launch->prepares_without_call++;
     launch->next_prepare_ahead_ms =
         inputs->now_ms + ITERATE_KIT_LAUNCH_PREPARE_AHEAD_RETRY_MS;
     return ITERATE_KIT_LAUNCH_PREPARE_AHEAD;
@@ -42,6 +48,8 @@ enum iterate_kit_launch_step iterate_kit_launch_next_step(
   }
   if (inputs->now_ms < launch->next_place_ms) return ITERATE_KIT_LAUNCH_NOTHING;
   launch->next_place_ms = inputs->now_ms + ITERATE_KIT_LAUNCH_PLACE_RETRY_MS;
+  /* Preparing ahead did its job: the count starts again from here. */
+  launch->prepares_without_call = 0U;
   return ITERATE_KIT_LAUNCH_PLACE_CALL;
 }
 
@@ -50,4 +58,5 @@ void iterate_kit_launch_retry_now(struct iterate_kit_launch *launch) {
   launch->next_prepare_ahead_ms = 0U;
   launch->next_prepare_ms = 0U;
   launch->next_place_ms = 0U;
+  launch->prepares_without_call = 0U;
 }

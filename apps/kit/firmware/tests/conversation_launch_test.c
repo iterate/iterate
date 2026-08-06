@@ -179,8 +179,70 @@ static void nothing_is_dereferenced_blind(void) {
   iterate_kit_launch_retry_now(NULL);
 }
 
+/*
+ * A PREPARE NOBODY IS WAITING ON MUST NOT BECOME A LOOP.
+ *
+ * `stream_used` only clears when the device SEES its prepare succeed. On the
+ * `iterate` project the completion never landed, so the board asked again every
+ * thirty seconds all evening — dozens of abandoned conversation streams on a
+ * real project, and a device that never reached a state where it could place a
+ * call. Bounded now: three tries, then it stops scribbling.
+ */
+static void preparing_ahead_gives_up_rather_than_looping(void) {
+  struct iterate_kit_launch launch = {0};
+  struct iterate_kit_launch_inputs inputs = idle_at(0U);
+  uint64_t now = 0U;
+  unsigned int prepares = 0U;
+
+  /* Twenty rounds of a setup whose success never comes back. */
+  for (unsigned int round = 0U; round < 20U; round++) {
+    inputs.now_ms = now;
+    if (iterate_kit_launch_next_step(&launch, &inputs) ==
+        ITERATE_KIT_LAUNCH_PREPARE_AHEAD) {
+      prepares++;
+    }
+    now += ITERATE_KIT_LAUNCH_PREPARE_AHEAD_RETRY_MS;
+  }
+  assert(prepares == ITERATE_KIT_LAUNCH_PREPARE_AHEAD_LIMIT);
+
+  /* …and a PRESS still works: the bound is on the idle path only. */
+  inputs.wants_call = true;
+  assert(
+      iterate_kit_launch_next_step(&launch, &inputs) ==
+      ITERATE_KIT_LAUNCH_PREPARE_NOW);
+}
+
+/* Placing a call is the evidence preparing ahead was worth it, so it resets. */
+static void placing_a_call_forgives_the_prepares(void) {
+  struct iterate_kit_launch launch = {0};
+  struct iterate_kit_launch_inputs inputs = idle_at(0U);
+  uint64_t now = 0U;
+
+  for (unsigned int round = 0U; round < 5U; round++) {
+    inputs.now_ms = now;
+    (void)iterate_kit_launch_next_step(&launch, &inputs);
+    now += ITERATE_KIT_LAUNCH_PREPARE_AHEAD_RETRY_MS;
+  }
+  /* A call happens on a fresh stream. */
+  inputs.now_ms = now;
+  inputs.wants_call = true;
+  inputs.stream_used = false;
+  assert(
+      iterate_kit_launch_next_step(&launch, &inputs) ==
+      ITERATE_KIT_LAUNCH_PLACE_CALL);
+  /* The idle path is willing again. */
+  inputs.wants_call = false;
+  inputs.stream_used = true;
+  inputs.now_ms = now + ITERATE_KIT_LAUNCH_PREPARE_AHEAD_RETRY_MS;
+  assert(
+      iterate_kit_launch_next_step(&launch, &inputs) ==
+      ITERATE_KIT_LAUNCH_PREPARE_AHEAD);
+}
+
 int main(void) {
   a_press_never_waits_on_the_idle_backoff();
+  preparing_ahead_gives_up_rather_than_looping();
+  placing_a_call_forgives_the_prepares();
   an_idle_prepare_retries_slowly();
   a_prepared_stream_makes_a_press_immediate();
   nothing_is_prepared_when_one_is_ready();

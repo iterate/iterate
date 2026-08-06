@@ -32,6 +32,22 @@ extern "C" {
 #define ITERATE_KIT_LAUNCH_PREPARE_RETRY_MS 8000U
 /** Retry for placing the call itself; a start takes ~1-3s. */
 #define ITERATE_KIT_LAUNCH_PLACE_RETRY_MS 8000U
+/**
+ * Prepares-ahead in a row that produced no usable stream before it stops.
+ *
+ * PREPARING AHEAD IS AN OPTIMISATION AND MUST NEVER BECOME A LOOP. It repeats
+ * while `stream_used` is true, and `stream_used` only clears when the device
+ * SEES the prepare succeed. Measured on `iterate`: the server minted a fresh
+ * conversation stream every thirty seconds, per board, all evening — the
+ * completion never reached the device, so it asked again forever and never
+ * reached a state where it could place a call. Dozens of abandoned streams on
+ * a real project, and from the outside a device that simply never answers.
+ *
+ * Three is enough to ride out a lost reply and few enough that a broken setup
+ * path stops rather than scribbling. A tap still prepares: this bounds the
+ * IDLE path only, because nobody is waiting on that one.
+ */
+#define ITERATE_KIT_LAUNCH_PREPARE_AHEAD_LIMIT 3U
 
 /** What the device loop should do about calls this tick. */
 enum iterate_kit_launch_step {
@@ -81,6 +97,13 @@ struct iterate_kit_launch {
   uint64_t next_prepare_ms;
   /** Earliest next attempt at placing the call. */
   uint64_t next_place_ms;
+  /**
+   * Consecutive idle prepares that never produced a call.
+   *
+   * Cleared when a call is actually placed, which is the only evidence that
+   * preparing ahead is doing what it exists for.
+   */
+  uint32_t prepares_without_call;
 };
 
 /**
