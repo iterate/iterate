@@ -12,10 +12,10 @@ import { Separator } from "@iterate-com/ui/components/separator";
 import { toast } from "@iterate-com/ui/components/sonner";
 import { AuthRedirectError } from "../components/auth-redirect-error.tsx";
 import { parseConfig } from "../config.ts";
-// Pure module (no server-only deps): the shared definition of which emails
-// take the fixed test OTP, and the code itself.
-import { shouldUseTestOtp, TEST_OTP_CODE } from "../server/email.ts";
 import { getLoginRedirectSearch } from "../utils/auth-redirect-error.ts";
+// Pure, unit-tested hint semantics (utils/login-hint.test.ts): Continue-as
+// shortcut, OTP guess for test addresses, mode hints.
+import { deriveLoginHintPresentation } from "../utils/login-hint.ts";
 import { authClient } from "../utils/auth-client.ts";
 import { AccountChooser } from "./-login-account-chooser.tsx";
 
@@ -111,27 +111,18 @@ function RouteComponent() {
   const redirectTo = safeRedirectPath(search.redirect);
   const { emailOtpEnabled, fixedTestOtpEnabled, user } = Route.useLoaderData();
   const signedInUser = user && isOAuthProviderFlowSearch(search) ? user : null;
-  // An email-address hint offers a "Continue as <email>" shortcut button and
-  // prefills the email form — it never forces a mode or signs in by itself.
-  const hintedEmail =
-    !signedInUser && emailOtpEnabled && search.login_hint?.includes("@")
-      ? search.login_hint
-      : undefined;
-  // Our best guess at the code the mailbox will "receive": on deployments
-  // with the fixed test OTP, a `*+test@nustom.com` hint means the code is
-  // knowable in advance, so the OTP field prefills with it (the user still
-  // presses the button). Not a secret — anyone can discover it empirically —
-  // and real deployments keep fixedTestOtpEnabled off.
-  const otpGuess =
-    hintedEmail && shouldUseTestOtp({ email: hintedEmail, fixedTestOtpEnabled })
-      ? TEST_OTP_CODE
-      : undefined;
-  const loginHint =
-    !signedInUser && search.login_hint === "email" && emailOtpEnabled
-      ? search.login_hint
-      : !signedInUser && search.login_hint === "google"
-        ? search.login_hint
-        : undefined;
+  // Hint semantics (Continue-as shortcut, OTP guess, mode hints) live in the
+  // pure, unit-tested helper — the route only renders what it derives.
+  const {
+    hintedEmail,
+    otpGuess,
+    mode: loginHint,
+  } = deriveLoginHintPresentation({
+    loginHint: search.login_hint,
+    emailOtpEnabled,
+    fixedTestOtpEnabled,
+    signedIn: signedInUser !== null,
+  });
 
   return (
     <div className="flex min-h-screen items-center justify-center p-6">
