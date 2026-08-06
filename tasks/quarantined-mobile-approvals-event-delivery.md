@@ -50,7 +50,10 @@ classification was weakened to admit either run.
 The next exact-head baseline kept all OS and mobile coverage green but was
 rejected when Semaphore reached the preceding Durable Object version after its
 90-second rollout clock. Semaphore now has an exact public-Worker/coordinator
-version readiness proof; a fresh head is pending.
+version readiness proof. Its first deployed check proved the orchestrator
+waited for that condition, then exposed an E2E helper still requiring the old
+literal `OK` body. The helper now validates the exact JSON/header version
+contract; a fresh head is pending.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -637,3 +640,12 @@ Test these in order; do not treat the first plausible one as the conclusion.
   starting tests. Three red/green health cases, 139 preview-orchestrator tests,
   both affected typechecks, lint, and formatting pass. The streak remains zero
   for the new head.
+- 2026-08-06: Baseline `82cxg80fnt` on `8668ab37c` proved the exact Semaphore
+  readiness gate worked: the first deploy smoke was healthy at 09:23:11 UTC,
+  while the preview orchestrator waited another 42 seconds for the public
+  Worker version header before starting tests. Both Semaphore E2E files then
+  timed out before their cases because their local waiter still required the
+  retired literal `OK` body from `/health`. It now uses the fixture's
+  version-pinned fetch and accepts only matching JSON body versions plus the
+  public version header. Focused red/green coverage rejects both coordinator
+  and header mismatches. This run is rejected; the streak remains zero.

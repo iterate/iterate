@@ -58,7 +58,13 @@ describe.sequential("live semaphore E2E", () => {
   }
 
   beforeAll(async () => {
-    await waitForHealth(app.baseURL, 30_000);
+    await waitForHealth({
+      baseURL: app.baseURL,
+      timeoutMs: 30_000,
+      networkFetch: app.networkFetch,
+      now: Date.now,
+      sleep,
+    });
     await sleep(2_000);
   }, 120_000);
 
