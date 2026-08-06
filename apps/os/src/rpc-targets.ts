@@ -8095,8 +8095,7 @@ class LiveStateRelayRpcTarget<State extends object>
       pagerLane === undefined
         ? undefined
         : openRelayedLiveState<State>({
-            dialPager:
-              pagerLane.dialPager ?? (async () => dialLiveStatePager(await this.#stub())),
+            dialPager: pagerLane.dialPager ?? (async () => dialLiveStatePager(await this.#stub())),
             readSnapshot: () => this.#transientGet(),
             pagerFailureDegrade: "reject",
             label: pagerLane.label,
