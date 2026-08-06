@@ -30,15 +30,18 @@ enum {
   DISPLAY_WIDTH = 368,
   DISPLAY_HEIGHT = 448,
   FACE_SCALE = 2,
-  /*
-   * The card is the face PLUS a strip of status lights under it, drawn by the
-   * shared overlay in source pixels so it scales with the face and is the
-   * same code every other surface uses. It replaces a text label that said
-   * "ready" — a word where twelve lights belong.
-   */
-  CARD_SOURCE_HEIGHT = FACE_RENDER_HEIGHT + ITERATE_KIT_OVERLAY_STRIP_HEIGHT,
+  CARD_SOURCE_HEIGHT = FACE_RENDER_HEIGHT,
   FACE_WIDTH = FACE_RENDER_WIDTH * FACE_SCALE,
   FACE_HEIGHT = CARD_SOURCE_HEIGHT * FACE_SCALE,
+  /*
+   * The status lights live at the BOTTOM OF THE PANEL, not under the chin.
+   * Drawn into the face card they were glued to it and moved with it, which
+   * makes them part of the picture; they belong to the device, so they sit at
+   * the device's own edge — the same reasoning as the Stick's left-edge rail.
+   */
+  LIGHTS_WIDTH = DISPLAY_WIDTH,
+  LIGHTS_HEIGHT = 28,
+  LIGHTS_MARGIN = 24,
   STATUS_CAPACITY = 64,
   REFRESH_PERIOD_MS = 100,
 };
@@ -62,6 +65,8 @@ static lv_obj_t *face_canvas;
 static uint16_t *face_pixels;
 static uint16_t *face_frame;
 static uint16_t *face_shown;
+static lv_obj_t *lights_canvas;
+static uint16_t *lights_pixels;
 
 static uint64_t now_ms(void) {
   return (uint64_t)(esp_timer_get_time() / 1000);
@@ -191,7 +196,7 @@ static void refresh_face(void) {
   iterate_kit_conversation_overlay_render(
       &status,
       (uint32_t)now,
-      ITERATE_KIT_OVERLAY_LIGHTS_STRIP,
+      ITERATE_KIT_OVERLAY_LIGHTS_NONE,
       face_frame,
       (uint32_t)FACE_RENDER_WIDTH,
       (uint32_t)CARD_SOURCE_HEIGHT);
@@ -223,9 +228,47 @@ static void refresh_face(void) {
   lv_obj_invalidate(face_canvas);
 }
 
+/*
+ * The twelve lights across the foot of the panel. Colours from the one shared
+ * renderer; only the geometry is this board's business.
+ */
+static void refresh_lights(void) {
+  struct iterate_kit_rgb8 lights[ITERATE_KIT_CONVERSATION_LIGHT_COUNT];
+  const struct iterate_kit_conversation_visual_state status = face_status();
+  const int32_t pitch =
+      LIGHTS_WIDTH / (int32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
+  const int32_t dot = LIGHTS_HEIGHT - 8;
+  const int32_t left = (pitch - dot) / 2;
+  int32_t index;
+
+  if (lights_pixels == NULL) return;
+  iterate_kit_conversation_lights_for_screen(
+      &status, (uint32_t)now_ms(), lights);
+  memset(
+      lights_pixels, 0, (size_t)LIGHTS_WIDTH * LIGHTS_HEIGHT *
+                            sizeof(*lights_pixels));
+  for (index = 0; index < (int32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
+       ++index) {
+    const uint16_t colour = (uint16_t)(
+        ((lights[index].red & 0xF8U) << 8) |
+        ((lights[index].green & 0xFCU) << 3) | (lights[index].blue >> 3));
+    int32_t row;
+    for (row = 0; row < dot; ++row) {
+      uint16_t *const out =
+          &lights_pixels[(size_t)((LIGHTS_HEIGHT - dot) / 2 + row) *
+                             LIGHTS_WIDTH +
+                         index * pitch + left];
+      int32_t column;
+      for (column = 0; column < dot; ++column) out[column] = colour;
+    }
+  }
+  lv_obj_invalidate(lights_canvas);
+}
+
 static void refresh_timer(lv_timer_t *timer) {
   (void)timer;
   refresh_face();
+  refresh_lights();
 }
 
 /*
@@ -284,6 +327,13 @@ static void build_ui(void) {
   lv_obj_set_style_bg_opa(screen, LV_OPA_COVER, 0);
   lv_obj_clear_flag(screen, LV_OBJ_FLAG_SCROLLABLE);
 
+  if (lights_pixels != NULL) {
+    lights_canvas = lv_canvas_create(screen);
+    lv_canvas_set_buffer(
+        lights_canvas, lights_pixels, LIGHTS_WIDTH, LIGHTS_HEIGHT,
+        LV_COLOR_FORMAT_RGB565);
+    lv_obj_align(lights_canvas, LV_ALIGN_BOTTOM_MID, 0, -LIGHTS_MARGIN);
+  }
   if (face_pixels != NULL) {
     face_canvas = lv_canvas_create(screen);
     lv_canvas_set_buffer(
@@ -294,7 +344,7 @@ static void build_ui(void) {
      * making room for two text labels that no longer exist — the lights and
      * the banner say what they said, inside the card itself.
      */
-    lv_obj_align(face_canvas, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_align(face_canvas, LV_ALIGN_CENTER, 0, -LIGHTS_MARGIN);
   }
 
 }
@@ -311,6 +361,9 @@ bool waveshare_display_init(void) {
     return false;
   }
 
+  lights_pixels = heap_caps_calloc(
+      (size_t)LIGHTS_WIDTH * LIGHTS_HEIGHT, sizeof(*lights_pixels),
+      MALLOC_CAP_SPIRAM);
   face_pixels = heap_caps_calloc(
       (size_t)FACE_WIDTH * FACE_HEIGHT, sizeof(*face_pixels), MALLOC_CAP_SPIRAM);
   face_frame = heap_caps_calloc(
