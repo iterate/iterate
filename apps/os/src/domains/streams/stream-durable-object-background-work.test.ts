@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { StreamReceiverUnavailableError } from "iterate/processors";
 import {
   StreamAlarmArmer,
   StreamDeliveryAlarmBoundary,
@@ -54,7 +55,22 @@ describe("settleStreamCoreBackgroundWork", () => {
     expect(error).toHaveBeenCalledWith("stream core background work failed", failure);
   });
 
-  it("classifies an explicit paused-stream rejection outside error telemetry", async () => {
+  it("classifies a paused-stream Durable Object rejection outside error telemetry", async () => {
+    const paused = new StreamReceiverUnavailableError("stream paused: operator maintenance");
+    const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    await expect(
+      settleStreamCoreBackgroundWork(() => Promise.reject(paused)),
+    ).resolves.toBeUndefined();
+
+    expect(info).toHaveBeenCalledWith("stream core background work reached a paused stream", {
+      message: paused.message,
+    });
+    expect(error).not.toHaveBeenCalled();
+  });
+
+  it("classifies a paused-stream rejection normalized by public RPC outside error telemetry", async () => {
     const paused = new Error("stream paused: operator maintenance");
     const info = vi.spyOn(console, "info").mockImplementation(() => undefined);
     const error = vi.spyOn(console, "error").mockImplementation(() => undefined);

@@ -92,7 +92,7 @@ const CoreStateRebuildCheckpoint = z.strictObject({
 function isStreamPausedError(error: unknown): error is Error {
   return (
     error instanceof Error &&
-    error.name === "Error" &&
+    (error.name === StreamReceiverUnavailableError.NAME || error.name === "Error") &&
     error.message.startsWith(STREAM_PAUSED_ERROR_PREFIX)
   );
 }

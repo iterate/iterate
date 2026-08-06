@@ -34,8 +34,13 @@ caught one remaining dynamic-worker concurrency error. A later config commit
 was probing the project worker from the retained root Stream alarm while that
 alarm delivered the same commit to the userspace worker feed. The probe now
 transfers to the Project DO's durable alarm queue and keeps the original stream
-fence. The 25-run streak remains at zero until this new head passes a clean
-preview and trace audit.
+fence. Its exact-head baseline passed all six groups, including both restored
+mobile flows first try, and had no dynamic-worker concurrency failure. The
+strict audit then found three expected paused-ancestor rejections mislabeled as
+application errors because their direct Durable Object error name differed
+from the public-RPC-normalized name. That classifier fix is now locally green;
+the 25-run streak remains at zero until its new exact head passes preview and
+trace audit.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -571,3 +576,16 @@ Test these in order; do not treat the first plausible one as the conclusion.
   Project-domain tests, OS typecheck, root lint, and formatting pass; a fresh
   exact-head preview and trace audit are next, so the 25-run streak remains
   zero.
+- 2026-08-06: Exact-head workflow `tmsts7hq51` on `d12aea6fe` passed all six
+  groups: 190 OS tests, both restored mobile flows first try, interrupted and
+  recreated session recovery, and no retry markers. Exact version
+  `5313b4d3-013b-4735-b709-3bf8cb415298` had no dynamic-worker concurrency
+  failure, proving the alarm handoff. Its strict audit did catch three
+  `stream core background work failed` rows from the deliberate
+  paused-ancestor recovery spec. The receiving stream throws
+  `StreamReceiverUnavailableError`; the classifier accepted only the plain
+  `Error` name used after public RPC normalization, so direct Durable Object
+  calls fell into error telemetry. A red/green spec now covers both wire
+  shapes and keeps only the exact `stream paused:` contract outside error
+  telemetry. The focused 10-test suite passes; a new exact-head baseline is
+  required before the 25-run gate starts.
