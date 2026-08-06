@@ -380,6 +380,20 @@ static char pending_stream_path[96];
 static bool stream_used = true;
 static bool awaiting_fresh_stream;
 /*
+ * WHEN the prepare went out, so waiting on it can expire.
+ *
+ * `awaiting_fresh_stream` was cleared only by setup_succeeded or setup_failed,
+ * so a request whose completion never came back latched it true for the rest
+ * of the boot: no further prepare was attempted, no call could be placed, and
+ * the board sat on its default stream looking perfectly healthy. Measured on
+ * the HA Voice PE — setupFailStep 0, voicelab ready, conversation still
+ * /agents/voice/device after four minutes. Every other in-flight state here
+ * already expires; this one was missed.
+ */
+static uint64_t awaiting_since_ms;
+/** Prepares abandoned because nothing ever answered them. */
+static uint32_t prepare_timeouts;
+/*
  * True when the stream being prepared was NOT asked for by a person.
  * See the eager prepare in the app loop: the adoption path must not
  * turn a speculative preparation into a call nobody wanted.
@@ -1800,6 +1814,7 @@ size_t waveshare_health_json(char *out, size_t capacity) {
     /* Which step of preparing a conversation failed last — the reason that
      * used to exist only on a console whose opening reboots the board. */
     {"setupFailStep", (uint32_t)runtime.voicelab.setup_failure_step},
+    {"prepareTimeouts", prepare_timeouts},
     {"heapFree", (uint32_t)esp_get_free_heap_size()},
     /*
      * INTERNAL, NOT TOTAL. `heapFree` counts PSRAM, and on a board with eight
@@ -2457,6 +2472,16 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
         }
         preparing_ahead = false;
       }
+      /* A prepare nothing ever answered must not latch the ladder shut. */
+      if (awaiting_fresh_stream && awaiting_since_ms != 0U &&
+          iterate_kit_voice_elapsed_ms(now, awaiting_since_ms) >
+              ITERATE_KIT_VOICE_PREPARE_TIMEOUT_MS) {
+        ++prepare_timeouts;
+        awaiting_fresh_stream = false;
+        preparing_ahead = false;
+        awaiting_since_ms = 0U;
+        ESP_LOGW(tag, "preparing a conversation went unanswered — trying again");
+      }
       if (runtime.voicelab.setup_failed) {
         runtime.voicelab.setup_failed = false;
         ESP_LOGE(tag, "could not prepare %s", pending_stream_path);
@@ -2793,10 +2818,12 @@ void iterate_kit_waveshare_s3_amoled_run(void) {
             ESP_LOGI(tag, "idle: preparing the next conversation in advance");
             preparing_ahead = begin_new_conversation();
             awaiting_fresh_stream = preparing_ahead;
+            awaiting_since_ms = now;
             break;
           case ITERATE_KIT_LAUNCH_PREPARE_NOW:
             ESP_LOGI(tag, "call asked for: preparing a fresh conversation");
             awaiting_fresh_stream = begin_new_conversation();
+            awaiting_since_ms = now;
             break;
           case ITERATE_KIT_LAUNCH_PLACE_CALL:
             call_pending_since = now;

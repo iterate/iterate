@@ -164,6 +164,14 @@ enum {
   ITERATE_KIT_VOICE_PING_TIMEOUT_MS = 20000,
   ITERATE_KIT_VOICE_BRIDGE_SILENCE_MS = 20000,
   ITERATE_KIT_VOICE_DOWNLINK_SILENCE_MS = 10000,
+  /*
+   * How long a prepare-a-conversation request may go unanswered.
+   *
+   * Sibling of the 20s call-start expiry, and added for the same reason: an
+   * in-flight request with no deadline is a latch. Setup is measured at 3-5s
+   * server-side, so twenty seconds is far past legitimate slowness.
+   */
+  ITERATE_KIT_VOICE_PREPARE_TIMEOUT_MS = 20000,
   ITERATE_KIT_VOICE_NO_LIVENESS_RESTART_MS = 180000,
   /*
    * How long an IDLE device may hold a mount nobody is answering before it
