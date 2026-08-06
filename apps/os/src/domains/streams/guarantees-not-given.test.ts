@@ -452,6 +452,7 @@ describe("guarantees the subscription rewrite deliberately does not give", () =>
         keepAlive: (promise) => kept.push(promise),
         wakeChannelKeys: () => new Set<string>(),
         onSessionsIdleClosed: () => undefined,
+        onClientConnectionsEvicted: () => undefined,
         wakeDormantSubscribers: () => undefined,
       },
     });

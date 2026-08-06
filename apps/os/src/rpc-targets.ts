@@ -5454,15 +5454,19 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
       connectionKey?: string;
     },
   ): Promise<ProjectRpcTarget> {
-    const path = opts.path;
-    if (
-      typeof path !== "string" ||
-      !path.startsWith("/") ||
-      path === "/" ||
-      path === CLIENT_COLLECTION_PATH
-    ) {
+    if (typeof opts.path !== "string" || !opts.path.trim().startsWith("/")) {
       throw new Error(
-        `client path must be an absolute stream path (e.g. "/clients/chrome"), got ${JSON.stringify(path)}`,
+        `client path must be an absolute stream path (e.g. "/clients/chrome"), got ${JSON.stringify(opts.path)}`,
+      );
+    }
+    // Canonicalize BEFORE guarding: StreamRpcTarget canonicalizes the same
+    // input ("/clients/", "/x/../clients" → "/clients"), so an exact-string
+    // check here would let a spelling that only canonicalizes to the
+    // collection path birth a client ON the collection stream itself.
+    const path = canonicalizeStreamPath(opts.path);
+    if (path === "/" || path === CLIENT_COLLECTION_PATH) {
+      throw new Error(
+        `client path must not be the root or the collection stream ("${CLIENT_COLLECTION_PATH}"), got ${JSON.stringify(opts.path)}`,
       );
     }
     if (typeof opts.description !== "string" || opts.description.trim().length === 0) {

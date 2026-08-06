@@ -321,6 +321,13 @@ type StreamEventSenderHooks = {
    */
   onSessionsIdleClosed(connectionKeys: readonly string[]): void;
   /**
+   * Client-cap enforcement just evicted these connections as "replaced"; the
+   * host must also close their wake sockets, or an evicted presence-only
+   * subscriber stays dormant-looking and the next matching append resurrects
+   * it past the cap.
+   */
+  onClientConnectionsEvicted(connectionKeys: readonly string[]): void;
+  /**
    * Post-commit: offer just-committed events to dormant wake-channel
    * subscribers (wake-socket.ts). Edge-triggered by design — a frame lost to
    * a crash between commit and send is repaired by the next qualifying
@@ -1625,6 +1632,7 @@ type StreamConnectionsHooks = Pick<
   | "keepAlive"
   | "wakeChannelKeys"
   | "onSessionsIdleClosed"
+  | "onClientConnectionsEvicted"
 > & {
   readBatch(afterOffset: number, beforeOffset: number, limit: number): SizedStreamEvent[];
   hostedDeliveryStillMatches(
@@ -2436,12 +2444,17 @@ export class StreamConnections {
     // single-threaded execution — the closed facts land right after the new
     // connection's opened fact.
     if (kind === "session" && args.maxConnections != null && args.openedBy?.client !== undefined) {
-      const clientConnections = [...this.#connections.values()].filter(
-        (candidate) => candidate.kind === "session" && candidate.openedBy?.client !== undefined,
+      const clientConnections = [...this.#connections.entries()].filter(
+        ([, candidate]) => candidate.kind === "session" && candidate.openedBy?.client !== undefined,
       );
       const excess = clientConnections.length - args.maxConnections;
-      for (const oldest of clientConnections.slice(0, Math.max(0, excess))) {
-        oldest.close("replaced");
+      if (excess > 0) {
+        const evicted = clientConnections.slice(0, excess);
+        for (const [, oldest] of evicted) oldest.close("replaced");
+        // The host also closes the evicted keys' wake sockets: without this a
+        // presence-only evictee parks as a dormant subscriber and the next
+        // matching append re-dials it straight past the cap.
+        this.#hooks.onClientConnectionsEvicted(evicted.map(([evictedKey]) => evictedKey));
       }
     }
     // Idle eligibility changed exactly here, so (re)derive the deadline here.

@@ -114,6 +114,13 @@ test("maxConnections defaults to 1: a reconnect evicts the previous connection a
   const connections = await project.clients.get("/clients/desk-robot").connections();
   expect(connections).toHaveLength(1);
   expect(connections[0]).toMatchObject({ description: "boot two" });
+
+  // The collection-path guard holds under canonicalization: a spelling that
+  // only canonicalizes to "/clients" must not birth a client ON the roster
+  // stream itself.
+  await expect(
+    adminItx.projects.connect(projectId, { path: "/x/../clients", description: "sneaky" }),
+  ).rejects.toThrow(/collection stream/);
 });
 
 test("maxConnections: null allows many tabs; fan-out reaches all, getConnection targets one, close kicks one", async () => {

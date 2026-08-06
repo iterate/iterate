@@ -518,6 +518,11 @@ export class StreamDurableObject extends DurableObject<Env> {
       keepAlive: (promise) => this.#runInBackground(() => promise),
       wakeChannelKeys: () => this.#wakeSockets.channelKeys(),
       onSessionsIdleClosed: (connectionKeys) => this.#wakeSockets.recordIdleClosed(connectionKeys),
+      onClientConnectionsEvicted: (connectionKeys) => {
+        for (const connectionKey of connectionKeys) {
+          this.#wakeSockets.closeForConnection(connectionKey, "replaced");
+        }
+      },
       wakeDormantSubscribers: (justCommitted) =>
         this.#wakeSockets.wakeDormant(justCommitted.map((entry) => entry.event)),
     },

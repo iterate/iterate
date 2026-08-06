@@ -160,6 +160,7 @@ function harness(args: {
       keepAlive: (promise) => kept.push(promise),
       wakeChannelKeys: () => new Set<string>(),
       onSessionsIdleClosed: () => undefined,
+      onClientConnectionsEvicted: () => undefined,
       wakeDormantSubscribers: () => undefined,
     },
   });
@@ -1905,6 +1906,7 @@ function connectionsHarness(
         sessionsIdleClosed.push([...keys]);
         options.onSessionsIdleClosed?.(keys);
       },
+      onClientConnectionsEvicted: () => undefined,
       reconcileAlarm: () => undefined,
       hostedDeliveryStillMatches: (_subscriptionKey, candidate) =>
         candidate.configuredAtOffset === expectedDelivery.configuredAtOffset &&
