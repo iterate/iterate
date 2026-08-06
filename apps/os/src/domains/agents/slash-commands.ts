@@ -5,10 +5,8 @@
 // consulted exactly there, server-side in the agent processor: a message
 // that RESOLVES to a command runs as a codemode script with the agent's own
 // provenance instead of triggering an LLM turn (the command stays visible in
-// the thread as an ordinary user message; the script result renders back as
-// developer context and drives the agent's next turn, which is when the
-// working indicator finally clears — the same lifecycle an agent-authored
-// script has).
+// the thread as an ordinary user message; `/script` appends its result as
+// interruptive developer context and drives the agent's next turn).
 //
 // Anything that does NOT resolve — an unknown `/command`, a bad example
 // slug, malformed vars — deliberately falls through to the LLM untouched:
@@ -22,12 +20,18 @@ import { ITX_EXAMPLES, runScriptEnvelope } from "../../itx/examples.ts";
  * primitives, and null fall through to the LLM like any other non-command. */
 const ExampleVars = z.record(z.string(), z.unknown());
 
-type ResolvedSlashCommand = {
-  /** Which command matched — recorded on nothing, useful for tests/logs. */
-  command: "example" | "script";
-  /** The exact `async (itx) => …` source handed to the run-script door. */
-  code: string;
-};
+type ResolvedSlashCommand =
+  | {
+      /** Which command matched — recorded on nothing, useful for tests/logs. */
+      command: "example";
+      /** The exact `async (itx) => …` source handed to the run-script door. */
+      code: string;
+    }
+  | {
+      command: "script";
+      /** The user-authored body, normalized to return a single expression. */
+      body: string;
+    };
 
 /**
  * Resolve a user message into a runnable slash command, or null. PURE and
@@ -85,10 +89,48 @@ export function resolveSlashCommand(content: string): ResolvedSlashCommand | nul
     // must not comment it out (and `//` inside a URL string makes detecting
     // comments non-trivial, so the newline handles every case).
     const body = singleExpression ? `return (${code}\n);` : code;
-    return { command: "script", code: `async (itx) => {\n${body}\n}` };
+    return { command: "script", body };
   }
 
   return null;
+}
+
+/** Build the event-specific script source after the command's execution ID is
+ * known. `/script` publishes successful results itself; its settlement stays
+ * reserved for failures and the no-result completion fact. */
+export function buildSlashCommandCode(command: ResolvedSlashCommand, executionId: string): string {
+  if (command.command === "example") return command.code;
+
+  const actor = JSON.stringify({ type: "script", executionId });
+  const idempotencyKey = JSON.stringify(`agent/slash-command-result@${executionId}`);
+  return `async (itx) => {
+const agent = itx.agent;
+if (!agent) throw new Error("/script requires an agent-scoped itx");
+const result = await (async () => {
+${command.body}
+})();
+if (result === undefined) return;
+let content;
+if (typeof result === "string") {
+  content = result;
+} else {
+  try {
+    content = JSON.stringify(result, null, 2) ?? String(result);
+  } catch {
+    content = String(result);
+  }
+}
+await agent.append({
+  type: "events.iterate.com/agents/context-added",
+  payload: {
+    role: "developer",
+    content,
+    actor: ${actor},
+    llmRequestPolicy: { behaviour: "interrupt-current-request" },
+  },
+  idempotencyKey: ${idempotencyKey},
+});
+}`;
 }
 
 /** The executionId prefix for slash-command runs — sibling of the

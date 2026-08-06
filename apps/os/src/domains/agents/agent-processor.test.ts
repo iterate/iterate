@@ -1976,7 +1976,7 @@ describe("AgentProcessor stream facts", () => {
 // =============================================================================
 
 describe("AgentProcessor slash commands", () => {
-  it("a resolving /script runs deterministically and triggers NO model turn", async () => {
+  it("a resolving /script runs deterministically and delegates its result append to the script", async () => {
     const h = makeAgentHarness();
     await h.play(
       ["append", ...NEW_AGENT_EVENTS, userMessage("/script await itx.__describe()")],
@@ -1991,11 +1991,16 @@ describe("AgentProcessor slash commands", () => {
         (event.payload as { content?: string }).content?.startsWith("/script"),
       )!.offset;
     expect(scriptRequests[0]!.payload).toMatchObject({
-      code: "async (itx) => {\nreturn (await itx.__describe()\n);\n}",
       executionId: `slash-command:${commandOffset}`,
     });
+    expect(scriptRequests[0]!.payload.code).toContain(
+      "const result = await (async () => {\nreturn (await itx.__describe()\n);\n})();",
+    );
+    expect(scriptRequests[0]!.payload.code).toContain(
+      'llmRequestPolicy: { behaviour: "interrupt-current-request" }',
+    );
     // The command IS the action — the model's turn comes later, from the
-    // script result's render, not from the command message.
+    // context item appended by the script, not from the command message.
     expect(h.llm.calls).toHaveLength(0);
     expect(h.events(REQUESTED)).toHaveLength(0);
   });

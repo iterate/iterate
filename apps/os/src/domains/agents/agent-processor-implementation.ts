@@ -16,7 +16,11 @@ import {
   reduceAgentEvent,
   type AgentChatMessage,
 } from "./agent-prompt-fold.ts";
-import { resolveSlashCommand, SLASH_COMMAND_EXECUTION_PREFIX } from "./slash-commands.ts";
+import {
+  buildSlashCommandCode,
+  resolveSlashCommand,
+  SLASH_COMMAND_EXECUTION_PREFIX,
+} from "./slash-commands.ts";
 import {
   extractChunkText,
   jsonCompatible,
@@ -210,13 +214,14 @@ export class AgentProcessor extends StreamProcessor<AgentProcessorContract, Agen
         if (payload.role === "user") {
           const slashCommand = resolveSlashCommand(payload.content);
           if (slashCommand !== null) {
+            const executionId = `${SLASH_COMMAND_EXECUTION_PREFIX}${event.offset}`;
             blockProcessorWhile(() =>
               this.#appendUnlessLostIdempotencyRace(append, [
                 {
                   type: "events.iterate.com/capability-host/script-run-requested",
                   payload: {
-                    code: slashCommand.code,
-                    executionId: `${SLASH_COMMAND_EXECUTION_PREFIX}${event.offset}`,
+                    code: buildSlashCommandCode(slashCommand, executionId),
+                    executionId,
                     expiresAt: Date.parse(event.createdAt) + state.config.llmRequestExpiryMs,
                   },
                   idempotencyKey: this.idempotencyKey(`slash-command@${event.offset}`),
