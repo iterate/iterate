@@ -8,6 +8,9 @@ export default defineConfig({
   resolve: {
     // Vitest does not apply tsconfig `paths` for `~/` reliably; mirror `~/*` -> `./src/*`.
     alias: {
+      // The default config template now lives at the repository root. Resolve
+      // its workspace-only docs dependency while exercising the worker here.
+      "@iterate-com/docs": resolve(appRoot, "../docs/src/config-bridge.ts"),
       "~": resolve(appRoot, "src"),
       // Production resolves Cap'n Web's `workerd` export. Exercise that same
       // runtime in unit tests so Workers-only RPC hooks cannot pass via the

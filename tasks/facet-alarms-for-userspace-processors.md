@@ -26,7 +26,7 @@ durable alarms, stateful dynamic workers are hosted as workerd FACETS inside
 delivery then fails with "alarms are not yet implemented for SQLite-backed
 Durable Objects" — proven live on PR #2073 (the recovery wiring was written,
 failed on first delivery, and reverted with the finding documented at the
-registration site in `config-repo-template/worker.ts`). Until fixed,
+registration site in `configs/default/worker.ts`). Until fixed,
 userspace processors are limited to idempotent at-head appends; consequential
 background obligations need a platform-hosted DO.
 
