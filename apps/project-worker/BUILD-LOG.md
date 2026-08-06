@@ -453,7 +453,7 @@ and cook the code down. Both, and they turned out to be the same fix.
 
 ## Increment 20 — cook down `worker.ts` (drop the increment 1–4 scaffolding)
 
-**Commit** `<pending>`. Jonas: keep cooking the code down. `worker.ts` was mostly walking-skeleton scaffolding
+**Commit** `10bdee661`. Jonas: keep cooking the code down. `worker.ts` was mostly walking-skeleton scaffolding
 now superseded by `/api` + the capability model + the DO's real egress path. Removed the `EGRESS_WS_AGENT` /
 `ITX_CALLBACK_AGENT` demo agents, `EgressEntrypoint` + `resolveFallback`, and the `/egress-test`, `/egress-debug`,
 `/load`, `/provide` routes (the WS-through-stack + secret-substitution mechanics still live in `core/egress.ts`
