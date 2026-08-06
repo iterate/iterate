@@ -1216,9 +1216,93 @@ describe("AgentProcessor script execution", () => {
     expect(rendered!.payload.content).toContain('line one\nline "two"');
     expect(rendered!.payload.content).not.toContain("\\n");
     expect(rendered!.payload.content).not.toContain("```json");
+    // The render names the preamble binding the next script will have — a
+    // small result embeds inline, so it reads as data, not a loader.
+    expect(rendered!.payload.content).toContain("`results[0].data`");
+    expect(rendered!.payload.content).not.toContain("load(itx)");
   });
 
-  it("spills an object result as pretty-printed JSON with a readFile pointer", async () => {
+  it("an oversized result's render points at the preamble's typed loader instead of .data", async () => {
+    const h = makeAgentHarness(undefined, {
+      writeWorkspaceFile: async (input) => ({
+        absolutePath: `/workspaces/agents/main/${input.path}`,
+      }),
+    });
+    await h.play(
+      [
+        "append",
+        ...NEW_AGENT_EVENTS,
+        {
+          type: "events.iterate.com/agent/configured",
+          payload: { config: { scriptResultHistoryLimit: 100 } },
+        },
+        userMessage("fetch the big thing"),
+      ],
+      ["advanceTime", 10_000],
+      () => h.llm.respond("```ts\nasync (itx) => itx.big()\n```"),
+    );
+    const executionId = h.events("events.iterate.com/capability-host/script-run-requested")[0]!
+      .payload.executionId;
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/script-run-settled",
+        payload: {
+          executionId,
+          // over INLINE_RESULT_PREAMBLE_LIMIT serialized: the host retains a
+          // typed loader for this row, and the render must say so
+          settlement: { status: "succeeded", result: "x".repeat(20_000) },
+        },
+      },
+    ]);
+    const rendered = h
+      .state()
+      .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
+    // The paging recipe itself uses the preamble loader, not a readFile call.
+    expect(rendered!.payload.content).toContain("await results[0].load(itx)");
+    expect(rendered!.payload.content).not.toContain("await itx.workspace.readFile(");
+  });
+
+  it("transcribes preamble changes as developer context without triggering a turn", async () => {
+    const h = makeAgentHarness();
+    await h.play(["append", ...NEW_AGENT_EVENTS]);
+    const callsBefore = h.llm.calls.length;
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/preamble-set",
+          payload: { key: "channels", code: 'const TECH_CHANNEL_ID = "c1234";' },
+        },
+      ],
+      ["advanceTime", 60_000],
+    );
+    const setItem = h
+      .state()
+      .contextItems.find((item) => item.payload.content.startsWith('Preamble entry "channels"'));
+    expect(setItem).toMatchObject({ payload: { role: "developer" } });
+    expect(setItem!.payload.content).toContain('const TECH_CHANNEL_ID = "c1234";');
+    expect(h.llm.calls.length).toBe(callsBefore); // configuration, not conversation
+
+    await h.play(
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/preamble-removed",
+          payload: { key: "channels" },
+        },
+      ],
+      ["advanceTime", 60_000],
+    );
+    expect(
+      h
+        .state()
+        .contextItems.some((item) => item.payload.content.includes('"channels" was removed')),
+    ).toBe(true);
+    expect(h.llm.calls.length).toBe(callsBefore);
+  });
+
+  it("spills an object result as pretty-printed JSON with a loader-first recipe", async () => {
     const written: { path: string; content: string }[] = [];
     const h = makeAgentHarness(undefined, {
       writeWorkspaceFile: async (input) => {
@@ -1259,17 +1343,20 @@ describe("AgentProcessor script execution", () => {
         content: spilled,
       },
     ]);
-    // The rendered item: a bounded preview plus the paste-ready read recipe,
-    // both naming the fully-qualified path the dep answered with.
+    // The rendered item: a bounded preview plus the paste-ready recipe. The
+    // recipe leads with the preamble loader (a competing readFile snippet
+    // would win over a footnote); the workspace path stays as a pointer.
     const rendered = h
       .state()
       .contextItems.find((item) => item.payload.content.startsWith("Your script returned"));
     expect(rendered!.payload.content).toContain(
       `saved in your workspace at "/workspaces/agents/main/${written[0]!.path}"`,
     );
-    expect(rendered!.payload.content).toContain(
-      'JSON.parse(await itx.workspace.readFile("/workspaces/agents/main/script-results/',
-    );
+    // Spilled for HISTORY (tiny historyLimit) but small enough to embed in
+    // the preamble: the row has `.data`, not `.load` — the recipe must match.
+    expect(rendered!.payload.content).toContain("const data = results[0].data;");
+    expect(rendered!.payload.content).not.toContain("results[0].load(");
+    expect(rendered!.payload.content).not.toContain("JSON.parse(await itx.workspace.readFile(");
     expect(rendered!.payload.content).toContain(
       `Your script returned ${spilled.length.toLocaleString("en-US")} chars of JSON — over the ~100-char inline limit.`,
     );
@@ -1277,7 +1364,6 @@ describe("AgentProcessor script execution", () => {
     expect(rendered!.payload.content).toContain("Inferred type:");
     expect(rendered!.payload.content).toContain("type Result = {");
     expect(rendered!.payload.content).toContain("items: string");
-    expect(rendered!.payload.content).toContain("const data = JSON.parse(");
     expect(rendered!.payload.content).not.toContain("x".repeat(200)); // preview stays bounded
   });
 

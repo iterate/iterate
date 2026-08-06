@@ -602,6 +602,33 @@ export interface CapabilityHost {
   provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvision>;
   /** Remove the current mount at a path, or one exact mount by its offset. */
   revokeCapability(input: RevokeCapabilityInput): Promise<void>;
+  /**
+   * Upsert one keyed preamble entry: TypeScript injected above every later
+   * script in this scope, at typecheck and at execution — constants, helper
+   * functions, anything scripts should see as in-scope typed symbols. Example:
+   * `await itx.capabilityHost.setPreamble({ key: "channels", code: 'const TECH_CHANNEL_ID = "C1234";' })`.
+   * Compiled at set time against the scope's assembled preamble; an entry
+   * that would break later scripts' checks rejects here instead.
+   */
+  setPreamble(input: SetPreambleInput): Promise<void>;
+  /** Remove one preamble entry by key (platform-derived `results` is not an entry and cannot be removed). */
+  removePreamble(input: { key: string }): Promise<void>;
+  /**
+   * The scope's current assembled preamble — the exact TypeScript injected
+   * above the next script (the derived `results` array plus user entries) —
+   * and the raw user entry table. Null when there is nothing to inject.
+   */
+  getPreamble(): Promise<{
+    text: string;
+    entries: { key: string; code: string }[];
+  } | null>;
+  /**
+   * One settled script result, read back from the scope's stream by
+   * executionId — the durable storage behind the preamble `results` array's
+   * async `load(itx)` helpers for results too large to embed inline. Throws
+   * for unknown executions and for scripts that failed.
+   */
+  getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }>;
   /** Explicit dynamic dispatch; the dotted-path fallback (`itx.foo.bar(...)`) compiles to exactly this call. */
   invokeCapability(call: { args?: unknown[]; path: string[] }): Promise<unknown>;
   /** Includes `capabilities`: everything reachable at this scope — own mounts plus inherited ones, tagged with their declaring scope. */
@@ -2804,6 +2831,11 @@ export type AgentEventInput =
           | undefined;
       }
     >
+  | TypedConsumedEventInput<"events.iterate.com/capability-host/preamble-removed", { key: string }>
+  | TypedConsumedEventInput<
+      "events.iterate.com/capability-host/preamble-set",
+      { key: string; code: string }
+    >
   | TypedConsumedEventInput<
       "events.iterate.com/capability-host/script-run-requested",
       { code: string; executionId: string; expiresAt: number }
@@ -2898,6 +2930,18 @@ export type AgentFileAttachment = NonNullable<AgentContextAddedPayload["files"]>
 
 /** The `capability-host/created` payload — the scope's birth certificate. */
 export type CapabilityHostCreateInput = { config: Record<string, never>; fallback?: unknown };
+
+/**
+ * `setPreamble` recipe: one keyed entry of TypeScript injected above every
+ * later script in the scope (typecheck and execution). A re-set at the same
+ * key replaces the code but keeps the entry's injection position. Compiled
+ * against the scope's assembled preamble at set time — an entry that breaks
+ * compilation rejects here instead of degrading every later script's check.
+ */
+export type SetPreambleInput = {
+  key: string;
+  code: string;
+};
 
 /** Target shape for a live capability that wants to receive flattened paths. */
 export type FlattenedCapabilityTarget = {

@@ -7,7 +7,11 @@ import { itxForScope, StreamRpcTarget } from "../../rpc-targets.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import type { CapabilityDescription } from "../itx/describe.ts";
-import { checkCapabilityTypes, checkItxScriptForExecution } from "../typecheck/virtual-project.ts";
+import {
+  checkCapabilityTypes,
+  checkItxScriptForExecution,
+  checkPreamble,
+} from "../typecheck/virtual-project.ts";
 import { sameCapabilityPath } from "./capability-path.ts";
 import {
   CapabilityHostProcessor,
@@ -29,7 +33,7 @@ import type {
 type ScriptExecutionEntrypoint = {
   run(
     code: string,
-    options: { emittedJs?: string; expiresAt: number },
+    options: { emittedJs?: string; expiresAt: number; preambleJs?: string },
   ): Promise<ScriptExecutionSettlement>;
 };
 
@@ -101,6 +105,7 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
         checkCapabilityTypes({ types, typechecker: this.env.TYPECHECKER }),
       typecheckScript: (input) =>
         checkItxScriptForExecution({ ...input, typechecker: this.env.TYPECHECKER }),
+      checkPreamble: (input) => checkPreamble({ ...input, typechecker: this.env.TYPECHECKER }),
     }),
     { recovery: true },
   );
@@ -339,5 +344,25 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
       () => undefined,
     );
     return result;
+  }
+
+  setPreamble(input: { key: string; code: string }): Promise<void> {
+    // Serialized like every capability mutation: the set-time compile
+    // snapshots state, awaits an expensive check, then appends — two
+    // concurrent sets validating against the same snapshot could each pass
+    // in isolation and commit a combined preamble that no longer compiles.
+    return this.#serializeMutation(() => this.#capabilityHostProcessor.setPreamble(input));
+  }
+
+  describePreamble(): Promise<{ text: string; entries: { key: string; code: string }[] } | null> {
+    return this.#capabilityHostProcessor.describePreamble();
+  }
+
+  removePreamble(input: { key: string }): Promise<void> {
+    return this.#serializeMutation(() => this.#capabilityHostProcessor.removePreamble(input));
+  }
+
+  getScriptResult(executionId: string): Promise<{ executionId: string; data: unknown }> {
+    return this.#capabilityHostProcessor.getScriptResult(executionId);
   }
 }
