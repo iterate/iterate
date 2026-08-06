@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: done
 size: small
 ---
 
@@ -7,7 +7,7 @@ size: small
 
 ## Status summary
 
-Implemented and unit-tested; awaiting CI (e2e) and review. Main pieces: the
+Implemented; CI green on PR #2432, awaiting review. Main pieces: the
 `client-session` StreamContext variant, session-boundary threading in
 rpc-targets, mobile approval-card rendering, e2e assertion. Not done: web
 dashboard rendering (no approvals surface renders streamContext today), MCP
