@@ -451,6 +451,19 @@ and cook the code down. Both, and they turned out to be the same fix.
 
 ---
 
+## Increment 20 — cook down `worker.ts` (drop the increment 1–4 scaffolding)
+
+**Commit** `<pending>`. Jonas: keep cooking the code down. `worker.ts` was mostly walking-skeleton scaffolding
+now superseded by `/api` + the capability model + the DO's real egress path. Removed the `EGRESS_WS_AGENT` /
+`ITX_CALLBACK_AGENT` demo agents, `EgressEntrypoint` + `resolveFallback`, and the `/egress-test`, `/egress-debug`,
+`/load`, `/provide` routes (the WS-through-stack + secret-substitution mechanics still live in `core/egress.ts`
+and the DO's egress, just no longer behind ad-hoc proof routes). What remains is the real edge: `/api` (capnweb),
+`/cap` (fetch lane), `/facet`, `/state`, `/call`, plus `DummyControlPlane` (solo fallback). **`worker.ts`: 273 →
+96 lines.** Re-proven end to end (deploy `cooked-1`): the full connect/clients/provideCapability/don't-pin/death
+proof still passes unchanged.
+
+---
+
 ## Status after increment 13 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project

@@ -1,19 +1,11 @@
-// The PROJECT WORKER — walking skeleton (target-core §6.0). Proves a "proper" fetch — WebSocket upgrades and
-// all — through the WHOLE stack, in SOLO mode (no control plane; the fallback is this worker's own
-// DummyControlPlane loopback entrypoint).
-//
-// Two routes:
-//   • GET /ws            — INGRESS WS: edge fetch → ITX_HOST DO-stub fetch → ctx.acceptWebSocket() → echo.
-//   • GET /egress-test   — EGRESS WS: load a confined agent whose outbound WS (via globalOutbound → the
-//                          egress door → the fallback → terminal) loops back over the internet to our own /ws.
-//                          One request exercises ALL FOUR §6.0 risk points at once.
+// The PROJECT WORKER — the stateless edge. capnweb terminates at `/api`; everything else forwards to the
+// ItxDurableObject over Workers RPC (the DO does the real work and stays hibernatable). `DummyControlPlane` is
+// the solo-mode fallback entrypoint (the deployed config binds FALLBACK to the real control-plane shell instead).
 
 import { WorkerEntrypoint } from "cloudflare:workers";
 import { newWorkersWebSocketRpcResponse } from "capnweb";
 import { ItxDurableObject } from "./itx-durable-object.ts";
-import { substituteHeaderSecrets } from "./core/egress.ts";
 import { canonicalName } from "./core/names.ts";
-import { parseAppConfig, type AppConfig } from "./core/config.ts";
 import { ProjectSession } from "./core/itx-surface.ts";
 
 export { ItxDurableObject };
@@ -29,86 +21,10 @@ interface Env {
   APP_CONFIG?: string;
 }
 
-// A confined dynamic worker whose ONLY outbound path is globalOutbound (the egress door). It opens an
-// outbound WS to `target`, sends a ping, awaits the echo, reports whether the full round trip worked.
-const EGRESS_WS_AGENT = /* js */ `
-export default {
-  async fetch(request) {
-    const target = new URL(request.url).searchParams.get("target");
-    const sent = "ping-through-egress";
-    let resp;
-    try {
-      // Outbound WS via a fetch Upgrade — intercepted by globalOutbound (the egress chain). The
-      // Authorization header carries a secret PLACEHOLDER the egress door substitutes on the way out.
-      resp = await fetch(target, { headers: { Upgrade: "websocket", Authorization: "Bearer {{secret:project:demo}}" } });
-    } catch (e) {
-      return Response.json({ ok: false, stage: "fetch", error: String(e && e.message || e) });
-    }
-    if (resp.status !== 101 || !resp.webSocket) {
-      return Response.json({ ok: false, stage: "upgrade", status: resp.status, reason: "no webSocket on response" });
-    }
-    const ws = resp.webSocket;
-    ws.accept();
-    // Echo servers may send a greeting first; resolve only when OUR payload comes back.
-    const echo = await new Promise((resolve) => {
-      const t = setTimeout(() => resolve(null), 6000);
-      ws.addEventListener("message", (e) => { if (String(e.data) === sent) { clearTimeout(t); resolve(String(e.data)); } });
-      ws.send(sent);
-    });
-    try { ws.close(1000); } catch {}
-    return Response.json({ ok: echo === sent, echo });
-  }
-};
-`;
-const AGENT_VERSION = "skeleton-2";
-
-// A confined agent run BY the DO (host.load). It calls back into its own capability host via env.ITX — an
-// intra-DO re-entrancy probe: whoami (built-in) + invokeCapability (falls back to the DummyControlPlane).
-const ITX_CALLBACK_AGENT = /* js */ `
-import { itxFromStub } from "./itx.js";
-export default {
-  async fetch(request, env) {
-    // The ergonomic surface over the agent's OWN capability host (the DO). Each dotted call re-enters the DO.
-    const itx = itxFromStub(env.ITX);
-    const who = await itx.whoami();      // → invokeCapability("itx.whoami")
-    const auth = await itx.auth.gate();  // → invokeCapability("itx.auth.gate")
-    // plain fetch() → globalOutbound (self-stub) → the host's fetch = EGRESS (secret-sub → fallback → terminal).
-    // postman-echo /get reflects request headers, so we can SEE the substituted secret came out the far side.
-    let egress = null;
-    try {
-      // TWO placeholders: a PROJECT secret (substituted at this project's DO) and a PLATFORM secret
-      // (substituted at the OUTER control-plane shell). postman-echo reflects both headers back.
-      const r = await fetch("https://postman-echo.com/get", { headers: {
-        Authorization: "Bearer {{secret:project:demo}}",
-        "X-First-Party": "Bearer {{secret:platform:exa}}",
-      } });
-      const j = await r.json();
-      egress = { status: r.status, seenProjectSecret: (j.headers || {}).authorization, seenPlatformSecret: (j.headers || {})["x-first-party"] };
-    } catch (e) { egress = { error: String(e && e.message || e) }; }
-    return Response.json({ who, auth, egress, ranInContext: true });
-  }
-};
-`;
-
-// The EGRESS door (project level): substitute the project's own secrets, then delegate outward to the
-// configured fallback. WS-safe (it only rewrites headers). Minted per request via ctx.exports and wired as
-// the confined agent's globalOutbound.
-export class EgressEntrypoint extends WorkerEntrypoint<Env, { projectId: string }> {
-  async fetch(request: Request): Promise<Response> {
-    const projectId = this.ctx.props.projectId;
-    const sub = await substituteHeaderSecrets(request, "project", (name) =>
-      this.env.SECRETS_KV ? this.env.SECRETS_KV.get(`secret:${projectId}:${name}`) : null,
-    );
-    return resolveFallback(this.ctx, this.env, parseAppConfig(this.env.APP_CONFIG)).fetch(sub);
-  }
-}
-
-// The SOLO fallback: a whole control plane, trivially. It would substitute platform/first-party secrets
-// (none in solo), then hit terminal (the real internet). Its `invokeCapability` is the capability fallthrough
-// (auth → ok). See target-core §3.4 (why a whole DummyControlPlane, not a DummyAuth).
+// The SOLO fallback (target-core §3.4): a whole control plane, trivially — platform-secret substitution (none in
+// solo) then terminal; `invokeCapability` is the capability fallthrough. Bound as FALLBACK only in solo config.
 export class DummyControlPlane extends WorkerEntrypoint<Env> {
   async fetch(request: Request): Promise<Response> {
-    // (platform-secret substitution would go here; none in solo) → terminal, which carries WS.
     return fetch(request);
   }
   async invokeCapability(callPath: string, _args?: unknown[]): Promise<unknown> {
@@ -117,19 +33,13 @@ export class DummyControlPlane extends WorkerEntrypoint<Env> {
   }
 }
 
-type CtxWithExports = { exports: Record<string, Fetcher & ((o: { props: unknown }) => Fetcher)> };
-
-/** Resolve the configured fallback to a Fetcher (target-core §3.4). Solo → the DummyControlPlane loopback.
- *  A ctx.exports entrypoint stub is itself a Fetcher (the default instance); you only CALL it to pass props. */
-function resolveFallback(ctx: unknown, env: Env, cfg: AppConfig): Fetcher {
-  const f = cfg.fallback;
-  if (f.via === "loopback-entrypoint") return (ctx as CtxWithExports).exports[f.entrypoint];
-  if (f.via === "service-binding") return (env as unknown as Record<string, Fetcher>)[f.binding];
-  return { fetch: (r: Request) => fetch(r) } as unknown as Fetcher; // terminal
-}
-
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "leaseserver-1";
+const CODE_VERSION = "cooked-1";
+
+/** The context host DO for a request's `?ctx=` (defaults to `prj_demo`). The DO does the real work. */
+function host(env: Env, url: URL) {
+  return env.ITX_HOST.getByName(canonicalName(url.searchParams.get("ctx") ?? "prj_demo"));
+}
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
@@ -137,82 +47,34 @@ export default {
 
     if (url.pathname === "/version") return new Response(CODE_VERSION + "\n");
 
-    // ── THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker. A client
-    // dials `/api` and gets a `ProjectSession` (`get()`/`connect()` → the project itx). It reaches the DO only
-    // over Workers RPC. Checked before the generic WS catch below. ──
-    if (url.pathname === "/api") {
-      const projectId = url.searchParams.get("ctx") ?? "prj_demo";
+    // THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker; the DO is
+    // reached only over Workers RPC. A client dials `/api` and gets a `ProjectSession` (`get`/`connect` → itx).
+    if (url.pathname === "/api")
       return newWorkersWebSocketRpcResponse(
         request,
-        new ProjectSession(env.ITX_HOST, projectId, ctx),
+        new ProjectSession(env.ITX_HOST, url.searchParams.get("ctx") ?? "prj_demo", ctx),
       );
-    }
 
-    // ── THE FETCH LANE: reach a fetch-shaped capability by address (a serialized ItxExpression in `?cap=`),
-    // carrying WS upgrades. Set `x-itx-cap` and forward to the context host, which routes it natively. Checked
-    // BEFORE the generic WS catch so a cap WS isn't grabbed as ingress echo. ──
+    // THE FETCH LANE: reach a fetch-shaped capability (WS upgrades and all) by a serialized ItxExpression in
+    // `?cap=`. Set `x-itx-cap` and forward to the context host — checked before the generic WS catch below.
     if (url.pathname === "/cap") {
-      const name = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
-      const cap = url.searchParams.get("cap"); // e.g. ["site"] — a serialized ItxExpression
       const headers = new Headers(request.headers);
+      const cap = url.searchParams.get("cap");
       if (cap) headers.set("x-itx-cap", cap);
-      return env.ITX_HOST.getByName(name).fetch(new Request(request, { headers }));
+      return host(env, url).fetch(new Request(request, { headers }));
     }
 
-    // ── INGRESS WS → the itx DO (proves a DO-stub fetch carries the 101) ──
+    // /state (observability), /facet (the stateful WS lane), and any bare WS ingress forward straight to the DO.
     if (
+      url.pathname === "/state" ||
+      url.pathname === "/facet" ||
       url.pathname === "/ws" ||
       (request.headers.get("Upgrade") ?? "").toLowerCase() === "websocket"
-    ) {
-      const name = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
-      return env.ITX_HOST.getByName(name).fetch(request);
-    }
+    )
+      return host(env, url).fetch(request);
 
-    // ── wake-on-call observability: the DO reports incarnation + what is pinning it right now ──
-    if (url.pathname === "/state") {
-      return env.ITX_HOST.getByName(canonicalName(url.searchParams.get("ctx") ?? "prj_demo")).fetch(
-        request,
-      );
-    }
-
-    // ── STATEFUL worker fetch lane: forward to the DO's /facet (carries WS into the hosted facet) ──
-    if (url.pathname === "/facet") {
-      return env.ITX_HOST.getByName(canonicalName(url.searchParams.get("ctx") ?? "prj_demo")).fetch(
-        request,
-      );
-    }
-
-    // ── the capability model: provide a mount, then invoke a callPath (built-in / local / fallback) ──
-    if (url.pathname === "/provide") {
-      const ctxName = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
-      const path = url.searchParams.get("path") as `itx.${string}` | null;
-      if (!path) return Response.json({ ok: false, error: "missing ?path=itx.*" }, { status: 400 });
-      const expression = url.searchParams.get("expression");
-      const value = url.searchParams.get("value");
-      const input = expression
-        ? ({ path, type: "itx-expression", expression: expression as `itx.${string}` } as const)
-        : ({ path, type: "static", value } as const);
-      try {
-        return Response.json(await env.ITX_HOST.getByName(ctxName).provideCapability(input));
-      } catch (e) {
-        return Response.json({ ok: false, error: String((e as Error).message) });
-      }
-    }
-    // ── execution in the DO: host.load runs a confined agent whose env.ITX is a self-stub to its host ──
-    if (url.pathname === "/load") {
-      const ctxName = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
-      try {
-        return await env.ITX_HOST.getByName(ctxName).load(ITX_CALLBACK_AGENT);
-      } catch (e) {
-        return Response.json(
-          { ok: false, error: String((e as Error).message ?? e) },
-          { status: 500 },
-        );
-      }
-    }
+    // /call — invoke a capability by callPath (POST `{ path, args }` or `?path=&args=`). Used by agents/harnesses.
     if (url.pathname === "/call") {
-      const ctxName = canonicalName(url.searchParams.get("ctx") ?? "prj_demo");
-      // POST JSON body { path, args } (for large args like source text), else query ?path=&args=.
       const body =
         request.method === "POST"
           ? ((await request.json()) as { path?: string; args?: unknown[] })
@@ -223,50 +85,15 @@ export default {
       try {
         return Response.json({
           ok: true,
-          value: await env.ITX_HOST.getByName(ctxName).invokeCapability(path, args),
+          value: await host(env, url).invokeCapability(path, args),
         });
       } catch (e) {
         return Response.json({ ok: false, error: String((e as Error).message) });
       }
     }
 
-    // ── deterministic proof that the egress middleware substitutes (no log-tail needed) ──
-    if (url.pathname === "/egress-debug") {
-      const req = new Request("https://example.test/", {
-        headers: { Authorization: "Bearer {{secret:project:demo}}" },
-      });
-      const sub = await substituteHeaderSecrets(req, "project", (n) =>
-        env.SECRETS_KV ? env.SECRETS_KV.get(`secret:prj_demo:${n}`) : null,
-      );
-      return Response.json({
-        substituted: sub !== req,
-        authorizationHeader: sub.headers.get("Authorization"),
-      });
-    }
-
-    // ── EGRESS WS proof → load a confined agent that dials an outbound WS back to our own /ws ──
-    if (url.pathname === "/egress-test") {
-      // Cloudflare fetch() takes an https:// URL + `Upgrade: websocket` (NOT a ws:// scheme). External echo
-      // (a worker can't WS its own hostname — loop protection); ingress WS is proven separately against /ws.
-      const target = url.searchParams.get("target") ?? "https://echo.websocket.org/";
-      const entry = (ctx as unknown as CtxWithExports).exports.EgressEntrypoint({
-        props: { projectId: "prj_demo" },
-      });
-      const worker = env.LOADER.get(`egress-agent:${AGENT_VERSION}`, () => ({
-        compatibilityDate: "2026-07-01",
-        mainModule: "a.js",
-        modules: { "a.js": EGRESS_WS_AGENT },
-        env: {}, // the confined agent sees NOTHING but globalOutbound
-        globalOutbound: entry, // its fetch → the egress door → fallback → terminal
-      }));
-      return worker
-        .getEntrypoint()
-        .fetch(new Request(`${url.origin}/?target=${encodeURIComponent(target)}`));
-    }
-
-    return new Response(
-      "project-worker walking skeleton (solo)\n  GET /ws          ingress WS echo\n  GET /egress-test egress WS through the whole stack\n",
-      { headers: { "content-type": "text/plain" } },
-    );
+    return new Response("project-worker — /api (capnweb), /call, /cap, /facet, /state\n", {
+      headers: { "content-type": "text/plain" },
+    });
   },
 };
