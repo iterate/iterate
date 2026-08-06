@@ -40,10 +40,9 @@ function block(node: RootContent): string {
       return blocks(node.children);
     case "list": {
       const items = node.children.map((item, index) => {
-        const marker =
-          node.ordered === true
-            ? `${(typeof node.start === "number" ? node.start : 1) + index}.`
-            : "-";
+        const marker = node.ordered
+          ? `${(typeof node.start === "number" ? node.start : 1) + index}.`
+          : "-";
         // A list item's blocks flatten onto one line per item.
         return `${marker} ${blocks(item.children).trim().replaceAll(/\n+/g, " ")}\n`;
       });
