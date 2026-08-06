@@ -32,7 +32,9 @@ import { ScriptExecutionSettlement } from "./script-execution-settlement.ts";
 
 export const CapabilityHostProcessorContract = defineProcessorContract({
   slug: "capability-host",
-  version: "0.5.0",
+  // 0.6.0: two parallel 0.5.0 claims merged — main's provider pagers and this
+  // branch's preamble (preamble-set/removed events, retained script results).
+  version: "0.6.0",
   description: "A tiny dynamic capability table and script execution stream.",
   stateSchema: z.object({
     birthCertificate: capabilityHostBirthCertificateSchema()
@@ -44,6 +46,21 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
           "capability-host/created reduces. No capability reads, mounts, or script runs happen " +
           "before it.",
       }),
+    capabilityProviderPagers: z
+      .array(
+        z.strictObject({
+          connectedAtOffset: z.number().int().nonnegative().meta({
+            description:
+              "The Pager's identity: the stream offset of the capability-provider-pager-connected event.",
+          }),
+        }),
+      )
+      .default([])
+      .meta({
+        description:
+          "Client-given hibernatable return channels currently connected to this host. " +
+          "One Pager may own any number of live capability mounts.",
+      }),
     capabilities: z
       .array(
         z
@@ -51,12 +68,22 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
             z.strictObject({
               type: z.literal("live").meta({
                 description:
-                  "A session-bound mount: calls travel over the providing connection and fail " +
-                  '"offline" when it disconnects. Only the record is durable.',
+                  "A Pager-backed live mount: the client gives the host a hibernatable return " +
+                  "channel so it can Page the provider relay after releasing ordinary RPC references. " +
+                  'Calls fail "offline" when that Pager disconnects; only the record is durable.',
               }),
               path: z
                 .array(z.string())
                 .meta({ description: 'Mount point as path segments, e.g. ["tools", "weather"].' }),
+              providerPager: z
+                .strictObject({
+                  connectedAtOffset: z.number().int().nonnegative(),
+                })
+                .meta({
+                  description:
+                    "The capability-provider-pager-connected event for the client-given Pager " +
+                    "that can return this mount's provider. It contains no socket id or RPC stub.",
+                }),
               providedAtOffset: z
                 .number()
                 .int()
@@ -278,6 +305,18 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
         "Creates a capability-host processor on this stream. The birth certificate records the scope's `fallback`: the itx expression a capability miss follows (usually straight to the project root host), or null at the root.",
       payloadSchema: capabilityHostBirthCertificateSchema(),
     },
+    "events.iterate.com/capability-host/capability-provider-pager-connected": {
+      description:
+        "A provider client gave this Durable Object a hibernatable Pager: a return channel the host can Page after releasing ordinary RPC references. The event's offset is the Pager's durable identity.",
+      payloadSchema: z.strictObject({}),
+    },
+    "events.iterate.com/capability-host/capability-provider-pager-disconnected": {
+      description:
+        "One exact Capability Provider Pager disappeared. Every live mount referencing its connected event retires atomically; replacement Pagers and their mounts are unaffected.",
+      payloadSchema: z.strictObject({
+        connectedAtOffset: z.number().int().nonnegative(),
+      }),
+    },
     "events.iterate.com/capability-host/capability-provided": {
       description: "A capability was mounted at a path.",
       payloadSchema: z
@@ -285,12 +324,22 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
           z.strictObject({
             type: z.literal("live").meta({
               description:
-                "A session-bound mount: the provider's value lives on the providing " +
-                "connection; only this record is durable.",
+                "A Pager-backed live mount: the client gives the host a hibernatable return " +
+                "channel so it can Page the provider relay after releasing ordinary RPC references; " +
+                "only this record is durable.",
             }),
             path: z
               .array(z.string())
               .meta({ description: 'Mount point as path segments, e.g. ["tools", "weather"].' }),
+            providerPager: z
+              .strictObject({
+                connectedAtOffset: z.number().int().nonnegative(),
+              })
+              .meta({
+                description:
+                  "The capability-provider-pager-connected event for the client-given Pager " +
+                  "that can return this mount's provider. It contains no socket id or RPC stub.",
+              }),
             instructions: z
               .string()
               .optional()
@@ -434,6 +483,8 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   },
   consumes: [
     "events.iterate.com/capability-host/created",
+    "events.iterate.com/capability-host/capability-provider-pager-connected",
+    "events.iterate.com/capability-host/capability-provider-pager-disconnected",
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
     "events.iterate.com/capability-host/script-run-requested",
@@ -454,6 +505,8 @@ export const CapabilityHostProcessorContract = defineProcessorContract({
   ],
   emits: [
     "events.iterate.com/capability-host/created",
+    "events.iterate.com/capability-host/capability-provider-pager-connected",
+    "events.iterate.com/capability-host/capability-provider-pager-disconnected",
     "events.iterate.com/capability-host/capability-provided",
     "events.iterate.com/capability-host/capability-revoked",
     "events.iterate.com/capability-host/script-run-requested",

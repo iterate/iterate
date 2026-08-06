@@ -331,15 +331,16 @@ export const ConnectionCloseReason = z.enum([
    * deliberately dropped every idle-eligible connection so both sides can
    * hibernate instead of accruing billable duration on idle cross-isolate RPC
    * sessions. For a hosted connection the subscription is kept and the next
-   * append wakes the processor again; for a wake-socket-backed session
-   * connection the subscriber stays present on its hibernatable socket and
-   * the next matching append makes its relay re-dial (see wake-socket.ts).
+   * append wakes the processor again; for a stream-subscriber-pager-backed session
+   * connection the subscriber stays present through the hibernatable Pager
+   * that its client gave the Stream DO, and the next matching append makes
+   * its relay re-dial (see stream-subscriber-pager.ts).
    * An idle close is therefore NOT a departure; the dormant subscriber's
    * eventual real departure is the `"departed"` close below.
    */
   "idle",
   /**
-   * A DORMANT subscriber's wake socket closed: the client behind an
+   * A DORMANT subscriber's Pager closed: the client behind an
    * idle-closed session connection actually went away (tab closed, device
    * offline, worker context canceled). Live connections never use this —
    * their close paths append their own reasons; this fact exists so audit

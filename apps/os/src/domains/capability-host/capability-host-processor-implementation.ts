@@ -20,7 +20,7 @@ import {
   RETAINED_SCRIPT_RESULTS_LIMIT,
   type AssembledPreamble,
 } from "./capability-host-preamble.ts";
-import { retainLiveCapabilityProvider, type LiveCapability } from "./live-capability.ts";
+import { assertCapabilityPath, sameCapabilityPath } from "./capability-path.ts";
 import { CapabilityHostProcessorContract } from "./capability-host-processor-contract.ts";
 import { settleByDeadline } from "./execution-deadline.ts";
 import {
@@ -98,11 +98,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
   CapabilityHostProcessorDeps
 > {
   readonly contract = CapabilityHostProcessorContract;
-
-  /** Live (session-bound) capability providers by mount-path key — ephemeral
-   * by design: only the mount RECORD is durable; the provider's value lives on
-   * the providing connection and dies with it. */
-  readonly #liveCapabilities = new Map<string, LiveCapability>();
 
   /** Script executions alive in THIS incarnation — the "actually running" half
    * the at-head pass compares the reduced obligations against. */
@@ -257,6 +252,26 @@ export class CapabilityHostProcessor extends StreamProcessor<
         // reducer would only wedge the frame).
         if (state.birthCertificate !== null) return state;
         return { ...state, birthCertificate: event.payload };
+      case "events.iterate.com/capability-host/capability-provider-pager-connected":
+        return {
+          ...state,
+          capabilityProviderPagers: [
+            ...state.capabilityProviderPagers,
+            { connectedAtOffset: event.offset },
+          ],
+        };
+      case "events.iterate.com/capability-host/capability-provider-pager-disconnected":
+        return {
+          ...state,
+          capabilityProviderPagers: state.capabilityProviderPagers.filter(
+            (pager) => pager.connectedAtOffset !== event.payload.connectedAtOffset,
+          ),
+          capabilities: state.capabilities.filter(
+            (capability) =>
+              capability.type !== "live" ||
+              capability.providerPager.connectedAtOffset !== event.payload.connectedAtOffset,
+          ),
+        };
       case "events.iterate.com/capability-host/capability-provided": {
         const row: CapabilityRecord = {
           ...event.payload,
@@ -266,12 +281,14 @@ export class CapabilityHostProcessor extends StreamProcessor<
           // they received, without a second generated id.
           providedAtOffset: event.offset,
         };
-        const exists = state.capabilities.some((capability) => samePath(capability.path, row.path));
+        const exists = state.capabilities.some((capability) =>
+          sameCapabilityPath(capability.path, row.path),
+        );
         return {
           ...state,
           capabilities: exists
             ? state.capabilities.map((capability) =>
-                samePath(capability.path, row.path) ? row : capability,
+                sameCapabilityPath(capability.path, row.path) ? row : capability,
               )
             : [...state.capabilities, row],
         };
@@ -281,7 +298,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
         return {
           ...state,
           capabilities: state.capabilities.filter((capability) => {
-            if (!samePath(capability.path, revoke.path)) return true;
+            if (!sameCapabilityPath(capability.path, revoke.path)) return true;
             // With providedAtOffset the revoke names ONE exact mount: a path
             // re-mounted since then keeps its newer row.
             return (
@@ -367,110 +384,93 @@ export class CapabilityHostProcessor extends StreamProcessor<
   // The scope's public capability surface, called via the hosting durable
   // object (never by the delivery loop).
 
-  async provideCapability(input: ProvideCapabilityInput) {
+  async connectCapabilityProviderPager(options: {
+    afterAppend(connectedAtOffset: number): void | Promise<void>;
+  }): Promise<number> {
     await this.#assertCreated();
-    const { path } = input;
-    assertCapabilityPath(path);
-    const key = liveKey(path);
-    const previousLive = this.#liveCapabilities.get(key);
-    let record: CapabilityProvidedPayload;
-    let nextLiveInput: { flattenNestedPath: boolean; target: unknown } | undefined;
-    if (input.type === "live") {
-      if (!Object.hasOwn(input, "capability")) {
-        throw new Error('live capabilities require "capability"');
-      }
-      const flattenNestedPath = input.flattenNestedPaths === true;
-      record = {
-        flattenNestedPaths: flattenNestedPath ? true : undefined,
-        instructions: input.instructions,
-        path,
-        type: "live",
-        types: input.types,
-      };
-      nextLiveInput = {
-        flattenNestedPath,
-        target: input.capability,
-      };
-    } else if (input.type === "itx-call") {
-      if (!Array.isArray(input.expression)) {
-        throw new Error(
-          '"expression" must be an ARRAY of steps — property names and [method, ...args] calls ' +
-            'walked over itx, e.g. ["streams", ["get", "/"]] — not JavaScript source. ' +
-            'Copy the recipe from itx.docs.get({ name: "typed-capability-mount" }).',
-        );
-      }
-      assertExpressionDoesNotReferenceOwnMount(input);
-      record = {
-        expression: input.expression,
-        flattenNestedPaths: input.flattenNestedPaths === true ? true : undefined,
-        instructions: input.instructions,
-        path,
-        type: "itx-call",
-        types: input.types ?? (await this.#selfDescribedTypes(input.expression)),
-      };
-    } else {
-      input satisfies never;
-      throw new Error(`unsupported capability input ${(input as { type?: unknown }).type}`);
-    }
-    // Authored types must compile before they enter the stream — a typo'd
-    // declaration rejected here is a fixable error; one recorded durably is
-    // silent rot every docs read and typecheck inherits. This runs AFTER the
-    // cheap structural checks above so a malformed payload never costs a
-    // network-bound compile before its real error surfaces.
-    if (input.types !== undefined) {
-      const problems = (await this.deps.validateCapabilityTypes?.(input.types)) ?? [];
-      if (problems.length > 0) {
-        throw new Error(
-          `capability "types" for "${path.join(".")}" does not compile:\n${problems.join("\n")}`,
-        );
-      }
-    }
-    const nextLive =
-      nextLiveInput !== undefined
-        ? retainLiveCapabilityProvider(nextLiveInput.target, {
-            flattenNestedPath: nextLiveInput.flattenNestedPath,
-          })
-        : undefined;
-
-    let committedOffset: number;
-    try {
-      const [committed] = await this.append({
-        type: "events.iterate.com/capability-host/capability-provided",
-        payload: record,
-      });
-      committedOffset = committed.offset;
-    } catch (error) {
-      nextLive?.dispose();
-      throw error;
-    }
-
-    // The append is the durable commit point. From here on, keep the ephemeral
-    // live-provider map aligned with the record that will reduce from the
-    // stream.
-    if (nextLive === undefined) {
-      this.#liveCapabilities.delete(key);
-    } else {
-      this.#liveCapabilities.set(key, nextLive);
-    }
-    previousLive?.dispose();
-
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/capability-provider-pager-connected",
+      payload: {},
+    });
+    await options.afterAppend(committed.offset);
     await this.deps.reads.waitUntilEvent({
-      offset: committedOffset,
+      offset: committed.offset,
       timeoutMs: INGEST_WAIT_TIMEOUT_MS,
     });
-    return { path, providedAtOffset: committedOffset };
+    return committed.offset;
+  }
+
+  async disconnectCapabilityProviderPager(connectedAtOffset: number): Promise<void> {
+    await this.#assertCreated();
+    const { state } = await this.deps.reads.snapshot();
+    if (
+      !state.capabilityProviderPagers.some((pager) => pager.connectedAtOffset === connectedAtOffset)
+    ) {
+      return;
+    }
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/capability-provider-pager-disconnected",
+      payload: { connectedAtOffset },
+    });
+    await this.deps.reads.waitUntilEvent({
+      offset: committed.offset,
+      timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+    });
+  }
+
+  async provideCapability(
+    input: CapabilityProvidedPayload,
+    options: {
+      afterAppend?(record: CapabilityRecord): void | Promise<void>;
+    } = {},
+  ) {
+    await this.#assertCreated();
+    const prepared = await this.#prepareCapabilityRecord(input);
+    const [committed] = await this.append({
+      type: "events.iterate.com/capability-host/capability-provided",
+      payload: prepared,
+    });
+    const provision = { path: prepared.path, providedAtOffset: committed.offset };
+    const record = { ...prepared, providedAtOffset: committed.offset } satisfies CapabilityRecord;
+
+    try {
+      await options.afterAppend?.(record);
+      await this.deps.reads.waitUntilEvent({
+        offset: committed.offset,
+        timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+      });
+      return provision;
+    } catch (provideError) {
+      // The provide event is already durable. Roll back this exact offset so
+      // a failed call cannot leave an ownerless mount behind. Exact identity
+      // also prevents the cleanup from revoking a later replacement.
+      try {
+        const [rolledBack] = await this.append({
+          type: "events.iterate.com/capability-host/capability-revoked",
+          payload: provision,
+        });
+        await this.deps.reads.waitUntilEvent({
+          offset: rolledBack.offset,
+          timeoutMs: INGEST_WAIT_TIMEOUT_MS,
+        });
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [provideError, rollbackError],
+          `capability "${prepared.path.join(".")}" provide and exact rollback failed`,
+        );
+      }
+      throw provideError;
+    }
   }
 
   async revokeCapability({ path, providedAtOffset }: RevokeCapabilityInput) {
     await this.#assertCreated();
     assertCapabilityPath(path);
     const { state } = await this.deps.reads.snapshot();
-    const current = state.capabilities.find((record) => samePath(record.path, path));
+    const current = state.capabilities.find((record) => sameCapabilityPath(record.path, path));
     if (providedAtOffset !== undefined && current?.providedAtOffset !== providedAtOffset) {
       return;
     }
-    const key = liveKey(path);
-    const previousLive = this.#liveCapabilities.get(key);
     const [committed] = await this.append({
       type: "events.iterate.com/capability-host/capability-revoked",
       payload: {
@@ -478,8 +478,6 @@ export class CapabilityHostProcessor extends StreamProcessor<
         ...(providedAtOffset === undefined ? {} : { providedAtOffset }),
       },
     });
-    this.#liveCapabilities.delete(key);
-    previousLive?.dispose();
     await this.deps.reads.waitUntilEvent({
       offset: committed.offset,
       timeoutMs: INGEST_WAIT_TIMEOUT_MS,
@@ -648,7 +646,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
     // especially: forwarding ["...","__describe"] to a flattenNestedPaths
     // target would hand a discovery probe to a dispatcher that treats every
     // path as a method route. This is what makes discovery work on
-    // session-bound live mounts whose provider is offline, and it is the first
+    // Pager-backed live mounts whose provider is offline, and it is the first
     // rung of the transitive-description ladder.
     if (path[path.length - 1] === "__describe") {
       return this.#describeMount(hit.record, path.slice(0, -1));
@@ -658,11 +656,10 @@ export class CapabilityHostProcessor extends StreamProcessor<
       const provider = await normalizeCapabilityProvider(evaluated, hit.record);
       return await invokeNormalizedCapability(provider, hit.rest, args);
     }
-    const live = this.#liveCapabilities.get(liveKey(hit.record.path));
-    if (!live) {
+    if (this.deps.invokeLiveCapability === undefined) {
       throw new Error(`capability "${hit.record.path.join(".")}" is offline`);
     }
-    return await live.invoke(hit.rest, args);
+    return await this.deps.invokeLiveCapability(hit.record, hit.rest, args);
   }
 
   // Reports everything reachable at this scope: this scope's own mounts plus
@@ -688,6 +685,60 @@ export class CapabilityHostProcessor extends StreamProcessor<
     if (state.birthCertificate === null) {
       throw new Error(`capability host at ${this.#scopePath} has not been created`);
     }
+  }
+
+  async #prepareCapabilityRecord(
+    input: CapabilityProvidedPayload,
+  ): Promise<CapabilityProvidedPayload> {
+    const { path } = input;
+    const inputType: unknown = input.type;
+    assertCapabilityPath(path);
+    let record: CapabilityProvidedPayload;
+    if (input.type === "live") {
+      const flattenNestedPath = input.flattenNestedPaths === true;
+      record = {
+        flattenNestedPaths: flattenNestedPath ? true : undefined,
+        instructions: input.instructions,
+        path,
+        providerPager: input.providerPager,
+        type: "live",
+        types: input.types,
+      };
+    } else if (input.type === "itx-call") {
+      if (!Array.isArray(input.expression)) {
+        throw new Error(
+          '"expression" must be an ARRAY of steps — property names and [method, ...args] calls ' +
+            'walked over itx, e.g. ["streams", ["get", "/"]] — not JavaScript source. ' +
+            'Copy the recipe from itx.docs.get({ name: "typed-capability-mount" }).',
+        );
+      }
+      assertExpressionDoesNotReferenceOwnMount(input);
+      record = {
+        expression: input.expression,
+        flattenNestedPaths: input.flattenNestedPaths === true ? true : undefined,
+        instructions: input.instructions,
+        path,
+        type: "itx-call",
+        types: input.types ?? (await this.#selfDescribedTypes(input.expression)),
+      };
+    } else {
+      input satisfies never;
+      throw new Error(`unsupported capability input ${String(inputType)}`);
+    }
+    // Authored types must compile before they enter the stream — a typo'd
+    // declaration rejected here is a fixable error; one recorded durably is
+    // silent rot every docs read and typecheck inherits. This runs AFTER the
+    // cheap structural checks above so a malformed payload never costs a
+    // network-bound compile before its real error surfaces.
+    if (input.types !== undefined) {
+      const problems = (await this.deps.validateCapabilityTypes?.(input.types)) ?? [];
+      if (problems.length > 0) {
+        throw new Error(
+          `capability "types" for "${path.join(".")}" does not compile:\n${problems.join("\n")}`,
+        );
+      }
+    }
+    return record;
   }
 
   /**
@@ -758,7 +809,7 @@ export class CapabilityHostProcessor extends StreamProcessor<
       record.flattenNestedPaths === true
         ? `This is a FLATTENED dispatch target: any dotted call under the mount compiles to one invokeCapability call with the remaining path — \`${mountPoint}.a.b(x)\` reaches the provider as \`invokeCapability({ path: ["a","b"], args: [x] })\`. There is no object graph to walk; \`children\` is empty because sub-paths are routes the provider interprets, not members this host can list.`
         : record.type === "live"
-          ? `Dotted calls under the mount replay onto the provider's value by property traversal (\`${mountPoint}.a.b(x)\` calls \`a.b(x)\` on it). Live mounts are session-bound: the mount record is durable, but calls travel over the provider's connection and fail with "offline" when it disconnects. \`children\` is empty because the host only stores this record, never the provider's shape.`
+          ? `Dotted calls under the mount replay onto the provider's value by property traversal (\`${mountPoint}.a.b(x)\` calls \`a.b(x)\` on it). Live mounts are Pager-backed: the client gives the host a hibernatable return channel so it can Page the provider relay after releasing ordinary RPC references. The mount record is durable, but calls fail with "offline" when that Pager disconnects. \`children\` is empty because the host only stores this record, never the provider's shape.`
           : `A durable itx-expression: on every call the recorded expression is re-evaluated against this scope's own itx and the remaining path is invoked on the result — no live connection is held. \`children\` is empty because the host only stores the recipe, not the evaluated value's shape.`;
     return {
       instructions: [
@@ -1169,6 +1220,16 @@ export type CapabilityHostProcessorDeps = {
   itx: Project;
   /** Runner-backed committed-state reads — see {@link CapabilityHostProcessorReads}. */
   reads: CapabilityHostProcessorReads;
+  /**
+   * Ephemeral capability-provider acquisition owned by the hosting Durable Object.
+   * The processor owns only durable mount facts; production wires this to the
+   * client-given hibernatable Capability Provider Pager, while pure reduction tests omit it.
+   */
+  invokeLiveCapability?: (
+    record: Extract<CapabilityRecord, { type: "live" }>,
+    path: string[],
+    args: unknown[],
+  ) => Promise<unknown>;
   /** Runs run-script workers in this scope. */
   scriptExecutionEntrypoint: ScriptExecutionEntrypoint;
   /** Injected clock (expiry decisions); production defaults to Date.now. */
@@ -1225,21 +1286,6 @@ function isFallbackCapabilityHost(value: unknown): value is FallbackCapabilityHo
   return typeof host?.invokeCapability === "function" && typeof host.__describe === "function";
 }
 
-const INVALID_PATH_SEGMENTS = new Set([
-  // Mount names only — INVOCATION paths may end in __describe (intercepted in
-  // invokeCapability above); a MOUNT named __describe would be unreachable.
-  "__describe",
-  "__proto__",
-  "constructor",
-  "prototype",
-  "then",
-  "apply",
-  "call",
-  "bind",
-  "dup",
-  "onRpcBroken",
-]);
-
 /** ~4k tokens: how much of a mount's types `__describe` shows before
  * deferring to docs.get's budgeted reader. */
 const MAX_DESCRIBED_TYPES_CHARS = 16_000;
@@ -1260,9 +1306,6 @@ function truncatedTypes(types: string, mountPoint: string): string {
   );
 }
 
-const samePath = (a: string[], b: string[]) =>
-  a.length === b.length && a.every((segment, index) => segment === b[index]);
-
 /** A checkPreamble problem string with its `label:line:col` position
  * stripped — the set-time gate's diff identity, so stale problems whose
  * lines merely SHIFTED when an entry above them changed length still match
@@ -1282,26 +1325,6 @@ function upsertPreambleEntry(
   return exists
     ? entries.map((entry) => (entry.key === input.key ? { ...entry, code: input.code } : entry))
     : [...entries, { key: input.key, code: input.code, setAtOffset: 0 }];
-}
-
-const liveKey = (path: string[]) => JSON.stringify(path);
-
-function assertCapabilityPath(path: string[]) {
-  if (!Array.isArray(path)) {
-    throw new Error('capability path must be an ARRAY of segments (e.g. ["tools", "weather"])');
-  }
-  if (path.length === 0) {
-    throw new Error("capability path must contain at least one segment");
-  }
-  for (const segment of path) {
-    if (
-      typeof segment !== "string" ||
-      !/^[A-Za-z_$][A-Za-z0-9_$]*$/.test(segment) ||
-      INVALID_PATH_SEGMENTS.has(segment)
-    ) {
-      throw new Error(`invalid capability path segment "${String(segment)}"`);
-    }
-  }
 }
 
 function resolveLongestPrefix(records: CapabilityRecord[], path: string[]) {

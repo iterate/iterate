@@ -9,7 +9,7 @@ import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
 import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
-import { LiveStateSockets } from "../live-state-socket.ts";
+import { LiveStatePagers } from "../live-state-pager.ts";
 import { StreamProcessorRpcTarget } from "../../rpc-targets.ts";
 import { parseConfig } from "../../config.ts";
 import {
@@ -74,13 +74,13 @@ export class SecretDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
   });
-  /** liveState watcher sockets (domains/live-state-socket.ts) — watched secrets hibernate at zero pin.
+  /** Client-given Live State Pagers — watched secrets hibernate at zero pin.
    * The explicit field type is NOT inferable decoration: it breaks the
    * field-initializer inference cycle with #registry (its hooks read the
    * registry, whose onLiveAssembled reads this field back — TS7022 without
    * it), the same pattern as the registry option getLiveState's explicit
    * return type. */
-  readonly #liveStateSockets: LiveStateSockets = new LiveStateSockets({
+  readonly #liveStatePagers: LiveStatePagers = new LiveStatePagers({
     getWebSockets: (tag) => this.ctx.getWebSockets(tag),
     acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
     readState: () => this.#registry.live.getState(),
@@ -92,7 +92,7 @@ export class SecretDurableObject extends DurableObject<Env> {
     path: this.#name.path,
     projectId: this.#name.projectId,
     version: workerVersion(this.env),
-    onLiveAssembled: (assembly) => this.#liveStateSockets.refreshAfterAssembly(assembly),
+    onLiveAssembled: (assembly) => this.#liveStatePagers.refreshAfterAssembly(assembly),
     // Secret material is write-only: the live state that leaves this DO is the
     // DESCRIPTION (hasMaterial), never the ciphertext — same redaction the
     // processor facade applies via publicState. The explicit return type does
@@ -428,19 +428,19 @@ export class SecretDurableObject extends DurableObject<Env> {
     // The liveState lane routes FIRST and never falls through on a bad token:
     // this same fetch serves substitution requests whose headers user scripts
     // control, and a request wearing the internal header must not egress.
-    const liveStateUpgrade = await this.#liveStateSockets.acceptUpgrade(request);
+    const liveStateUpgrade = await this.#liveStatePagers.acceptUpgrade(request);
     if (liveStateUpgrade !== undefined) return liveStateUpgrade;
     return await this.#fetch(request, { kind: "any-revision" });
   }
 
-  /** liveState sockets are one-way (this DO → relay); inbound frames are ignored. */
+  /** Live State Pagers are one-way (this DO → relay); inbound frames are ignored. */
   webSocketMessage(): void {}
 
   /** A closed watcher socket simply drops off `getWebSockets`; nothing to clean up. */
   webSocketClose(): void {}
 
   webSocketError(_ws: WebSocket, error: unknown): void {
-    this.#liveStateSockets.socketError(error);
+    this.#liveStatePagers.pagerError(error);
   }
 
   async fetchAtUpdatedOffset(
