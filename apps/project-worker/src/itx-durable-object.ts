@@ -1,25 +1,22 @@
-// The ItxDurableObject — the capability host (target-core §4.1). One DO per {projectId, path} (a faux-URL
-// name), the single host for a context:
-//   • NATIVE fetch — the ONE method a WS upgrade (101) can flow through. `/register` → a hibernatable WAKE
-//     socket (no pin); `/connect` → a capnweb leg for `.connect` (CLIENTS — presence + capabilities + inbox) or
-//     the lower-level `provideCapability`; `x-itx-cap` → the FETCH LANE (a WS to a fetch-shaped capability);
-//     `/facet?path=` → a STATEFUL worker's facet
-//     fetch (WS/streaming into a hosted DO); a WS upgrade → ingress (acceptWebSocket); a non-WS request →
-//     EGRESS (secret-sub → fallback). `/state` → observability.
+// The ItxDurableObject — the capability host (target-core §4.1). One DO per {projectId, path} (a faux-URL name).
+// PURE WORKERS-RPC: capnweb NEVER terminates here — it terminates in the stateless `/api` worker (the relay),
+// which reaches this DO only over Workers RPC. That keeps the DO hibernatable and is a hard rule.
+//   • NATIVE fetch — the ONE method a WS upgrade (101) can flow through. `x-itx-pager` → a HIBERNATABLE PAGER
+//     (a relay's hibernation-safe DO→relay back-channel — no pin); `x-itx-cap` → the FETCH LANE (a WS to a
+//     fetch-shaped capability); `/facet?path=` → a STATEFUL worker's facet fetch; a WS upgrade → ingress
+//     (acceptWebSocket echo); a non-WS request → EGRESS (secret-sub → fallback). `/state` → observability.
 //   • invokeCapability — the single dispatch: built-ins (whoami/kv/secrets/streams/repo/provideCapability/
-//     configure) → live provider mounts → WAKE-ON-CALL (page a hibernatable device) → local mounts
-//     (alias/static/code/stateful) → fall back to the PARENT PATH, then the SHELL. "Reads fall back, writes
-//     stay local."
-//   • provideCapability — mount at a callPath. Two dynamic-worker kinds (mirroring apps/os): `code` = a
-//     STATELESS repo fn; `stateful` = a repo `DurableObject` class run by the dedicated StatefulWorkerDurableObject
-//     runner (a separate DO the host forwards to by name). load — run confined code IN this context
-//     (env.ITX = self-stub). itx.configure — run the repo's config worker. itx.repo — the project's file store.
+//     clients/files/configure) → LIVE capabilities (a relay-owned provider, reached via its Pager + a short
+//     Workers-RPC leg on demand) → local mounts (alias/static/code/stateful) → fall back to the PARENT PATH,
+//     then the SHELL. "Reads fall back, writes stay local."
 //
-// Wake-on-call (spike-4): a live RPC leg is the ONLY thing that pins the DO; wake sockets are hibernatable, so
-// 1000 registered devices cost ~nothing while idle. The fallback is a real second worker (the control plane).
+// DON'T-PIN (mirrors dont-pin-capability-host): a live capability's provider lives in the stateless relay. The
+// DO stores only a `{ socketId }` LEASE + the hibernatable Pager socket — NO stub — so it hibernates while idle.
+// On an invocation it sends a "wake" Page; the relay hands back a short Workers-RPC leg (an Invoker) for the
+// burst; at quiescence the DO drops the leg and sends "idle". A `.connect` client connection is just a live
+// capability lease tagged `{ path, connectionKey }`; `itx.clients` groups those by path and fans out.
 
 import { DurableObject } from "cloudflare:workers";
-import { newWorkersRpcResponse, RpcTarget } from "capnweb";
 import { substituteHeaderSecrets } from "./core/egress.ts";
 import { ITX_SURFACE_MODULE, CODE_CAP_RUNNER } from "./core/agent-runtime.ts";
 import {
@@ -28,77 +25,46 @@ import {
   itxRoot,
   type ItxExpression,
 } from "./core/itx-expression.ts";
+import {
+  PAGER_HEADER,
+  acceptPager,
+  pagerAttachment,
+  pagerSocketFor,
+  sendPage,
+} from "./core/hibernatable-pager.ts";
 import { parseName, stringifyName, parentPath } from "./core/names.ts";
 import type { StreamDurableObject, StreamEventInput } from "./stream-durable-object.ts";
 import type { StatefulWorkerDurableObject } from "./stateful-worker-durable-object.ts";
 import type { ItxCallPath } from "./core/config.ts";
 
-/** A capnweb stub to a provider-supplied capability. `.dup()` retains it past a call; `onRpcBroken` fires when
- *  the provider's socket drops; other keys are its (remote) methods, which resolve back on the provider. */
-type LiveStub = {
-  dup(): LiveStub;
-  onRpcBroken?(cb: (e: unknown) => void): void;
-  [method: string]: unknown;
+/** A short Workers-RPC leg the relay hands the DO on wake: it wraps the retained provider and forwards ONE
+ *  invocation burst (DO → relay → provider). The DO drops it at quiescence so nothing pins it between bursts. */
+type Invoker = {
+  invoke(capPath: string[], args: unknown[]): Promise<unknown>;
+  dup?(): Invoker;
 };
 
-// `Symbol.dispose` isn't in the current lib target; reference it defensively to free a capnweb stub.
+// `Symbol.dispose` isn't in the current lib target; reference it defensively to free a (Workers-RPC) stub.
 const DISPOSE: symbol | undefined = (Symbol as { dispose?: symbol }).dispose;
-function disposeStub(stub: LiveStub): void {
+function disposeStub(stub: unknown): void {
   const fn = DISPOSE ? (stub as Record<symbol, unknown>)[DISPOSE] : undefined;
   if (typeof fn === "function") (fn as () => void).call(stub);
 }
 
-// Wake-on-call timings (spike-4). Kept short so the RPC leg is torn down fast and the DO can hibernate; the
-// wake sockets themselves are hibernatable and never pin.
-const IDLE_MS = 2000; // tear the on-demand RPC leg down this long after the last call
-const WAKE_TIMEOUT_MS = 8000; // give a paged device this long to dial its RPC leg back
+const ATTACH_TIMEOUT_MS = 10_000; // a woken relay has this long to hand back its short leg before we give up
 
-/** What a client supplies when it attaches with `.connect` (the principal client operation). `path` is its
- *  caller-chosen identity + stream address; `exclusive` pins a fixed connectionKey so a reconnect knocks out the
- *  old connection (no double-live during a race). */
-interface ClientInfo {
-  path: string;
+/** One live-capability LEASE: a provider that lives in a stateless relay, reachable via its Pager socket. The DO
+ *  holds NO stub — only this record + the hibernatable Pager. `kind`:
+ *    • "capability" — an `itx.provideCapability({type:"live"})` mount at the dotted `capPath`.
+ *    • "client"     — a `.connect` client connection at `path` (fanned out via `itx.clients`). */
+interface Lease {
+  socketId: string;
+  kind: "capability" | "client";
+  capPath?: string; // "capability": the dotted mount path, e.g. "itx.myComputer"
+  path?: string; // "client": the client identity + stream path, e.g. "/clients/chrome"
+  connectionKey?: string; // "client": the connection key (reconnect under the same key replaces)
   description?: string;
-  user?: string;
-  exclusive?: boolean;
-}
-
-/** A CLIENT connection (0..N per client path) in the host's runtime table — the authoritative "who is connected
- *  now" and where the RETAINED (duped) live stubs into the client's process physically live; both die with the
- *  socket. (The reduced-state roster/history via a stream processor is deferred — the delivery spine isn't built
- *  yet — so `itx.clients.list` reads this table directly for v1.) */
-interface ClientConnection {
-  connectionKey: string;
-  description?: string;
-  user?: string;
   openedAt: string;
-  capabilities?: LiveStub; // the itx half — a duped RpcTarget, fanned out over connections
-  inbox?: LiveStub; // the stream half — a duped stub with `processEventBatch(batch)`
-}
-
-/** The control surface a PROVIDER / CLIENT gets over capnweb (target-core §4.1 / D7). Two ways to attach:
- *   • `connect(info, capabilities?, inbox?)` — THE PRINCIPAL OPERATION. Become a visible CLIENT: presence + a
- *     retained `capabilities` RpcTarget (the itx half, fanned out over all a client's connections) + an optional
- *     `inbox` (the stream half — `processEventBatch(batch)`). Both optional, both die with the socket.
- *   • `provideCapability(path, stub)` — the lower-level live mount (a single capability at a callPath). */
-class ProviderControl extends RpcTarget {
-  #mount: (path: string, stub: LiveStub) => void;
-  #connect: (info: ClientInfo, capabilities?: LiveStub, inbox?: LiveStub) => Promise<unknown>;
-  constructor(
-    mount: (path: string, stub: LiveStub) => void,
-    connect: (info: ClientInfo, capabilities?: LiveStub, inbox?: LiveStub) => Promise<unknown>,
-  ) {
-    super();
-    this.#mount = mount;
-    this.#connect = connect;
-  }
-  connect(info: ClientInfo, capabilities?: LiveStub, inbox?: LiveStub): Promise<unknown> {
-    return this.#connect(info, capabilities, inbox);
-  }
-  provideCapability(path: string, capability: LiveStub): { ok: true } {
-    this.#mount(path, capability.dup()); // dup: the param is disposed when this call returns; keep ours
-    return { ok: true };
-  }
 }
 
 interface Env {
@@ -148,18 +114,13 @@ export class Counter extends DurableObject {
 };
 
 // A mount (target-core §4.1). `itx-expression` = an ALIAS to another callPath. `static` = a plain value.
-// The two DYNAMIC-WORKER kinds mirror apps/os's `DynamicWorkerRef` — and their SOURCE is an itx EXPRESSION
-// (data), resolved to a `{ name: source }` modules map by evaluating it against this host. The loader is
-// repo-agnostic: it knows only "evaluate an expression to get modules" (v1 reader = `itx.files.read`, below).
-//   • `code` = STATELESS — modules whose entry `cap.js` default-exports `(itx, ...args) => result`.
-//   • `stateful` = a `DurableObject` class (`className`), run by the dedicated `StatefulWorkerDurableObject`
-//     runner (a separate DO, one per stateful capability, hosting the class as a facet with its own SQLite).
-//   • `web` = FETCH-SHAPED — modules whose entry `cap.js` default-exports `{ fetch(request, env) }`. Reached by
-//     the FETCH LANE (`#fetchCapability`), so a WebSocket **upgrade (101) passes through** to it natively — the
-//     thing apps/os could not do (a provided capability there is reachable only by RPC replay, and a 101 can't
-//     serialize across an RPC hop). `code`/`stateful` are RPC-shaped; `web` (and `stateful`'s facet fetch) are
-//     fetch-shaped.
-// (`live` RPC-stub mounts are the capnweb path, above.)
+// The DYNAMIC-WORKER kinds mirror apps/os's `DynamicWorkerRef` — their SOURCE is an itx EXPRESSION (data),
+// resolved to a `{ name: source }` modules map by evaluating it against this host (the loader is repo-agnostic).
+//   • `code` = STATELESS — entry `cap.js` default-exports `(itx, ...args) => result`.
+//   • `stateful` = a `DurableObject` class (`className`), run by the dedicated `StatefulWorkerDurableObject`.
+//   • `web` = FETCH-SHAPED — entry `cap.js` default-exports `{ fetch(request, env) }`; reached by the FETCH LANE
+//     so a WebSocket upgrade (101) passes through natively.
+// (LIVE capabilities aren't mounts — they're relay-owned leases; see `#leases`.)
 type Mount =
   | { type: "itx-expression"; expression: ItxCallPath }
   | { type: "static"; value: unknown }
@@ -171,18 +132,15 @@ export type ProvideCapabilityInput = { path: ItxCallPath } & Mount;
 
 export class ItxDurableObject extends DurableObject<Env> {
   #mounts = new Map<string, Mount>(); // callPath -> mount (mirrors DO storage; the event-sourced fold is later)
-  // Wake-on-call state (spike-4). All IN-MEMORY: a live RPC leg is the only thing that pins the DO; the wake
-  // sockets are hibernatable and survive eviction, so 1000 registered devices cost ~nothing while idle.
-  #liveMounts = new Map<string, { stub: LiveStub; connectionKey: string }>(); // callPath -> connected provider
-  #liveByConn = new Map<string, Set<string>>(); // connectionKey -> callPaths it currently provides
+  // DON'T-PIN live state. All IN-MEMORY + the hibernatable Pager sockets: the DO holds NO provider stub between
+  // bursts, so it hibernates while idle. `#leases` is the runtime table (socketId -> record); `#activeLegs` holds
+  // a short Workers-RPC leg ONLY during an in-flight burst; `#pending` tracks in-flight wake handshakes.
+  #leases = new Map<string, Lease>();
+  #activeLegs = new Map<string, { invoker: Invoker; inFlight: number }>();
   #pending = new Map<
     string,
     { resolve: () => void; reject: (e: Error) => void; timer: ReturnType<typeof setTimeout> }
   >();
-  #idleTimers = new Map<string, ReturnType<typeof setTimeout>>();
-  // CLIENTS (target-core clients model). client path -> its 0..N open connections. The authoritative runtime
-  // table for "who is connected now" + where retained client stubs live. Lives on the project ROOT host.
-  #clients = new Map<string, ClientConnection[]>();
   incarnation = 0; // durable, bumped on every (re)construction — grows across an idle gap ⇒ the DO hibernated
 
   constructor(ctx: DurableObjectState, env: Env) {
@@ -204,20 +162,23 @@ export class ItxDurableObject extends DurableObject<Env> {
     return this.#name.projectId;
   }
 
-  // ── native fetch (target-core §4.1, §6.0). Two callers, disambiguated by the Upgrade header:
-  //    • WS upgrade → INGRESS: accept a hibernatable socket (a client connecting in).
-  //    • non-WS     → EGRESS: a loaded agent reaching OUT via its globalOutbound self-stub → substitute the
-  //      project's own secrets, then delegate to the fallback (→ terminal). This is `itx.egress.fetch`.
-  //    (WS EGRESS from a DO-loaded agent is ambiguous with WS ingress here — deferred; agents egress over HTTP
-  //     today. A marker will disambiguate when needed.) ──
+  #getWebSockets = (tag: string) => this.ctx.getWebSockets(tag);
+
+  // ── native fetch (target-core §4.1, §6.0). ──
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
 
-    // ── THE FETCH LANE (target-core §6.0 / D33). A request carrying `x-itx-cap` (a capability address, as a
-    // serialized ItxExpression or a bare callPath) is routed to a FETCH-SHAPED capability by NATIVE `.fetch()`
-    // hops — so a WebSocket upgrade (101) passes straight through. This is the sibling of `invokeCapability`
-    // (RPC): a 101 can't cross an RPC hop, but it rides a fetch. Checked FIRST so a cap WS never hits the
-    // ingress-echo path below. ──
+    // A relay opens its HIBERNATABLE PAGER here — a hibernation-safe DO→relay back-channel accepted through the
+    // DO's own hibernation API. The DO stores only its `{ socketId }` attachment (no stub) and later sends
+    // one-way Pages over it. Checked FIRST so it isn't grabbed as an ingress-echo socket.
+    if (request.headers.get(PAGER_HEADER))
+      return acceptPager(request, {
+        acceptWebSocket: (ws, tags) => this.ctx.acceptWebSocket(ws, tags),
+      });
+
+    // ── THE FETCH LANE (target-core §6.0 / D33). A request carrying `x-itx-cap` (a serialized ItxExpression or
+    // a bare callPath) is routed to a FETCH-SHAPED capability by NATIVE `.fetch()` hops, so a WebSocket upgrade
+    // (101) passes straight through. ──
     const capHeader = request.headers.get("x-itx-cap");
     if (capHeader) {
       const callPath = capHeader.startsWith("[")
@@ -226,33 +187,8 @@ export class ItxDurableObject extends DurableObject<Env> {
       return this.#fetchCapability(callPath, request);
     }
 
-    // A device REGISTERS a hibernatable wake socket declaring the capabilities it can provide. This socket does
-    // NOT pin the DO (it survives hibernation) — 1000 of these cost ~nothing. It only carries pages (DO→device).
-    if (url.pathname === "/register") {
-      const connectionKey = url.searchParams.get("connectionKey") ?? crypto.randomUUID();
-      const caps = (url.searchParams.get("caps") ?? "").split(",").filter(Boolean);
-      const pair = new WebSocketPair();
-      this.ctx.acceptWebSocket(pair[1], ["wake"]); // hibernatable
-      pair[1].serializeAttachment({ connectionKey, caps }); // survives hibernation
-      return new Response(null, { status: 101, webSocket: pair[0] });
-    }
-
-    // The on-demand RPC leg: a device dials this (usually after a wake page) and re-provides its capability
-    // over capnweb. This IS a live pin — torn down after IDLE_MS so the DO can hibernate again.
-    if (url.pathname === "/connect") {
-      const connectionKey = url.searchParams.get("connectionKey") ?? crypto.randomUUID();
-      return newWorkersRpcResponse(
-        request,
-        new ProviderControl(
-          (p, s) => this.#mountLive(connectionKey, p, s),
-          (info, caps, inbox) => this.#connectClient(info, caps, inbox),
-        ),
-      );
-    }
-
     // The STATEFUL worker fetch lane: forward to the mount's runner DO (→ the facet's own `fetch`) — the ONLY
-    // lane that can carry a WS upgrade (a 101 can't cross an RPC method). `?path=<callPath>` names the mount;
-    // module + class ride in headers.
+    // lane that can carry a WS upgrade. `?path=<callPath>` names the mount; source + class ride in headers.
     if (url.pathname === "/facet") {
       const callPath = url.searchParams.get("path") ?? "";
       const mount = this.#mounts.get(callPath);
@@ -269,15 +205,15 @@ export class ItxDurableObject extends DurableObject<Env> {
       return this.#statefulRunner(callPath).fetch(fwd);
     }
 
-    // Observability: incarnation (the hibernation tell) + how much is pinning right now.
+    // Observability: incarnation (the hibernation tell) + what's live right now. `dormant` ⇒ holds no leg.
     if (url.pathname === "/state") {
       return Response.json({
         incarnation: this.incarnation,
-        wakeSockets: this.ctx.getWebSockets("wake").length,
-        liveMounts: this.#liveMounts.size,
-        idleTimers: this.#idleTimers.size,
-        dormant:
-          this.#liveMounts.size === 0 && this.#idleTimers.size === 0 && this.#pending.size === 0,
+        pagers: this.ctx.getWebSockets("itx-pager").length,
+        leases: this.#leases.size,
+        activeLegs: this.#activeLegs.size,
+        pending: this.#pending.size,
+        dormant: this.#activeLegs.size === 0 && this.#pending.size === 0,
       });
     }
 
@@ -293,24 +229,25 @@ export class ItxDurableObject extends DurableObject<Env> {
   }
 
   webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): void {
-    // Only the ingress-echo socket echoes; a wake socket receives pages and sends nothing back that we act on.
+    // Only the ingress-echo socket echoes. A Pager is DO→relay only (the relay sends nothing we act on).
     if (this.ctx.getTags(ws).includes("echo")) {
       const text = typeof message === "string" ? message : new TextDecoder().decode(message);
       ws.send(`echo:${text}`);
     }
   }
   webSocketClose(ws: WebSocket): void {
-    const att = ws.deserializeAttachment() as { connectionKey?: string } | null;
-    if (att?.connectionKey) this.#dropConn(att.connectionKey); // a device's wake socket dropped → clean up
+    const att = pagerAttachment(ws);
+    if (att) this.#pagerClosed(att.socketId); // a relay's Pager dropped → reconcile its lease away
   }
-  webSocketError(): void {
-    /* keep the DO from crashing on a transport error */
+  webSocketError(ws: WebSocket): void {
+    const att = pagerAttachment(ws);
+    if (att) this.#pagerClosed(att.socketId);
   }
 
   // ── the capability model ──
 
-  /** Mount a capability at a callPath on THIS scope (writes stay LOCAL — target-core §4.4). Durable now; the
-   *  event-sourced `capability-provided`-on-a-stream fold is a later increment. */
+  /** Mount a capability at a callPath on THIS scope (writes stay LOCAL — target-core §4.4). LIVE capabilities
+   *  don't come here — they're relay-owned leases recorded via `recordLease` / `recordClientConnection`. */
   async provideCapability(input: ProvideCapabilityInput): Promise<{ ok: true }> {
     const { path, ...mount } = input;
     this.#mounts.set(path, mount as Mount);
@@ -318,11 +255,8 @@ export class ItxDurableObject extends DurableObject<Env> {
     return { ok: true };
   }
 
-  /** THE single dynamic dispatch (target-core §4.1). Built-in (resolved in-place) → local mount (an
-   *  itx-expression re-enters as an alias) → else fall back to the enclosing shell's invokeCapability. */
+  /** THE single dynamic dispatch (target-core §4.1). Built-in → LIVE lease → local mount → fall back. */
   async invokeCapability(callPath: string, args: unknown[] = []): Promise<unknown> {
-    // built-ins resolve in-place, no fallback (target-core §4.0). Backing is project-prefixed by the DO's own
-    // (unforgeable) projectId — so byte-identical project code is isolated in a shared namespace (D8).
     if (callPath === "itx.whoami") return { projectId: this.#projectId };
     if (callPath.startsWith("itx.kv.")) return this.#kv(callPath.slice("itx.kv.".length), args);
     if (callPath === "itx.streams.append") {
@@ -333,292 +267,269 @@ export class ItxDurableObject extends DurableObject<Env> {
       const [path, after] = args as [string, number?];
       return this.#stream(path).read(after ?? 0);
     }
-    // The project's REPO (a file store) + registering/configuring dynamic capabilities in terms of it.
     if (callPath.startsWith("itx.repo."))
       return this.#repo(callPath.slice("itx.repo.".length), args);
     if (callPath === "itx.provideCapability") {
       await this.provideCapability(args[0] as ProvideCapabilityInput);
       return { ok: true };
     }
-    // CLIENTS — the roster + fan-out surface (target-core clients model). Resolved only on the project ROOT,
-    // where the runtime table lives; a deep context falls through and fails over to its parent → root.
+    // CLIENTS — roster + fan-out, resolved only on the project ROOT (where the leases live). A deep context
+    // falls through and fails over to its parent → root. (The worker-side ClientCollection calls these DO
+    // methods directly; this branch is for LOADED AGENTS reaching clients through their itx surface.)
     if (callPath.startsWith("itx.clients.") && this.#name.path === "/") {
       const op = callPath.slice("itx.clients.".length);
-      if (op === "list") return this.#clientsList();
-      if (op === "get") return this.#clientsGet(args[0] as string);
+      if (op === "list") return this.clientsList();
+      if (op === "connections") return this.clientConnections(args[0] as string);
       if (op === "call")
-        return this.#clientsCall(
+        return this.invokeClientCapabilities(
           args[0] as string,
           args[1] as string[],
           (args[2] as unknown[]) ?? [],
         );
-      if (op === "append")
-        return this.#clientsAppend(args[0] as string, args[1] as StreamEventInput);
       throw new Error(`itx.clients: no op "${op}"`);
     }
-    // The v1 "file reader": evaluate a source expression's terminal call. Returns a `{ name: source }` modules
-    // map. No repo/KV yet — a hardcoded hello (later: a repo snapshot at a ref, same capability + expression).
     if (callPath === "itx.files.read") {
       const [path] = args as [string];
       const content = HELLO_FILES[path];
       if (content == null) throw new Error(`itx.files: no file "${path}"`);
       return { "cap.js": content };
     }
-    if (callPath === "itx.configure") return this.#configure(); // run the repo's config worker
+    if (callPath === "itx.configure") return this.#configure();
     if (callPath === "itx.secrets.set") {
       const [name, value] = args as [string, string];
       if (!this.env.SECRETS_KV) throw new Error("no SECRETS_KV bound");
       await this.env.SECRETS_KV.put(`secret:${this.#projectId}:${name}`, String(value));
-      return { ok: true }; // write-only from userspace (referenced by placeholder in egress — never read back)
+      return { ok: true };
     }
 
-    // LIVE mounts (a provider with an OPEN RPC leg): dispatch, refresh the idle timer (target-core §4.1 / D7).
-    let live = this.#liveMountFor(callPath);
-    if (live) return this.#dispatchLive(live, args);
-    // WAKE-ON-CALL (spike-4): a registered device declares this cap but has no live leg → page its hibernatable
-    // wake socket, wait for it to dial its RPC leg back and re-provide, then dispatch. The DO was hibernating.
-    if (await this.#wake(callPath)) {
-      live = this.#liveMountFor(callPath);
-      if (live) return this.#dispatchLive(live, args);
-    }
+    // LIVE capability (a relay-owned provider): reach it via its Pager + a short Workers-RPC leg on demand — the
+    // DO holds no stub between bursts. Longest dotted-prefix lease; the remaining segment(s) name the method.
+    const lease = this.#liveLeaseFor(callPath);
+    if (lease) return this.#invokeVia(lease.socketId, lease.method, args);
 
     const mount = this.#mounts.get(callPath);
     if (mount) {
       if (mount.type === "itx-expression") return this.invokeCapability(mount.expression, args); // alias
-      if (mount.type === "code") return this.#runCode(mount.source, args); // stateless worker (from a source expr)
+      if (mount.type === "code") return this.#runCode(mount.source, args); // stateless worker
       if (mount.type === "static") return mount.value;
-      // stateful with no method (a bare mount-path call) is not invocable — fall through to fallback.
     }
-    // STATEFUL worker (RPC lane): a `DurableObject` class hosted as a facet. Longest dotted-prefix match — the
-    // remaining segment names the facet method (like a live mount / apps/os replayPath, at clean-room weight).
     const sf = this.#statefulMountFor(callPath);
     if (sf) return this.#dispatchStateful(sf.callPath, sf.mount, sf.method, args);
 
-    // reads fall back (target-core §4.4 / D21): a deep path falls back to its PARENT PATH (another context DO,
-    // so it inherits everything provided above it); the ROOT falls back to the enclosing SHELL. Both recurse
-    // until the capability resolves or the terminal shell throws.
+    // reads fall back (target-core §4.4 / D21): a deep path → its PARENT PATH; the ROOT → the enclosing SHELL.
     const parent = parentPath(this.#name.path);
     if (parent === null) return this.env.FALLBACK.invokeCapability(callPath, args); // root → shell
     const parentName = stringifyName({ projectId: this.#projectId, path: parent });
     return this.env.ITX_HOST.getByName(parentName).invokeCapability(callPath, args); // → parent path
   }
 
-  /** Longest dotted-prefix live mount; the remaining segment(s) name the provider method to call. */
-  #liveMountFor(
-    callPath: string,
-  ): { stub: LiveStub; method: string; connectionKey: string } | null {
-    const parts = callPath.split(".");
-    for (let i = parts.length - 1; i >= 2; i--) {
-      const hit = this.#liveMounts.get(parts.slice(0, i).join("."));
-      if (hit)
-        return {
-          stub: hit.stub,
-          method: parts.slice(i).join("."),
-          connectionKey: hit.connectionKey,
-        };
-    }
-    return null;
-  }
+  // ── DON'T-PIN live-capability leases (Workers-RPC methods the stateless relay calls) ──
 
-  #dispatchLive(
-    live: { stub: LiveStub; method: string; connectionKey: string },
-    args: unknown[],
-  ): unknown {
-    this.#armIdle(live.connectionKey);
-    return (live.stub[live.method] as (...a: unknown[]) => unknown)(...args);
-  }
-
-  /** A device connected its RPC leg and provided a capability. Record it, resolve any pending wake, arm idle. */
-  #mountLive(connectionKey: string, path: string, stub: LiveStub): void {
-    this.#liveMounts.set(path, { stub, connectionKey });
-    let paths = this.#liveByConn.get(connectionKey);
-    if (!paths) this.#liveByConn.set(connectionKey, (paths = new Set()));
-    paths.add(path);
-    stub.onRpcBroken?.(() => this.#dropConn(connectionKey)); // leg dropped → forget its mounts
-    const p = this.#pending.get(connectionKey);
-    if (p) {
-      this.#pending.delete(connectionKey);
-      clearTimeout(p.timer);
-      p.resolve();
-    }
-    this.#armIdle(connectionKey);
-  }
-
-  /** Page the hibernatable wake socket that declares `callPath`, then wait for its RPC leg to arrive. */
-  async #wake(callPath: string): Promise<boolean> {
-    const target = this.#wakeSocketFor(callPath);
-    if (!target) return false;
-    const { ws, connectionKey } = target;
-    const arrived = new Promise<void>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        if (this.#pending.delete(connectionKey))
-          reject(new Error(`wake timed out for ${connectionKey}`));
-      }, WAKE_TIMEOUT_MS);
-      this.#pending.set(connectionKey, { resolve, reject, timer });
+  /** The relay recorded a live capability (`itx.provideCapability({type:"live"})`) after opening its Pager. */
+  recordLease(input: { socketId: string; capPath: string; description?: string }): { ok: true } {
+    this.#leases.set(input.socketId, {
+      socketId: input.socketId,
+      kind: "capability",
+      capPath: input.capPath,
+      description: input.description,
+      openedAt: new Date(Date.now()).toISOString(),
     });
-    ws.send(JSON.stringify({ type: "wake", cap: callPath }));
-    await arrived;
-    return true;
+    return { ok: true };
   }
 
-  /** The wake socket whose declared caps cover `callPath` (a declared cap is a dotted prefix of it). */
-  #wakeSocketFor(callPath: string): { ws: WebSocket; connectionKey: string } | null {
-    for (const ws of this.ctx.getWebSockets("wake")) {
-      const att = ws.deserializeAttachment() as { connectionKey: string; caps: string[] } | null;
-      if (att && att.caps.some((c) => callPath === c || callPath.startsWith(`${c}.`)))
-        return { ws, connectionKey: att.connectionKey };
+  /** The relay opened a `.connect` CLIENT connection. Reconnecting under the same path+connectionKey replaces
+   *  the dead predecessor (the 0..1 shape a device wants; browsers pass unique keys for unlimited tabs). */
+  recordClientConnection(input: {
+    socketId: string;
+    path: string;
+    connectionKey: string;
+    description?: string;
+  }): { ok: true; connectionKey: string } {
+    for (const [sid, l] of this.#leases)
+      if (
+        l.kind === "client" &&
+        l.path === input.path &&
+        l.connectionKey === input.connectionKey &&
+        sid !== input.socketId
+      )
+        this.#closePager(sid, 1000, "replaced");
+    this.#leases.set(input.socketId, {
+      socketId: input.socketId,
+      kind: "client",
+      path: input.path,
+      connectionKey: input.connectionKey,
+      description: input.description,
+      openedAt: new Date(Date.now()).toISOString(),
+    });
+    return { ok: true, connectionKey: input.connectionKey };
+  }
+
+  /** Wake handshake: the relay, having received a "wake" Page, hands the DO a short leg (an Invoker) for the
+   *  burst. Returns undefined for a STALE wake (nothing waiting) so the relay drops it. */
+  activateLiveCapability(input: { socketId: string; invoker: Invoker }): { ok: true } | undefined {
+    const pending = this.#pending.get(input.socketId);
+    if (pending === undefined) return undefined;
+    const prev = this.#activeLegs.get(input.socketId);
+    const invoker = input.invoker.dup?.() ?? input.invoker; // retain past this call; disposed at quiescence
+    this.#activeLegs.set(input.socketId, { invoker, inFlight: 0 });
+    if (prev) disposeStub(prev.invoker);
+    clearTimeout(pending.timer);
+    this.#pending.delete(input.socketId);
+    pending.resolve();
+    return { ok: true };
+  }
+
+  /** Revoke a live capability mount (its relay's provision handle called this). */
+  revokeCapability(input: { capPath: string }): { ok: true } {
+    for (const l of [...this.#leases.values()])
+      if (l.kind === "capability" && l.capPath === input.capPath)
+        this.#closePager(l.socketId, 1000, "revoked");
+    return { ok: true };
+  }
+
+  /** Acquire a short leg for `socketId`: reuse an active one, else send a "wake" Page and await the relay's
+   *  `activateLiveCapability`. */
+  async #acquireLeg(socketId: string): Promise<{ invoker: Invoker; inFlight: number }> {
+    let leg = this.#activeLegs.get(socketId);
+    if (leg === undefined) {
+      const ws = pagerSocketFor(socketId, { getWebSockets: this.#getWebSockets });
+      if (ws === undefined) throw new Error("live capability offline (no pager)");
+      const arrived = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          if (this.#pending.delete(socketId)) reject(new Error("provider attach timed out"));
+        }, ATTACH_TIMEOUT_MS);
+        this.#pending.set(socketId, { resolve, reject, timer });
+      });
+      sendPage(ws, { type: "wake" });
+      await arrived;
+      leg = this.#activeLegs.get(socketId);
+      if (leg === undefined) throw new Error("provider attach completed empty");
     }
-    return null;
+    leg.inFlight += 1;
+    return leg;
   }
 
-  #armIdle(connectionKey: string): void {
-    const prev = this.#idleTimers.get(connectionKey);
-    if (prev !== undefined) clearTimeout(prev);
-    this.#idleTimers.set(
-      connectionKey,
-      setTimeout(() => this.#teardown(connectionKey), IDLE_MS),
-    );
-  }
-
-  /** Idle: tell the device to close its RPC leg (freeing the pin) and forget its live mounts. The device keeps
-   *  its hibernatable wake socket, so the DO can hibernate and still be paged later. */
-  #teardown(connectionKey: string): void {
-    this.#idleTimers.delete(connectionKey);
-    for (const ws of this.ctx.getWebSockets("wake")) {
-      const att = ws.deserializeAttachment() as { connectionKey: string } | null;
-      if (att?.connectionKey === connectionKey) {
-        try {
-          ws.send(JSON.stringify({ type: "idle" }));
-        } catch {
-          /* socket gone */
-        }
+  /** Invoke through an on-demand short leg, then release it at quiescence (send "idle" so the relay drops it). */
+  async #invokeVia(socketId: string, capPath: string[], args: unknown[]): Promise<unknown> {
+    const leg = await this.#acquireLeg(socketId);
+    try {
+      return await leg.invoker.invoke(capPath, args);
+    } finally {
+      leg.inFlight -= 1;
+      if (leg.inFlight === 0 && this.#activeLegs.get(socketId) === leg) {
+        this.#activeLegs.delete(socketId);
+        disposeStub(leg.invoker);
+        const ws = pagerSocketFor(socketId, { getWebSockets: this.#getWebSockets });
+        if (ws) sendPage(ws, { type: "idle" });
       }
     }
-    this.#dropConn(connectionKey);
   }
 
-  #dropConn(connectionKey: string): void {
-    const prev = this.#idleTimers.get(connectionKey);
-    if (prev !== undefined) clearTimeout(prev);
-    this.#idleTimers.delete(connectionKey);
-    for (const path of this.#liveByConn.get(connectionKey) ?? []) {
-      const hit = this.#liveMounts.get(path);
-      if (hit) disposeStub(hit.stub);
-      this.#liveMounts.delete(path);
+  /** Longest dotted-prefix LIVE CAPABILITY lease; the remaining segment(s) name the provider method. */
+  #liveLeaseFor(callPath: string): { socketId: string; method: string[] } | null {
+    const parts = callPath.split(".");
+    for (let i = parts.length - 1; i >= 2; i--) {
+      const prefix = parts.slice(0, i).join(".");
+      for (const l of this.#leases.values())
+        if (l.kind === "capability" && l.capPath === prefix)
+          return { socketId: l.socketId, method: parts.slice(i) };
     }
-    this.#liveByConn.delete(connectionKey);
+    return null;
   }
 
-  // ── CLIENTS (target-core clients model). `.connect` is the principal operation: a client attaches, retaining
-  //    a `capabilities` RpcTarget (fanned out over its connections) + an optional `inbox` (its stream half).
-  //    Presence facts land on the client's OWN stream; the runtime table above is authoritative for "open now". ──
-
-  /** THE PRINCIPAL OPERATION. Register a client connection: retain its stubs, record presence, wire death. */
-  async #connectClient(
-    info: ClientInfo,
-    capabilities?: LiveStub,
-    inbox?: LiveStub,
-  ): Promise<{ ok: true; connectionKey: string }> {
-    const path = info.path;
-    const connectionKey = info.exclusive ? `client:${path}` : crypto.randomUUID();
-    // exclusive knock-out: reopening the fixed key closes the old connection as `replaced` (no double-live).
-    if ((this.#clients.get(path) ?? []).some((c) => c.connectionKey === connectionKey))
-      await this.#dropClientConnection(path, connectionKey, "replaced");
-    const conn: ClientConnection = {
-      connectionKey,
-      description: info.description,
-      user: info.user,
-      openedAt: new Date(Date.now()).toISOString(),
-      capabilities: capabilities?.dup(), // dup: the arg is disposed when connect() returns; keep ours
-      inbox: inbox?.dup(),
-    };
-    const list = this.#clients.get(path) ?? [];
-    list.push(conn);
-    this.#clients.set(path, list);
-    // Death detection via a retained stub (mirrors #mountLive): the socket dying drops the connection.
-    (conn.capabilities ?? conn.inbox)?.onRpcBroken?.(() => {
-      void this.#dropClientConnection(path, connectionKey, "departed");
-    });
-    await this.#stream(path).append({
-      type: "client/connection-opened",
-      payload: { connectionKey, openedBy: { description: info.description, user: info.user } },
-    });
-    return { ok: true, connectionKey };
+  /** A Pager dropped (socket close / revoke / kick): drop its lease + any active leg, fail any pending wake. */
+  #pagerClosed(socketId: string): void {
+    const leg = this.#activeLegs.get(socketId);
+    if (leg) {
+      this.#activeLegs.delete(socketId);
+      disposeStub(leg.invoker);
+    }
+    const p = this.#pending.get(socketId);
+    if (p) {
+      clearTimeout(p.timer);
+      this.#pending.delete(socketId);
+      p.reject(new Error("provider went offline"));
+    }
+    this.#leases.delete(socketId);
   }
 
-  /** Drop a client connection (socket death / knock-out): dispose its stubs, record the close on its stream. */
-  async #dropClientConnection(path: string, connectionKey: string, reason: string): Promise<void> {
-    const list = this.#clients.get(path);
-    const idx = list?.findIndex((c) => c.connectionKey === connectionKey) ?? -1;
-    if (!list || idx === -1) return;
-    const [conn] = list.splice(idx, 1);
-    if (conn.capabilities) disposeStub(conn.capabilities);
-    if (conn.inbox) disposeStub(conn.inbox);
-    if (list.length === 0) this.#clients.delete(path);
-    await this.#stream(path).append({
-      type: "client/connection-closed",
-      payload: { connectionKey, reason },
-    });
+  #closePager(socketId: string, code: number, reason: string): void {
+    const ws = pagerSocketFor(socketId, { getWebSockets: this.#getWebSockets });
+    if (ws)
+      try {
+        ws.close(code, reason);
+      } catch {
+        /* already closing */
+      }
+    this.#pagerClosed(socketId);
   }
 
-  /** itx.clients.list — the roster (from the runtime table; may briefly overcount after an eviction). */
-  #clientsList(): unknown {
-    return [...this.#clients.entries()].map(([path, list]) => ({
+  // ── CLIENTS (itx.clients): the roster + fan-out over `.connect` client connections. No stream-connection
+  //    machinery — a client connection IS a live-capability lease tagged `{ path, connectionKey }`. ──
+
+  /** itx.clients.list — one row per client path, from the lease table (authoritative for "connected now"). */
+  clientsList(): unknown[] {
+    const byPath = new Map<string, Lease[]>();
+    for (const l of this.#leases.values())
+      if (l.kind === "client" && l.path !== undefined) {
+        const list = byPath.get(l.path) ?? [];
+        list.push(l);
+        byPath.set(l.path, list);
+      }
+    return [...byPath.entries()].map(([path, list]) => ({
       path,
       description: list[list.length - 1]?.description ?? null,
-      openConnections: list.length,
-      hasCapabilities: list.some((c) => c.capabilities),
+      connections: list.length,
+      hasCapabilities: true,
     }));
   }
 
-  /** itx.clients.get — one client + its connections (metadata only; the live stubs never cross the wire). */
-  #clientsGet(path: string): unknown {
-    const list = this.#clients.get(path) ?? [];
-    return {
-      path,
-      description: list[list.length - 1]?.description ?? null,
-      connections: list.map((c) => ({
-        connectionKey: c.connectionKey,
-        openedBy: { description: c.description, user: c.user },
-        openedAt: c.openedAt,
-        hasCapabilities: !!c.capabilities,
-      })),
-    };
+  /** itx.clients.get(path).connections() — the open connections at a client path. */
+  clientConnections(path: string): unknown[] {
+    return [...this.#leases.values()]
+      .filter((l) => l.kind === "client" && l.path === path)
+      .map((l) => ({
+        connectionKey: l.connectionKey,
+        description: l.description,
+        openedAt: l.openedAt,
+        hasCapabilities: true,
+      }));
   }
 
-  /** itx.clients.call — FAN OUT a capability call over every open connection's `capabilities`, Promise.all. The
-   *  segment(s) after the path name the method (a direct capnweb dispatch, like #dispatchLive — never `.apply`).
-   *  Zero connections resolves `[]` (honest + composable — callers see the count via list/get). */
-  async #clientsCall(path: string, capPath: string[], args: unknown[]): Promise<unknown[]> {
-    const targets = (this.#clients.get(path) ?? []).filter((c) => c.capabilities);
-    return Promise.all(
-      targets.map((c) => {
-        let recv = c.capabilities as unknown as Record<string, unknown>;
-        for (let i = 0; i < capPath.length - 1; i++)
-          recv = recv[capPath[i]] as Record<string, unknown>;
-        return (recv[capPath[capPath.length - 1]] as (...a: unknown[]) => unknown)(...args);
-      }),
+  /** itx.clients.get(path).capabilities.* — FAN OUT one call over every open connection at `path`, Promise.all
+   *  (each via its own on-demand short leg). Zero connections resolves `[]`. */
+  async invokeClientCapabilities(
+    path: string,
+    capPath: string[],
+    args: unknown[],
+  ): Promise<unknown[]> {
+    const conns = [...this.#leases.values()].filter((l) => l.kind === "client" && l.path === path);
+    return Promise.all(conns.map((l) => this.#invokeVia(l.socketId, capPath, args)));
+  }
+
+  /** itx.clients.get(path).getConnection(key).capabilities.* — single-target (bare result). */
+  async invokeClientCapability(
+    connectionKey: string,
+    capPath: string[],
+    args: unknown[],
+  ): Promise<unknown> {
+    const lease = [...this.#leases.values()].find(
+      (l) => l.kind === "client" && l.connectionKey === connectionKey,
     );
+    if (lease === undefined) throw new Error(`no client connection "${connectionKey}"`);
+    return this.#invokeVia(lease.socketId, capPath, args);
   }
 
-  /** itx.clients.append — append to the client's OWN stream, then push it to every connected `inbox` (the stream
-   *  half). Full stream-wide push delivery (any append anywhere → subscribers) is the deferred delivery spine. */
-  async #clientsAppend(path: string, event: StreamEventInput): Promise<{ offset: number }> {
-    const r = await this.#stream(path).append(event);
-    await Promise.all(
-      (this.#clients.get(path) ?? [])
-        .filter((c) => c.inbox)
-        .map((c) =>
-          (c.inbox as unknown as { processEventBatch(b: unknown[]): unknown }).processEventBatch([
-            { ...event, offset: r.offset },
-          ]),
-        ),
+  /** Kick one client connection from the platform side (closes its Pager). */
+  closeClientConnection(connectionKey: string): { ok: true } {
+    const lease = [...this.#leases.values()].find(
+      (l) => l.kind === "client" && l.connectionKey === connectionKey,
     );
-    return r;
+    if (lease) this.#closePager(lease.socketId, 1000, "kicked");
+    return { ok: true };
   }
 
-  /** itx.kv — a project-prefixed view of env.ITX_KV. `${projectId}:` prefix makes byte-identical project code
-   *  isolated in a shared namespace, and swappable for a BYO KV by config (D8 / target-core §4.5). */
+  /** itx.kv — a project-prefixed view of env.ITX_KV (D8 / target-core §4.5). */
   async #kv(op: string, args: unknown[]): Promise<unknown> {
     if (!this.env.ITX_KV) throw new Error("no ITX_KV bound");
     const kv = this.env.ITX_KV;
@@ -642,16 +553,13 @@ export class ItxDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** itx.streams — a project-prefixed view of the StreamDurableObject namespace. Name `${projectId}:${path}`
-   *  so a project can only ever name its OWN streams (constructive isolation, like itx.kv). */
+  /** itx.streams — a project-prefixed view of the StreamDurableObject namespace. */
   #stream(path: string) {
     if (!this.env.STREAM_DO) throw new Error("no STREAM_DO bound");
     return this.env.STREAM_DO.getByName(`${this.#projectId}:${path}`);
   }
 
-  /** itx.repo — the project's file store (where the config worker + capability code live). Really lightweight:
-   *  a `${projectId}:repo:` view over env.ITX_KV (a real content-addressed RepoDurableObject can slot in behind
-   *  this same API later). */
+  /** itx.repo — the project's file store (a `${projectId}:repo:` view over env.ITX_KV). */
   async #repo(op: string, args: unknown[]): Promise<unknown> {
     if (!this.env.ITX_KV) throw new Error("no ITX_KV bound");
     const kv = this.env.ITX_KV;
@@ -671,15 +579,15 @@ export class ItxDurableObject extends DurableObject<Env> {
     }
   }
 
-  /** Evaluate a source EXPRESSION against THIS host's itx into a `{ name: source }` modules map. The loader is
-   *  repo-agnostic — it only knows "evaluate an itx expression to get modules" (v1 → `itx.files.read`). */
+  /** Evaluate a source EXPRESSION against THIS host's itx into a `{ name: source }` modules map (repo-agnostic
+   *  loader; v1 reader → `itx.files.read`). */
   async #loadModules(source: ItxExpression): Promise<Record<string, string>> {
     const root = itxRoot((p, a) => this.invokeCapability(p, a));
     return (await evaluateItxExpression(root, source)) as Record<string, string>;
   }
 
-  /** Run a stateless dynamic worker: resolve its modules from the source expression, load the entry `cap.js`'s
-   *  `(itx, ...args) => result` default export confined (env.ITX = a self-stub), and return the result. */
+  /** Run a stateless dynamic worker: resolve modules from the source expression, run `cap.js`'s
+   *  `(itx, ...args) => result` default export confined (env.ITX = self-stub), return the result. */
   async #runCode(source: ItxExpression, args: unknown[]): Promise<unknown> {
     const modules = await this.#loadModules(source);
     const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?");
@@ -699,10 +607,9 @@ export class ItxDurableObject extends DurableObject<Env> {
     return ((await resp.json()) as { result: unknown }).result;
   }
 
-  /** THE FETCH LANE dispatch: resolve a fetch-shaped capability and forward the request NATIVELY, so a 101
-   *  upgrade passes through. `web` → a loaded fetch worker; `stateful` → the runner's facet fetch; an alias
-   *  re-resolves; a live capnweb provider needs a frame bridge (a 101 can't cross capnweb) — deferred; a deep
-   *  path falls back to its PARENT PATH (a native DO→DO fetch, so the 101 still survives). */
+  /** THE FETCH LANE dispatch: resolve a fetch-shaped capability and forward the request NATIVELY so a 101
+   *  passes through. `web` → a loaded fetch worker; `stateful` → the runner's facet fetch; alias re-resolves; a
+   *  deep path falls back to its PARENT PATH (a native DO→DO fetch, so the 101 survives). */
   async #fetchCapability(callPath: string, request: Request): Promise<Response> {
     const mount = this.#mounts.get(callPath);
     if (mount) {
@@ -719,14 +626,11 @@ export class ItxDurableObject extends DurableObject<Env> {
       });
     }
     // A live capnweb provider: a 101 can't cross capnweb, so a WS to a device needs a frame bridge (deferred).
-    if (this.#liveMountFor(callPath))
+    if (this.#liveLeaseFor(callPath))
       return new Response(
         `fetch to a live provider "${callPath}" needs a frame bridge (deferred)\n`,
-        {
-          status: 501,
-        },
+        { status: 501 },
       );
-    // Fall back to the PARENT PATH — a native DO→DO fetch, so the 101 survives the hop (reads fall back).
     const parent = parentPath(this.#name.path);
     if (parent === null)
       return new Response(`no fetch capability "${callPath}"\n`, { status: 404 });
@@ -737,9 +641,8 @@ export class ItxDurableObject extends DurableObject<Env> {
     ).fetch(new Request(request, { headers }));
   }
 
-  /** Load a `web` capability's modules and forward the request to its fetch entrypoint (env.ITX + globalOutbound
-   *  = a self-stub, like every dynamic worker). The entrypoint's `fetch` can `accept()` a WebSocket and return a
-   *  101, which flows straight back out through this native binding call. */
+  /** Load a `web` capability's modules and forward the request to its fetch entrypoint (its `accept()`ed 101
+   *  flows back out through this native binding call). */
   async #fetchWeb(source: ItxExpression, request: Request): Promise<Response> {
     const modules = await this.#loadModules(source);
     const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?");
@@ -756,7 +659,7 @@ export class ItxDurableObject extends DurableObject<Env> {
     return worker.getEntrypoint().fetch(request);
   }
 
-  /** Longest dotted-prefix STATEFUL mount; the remaining segment(s) name the facet method to call. */
+  /** Longest dotted-prefix STATEFUL mount; the remaining segment(s) name the facet method. */
   #statefulMountFor(
     callPath: string,
   ): { callPath: string; mount: Extract<Mount, { type: "stateful" }>; method: string } | null {
@@ -770,16 +673,14 @@ export class ItxDurableObject extends DurableObject<Env> {
     return null;
   }
 
-  /** The dedicated runner DO for a stateful capability in THIS context. One instance per (context, callPath). */
+  /** The dedicated runner DO for a stateful capability in THIS context. */
   #statefulRunner(callPath: string) {
     return this.env.STATEFUL_WORKER.getByName(
       `${this.#projectId}::${this.#name.path}::${callPath}`,
     );
   }
 
-  /** The RPC lane for a stateful worker: FORWARD to the runner DO, which owns the facet and calls the method
-   *  NATIVELY (mirrors apps/os). The runner awaits the facet method, so a plain value returns — no facet stub
-   *  crosses back to this host. */
+  /** The RPC lane for a stateful worker: FORWARD to the runner DO (native facet method call inside it). */
   async #dispatchStateful(
     callPath: string,
     mount: Extract<Mount, { type: "stateful" }>,
@@ -794,28 +695,23 @@ export class ItxDurableObject extends DurableObject<Env> {
     });
   }
 
-  /** Run the project's config worker: load `/worker.js` from the repo and execute it in THIS context. It
-   *  typically registers the project's dynamic capabilities (itx.provideCapability) in terms of the repo. */
+  /** Run the project's config worker: load `/worker.js` from the repo and execute it in THIS context. */
   async #configure(): Promise<unknown> {
     const source = (await this.#repo("get", ["/worker.js"])) as string | null;
     if (source == null) throw new Error("itx.repo: no /worker.js (config worker)");
     return (await (await this.load(source)).json()) as unknown;
   }
 
-  /** Execute code IN this context (target-core §4.1 mode 2 / D23). Loads `source` as a confined dynamic
-   *  worker whose ONLY binding is env.ITX = globalOutbound = a self-stub to THIS host — so the agent's
-   *  `itx.*` calls and its plain `fetch()` both resolve against its own capability host. The agent calling
-   *  back into this DO while we await it is intra-DO re-entrancy (allowed: the input gate is open during the
-   *  await). Returns the agent's Response. */
+  /** Execute code IN this context (target-core §4.1 mode 2 / D23): a confined dynamic worker whose ONLY binding
+   *  is env.ITX = globalOutbound = a self-stub to THIS host. */
   async load(source: string, request?: Request): Promise<Response> {
-    const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?"); // a stub to THIS host
+    const self = this.env.ITX_HOST.getByName(this.ctx.id.name ?? "?");
     const worker = this.env.LOADER.get(`load:${this.ctx.id.name}:${hashSource(source)}`, () => ({
       compatibilityDate: "2026-07-01",
       mainModule: "agent.js",
-      // `itx.js` gives the agent the ergonomic `itx.a.b(args)` surface over the raw host stub (§4.2).
       modules: { "agent.js": source, "itx.js": ITX_SURFACE_MODULE },
-      env: { ITX: self }, // the agent sees ONLY its itx (the confinement)
-      globalOutbound: self, // plain fetch() → this host's fetch (egress)
+      env: { ITX: self },
+      globalOutbound: self,
     }));
     return worker.getEntrypoint().fetch(request ?? new Request("https://agent.local/"));
   }

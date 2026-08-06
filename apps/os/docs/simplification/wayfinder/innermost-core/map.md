@@ -510,6 +510,22 @@ args)` — invokes `[[Call]]` directly, runs inside the owning DO, returns plain
   `itx.clients.append`); the pipelined `itx.clients.get(path).capabilities.x.y()` ergonomic surface. Decisions
   followed: capabilities = RpcTarget not fetch door (Q11); per-connection description (Q3); `[]`+`Promise.all`
   (Q4); exclusive (Q6); shared `/clients/browser` + `user` in `openedBy` (Q7).
+- **D39 — capnweb terminates ONLY in the stateless worker; the DO doesn't pin. `connect → itx`, `itx.clients`,
+  don't-pin lease. (proven, increment 18, `connect-1`; supersedes D7/D37-clients + increments 6+17.)** Two hard
+  rules, landed together from the `dont-pin-capability-host` (PR #2424) + `client-and-connections` worktrees
+  (used their APIs): (1) **capnweb terminates only in the `/api` worker** — the `ItxDurableObject` is now PURE
+  Workers-RPC (dropped its capnweb import, `/connect`, `ProviderControl`, retained stubs); (2) **a connected
+  client doesn't pin the DO.** `ProjectSession.get()/connect(opts) → Itx` (the iterate context; connect = get +
+  presence, capabilities provided by connecting, `itx.provideCapability({type:"live"})` adds more). Transport
+  (`core/hibernatable-pager.ts`): the provider is retained in the stateless RELAY; the DO holds only a
+  **Hibernatable Pager** (`ctx.acceptWebSocket`, `{socketId}`) + a lease record — no stub — and on a call sends a
+  `wake` **Page**, gets a short Workers-RPC Invoker leg for the burst, drops it + sends `idle` at quiescence, so
+  it hibernates between calls. `itx.clients` needs **no stream-connection machinery** — a client connection is a
+  live lease tagged `{path, connectionKey}`; `Client.invokeCapability` fans out over a path's connections
+  (`Promise.all`), `getConnection(key)` single-targets, reconnect-same-key replaces. Proven: two tabs connected,
+  fan-out hit both, and `/state` = `{activeLegs:0, dormant:true}` WHILE connected (the DO holds no stub). Deferred:
+  `processEventBatch` stream-inbox, the `authenticate→Session→projects` chain, pipelined `itx.a.b()` sugar,
+  cross-deploy lease reconciliation.
 - **D14 — Cost/billing is USERSPACE, not a control-plane primitive.** Budgets/spend limits are a key PRODUCT
   concern but implemented in userspace: a **stream processor that consumes cost-bearing events** across
   streams and computes spend/budget. Can live on the product shell (for now), or the project shell (as a core

@@ -384,6 +384,48 @@ sockets, `onRpcBroken` death, thin streams), so this is composition on what exis
 
 ---
 
+## Increment 18 — capnweb at the EDGE, the DO doesn't pin: `connect → itx`, `itx.clients`, don't-pin
+
+**Commit** `<pending>`. Supersedes increments 6 + 17 (a clean break — no backcompat). Jonas pointed at two
+worktrees: `dont-pin-capability-host` (PR #2424 — the transport) and `client-and-connections` (the `itx.clients`
+API), and said use those APIs exactly, keep it simple, and implement `.connect`/`.clients` WITHOUT the stream-
+connection machinery. Two hard rules landed together: **capnweb terminates ONLY in the stateless worker** (never
+a DO), and a **connected client does not pin the DO**.
+
+- **`/api` on the worker = the ONE capnweb entrypoint.** `newWorkersWebSocketRpcResponse` terminates the session
+  against a `ProjectSession` (`core/itx-surface.ts`). It reaches the `ItxDurableObject` only over **Workers RPC**.
+  The DO dropped its `capnweb` import, `ProviderControl`, `/connect`, `/register`, and all retained-stub state —
+  it is now **pure Workers-RPC**.
+- **`connect → itx` (get + presence).** `ProjectSession.get()` → the project `Itx` (the iterate-context stub);
+  `ProjectSession.connect({ path, description, capabilities?, connectionKey? })` → the same `Itx`, plus the
+  client is registered at `path` and its live `capabilities` are provided. Every connected client provides
+  capabilities by connecting; `itx.provideCapability({type:"live"})` adds more. Both return exactly the itx.
+- **The don't-pin transport (`core/hibernatable-pager.ts`).** The client's `capabilities` stub is retained in the
+  stateless RELAY (the /api worker). The relay opens a **Hibernatable Pager** (a WS the DO accepts via
+  `ctx.acceptWebSocket`, attachment `{ socketId }`) and records only `{ socketId }` in the DO — **no stub**. On an
+  invocation the DO sends a `wake` **Page**; the relay hands back a short Workers-RPC **Invoker** leg for the
+  burst; at quiescence the DO drops the leg and sends `idle`. So the DO holds a live reference only mid-call and
+  hibernates in between (the 1000-idle-devices property).
+- **`itx.clients` with NO stream-connection machinery.** A `.connect` client connection is just a live-capability
+  lease tagged `{ path, connectionKey }`. `ClientCollection.get(path) → Client`; `Client.invokeCapability({path,
+args})` **fans out** over the connections at a path (`Promise.all`, `[]` if none); `Client.connections()`,
+  `getConnection(key) → ClientConnection` (single-target + `close()`), `ClientCollection.list()`. Reconnect under
+  the same `connectionKey` replaces the dead predecessor. The apps/os stream `openConnection` + processors +
+  presence-fact delivery are NOT ported (Jonas: implement it without them).
+- **Proven** (deployed `connect-1`, real capnweb Node clients): dial `/api`, `connect` two tabs on
+  `/clients/browser` → `whoami()` = `{projectId}`, `clients.list()` shows 2 connections; **fan-out**
+  `clients.get(path).invokeCapability(navigate)` ran in BOTH tab processes (2 results); **DON'T-PIN** — after the
+  call drained, `/state` = `{ pagers:2, leases:2, activeLegs:0, dormant:true }` (the DO holds NO leg while two
+  clients stay connected); `itx.provideCapability({type:"live"})` → a `CapabilityProvision` with a relay-local
+  `__leaseActive()`, and `itx.myComputer.ask()` reached the provider through a short leg; **death** — closing a
+  tab's `/api` socket reconciled its lease → roster dropped to 1.
+- **Deferred:** `processEventBatch` (the stream-inbox half — it IS delivery machinery, out of scope here); the
+  full session/auth chain (`authenticate → Session → projects.get`; the clean room addresses by projectId via
+  `/api?ctx=`); the pipelined `itx.a.b(x)` sugar (client-side over `invokeCapability`); lease reconciliation
+  across a deploy (v1 reconciles on `webSocketClose`).
+
+---
+
 ## Status after increment 13 — the inner core end to end
 
 A single `ItxDurableObject` is the host for a `{projectId, path}` context: **ingress WS**, **egress** (project

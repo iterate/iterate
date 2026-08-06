@@ -9,10 +9,12 @@
 //                          One request exercises ALL FOUR §6.0 risk points at once.
 
 import { WorkerEntrypoint } from "cloudflare:workers";
+import { newWorkersWebSocketRpcResponse } from "capnweb";
 import { ItxDurableObject } from "./itx-durable-object.ts";
 import { substituteHeaderSecrets } from "./core/egress.ts";
 import { canonicalName } from "./core/names.ts";
 import { parseAppConfig, type AppConfig } from "./core/config.ts";
+import { ProjectSession } from "./core/itx-surface.ts";
 
 export { ItxDurableObject };
 export { StreamDurableObject } from "./stream-durable-object.ts";
@@ -127,13 +129,24 @@ function resolveFallback(ctx: unknown, env: Env, cfg: AppConfig): Fetcher {
 }
 
 // Bumped every deploy so a smoke test can wait for THIS build to propagate (workers.dev lags ~1-2min/colo).
-const CODE_VERSION = "clients-1";
+const CODE_VERSION = "connect-1";
 
 export default {
   async fetch(request: Request, env: Env, ctx: ExecutionContext): Promise<Response> {
     const url = new URL(request.url);
 
     if (url.pathname === "/version") return new Response(CODE_VERSION + "\n");
+
+    // ── THE ONE capnweb ENTRYPOINT (the hard rule): capnweb terminates HERE, in the stateless worker. A client
+    // dials `/api` and gets a `ProjectSession` (`get()`/`connect()` → the project itx). It reaches the DO only
+    // over Workers RPC. Checked before the generic WS catch below. ──
+    if (url.pathname === "/api") {
+      const projectId = url.searchParams.get("ctx") ?? "prj_demo";
+      return newWorkersWebSocketRpcResponse(
+        request,
+        new ProjectSession(env.ITX_HOST, projectId, ctx),
+      );
+    }
 
     // ── THE FETCH LANE: reach a fetch-shaped capability by address (a serialized ItxExpression in `?cap=`),
     // carrying WS upgrades. Set `x-itx-cap` and forward to the context host, which routes it natively. Checked
