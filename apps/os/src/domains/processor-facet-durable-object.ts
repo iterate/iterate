@@ -36,10 +36,9 @@ import {
 import { trustedInternalAuthContext } from "../auth.ts";
 import { parseConfig } from "../config.ts";
 import { workerVersion, type Env } from "../env.ts";
-import { itxForScope, PLATFORM_STREAM_APPEND, StreamRpcTarget } from "../rpc-targets.ts";
+import { itxForScope, StreamRpcTarget } from "../rpc-targets.ts";
 import { readProjectById } from "../project-directory.ts";
 import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
-import { containsFacetProcessorSubscription } from "./streams/utils.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
 import { AgentProcessor } from "./agents/agent-processor-implementation.ts";
@@ -114,35 +113,6 @@ type ScriptExecutionLoopbackExports = {
   }): ScriptExecutionEntrypointHandle;
 };
 
-/**
- * The ProcessorStream first-party facet processors append through. Their
- * creation sagas emit batches that ARM facet-placed processor subscriptions
- * (the project birth creating repos, capability hosts, and routers; the
- * integration routers creating agent threads) — and the stream's core
- * processor rejects facet placement on the public append lane
- * (core-processor.ts validate). Exactly those batches ride the platform
- * (core-event) append lane; every other append keeps public authority,
- * circuit breaker included. `at()` keeps descendants on the same lane, so
- * `appendTo` sibling births inherit it.
- */
-function platformLaneProcessorStream(stream: StreamRpcTarget): ProcessorStream {
-  return {
-    append: (...events) =>
-      containsFacetProcessorSubscription(events)
-        ? stream[PLATFORM_STREAM_APPEND](events)
-        : stream.append(...events),
-    appendIfStreamId: (args) =>
-      containsFacetProcessorSubscription(args.events)
-        ? stream[PLATFORM_STREAM_APPEND](args.events, { streamId: args.streamId })
-        : stream.appendIfStreamId(args),
-    getEventPage: (args) => stream.getEventPage(args),
-    readEvents: (args) => stream.readEvents(args),
-    getEvent: (args) => stream.getEvent(args),
-    getEvents: (args) => stream.getEvents(args),
-    at: (path) => platformLaneProcessorStream(stream.at(path)),
-  };
-}
-
 export class ProcessorFacet extends ProcessorFacetBase<Env> {
   /** The registry built by the base host — captured for the catchUp/alarm doors. */
   #registry: StreamProcessorRegistry | undefined;
@@ -176,13 +146,11 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   }
 
   protected createHost(identity: ProcessorFacetIdentity): ProcessorFacetHost {
-    const stream = platformLaneProcessorStream(
-      new StreamRpcTarget({
-        auth: trustedInternalAuthContext(),
-        path: identity.path,
-        projectId: identity.projectId,
-      }),
-    );
+    const stream = new StreamRpcTarget({
+      auth: trustedInternalAuthContext(),
+      path: identity.path,
+      projectId: identity.projectId,
+    });
     return {
       stream,
       version: workerVersion(this.env),

@@ -180,24 +180,6 @@ export function createFakeItxEnv(options?: {
             }
             return appended;
           },
-          /** The Stream DO's platform (core-event) append lane: the same
-           * durable batch under platform authority, which is what a batch
-           * arming a facet-placed processor subscription requires. The fake
-           * has no authority model, so it records the batch exactly like
-           * `append` — the atomicity assertions stay identical. */
-          async appendCoreEvents(
-            inputs: Array<{ idempotencyKey?: string; payload: unknown; type: string }>,
-          ) {
-            const appended = appendStored(name, inputs);
-            const streamAppendHook = streamAppendHooks.shift();
-            if (
-              streamAppendHook !== undefined &&
-              (await streamAppendHook({ events: inputs, name })) === false
-            ) {
-              streamAppendHooks.unshift(streamAppendHook);
-            }
-            return appended;
-          },
           async setCopySubscription(input: {
             configuration: Record<string, unknown>;
             idempotencyKey?: string;

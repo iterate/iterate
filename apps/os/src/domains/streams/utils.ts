@@ -1,4 +1,3 @@
-import type { StreamEventInput } from "iterate/processors";
 import {
   CoreProcessorContract,
   type SubscriptionConfiguredPayload,
@@ -46,25 +45,6 @@ export function buildFacetProcessorSubscriptionConfiguredEvent(input: {
         placement: "facet",
       },
     } satisfies SubscriptionConfiguredPayload,
-  });
-}
-
-/**
- * True when the batch contains a first-hand event configuring a FACET-placed
- * processor-wake subscription. Facet placement is platform-internal (the
- * stream's core processor rejects it under public append authority), so
- * trusted first-party appenders use this predicate to route exactly these
- * batches through the Stream DO's platform (core-event) append lane while
- * every other append keeps public authority — circuit breaker included.
- */
-export function containsFacetProcessorSubscription(events: readonly StreamEventInput[]): boolean {
-  return events.some((event) => {
-    if (event.type !== "events.iterate.com/stream/subscription-configured") return false;
-    if (event.source?.copiedFrom !== undefined) return false;
-    const receiver = (
-      event.payload as { receiver?: { action?: unknown; placement?: unknown } } | undefined
-    )?.receiver;
-    return receiver?.action === "processor-wake" && receiver.placement === "facet";
   });
 }
 

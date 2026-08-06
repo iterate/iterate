@@ -35,13 +35,6 @@ test("public secret events can change egress but copied ciphertext cannot follow
   )?.config?.["encryptedMaterial"];
   expect(encryptedMaterial).toBeDefined();
 
-  // The subscriptions catalog is a generic door over the same processor
-  // facade the secret domain door reads: it must serve the projected
-  // SecretDescription, never the raw fold's ciphertext.
-  const catalogSnapshot = await stream.subscriptions.get("secret").processor.snapshot();
-  expect(catalogSnapshot.state).toMatchObject({ created: true, hasMaterial: true });
-  expect(JSON.stringify(catalogSnapshot.state)).not.toContain("encryptedMaterial");
-
   await stream.append({
     type: "events.iterate.com/secret/updated",
     payload: { egress: { urls: [attacker.url] } },

@@ -1834,8 +1834,7 @@ export interface StreamSubscription {
   /** The hosted processor instance behind a processor-wake subscription
    * (snapshot/getRuntimeState/waitUntilProcessed), dialed by placement: the
    * Stream DO's facade serves a facet row from its facet and replays the
-   * read verbs onto an expression row's own `processor` node. States leave
-   * through the same per-family projection the domain doors apply. */
+   * read verbs onto an expression row's own `processor` node. */
   processor: StreamProcessorRpc;
 }
 

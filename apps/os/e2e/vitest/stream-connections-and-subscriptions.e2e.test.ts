@@ -2554,22 +2554,8 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
   const { project } = testProject;
   using stream = project.streams.get(streamPath);
 
-  // Facet placement is platform-internal: the PUBLIC append lane must refuse
-  // it (a public caller could otherwise run a first-party processor as a
-  // facet of an arbitrary stream), so this configuration rides the trusted
-  // core-event lane — the same authority the production creation doors use.
-  await expect(
-    stream.append(
-      subscriptionConfigured({
-        name: subscriptionName,
-        receiver: {
-          action: "processor-wake",
-          placement: "facet",
-        },
-      }),
-    ),
-  ).rejects.toThrow(/facet placement is platform-internal/);
-  await appendTrustedCoreEvents(stream, [
+  // Facet placement is freely configurable through the ordinary append lane.
+  await stream.append(
     subscriptionConfigured({
       name: subscriptionName,
       receiver: {
@@ -2577,7 +2563,7 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
         placement: "facet",
       },
     }),
-  ]);
+  );
   const [created] = await stream.append({
     type: "events.iterate.com/slack/created",
     payload: { config: { connection } },

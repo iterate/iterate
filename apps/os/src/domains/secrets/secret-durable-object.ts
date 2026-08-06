@@ -4,7 +4,7 @@ import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { PLATFORM_STREAM_APPEND, StreamRpcTarget } from "../../rpc-targets.ts";
+import { StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { LIVE_STATE_SOCKET_HEADER } from "../live-state-socket.ts";
 import { parseConfig } from "../../config.ts";
@@ -155,9 +155,7 @@ export class SecretDurableObject extends DurableObject<Env> {
         payload: { config: { egress, refresh: input.refresh ?? null, visibility } },
         projectId: this.#name.projectId,
       });
-      // Platform lane: the facet-placed processor subscription may not ride a
-      // public append (core-processor.ts validate).
-      const [configured] = await this.#stream[PLATFORM_STREAM_APPEND]([subscription!]);
+      const [configured] = await this.#stream.append(subscription!);
       await this.#waitUntilProcessed(configured!.offset);
       return existing;
     }
@@ -182,10 +180,8 @@ export class SecretDurableObject extends DurableObject<Env> {
               },
             );
       try {
-        // Platform lane: the batch arms the secret's facet-placed processor
-        // subscription, which a public append may not configure.
-        const [created, configured] = await this.#stream[PLATFORM_STREAM_APPEND](
-          secretCreationEvents({
+        const [created, configured] = await this.#stream.append(
+          ...secretCreationEvents({
             offset,
             path: this.#name.path,
             payload: {

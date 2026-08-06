@@ -191,64 +191,23 @@ test("openConnection rejects a malformed callback owner before installing the ca
   expect(state.runtime.connections[rejectedKey]).toBeUndefined();
 });
 
-// Facet placement is a PLATFORM mechanism: only trusted first-party code may
-// run a processor as a facet of the Stream Durable Object. Before the fix a
-// project user could append `placement: "facet"` with a first-party contract
-// slug on an arbitrary stream — materializing platform processor code, with
-// delivery authority, on a path of their choosing — and the facade would
-// even mint a facet for a name the catalog never configured.
-test("public appends cannot configure facet placement and reads cannot mint facets", async () => {
+// A processor read must never MATERIALIZE a facet: reading a subscription name
+// the committed catalog does not configure is refused at the facade door
+// rather than minting a durable facet on a typo. (Facet placement itself is
+// freely configurable — any caller trusted to append to a project's stream may
+// configure it; the guard here is purely "don't create a facet for a name that
+// isn't a real subscription".)
+test("a processor read for an unconfigured name does not mint a facet", async () => {
   const marker = crypto.randomUUID();
-  const projectSlug = `sec-facet-${RUN_SUFFIX}-${marker}`;
-  const streamPath = `/e2e/security/facet-placement/${marker}`;
+  const streamPath = `/e2e/security/facet-read/${marker}`;
 
-  using adminSession = withItxSession();
-  using admin = adminSession.authenticate({ type: "admin-secret", secret: adminSecret() });
-  using adminProject = await admin.projects.get(projectSlug).create({});
-  const { projectId } = await adminProject.__describe();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`sec-facet-${RUN_SUFFIX}-${marker}`).create({});
+  using stream = project.streams.get(streamPath);
 
-  using userSession = withItxSession();
-  using user = userSession.authenticate({
-    type: "impersonate",
-    secret: adminSecret(),
-    token: {
-      type: "user",
-      principal: `facet-security-${marker}`,
-      projectScopes: [projectId],
-    },
-  });
-  using userProject = user.projects.get(projectId);
-  using userStream = userProject.streams.get(streamPath);
-
-  // The abuse shape: a first-party contract slug under facet placement on an
-  // attacker-chosen path, through the public append lane.
   await expect(async () => {
-    await userStream.append({
-      type: "events.iterate.com/stream/subscription-configured",
-      payload: {
-        name: "secret",
-        receiver: { action: "processor-wake", placement: "facet" },
-      },
-    });
-  }).rejects.toThrow(/facet placement is platform-internal/);
-
-  // Expression-placed processor-wake stays a public capability (userspace
-  // workers over the wake transport).
-  await userStream.append({
-    type: "events.iterate.com/stream/subscription-configured",
-    payload: {
-      name: `probe-${marker.slice(0, 8)}`,
-      receiver: {
-        action: "processor-wake",
-        expression: ["workers", ["get", { type: "stateless", path: "/" }]],
-      },
-    },
-  });
-
-  // A read must never MATERIALIZE a facet: a caller-chosen name the committed
-  // catalog does not know is refused at the facade door.
-  await expect(async () => {
-    await userStream.subscriptions.get("secret").processor.snapshot();
+    await stream.subscriptions.get(`never-configured-${marker.slice(0, 8)}`).processor.snapshot();
   }).rejects.toThrow(/does not exist/);
 });
 

@@ -573,17 +573,6 @@ function retryLoggedIdempotentOperation<Result>(input: {
 export const STREAM_DURABLE_OBJECT_STUB = Symbol("stream-durable-object-stub");
 
 /**
- * Server-only platform append lane on {@link StreamRpcTarget}. Facet-placed
- * processor subscriptions are platform-internal — the stream's core processor
- * rejects them under public append authority (core-processor.ts validate) —
- * so the trusted first-party creation doors commit birth batches containing
- * one through the Stream DO's core-event append verbs instead. A symbol keeps
- * the lane unreachable by Cap'n Web property traversal (paths are strings),
- * exactly like {@link STREAM_DURABLE_OBJECT_STUB}.
- */
-export const PLATFORM_STREAM_APPEND = Symbol("platform-stream-append");
-
-/**
  * Durable event stream capability.
  *
  * Streams are the public coordination primitive, not an internal queue hidden
@@ -671,29 +660,6 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
     return await this.#appendRetrying(events, () =>
       Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events)),
-    );
-  }
-
-  /**
-   * @internal Server-only platform lane ({@link PLATFORM_STREAM_APPEND}):
-   * commit a first-party batch (typically a creation batch containing a
-   * facet-placed processor subscription) with platform (core-event)
-   * authority; `streamId` fences the commit to one stream lifetime. Same
-   * keyed deploy-reset retry as the public door. Symbol-keyed, so Cap'n Web
-   * property traversal (paths are strings) cannot reach it — the `@internal`
-   * tag only keeps it out of the published itx surface.
-   */
-  async [PLATFORM_STREAM_APPEND](
-    events: StreamEventInput[],
-    opts?: { streamId?: string },
-  ): Promise<StreamEvent[]> {
-    const streamId = opts?.streamId;
-    return await this.#appendRetrying(events, () =>
-      Promise.resolve(
-        streamId === undefined
-          ? this[STREAM_DURABLE_OBJECT_STUB].appendCoreEvents(events)
-          : this[STREAM_DURABLE_OBJECT_STUB].appendCoreEventsIfStreamId({ events, streamId }),
-      ),
     );
   }
 
@@ -1384,45 +1350,15 @@ class StreamSubscriptionRpcTarget extends IterateRpcTarget<"StreamSubscription">
   /** The hosted processor instance behind a processor-wake subscription
    * (snapshot/getRuntimeState/waitUntilProcessed), dialed by placement: the
    * Stream DO's facade serves a facet row from its facet and replays the
-   * read verbs onto an expression row's own `processor` node. States leave
-   * through the same per-family projection the domain doors apply. */
+   * read verbs onto an expression row's own `processor` node. */
   get processor(): StreamProcessorRpc {
-    const publicState = subscriptionsCatalogPublicState(this.props);
     return facetProcessorRelay({
       auth: this.props.auth,
       name: this.props.name,
       path: this.props.path,
       projectId: this.props.projectId,
-      ...(publicState === undefined ? {} : { publicState }),
     });
   }
-}
-
-/**
- * The per-family public-state projection the subscriptions catalog applies to
- * `subscriptions.get(name).processor` reads. The domain doors pin projection
- * and processor together at their own relays (`SecretRpcTarget.processor` →
- * `describeSecretState`, `DeviceRpcTarget.processor` → `describeDeviceState`);
- * the catalog is a generic door over the SAME facades, so without this it
- * would hand out the raw fold the domain door deliberately redacts — a
- * secret's `encryptedMaterial`, a device's raw credential bookkeeping. Path
- * family plus the contract slug select the projection exactly the way the
- * facet composition selects the registered processor family; sibling rows on
- * those streams (capability-host, userspace names) carry their own folds and
- * pass through unprojected.
- */
-function subscriptionsCatalogPublicState(props: {
-  name: string;
-  path: string;
-}): ((state: unknown) => unknown) | undefined {
-  if (props.path.startsWith("/secrets/") && props.name === SecretProcessorContract.slug) {
-    return (state) => describeSecretState(state as never);
-  }
-  if (props.path.startsWith("/devices/") && props.name === DeviceProcessorContract.slug) {
-    const deviceId = props.path.split("/")[2] ?? "";
-    return (state) => describeDeviceState(state as never, deviceId);
-  }
-  return undefined;
 }
 
 /** Stream catalog for either a project or the deployment-wide global scope. */
@@ -1728,10 +1664,8 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
       projectId: this.props.projectId,
     });
     const timing = { projectId: this.props.projectId, path };
-    // Platform lane: the batch arms the repo's facet-placed processor
-    // subscription, which a public append may not configure.
     const committed = await timedStep("create-timing", timing, "repo-request-append", () =>
-      stream[PLATFORM_STREAM_APPEND]([
+      stream.append(
         ...repoCreationEvents({ path, projectId: this.props.projectId, payload: request }),
         {
           type: "events.iterate.com/stream/subscription-configured",
@@ -1750,7 +1684,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
             },
           },
         },
-      ]),
+      ),
     );
     // An idempotency hit returns the FIRST request at its old offset — the
     // loud duplicate-create failure is this comparison, not the stream.
@@ -2485,8 +2419,8 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
     }
     // Platform lane: the batch arms the workspace's facet-placed processor
     // subscription, which a public append may not configure.
-    const committed = await this.#stream[PLATFORM_STREAM_APPEND](
-      workspaceCreationEvents({
+    const committed = await this.#stream.append(
+      ...workspaceCreationEvents({
         ...(input.mounts === undefined ? {} : { mounts: input.mounts }),
         path: this.props.path,
         projectId: this.props.projectId,
@@ -4920,10 +4854,10 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
     // Platform lane: both batches arm facet-placed processor subscriptions
     // (the collection projection and the agent family), which a public
     // append may not configure.
-    await collectionStream[PLATFORM_STREAM_APPEND](
-      agentCollectionCreationEvents({ projectId: this.#props.projectId }),
+    await collectionStream.append(
+      ...agentCollectionCreationEvents({ projectId: this.#props.projectId }),
     );
-    const committed = await this.stream[PLATFORM_STREAM_APPEND](creation.events);
+    const committed = await this.stream.append(...creation.events);
     // append() preserves INPUT order, including idempotency hits at their old
     // offsets. A paired capability host may already exist, so the last input
     // is not necessarily the newest event. The create boundary is the maximum
@@ -5601,8 +5535,8 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   async create(payload?: CapabilityHostCreateInput): Promise<CapabilityHostRpcTarget> {
     // Platform lane: the batch arms the scope's facet-placed capability-host
     // processor subscription, which a public append may not configure.
-    const committed = await this.#stream[PLATFORM_STREAM_APPEND](
-      capabilityHostCreationEvents({
+    const committed = await this.#stream.append(
+      ...capabilityHostCreationEvents({
         path: this.#props.path,
         projectId: this.#props.projectId,
         ...(payload === undefined ? {} : { payload }),
@@ -6027,10 +5961,8 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     // notification processor subscriptions, which a public append may not
     // configure.
     const committed = await timedStep("create-timing", timing, "root-append", () =>
-      rootStream({ auth: this.#props.auth, projectId: registered.projectId })[
-        PLATFORM_STREAM_APPEND
-      ](
-        projectCreationEvents({
+      rootStream({ auth: this.#props.auth, projectId: registered.projectId }).append(
+        ...projectCreationEvents({
           projectId: registered.projectId,
           payload: {
             config: {
