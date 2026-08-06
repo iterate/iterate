@@ -2001,6 +2001,81 @@ describe("StreamConnections hosted delivery watchdog", () => {
     warnLog.mockRestore();
   });
 
+  it("recovers after three consecutive pending-batch probes cannot reach the processor", async () => {
+    const calls: DeliveryCall[] = [];
+    const h = connectionsHarness();
+    const warnLog = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      ping: async () => {
+        throw new StreamReceiverUnavailableError("pending hosted delivery probe timed out");
+      },
+    });
+
+    connection.sendQueued();
+    expect(calls).toHaveLength(1);
+    for (const now of [2_000, 3_000]) {
+      h.setNow(now);
+      h.connections.onAlarm();
+      await Promise.allSettled(h.keptAlive);
+      expect(connection.isLive()).toBe(true);
+    }
+
+    h.setNow(4_000);
+    h.connections.onAlarm();
+    await Promise.allSettled(h.keptAlive);
+
+    expect(h.deliveryFailures).toHaveBeenCalledWith(
+      "processor",
+      expect.objectContaining({
+        message: "pending hosted delivery probe timed out",
+        retryable: true,
+      }),
+    );
+    expect(connection.isLive()).toBe(false);
+    expect(warnLog).toHaveBeenCalledWith(
+      "stream durable callback unavailable; backing off before waking it again",
+      expect.objectContaining({
+        connectionKey: "processor",
+        source: "rpc-broken",
+        errorMessage: "pending hosted delivery probe timed out",
+      }),
+    );
+    warnLog.mockRestore();
+  });
+
+  it("keeps a slow hosted batch when an intervening probe reaches its processor", async () => {
+    const calls: DeliveryCall[] = [];
+    const replies = ["timeout", "timeout", "reached", "timeout", "timeout"] as const;
+    let replyIndex = 0;
+    const h = connectionsHarness();
+    const connection = h.connections.openHosted({
+      connectionKey: "processor",
+      expectedHostedDelivery: h.expectedDelivery,
+      processEventBatch: recordingProcessEventBatch(calls, () => undefined),
+      replayAfterOffset: 0,
+      ping: async ({ t0 }) => {
+        if (replies[replyIndex++] === "timeout") {
+          throw new StreamReceiverUnavailableError("pending hosted delivery probe timed out");
+        }
+        return { t0, t1: t0, t2: t0 };
+      },
+    });
+
+    connection.sendQueued();
+    for (const now of [2_000, 3_000, 4_000, 5_000, 6_000]) {
+      h.setNow(now);
+      h.connections.onAlarm();
+      await Promise.allSettled(h.keptAlive);
+    }
+
+    expect(h.deliveryFailures).not.toHaveBeenCalled();
+    expect(connection.isLive()).toBe(true);
+  });
+
   it("does not publish a hosted callback until its opened event finishes appending", () => {
     const calls: DeliveryCall[] = [];
     const h = connectionsHarness({

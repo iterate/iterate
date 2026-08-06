@@ -1570,6 +1570,8 @@ type StreamConnection = {
   pendingDeliveryDeadlineAtMs(): number | null;
   takeDuePendingDeliveryProbe(nowMs: number): boolean;
   schedulePendingDeliveryProbe(atMs: number): void;
+  notePendingDeliveryProbeReachedOwner(): void;
+  notePendingDeliveryProbeTimedOut(): boolean;
   close(reason: ConnectionCloseReason, error?: string): void;
 };
 
@@ -1649,6 +1651,7 @@ const PING_ROUND_MIN_INTERVAL_MS = 5_000;
 const PING_TIMEOUT_MS = 10_000;
 const HOSTED_PENDING_PROBE_INTERVAL_MS = 1_000;
 const HOSTED_PENDING_PROBE_TIMEOUT_MS = 1_000;
+const HOSTED_PENDING_PROBE_TIMEOUT_LIMIT = 3;
 function connectionError(error: unknown): string {
   return boundedErrorMessage(error) ?? "unknown error";
 }
@@ -1793,13 +1796,19 @@ export class StreamConnections {
       `pending hosted delivery probe ${connectionKey}`,
       { timeoutMs: HOSTED_PENDING_PROBE_TIMEOUT_MS },
     )
+      .then(() => connection.notePendingDeliveryProbeReachedOwner())
       .catch((error: unknown) => {
-        // The timeout means only that this incarnation was busy for the probe
-        // slice; the batch watchdog still owns that verdict. Every other ping
-        // rejection is definitive: hostRuntimeCapabilities.ping has no
-        // application work that can fail, so its callback leg is unavailable
-        // even when an RPC hop stripped Cloudflare's lifecycle flags.
-        if (isStreamReceiverUnavailableError(error)) return;
+        // One or two missed slices can mean this incarnation is busy. Three
+        // consecutive misses cannot consume the entire application-work
+        // watchdog: the ping is pure, the delivery lane is at-least-once, and
+        // code-update/storage resets can leave both retained calls hanging
+        // rather than rejecting with Cloudflare's lifecycle flags.
+        if (
+          isStreamReceiverUnavailableError(error) &&
+          !connection.notePendingDeliveryProbeTimedOut()
+        ) {
+          return;
+        }
         const unavailable = isRetryableDurableObjectAvailabilityError(error)
           ? error
           : Object.assign(new Error(errorMessage(error), { cause: error }), { retryable: true });
@@ -2210,6 +2219,7 @@ export class StreamConnections {
     let hostedBatchStartedAtMs: number | null = null;
     let hostedBatchDeadlineAtMs: number | null = null;
     let hostedBatchProbeAtMs: number | null = null;
+    let hostedBatchProbeTimeouts = 0;
     let connection!: StreamConnection;
 
     const sendQueuedBatches = async () => {
@@ -2310,6 +2320,7 @@ export class StreamConnections {
             hostedBatchStartedAtMs = this.#hooks.now();
             hostedBatchDeadlineAtMs = hostedBatchStartedAtMs + DEFAULT_DELIVERY_TIMEOUT_MS;
             hostedBatchProbeAtMs = hostedBatchStartedAtMs + HOSTED_PENDING_PROBE_INTERVAL_MS;
+            hostedBatchProbeTimeouts = 0;
             // This SQLite write and the native alarm are both issued before
             // the callback leaves the source DO. The output gate therefore
             // makes a vanished isolate recover as an expired durable attempt,
@@ -2333,6 +2344,7 @@ export class StreamConnections {
                 hostedBatchStartedAtMs = null;
                 hostedBatchDeadlineAtMs = null;
                 hostedBatchProbeAtMs = null;
+                hostedBatchProbeTimeouts = 0;
                 const parsed = parseWakeDeliveryResult(deliveryResult);
                 if (
                   parsed.outcome === "ok" &&
@@ -2425,6 +2437,13 @@ export class StreamConnections {
       schedulePendingDeliveryProbe: (atMs) => {
         if (hostedBatchPending) hostedBatchProbeAtMs = atMs;
       },
+      notePendingDeliveryProbeReachedOwner: () => {
+        hostedBatchProbeTimeouts = 0;
+      },
+      notePendingDeliveryProbeTimedOut: () => {
+        hostedBatchProbeTimeouts += 1;
+        return hostedBatchProbeTimeouts >= HOSTED_PENDING_PROBE_TIMEOUT_LIMIT;
+      },
       close: (reason, error) => {
         if (!open) return;
         open = false;
@@ -2433,6 +2452,7 @@ export class StreamConnections {
         hostedBatchStartedAtMs = null;
         hostedBatchDeadlineAtMs = null;
         hostedBatchProbeAtMs = null;
+        hostedBatchProbeTimeouts = 0;
         if (this.#connections.get(connectionKey) === connection) {
           this.#connections.delete(connectionKey);
           this.#hooks.runtimeChanged();

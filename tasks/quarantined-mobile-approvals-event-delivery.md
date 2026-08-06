@@ -132,6 +132,14 @@ notification journal.
   and requires the notification intent within 12 seconds. It failed against
   `16c29a0` with the public wait timing out after 12 seconds; the old path took
   about 20 seconds because only the batch watchdog detected the dead callback.
+- Canonical workflow `79mpzrv8mt` on `1c66ee9` passed approvals in 52.7s,
+  notifications in 57.8s, and the new Project-restart E2E, all with zero
+  retries/errors in PostHog. The Cloudflare audit still rejected it: rollout
+  resets left retained callbacks whose pure ping calls hung instead of
+  rejecting. One or two missed one-second probes are allowed for a busy
+  processor; three consecutive misses now classify that callback as
+  unavailable and use the bounded one-second lifecycle retry before the 20s
+  application-work watchdog can report a false application failure.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -287,3 +295,11 @@ Test these in order; do not treat the first plausible one as the conclusion.
   infrastructure resets cannot inflate recovery latency. The focused 54-test
   sender suite, OS typecheck, lint, and formatting pass; preview validation is
   next.
+- 2026-08-06: Preview `1c66ee9` made all three target cases retry-free, but its
+  trace audit found callbacks orphaned by the deployment itself still reaching
+  the 20s error watchdog. Their liveness probes timed out rather than returning
+  Cloudflare lifecycle flags. Added a red/green three-consecutive-miss test and
+  a success-between-misses test: a reachable slow processor keeps its full work
+  deadline, while a callback whose owner cannot answer three pure pings moves
+  onto the one-second availability path. The restoration streak remains zero
+  until the next exact-head audit is clean.
