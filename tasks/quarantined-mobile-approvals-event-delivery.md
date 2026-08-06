@@ -61,8 +61,12 @@ The fourth candidate passed cleanly but its exact-version audit caught local
 subscription `nack` logging an unflagged code-update reset as an application
 error. The shared lifecycle classifier now accepts only Cloudflare's exact
 code-update sentence in addition to the existing flagged and referenced-reset
-shapes. Focused regressions and OS typecheck pass; the 25-run streak returns to
-zero for the new candidate head.
+shapes. Its next eight rapid redeploys produced three broad, unrelated Project
+Durable Object failure waves despite the fixed 90-second rollout delay. Project
+birth now proves the new Project and root Stream objects report the caller's
+exact Worker version before it appends any birth facts, and uses the exact
+proven Stream stub for that append. Focused regressions and OS typecheck pass;
+the 25-run streak remains zero pending an exact-head preview.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -685,3 +689,17 @@ Test these in order; do not treat the first plausible one as the conclusion.
   keep that exact lifecycle interruption outside error telemetry while
   preserving arbitrary application failures. The 34 focused tests and OS
   typecheck pass; the streak is zero for the new head.
+- 2026-08-06: Head `afa794639` passed its baseline and four candidates, then
+  workflows `jznj3pln0w`, `xt9rv0shlg`, and `qnj0qgn1c6` each produced broad
+  failure waves after rapid unchanged-head redeploys. The first wave emitted
+  106 distinct internal references from 19 Project Durable Objects; the next
+  two retried or failed unrelated dashboard, SSR, reactivity, stream-resume,
+  and Vitest cases. Cloudflare can therefore route the version-pinned public
+  Worker to retiring Project/root Stream incarnations even after the fixed
+  90-second creation gate. Added a bounded, read-only exact-version boundary
+  before project birth. It reacquires only on a version mismatch, explicit
+  lifecycle reset, probe timeout, or opaque platform reference; arbitrary
+  application errors remain terminal. Root birth facts are appended through
+  the exact Stream stub that passed the probe, and neither readiness deadline
+  can append product state. The 36 focused tests and OS typecheck pass; an
+  exact-head preview is next and the strict streak remains zero.
