@@ -65,8 +65,11 @@ shapes. Its next eight rapid redeploys produced three broad, unrelated Project
 Durable Object failure waves despite the fixed 90-second rollout delay. Project
 birth now proves the new Project and root Stream objects report the caller's
 exact Worker version before it appends any birth facts, and uses the exact
-proven Stream stub for that append. Focused regressions and OS typecheck pass;
-the 25-run streak remains zero pending an exact-head preview.
+proven Stream stub for that append. Its first preview caught the initial probe
+loop overlapping seven uncancellable RPC calls after a reset; the gate now
+leaves an invocation-free handoff window and never starts another probe after
+one times out. Focused regressions and OS typecheck pass; the 25-run streak
+remains zero pending an exact-head preview.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -703,3 +706,17 @@ Test these in order; do not treat the first plausible one as the conclusion.
   the exact Stream stub that passed the probe, and neither readiness deadline
   can append product state. The 36 focused tests and OS typecheck pass; an
   exact-head preview is next and the strict streak remains zero.
+- 2026-08-06: The first readiness baseline on `fd5025c7c` kept both mobile
+  flows first-try green but rejected the dashboard navigation case's initial
+  attempt. Project `prj_48c56b4263e74ab08793a581299cec43` reached the current
+  Project DO immediately; its root Stream probe then received one code-update
+  reset and seven two-second timeouts. Exact trace
+  `78918c0f067129cc020ae9e09f0231df` showed the flaw: timed-out native RPCs are
+  uncancellable, so every retry remained in flight against the same Stream DO
+  and pinned the retiring incarnation until the 33.2-second client request was
+  cancelled. The readiness state machine now gives reset/mismatch outcomes a
+  five-second invocation-free handoff window with bounded exponential backoff.
+  A probe owns the whole remaining deadline; if it times out the attempt fails
+  explicitly and no overlapping probe starts. A fake-time regression requires
+  exactly one acquisition for a hung target. The streak remains zero for the
+  corrected head.

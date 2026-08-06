@@ -3,15 +3,15 @@ import { settleByDeadline } from "../capability-host/execution-deadline.ts";
 import { isRetryableDurableObjectAvailabilityError } from "../streams/stream-unavailable.ts";
 
 const deploymentWaitTimeoutMs = 30_000;
-const deploymentProbeTimeoutMs = 2_000;
-const deploymentPollIntervalMs = 250;
-const deploymentMaxPollIntervalMs = 4_000;
+// A code-update reset needs an invocation-free window before Cloudflare can
+// replace the old incarnation. Short probing kept that incarnation alive.
+const deploymentPollIntervalMs = 5_000;
+const deploymentMaxPollIntervalMs = 15_000;
 
 type ProjectBirthDeploymentReadinessOptions = {
   maxPollIntervalMs?: number;
   now?: () => number;
   pollIntervalMs?: number;
-  probeTimeoutMs?: number;
   sleep?: (durationMs: number) => Promise<void>;
   timeoutMs?: number;
 };
@@ -52,8 +52,6 @@ export async function waitForProjectBirthDeploymentVersion<
   const startedAt = now();
   const deadline =
     startedAt + (options.timeoutMs === undefined ? deploymentWaitTimeoutMs : options.timeoutMs);
-  const probeTimeoutMs =
-    options.probeTimeoutMs === undefined ? deploymentProbeTimeoutMs : options.probeTimeoutMs;
   const pollIntervalMs =
     options.pollIntervalMs === undefined ? deploymentPollIntervalMs : options.pollIntervalMs;
   const maxPollIntervalMs =
@@ -73,7 +71,7 @@ export async function waitForProjectBirthDeploymentVersion<
     const target = input.getTarget();
     const outcome = await settleByDeadline(
       Promise.resolve().then(() => target.deploymentVersion()),
-      Math.min(deadline, now() + probeTimeoutMs),
+      deadline,
       now,
     );
     if (outcome.status === "fulfilled" && outcome.value === input.expectedVersion) {
@@ -102,7 +100,10 @@ export async function waitForProjectBirthDeploymentVersion<
       lastObservedVersion = outcome.value;
       mismatches += 1;
     } else if (outcome.status === "deadline") {
+      // Native RPC calls cannot be cancelled. Starting another probe here
+      // would overlap this still-running invocation and pin the old object.
       probeTimeouts += 1;
+      break;
     } else if (isRetryableDurableObjectAvailabilityError(outcome.error)) {
       lifecycleFailures += 1;
     } else if (

@@ -115,6 +115,33 @@ test("bounds lifecycle and platform convergence without accepting application fa
   ).rejects.toThrow('the version probe failed with "processor invariant failed"');
 });
 
+test("never overlaps a probe that has not settled", async () => {
+  vi.useFakeTimers();
+  try {
+    const getTarget = vi.fn(() =>
+      disposableTarget({ deploymentVersion: () => new Promise<string>(() => undefined) }),
+    );
+    const readiness = waitForProjectBirthDeploymentVersion(
+      {
+        expectedVersion: "version-new",
+        getTarget,
+        projectId: "prj_test",
+        targetKind: "Stream Durable Object",
+      },
+      { timeoutMs: 10_000 },
+    );
+    const rejected = expect(readiness).rejects.toThrow(
+      "probe timeouts=1, version mismatches=0 across 1 read-only probe",
+    );
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await rejected;
+    expect(getTarget).toHaveBeenCalledOnce();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
 function disposableTarget(input: {
   deploymentVersion: () => Promise<string>;
   dispose?: () => void;
