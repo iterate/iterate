@@ -627,23 +627,27 @@ async function recordConnection(input: {
     if ((await secretStub.describe()).created) await secretStub.update(secretInput);
     else await secretStub.create(secretInput);
   }
-  await integrationStreamStub(input.projectId, streamPath).append(
-    ...(input.processorSubscription
-      ? [
-          buildIntegrationRouterCreatedEvent({
-            connection: input.connection,
-            slug: input.slug,
-          }),
-          buildIntegrationRouterSubscriptionConfiguredEvent({
-            connection: input.connection,
-            projectId: input.projectId,
-            name: input.processorSubscription.name,
-            slug: input.slug,
-          }),
-        ]
-      : []),
-    input.connectedEvent,
-  );
+  // The router-arming batch carries a facet-placed processor subscription,
+  // which a public append may not configure (core-processor.ts validate) —
+  // that shape rides the platform (core-event) lane; a plain connected fact
+  // stays on the public one.
+  if (input.processorSubscription) {
+    await integrationStreamStub(input.projectId, streamPath).appendCoreEvents([
+      buildIntegrationRouterCreatedEvent({
+        connection: input.connection,
+        slug: input.slug,
+      }),
+      buildIntegrationRouterSubscriptionConfiguredEvent({
+        connection: input.connection,
+        projectId: input.projectId,
+        name: input.processorSubscription.name,
+        slug: input.slug,
+      }),
+      input.connectedEvent,
+    ]);
+  } else {
+    await integrationStreamStub(input.projectId, streamPath).append(input.connectedEvent);
+  }
   if (input.directoryClaim) {
     await appendConnectionDirectoryEvents([
       ...(input.directoryClaim.unclaimFirst

@@ -155,6 +155,20 @@ const HOSTED_SCAN_EVENT_LIMIT = 100;
 /** Soft cap on a delivery batch's payload bytes (large events shrink the batch). */
 const DELIVERY_BATCH_BYTE_LIMIT = 1024 * 1024;
 
+/**
+ * Incarnation/connection lifecycle facts withheld from COPY receivers. Every
+ * boot appends a fresh unkeyed `stream/woken`, and a copy delivery can itself
+ * boot the hibernated peer — with the circuit breaker deliberately ignoring
+ * control events, a reciprocal wildcard copy pair would manufacture wake (and
+ * hosted-lane connection) events forever. Local readers of the source stream
+ * are unaffected; only cross-stream copy delivery skips them.
+ */
+const COPY_WITHHELD_LIFECYCLE_EVENT_TYPES = new Set<string>([
+  "events.iterate.com/stream/woken",
+  "events.iterate.com/stream/connection-opened",
+  "events.iterate.com/stream/connection-closed",
+]);
+
 const BACKOFF_BASE_MS = 1_000;
 const BACKOFF_CAP_MS = 30 * 60_000;
 const BACKOFF_JITTER = 0.2;
@@ -783,10 +797,18 @@ export class StreamEventSender {
           // The receiver's cycle-drop audit event is first-hand and would
           // start a fresh provenance chain if copied onward; a reciprocal
           // wildcard copy pair could then manufacture audit events forever.
+          // Incarnation/connection lifecycle facts are withheld for the same
+          // reason: every boot appends a fresh unkeyed `stream/woken`, a copy
+          // delivery can itself wake (boot) the hibernated peer, and the
+          // circuit breaker deliberately ignores control events — so a
+          // reciprocal wildcard pair would manufacture wake events forever. A
+          // foreign incarnation's lifecycle is not product data on the
+          // receiver; local consumers on the source stream see it unchanged.
           const deliverable =
             receiver.action === "copy-to-stream"
               ? visible.filter(
                   (event) =>
+                    !COPY_WITHHELD_LIFECYCLE_EVENT_TYPES.has(event.type) &&
                     !hasStructuredIdPrefix(
                       event.idempotencyKey,
                       internalStreamIdPrefix("copy-drop"),

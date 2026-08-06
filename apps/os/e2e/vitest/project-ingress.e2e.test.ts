@@ -131,6 +131,42 @@ test("routes seeded apps by host and serves worker-bundler browser assets", asyn
     },
   );
 
+  // An expression-placed wake subscription on the guestbook stream: the
+  // standard createProcessorHost idiom's `processor` node serves the read
+  // verbs too, so the subscriptions catalog and the uniform barrier reach a
+  // DYNAMIC WORKER's processor through the stored expression (facet rows
+  // resolve to the stream's own facet instead).
+  await guestbookStream.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    idempotencyKey: `guestbook-wake:${marker}`,
+    payload: {
+      name: "guestbook",
+      receiver: {
+        action: "processor-wake",
+        expression: ["workers", ["get", guestbookAppRef], "processor", "wakeStreamProcessor"],
+      },
+    },
+  });
+  const catalogName = `Catalog ${marker}`;
+  const [catalogProbe] = await guestbookStream.append({
+    type: "events.iterate.com/guestbook/entry-signed",
+    payload: { message: "Read back through the subscriptions catalog", name: catalogName },
+    idempotencyKey: `guestbook/catalog:${marker}`,
+  });
+  const wakeSubscription = guestbookStream.subscriptions.get("guestbook");
+  await wakeSubscription.waitUntilProcessed({ offset: catalogProbe!.offset, timeoutMs: 30_000 });
+  await wakeSubscription.processor.waitUntilProcessed({
+    offset: catalogProbe!.offset,
+    timeoutMs: 30_000,
+  });
+  const catalogSnapshot = await wakeSubscription.processor.snapshot();
+  expect(catalogSnapshot.offset).toBeGreaterThanOrEqual(catalogProbe!.offset);
+  expect(
+    (catalogSnapshot.state as { entries?: { name: string }[] }).entries?.some(
+      ({ name }) => name === catalogName,
+    ),
+  ).toBe(true);
+
   const fetchApp = (
     appHostPrefix: string,
     init?: RequestInit & { path?: string },

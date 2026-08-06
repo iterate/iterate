@@ -24,6 +24,7 @@
  * their own Durable Objects (domain-alarm entanglement; Containers SDK).
  */
 import { disposeIgnoredRpcResult } from "iterate/sdk/capnweb";
+import type { ProcessorStream } from "iterate/processors";
 import {
   FACET_IDENTITY_KEY,
   ProcessorFacet as ProcessorFacetBase,
@@ -35,8 +36,10 @@ import {
 import { trustedInternalAuthContext } from "../auth.ts";
 import { parseConfig } from "../config.ts";
 import { workerVersion, type Env } from "../env.ts";
-import { itxForScope, StreamRpcTarget } from "../rpc-targets.ts";
+import { itxForScope, PLATFORM_STREAM_APPEND, StreamRpcTarget } from "../rpc-targets.ts";
 import { readProjectById } from "../project-directory.ts";
+import { facetProcessorFamilyForPath } from "./processor-facet-families.ts";
+import { containsFacetProcessorSubscription } from "./streams/utils.ts";
 import type { CapabilityDescription } from "./itx/describe.ts";
 import { DurableObjectNameCodec } from "./durable-object-names.ts";
 import { AgentProcessor } from "./agents/agent-processor-implementation.ts";
@@ -45,7 +48,6 @@ import {
   type AgentRuntimeTransition,
 } from "./agents/agent-processor-contract.ts";
 import { AgentCollectionStreamProcessor } from "./agents/agent-collection-processor-implementation.ts";
-import { AGENT_COLLECTION_PATH } from "./agents/agent-collection-processor-contract.ts";
 import {
   CapabilityHostProcessor,
   type CapabilityHostProcessorReads,
@@ -59,7 +61,6 @@ import type { DevicePushSender } from "./devices/device-processor-implementation
 import { deviceIdFromPath } from "./devices/device-durable-object.ts";
 import { EmailProcessor } from "./email/email-processor-implementation.ts";
 import { EmailAgentProcessor } from "./email/email-agent-processor-implementation.ts";
-import { EMAIL_INTEGRATION_STREAM_PATH } from "./email/utils.ts";
 import { SlackProcessor } from "./integrations/slack-processor-implementation.ts";
 import {
   eyesReactionTargetFromWebhookPayload,
@@ -80,7 +81,6 @@ import { SecretProcessor } from "./secrets/secret-processor-implementation.ts";
 import { describeSecretState } from "./secrets/secret-durable-object.ts";
 import { describeDeviceState } from "./devices/device-durable-object.ts";
 import { WorkspaceProcessor } from "./workspaces/workspace-processor-implementation.ts";
-import { WORKSPACE_PATH_PREFIX } from "./workspaces/utils.ts";
 import { mintProjectFileUrl, MODEL_FILE_URL_TTL_SECONDS } from "./files/project-files.ts";
 import { agentWorkspacePath } from "./workspaces/utils.ts";
 import { DynamicWorkerRunner } from "./workers/worker-runner.ts";
@@ -113,6 +113,35 @@ type ScriptExecutionLoopbackExports = {
     };
   }): ScriptExecutionEntrypointHandle;
 };
+
+/**
+ * The ProcessorStream first-party facet processors append through. Their
+ * creation sagas emit batches that ARM facet-placed processor subscriptions
+ * (the project birth creating repos, capability hosts, and routers; the
+ * integration routers creating agent threads) — and the stream's core
+ * processor rejects facet placement on the public append lane
+ * (core-processor.ts validate). Exactly those batches ride the platform
+ * (core-event) append lane; every other append keeps public authority,
+ * circuit breaker included. `at()` keeps descendants on the same lane, so
+ * `appendTo` sibling births inherit it.
+ */
+function platformLaneProcessorStream(stream: StreamRpcTarget): ProcessorStream {
+  return {
+    append: (...events) =>
+      containsFacetProcessorSubscription(events)
+        ? stream[PLATFORM_STREAM_APPEND](events)
+        : stream.append(...events),
+    appendIfStreamId: (args) =>
+      containsFacetProcessorSubscription(args.events)
+        ? stream[PLATFORM_STREAM_APPEND](args.events, { streamId: args.streamId })
+        : stream.appendIfStreamId(args),
+    getEventPage: (args) => stream.getEventPage(args),
+    readEvents: (args) => stream.readEvents(args),
+    getEvent: (args) => stream.getEvent(args),
+    getEvents: (args) => stream.getEvents(args),
+    at: (path) => platformLaneProcessorStream(stream.at(path)),
+  };
+}
 
 export class ProcessorFacet extends ProcessorFacetBase<Env> {
   /** The registry built by the base host — captured for the catchUp/alarm doors. */
@@ -147,11 +176,13 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   }
 
   protected createHost(identity: ProcessorFacetIdentity): ProcessorFacetHost {
-    const stream = new StreamRpcTarget({
-      auth: trustedInternalAuthContext(),
-      path: identity.path,
-      projectId: identity.projectId,
-    });
+    const stream = platformLaneProcessorStream(
+      new StreamRpcTarget({
+        auth: trustedInternalAuthContext(),
+        path: identity.path,
+        projectId: identity.projectId,
+      }),
+    );
     return {
       stream,
       version: workerVersion(this.env),
@@ -258,46 +289,62 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
 
   #registerProcessors(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
-    const { path, projectId } = identity;
-    if (projectId === null) {
-      // Deployment-global streams: only repos host a processor, and repos
-      // are path-addressable anywhere (repos.get accepts any path).
-      this.#registerRepo(identity, stream, registry);
-      return;
+    const { projectId } = identity;
+    // The path→family selection is the extracted pure function so creation
+    // doors (repos.create at a claimed path) can refuse a path this
+    // composition would hand to another family — see
+    // processor-facet-families.ts. Repos are the ELSE arm, not a "/repos/"
+    // family: repos.get accepts any path (the examples create repos under
+    // /examples/**), exactly as the retired Repo Durable Object existed at
+    // every {projectId, path}.
+    switch (facetProcessorFamilyForPath({ path: identity.path, projectId })) {
+      case "project-root":
+        this.#registerProjectRoot(identity, stream, registry);
+        break;
+      case "agent-collection":
+        this.#registerAgentCollection(identity, stream, registry);
+        break;
+      case "agent":
+        this.#registerAgent(identity, stream, registry);
+        break;
+      case "email-router":
+        this.#registerEmailRouter(identity, stream, registry);
+        break;
+      case "slack-router":
+        this.#registerSlackRouter(identity, stream, registry);
+        break;
+      case "telegram-router":
+        this.#registerTelegramRouter(identity, stream, registry);
+        break;
+      case "device":
+        this.#registerDevice(identity, stream, registry);
+        break;
+      case "secret":
+        this.#registerSecret(identity, stream, registry);
+        break;
+      case "workspace":
+        this.#registerWorkspace(identity, stream, registry);
+        break;
+      case "repo":
+        this.#registerRepo(identity, stream, registry);
+        break;
     }
-    if (path === "/") this.#registerProjectRoot(identity, stream, registry);
-    else if (path === AGENT_COLLECTION_PATH)
-      this.#registerAgentCollection(identity, stream, registry);
-    else if (path.startsWith("/agents/")) this.#registerAgent(identity, stream, registry);
-    else if (path === EMAIL_INTEGRATION_STREAM_PATH)
-      this.#registerEmailRouter(identity, stream, registry);
-    else if (path.startsWith("/integrations/slack/"))
-      this.#registerSlackRouter(identity, stream, registry);
-    else if (path.startsWith("/integrations/telegram/"))
-      this.#registerTelegramRouter(identity, stream, registry);
-    else if (path.startsWith("/devices/")) this.#registerDevice(identity, stream, registry);
-    else if (path.startsWith("/secrets/")) this.#registerSecret(identity, stream, registry);
-    else if (path.startsWith(`${WORKSPACE_PATH_PREFIX}/`))
-      this.#registerWorkspace(identity, stream, registry);
-    // Repos are the ELSE arm, not a "/repos/" family: repos.get accepts any
-    // path (the examples create repos under /examples/**), exactly as the
-    // retired Repo Durable Object existed at every {projectId, path}. Only
-    // paths claimed by another family above cannot host a repo.
-    else this.#registerRepo(identity, stream, registry);
-    // Every project-scoped stream can be a capability scope ("/" is the
-    // project root, agent paths are agent scopes) — the capability-host
-    // processor is registered everywhere, exactly as its Durable Object
-    // existed at every {projectId, path}.
+    // Deployment-global streams host only repos; every project-scoped stream
+    // can additionally be a capability scope ("/" is the project root, agent
+    // paths are agent scopes) — the capability-host processor is registered
+    // everywhere, exactly as its Durable Object existed at every
+    // {projectId, path}.
+    if (projectId === null) return;
     this.#registerCapabilityHost(identity, stream, registry);
   }
 
   /** The retired CapabilityHostDurableObject's wiring, per scope path. */
   #registerCapabilityHost(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     const { path } = identity;
@@ -361,7 +408,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   /** The retired ProjectDurableObject's hosting wiring (project + notification). */
   #registerProjectRoot(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     const { path } = identity;
@@ -420,7 +467,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   /** The retired AgentCollectionDurableObject's wiring. */
   #registerAgentCollection(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     const processor = registry.register(
@@ -438,7 +485,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
    * recovery — see each block's comment in the original file for the why. */
   #registerAgent(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     const { path } = identity;
@@ -682,7 +729,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   /** The email router — the retired project DO's `/integrations/email` block. */
   #registerEmailRouter(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     registry.register(
@@ -697,7 +744,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   /** The Slack webhook router — the retired project DO's per-connection block. */
   #registerSlackRouter(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     const { path } = identity;
@@ -736,7 +783,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   /** The Telegram webhook router — the retired project DO's per-connection block. */
   #registerTelegramRouter(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     const { path } = identity;
@@ -776,7 +823,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
    * receipt/approval-grace domain alarm (replayed via handleAlarm above). */
   #registerDevice(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     const { path } = identity;
@@ -851,7 +898,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
    * the crypto/egress domain logic and reads back through the facade). */
   #registerSecret(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     // NO recovery on purpose: the processor's only side effect (the
@@ -875,7 +922,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
    * write serializer) — the facet dials its processor doors. */
   #registerRepo(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     const { path, projectId } = identity;
@@ -923,7 +970,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   /** The retired WorkspaceV2DurableObject hosting wiring (a pure reducer). */
   #registerWorkspace(
     identity: ProcessorFacetIdentity,
-    stream: StreamRpcTarget,
+    stream: ProcessorStream,
     registry: StreamProcessorRegistry,
   ): void {
     // NO recovery on purpose: WorkspaceProcessor is a pure reducer (no

@@ -612,6 +612,112 @@ class FacetLiveStateRelayRpcTarget
   }
 }
 
+/** The committed receiver union as stored in reduced core state. */
+type OutboundSubscriptionReceiver =
+  CoreProcessorState["subscriptions"]["outbound"]["byName"][string]["configuration"]["receiver"];
+
+/** The processor-wake variant of {@link OutboundSubscriptionReceiver}. */
+type ProcessorWakeReceiver = Extract<OutboundSubscriptionReceiver, { action: "processor-wake" }>;
+
+/**
+ * Copy an expression-evaluation result into plain data and release the
+ * original. The worker's processor node answers with plain JSON, but the
+ * value reaching this DO may be a disposable-augmented RPC result whose
+ * lifetime must not leak into the caller's Cap'n Web session.
+ */
+function detachExpressionReadResult<T>(value: unknown, operation: string): T {
+  if (value === null || typeof value !== "object") return value as T;
+  const detached: unknown = Array.isArray(value) ? [...value] : { ...value };
+  Reflect.deleteProperty(detached as object, Symbol.dispose);
+  disposeAcknowledgedRpcResult(value, operation);
+  return detached as T;
+}
+
+/**
+ * The subscriptions catalog's processor facade for an EXPRESSION-placed
+ * subscription (own-DO first-party hosts and userspace dynamic workers). The
+ * read verbs replay onto the worker's `processor` node — the stored wake
+ * expression minus its trailing `wakeStreamProcessor` step — with the same
+ * delivery authority the wake transport uses, so
+ * `subscriptions.get(name).processor` serves snapshot / getRuntimeState /
+ * waitUntilProcessed for EVERY placement. Facet-only doors (liveState, the
+ * capability-host domain doors) reject explicitly: they have no
+ * expression-side counterpart, and the wake step stays platform-only.
+ */
+class ExpressionProcessorFacadeRpcTarget extends RpcTarget {
+  readonly #name: string;
+  readonly #callProcessorNode: (call: [method: string, ...args: unknown[]]) => Promise<unknown>;
+  readonly #waitUntilProcessed: (input: { offset: number; timeoutMs?: number }) => Promise<void>;
+
+  constructor(input: {
+    name: string;
+    callProcessorNode: (call: [method: string, ...args: unknown[]]) => Promise<unknown>;
+    waitUntilProcessed: (input: { offset: number; timeoutMs?: number }) => Promise<void>;
+  }) {
+    super();
+    this.#name = input.name;
+    this.#callProcessorNode = input.callProcessorNode;
+    this.#waitUntilProcessed = input.waitUntilProcessed;
+  }
+
+  async snapshot(): Promise<ProcessorSnapshot<unknown>> {
+    return detachExpressionReadResult(
+      await this.#callProcessorNode(["snapshot"]),
+      "expression-processor-snapshot",
+    );
+  }
+
+  async getRuntimeState(): Promise<ProcessorRuntimeState> {
+    return detachExpressionReadResult(
+      await this.#callProcessorNode(["getRuntimeState"]),
+      "expression-processor-runtime-state",
+    );
+  }
+
+  /** Delegates to the stream's uniform barrier, which already swaps the wake
+   * step for the processor node's own `waitUntilProcessed` verb. */
+  async waitUntilProcessed(input: { offset: number; timeoutMs?: number }): Promise<void> {
+    await this.#waitUntilProcessed(input);
+  }
+
+  /** Mirror of the facet facade's guard: wake delivery belongs to the stream. */
+  wakeStreamProcessor(): never {
+    throw new Error(
+      `subscription "${this.#name}" is delivered by its stream; wakeStreamProcessor is not ` +
+        `dialable through the processor facade`,
+    );
+  }
+
+  #facetOnly(door: string): never {
+    throw new Error(
+      `subscription "${this.#name}" runs under expression placement; ${door} is served by the ` +
+        `hosting worker itself, not the subscriptions catalog`,
+    );
+  }
+
+  /** A getter like the facet facade's node, so the property read itself
+   * rejects instead of handing out a dead stub. */
+  get liveState(): never {
+    return this.#facetOnly("liveState");
+  }
+
+  invokeCapability(): never {
+    this.#facetOnly("invokeCapability");
+  }
+
+  provideCapability(): never {
+    this.#facetOnly("provideCapability");
+  }
+
+  revokeCapability(): never {
+    this.#facetOnly("revokeCapability");
+  }
+
+  describeCapabilities(): never {
+    this.#facetOnly("describeCapabilities");
+  }
+}
+
 /**
  * Durable stream storage plus the stream's own ("core") processor.
  *
@@ -979,12 +1085,42 @@ export class StreamDurableObject extends DurableObject<Env> {
   readonly #facetAlarmFailures = new Map<string, number>();
 
   /**
+   * The committed catalog row a processor read/dial door may act on: the
+   * subscription must EXIST and be a processor-wake row. Reads must never
+   * materialize processor state for a caller-chosen name the committed
+   * catalog does not place there — `ctx.facets.get` CREATES a facet on first
+   * dial, so an unchecked name would mint arbitrary facets (including
+   * wrong-path first-party runners) from a read. Same gate shape as
+   * `waitUntilProcessed`'s existence check.
+   */
+  #requireProcessorWakeSubscription(name: string): ProcessorWakeReceiver {
+    const configured = this.#coreProcessorState.subscriptions.outbound.byName[name];
+    if (configured === undefined) {
+      throw new Error(`subscription "${name}" does not exist`);
+    }
+    const receiver = configured.configuration.receiver;
+    if (receiver.action !== "processor-wake") {
+      throw new Error(`subscription "${name}" is not a processor-wake subscription`);
+    }
+    return receiver;
+  }
+
+  /**
    * Create-or-reuse the processor facet named after a subscription and make
    * sure it received its first-contact `configure` before any wake. The class
    * is the sibling `ProcessorFacet` export from `iterate/processors/cloudflare`,
    * re-exported as an OS worker entrypoint so `ctx.exports` carries it.
+   *
+   * THE facet-materialization choke point: every caller funnels through the
+   * committed-catalog check, so no read, socket lane, alarm replay, or
+   * facade dial can create a facet for a name the catalog does not place
+   * under facet placement.
    */
   async #dialProcessorFacet(name: string): Promise<ProcessorFacetStub> {
+    const receiver = this.#requireProcessorWakeSubscription(name);
+    if (receiver.placement !== "facet") {
+      throw new Error(`subscription "${name}" does not run under facet placement`);
+    }
     const workerExports = this.ctx.exports as Record<string, unknown>;
     // Loose lookup on purpose: the class is the sibling ProcessorFacet export
     // from iterate/processors/cloudflare, surfaced as an OS worker entrypoint;
@@ -1111,16 +1247,56 @@ export class StreamDurableObject extends DurableObject<Env> {
 
   /**
    * The per-subscription processor facade — the read/domain surface itx
-   * relays dial for facet-hosted processors (snapshot, runtime state, offset
-   * barriers, live state, and the capability-host domain doors). The name is
-   * the subscription name, which IS the facet name.
+   * relays dial for hosted processors (snapshot, runtime state, offset
+   * barriers, live state, and the capability-host domain doors), routed by
+   * the COMMITTED catalog row: a facet-placed subscription serves its facet
+   * (the name IS the facet name), an expression-placed one replays the read
+   * verbs onto the worker's `processor` node, and a name the catalog does
+   * not know throws — a read must never materialize a facet.
    */
-  processorFacade(args: { name: string }): StreamProcessorFacadeRpcTarget {
+  processorFacade(args: {
+    name: string;
+  }): StreamProcessorFacadeRpcTarget | ExpressionProcessorFacadeRpcTarget {
     const name = z.string().trim().min(1).parse(args.name);
-    return new StreamProcessorFacadeRpcTarget({
+    const receiver = this.#requireProcessorWakeSubscription(name);
+    if (receiver.placement === "facet") {
+      return new StreamProcessorFacadeRpcTarget({
+        name,
+        dial: () => this.#dialProcessorFacet(name),
+      });
+    }
+    return new ExpressionProcessorFacadeRpcTarget({
       name,
-      dial: () => this.#dialProcessorFacet(name),
+      callProcessorNode: (call) => this.#callExpressionProcessorNode(name, call),
+      waitUntilProcessed: (input) => this.waitUntilProcessed(name, input),
     });
+  }
+
+  /**
+   * Replay one read verb on an EXPRESSION-placed subscription's processor
+   * node: the stored wake expression minus its trailing wake step names the
+   * worker's `processor` node, and the call runs with the same delivery
+   * authority the wake transport uses. The row is re-read per call so a
+   * removed or re-placed subscription is honored at call time.
+   */
+  async #callExpressionProcessorNode(
+    name: string,
+    call: [method: string, ...args: unknown[]],
+  ): Promise<unknown> {
+    const receiver = this.#requireProcessorWakeSubscription(name);
+    if (receiver.placement === "facet") {
+      throw new Error(`subscription "${name}" now runs under facet placement; re-dial its facade`);
+    }
+    if (receiver.expression === undefined) {
+      throw new Error(
+        `processor-wake subscription "${name}" has neither facet placement nor an expression`,
+      );
+    }
+    const { value } = await evaluateItxExpression(this.#createEventDeliveryAuthorityRoot(), [
+      ...receiver.expression.slice(0, -1),
+      call,
+    ]);
+    return value;
   }
 
   /**
@@ -1148,6 +1324,15 @@ export class StreamDurableObject extends DurableObject<Env> {
    * durable cursor rows — `streams.get(path).subscriptions.list()`. Lag is
    * `head − confirmed` (durable cursors advance over EVERY offset, ephemeral
    * included).
+   *
+   * TODO(facet-lag-display): for processor-wake rows the durable cursor is
+   * the runner's REPORTED checkpoint, which trails the runner's real position
+   * until the next wake cycle's report — a healthy facet can read as lagging
+   * here for minutes while `waitUntilProcessed` (which asks the runner
+   * directly) is precise. Confirm-on-batch-settle for facet rows, or an
+   * async describe that reads the facet's snapshot offset, would make the
+   * operator's primary health signal honest; both touch the hosted
+   * checkpoint-report plumbing, so this stays display-only lag for now.
    */
   listSubscriptions(): StreamSubscriptionListEntry[] {
     const head = this.#coreProcessorState.maxOffset;
@@ -2299,21 +2484,12 @@ export class StreamDurableObject extends DurableObject<Env> {
         await facet.waitUntilProcessed({ offset: args.offset, timeoutMs, name: trimmedName });
         return;
       }
-      if (receiver.expression === undefined) {
-        throw new Error(
-          `processor-wake subscription "${trimmedName}" has neither facet placement nor an expression`,
-        );
-      }
       // Swap the expression's trailing `wakeStreamProcessor` property step for
       // the public `waitUntilProcessed` verb on the same `processor` node.
-      const barrier: ItxExpression = [
-        ...receiver.expression.slice(0, -1),
-        ["waitUntilProcessed", { offset: args.offset, timeoutMs }],
-      ];
-      const { value } = await evaluateItxExpression(
-        this.#createEventDeliveryAuthorityRoot(),
-        barrier,
-      );
+      const value = await this.#callExpressionProcessorNode(trimmedName, [
+        "waitUntilProcessed",
+        { offset: args.offset, timeoutMs },
+      ]);
       disposeAcknowledgedRpcResult(value, "wait-until-processed");
       return;
     }
@@ -2424,6 +2600,20 @@ export class StreamDurableObject extends DurableObject<Env> {
   async fetch(request: Request): Promise<Response> {
     const lane = liveStateSocketLaneKey(request);
     if (lane !== undefined) {
+      // A socket upgrade is a read: it must not create a lane (whose pulls
+      // dial the named facet) for a caller-chosen key the committed catalog
+      // does not place under facet placement. Same gate as processorFacade.
+      try {
+        const receiver = this.#requireProcessorWakeSubscription(lane);
+        if (receiver.placement !== "facet") {
+          throw new Error(`subscription "${lane}" does not run under facet placement`);
+        }
+      } catch (error) {
+        return Response.json(
+          { error: error instanceof Error ? error.message : String(error) },
+          { status: 404 },
+        );
+      }
       return (
         (await this.#facetLiveStateLane(lane).acceptUpgrade(request)) ??
         Response.json(

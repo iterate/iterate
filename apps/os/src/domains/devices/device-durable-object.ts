@@ -2,8 +2,12 @@ import { DurableObject } from "cloudflare:workers";
 import { type ProcessorState, type StreamEventInput } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { StreamRpcTarget } from "../../rpc-targets.ts";
+import { PLATFORM_STREAM_APPEND, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
+import {
+  containsFacetProcessorSubscription,
+  isUnconfiguredSubscriptionError,
+} from "../streams/utils.ts";
 import { deviceCreationEvents } from "./device-defaults.ts";
 import { DeviceProcessorContract } from "./device-processor-contract.ts";
 import { appendAfterPushTokenSecretUpdate } from "./push-token-consistency.ts";
@@ -118,7 +122,13 @@ export class DeviceDurableObject extends DurableObject<Env> {
     ...events: StreamEventInput[]
   ) {
     return await appendAfterPushTokenSecretUpdate({
-      append: () => this.#stream.append(...events),
+      // Enrollment's birth batch arms the device's facet-placed processor
+      // subscription, which a public append may not configure; every other
+      // credential append keeps the public lane.
+      append: () =>
+        containsFacetProcessorSubscription(events)
+          ? this.#stream[PLATFORM_STREAM_APPEND](events)
+          : this.#stream.append(...events),
       clearUpdatedSecret: () =>
         this.#clearPushTokenSecret({
           pushTokenSecretPath: this.#pushTokenSecretPath,
@@ -183,7 +193,21 @@ export class DeviceDurableObject extends DurableObject<Env> {
   }
 
   async #snapshot() {
-    return await (await this.#processorFacade()).snapshot();
+    // UNBORN streams: before enrollment commits, the device's facet
+    // subscription does not exist and the Stream DO's facade refuses the
+    // name (reads must never materialize a facet). Substitute the unborn
+    // shape the facade used to serve: the schema-default fold.
+    try {
+      return await (await this.#processorFacade()).snapshot();
+    } catch (error) {
+      if (!isUnconfiguredSubscriptionError(error)) throw error;
+      return {
+        offset: 0,
+        state: DeviceProcessorContract.stateSchema.parse(
+          {},
+        ) as ProcessorState<DeviceProcessorContract>,
+      };
+    }
   }
 
   async #waitUntilProcessed(offset: number) {

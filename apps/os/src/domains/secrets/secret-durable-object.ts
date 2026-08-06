@@ -4,7 +4,7 @@ import type { StreamEventInput } from "iterate/processors";
 import type { ProcessorState } from "iterate/processors";
 import { workerVersion, type Env } from "../../env.ts";
 import { trustedInternalAuthContext } from "../../auth.ts";
-import { StreamRpcTarget } from "../../rpc-targets.ts";
+import { PLATFORM_STREAM_APPEND, StreamRpcTarget } from "../../rpc-targets.ts";
 import { DurableObjectNameCodec } from "../durable-object-names.ts";
 import { LIVE_STATE_SOCKET_HEADER } from "../live-state-socket.ts";
 import { parseConfig } from "../../config.ts";
@@ -13,6 +13,7 @@ import {
   mintGithubInstallationToken,
 } from "../integrations/github-app.ts";
 import { assertPushTokenSecretRevision } from "../devices/push-token-consistency.ts";
+import { isUnconfiguredSubscriptionError } from "../streams/utils.ts";
 import { secretCreationEvents } from "./secret-defaults.ts";
 import type {
   SecretCreateInput,
@@ -154,7 +155,9 @@ export class SecretDurableObject extends DurableObject<Env> {
         payload: { config: { egress, refresh: input.refresh ?? null, visibility } },
         projectId: this.#name.projectId,
       });
-      const [configured] = await this.#stream.append(subscription!);
+      // Platform lane: the facet-placed processor subscription may not ride a
+      // public append (core-processor.ts validate).
+      const [configured] = await this.#stream[PLATFORM_STREAM_APPEND]([subscription!]);
       await this.#waitUntilProcessed(configured!.offset);
       return existing;
     }
@@ -179,8 +182,10 @@ export class SecretDurableObject extends DurableObject<Env> {
               },
             );
       try {
-        const [created, configured] = await this.#stream.append(
-          ...secretCreationEvents({
+        // Platform lane: the batch arms the secret's facet-placed processor
+        // subscription, which a public append may not configure.
+        const [created, configured] = await this.#stream[PLATFORM_STREAM_APPEND](
+          secretCreationEvents({
             offset,
             path: this.#name.path,
             payload: {
@@ -756,7 +761,26 @@ export class SecretDurableObject extends DurableObject<Env> {
   async #snapshotWithOffset(): Promise<SecretSnapshot> {
     // The facade's snapshot pulls through the durable stream tail first
     // (read-your-writes — the old catchUp-then-snapshot pair, one door).
-    return await (await this.#processorFacade()).snapshot();
+    //
+    // UNBORN streams: before the birth batch commits, the secret's facet
+    // subscription does not exist and the Stream DO's facade refuses the name
+    // (reads must never materialize a facet). Substitute the unborn shape the
+    // facade used to serve — the schema-default fold at the stream's current
+    // head — which keeps create()'s offset-bound encryption rider exactly
+    // where the old catch-up snapshot put it.
+    try {
+      return await (await this.#processorFacade()).snapshot();
+    } catch (error) {
+      if (!isUnconfiguredSubscriptionError(error)) throw error;
+      const page = await this.#stream.getEventPage({
+        afterOffset: Number.MAX_SAFE_INTEGER,
+        limit: 1,
+      });
+      return {
+        offset: page.streamMaxOffset,
+        state: SecretProcessorContract.stateSchema.parse({}) as SecretState,
+      };
+    }
   }
 
   async #waitUntilProcessed(offset: number): Promise<void> {

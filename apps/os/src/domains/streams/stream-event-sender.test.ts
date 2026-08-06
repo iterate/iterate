@@ -1081,6 +1081,55 @@ describe("StreamEventSender stream delivery", () => {
     });
   });
 
+  it("withholds incarnation/connection lifecycle facts from stream copies", async () => {
+    const delivered: StreamEvent[][] = [];
+    const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async (_path, batch) => {
+      delivered.push(batch.events);
+      return { acknowledged: batch.events.length };
+    });
+    const h = harness({
+      events: [
+        event(2, "events.iterate.com/stream/woken", { incarnationId: "incarnation-a" }),
+        event(3, "events.iterate.com/stream/connection-opened", { connectionKey: "session" }),
+        event(4, "example.com/issue-created", { issue: 42 }),
+        event(5, "events.iterate.com/stream/connection-closed", {
+          connectionKey: "session",
+          reason: "idle",
+        }),
+      ],
+      configuration: {
+        name: PROCESSOR_KEY,
+        receiver: {
+          action: "copy-to-stream",
+          receivingStreamPath: "/agents/b",
+          delivery: {
+            start: "beginning",
+            onFailingEvent: "halt",
+          },
+        },
+      },
+      copyToStream,
+      wakeProcessor: async () => {
+        throw new Error("a copy must not wake a hosted processor");
+      },
+    });
+
+    h.eventSender.sendDue();
+    await h.settle();
+
+    // Only the product event crosses. The cursor still advances over the
+    // withheld lifecycle rows, so a reciprocal copy pair runs out of fuel
+    // instead of manufacturing wake events forever (every boot appends a
+    // fresh unkeyed `woken`, and the circuit breaker ignores control events).
+    expect(delivered.map((batch) => batch.map(({ offset }) => offset))).toEqual([[4]]);
+    expect(h.store.get(PROCESSOR_KEY)).toMatchObject({
+      confirmedOffset: 5,
+      attempt: 0,
+      nextAttemptAt: null,
+      lastError: null,
+    });
+  });
+
   it("halts after bounded retries when the receiving stream reports itself paused", async () => {
     const appendDeliveryEvent = vi.fn(() => true);
     const copyToStream = vi.fn<SubscriptionReceiverCalls["copyToStream"]>(async () => {

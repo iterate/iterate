@@ -2052,6 +2052,23 @@ test("an expression-placed processor returns its callback, idles cleanly, and wa
     { description: "the scheduler processor to reduce its own birth certificate" },
   );
 
+  // The subscriptions catalog serves EXPRESSION rows too: the stream's
+  // facade replays the read verbs onto the worker's own `processor` node
+  // (the stored wake expression minus its trailing wake step), so the
+  // uniform barrier and snapshot work for every placement.
+  const expressionSubscription = stream.subscriptions.get(subscriptionName);
+  await expressionSubscription.waitUntilProcessed({
+    offset: created!.offset,
+    timeoutMs: 30_000,
+  });
+  await expressionSubscription.processor.waitUntilProcessed({
+    offset: created!.offset,
+    timeoutMs: 30_000,
+  });
+  const expressionSnapshot = await expressionSubscription.processor.snapshot();
+  expect(expressionSnapshot.offset).toBeGreaterThanOrEqual(created!.offset);
+  expect(expressionSnapshot.state).toMatchObject({ birthCertificate: {} });
+
   const ephemeralKey = `ephemeral-${marker.slice(0, 8)}`;
   const durableKey = `durable-${marker.slice(0, 8)}`;
   const [, durableScheduleSet] = await stream.append(
@@ -2537,7 +2554,22 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
   const { project } = testProject;
   using stream = project.streams.get(streamPath);
 
-  await stream.append(
+  // Facet placement is platform-internal: the PUBLIC append lane must refuse
+  // it (a public caller could otherwise run a first-party processor as a
+  // facet of an arbitrary stream), so this configuration rides the trusted
+  // core-event lane — the same authority the production creation doors use.
+  await expect(
+    stream.append(
+      subscriptionConfigured({
+        name: subscriptionName,
+        receiver: {
+          action: "processor-wake",
+          placement: "facet",
+        },
+      }),
+    ),
+  ).rejects.toThrow(/facet placement is platform-internal/);
+  await appendTrustedCoreEvents(stream, [
     subscriptionConfigured({
       name: subscriptionName,
       receiver: {
@@ -2545,11 +2577,17 @@ test("a facet-placed processor delivers in-process and serves snapshots through 
         placement: "facet",
       },
     }),
-  );
+  ]);
   const [created] = await stream.append({
     type: "events.iterate.com/slack/created",
     payload: { config: { connection } },
   });
+
+  // A read must never materialize a facet: a name the committed catalog does
+  // not know is refused at the facade door instead of minting a facet.
+  await expect(
+    stream.subscriptions.get(`not-configured-${marker.slice(0, 8)}`).processor.snapshot(),
+  ).rejects.toThrow(/does not exist/);
 
   // The processor facade is the fold barrier: waitUntilProcessed resolves off
   // the runner's committed checkpoint through the parent→facet dial.

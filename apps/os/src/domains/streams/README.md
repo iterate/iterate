@@ -347,7 +347,14 @@ If a copy would complete a cycle (the receiving stream already appears in
 acknowledges the event as dropped, the cursor advances past it, and the
 receiver appends one idempotent `stream/error-occurred` line describing the
 drop. That audit line is withheld from onward copy delivery so a reciprocal
-wildcard pair cannot manufacture audit events forever.
+wildcard pair cannot manufacture audit events forever. Incarnation and
+connection lifecycle facts (`stream/woken`, `stream/connection-opened`,
+`stream/connection-closed`) are withheld from copy delivery for the same
+reason: every boot appends a fresh unkeyed `woken`, a copy delivery can
+itself boot the hibernated peer, and the circuit breaker deliberately ignores
+control events — so a reciprocal pair would otherwise manufacture wake events
+forever. A foreign incarnation's lifecycle is not product data; local readers
+of the source stream see those events unchanged.
 
 Public `append()` cannot author `source.copiedFrom`. Only trusted Stream
 Durable Object calls can.

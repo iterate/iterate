@@ -190,3 +190,96 @@ test("openConnection rejects a malformed callback owner before installing the ca
   // Nothing half-open from the rejected attempt.
   expect(state.runtime.connections[rejectedKey]).toBeUndefined();
 });
+
+// Facet placement is a PLATFORM mechanism: only trusted first-party code may
+// run a processor as a facet of the Stream Durable Object. Before the fix a
+// project user could append `placement: "facet"` with a first-party contract
+// slug on an arbitrary stream — materializing platform processor code, with
+// delivery authority, on a path of their choosing — and the facade would
+// even mint a facet for a name the catalog never configured.
+test("public appends cannot configure facet placement and reads cannot mint facets", async () => {
+  const marker = crypto.randomUUID();
+  const projectSlug = `sec-facet-${RUN_SUFFIX}-${marker}`;
+  const streamPath = `/e2e/security/facet-placement/${marker}`;
+
+  using adminSession = withItxSession();
+  using admin = adminSession.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using adminProject = await admin.projects.get(projectSlug).create({});
+  const { projectId } = await adminProject.__describe();
+
+  using userSession = withItxSession();
+  using user = userSession.authenticate({
+    type: "impersonate",
+    secret: adminSecret(),
+    token: {
+      type: "user",
+      principal: `facet-security-${marker}`,
+      projectScopes: [projectId],
+    },
+  });
+  using userProject = user.projects.get(projectId);
+  using userStream = userProject.streams.get(streamPath);
+
+  // The abuse shape: a first-party contract slug under facet placement on an
+  // attacker-chosen path, through the public append lane.
+  await expect(async () => {
+    await userStream.append({
+      type: "events.iterate.com/stream/subscription-configured",
+      payload: {
+        name: "secret",
+        receiver: { action: "processor-wake", placement: "facet" },
+      },
+    });
+  }).rejects.toThrow(/facet placement is platform-internal/);
+
+  // Expression-placed processor-wake stays a public capability (userspace
+  // workers over the wake transport).
+  await userStream.append({
+    type: "events.iterate.com/stream/subscription-configured",
+    payload: {
+      name: `probe-${marker.slice(0, 8)}`,
+      receiver: {
+        action: "processor-wake",
+        expression: ["workers", ["get", { type: "stateless", path: "/" }]],
+      },
+    },
+  });
+
+  // A read must never MATERIALIZE a facet: a caller-chosen name the committed
+  // catalog does not know is refused at the facade door.
+  await expect(async () => {
+    await userStream.subscriptions.get("secret").processor.snapshot();
+  }).rejects.toThrow(/does not exist/);
+});
+
+// A repo born at a path CLAIMED by another facet family could never wake (the
+// composition registers the claiming family, not the repo processor), so the
+// old behaviour committed the birth batch and then hung the caller forever
+// waiting for a repos/created that could not come. The door now fails loudly
+// BEFORE committing anything.
+test("repo create refuses paths claimed by another processor family", async () => {
+  const marker = crypto.randomUUID();
+  using session = withItxSession();
+  using itx = session.authenticate({ type: "admin-secret", secret: adminSecret() });
+  using project = await itx.projects.get(`sec-repo-path-${RUN_SUFFIX}-${marker}`).create({});
+
+  await expect(async () => {
+    await project.repos.get(`/agents/${marker}`).create({ type: "empty" });
+  }).rejects.toThrow(/reserved by the "agent" processor family/);
+  await expect(async () => {
+    await project.repos.get(`/secrets/${marker}`).create({ type: "empty" });
+  }).rejects.toThrow(/reserved by the "secret" processor family/);
+
+  // Nothing was committed at the refused path.
+  expect(
+    await project.streams.get(`/agents/${marker}`).getEvents({ limit: 50 }),
+  ).not.toContainEqual(
+    expect.objectContaining({ type: "events.iterate.com/repos/create-requested" }),
+  );
+
+  // A plain unclaimed path still creates.
+  using repo = await project.repos.get(`/examples/sec-${marker.slice(0, 8)}`).create({
+    type: "empty",
+  });
+  expect(await repo.whoami()).toContain("/examples/sec-");
+});

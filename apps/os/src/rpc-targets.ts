@@ -138,6 +138,7 @@ import {
   workspaceCreationEvents,
 } from "./domains/workspaces/utils.ts";
 import { canonicalRecurrence } from "./domains/scheduler/recurrence.ts";
+import { facetProcessorFamilyForPath } from "./domains/processor-facet-families.ts";
 import { schedulerCreationEvents } from "./domains/scheduler/scheduler-defaults.ts";
 import { normalizeSchedulerPath, SCHEDULER_PRIMARY_PATH } from "./domains/scheduler/utils.ts";
 import {
@@ -196,6 +197,7 @@ import {
 } from "./domains/files/project-files.ts";
 import {
   buildFacetProcessorSubscriptionConfiguredEvent,
+  isUnconfiguredSubscriptionError,
   resolveStreamPath,
 } from "./domains/streams/utils.ts";
 import { DynamicWorkerRef as WorkerRefSchema } from "./domains/workers/schemas.ts";
@@ -571,6 +573,17 @@ function retryLoggedIdempotentOperation<Result>(input: {
 export const STREAM_DURABLE_OBJECT_STUB = Symbol("stream-durable-object-stub");
 
 /**
+ * Server-only platform append lane on {@link StreamRpcTarget}. Facet-placed
+ * processor subscriptions are platform-internal — the stream's core processor
+ * rejects them under public append authority (core-processor.ts validate) —
+ * so the trusted first-party creation doors commit birth batches containing
+ * one through the Stream DO's core-event append verbs instead. A symbol keeps
+ * the lane unreachable by Cap'n Web property traversal (paths are strings),
+ * exactly like {@link STREAM_DURABLE_OBJECT_STUB}.
+ */
+export const PLATFORM_STREAM_APPEND = Symbol("platform-stream-append");
+
+/**
  * Durable event stream capability.
  *
  * Streams are the public coordination primitive, not an internal queue hidden
@@ -656,12 +669,44 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   // so a read cannot inherit the surrounding wake connection's lifetime.
   /** Commit events; resolves with the same events carrying offsets and timestamps. */
   async append(...events: StreamEventInput[]): Promise<StreamEvent[]> {
+    return await this.#appendRetrying(events, () =>
+      Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events)),
+    );
+  }
+
+  /**
+   * @internal Server-only platform lane ({@link PLATFORM_STREAM_APPEND}):
+   * commit a first-party batch (typically a creation batch containing a
+   * facet-placed processor subscription) with platform (core-event)
+   * authority; `streamId` fences the commit to one stream lifetime. Same
+   * keyed deploy-reset retry as the public door. Symbol-keyed, so Cap'n Web
+   * property traversal (paths are strings) cannot reach it — the `@internal`
+   * tag only keeps it out of the published itx surface.
+   */
+  async [PLATFORM_STREAM_APPEND](
+    events: StreamEventInput[],
+    opts?: { streamId?: string },
+  ): Promise<StreamEvent[]> {
+    const streamId = opts?.streamId;
+    return await this.#appendRetrying(events, () =>
+      Promise.resolve(
+        streamId === undefined
+          ? this[STREAM_DURABLE_OBJECT_STUB].appendCoreEvents(events)
+          : this[STREAM_DURABLE_OBJECT_STUB].appendCoreEventsIfStreamId({ events, streamId }),
+      ),
+    );
+  }
+
+  async #appendRetrying(
+    events: StreamEventInput[],
+    invoke: () => Promise<StreamEvent[]>,
+  ): Promise<StreamEvent[]> {
     const isKeyed = events.every(
       (event) => typeof event.idempotencyKey === "string" && event.idempotencyKey.length > 0,
     );
     const canDeadlineReplay = isKeyed && this.props.path !== "/";
     const append = async () => {
-      const invocation = Promise.resolve(this[STREAM_DURABLE_OBJECT_STUB].append(...events));
+      const invocation = invoke();
       if (!canDeadlineReplay) return await invocation;
 
       const outcome = await settleByDeadline(
@@ -1337,15 +1382,47 @@ class StreamSubscriptionRpcTarget extends IterateRpcTarget<"StreamSubscription">
   }
 
   /** The hosted processor instance behind a processor-wake subscription
-   * (snapshot/getRuntimeState/waitUntilProcessed), dialed by placement. */
+   * (snapshot/getRuntimeState/waitUntilProcessed), dialed by placement: the
+   * Stream DO's facade serves a facet row from its facet and replays the
+   * read verbs onto an expression row's own `processor` node. States leave
+   * through the same per-family projection the domain doors apply. */
   get processor(): StreamProcessorRpc {
+    const publicState = subscriptionsCatalogPublicState(this.props);
     return facetProcessorRelay({
       auth: this.props.auth,
       name: this.props.name,
       path: this.props.path,
       projectId: this.props.projectId,
+      ...(publicState === undefined ? {} : { publicState }),
     });
   }
+}
+
+/**
+ * The per-family public-state projection the subscriptions catalog applies to
+ * `subscriptions.get(name).processor` reads. The domain doors pin projection
+ * and processor together at their own relays (`SecretRpcTarget.processor` →
+ * `describeSecretState`, `DeviceRpcTarget.processor` → `describeDeviceState`);
+ * the catalog is a generic door over the SAME facades, so without this it
+ * would hand out the raw fold the domain door deliberately redacts — a
+ * secret's `encryptedMaterial`, a device's raw credential bookkeeping. Path
+ * family plus the contract slug select the projection exactly the way the
+ * facet composition selects the registered processor family; sibling rows on
+ * those streams (capability-host, userspace names) carry their own folds and
+ * pass through unprojected.
+ */
+function subscriptionsCatalogPublicState(props: {
+  name: string;
+  path: string;
+}): ((state: unknown) => unknown) | undefined {
+  if (props.path.startsWith("/secrets/") && props.name === SecretProcessorContract.slug) {
+    return (state) => describeSecretState(state as never);
+  }
+  if (props.path.startsWith("/devices/") && props.name === DeviceProcessorContract.slug) {
+    const deviceId = props.path.split("/")[2] ?? "";
+    return (state) => describeDeviceState(state as never, deviceId);
+  }
+  return undefined;
 }
 
 /** Stream catalog for either a project or the deployment-wide global scope. */
@@ -1615,6 +1692,17 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
       RepoProcessorContract.events["events.iterate.com/repos/create-failed"].payloadSchema;
     const request = requestSchema.parse(payload ?? { type: "empty" });
     const path = normalizePath(this.props.path);
+    // A path CLAIMED by another facet family can never host the repo
+    // processor: the composition would register that family instead, the
+    // repo subscription's wake would fail "unknown processor name" forever,
+    // and this caller would hang waiting for a repos/created that cannot
+    // come. Fail loudly BEFORE committing the birth batch.
+    const family = facetProcessorFamilyForPath({ path, projectId: this.props.projectId });
+    if (family !== "repo") {
+      throw new Error(
+        `repos cannot be created at "${path}": that path is reserved by the "${family}" processor family`,
+      );
+    }
     // NESTED repo paths are rejected against the current catalog: repos
     // mount at their own paths in every workspace, and a repo born inside
     // (or above) an existing repo's subtree would silently re-route that
@@ -1640,8 +1728,10 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
       projectId: this.props.projectId,
     });
     const timing = { projectId: this.props.projectId, path };
+    // Platform lane: the batch arms the repo's facet-placed processor
+    // subscription, which a public append may not configure.
     const committed = await timedStep("create-timing", timing, "repo-request-append", () =>
-      stream.append(
+      stream[PLATFORM_STREAM_APPEND]([
         ...repoCreationEvents({ path, projectId: this.props.projectId, payload: request }),
         {
           type: "events.iterate.com/stream/subscription-configured",
@@ -1660,7 +1750,7 @@ class RepoRpcTarget extends IterateRpcTarget<"Repo"> {
             },
           },
         },
-      ),
+      ]),
     );
     // An idempotency hit returns the FIRST request at its old offset — the
     // loud duplicate-create failure is this comparison, not the stream.
@@ -2393,8 +2483,10 @@ class WorkspaceRpcTarget extends IterateRpcTarget<"Workspace"> {
         }
       }
     }
-    const committed = await this.#stream.append(
-      ...workspaceCreationEvents({
+    // Platform lane: the batch arms the workspace's facet-placed processor
+    // subscription, which a public append may not configure.
+    const committed = await this.#stream[PLATFORM_STREAM_APPEND](
+      workspaceCreationEvents({
         ...(input.mounts === undefined ? {} : { mounts: input.mounts }),
         path: this.props.path,
         projectId: this.props.projectId,
@@ -4365,7 +4457,9 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
     };
     await Promise.all([
       integrationStreamStub(this.props.projectId, EMAIL_INTEGRATION_STREAM_PATH).append(routeEvent),
-      integrationStreamStub(this.props.projectId, scopePath).append(
+      // Platform (core-event) lane: the batch arms the email-agent facet
+      // subscription, which a public append may not configure.
+      integrationStreamStub(this.props.projectId, scopePath).appendCoreEvents([
         {
           type: "events.iterate.com/email-agent/created",
           idempotencyKey: `email-agent/created:${this.props.projectId}:${scopePath}`,
@@ -4376,7 +4470,7 @@ class EmailCapabilityRpcTarget extends IterateRpcTarget<"EmailCapability"> {
           idempotencyKey: `stream/subscription-configured:${EmailAgentProcessorContract.slug}`,
           name: EmailAgentProcessorContract.slug,
         }),
-      ),
+      ]),
     ]);
     return {
       threadId,
@@ -4823,10 +4917,13 @@ class AgentRpcTarget extends IterateRpcTarget<"Agent"> {
       projectId: this.#props.projectId,
       path: AGENT_COLLECTION_PATH,
     });
-    await collectionStream.append(
-      ...agentCollectionCreationEvents({ projectId: this.#props.projectId }),
+    // Platform lane: both batches arm facet-placed processor subscriptions
+    // (the collection projection and the agent family), which a public
+    // append may not configure.
+    await collectionStream[PLATFORM_STREAM_APPEND](
+      agentCollectionCreationEvents({ projectId: this.#props.projectId }),
     );
-    const committed = await this.stream.append(...creation.events);
+    const committed = await this.stream[PLATFORM_STREAM_APPEND](creation.events);
     // append() preserves INPUT order, including idempotency hits at their old
     // offsets. A paired capability host may already exist, so the last input
     // is not necessarily the newest event. The create boundary is the maximum
@@ -5502,8 +5599,10 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
    * host with a different payload fails loudly.
    */
   async create(payload?: CapabilityHostCreateInput): Promise<CapabilityHostRpcTarget> {
-    const committed = await this.#stream.append(
-      ...capabilityHostCreationEvents({
+    // Platform lane: the batch arms the scope's facet-placed capability-host
+    // processor subscription, which a public append may not configure.
+    const committed = await this.#stream[PLATFORM_STREAM_APPEND](
+      capabilityHostCreationEvents({
         path: this.#props.path,
         projectId: this.#props.projectId,
         ...(payload === undefined ? {} : { payload }),
@@ -5924,9 +6023,14 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
     const creatorEmail = userPrincipalOf(this.#props.auth)?.email;
     // Every birth event carries an idempotency key, so the keyed-append door
     // retry in StreamRpcTarget.append is the single deploy-reset recovery.
+    // Platform lane: the root batch arms the facet-placed project and
+    // notification processor subscriptions, which a public append may not
+    // configure.
     const committed = await timedStep("create-timing", timing, "root-append", () =>
-      rootStream({ auth: this.#props.auth, projectId: registered.projectId }).append(
-        ...projectCreationEvents({
+      rootStream({ auth: this.#props.auth, projectId: registered.projectId })[
+        PLATFORM_STREAM_APPEND
+      ](
+        projectCreationEvents({
           projectId: registered.projectId,
           payload: {
             config: {
@@ -6816,7 +6920,18 @@ function streamContextForAuth(auth: ItxAuth): StreamContext {
 export async function projectProcessorState(projectId: string) {
   const stream = env.STREAM.getByName(DurableObjectNameCodec.stringify({ path: "/", projectId }));
   try {
-    const facade = await stream.processorFacade({ name: ProjectProcessorContract.slug });
+    let facade: Awaited<ReturnType<typeof stream.processorFacade>>;
+    try {
+      facade = await stream.processorFacade({ name: ProjectProcessorContract.slug });
+    } catch (error) {
+      // UNBORN project: before the root birth batch commits, the project
+      // processor's subscription does not exist and the facade refuses the
+      // name (a read must never materialize a facet). This is a pure catalog
+      // read — answer with the empty fold the facade used to fabricate,
+      // exactly as it did while the project's own creation saga runs.
+      if (!isUnconfiguredSubscriptionError(error)) throw error;
+      return ProjectProcessorContract.stateSchema.parse({}) as ProjectProcessorState;
+    }
     try {
       // Safe: the root stream's facet composition registers the
       // ProjectProcessor under ProjectProcessorContract.slug, so the facade
@@ -8036,8 +8151,11 @@ type StreamProcessorFacadeStub = ProcessorHostStub &
     describeCapabilities(): Promise<CapabilityDescription[]>;
   };
 
-/** Dial the facade for one facet-hosted subscription. Fresh per call: facade
- * stubs are remote RpcTarget stubs whose lifetime the caller owns. */
+/** Dial the facade for one processor-wake subscription. The Stream DO routes
+ * by the COMMITTED catalog row — facet rows serve their facet, expression
+ * rows replay reads onto the worker's own `processor` node, and an unknown
+ * name throws (a read must never materialize a facet). Fresh per call:
+ * facade stubs are remote RpcTarget stubs whose lifetime the caller owns. */
 function streamProcessorFacade(input: {
   name: string;
   path: string;

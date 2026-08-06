@@ -1099,15 +1099,17 @@ describe("StreamCoreProcessor validation and dispatch", () => {
 
   test("processor-wake requires exactly one placement", () => {
     const { processor, state } = harness(SOURCE_PATH);
-    const configure = (receiver: Record<string, unknown>) => () =>
-      processor.validate({
-        event: {
-          type: "events.iterate.com/stream/subscription-configured",
-          payload: { name: "agent", receiver },
-        },
-        state,
-        authority: "public",
-      });
+    const configure =
+      (receiver: Record<string, unknown>, authority: "public" | "core-event" = "public") =>
+      () =>
+        processor.validate({
+          event: {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: { name: "agent", receiver },
+          },
+          state,
+          authority,
+        });
     const expression = ["agents", ["get", "/agents/reviewer"], "processor", "wakeStreamProcessor"];
 
     // Neither placement: nothing to dial.
@@ -1116,10 +1118,38 @@ describe("StreamCoreProcessor validation and dispatch", () => {
     expect(configure({ action: "processor-wake", placement: "facet", expression })).toThrow(
       /exactly one of placement/,
     );
-    // Facet placement: the subscription name IS the facet name; no expression.
-    expect(configure({ action: "processor-wake", placement: "facet" })).not.toThrow();
+    // Facet placement: the subscription name IS the facet name; no
+    // expression — and it is platform-internal, so only a platform append
+    // may configure it.
+    expect(configure({ action: "processor-wake", placement: "facet" }, "core-event")).not.toThrow();
     // Expression placement: today's own-DO / userspace-worker wake.
     expect(configure({ action: "processor-wake", expression })).not.toThrow();
+  });
+
+  test("facet placement is platform-internal: public appends cannot configure it", () => {
+    const { processor, state } = harness(SOURCE_PATH);
+    const validate =
+      (receiver: Record<string, unknown>, authority: "public" | "core-event") => () =>
+        processor.validate({
+          event: {
+            type: "events.iterate.com/stream/subscription-configured",
+            payload: { name: "secret", receiver },
+          },
+          state,
+          authority,
+        });
+    const expression = ["agents", ["get", "/agents/reviewer"], "processor", "wakeStreamProcessor"];
+
+    // The abuse shape: a public caller trying to run a first-party processor
+    // as a facet of an arbitrary stream (the name selects the contract).
+    expect(validate({ action: "processor-wake", placement: "facet" }, "public")).toThrow(
+      /facet placement is platform-internal/,
+    );
+    // The platform lane commits the same event.
+    expect(validate({ action: "processor-wake", placement: "facet" }, "core-event")).not.toThrow();
+    // Public callers keep every other receiver, including expression-placed
+    // processor-wake (userspace workers over the wake transport).
+    expect(validate({ action: "processor-wake", expression }, "public")).not.toThrow();
   });
 
   test("resumed requires a halted subscription", () => {
@@ -1147,6 +1177,8 @@ describe("StreamCoreProcessor validation and dispatch", () => {
 
   test("processor-wake accepts any name at configure time", () => {
     const { processor, state } = harness(SOURCE_PATH);
+    // Platform authority: facet placement is platform-internal, and name
+    // permissiveness is what this test pins down.
     const configure = (name: string) => () =>
       processor.validate({
         event: {
@@ -1157,7 +1189,7 @@ describe("StreamCoreProcessor validation and dispatch", () => {
           },
         },
         state,
-        authority: "public",
+        authority: "core-event",
       });
     // The NAME is the contract selector (name == registered slug), but nothing
     // enforces that here: a name matching no registered processor fails loudly

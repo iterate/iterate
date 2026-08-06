@@ -209,6 +209,23 @@ export class StreamCoreProcessor {
         args.event,
         "events.iterate.com/stream/subscription-configured",
       );
+      // Facet placement is platform-internal: the subscription name IS the
+      // facet name AND a first-party contract slug, and its wake is an
+      // in-process parent→facet dial that runs platform processor code with
+      // delivery authority. Only platform-authored appends — the same
+      // authority class that appends CORE_AUTHORED_EVENT_TYPES — may
+      // configure it. Public appends keep every other receiver, including
+      // expression-placed processor-wake (userspace workers over the wake
+      // transport).
+      if (
+        event.payload.receiver.action === "processor-wake" &&
+        event.payload.receiver.placement === "facet" &&
+        args.authority !== "core-event"
+      ) {
+        throw new Error(
+          'facet placement is platform-internal; a public append cannot configure a processor-wake subscription with placement: "facet"',
+        );
+      }
       const requestedName = event.payload.name;
       // Only the platform's omitted-name fallback may mint `subscription:…`
       // names; a caller may still address one that already exists (generated
