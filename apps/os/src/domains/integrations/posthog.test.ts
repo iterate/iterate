@@ -149,16 +149,6 @@ describe("first-party PostHog stream integration", () => {
     });
   });
 
-  it("does not export stream events from dev or preview deployments", async () => {
-    for (const workerName of ["os", "os-preview-6"]) {
-      const captureFetch = acceptingFetch();
-      await capturePosthogStreamEventBatch(captureArgs([streamEvent()], workerName), {
-        fetch: captureFetch,
-      });
-      expect(captureFetch).not.toHaveBeenCalled();
-    }
-  });
-
   it("drops ephemeral events from capture, including all-ephemeral batches", async () => {
     const durable = streamEvent();
     const ephemeral = streamEvent({

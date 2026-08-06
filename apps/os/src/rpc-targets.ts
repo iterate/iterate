@@ -3749,12 +3749,10 @@ class PostHogIntegrationRpcTarget extends RpcTarget {
     if (batch.projectId !== this.props.projectId) {
       throw new Error("PostHog stream delivery project does not match its itx authority");
     }
-    const config = parseConfig(env).posthog;
-    if (config === undefined) {
-      throw new StreamReceiverUnavailableError("PostHog is not configured for this deployment");
-    }
+    const posthog = parseConfig(env).posthog;
+    if (posthog?.sendStreamEvents !== true) return;
     await capturePosthogStreamEventBatch({
-      apiKey: config.apiKey,
+      apiKey: posthog.apiKey,
       batch,
       projectId: this.props.projectId,
       workerName: env.WORKER_SELF,
