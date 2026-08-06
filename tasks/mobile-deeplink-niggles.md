@@ -33,8 +33,8 @@ Implementation complete; all local checks green (typecheck, lint, knip, format; 
    - [x] Show commit details: `buildInfo` stamps `message` alongside `commit`/`branch` — add the running bundle's commit message (and keep `branch @ sha`) to the card
 3. **Auth changes unprotected by tests** (rewrite-proofing the login_hint feature):
    - [x] `apps/auth` e2e (`oauth-code-exchange.e2e.test.ts` lane — plain fetch against a deployed/local auth): authorize request with `login_hint` → assert the signed `/login` redirect Location carries it (protects the `@better-auth/oauth-provider` patch)
-   - [ ] Extract the login page's hint/otp-guess derivation (`hintedEmail`, `otpGuess` from search + config) into a pure `apps/auth/src/utils/login-hint.ts` with node unit tests _(utils/login-hint.ts + 8 node tests; login.tsx now renders what it derives)_
-   - [ ] Note: full-UI coverage (Continue-as button → prefilled OTP) already exists in `specs/mobile/preview-deeplink-hints.spec.ts` (preview e2e lane)
+   - [x] Extract the login page's hint/otp-guess derivation (`hintedEmail`, `otpGuess` from search + config) into a pure `apps/auth/src/utils/login-hint.ts` with node unit tests _(utils/login-hint.ts + 8 node tests; login.tsx now renders what it derives)_
+   - [x] Note: full-UI coverage (Continue-as button → prefilled OTP) already exists in `specs/mobile/preview-deeplink-hints.spec.ts` (preview e2e lane)
 
 ## Assumptions
 
