@@ -76,7 +76,8 @@ async function makeProcessor(options: {
     validateCapabilityTypes: options.validateCapabilityTypes,
     reads: {
       snapshot: () => runner.snapshot(),
-      waitUntilEvent: (input) => runner.waitUntilEvent(input),
+      waitUntilEvent: (input) =>
+        "offset" in input ? runner.waitUntilEvent(input) : runner.waitUntilEvent(input),
     },
   });
   runner = new StreamProcessorRunner({ processor, stream: options.stream });

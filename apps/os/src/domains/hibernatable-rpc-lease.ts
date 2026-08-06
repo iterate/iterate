@@ -89,10 +89,7 @@ export function parseHibernatableRpcLeaseFrame(
  * use, one exact socket claims a lease key, and any serialization/send failure
  * closes the channel so it cannot remain healthy-looking and stale.
  */
-export class HibernatableRpcLeaseSockets<
-  Attachment,
-  Frame extends { type: string } = HibernatableRpcLeaseFrame,
-> {
+export class HibernatableRpcLeaseSockets<Attachment> {
   readonly #options: HibernatableRpcLeaseSocketsOptions<Attachment>;
 
   constructor(options: HibernatableRpcLeaseSocketsOptions<Attachment>) {
@@ -212,7 +209,7 @@ export class HibernatableRpcLeaseSockets<
   }
 
   /** Send one lifecycle frame; failure closes the channel and returns false. */
-  send(ws: WebSocket, frame: Frame): boolean {
+  send(ws: WebSocket, frame: HibernatableRpcLeaseFrame): boolean {
     try {
       ws.send(JSON.stringify(frame));
       return true;

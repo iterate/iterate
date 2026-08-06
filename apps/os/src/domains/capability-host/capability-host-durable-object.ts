@@ -212,6 +212,8 @@ export class CapabilityHostDurableObject extends DurableObject<Env> {
               throw new Error("live capability provision committed a non-live record");
             }
             if (!this.#liveCapabilityLeases.bindProvision(record, liveLease.socketId)) {
+              this.#invalidateLiveLeaseReconciliation();
+              this.ctx.waitUntil(this.#reconcileLiveCapabilityLeases());
               throw new Error(`live capability "${input.path.join(".")}" lease socket disappeared`);
             }
           }
