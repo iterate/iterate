@@ -1473,6 +1473,16 @@ static size_t health_json(char *out, size_t capacity) {
     {"bargeIns", runtime.barge_in_flushes},
     {"faceFrames", face_metrics.analyzer_frames},
     {"faceRenderFails", face_metrics.render_failures},
+    /*
+     * THE BLACK SCREEN, NAMED. The sidecar switches itself off after a failed
+     * or timed-out panel transfer and never switches back on; without these
+     * three the board looks identical to a working one from every angle except
+     * the one you are looking at.
+     */
+    {"displayActive", iterate_kit_stackchan_avatar_display_active() ? 1U : 0U},
+    {"displayTransfers", face_metrics.display_transfers},
+    {"displayTransferFails", face_metrics.display_transfer_failures},
+    {"displayTransferTimeouts", face_metrics.display_transfer_timeouts},
     {"faceDroppedFrames", face_metrics.mailbox_overwrites},
     {"batches", runtime.voicelab.batches_on_connection},
     {"connGeneration", runtime.voicelab.connection_generation},

@@ -143,6 +143,18 @@ bool iterate_kit_stackchan_avatar_observe_playout(
 void iterate_kit_stackchan_avatar_metrics_snapshot(
     struct iterate_kit_stackchan_avatar_metrics *snapshot);
 
+/**
+ * Whether the panel is still being driven.
+ *
+ * A BLACK SCREEN IS A LATCH, NOT A CRASH. Four paths switch the visual sidecar
+ * off — a failed transfer, a transfer that timed out, and two more — and that
+ * is the correct bounded policy, because after a DMA timeout the buffer's
+ * ownership is unknowable and audio must keep running. What was missing is any
+ * way to ASK: the board went dark, its LEDs stayed green, its face frames kept
+ * counting up, and nothing it published said the display had been switched off.
+ */
+bool iterate_kit_stackchan_avatar_display_active(void);
+
 #ifdef __cplusplus
 }
 #endif

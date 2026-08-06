@@ -1243,3 +1243,7 @@ uint32_t iterate_kit_stackchan_avatar_speaker_status_peak(void) {
       ? 256U
       : 0U;
 }
+
+bool iterate_kit_stackchan_avatar_display_active(void) {
+  return __atomic_load_n(&owner.display_active, __ATOMIC_ACQUIRE) != 0U;
+}
