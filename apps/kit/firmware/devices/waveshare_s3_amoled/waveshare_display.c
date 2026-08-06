@@ -40,8 +40,14 @@ enum {
    * the device's own edge — the same reasoning as the Stick's left-edge rail.
    */
   LIGHTS_WIDTH = DISPLAY_WIDTH,
-  LIGHTS_HEIGHT = 28,
-  LIGHTS_MARGIN = 24,
+  /*
+   * Half-height marks flush with the bottom edge, not a row of squares. They
+   * are a status bar, not twelve objects — small enough to read as one strip
+   * of information under the face rather than as a second thing competing
+   * with it.
+   */
+  LIGHTS_HEIGHT = 10,
+  LIGHTS_MARGIN = 0,
   STATUS_CAPACITY = 64,
   REFRESH_PERIOD_MS = 100,
 };
@@ -237,8 +243,9 @@ static void refresh_lights(void) {
   const struct iterate_kit_conversation_visual_state status = face_status();
   const int32_t pitch =
       LIGHTS_WIDTH / (int32_t)ITERATE_KIT_CONVERSATION_LIGHT_COUNT;
-  const int32_t dot = LIGHTS_HEIGHT - 8;
-  const int32_t left = (pitch - dot) / 2;
+  const int32_t mark_width = pitch - 6;
+  const int32_t mark_height = LIGHTS_HEIGHT / 2;
+  const int32_t left = (pitch - mark_width) / 2;
   int32_t index;
 
   if (lights_pixels == NULL) return;
@@ -253,13 +260,12 @@ static void refresh_lights(void) {
         ((lights[index].red & 0xF8U) << 8) |
         ((lights[index].green & 0xFCU) << 3) | (lights[index].blue >> 3));
     int32_t row;
-    for (row = 0; row < dot; ++row) {
+    /* Flush with the bottom: the last rows of the canvas, nothing under them. */
+    for (row = LIGHTS_HEIGHT - mark_height; row < LIGHTS_HEIGHT; ++row) {
       uint16_t *const out =
-          &lights_pixels[(size_t)((LIGHTS_HEIGHT - dot) / 2 + row) *
-                             LIGHTS_WIDTH +
-                         index * pitch + left];
+          &lights_pixels[(size_t)row * LIGHTS_WIDTH + index * pitch + left];
       int32_t column;
-      for (column = 0; column < dot; ++column) out[column] = colour;
+      for (column = 0; column < mark_width; ++column) out[column] = colour;
     }
   }
   lv_obj_invalidate(lights_canvas);
@@ -344,7 +350,7 @@ static void build_ui(void) {
      * making room for two text labels that no longer exist — the lights and
      * the banner say what they said, inside the card itself.
      */
-    lv_obj_align(face_canvas, LV_ALIGN_CENTER, 0, -LIGHTS_MARGIN);
+    lv_obj_align(face_canvas, LV_ALIGN_CENTER, 0, 0);
   }
 
 }

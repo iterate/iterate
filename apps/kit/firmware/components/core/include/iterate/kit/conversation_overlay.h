@@ -31,12 +31,13 @@ extern "C" {
  * compiled avatar — measured, not assumed: the narrowest is 18 free columns,
  * and this rail is 8 wide. It therefore never covers a face.
  *
- * NOT-CONNECTED IS NOT A SUBTLE STATE. Three dim dots in a corner is how a
- * device that cannot possibly work looks identical to one that is merely
- * quiet. So whenever the device is not ready, a banner takes the bottom of
- * the frame and says so in words, and it breathes so it cannot be mistaken
- * for a frozen screen. That banner does cover the bottom of the face, which
- * is the correct trade: there is no conversation to watch during it.
+ * NOT-CONNECTED IS NOT A SUBTLE STATE, AND IT IS NOT A CAPTION EITHER. It was
+ * a word across the bottom of the face for a while — legible, and wrong: a
+ * device with a twelve-LED ring has no way to render a word, so the fleet was
+ * saying the same thing two different ways and only three of the four could
+ * say it at all. The lights say it now, everywhere, with the SAME animation:
+ * a comet walking the twelve positions. One thing to learn, and every surface
+ * can show it.
  *
  * Everything here is pure. No clock is read, no memory is allocated, and the
  * caller passes the time so the animation is reproducible in a host test.
@@ -45,8 +46,6 @@ extern "C" {
 enum {
   /** Source columns the always-on rail occupies at the left edge. */
   ITERATE_KIT_OVERLAY_RAIL_WIDTH = 8,
-  /** Source rows the not-connected banner occupies at the bottom edge. */
-  ITERATE_KIT_OVERLAY_BANNER_HEIGHT = 24,
   /** The banner's breathing period, in milliseconds. */
   ITERATE_KIT_OVERLAY_PULSE_PERIOD_MS = 1400,
   /** Source rows a horizontal light strip occupies below the face. */

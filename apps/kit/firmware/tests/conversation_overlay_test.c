@@ -71,40 +71,6 @@ static void every_light_has_a_socket(void) {
   }
 }
 
-/* A ready device gets its face back: no banner, nothing over the mouth. */
-static void ready_leaves_the_face_alone(void) {
-  const struct iterate_kit_conversation_visual_state state = ready_state();
-  clear_frame();
-  iterate_kit_conversation_overlay_render(&state, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, WIDTH, HEIGHT);
-  assert(!any_pixel_in(
-      (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH,
-      (uint32_t)HEIGHT - (uint32_t)ITERATE_KIT_OVERLAY_BANNER_HEIGHT,
-      (uint32_t)WIDTH - (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH,
-      (uint32_t)ITERATE_KIT_OVERLAY_BANNER_HEIGHT));
-}
-
-/*
- * ...and a device that cannot work says so across the whole width. This is
- * the requirement that a person must never have to guess whether the thing
- * is connected.
- */
-static void not_connected_raises_a_banner(void) {
-  struct iterate_kit_conversation_visual_state state = ready_state();
-  state.network = ITERATE_KIT_NETWORK_CONNECTING;
-  clear_frame();
-  iterate_kit_conversation_overlay_render(&state, 0U, ITERATE_KIT_OVERLAY_LIGHTS_RAIL, frame, WIDTH, HEIGHT);
-  assert(any_pixel_in(
-      (uint32_t)WIDTH / 2U,
-      (uint32_t)HEIGHT - (uint32_t)ITERATE_KIT_OVERLAY_BANNER_HEIGHT,
-      2U,
-      (uint32_t)ITERATE_KIT_OVERLAY_BANNER_HEIGHT));
-  assert(!any_pixel_in(
-      (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH,
-      0U,
-      (uint32_t)WIDTH - (uint32_t)ITERATE_KIT_OVERLAY_RAIL_WIDTH,
-      (uint32_t)HEIGHT - (uint32_t)ITERATE_KIT_OVERLAY_BANNER_HEIGHT));
-}
-
 /* A working device must not flicker, and a broken one must not sit still. */
 static void only_attention_states_breathe(void) {
   struct iterate_kit_conversation_visual_state state = ready_state();
@@ -236,8 +202,6 @@ int main(void) {
   connecting_walks_and_ready_holds_still();
   rail_stays_inside_the_left_margin();
   every_light_has_a_socket();
-  ready_leaves_the_face_alone();
-  not_connected_raises_a_banner();
   only_attention_states_breathe();
   an_absent_state_still_says_something();
   a_frame_too_small_is_left_alone();

@@ -2297,8 +2297,22 @@ export class VoiceBridge extends IterateDurableObject {
     let pendingHangUp: string | null = null;
     const settleHangUp = () => {
       if (pendingHangUp === null || closedDown) return;
-      /* Still speaking, or being spoken to. Either way the goodbye is not over. */
-      if (responseActive || liveResponses.size > 0 || micOpen) return;
+      /*
+       * Still speaking? Then the goodbye is not over.
+       *
+       * `micOpen` DELIBERATELY DOES NOT APPEAR HERE. It did, on the reasoning
+       * that hanging up while somebody is talking is rude — but the two boards
+       * with echo cancellation hold their microphone open for the WHOLE call,
+       * so on those it is never closed and the hang-up never settled at all:
+       * the tool fired, the model said "Goodbye!", and the call stayed up.
+       * Measured on the StackChan with callActive still true afterwards.
+       *
+       * An open microphone is a property of the hardware, not evidence that
+       * anybody is speaking into it. The provider tells us that separately,
+       * and it is already covered: a real interruption starts a response, and
+       * `responseActive` catches it.
+       */
+      if (responseActive || liveResponses.size > 0) return;
       const reason = pendingHangUp;
       pendingHangUp = null;
       const waitMs =
