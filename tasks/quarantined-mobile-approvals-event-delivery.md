@@ -114,6 +114,19 @@ but no longer grows exponentially, so the same three-error regression reaches
 the ready fourth target in 15 seconds. Nine focused readiness/create tests pass;
 the 25-run streak remains zero for this new exact head.
 
+The corrected readiness head passed all linked proofs in preview, but its
+first run was excluded for a one-time 453-second package/deploy preflight and
+two opaque Stream background failures. Its warmed 350-second successor
+repeated the two background failures and the corresponding agent-chat case
+retried after its first project never rendered the assistant reply. The child
+Stream's ancestor announcement reset its in-memory in-flight flag after a
+background rejection but did not durably request another reconciliation turn.
+Ancestor discovery now remains an explicit repair obligation until its
+idempotent remote appends succeed. A red full-Durable-Object regression proves
+three failed turns each preserve a native alarm and the fourth succeeds; all
+29 copy-recovery/background-work tests pass. The streak remains zero for the
+next exact head.
+
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
 model and routing; the mobile bundle does not import its route helper. The
@@ -842,3 +855,15 @@ Test these in order; do not treat the first plausible one as the conclusion.
   sequence; capping each invocation-free handoff at five seconds reaches the
   ready fourth target in 15 seconds without raising the timeout. The focused
   nine-test readiness/create set passes; the streak restarts at zero.
+- 2026-08-06: Readiness head `88c258e7e` kept every linked proof first-try
+  green in preflight `w8z672bxsg`, but that run was excluded at 453 seconds and
+  its exact-version audit found two opaque `stream core background work failed`
+  rows. Warmed candidate `p5g7jl72cd` finished in 350 seconds and repeated the
+  same two rows; its corresponding agent-chat attempt never rendered the reply
+  and passed only on test retry. The child Stream's ancestor-discovery work was
+  level-triggered only in memory: a background rejection cleared the in-flight
+  flag but did not durably arm a later reconciliation. A red full-Durable-
+  Object regression now injects three opaque ancestor-append failures, proves
+  each turn preserves another native alarm, and observes the fourth idempotent
+  append succeed. All 29 copy-recovery/background-work tests pass; the streak
+  restarts at zero.

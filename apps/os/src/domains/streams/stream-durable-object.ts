@@ -1238,12 +1238,13 @@ export class StreamDurableObject extends DurableObject<Env> {
   }
 
   /** Tell every ancestor stream (up to the root) that this stream exists. */
-  #announceToAncestors(): void {
-    if (this.#ancestorsAnnouncedThisIncarnation || this.#ancestorAnnouncementInFlight) return;
+  #announceToAncestors(): boolean {
+    if (this.#ancestorsAnnouncedThisIncarnation) return true;
+    if (this.#ancestorAnnouncementInFlight) return false;
     const path = this.#coreProcessorState.path;
     if (path === undefined || path === "/") {
       this.#ancestorsAnnouncedThisIncarnation = true;
-      return;
+      return true;
     }
 
     const pathSegments = path.split("/").filter(Boolean);
@@ -1269,6 +1270,11 @@ export class StreamDurableObject extends DurableObject<Env> {
         this.#ancestorAnnouncementInFlight = false;
       }
     });
+    // The idempotent remote appends are not committed state on this child
+    // stream. Keep a native alarm armed until a later reconciliation observes
+    // that they completed; otherwise a transient background rejection clears
+    // the in-memory flag and silently strands ancestor discovery.
+    return false;
   }
 
   #streamStub(path: string) {

@@ -523,6 +523,64 @@ describe("StreamDurableObject receiving retries", () => {
 });
 
 describe("StreamDurableObject reconciliation recovery", () => {
+  it("keeps an alarm armed until a failed ancestor announcement succeeds", async () => {
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const loggedError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const childPath = "/onboarding";
+    const context = durableObjectContext(streamName(childPath));
+    const announcements: StreamEventInput[] = [];
+    let attempts = 0;
+    const env = {
+      STREAM: {
+        getByName() {
+          return {
+            async appendCoreEvent(event: StreamEventInput): Promise<StreamEvent> {
+              attempts += 1;
+              if (attempts <= 3) {
+                throw new Error(`internal error; reference = platformfailure${attempts}`);
+              }
+              announcements.push(structuredClone(event));
+              return {
+                ...event,
+                path: "/",
+                offset: 1,
+                createdAt: SOURCE_STREAM_CREATED_AT,
+              } as StreamEvent;
+            },
+          };
+        },
+      },
+    } as unknown as Env;
+    const stream = new StreamDurableObject(context.ctx, env);
+    await context.settle();
+    expect(attempts).toBe(1);
+
+    try {
+      stream.append({ type: MATCHING_EVENT_TYPE, payload: { issue: "announce-me" } });
+      await context.settle();
+      expect(attempts).toBe(2);
+
+      const alarmCountBeforeFailedRetry = context.alarms.length;
+      stream.alarm();
+      await context.settle();
+      expect(attempts).toBe(3);
+      expect(context.alarms.length).toBeGreaterThan(alarmCountBeforeFailedRetry);
+
+      stream.alarm();
+      await context.settle();
+      expect(attempts).toBe(4);
+      expect(announcements).toEqual([
+        expect.objectContaining({
+          type: "events.iterate.com/stream/child-stream-created",
+          payload: { childPath },
+        }),
+      ]);
+      expect(loggedError).toHaveBeenCalledTimes(3);
+    } finally {
+      context.close();
+    }
+  });
+
   it("rejects oversized retained state before inserting the configuring event", async () => {
     const context = durableObjectContext(streamName(SOURCE_PATH));
     const env = { STREAM: { getByName: vi.fn() } } as unknown as Env;
