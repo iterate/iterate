@@ -96,25 +96,32 @@ export type AssembledPreamble = {
 /**
  * Render a scope's preamble. Returns null when there is nothing to inject —
  * the common empty scope pays nothing.
+ *
+ * ONE source, two derivations: every section is a single marked string in
+ * which TS-only spans (annotations, casts, type aliases — always purely
+ * additive) are wrapped by {@link markedRenderer}'s `tsOnly`. `toTs` strips
+ * just the markers; `toJs` strips the marked spans. The variants cannot
+ * diverge by carelessness because nobody writes them separately.
  */
 export function assemblePreamble(input: {
   /** Injection order is the array order (state keeps first-set order). */
   entries: Pick<PreambleEntry, "key" | "code">[];
   results: RetainedScriptResult[];
 }): AssembledPreamble | null {
-  const sections: { ts: string; js: string }[] = [];
+  const renderer = markedRenderer();
+  const sections: string[] = [];
   if (input.results.length > 0) {
-    sections.push(renderResultsArray(input.results));
+    sections.push(renderResultsArray(input.results, renderer.tsOnly));
   }
   for (const entry of input.entries) {
-    const code = `// ── preamble entry ${JSON.stringify(entry.key)} ──\n${entry.code}`;
-    sections.push({ ts: code, js: code });
+    // User entries embed verbatim in BOTH variants — they cannot be
+    // auto-stripped without a compiler; same caveat as raw scripts on the
+    // no-emit fallback path.
+    sections.push(`// ── preamble entry ${JSON.stringify(entry.key)} ──\n${entry.code}`);
   }
   if (sections.length === 0) return null;
-  return {
-    ts: sections.map((section) => section.ts).join("\n"),
-    js: sections.map((section) => section.js).join("\n"),
-  };
+  const marked = sections.join("\n");
+  return { ts: renderer.toTs(marked), js: renderer.toJs(marked) };
 }
 
 /**
@@ -124,54 +131,68 @@ export function assemblePreamble(input: {
  * `.data` plus a typed async `load(itx)` that reads the settlement back
  * through the scope's own capability host; failures carry `.error`.
  */
-function renderResultsArray(rows: RetainedScriptResult[]): { ts: string; js: string } {
+function renderResultsArray(rows: RetainedScriptResult[], tsOnly: (code: string) => string) {
   const newestFirst = [...rows].reverse();
   const typeAliases: string[] = [];
-  const tsElements: string[] = [];
-  const jsElements: string[] = [];
+  const elements: string[] = [];
   newestFirst.forEach((row, index) => {
     const id = JSON.stringify(row.executionId);
     switch (row.kind) {
-      case "data": {
-        const data = inlineDataExpression(row.resultJson);
-        tsElements.push(`  { executionId: ${id}, data: ${data.ts} },`);
-        jsElements.push(`  { executionId: ${id}, data: ${data.js} },`);
+      case "data":
+        elements.push(
+          `  { executionId: ${id}, data: ${inlineDataExpression(row.resultJson, tsOnly)} },`,
+        );
         break;
-      }
       case "large": {
         const typeName = `Result${index}`;
-        typeAliases.push(`type ${typeName} = ${row.typeText};`);
+        typeAliases.push(tsOnly(`type ${typeName} = ${row.typeText};\n`));
         const loadBody = `(await itx.capabilityHost.getScriptResult(${id})).data`;
         const message = JSON.stringify(
           `Large result: use \`await results[${index}].load(itx)\` instead`,
         );
-        tsElements.push(
+        elements.push(
           `  {`,
           `    executionId: ${id},`,
-          `    get data(): never { throw new Error(${message}); },`,
-          `    load: async (itx: Itx): Promise<${typeName}> => ${loadBody} as ${typeName},`,
-          `  },`,
-        );
-        jsElements.push(
-          `  {`,
-          `    executionId: ${id},`,
-          `    get data() { throw new Error(${message}); },`,
-          `    load: async (itx) => ${loadBody},`,
+          `    get data()${tsOnly(": never")} { throw new Error(${message}); },`,
+          `    load: async (itx${tsOnly(": Itx")})${tsOnly(`: Promise<${typeName}>`)} => ${loadBody}${tsOnly(` as ${typeName}`)},`,
           `  },`,
         );
         break;
       }
-      case "error": {
-        tsElements.push(`  { executionId: ${id}, error: ${JSON.stringify(row.error)} },`);
-        jsElements.push(`  { executionId: ${id}, error: ${JSON.stringify(row.error)} },`);
+      case "error":
+        elements.push(`  { executionId: ${id}, error: ${JSON.stringify(row.error)} },`);
         break;
-      }
     }
   });
-  const header = "// ── prior script results, newest first (assembled by the platform) ──";
+  return [
+    "// ── prior script results, newest first (assembled by the platform) ──",
+    // Whole-line TS-only sections carry their own trailing newline inside the
+    // span (see typeAliases above), so the js variant has no blank ghosts.
+    `${typeAliases.join("")}const results = [`,
+    ...elements,
+    `]${tsOnly(" as const")};`,
+  ].join("\n");
+}
+
+/**
+ * The single-source marker scheme. `tsOnly` wraps a purely-additive
+ * TypeScript span; `toTs` keeps the span and drops the markers; `toJs` drops
+ * span and markers together. The marker id is random per assembly so
+ * adversarial content (a result JSON containing marker-shaped text) cannot
+ * terminate or open a span.
+ */
+function markedRenderer() {
+  const id = Math.random().toString(36).slice(2);
+  const begin = `/*ts:begin:${id}*/`;
+  const end = `/*ts:end:${id}*/`;
   return {
-    ts: [header, ...typeAliases, "const results = [", ...tsElements, "] as const;"].join("\n"),
-    js: [header, "const results = [", ...jsElements, "];"].join("\n"),
+    tsOnly: (code: string) => `${begin}${code}${end}`,
+    toTs: (marked: string) => marked.split(begin).join("").split(end).join(""),
+    toJs: (marked: string) =>
+      marked
+        .split(begin)
+        .map((chunk, index) => (index === 0 ? chunk : chunk.slice(chunk.indexOf(end) + end.length)))
+        .join(""),
   };
 }
 
@@ -181,10 +202,9 @@ function renderResultsArray(rows: RetainedScriptResult[]): { ts: string; js: str
  * the prototype instead of a plain property. Such results (rare, possibly
  * adversarial) parse at runtime instead — losing only the literal type.
  */
-function inlineDataExpression(resultJson: string): { ts: string; js: string } {
+function inlineDataExpression(resultJson: string, tsOnly: (code: string) => string): string {
   if (resultJson.includes('"__proto__"')) {
-    const parsed = `JSON.parse(${JSON.stringify(resultJson)})`;
-    return { ts: `${parsed} as unknown`, js: parsed };
+    return `JSON.parse(${JSON.stringify(resultJson)})${tsOnly(" as unknown")}`;
   }
-  return { ts: resultJson, js: resultJson };
+  return resultJson;
 }
