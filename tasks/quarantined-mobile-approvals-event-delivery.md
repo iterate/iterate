@@ -28,8 +28,14 @@ raced first creation against eight seconds, abandoned the successful response's
 one-time write token, then hammered an existing but unreadable repo. Empty repo
 birth now transfers to an independent durable alarm actor which awaits that
 token, checkpoints the seeded Artifact, and appends the terminal fact under the
-original stream-lifetime fence. The 25-run streak remains at zero until this
-fix passes a fresh preview.
+original stream-lifetime fence. Its first baseline made every preview group
+green with both restored mobile flows first try, but the exact-version audit
+caught one remaining dynamic-worker concurrency error. A later config commit
+was probing the project worker from the retained root Stream alarm while that
+alarm delivered the same commit to the userspace worker feed. The probe now
+transfers to the Project DO's durable alarm queue and keeps the original stream
+fence. The 25-run streak remains at zero until this new head passes a clean
+preview and trace audit.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -236,6 +242,15 @@ notification journal.
   remains separate from this auth fix.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
+- Exact-head baseline `pjdxkm1kjb` / attempt `ljkjs8v9mc` on `7df2242c3`
+  passed all six preview groups, 190 OS tests, interrupted-session recovery,
+  approvals in 51.6 seconds, and notifications in about one minute with no
+  test retry. The strict Cloudflare audit rejected it for one unexplained
+  exact-version error in trace `54342071e9bcc5e682d1166fe77f2194`:
+  `ProjectDurableObject` called the project-config dynamic worker from its
+  config-commit processor while the root Stream alarm's permanent
+  `project-worker` feed called that worker in the same invocation tree. The
+  latter succeeded; the former hit Cloudflare's four-dynamic-worker limit.
 
 ## Quarantined behavior
 
@@ -540,3 +555,19 @@ Test these in order; do not treat the first plausible one as the conclusion.
   lint, and formatting. The generated itx API was refreshed for the new
   optional seeded-head certificate field after its freshness check caught the
   omission.
+- 2026-08-06: Repo-birth baseline `pjdxkm1kjb` passed all six groups and both
+  restored mobile flows first try, but strict trace audit rejected one
+  dynamic-worker concurrency error in trace
+  `54342071e9bcc5e682d1166fe77f2194`. A post-creation config commit was sent
+  concurrently to the userspace `project-worker` feed and the Project
+  processor's inline readiness probe from one retained root Stream alarm.
+  Added a red handoff spec and a pure durable queue state machine. The
+  processor now checkpoints an alarm handoff without probing; the Project DO
+  later probes in an independent alarm invocation, checkpoints the exact
+  success/failure outcome, and appends it through the original stream-ID
+  fence. Queue tests cover dedupe, lost acknowledgement, stale stream,
+  deterministic failure, bounded classified retry, visible invariant failure,
+  and a second commit interleaving while the first probe is in flight. The 83
+  Project-domain tests, OS typecheck, root lint, and formatting pass; a fresh
+  exact-head preview and trace audit are next, so the 25-run streak remains
+  zero.

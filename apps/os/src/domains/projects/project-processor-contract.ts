@@ -210,15 +210,15 @@ export const ProjectProcessorContract = defineProcessorContract({
     },
     "events.iterate.com/project/worker-update-failed": {
       description:
-        "A post-creation config repo commit deterministically failed to build as the default " +
-        "project worker. A later config commit can repair it; transient availability remains " +
-        "open for redelivery.",
+        "A post-creation config repo commit failed to become the ready default project worker: " +
+        "either its source deterministically failed to build, or the bounded durable readiness " +
+        "recovery exhausted. A later config commit can repair it.",
       payloadSchema: z.object({
         commitOid: z.string().trim().min(1).meta({
           description: "The config-repo commit that triggered the failed readiness check.",
         }),
         error: z.string().trim().min(1).meta({
-          description: "The deterministic worker build failure.",
+          description: "The worker build failure or exhausted readiness-recovery explanation.",
         }),
       }),
     },

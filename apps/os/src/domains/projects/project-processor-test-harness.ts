@@ -12,10 +12,18 @@ import {
 import type { ProjectDirectoryRecord } from "../../project-directory.ts";
 import type { ProjectRpcTarget } from "../../rpc-targets.ts";
 import { WORKER_BUILDING_HEADER } from "../workers/worker-fetch-dispatch.ts";
+import { isWorkerBuildFailedError } from "../workers/artifact-store.ts";
 import { withWorkerCommit } from "../workers/worker-serve-info.ts";
 import { internalStreamId } from "../streams/stream-delivery-utils.ts";
 import { ProjectProcessorContract } from "./project-processor-contract.ts";
-import { ProjectProcessor } from "./project-processor-implementation.ts";
+import {
+  ProjectProcessor,
+  waitForDefaultProjectWorker,
+} from "./project-processor-implementation.ts";
+import {
+  workerUpdatedOutcome,
+  workerUpdateFailedOutcome,
+} from "./project-worker-update-coordinator.ts";
 
 export type ProjectEventInput = ConsumedInput<ProjectProcessorContract>;
 
@@ -138,6 +146,8 @@ export function makeProjectHarness(
     clockAdvanceBySibling?: Partial<Record<SiblingName, number>>;
     /** Overrides the worker probe's retry pause. */
     workerRetrySleep?: () => Promise<void>;
+    /** Replaces the production alarm handoff for focused processor specs. */
+    updateDefaultWorker?: (input: { commitOid: string; streamId: string }) => Promise<void>;
     processorClass?: typeof ProjectProcessor;
   } = {},
 ) {
@@ -196,6 +206,28 @@ export function makeProjectHarness(
         itx,
         customDomains,
         workerFetch,
+        updateDefaultWorker:
+          options.updateDefaultWorker ??
+          (async ({ commitOid, streamId }) => {
+            let outcome;
+            try {
+              const servedCommitOid = await waitForDefaultProjectWorker({
+                sleep: options.workerRetrySleep ?? (() => Promise.resolve()),
+                workerFetch,
+              });
+              outcome = workerUpdatedOutcome(commitOid, servedCommitOid);
+            } catch (error) {
+              if (!isWorkerBuildFailedError(error)) throw error;
+              outcome = workerUpdateFailedOutcome(
+                commitOid,
+                error instanceof Error ? error.message : String(error),
+              );
+            }
+            await deps.stream.appendIfStreamId({
+              streamId,
+              events: [outcome],
+            });
+          }),
         appendPlatformEvents: async ({ events, streamId }) => {
           await deps.stream.appendIfStreamId({ events, streamId });
         },
