@@ -132,7 +132,11 @@ describe("RepoProcessor eviction recovery", () => {
     };
     await h.stream.append(EMPTY_REQUEST);
 
-    await expect(h.settle()).rejects.toThrow("HTTP Error: 503 Service Unavailable");
+    await expect(h.settle()).rejects.toMatchObject({
+      message: "Artifacts temporarily unavailable: HTTP Error: 503 Service Unavailable",
+      name: "RetryableRepoCreationError",
+      retryable: true,
+    });
     expect(calls).toBe(1);
     expect(h.events("events.iterate.com/repos/create-failed")).toHaveLength(0);
 

@@ -22,7 +22,10 @@ availability outcomes while still rejecting unclassified failures. Auth's 86
 tests, the 18-test deploy-helper suite, typechecks, lint, and formatting are
 green. The latest baseline then exposed a Semaphore waiter timing out while
 its lease assignment was already in flight; that lifecycle is now explicit
-and covered by the tightened live case. The 25-run streak remains at zero
+and covered by the tightened live case. Its successor exposed a property-
+stripped Artifacts 503 crossing the processor RPC boundary without the
+availability flag; the repo processor now wraps that already-classified
+failure in the wire-safe retryable error. The 25-run streak remains at zero
 until these fixes pass a fresh preview.
 
 The two end-to-end mobile approval and notification flows were quarantined on
@@ -507,3 +510,13 @@ Test these in order; do not treat the first plausible one as the conclusion.
   assignment finishes, while its own failure rejects that waiter explicitly.
   The live case no longer relies on a 250 ms cushion. Semaphore typecheck, its
   four local tests, lint, and formatting pass.
+- 2026-08-06: Baseline `3v3313vbpl` on `a7ec3271f` retried six OS cases and
+  emitted one exact-version callback application error. Project
+  `prj_9393c83a0a3e4e5eab80ad49de5ddba0` spent 48.969 seconds birthing its
+  config repo; the first repo-processor delivery received the live-observed
+  property-stripped `HTTP Error: 503 Service Unavailable`. The processor kept
+  the creation obligation open but rethrew the raw error, so its availability
+  classification did not survive the hosted-processor wire serializer. It now
+  wraps that already-classified Artifacts outage as
+  `RetryableRepoCreationError` with the original cause. The red/green recovery
+  case plus 69 focused repo tests, OS typecheck, lint, and formatting pass.

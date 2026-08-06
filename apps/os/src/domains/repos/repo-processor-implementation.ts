@@ -253,9 +253,14 @@ export class RepoProcessor extends StreamProcessor<RepoProcessorContract, RepoPr
         payload: { ...artifact, request },
       };
     } catch (error) {
+      if (isRetryableArtifactsInfrastructureError(error)) {
+        throw new RetryableRepoCreationError(
+          `Artifacts temporarily unavailable: ${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
       if (
         isRepoNotSeededError(error) ||
-        isRetryableArtifactsInfrastructureError(error) ||
         isRetryableDurableObjectAvailabilityError(error) ||
         error instanceof RetryableRepoCreationError
       ) {
