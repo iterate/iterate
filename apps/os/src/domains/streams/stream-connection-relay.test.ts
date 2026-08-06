@@ -3,12 +3,12 @@ import type { StreamConnectionHandle } from "iterate/processors";
 import type { StreamDurableObject } from "./stream-durable-object.ts";
 import { openRelayedStreamConnection } from "./stream-connection-relay.ts";
 
-test("a dormant relay rejects an orphaned wake socket after the stream incarnation dies", async () => {
-  const wakeSocket = new FakeWakeSocket();
+test("a dormant relay rejects an orphaned Subscriber Pager after the stream incarnation dies", async () => {
+  const pager = new FakeSubscriberPager();
   let relayState: "live" | "dormant" | "dead" = "dormant";
   const probe = vi.fn(async () => relayState);
   const stub = {
-    fetch: async () => ({ webSocket: wakeSocket }),
+    fetch: async () => ({ webSocket: pager }),
     openConnection: async () => connectionHandle(),
     relayedConnectionState: probe,
   } as unknown as DurableObjectStub<StreamDurableObject>;
@@ -17,21 +17,21 @@ test("a dormant relay rejects an orphaned wake socket after the stream incarnati
     stub: () => stub,
     args: { processEventBatch: () => undefined },
   });
-  wakeSocket.receive('{"type":"idle"}');
+  pager.receive('{"type":"idle"}');
 
   relayState = "dead";
   expect(await relay.isLive()).toBe(false);
   expect(probe).toHaveBeenCalledWith({
     connectionKey: relay.connectionKey,
-    wakeSocketId: expect.any(String),
+    subscriberPagerId: expect.any(String),
   });
 });
 
-test("a relay reconciles a missed idle frame before the next wake", async () => {
-  const wakeSocket = new FakeWakeSocket();
+test("a relay reconciles a missed idle Page before the next work Page", async () => {
+  const pager = new FakeSubscriberPager();
   const openConnection = vi.fn(async () => connectionHandle());
   const stub = {
-    fetch: async () => ({ webSocket: wakeSocket }),
+    fetch: async () => ({ webSocket: pager }),
     openConnection,
     relayedConnectionState: async () => "dormant" as const,
   } as unknown as DurableObjectStub<StreamDurableObject>;
@@ -42,11 +42,11 @@ test("a relay reconciles a missed idle frame before the next wake", async () => 
   });
 
   expect(await relay.isLive()).toBe(true);
-  wakeSocket.receive('{"type":"wake"}');
+  pager.receive('{"type":"page"}');
   await vi.waitFor(() => expect(openConnection).toHaveBeenCalledTimes(2));
 });
 
-class FakeWakeSocket extends EventTarget {
+class FakeSubscriberPager extends EventTarget {
   accept() {}
 
   close() {}

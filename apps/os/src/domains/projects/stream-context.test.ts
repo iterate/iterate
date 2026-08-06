@@ -35,3 +35,14 @@ test("an unstamped fetch uses the project root stream context", () => {
     streamContext: { kind: "scope", scopePath: "/" },
   });
 });
+
+test("client-session provenance survives the trusted hop", () => {
+  const stamped = withStreamContext(new Request("https://payments.example/refund"), {
+    kind: "client-session",
+    principal: "misha@example.com",
+    admin: false,
+  });
+  expect(takeStreamContext(stamped)).toMatchObject({
+    streamContext: { kind: "client-session", principal: "misha@example.com", admin: false },
+  });
+});

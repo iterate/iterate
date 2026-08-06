@@ -8,6 +8,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { router, Stack } from "expo-router";
 import { ActivityIndicator, FlatList, Pressable, StyleSheet, Text, View } from "react-native";
 import type { ProjectListEntry } from "iterate/sdk/itx/react";
+import { AppDrawerButton } from "../components/project-drawer.tsx";
 import { SignInRequiredError, signOut } from "../lib/auth.ts";
 import { disconnectItxSession, getItxSession } from "../lib/itx.ts";
 import { backfillProjectIfMissing } from "../lib/open-project.ts";
@@ -56,6 +57,8 @@ export default function ProjectsScreen() {
       <Stack.Screen
         options={{
           title: "Projects",
+          // Build info stays reachable before a project is picked.
+          headerLeft: () => <AppDrawerButton />,
           headerRight: () => (
             <Pressable
               onPress={async () => {

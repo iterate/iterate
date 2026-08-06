@@ -206,7 +206,7 @@ import type {
   StatefulDynamicWorkerRef,
 } from "./domains/workers/schemas.ts";
 import { openRelayedStreamConnection } from "./domains/streams/stream-connection-relay.ts";
-import { dialLiveStateSocket, openRelayedLiveState } from "./domains/live-state-socket.ts";
+import { dialLiveStatePager, openRelayedLiveState } from "./domains/live-state-pager.ts";
 import {
   isRetryableDurableObjectAvailabilityError,
   isStreamWaitTimeoutError,
@@ -244,6 +244,7 @@ import type {
   Description,
   ProjectDescription,
 } from "./domains/itx/describe.ts";
+import { CapabilityProviderPagerRelay } from "./domains/capability-host/capability-provider-pager-relay.ts";
 import type { CfExecutionContext } from "./domains/itx/utils.ts";
 import type { SandboxCreateInput } from "./domains/sandboxes/utils.ts";
 import type {
@@ -341,6 +342,7 @@ import type {
   ProvideCapabilityInput,
   RevokeCapabilityInput,
 } from "./domains/capability-host/types.ts";
+import { assertCapabilityPath } from "./domains/capability-host/capability-path.ts";
 import type {
   CollectSecretInput,
   CollectSecretLink,
@@ -932,7 +934,7 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   /**
    * Push-driven stream runtime state for polling-free debug surfaces.
    *
-   * Rides the hibernatable liveState socket (domains/live-state-socket.ts) —
+   * Rides the client-given hibernatable Live State Pager —
    * a watched idle stream hibernates at zero duration and pushes frames only
    * when something actually changes. Snapshot-only degrade on purpose, never
    * the pinning fallback the generic hosts use: the DO's `liveState` property
@@ -942,9 +944,9 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
   get liveState(): LiveStateRpc<StreamRuntimeDebugState> {
     return new RelayedLiveStateRpcTarget<StreamRuntimeDebugState>(
       openRelayedLiveState({
-        dialSocket: () => dialLiveStateSocket(this[STREAM_DURABLE_OBJECT_STUB]),
+        dialPager: () => dialLiveStatePager(this[STREAM_DURABLE_OBJECT_STUB]),
         readSnapshot: () => this.runtimeState(),
-        socketFailureDegrade: "snapshot-only",
+        pagerFailureDegrade: "snapshot-only",
         label: `stream ${this.props.path}`,
       }),
     );
@@ -1040,11 +1042,12 @@ export class StreamRpcTarget extends IterateRpcTarget<"Stream"> {
      */
     ping?: StreamConnectionPing;
   }): Promise<StreamConnectionHandle> {
-    // The relay (stream-connection-relay.ts) terminates the callback leg at
-    // this worker and pairs the RPC leg with a hibernatable wake socket so an
-    // idle connection stops pinning the Stream DO. The stub argument is a
-    // thunk on purpose: the getter mints a fresh stub per access, and a wake
-    // re-dial may happen hours later, across DO resets.
+    // The relay (stream-connection-relay.ts) gives the Stream DO a
+    // hibernatable Stream Subscriber Pager, then lends it an ordinary RPC leg
+    // only while delivery is active. When the subscriber goes dormant, the DO
+    // can release that pinning leg and Page the relay to re-dial it later. The
+    // stub argument is a thunk on purpose: the getter mints a fresh stub per
+    // access, and a Page may arrive hours later, across DO resets.
     return new StreamConnectionRpcTarget(
       await openRelayedStreamConnection({ stub: () => this[STREAM_DURABLE_OBJECT_STUB], args }),
     );
@@ -5187,7 +5190,7 @@ export class ProjectCollectionRpcTarget extends IterateRpcTarget<"ProjectCollect
     return itxForScope({
       auth: this.props.auth,
       ctx: this.props.ctx,
-      streamContext: { kind: "scope", scopePath: "/" },
+      streamContext: streamContextForAuth(this.props.auth),
       path: "/",
       projectId,
     });
@@ -5332,6 +5335,7 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
   // and ITX_SURFACE_MEMBER_NAMES bans mounts from shadowing members). A public
   // `props` field would burn that name for internals.
   readonly #props: CapabilityHostRpcTargetProps;
+  #capabilityProviderPagerRelay: CapabilityProviderPagerRelay | undefined;
 
   constructor(props: CapabilityHostRpcTargetProps) {
     super();
@@ -5400,7 +5404,29 @@ class CapabilityHostRpcTarget extends IterateRpcTarget<"CapabilityHost"> {
 
   /** Mount a capability on THIS scope; returns an ownership handle that can revoke exactly this mount. */
   async provideCapability(input: ProvideCapabilityInput): Promise<CapabilityProvisionRpcTarget> {
+    assertCapabilityPath(input.path);
     rejectBuiltinCollision(ITX_SURFACE_MEMBER_NAMES, input.path);
+    if (input.type === "live") {
+      if (!Object.hasOwn(input, "capability")) {
+        throw new Error('live capabilities require "capability"');
+      }
+      // The client leaves one hibernatable Capability Provider Pager with the
+      // CapabilityHost DO. The relay retains the provider only while a Page
+      // asks it to lend the DO a short ordinary RPC call leg.
+      this.#capabilityProviderPagerRelay ??= new CapabilityProviderPagerRelay({
+        env,
+        scope: { path: this.#props.path, projectId: this.#props.projectId },
+        waitUntil: (promise) => this.#props.ctx.waitUntil(promise),
+      });
+      const provision = await this.#capabilityProviderPagerRelay.provide(input);
+      return new CapabilityProvisionRpcTarget({
+        ctx: this.#props.ctx,
+        isActive: provision.isActive,
+        path: provision.path,
+        providedAtOffset: provision.providedAtOffset,
+        revoke: provision.revoke,
+      });
+    }
     const provision = await this.#durableObject.provideCapability(input);
     // The Durable Object returns the durable mount coordinates. The public RPC
     // surface returns an ownership handle that can revoke that exact mount on
@@ -5779,7 +5805,7 @@ export class ProjectRpcTarget extends IterateRpcTarget<"Project"> {
           projectId: registered.projectId,
         }),
         ctx: prospective.ctx,
-        streamContext: { kind: "scope", scopePath: "/" },
+        streamContext: streamContextForAuth(prospective.auth),
         projectId: registered.projectId,
       };
       existing.auth.assertCanAccessProject(existing.projectId);
@@ -6711,6 +6737,19 @@ export function deploymentItxForInternal(props: { auth: ItxAuth; ctx: CfExecutio
   return new SessionRpcTarget(props);
 }
 
+/**
+ * The stream context a project-root itx vends for this authority. External
+ * origin (a credential presented over the wire — CLI, REPL, dashboard,
+ * harness) journals server-derived client-session provenance, so approval
+ * surfaces can show WHO asked; internal mints keep the plain root scope.
+ * Never client-declared — both fields come from what auth verified.
+ */
+function streamContextForAuth(auth: ItxAuth): StreamContext {
+  return auth.origin === "external"
+    ? { kind: "client-session", principal: auth.principal, admin: auth.isAdmin() }
+    : { kind: "scope", scopePath: "/" };
+}
+
 /** The project stream's reduced state (repo catalog, worker builds, …) — also
  * the workspace Durable Object's source for the derived mount table. */
 export async function projectProcessorState(projectId: string) {
@@ -6932,16 +6971,19 @@ class StreamEventPagerRpcTarget extends IterateRpcTarget<"StreamEventPager"> {
  * by the stream offset that mounted the capability, so disposing an older
  * provision after a replacement cannot revoke the newer mount at the same path.
  */
-class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision"> {
+export class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision"> {
   async __describe(): Promise<Description> {
     return describeNode({
       instructions: `The ownership handle for the mount at "${this.path.join(".")}" (providedAtOffset ${this.providedAtOffset}): revoke() removes exactly this mount; disposal (\`using\`) revokes too.`,
-      children: { revoke: "Remove this mount." },
+      children: {
+        revoke: "Remove this mount.",
+      },
       parent: "returned by provideCapability",
     });
   }
 
   readonly #ctx: Pick<CfExecutionContext, "waitUntil"> | undefined;
+  readonly #isActive: () => boolean;
   readonly #path: string[];
   readonly #providedAtOffset: number;
   readonly #revoke: RevokeCapability;
@@ -6949,12 +6991,14 @@ class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision
 
   constructor(args: {
     ctx?: Pick<CfExecutionContext, "waitUntil">;
+    isActive?: () => boolean;
     path: string[];
     providedAtOffset: number;
     revoke: RevokeCapability;
   }) {
     super();
     this.#ctx = args.ctx;
+    this.#isActive = args.isActive ?? (() => true);
     this.#path = [...args.path];
     this.#providedAtOffset = args.providedAtOffset;
     this.#revoke = args.revoke;
@@ -6968,6 +7012,11 @@ class CapabilityProvisionRpcTarget extends IterateRpcTarget<"CapabilityProvision
   /** The stream offset of the `capability-provided` event this handle owns. */
   get providedAtOffset(): number {
     return this.#providedAtOffset;
+  }
+
+  /** @internal Whether this relay still owns the mount behind its Capability Provider Pager. */
+  __capabilityProviderPagerActive(): boolean {
+    return this.#revokePromise === undefined && this.#isActive();
   }
 
   /** Remove exactly this mount (never a newer mount at the same path). */
@@ -7790,8 +7839,8 @@ type LiveStateDurableObjectStub<State> = {
  * Isolate-side relay for a DO-hosted `.liveState` node. `get()` is a
  * transient forward that releases every stub it materialized — a one-shot
  * read must never leave a capability pinning the DO for the session's life.
- * `subscribe()` rides the hibernatable liveState socket
- * (domains/live-state-socket.ts) when the host declares the lane, so a
+ * `subscribe()` rides the client-given hibernatable Live State Pager
+ * (domains/live-state-pager.ts) when the host declares the lane, so a
  * watched idle DO leaves memory; a host without the lane — and any socket
  * failure — falls back to forwarding the subscription into the DO, which
  * retains the callback there and pins it (exactly the pre-socket behavior,
@@ -7818,9 +7867,9 @@ class LiveStateRelayRpcTarget<State extends object>
       socketLane === undefined
         ? undefined
         : openRelayedLiveState<State>({
-            dialSocket: async () => dialLiveStateSocket(await this.#stub()),
+            dialPager: async () => dialLiveStatePager(await this.#stub()),
             readSnapshot: () => this.#transientGet(),
-            socketFailureDegrade: "reject",
+            pagerFailureDegrade: "reject",
             label: socketLane.label,
           });
   }
@@ -7866,7 +7915,7 @@ class LiveStateRelayRpcTarget<State extends object>
         return new LiveStateSubscriptionRpcTarget(await this.#relay.subscribe(onUpdate));
       } catch (error) {
         console.warn(
-          "liveState socket relay unavailable; subscription falls back to pinning the durable object",
+          "Live State Pager unavailable; subscription falls back to pinning the durable object",
           { label: this.#label, error },
         );
       }

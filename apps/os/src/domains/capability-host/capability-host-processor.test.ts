@@ -552,4 +552,87 @@ describe("CapabilityHostProcessor capability table", () => {
     await h.play(["append", { type: STARTED, payload: { executionId: "ghost" } }]);
     expect(h.state().scriptExecutions).toEqual({});
   });
+
+  it("one Pager can own many mounts and disconnect retires only mounts still on that Pager", async () => {
+    const h = makeHostHarness();
+    await h.play(
+      ["append", ...NEW_HOST_EVENTS],
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/capability-provider-pager-connected",
+          payload: {},
+        },
+      ],
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/capability-provided",
+          payload: {
+            type: "live",
+            path: ["first"],
+            providerPager: { connectedAtOffset: 2 },
+          },
+        },
+        {
+          type: "events.iterate.com/capability-host/capability-provided",
+          payload: {
+            type: "live",
+            path: ["shared"],
+            providerPager: { connectedAtOffset: 2 },
+          },
+        },
+      ],
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/capability-provider-pager-connected",
+          payload: {},
+        },
+      ],
+      [
+        "append",
+        {
+          type: "events.iterate.com/capability-host/capability-provided",
+          payload: {
+            type: "live",
+            path: ["shared"],
+            providerPager: { connectedAtOffset: 5 },
+          },
+        },
+        {
+          type: "events.iterate.com/capability-host/capability-provided",
+          payload: {
+            type: "live",
+            path: ["second"],
+            providerPager: { connectedAtOffset: 5 },
+          },
+        },
+      ],
+    );
+
+    expect(h.state().capabilityProviderPagers).toEqual([
+      { connectedAtOffset: 2 },
+      { connectedAtOffset: 5 },
+    ]);
+    expect(h.state().capabilities).toMatchObject([
+      { path: ["first"], providerPager: { connectedAtOffset: 2 } },
+      { path: ["shared"], providerPager: { connectedAtOffset: 5 } },
+      { path: ["second"], providerPager: { connectedAtOffset: 5 } },
+    ]);
+
+    await h.play([
+      "append",
+      {
+        type: "events.iterate.com/capability-host/capability-provider-pager-disconnected",
+        payload: { connectedAtOffset: 2 },
+      },
+    ]);
+
+    expect(h.state().capabilityProviderPagers).toEqual([{ connectedAtOffset: 5 }]);
+    expect(h.state().capabilities).toMatchObject([
+      { path: ["shared"], providerPager: { connectedAtOffset: 5 } },
+      { path: ["second"], providerPager: { connectedAtOffset: 5 } },
+    ]);
+  });
 });

@@ -152,6 +152,14 @@ was the only preview suite that calls a Durable Object without the shared
 boundary; the preview-policy regression failed before the change and all 139
 tests pass after it. The strict streak is zero pending a new exact head.
 
+Current `main` then replaced the stream wake-socket implementation with the
+shared Subscriber Pager transport. The merge keeps the branch's
+fresh-incarnation relay-state proof and missed-idle recovery on that new
+transport rather than restoring the retired module. All 38 Stream test files
+(481 passing, 7 expected failures), OS typecheck, and the 139 preview-policy
+tests pass on the merge result. The gate still starts from zero on its final
+merge head.
+
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
 model and routing; the mobile bundle does not import its route helper. The

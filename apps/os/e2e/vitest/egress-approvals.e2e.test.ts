@@ -102,6 +102,9 @@ test("hold → approve releases, hold → reject refuses, short timeouts expire"
         },
       ],
       ruleKey: "post-echo",
+      // A direct /api session (this test, playing the CLI) journals WHO asked
+      // — the auth-verified principal, not the anonymous scope-"/" fallback.
+      streamContext: { kind: "client-session", principal: "admin", admin: true },
     });
     expect(requestedPayload.requests[0]!.headers["x-approval-proof"]).toBe("hold-me");
     expect(requestedPayload.requests[0]!.body?.sha256).toMatch(/^[0-9a-f]{64}$/);

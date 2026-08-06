@@ -71,6 +71,9 @@ async function publishMobileUpdate() {
     publishedRuntime: runtimeVersion,
     installedRuntime,
     installUrl: `https://expo.dev/accounts/${owner}/projects/${slug}/builds/${installBuild.id}`,
+    // Main's QR points phones back at the default channel talking to prd —
+    // no recommended backend, and never a test sign-in (prd has no test OTP).
+    deepLinkParams: {},
   });
   const [deepLinkQrUrl, installQrUrl] = await Promise.all([
     uploadQrAsset(`mobile-main-${sha.slice(0, 9)}-ota-scheme.png`, plan.otaQrContent),

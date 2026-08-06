@@ -2175,12 +2175,13 @@ test("a hosted processor returns its callback, idles cleanly, and wakes again af
   );
 });
 
-// The wake-socket cycle for session connections (wake-socket.ts): idle
-// teardown severs the pinning RPC leg while the owner's Cap'n Web session
-// stays open, and the next matching append makes the worker relay re-dial —
-// the SAME processEventBatch callback receives it, with no client
-// re-subscribe. Lifecycle facts and non-matching appends must not resurrect
-// the dormant subscriber (the close→wake→open→idle-close loop).
+// The client gives the Stream DO a hibernatable Stream Subscriber Pager
+// (stream-subscriber-pager.ts). Idle teardown severs the pinning RPC leg while
+// the owner's Cap'n Web session stays open; the next matching append makes the
+// DO Page the worker relay, which re-dials the ordinary RPC leg. The SAME
+// processEventBatch callback receives it, with no client re-subscribe.
+// Lifecycle facts and non-matching appends must not Page the dormant
+// subscriber (the close→Page→open→idle-close loop).
 test("an idle-torn session connection resumes on the next matching append without re-subscribing", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/subscriptions/session/wake/${marker}`;
@@ -2211,7 +2212,7 @@ test("an idle-torn session connection resumes on the next matching append withou
     await waitForCondition(
       async () =>
         runtimeState(await stream.runtimeState()).runtime.connections[connectionKey] === undefined,
-      { description: "idle teardown to sever the wake-socket-backed session connection" },
+      { description: "idle teardown to leave only the subscriber's hibernatable Pager" },
     );
     expect(
       (
@@ -2235,14 +2236,15 @@ test("an idle-torn session connection resumes on the next matching append withou
       runtimeState(await stream.runtimeState()).runtime.connections[connectionKey],
     ).toBeUndefined();
 
-    // …while a matching one wakes the relay, which re-dials from its exact
+    // …while a matching one Pages the relay, which re-dials from its exact
     // cursor and delivers through the ORIGINAL callback.
     const [second] = await stream.append({
       type: MATCHING_EVENT_TYPE,
       payload: { round: "after-idle" },
     });
     await waitForCondition(async () => received.some((event) => event.offset === second!.offset), {
-      description: "the wake re-dial to deliver the post-idle append to the original callback",
+      description:
+        "the Page-driven re-dial to deliver the post-idle append to the original callback",
       timeoutMs: 30_000,
     });
     expect(received.map((event) => event.type)).toEqual([MATCHING_EVENT_TYPE, MATCHING_EVENT_TYPE]);
@@ -2329,12 +2331,12 @@ test("a session connection detects an interrupted stream incarnation and resumes
 });
 
 // The resurrection-loop regression (Bugbot 9d27eb22): a subscriber whose
-// filter explicitly names connection-closed must NOT be woken by its own idle
+// filter explicitly names connection-closed must NOT be Paged by its own idle
 // close fact — the teardown's nested reconcile runs before the dormancy stamp
-// lands, so without the isTearingDown gate the close would wake the relay,
+// lands, so without the isTearingDown gate the close would Page the relay,
 // re-dial, idle again, and cycle forever. The deferred close fact still
 // arrives on the next real wake.
-test("an idle close never wakes the subscriber it closed, even when its filter names connection-closed", async () => {
+test("an idle close never Pages the subscriber it closed, even when its filter names connection-closed", async () => {
   const marker = crypto.randomUUID();
   const streamPath = `/e2e/subscriptions/session/wake-loop/${marker}`;
   const connectionKey = `wake-loop-${marker.slice(0, 8)}`;
@@ -2382,14 +2384,14 @@ test("an idle close never wakes the subscriber it closed, even when its filter n
     );
     expect(idleCloses).toHaveLength(1);
 
-    // A real matching append wakes the relay, and the replay delivers the
+    // A real matching append Pages the relay, and the replay delivers the
     // deferred close fact along with the new event.
     const [fresh] = await stream.append({
       type: MATCHING_EVENT_TYPE,
       payload: { round: "after-idle" },
     });
     await waitForCondition(async () => received.some((event) => event.offset === fresh!.offset), {
-      description: "the wake re-dial to deliver the post-idle append",
+      description: "the Page-driven re-dial to deliver the post-idle append",
       timeoutMs: 30_000,
     });
     expect(

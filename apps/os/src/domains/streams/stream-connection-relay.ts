@@ -1,4 +1,4 @@
-// The worker-side half of the wake-socket protocol (wake-socket.ts): the
+// The worker-side half of the stream-subscriber-pager protocol (stream-subscriber-pager.ts): the
 // relay that makes a session connection's RPC leg droppable.
 //
 // The zero-return-frame wire guarantee, relay leg. The Stream DO retains and
@@ -17,30 +17,39 @@
 // The same decoupling makes the RPC leg droppable. A retained callback is a
 // live capability into the Stream DO's isolate and pins it (billable
 // duration) for the connection's whole life, so the relay also dials a
-// hibernatable WAKE SOCKET through the DO stub's real fetch(). After the
-// stream's idle window the DO severs the RPC leg, sends an idle frame (the
-// relay drops its handle stub — itself a hibernation blocker), and hibernates
-// at zero duration; the next matching append sends one wake frame and the
-// relay re-dials openConnection from its exact delivered cursor. The caller's
+// client gives the DO a hibernatable Subscriber Pager through the DO stub's
+// real fetch(): "you may release my RPC leg; Page me here when you need me."
+// After the stream's idle window the DO severs the RPC leg, sends an idle Page
+// (the relay drops its handle stub — itself a hibernation blocker), and
+// hibernates at zero duration. The next matching append sends one work Page,
+// and the relay lends the DO a new RPC leg by re-dialing openConnection from
+// its exact delivered cursor. The caller's
 // Cap'n Web leg — including the handle built from `open()`'s result, which is
 // deliberately relay-local so ping() reflects the logical subscription rather
 // than the current RPC leg — never observes the cycle.
 //
-// Delete this module (and wake-socket.ts) when hibernatable RPC ships.
+// Delete this module (and stream-subscriber-pager.ts) when hibernatable RPC ships.
 
 import type {
   ProcessEventBatch,
   StreamConnectionHandle,
   StreamPingInput,
 } from "iterate/processors";
+import { z } from "zod";
 import type { Stream } from "../../itx-api.generated.ts";
-import type { StreamDurableObject } from "./stream-durable-object.ts";
+import { dialHibernatablePager, parseHibernatablePage } from "../hibernatable-pager.ts";
 import {
   retainConnectionPing,
   retainGetProcessorRuntimeState,
   retainProcessEventBatch,
 } from "./retained-event-callbacks.ts";
-import { parseWakeSocketFrame, STREAM_WAKE_SOCKET_HEADER } from "./wake-socket.ts";
+import type { StreamDurableObject } from "./stream-durable-object.ts";
+import { STREAM_SUBSCRIBER_PAGER_HEADER } from "./stream-subscriber-pager.ts";
+
+const StreamSubscriberPage = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("idle") }),
+  z.object({ type: z.literal("page") }),
+]);
 
 /** What StreamConnectionRpcTarget's constructor needs; built here so rpc-targets.ts keeps owning the published target class. */
 type RelayedStreamConnection = {
@@ -51,7 +60,7 @@ type RelayedStreamConnection = {
 };
 
 /**
- * Open one session connection through the wake-socket relay.
+ * Open one session connection through the stream-subscriber-pager relay.
  *
  * `stub` is a thunk on purpose: the Stream DO stub getter mints a fresh stub
  * per access, and a re-dial may happen hours after open, across DO resets —
@@ -63,7 +72,7 @@ export async function openRelayedStreamConnection(input: {
 }): Promise<RelayedStreamConnection> {
   const { args } = input;
   const connectionKey = args.connectionKey?.trim() || crypto.randomUUID();
-  const wakeSocketId = crypto.randomUUID();
+  const subscriberPagerId = crypto.randomUUID();
 
   // The retained wrappers hold the caller's Cap'n Web exports for the
   // LOGICAL subscription's lifetime, across every re-dial.
@@ -97,7 +106,7 @@ export async function openRelayedStreamConnection(input: {
   let closedByOwner = false;
   let dialing = false;
   let currentHandle: StreamConnectionHandle | undefined;
-  let wakeSocket: WebSocket | undefined;
+  let subscriberPager: WebSocket | undefined;
   let deliveredThroughOffset = args.replayAfterOffset;
 
   const forwardIntoDo = (batch: Parameters<ProcessEventBatch>[0]) => {
@@ -127,7 +136,7 @@ export async function openRelayedStreamConnection(input: {
       // Internal plumbing rides a separate parameter, never the public arg
       // bag: with the spread above, anything merged into `args`'s shape would
       // be client-spoofable by default.
-      wakeSocket === undefined ? undefined : { wakeSocketId },
+      subscriberPager === undefined ? undefined : { subscriberPagerId },
     );
 
   const probeLeg = (handle: StreamConnectionHandle) =>
@@ -143,7 +152,7 @@ export async function openRelayedStreamConnection(input: {
   // has not emitted `close`.
   const probeRelayState = () =>
     Promise.resolve()
-      .then(() => input.stub().relayedConnectionState({ connectionKey, wakeSocketId }))
+      .then(() => input.stub().relayedConnectionState({ connectionKey, subscriberPagerId }))
       .catch(() => "dead" as const);
 
   /** The one terminal transition; every teardown path funnels here. */
@@ -158,7 +167,7 @@ export async function openRelayedStreamConnection(input: {
       });
     }
     try {
-      wakeSocket?.close(args2.socketCode, args2.reason);
+      subscriberPager?.close(args2.socketCode, args2.reason);
     } catch {
       // Already closed.
     }
@@ -178,32 +187,30 @@ export async function openRelayedStreamConnection(input: {
     disposeRetained();
   };
 
-  // Best-effort: without a wake socket the connection simply keeps today's
+  // Best-effort: without a Pager the connection simply keeps today's
   // semantics — never idle-closed, pinned for the session's life.
   try {
-    const upgrade = await input.stub().fetch("https://stream-wake.internal/", {
-      headers: {
-        Upgrade: "websocket",
-        [STREAM_WAKE_SOCKET_HEADER]: JSON.stringify({ connectionKey, socketId: wakeSocketId }),
-      },
+    subscriberPager = await dialHibernatablePager({
+      headerName: STREAM_SUBSCRIBER_PAGER_HEADER,
+      headerValue: { connectionKey, pagerId: subscriberPagerId },
+      stub: input.stub(),
+      url: "https://stream-subscriber-pager.internal/",
     });
-    wakeSocket = upgrade.webSocket ?? undefined;
-    wakeSocket?.accept();
   } catch (error) {
-    console.warn("stream wake socket unavailable; session connection will stay pinned", {
+    console.warn("stream Subscriber Pager unavailable; session connection will stay pinned", {
       connectionKey,
       error,
     });
   }
 
-  wakeSocket?.addEventListener("message", (event) => {
+  subscriberPager?.addEventListener("message", (event) => {
     if (!active) return;
-    const frame = parseWakeSocketFrame(event.data);
-    if (frame === undefined) return;
-    if (frame.type === "idle") {
+    const page = parseHibernatablePage(event.data, StreamSubscriberPage);
+    if (page === undefined) return;
+    if (page.type === "idle") {
       // The DO idle-closed the RPC leg. Dropping this handle stub releases
       // the relay's last live reference into the DO's isolate, which is what
-      // lets the DO actually hibernate; the wake socket alone carries the
+      // lets the DO actually hibernate; the Pager alone carries the
       // dormancy.
       const idled = currentHandle;
       currentHandle = undefined;
@@ -216,7 +223,7 @@ export async function openRelayedStreamConnection(input: {
       try {
         const previous = currentHandle;
         if (previous !== undefined) {
-          // A wake while a leg exists is either stale — sent in the gap
+          // A Page while a leg exists is either stale — sent in the gap
           // between socket accept and openConnection binding it, when the DO
           // saw an unstamped, connection-absent socket, and delivered after
           // the dial resolved — or the leg died without an idle frame (DO
@@ -239,20 +246,20 @@ export async function openRelayedStreamConnection(input: {
         }
         currentHandle = fresh;
       } catch (error) {
-        teardown({ reason: "wake re-dial failed", socketCode: 1011, warn: error });
+        teardown({ reason: "Pager re-dial failed", socketCode: 1011, warn: error });
       } finally {
         dialing = false;
       }
     })();
   });
-  wakeSocket?.addEventListener("close", () => {
-    wakeSocket = undefined;
+  subscriberPager?.addEventListener("close", () => {
+    subscriberPager = undefined;
     if (!active || closedByOwner) return;
     void (async () => {
-      // While the RPC leg is live the socket was only a future optimization:
-      // degrade to pinned mode (the DO's channel scan already sees the socket
-      // gone). If the leg died with the socket, recover from the relay's exact
-      // cursor immediately. That replacement has no wake socket, so it stays
+      // While the RPC leg is live the Pager was only a future optimization:
+      // degrade to pinned mode (the DO's Pager scan already sees it gone). If
+      // the leg died with the Pager, recover from the relay's exact cursor
+      // immediately. That replacement has no Pager, so it stays
       // pinned for the rest of this logical subscription instead of silently
       // losing events until the owner's next watchdog round.
       const handle = currentHandle;
@@ -271,19 +278,19 @@ export async function openRelayedStreamConnection(input: {
           return;
         }
         currentHandle = fresh;
-        console.warn("stream wake socket closed; session connection resumed in pinned mode", {
+        console.warn("stream Subscriber Pager closed; session connection resumed in pinned mode", {
           connectionKey,
         });
       } catch (error) {
-        teardown({ reason: "wake socket recovery failed", socketCode: 1011, warn: error });
+        teardown({ reason: "Subscriber Pager recovery failed", socketCode: 1011, warn: error });
       } finally {
         dialing = false;
       }
     })();
   });
 
-  // The dialing guard also covers this initial dial: a wake frame for a
-  // just-bound socket must not race a second openConnection under it.
+  // The dialing guard also covers this initial dial: a Page for a just-bound
+  // Pager must not race a second openConnection under it.
   dialing = true;
   try {
     const fresh = await dial(args.replayAfterOffset, false);
@@ -321,7 +328,7 @@ export async function openRelayedStreamConnection(input: {
   // Seed the resume cursor for callers that omitted replayAfterOffset ("new
   // events only"): the head observed at open is that intent's exact baseline.
   // Without it, an idle teardown before the first batch reaches this relay
-  // would make the wake re-dial open at the DO's CURRENT head and skip every
+  // would make the Page-driven re-dial open at the DO's CURRENT head and skip every
   // event committed during dormancy — including the one that woke it.
   deliveredThroughOffset ??= streamMaxOffset;
 
@@ -335,10 +342,10 @@ export async function openRelayedStreamConnection(input: {
     isLive: () => {
       if (!active) return false;
       const handle = currentHandle;
-      const socket = wakeSocket;
-      if (socket !== undefined) {
+      const pager = subscriberPager;
+      if (pager !== undefined) {
         return probeRelayState().then((state) => {
-          if (currentHandle !== handle || wakeSocket !== socket) return active;
+          if (currentHandle !== handle || subscriberPager !== pager) return active;
           if (state === "live") return active;
           if (state === "dormant") {
             currentHandle = undefined;
@@ -346,27 +353,27 @@ export async function openRelayedStreamConnection(input: {
             return active;
           }
           teardown({
-            reason: "wake socket absent from current stream incarnation",
+            reason: "Subscriber Pager absent from current stream incarnation",
             socketCode: 1000,
           });
           return false;
         });
       }
-      // Socketless pinned mode owns only the RPC leg.
+      // Pagerless pinned mode owns only the RPC leg.
       if (handle === undefined) return true;
       return probeLeg(handle).then((live) => {
         if (live === true || currentHandle !== handle) return active;
         // An idle frame clears currentHandle before the ordinary dormant state
         // reaches this branch. A handle that was present and now fails its
-        // probe is therefore dead even when the local wake-socket endpoint
+        // probe is therefore dead even when the local Pager endpoint
         // still LOOKS open: ctx.abort() can orphan that endpoint without a
         // close event or a socket in the next DO incarnation. Report false so
         // the owner reopens from its durable cursor instead of waiting forever
-        // for a wake frame that can no longer exist.
+        // for a Page that can no longer exist.
         currentHandle = undefined;
         disposeStub(handle);
-        if (wakeSocket === undefined) {
-          teardown({ reason: "rpc leg gone with no wake socket", socketCode: 1000 });
+        if (subscriberPager === undefined) {
+          teardown({ reason: "rpc leg gone with no Subscriber Pager", socketCode: 1000 });
         }
         return false;
       });
