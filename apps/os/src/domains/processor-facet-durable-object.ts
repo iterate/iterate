@@ -71,6 +71,7 @@ import { TelegramAgentProcessor } from "./integrations/telegram-agent-processor-
 import { callProjectTelegramBotApi } from "./integrations/telegram-api.ts";
 import { buildTelegramAccessSettingsUrl } from "./integrations/utils.ts";
 import { NotificationProcessor } from "./notifications/notification-processor-implementation.ts";
+import { ChatReplyNotifyProcessor } from "./notifications/chat-reply-notify-implementation.ts";
 import { ProjectProcessor } from "./projects/project-processor-implementation.ts";
 import { createCloudflareProjectCustomDomainDeps } from "./projects/custom-domains.ts";
 import { RepoProcessor } from "./repos/repo-processor-implementation.ts";
@@ -442,6 +443,19 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
   ): void {
     const { path } = identity;
     const projectId = identity.projectId!;
+    // Registered on every agent family; it only wakes on plain chat threads
+    // where the generic agents.create batch configured its subscription. Its
+    // one side effect — the chat-reply push intent on the project root — is a
+    // per-event `blockProcessorWhile` append (delivered-once, idempotency
+    // keyed), so no recovery registration: there is no `runInBackground` work
+    // whose loss an eviction could strand. (Ported from #2422's agent DO.)
+    registry.register(
+      new ChatReplyNotifyProcessor({
+        stream,
+        path,
+        projectId,
+      }),
+    );
     // Registered WITH recovery: LLM turns are consequential `runInBackground`
     // work (stream-committed requested/started obligations whose OUTCOME
     // matters). An incarnation that dies owing either must be revived.
@@ -782,7 +796,8 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
             DurableObjectNameCodec.stringify({ path, projectId }),
           ).processorClearPushToken(input),
         getReceipt: getExpoPushReceipt,
-        repointApprovalGraceAlarm: (atMs) => registry.setAlarmSlice("device-approval-grace", atMs),
+        repointGraceAlarm: (atMs: number | null) =>
+          registry.setAlarmSlice("device-approval-grace", atMs),
         repointReceiptAlarm: (atMs) => registry.setAlarmSlice("device-receipts", atMs),
         send: async ({
           notification,
@@ -820,7 +835,7 @@ export class ProcessorFacet extends ProcessorFacetBase<Env> {
       try {
         await registry.catchUp(deviceProcessor.contract.slug);
         await deviceProcessor.checkReceipts(deviceReads.currentState);
-        await deviceProcessor.releaseApprovalGraces(() => deviceReads.currentState);
+        await deviceProcessor.releaseGraces(() => deviceReads.currentState);
         await registry.catchUp(deviceProcessor.contract.slug);
       } catch (error) {
         // Cloudflare retries a throwing alarm only a bounded number of times;

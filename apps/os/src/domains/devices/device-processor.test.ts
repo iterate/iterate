@@ -145,7 +145,7 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
           clearedTokens.push(input);
           return gateway.clearPushToken(input);
         },
-        repointApprovalGraceAlarm: async (atMs) => {
+        repointGraceAlarm: async (atMs) => {
           graceAlarms.push(atMs);
         },
         repointReceiptAlarm: async (atMs) => {
@@ -163,7 +163,7 @@ function makeDeviceHarness(substrate?: HarnessSubstrate) {
     graceAlarms,
     rootEvents: () => harness.stream.network!.eventsAt("/"),
     checkReceipts: () => harness.processor().checkReceipts(harness.state()),
-    releaseApprovalGraces: () => harness.processor().releaseApprovalGraces(() => harness.state()),
+    releaseGraces: () => harness.processor().releaseGraces(() => harness.state()),
   };
 }
 
@@ -195,6 +195,7 @@ describe("DeviceProcessor enrollment", () => {
             eventTypes: [
               "events.iterate.com/notification/requested",
               "events.iterate.com/project/approval-presented",
+              "events.iterate.com/project/agent-reply-presented",
             ],
           },
           receiver: {
@@ -463,13 +464,13 @@ describe("DeviceProcessor approval-push suppression", () => {
 
     // An early fire (another slice shares the DO alarm) finds the obligation
     // still inside grace: nothing sent, the slice re-arms at the same expiry.
-    await h.play(["advanceTime", 1_000], () => h.releaseApprovalGraces());
+    await h.play(["advanceTime", 1_000], () => h.releaseGraces());
     expect(h.sent).toHaveLength(0);
     expect(h.graceAlarms.at(-1)).toBe(graceUntil);
 
     // Past the expiry the nudge runs the ordinary send: durable started
     // evidence, the Expo dial, the ticket — and the slice disarms.
-    await h.play(["advanceTime", 500], () => h.releaseApprovalGraces());
+    await h.play(["advanceTime", 500], () => h.releaseGraces());
     expect(h.sent).toMatchObject([
       {
         notification: {
@@ -512,7 +513,7 @@ describe("DeviceProcessor approval-push suppression", () => {
 
     // The grace alarm armed before the claim still fires; it finds nothing
     // owed and disarms.
-    await h.play(["advanceTime", 2_000], () => h.releaseApprovalGraces());
+    await h.play(["advanceTime", 2_000], () => h.releaseGraces());
     expect(h.sent).toHaveLength(0);
     expect(h.graceAlarms.at(-1)).toBeNull();
   });
@@ -522,7 +523,7 @@ describe("DeviceProcessor approval-push suppression", () => {
     await h.play(
       ["append", DEVICE_CREATED, approvalIntentRequested()],
       ["advanceTime", 1_500],
-      () => h.releaseApprovalGraces(),
+      () => h.releaseGraces(),
     );
     expect(h.events(TICKET)).toHaveLength(1);
 
@@ -570,7 +571,7 @@ describe("DeviceProcessor approval-push suppression", () => {
     // The grace alarm fires and starts the first batch's send; the Expo dial
     // parks so a SECOND batch's intent can land mid-release — its delivery
     // arms the grace slice for the new in-grace obligation.
-    const releasing = h.releaseApprovalGraces();
+    const releasing = h.releaseGraces();
     await dialing.promise;
     await h.append(approvalIntentRequested({ approvalRequestEventOffset: 23 }));
     const secondGraceUntil = h.clock.now + h.state().config.approvalGraceMs;
@@ -591,6 +592,152 @@ describe("DeviceProcessor approval-push suppression", () => {
       "2": { status: "ticketed" },
       "4": { status: "requested" },
     });
+  });
+});
+
+// =============================================================================
+// Chat-reply push suppression: the reply grace window, the presented claim
+// (including claim-before-intent), and user-scoped audiences
+// =============================================================================
+
+/** A copied chat-reply intent: the TOP-LEVEL agentReplyEventOffset plus the
+ * agent-chat destination path are the claimable identity; the audience is
+ * user-scoped the way the producer emits it. */
+function replyIntentRequested(overrides?: {
+  agentReplyEventOffset?: number;
+  audience?: { kind: "project" } | { kind: "user"; userId: string };
+  path?: string;
+}): DeviceEventInput {
+  return {
+    type: "events.iterate.com/notification/requested",
+    payload: {
+      agentReplyEventOffset: overrides?.agentReplyEventOffset ?? 42,
+      audience: overrides?.audience ?? { kind: "user", userId: "usr_misha" },
+      body: "Found 3 flights under $400 — the Tuesday red-eye is the best deal.",
+      destination: { kind: "agent-chat", path: overrides?.path ?? "/agents/mobile/1752825600000" },
+      expiresAt: Date.parse("2026-07-18T09:00:00Z"),
+      title: "Trip planner",
+    },
+  };
+}
+
+/** The suppression claim, as the subscription copies it from the root stream:
+ * a client is already showing reply 42 of the mobile thread. */
+const REPLY_PRESENTED = {
+  type: "events.iterate.com/project/agent-reply-presented",
+  payload: { path: "/agents/mobile/1752825600000", replyEventOffset: 42 },
+} satisfies DeviceEventInput;
+
+describe("DeviceProcessor chat-reply push suppression", () => {
+  it("a reply intent waits out replyGraceMs, then the alarm nudge sends it", async () => {
+    const h = makeDeviceHarness();
+    await h.play(["append", DEVICE_CREATED, replyIntentRequested()]);
+
+    // Inside the reply grace window (longer than the approval one): no dial,
+    // only the grace alarm pointed at the window's end.
+    const graceUntil = Date.parse("2026-07-18T08:00:00Z") + h.state().config.replyGraceMs;
+    expect(h.state().config.replyGraceMs).toBeGreaterThan(h.state().config.approvalGraceMs);
+    expect(h.sent).toHaveLength(0);
+    expect(h.graceAlarms.at(-1)).toBe(graceUntil);
+
+    await h.play(["advanceTime", h.state().config.replyGraceMs], () => h.releaseGraces());
+    expect(h.sent).toMatchObject([
+      {
+        notification: {
+          body: "Found 3 flights under $400 — the Tuesday red-eye is the best deal.",
+          title: "Trip planner",
+          data: {
+            destination: { kind: "agent-chat", path: "/agents/mobile/1752825600000" },
+            requestOffset: 2,
+          },
+        },
+      },
+    ]);
+    expect(h.graceAlarms.at(-1)).toBeNull();
+  });
+
+  it("a claim inside the grace window settles the reply push suppressed without dialing Expo", async () => {
+    const h = makeDeviceHarness();
+    h.gateway.send = async () => {
+      throw new Error("a suppressed reply push must never dial Expo");
+    };
+    await h.play(
+      ["append", DEVICE_CREATED, replyIntentRequested()],
+      // The thread screen rendered the reply foregrounded moments later.
+      ["advanceTime", 800],
+      ["append", REPLY_PRESENTED],
+    );
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { requestOffset: 2, outcome: { kind: "suppressed" } } },
+    ]);
+    expect(h.state().notifications).toEqual({});
+  });
+
+  it("a claim copied BEFORE its intent still suppresses: the intent opens pre-claimed", async () => {
+    // The reply's claim and intent are triggered by the same reply event, so
+    // the claim can win the race down the root→device lane — unlike
+    // approvals, losing this race would ring a phone the user is looking at.
+    const h = makeDeviceHarness();
+    h.gateway.send = async () => {
+      throw new Error("a pre-claimed reply push must never dial Expo");
+    };
+    await h.play(
+      ["append", DEVICE_CREATED, REPLY_PRESENTED],
+      ["advanceTime", 300],
+      ["append", replyIntentRequested()],
+    );
+
+    expect(h.sent).toHaveLength(0);
+    expect(h.events(SETTLED)).toMatchObject([
+      { payload: { requestOffset: 3, outcome: { kind: "suppressed" } } },
+    ]);
+    expect(h.state().notifications).toEqual({});
+  });
+
+  it("a claim for a different reply or thread suppresses nothing", async () => {
+    const h = makeDeviceHarness();
+    await h.play(
+      ["append", DEVICE_CREATED, replyIntentRequested()],
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/agent-reply-presented",
+          payload: { path: "/agents/mobile/1752825600000", replyEventOffset: 41 },
+        },
+      ],
+      [
+        "append",
+        {
+          type: "events.iterate.com/project/agent-reply-presented",
+          payload: { path: "/agents/other", replyEventOffset: 42 },
+        },
+      ],
+      ["advanceTime", h.state().config.replyGraceMs],
+      () => h.releaseGraces(),
+    );
+
+    expect(h.events(SETTLED)).toHaveLength(0);
+    expect(h.events(TICKET)).toHaveLength(1);
+  });
+
+  it("a user-scoped intent for another user opens no obligation on this device", async () => {
+    const h = makeDeviceHarness();
+    await h.play([
+      "append",
+      DEVICE_CREATED,
+      replyIntentRequested({ audience: { kind: "user", userId: "usr_someone_else" } }),
+      // A project-audience intent right after still delivers normally, so the
+      // skip is the audience gate, not a broken lane.
+      notificationRequested(),
+    ]);
+
+    expect(h.state().notifications).toMatchObject({ "3": {} });
+    expect(h.state().notifications["2"]).toBeUndefined();
+    await h.play(["advanceTime", h.state().config.replyGraceMs], () => h.releaseGraces());
+    expect(h.sent).toHaveLength(1);
+    expect(h.sent[0]!.notification.data.requestOffset).toBe(3);
   });
 });
 

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { FilterIcon, XIcon } from "lucide-react";
 import { Button } from "@iterate-com/ui/components/button";
 import { useAuthClient } from "@iterate-com/auth/client";
@@ -204,6 +205,10 @@ function BrowserDatabaseProjectStreamView({
     `SELECT COALESCE(SUM(n), 0) AS count FROM event_type_counts`,
   );
   const eventCount = Number(countResult.data[0]?.count ?? 0);
+  // While this view shows the newest agent reply in a visible tab, claim it
+  // so the chat-reply push stays quiet (suppression, not read-state) — the
+  // web half of the mobile thread screen's identical claim.
+  useClaimReplyPresented({ database: store.streamDatabase, projectId, streamPath });
   const agentUiState = useAgentUiReducedState(store.streamDatabase, store, snapshot.liveRevision);
   // Real, browser-measured: transport RTT from RPCs the store already makes,
   // plus the hosted processor's self-measured consumption report.
@@ -933,6 +938,62 @@ function useAgentUiReducedState(
       return null;
     }
   }, [liveRevision, result.data, store]);
+}
+
+/**
+ * Claim the newest agent reply in this thread as "on screen": a
+ * `project/agent-reply-presented` claim that lands inside the device
+ * processor's reply grace window settles the pending push `suppressed` on
+ * every enrolled device, and a late claim is a harmless no-op (the push
+ * simply goes out — the designed fallback), so failures are ignored. One
+ * claim per reply per mount (useQuery keyed on the reply offset; the
+ * idempotency key makes any refire a stream-level no-op). Only a visible tab
+ * may claim — the queryFn WAITS for visibility, so a reply that arrives in a
+ * hidden tab is deliberately not claimed: the push is exactly what should
+ * happen then.
+ */
+function useClaimReplyPresented(args: {
+  database: StreamBrowserDatabase;
+  projectId: string | null;
+  streamPath: string;
+}) {
+  const { database, projectId, streamPath } = args;
+  const newestReply = useStreamQuery(
+    database,
+    `SELECT MAX(offset) AS offset FROM events
+     WHERE type = 'events.iterate.com/agents/web-message-sent'`,
+  );
+  const replyOffset = Number(newestReply.data[0]?.offset ?? 0) || null;
+  useQuery({
+    queryKey: ["agent-reply-presented", projectId, streamPath, replyOffset],
+    enabled: projectId !== null && replyOffset !== null && streamPath.startsWith("/agents/"),
+    queryFn: async () => {
+      await documentVisible();
+      const itx = await connectItx(projectId!);
+      await itx.streams.get("/").append({
+        type: "events.iterate.com/project/agent-reply-presented",
+        idempotencyKey: `project/agent-reply-presented:${streamPath}:${replyOffset}`,
+        payload: { path: streamPath, replyEventOffset: replyOffset! },
+      });
+      return true;
+    },
+    staleTime: Infinity,
+    retry: false,
+  });
+}
+
+/** Resolves once this tab is visible — immediately when it already is.
+ * One-shot: the listener removes itself on the first visible transition. */
+function documentVisible(): Promise<void> {
+  if (document.visibilityState === "visible") return Promise.resolve();
+  return new Promise((resolve) => {
+    const onChange = () => {
+      if (document.visibilityState !== "visible") return;
+      document.removeEventListener("visibilitychange", onChange);
+      resolve();
+    };
+    document.addEventListener("visibilitychange", onChange);
+  });
 }
 
 function useStreamPauseState(database: StreamBrowserDatabase): {
