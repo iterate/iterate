@@ -43,6 +43,7 @@ iterate_kit_add_core_test(
 iterate_kit_add_core_test(iterate-kit-device-events-test device_events_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-connection-test itx_connection_test.c)
 iterate_kit_add_core_test(iterate-kit-itx-mount-test itx_mount_test.c)
+iterate_kit_add_core_test(iterate-kit-mount-watchdog-test mount_watchdog_test.c)
 iterate_kit_add_core_test(iterate-kit-retry-gate-test retry_gate_test.c)
 iterate_kit_add_core_test(iterate-kit-spsc-ring-test spsc_ring_test.c)
 iterate_kit_add_core_test(iterate-kit-talk-button-test talk_button_test.c)

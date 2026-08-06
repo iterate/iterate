@@ -185,6 +185,7 @@ enum {
    * exchanges a ping every five — and short enough that a person who walks up
    * to it finds it working.
    */
+  ITERATE_KIT_VOICE_IDLE_REMOUNT_MS = 180000,
 };
 
 /**
