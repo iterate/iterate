@@ -1,33 +1,60 @@
-// Deep-link target for PR preview QRs: iterate://preview-channel/<channel>.
-// Deliberately a confirm screen, not an auto-switch — a stray link tap
-// shouldn't silently repoint the app at another PR's JS.
+// Deep-link target for PR preview QRs:
+//   iterate://preview-channel/<channel>[?env=<envs.ts key>&email=<*+test@nustom.com>]
+// `env` is the PR's leased preview slot — the backend this channel's JS
+// expects — and `email` a per-PR test identity (CI bakes both in,
+// scripts/ci/publish-mobile-pr-preview.ts). This screen owns ONE decision —
+// the channel switch (deliberately a confirm, not an auto-switch: a stray
+// link tap shouldn't silently repoint the app at another PR's JS). The env
+// and email ride along as HINTS: once the channel matches, this screen
+// forwards them to the sign-in screen, which suggests the backend and test
+// identity there. `env` resolves against the preset list only
+// (serverPresetForEnvKey), so a crafted link can't name an arbitrary server.
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Redirect, Stack, useLocalSearchParams, useRouter } from "expo-router";
 import * as Updates from "expo-updates";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { buildInfo } from "../../lib/build-info.ts";
+import { testEmailFromHint } from "../../lib/deep-link-hints.ts";
 import { getPreviewChannelOverride, switchChannelAndReload } from "../../lib/preview-channel.ts";
+import { serverPresetForEnvKey } from "../../lib/servers.ts";
 import { colors, radius, spacing } from "../../lib/theme.ts";
 
 export default function PreviewChannelScreen() {
-  const { channel } = useLocalSearchParams<{ channel: string }>();
+  const params = useLocalSearchParams<{ channel: string; env?: string; email?: string }>();
+  const { channel } = params;
   const router = useRouter();
   const queryClient = useQueryClient();
   const current = useQuery({
     queryKey: ["preview-channel-override"],
     queryFn: getPreviewChannelOverride,
   });
+
+  const recommendedServer =
+    typeof params.env === "string" ? serverPresetForEnvKey(params.env) : null;
+  // The test-identity hint ferries onward for per-PR test addresses only;
+  // anything else in the param is dropped rather than suggested.
+  const testEmail = testEmailFromHint(params.email);
+  // What the sign-in screen receives once the channel matches. Hints only —
+  // nothing here changes state; the sign-in screen suggests, the user decides.
+  const hintParams = {
+    ...(recommendedServer !== null && typeof params.env === "string" ? { env: params.env } : {}),
+    ...(testEmail !== null ? { email: testEmail } : {}),
+  };
+
   const switchChannel = useMutation({
     mutationFn: () => switchChannelAndReload(channel),
     // Only reaches onSuccess without a reload ("no-update"); the invalidate
-    // flips `current` and the Redirect below takes over.
+    // flips `current` and the Redirect below takes over. After a real reload
+    // the deep link re-opens this screen in the NEW bundle and the same
+    // Redirect fires there.
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ["preview-channel-override"] }),
   });
 
   // Already on the target channel — including the relaunch after a successful
-  // switch, where the deep link URL re-opens this screen. Nothing to confirm.
+  // switch, where the deep link URL re-opens this screen. Hand the hints to
+  // the sign-in screen instead of parking on build-info.
   if (current.isSuccess && current.data === channel) {
-    return <Redirect href="/build-info" />;
+    return <Redirect href={{ pathname: "/", params: hintParams }} />;
   }
 
   const currentChannel = current.data || Updates.channel || "preview";
@@ -39,6 +66,10 @@ export default function PreviewChannelScreen() {
       <View style={styles.card}>
         <Row label="Current" value={currentChannel} />
         <Row label="Target" value={channel} />
+        {recommendedServer !== null ? (
+          // Display-only preview of what the sign-in screen will suggest next.
+          <Row label="Recommended backend" value={recommendedServer.label} />
+        ) : null}
         <Row
           label="Running"
           value={`${buildInfo.branch || "?"} @ ${buildInfo.commit.slice(0, 7) || "?"}`}
