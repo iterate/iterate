@@ -9,7 +9,11 @@ Follow-up from `tasks/codemode-script-preamble-followups.md` (second checklist i
 
 ## Status summary
 
-Spec committed; implementation not started yet.
+Done, pending review. The feed's Result tab now defaults to the exact settlement
+text the agent was shown (rendered markdown from the stream's script-actor
+context-added event), with the old raw YAML view one toggle away and as the
+fallback. Component tests + live screenshots in the PR. Not done here: mobile's
+twin activity card still shows only the raw result (possible follow-up).
 
 ## Problem
 
@@ -71,16 +75,23 @@ shown.** Keep the raw view reachable, but the agent's view is the default.
 
 ## Checklist
 
-- [ ] Pass `database` down to `RoundResult`; query the mirror for the script's
-      `agents/context-added` render event
-- [ ] Render the agent-visible markdown via `MessageResponse` as the DEFAULT Result
-      view
-- [ ] Keep the raw YAML/error view behind a toggle, and as the fallback when no render
-      event exists
-- [ ] Component test following `agent-feed.test.tsx` patterns (fake
+- [x] Pass `database` down to `RoundResult`; query the mirror for the script's
+      `agents/context-added` render event _`AgentRenderedRoundResult` in
+      apps/os/src/components/agent-activity-rounds.tsx, same `useStreamQuery` pattern
+      as the Meta tab_
+- [x] Render the agent-visible markdown via `MessageResponse` as the DEFAULT Result
+      view _data-testid="script-result-agent-view"; MessageResponse mode="static",
+      like settled assistant messages_
+- [x] Keep the raw YAML/error view behind a toggle, and as the fallback when no render
+      event exists _"Show raw result" / "Show agent view" ghost button; raw body
+      extracted unchanged into `RawRoundResult` (+ data-testid="script-result-raw")_
+- [x] Component test following `agent-feed.test.tsx` patterns (fake
       `StreamBrowserDatabase` with a canned query handle)
-- [ ] Screenshot for the PR body (local dev or spec tooling); if too painful, say so in
-      the PR body
+      _apps/os/src/components/agent-activity-rounds.test.tsx — createRoot + act +
+      disposable mount fixture; the fake db is just `{ query: () => handle }`_
+- [x] Screenshot for the PR body (local dev or spec tooling); if too painful, say so in
+      the PR body _live capture: local dev + minted session (`pnpm getin`), real agent
+      conversation running a fibonacci script; uploaded via gh image_
 
 ## Implementation log
 
@@ -91,3 +102,9 @@ shown.** Keep the raw view reachable, but the agent's view is the default.
 - Confirmed the reducer (`packages/ui/src/components/events/agent-ui-reducer.ts`) drops
   script-actor context-added events ("model input, not another bubble") — so the mirror
   query approach avoids growing always-in-memory reducer state with big rendered text.
+- Verified live on local dev: agent ran a script, Result tab showed
+  "Your script returned:" + fenced JSON + preamble note, toggle flipped to the raw
+  YAML view and back.
+- Note for jsdom tests: `SourceCodeBlock`/CodeMirror is a lazy client-only chunk that
+  never paints in jsdom, so raw-view assertions target `script-result-raw` rather than
+  highlighted YAML text.
