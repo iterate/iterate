@@ -86,6 +86,8 @@ const RETRYABLE_ARTIFACTS_HTTP_STATUS_CODES = new Set([429, 500, 502, 503, 504])
 // Artifacts operations, so an exact transient HTTP status remains enough to
 // classify the failure as infrastructure rather than poison a repo forever.
 const ARTIFACTS_HTTP_ERROR_MESSAGE = /^HTTP Error: (\d{3})(?:\s|$)/;
+const ARTIFACTS_INFRASTRUCTURE_ATTEMPTS = 3;
+const ARTIFACTS_INFRASTRUCTURE_RETRY_DELAY_MS = 250;
 
 function isArtifactsRepoNotReadyError(error: unknown) {
   if (typeof error !== "object" || error === null) return false;
@@ -148,6 +150,38 @@ export function isRetryableArtifactsInfrastructureError(error: unknown): boolean
     candidate = artifactError.cause;
   }
   return false;
+}
+
+/**
+ * Keep a brief Artifacts outage inside the repo operation that encountered it.
+ * Retrying the enclosing processor or test repeats unrelated work and can hide
+ * which remote call actually failed. Three attempts bound both latency and
+ * request amplification while covering the isolated 503 observed in production.
+ */
+export async function retryArtifactsInfrastructureOperation<T>(input: {
+  description: string;
+  operation: () => Promise<T>;
+}): Promise<T> {
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      return await input.operation();
+    } catch (error) {
+      if (
+        attempt >= ARTIFACTS_INFRASTRUCTURE_ATTEMPTS ||
+        !isRetryableArtifactsInfrastructureError(error)
+      ) {
+        throw error;
+      }
+      console.warn("[artifacts-infrastructure-retry]", {
+        attempt,
+        description: input.description,
+        error,
+      });
+      await new Promise((resolve) =>
+        setTimeout(resolve, ARTIFACTS_INFRASTRUCTURE_RETRY_DELAY_MS * attempt),
+      );
+    }
+  }
 }
 
 /**

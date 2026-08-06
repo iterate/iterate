@@ -54,6 +54,7 @@ import {
   bytesToBase64,
   classifyRepoAccessError,
   gitBranchContainsCommit,
+  retryArtifactsInfrastructureOperation,
 } from "./utils.ts";
 import { projectRepoSeedFiles } from "./project-repo-seed.ts";
 import { RepoProcessorContract } from "./repo-processor-contract.ts";
@@ -442,7 +443,10 @@ export class RepoDurableObject extends DurableObject<Env> {
         const git = createGit(filesystem, REPO_DIR);
         let branchHead: { oid: string } | undefined;
         try {
-          await git.clone({ branch, url: repo.remote, ...credentials });
+          await retryArtifactsInfrastructureOperation({
+            description: `clone ${this.#name.path}:${branch}`,
+            operation: () => git.clone({ branch, url: repo.remote, ...credentials }),
+          });
           [branchHead] = await git.log({ depth: 1, ref: branch });
         } catch (error) {
           throw classifyRepoAccessError(error, branch);
@@ -480,12 +484,16 @@ export class RepoDurableObject extends DurableObject<Env> {
       const git = createGit(filesystem, REPO_DIR);
       let head: { oid: string } | undefined;
       try {
-        await git.clone({
-          branch,
-          ...(input.historyDepth === "full" ? {} : { depth: input.historyDepth || 1 }),
-          singleBranch: true,
-          url: repo.remote,
-          ...credentials,
+        await retryArtifactsInfrastructureOperation({
+          description: `clone ${this.#name.path}:${branch}`,
+          operation: () =>
+            git.clone({
+              branch,
+              ...(input.historyDepth === "full" ? {} : { depth: input.historyDepth || 1 }),
+              singleBranch: true,
+              url: repo.remote,
+              ...credentials,
+            }),
         });
         [head] = await git.log({ depth: 1, ref: branch });
       } catch (error) {

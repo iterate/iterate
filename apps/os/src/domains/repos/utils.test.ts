@@ -1,6 +1,6 @@
 import { InMemoryFs } from "@cloudflare/shell";
 import { createGit } from "@cloudflare/shell/git";
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { countOccurrences, replaceLiteralOccurrences } from "./edit-utils.ts";
 import {
   RepoArtifactNameCodec,
@@ -11,6 +11,7 @@ import {
   gitBranchContainsCommit,
   isRepoNotSeededError,
   isRetryableArtifactsInfrastructureError,
+  retryArtifactsInfrastructureOperation,
 } from "./utils.ts";
 
 describe("RepoArtifactNameCodec", () => {
@@ -197,6 +198,66 @@ describe("isRetryableArtifactsInfrastructureError", () => {
     expect(isRetryableArtifactsInfrastructureError(new Error("HTTP Error: 404 Not Found"))).toBe(
       false,
     );
+  });
+});
+
+describe("retryArtifactsInfrastructureOperation", () => {
+  test("retries the property-stripped 503 observed during a repo clone", async () => {
+    vi.useFakeTimers();
+    try {
+      const operation = vi
+        .fn()
+        .mockRejectedValueOnce(new Error("HTTP Error: 503 Service Unavailable"))
+        .mockResolvedValueOnce("cloned");
+
+      const result = retryArtifactsInfrastructureOperation({
+        description: "repo clone",
+        operation,
+      });
+      await vi.runAllTimersAsync();
+
+      await expect(result).resolves.toBe("cloned");
+      expect(operation).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  test("does not retry a deterministic git failure", async () => {
+    const failure = new Error("Could not find main.");
+    const operation = vi.fn(async () => {
+      throw failure;
+    });
+
+    await expect(
+      retryArtifactsInfrastructureOperation({
+        description: "repo clone",
+        operation,
+      }),
+    ).rejects.toBe(failure);
+    expect(operation).toHaveBeenCalledOnce();
+  });
+
+  test("stops retrying a persistent infrastructure failure after three attempts", async () => {
+    vi.useFakeTimers();
+    try {
+      const failure = new Error("HTTP Error: 503 Service Unavailable");
+      const operation = vi.fn(async () => {
+        throw failure;
+      });
+
+      const result = retryArtifactsInfrastructureOperation({
+        description: "repo clone",
+        operation,
+      });
+      const rejection = expect(result).rejects.toBe(failure);
+      await vi.runAllTimersAsync();
+
+      await rejection;
+      expect(operation).toHaveBeenCalledTimes(3);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

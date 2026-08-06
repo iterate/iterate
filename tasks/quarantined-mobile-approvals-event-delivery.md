@@ -38,7 +38,11 @@ next head's first candidate exposed a separate product defect: final hosted-
 wake alarm reconciliation re-derived only the 20-second durable watchdog, not
 the live callback's one-second owner probe. A red/green unit regression now
 makes the probe part of every alarm recomputation. The exact-head gate restarts
-from zero after preview deployment.
+from zero after preview deployment. Two other rejected candidates exposed an
+isolated Artifacts 503 during `Repo.log` and one 160.5-second Artifacts create
+outlier. Repo clones now retry only classified transient infrastructure
+failures, while idempotent artifact create/readback has one eight-second total
+deadline that returns the obligation to durable recovery.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -203,6 +207,18 @@ notification journal.
   one-second probe (`11000`). Alarm recomputation now includes the earliest
   live pending-delivery probe, and the regression plus both adjacent stream
   suites pass.
+- An earlier rejected gate attempt retried `repo-lazy` after `Repo.log` returned
+  the property-stripped `HTTP Error: 503 Service Unavailable`. Trace
+  `563d23a0e7a5ac39aa9dc89d134d3989` showed the project had already completed
+  all four commits; only its later Artifacts-backed clone failed. Clone reads
+  now retry that existing transient-infrastructure classifier locally at most
+  three times, while branch/domain failures still propagate immediately.
+- The same gate attempt timed out a live-capabilities project after its config
+  artifact create occupied the callback for 160.512 seconds. Across 1,262
+  creates in the surrounding window, p99 was 2.074 seconds and only this call
+  exceeded eight seconds. The idempotent create plus ambiguous-create readback
+  now share one eight-second deadline, safely below the 20-second hosted
+  callback watchdog; expiry is an explicit retryable repo-creation obligation.
 - Since the quarantine merged, each test has been skipped 99 times across 98
   preview workflows through 2026-08-05 16:05 UTC.
 
@@ -391,3 +407,11 @@ Test these in order; do not treat the first plausible one as the conclusion.
   retried after a split 30-second/5-second wait. Consolidated it into one
   exact-state wait using the already-declared 30-second propagation budget.
   OS typecheck, lint, and formatting pass; the streak remains zero.
+- 2026-08-06: Rejected gate candidates then exposed three independent recovery
+  defects: final callback settlement could overwrite the one-second owner
+  probe with a 20-second watchdog; one read clone surfaced a transient
+  Artifacts 503; and one idempotent artifact create ran for 160.512 seconds.
+  Added red/green alarm reconciliation, bounded clone retry, and shared
+  eight-second artifact-creation deadline coverage. The four focused suites
+  pass 104 tests, OS typecheck is green, and the streak remains zero pending a
+  fresh exact-head preview.
