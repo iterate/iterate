@@ -61,6 +61,19 @@ const dormant = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("WakeSocketRegistry", () => {
+  it("classifies an exact relay as live, deliberately dormant, or dead", () => {
+    const liveSocket = fakeSocket(dormant({ idleDeliveredThrough: undefined }));
+    expect(registryOver([liveSocket], ["sub"]).relayState("sub", "sock-1")).toBe("live");
+
+    const dormantSocket = fakeSocket(dormant());
+    expect(registryOver([dormantSocket]).relayState("sub", "sock-1")).toBe("dormant");
+
+    const orphanedSocket = fakeSocket(dormant({ idleDeliveredThrough: undefined }));
+    expect(registryOver([orphanedSocket]).relayState("sub", "sock-1")).toBe("dead");
+    expect(registryOver([]).relayState("sub", "sock-1")).toBe("dead");
+    expect(registryOver([dormantSocket]).relayState("sub", "another-socket")).toBe("dead");
+  });
+
   it("wakes a dormant subscriber once per dormancy period, offset-gated", () => {
     const socket = fakeSocket(dormant());
     const registry = registryOver([socket]);

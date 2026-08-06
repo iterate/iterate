@@ -63,7 +63,13 @@ append, and wake completed before its observational processor-state callback
 stayed pending until Vitest's outer timeout. That callback now has a five-
 second receiver-unavailable boundary, and the proof polls through only that
 named transient inside its unchanged restoration deadline. Both fixes need
-exact-head verification; the gate is zero.
+exact-head verification. Their combined head passed its initial preview and
+three strict candidates before candidate four exposed a different stale-
+capability defect: after `ctx.abort()`, 276 rapid relay pings all returned the
+old handle's captured `true`. Relay liveness now asks a fresh Stream DO about
+the exact wake-socket identity; live and deliberately dormant sockets remain
+healthy, while an orphan absent from the current incarnation reports dead.
+The gate is zero pending deployment of that fix.
 
 The two end-to-end mobile approval and notification flows were quarantined on
 2026-08-03 while landing PR #2388. That PR changes only the OS web stream-tree
@@ -482,3 +488,12 @@ Test these in order; do not treat the first plausible one as the conclusion.
   the fourth-or-later same-IP send inside Better Auth's 60-second window, not
   a slow locator. Added red/green policy coverage and raised only fixed-test-
   OTP stages to 100/minute; production remains at 3/minute.
+- 2026-08-06: Head `050cd7c` passed its initial preview and three strict gate
+  candidates. Candidate four `fdjddkrnf7` retried only the interrupted-session
+  regression. Exact-version traces recorded 276 successful
+  `StreamConnection.ping` calls after the deliberate kill: the aborted DO's
+  old capability kept returning captured in-memory liveness indefinitely.
+  Added red/green relay and wake-registry coverage. A relay with a wake socket
+  now probes a fresh DO for that exact socket identity, preserving intentional
+  dormancy but rejecting orphaned old incarnations. The three focused suites
+  pass 68 tests; OS typecheck, lint, and formatting are green.

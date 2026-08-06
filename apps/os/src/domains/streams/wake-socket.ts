@@ -234,6 +234,16 @@ export class WakeSocketRegistry {
     return new Set(this.#sockets().map(({ attachment }) => attachment.connectionKey));
   }
 
+  /** Current DO-side state of one exact relay/socket pair. */
+  relayState(connectionKey: string, socketId: string): "live" | "dormant" | "dead" {
+    const socket = this.#sockets(connectionKey).find(
+      ({ attachment }) => attachment.socketId === socketId,
+    );
+    if (socket === undefined) return "dead";
+    if (this.#hooks.hasConnection(connectionKey)) return "live";
+    return socket.attachment.idleDeliveredThrough === undefined ? "dead" : "dormant";
+  }
+
   /**
    * Bind this connection's own wake socket (dialed by its relay just before
    * the openConnection call, or surviving a DO eviction): store the raw

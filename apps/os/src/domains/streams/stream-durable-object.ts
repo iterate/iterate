@@ -1644,6 +1644,11 @@ export class StreamDurableObject extends DurableObject<Env> {
     });
   }
 
+  /** @internal Fresh-incarnation liveness for the worker-side wake relay. */
+  isRelayedSessionConnectionLive(args: { connectionKey: string; wakeSocketId: string }): boolean {
+    return this.#wakeSockets.relayState(args.connectionKey, args.wakeSocketId) !== "dead";
+  }
+
   /**
    * One-shot convenience over `openConnection()`: replay durable and currently
    * buffered ephemeral events from the requested cursor, then receive new

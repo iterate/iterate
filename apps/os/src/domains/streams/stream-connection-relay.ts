@@ -135,6 +135,17 @@ export async function openRelayedStreamConnection(input: {
       .then(() => handle.ping())
       .catch(() => false);
 
+  // A Workers RPC capability from an aborted Durable Object can keep
+  // returning its captured in-memory `true` indefinitely. Ask a fresh stub
+  // about this exact relay/socket pair so liveness comes from the current
+  // incarnation. A deliberately idle relay remains logically alive; a socket
+  // absent from the current incarnation is orphaned even if its local endpoint
+  // has not emitted `close`.
+  const probeRelay = () =>
+    Promise.resolve()
+      .then(() => input.stub().isRelayedSessionConnectionLive({ connectionKey, wakeSocketId }))
+      .catch(() => false);
+
   /** The one terminal transition; every teardown path funnels here. */
   const teardown = (args2: { reason: string; socketCode: number; warn?: unknown }) => {
     if (!active) return;
@@ -324,7 +335,17 @@ export async function openRelayedStreamConnection(input: {
     isLive: () => {
       if (!active) return false;
       const handle = currentHandle;
-      // Dormant: the wake socket carries liveness (its close breaks the relay).
+      const socket = wakeSocket;
+      if (socket !== undefined) {
+        return probeRelay().then((live) => {
+          if (currentHandle !== handle || wakeSocket !== socket) return active;
+          if (live) return active;
+          currentHandle = undefined;
+          disposeStub(handle);
+          return false;
+        });
+      }
+      // Socketless pinned mode owns only the RPC leg.
       if (handle === undefined) return true;
       return probeLeg(handle).then((live) => {
         if (live === true || currentHandle !== handle) return active;
